@@ -156,9 +156,13 @@ function ProviderUsageCard({ usage, schedule, now, onUsageChanged }: {
   const nearestCredit = nearestAvailableResetCredit(usage);
   const nearestCreditId = str(nearestCredit?.id);
   const summary = record(usage.activity?.summary);
-  const sessionUsage = record(usage.activity?.session);
-  const sessionCost = record(sessionUsage?.cost);
-  const title = usage.provider === "claude-code" ? "Claude Code" : usage.provider === "gemini" ? "Gemini" : "Codex";
+  const title = usage.provider === "claude-code"
+    ? "Claude Code"
+    : usage.provider === "gemini"
+    ? "Gemini"
+    : usage.provider === "codex-deepseek"
+    ? "DeepSeek"
+    : "Codex";
   const statusLabel = plan
     ? plan.toUpperCase()
     : usage.status === "available"
@@ -300,18 +304,6 @@ function ProviderUsageCard({ usage, schedule, now, onUsageChanged }: {
         {summary && num(summary.lifetimeTokens) !== undefined && (
           <InfoRow k="Lifetime tokens" v={num(summary.lifetimeTokens)?.toLocaleString() ?? "—"} />
         )}
-        {sessionUsage && num(sessionUsage.used) !== undefined && num(sessionUsage.size) !== undefined && (
-          <InfoRow
-            k="Latest context"
-            v={`${num(sessionUsage.used)?.toLocaleString() ?? "0"} / ${num(sessionUsage.size)?.toLocaleString() ?? "0"}`}
-          />
-        )}
-        {sessionCost && num(sessionCost.amount) !== undefined && (
-          <InfoRow
-            k="Session cost"
-            v={`${str(sessionCost.currency) ?? "USD"} ${String(num(sessionCost.amount) ?? 0)}`}
-          />
-        )}
         {limits.length === 0 && (
           <Typography variant="body2" color="text.secondary">
             {usage.status === "unavailable"
@@ -319,6 +311,8 @@ function ProviderUsageCard({ usage, schedule, now, onUsageChanged }: {
                 ? "Waiting for Claude Code session activity. Plan limits appear after the Agent SDK reports them."
                 : usage.provider === "gemini"
                 ? "Waiting for Gemini session activity. Account quota is not exposed by Gemini ACP."
+                : usage.provider === "codex-deepseek"
+                ? "DeepSeek account balance is not exposed by the isolated Responses gateway."
                 : usage.error ?? "Waiting for usage data."
               : usage.error ?? "Account quota is not exposed for this session."}
           </Typography>

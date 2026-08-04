@@ -32,6 +32,7 @@ import {
   ListItemButton,
   ListItemIcon,
   ListItemText,
+  LinearProgress,
   Menu,
   MenuItem,
   Paper,
@@ -5536,8 +5537,16 @@ function SessionInfoSection({
   // DISPLAY title, not the machine string. The parent owns the draft because
   // mobile replaces the footer Close action with an explicit Save action while
   // this field is being edited. Plain Enter is intentionally not a commit path.
+  const project = sessionProjectLabel(session);
+  const contextUsed = session.context_used ?? 0;
+  const contextSize = session.context_size ?? 0;
+  const hasContext = contextSize > 0;
+  const contextPercent = hasContext
+    ? Math.min(100, Math.max(0, contextUsed / contextSize * 100))
+    : 0;
   const rows: { label: string; value: string; mono?: boolean }[] = [
     { label: "Provider", value: session.provider },
+    { label: "Project", value: project },
     { label: "Working dir", value: session.cwd, mono: true },
     { label: "Source", value: originLabel(session.origin) },
     { label: "Status", value: session.status },
@@ -5593,8 +5602,43 @@ function SessionInfoSection({
           />
         ))}
       </List>
+      <Stack spacing={0.65} sx={{ pt: 0.75, pb: 1 }}>
+        <Stack direction="row" alignItems="baseline" justifyContent="space-between" spacing={2}>
+          <Typography variant="caption" color="text.secondary">
+            Context
+          </Typography>
+          <Typography variant="body2" sx={{ fontWeight: 600 }}>
+            {hasContext ? `${Math.round(contextPercent)}% used` : "Waiting for usage"}
+          </Typography>
+        </Stack>
+        <LinearProgress
+          variant="determinate"
+          value={contextPercent}
+          color={contextPercent >= 90 ? "error" : contextPercent >= 75 ? "warning" : "primary"}
+          aria-label="session context usage"
+          sx={{
+            height: 7,
+            borderRadius: 99,
+            bgcolor: "action.selected",
+            "& .MuiLinearProgress-bar": { borderRadius: 99 },
+          }}
+        />
+        {hasContext && (
+          <Typography variant="caption" color="text.secondary" sx={{ textAlign: "right" }}>
+            {contextUsed.toLocaleString()} / {contextSize.toLocaleString()} tokens
+          </Typography>
+        )}
+      </Stack>
     </>
   );
+}
+
+// Stable source checkouts can reveal the project from their path. Machine-backed
+// sessions currently expose only their isolated worktree path, so do not guess
+// from a mutable title or the `sess-*` directory name.
+function sessionProjectLabel(session: SessionMeta): string {
+  const match = session.cwd.match(/\/columbus\/projects\/([^/]+)(?:\/|$)/);
+  return match?.[1] ?? "Not recorded";
 }
 
 // The queue pause/resume control. Session-level and orthogonal to what's queued,
