@@ -1957,16 +1957,9 @@ fn parse_workspaces(values: &[String]) -> anyhow::Result<Vec<MachineWorkspace>> 
         if id.trim().is_empty() || id.contains('/') {
             bail!("workspace id {id:?} is invalid");
         }
-        let configured = Path::new(path);
-        if !configured.is_absolute()
-            || configured
-                .components()
-                .any(|component| matches!(component, std::path::Component::ParentDir))
-        {
-            bail!("workspace {id:?} must use a normalized absolute path");
-        }
-        let (canonical, available) = resolve_configured_workspace(configured)
-            .with_context(|| format!("canonicalizing workspace {id:?} at {path:?}"))?;
+        let (canonical, available) =
+            crate::workspace_roots::resolve_configured_root(Path::new(path))
+                .with_context(|| format!("canonicalizing workspace {id:?} at {path:?}"))?;
         if available && !canonical.is_dir() {
             bail!("workspace {id:?} is not a directory");
         }
@@ -1986,37 +1979,6 @@ fn parse_workspaces(values: &[String]) -> anyhow::Result<Vec<MachineWorkspace>> 
     out.sort_by(|a, b| a.id.cmp(&b.id));
     out.dedup_by(|a, b| a.id == b.id);
     Ok(out)
-}
-
-fn resolve_configured_workspace(path: &Path) -> std::io::Result<(PathBuf, bool)> {
-    let mut cursor = path;
-    let mut missing = Vec::new();
-    loop {
-        match std::fs::canonicalize(cursor) {
-            Ok(mut canonical) => {
-                for component in missing.iter().rev() {
-                    canonical.push(component);
-                }
-                return Ok((canonical, missing.is_empty()));
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let name = cursor.file_name().ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        "workspace path has no existing ancestor",
-                    )
-                })?;
-                missing.push(name.to_os_string());
-                cursor = cursor.parent().ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        "workspace path has no existing ancestor",
-                    )
-                })?;
-            }
-            Err(error) => return Err(error),
-        }
-    }
 }
 
 fn reject_untrusted_workspace(
@@ -2050,8 +2012,10 @@ fn workspace_path_allowed(
     worktree_root: &Path,
 ) -> bool {
     workspaces.iter().any(|workspace| {
-        let root = Path::new(&workspace.canonical_path);
-        target == root || target.starts_with(root)
+        crate::workspace_roots::canonical_target_within_root(
+            target,
+            Path::new(&workspace.canonical_path),
+        )
     }) || worktree_root
         .canonicalize()
         .is_ok_and(|root| target.starts_with(root))

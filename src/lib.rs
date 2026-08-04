@@ -81,6 +81,8 @@ mod usage;
 pub mod worker;
 #[cfg(feature = "full")]
 mod workspace;
+#[cfg(any(feature = "full", feature = "machine-host", feature = "code-adapter"))]
+mod workspace_roots;
 
 #[cfg(all(test, feature = "full"))]
 mod migration_policy;

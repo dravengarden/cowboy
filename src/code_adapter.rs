@@ -64,16 +64,7 @@ pub enum CodeAdapterResponse {
 }
 
 pub async fn serve(socket: &Path, roots: Vec<PathBuf>) -> Result<()> {
-    let roots = roots
-        .into_iter()
-        .map(|root| {
-            root.canonicalize()
-                .with_context(|| format!("canonicalizing {}", root.display()))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    if roots.is_empty() {
-        bail!("at least one trusted workspace root is required");
-    }
+    let roots = prepare_trusted_roots(roots)?;
     if let Some(parent) = socket.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
@@ -90,6 +81,23 @@ pub async fn serve(socket: &Path, roots: Vec<PathBuf>) -> Result<()> {
             }
         });
     }
+}
+
+fn prepare_trusted_roots(roots: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
+    if roots.is_empty() {
+        bail!("at least one trusted workspace root is required");
+    }
+    roots
+        .into_iter()
+        .map(|root| {
+            let (root, available) = crate::workspace_roots::resolve_configured_root(&root)
+                .with_context(|| format!("anchoring trusted workspace {}", root.display()))?;
+            if available && !root.is_dir() {
+                bail!("trusted workspace {} is not a directory", root.display());
+            }
+            Ok(root)
+        })
+        .collect()
 }
 
 async fn serve_one(stream: UnixStream, roots: &[PathBuf]) -> Result<()> {
@@ -113,7 +121,7 @@ fn execute(request: CodeAdapterRequest, roots: &[PathBuf]) -> Result<CodeAdapter
     let root = PathBuf::from(&request.root).canonicalize()?;
     if !roots
         .iter()
-        .any(|trusted| root == *trusted || root.starts_with(trusted))
+        .any(|trusted| crate::workspace_roots::canonical_target_within_root(&root, trusted))
     {
         bail!("workspace is outside the trusted Machine roots");
     }
@@ -166,6 +174,20 @@ fn execute(request: CodeAdapterRequest, roots: &[PathBuf]) -> Result<CodeAdapter
 mod tests {
     use super::*;
 
+    async fn request(socket: &Path, payload: serde_json::Value) -> serde_json::Value {
+        let mut stream = UnixStream::connect(socket).await.unwrap();
+        stream
+            .write_all(format!("{payload}\n").as_bytes())
+            .await
+            .unwrap();
+        let mut response = String::new();
+        BufReader::new(stream)
+            .read_line(&mut response)
+            .await
+            .unwrap();
+        serde_json::from_str(&response).unwrap()
+    }
+
     #[test]
     fn serves_files_only_below_a_trusted_workspace() {
         let root = std::env::temp_dir().join(format!(
@@ -202,6 +224,84 @@ mod tests {
             std::slice::from_ref(&root),
         );
         assert!(outside.is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn pending_roots_do_not_block_available_roots_and_activate_without_restart() {
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-code-adapter-pending-{}",
+            std::process::id()
+        ));
+        let available = root.join("available");
+        let pending = root.join("pending");
+        let socket = root.join("adapter.sock");
+        std::fs::create_dir_all(&available).unwrap();
+        std::fs::write(available.join("available.txt"), "ready\n").unwrap();
+
+        let server_socket = socket.clone();
+        let server_roots = vec![available.clone(), pending.clone()];
+        let server = tokio::spawn(async move { serve(&server_socket, server_roots).await });
+        for _ in 0..100 {
+            if socket.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(socket.exists(), "adapter did not start with a pending root");
+        assert!(!server.is_finished());
+
+        let available_response = request(
+            &socket,
+            serde_json::json!({
+                "root": available,
+                "type": "file",
+                "path": "available.txt",
+                "cursor": null
+            }),
+        )
+        .await;
+        assert_eq!(available_response["ok"], true);
+        assert_eq!(available_response["value"]["value"]["text"], "ready\n");
+
+        std::fs::create_dir(&pending).unwrap();
+        std::fs::write(pending.join("synchronized.txt"), "arrived\n").unwrap();
+        let synchronized_response = request(
+            &socket,
+            serde_json::json!({
+                "root": pending,
+                "type": "file",
+                "path": "synchronized.txt",
+                "cursor": null
+            }),
+        )
+        .await;
+        assert_eq!(synchronized_response["ok"], true);
+        assert_eq!(synchronized_response["value"]["value"]["text"], "arrived\n");
+
+        #[cfg(unix)]
+        {
+            std::fs::remove_dir_all(&pending).unwrap();
+            let outside = root.with_extension("outside");
+            std::fs::create_dir(&outside).unwrap();
+            std::fs::write(outside.join("secret.txt"), "must not escape\n").unwrap();
+            std::os::unix::fs::symlink(&outside, &pending).unwrap();
+            let escaped_response = request(
+                &socket,
+                serde_json::json!({
+                    "root": pending,
+                    "type": "file",
+                    "path": "secret.txt",
+                    "cursor": null
+                }),
+            )
+            .await;
+            assert_eq!(escaped_response["ok"], false);
+            std::fs::remove_dir_all(outside).unwrap();
+        }
+
+        server.abort();
+        let _ = server.await;
         std::fs::remove_dir_all(root).unwrap();
     }
 }
