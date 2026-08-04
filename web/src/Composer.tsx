@@ -1338,7 +1338,8 @@ export function ComposerWorkspace({
         // Pending, and Composer children so the first surface never fuses with
         // the transcript boundary.
         "--mobile-composer-stack-gap": "8px",
-        pt: desktop ? 1 : "var(--mobile-composer-stack-gap)",
+        "--mobile-composer-boundary-gap": "6px",
+        pt: desktop ? 1 : "var(--mobile-composer-boundary-gap)",
         display: "flex",
         flexDirection: "column",
         rowGap: desktop ? 0 : "var(--mobile-composer-stack-gap)",
@@ -1362,12 +1363,6 @@ export function ComposerWorkspace({
         borderTop: 0,
         position: "relative", // anchor for Popper portal placement
         ...(!desktop && {
-          // The idle stack needs a full rhythm token below transcript chrome.
-          // Once the keyboard leaves only one floating card, halve that inset:
-          // enough separation to read as floating without manufacturing a band.
-          "&:has(> [data-mobile-primary-composer='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within), &:has([data-mobile-pending-editor='true'][data-mobile-keyboard-open='true']:focus-within)": {
-            paddingTop: "4px",
-          },
           // Keyboard Focus Mode is a single floating writing surface. Keep the
           // auxiliary state mounted so Plan/Queue/Draft disclosure and edit
           // ownership survive, but remove it from presentation while the main

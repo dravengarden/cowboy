@@ -114,10 +114,10 @@ Deno.test("mobile pending edit exits when a third-party IME never reports an ope
   assertEquals(composerSource.includes("if (keyboardBoundEditing) {"), true);
 });
 
-Deno.test("mobile composer preserves its stack gap below the transcript boundary", () => {
+Deno.test("mobile composer keeps one boundary gap across focus transitions", () => {
   assertEquals(
     composerSource.includes(
-      'pt: desktop ? 1 : "var(--mobile-composer-stack-gap)"',
+      'pt: desktop ? 1 : "var(--mobile-composer-boundary-gap)"',
     ),
     true,
   );
@@ -128,8 +128,12 @@ Deno.test("mobile composer preserves its stack gap below the transcript boundary
     true,
   );
   assertEquals(
-    composerSource.includes('paddingTop: "4px"'),
+    composerSource.includes('"--mobile-composer-boundary-gap": "6px"'),
     true,
+  );
+  assertEquals(
+    composerSource.includes('paddingTop: "4px"'),
+    false,
   );
 });
 
