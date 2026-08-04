@@ -94,6 +94,14 @@ pub fn builtin() -> HashMap<&'static str, LaunchSpec> {
 }
 
 fn builtin_with_env(get_env: impl Fn(&str) -> Option<String>) -> HashMap<&'static str, LaunchSpec> {
+    let claude_deepseek_shell = crate::claude_shell::resolve(&get_env);
+    builtin_with_env_and_shell(get_env, claude_deepseek_shell)
+}
+
+fn builtin_with_env_and_shell(
+    get_env: impl Fn(&str) -> Option<String>,
+    claude_deepseek_shell: Option<String>,
+) -> HashMap<&'static str, LaunchSpec> {
     let mut m = HashMap::new();
     m.insert(
         "claude-code",
@@ -120,7 +128,6 @@ fn builtin_with_env(get_env: impl Fn(&str) -> Option<String>) -> HashMap<&'stati
             claude_deepseek.args.clear();
         }
     }
-    let claude_deepseek_shell = crate::claude_shell::resolve(&get_env);
     claude_deepseek.env.extend([
         (
             "ANTHROPIC_BASE_URL".to_owned(),
@@ -500,8 +507,11 @@ mod tests {
 
     fn lookup_with(overrides: &[(&str, &str)], id: &str) -> Option<super::LaunchSpec> {
         let overrides: HashMap<_, _> = overrides.iter().copied().collect();
-        super::builtin_with_env(|key| overrides.get(key).map(|value| (*value).to_owned()))
-            .remove(id)
+        super::builtin_with_env_and_shell(
+            |key| overrides.get(key).map(|value| (*value).to_owned()),
+            Some("/test/bin/bash".to_owned()),
+        )
+        .remove(id)
     }
 
     #[test]
@@ -653,6 +663,7 @@ mod tests {
             .env
             .get("CLAUDE_CODE_SHELL")
             .expect("Claude Code shell detected");
+        assert_eq!(shell, "/test/bin/bash");
         let shell = std::path::Path::new(shell);
         assert!(shell.is_absolute());
         assert!(matches!(
