@@ -86,6 +86,7 @@ import {
   dismissMobileSoftwareKeyboard,
   releaseMobileComposerFocus,
 } from "./composer/mobileComposerFocus";
+import { useKeyboardOpen } from "./keyboardInset";
 import { attachmentTrayForSurface } from "./composer/attachmentPresentation";
 import type { ComposerWorkspaceProps } from "./composer/contracts";
 import { resolveSessionAction, type SessionAction } from "./agentCommands";
@@ -3374,6 +3375,10 @@ function PendingPanel({
   // `cowboy:plan-expanded`). Default expanded; the count stays visible either way.
   const collapse = collapseStore(`cowboy:${kind}-collapsed`);
   const collapsed = usePrefStore(collapse);
+  // One viewport/focus observer per panel, not per message row. A long queue can
+  // contain dozens of rows; registering the iOS keyboard listeners in every row
+  // makes one dismissal fan out through unnecessary handlers and causes jank.
+  const keyboardOpen = useKeyboardOpen();
   const [editingId, setEditingId] = useState<string | null>(null);
   const editControllerRef = useRef<PendingEditController | null>(null);
   const suppressEditFocusRestoreRef = useRef(false);
@@ -3906,6 +3911,7 @@ function PendingPanel({
                         status={status}
                         commands={commands}
                         editing={editingId === m.id}
+                        keyboardOpen={keyboardOpen}
                         onEdit={(): void => {
                           setReordering(false);
                           setEditingId(m.id);
@@ -3995,6 +4001,7 @@ function PendingRow({
   status,
   commands,
   editing,
+  keyboardOpen,
   onEdit,
   onEditDone,
   onEditController,
@@ -4008,6 +4015,8 @@ function PendingRow({
   status: Status;
   commands: () => AvailableCommand[];
   editing: boolean;
+  /** Panel-owned software-keyboard state, shared by every row. */
+  keyboardOpen: boolean;
   onEdit: () => void;
   onEditDone: () => void;
   onEditController: (controller: PendingEditController | null) => void;
@@ -4133,6 +4142,40 @@ function PendingRow({
     setOverlayOpen(false);
     onEditDone();
   };
+  // Mobile Queue/Draft edits are continuously buffered in this row. Dismissing
+  // the keyboard is therefore the completion gesture: persist a non-empty edit
+  // (or restore an edit that was cleared), leave fullscreen, and return to the
+  // ordinary pending card. Desktop deliberately keeps its explicit transaction.
+  const mobileEditSawKeyboardRef = useRef(false);
+  const mobileEditFinishingRef = useRef(false);
+  const finishMobileEdit = (): void => {
+    if (!touchInput || mobileEditFinishingRef.current) return;
+    mobileEditFinishingRef.current = true;
+    dismissMobileSoftwareKeyboard();
+    if (draft.trim() || editAttachments.length > 0) saveEdit();
+    else discardEdit();
+  };
+  const finishMobileEditRef = useRef(finishMobileEdit);
+  finishMobileEditRef.current = finishMobileEdit;
+  useEffect(() => {
+    if (!touchInput || !editing) {
+      mobileEditSawKeyboardRef.current = false;
+      mobileEditFinishingRef.current = false;
+      return undefined;
+    }
+    if (keyboardOpen) {
+      mobileEditSawKeyboardRef.current = true;
+      return undefined;
+    }
+    // Do not treat the short interval between synchronous editor focus and the
+    // first visualViewport resize as a dismissal. Only a visible→hidden keyboard
+    // transition completes the edit.
+    if (!mobileEditSawKeyboardRef.current) return undefined;
+    const frame = globalThis.requestAnimationFrame(() =>
+      finishMobileEditRef.current()
+    );
+    return () => globalThis.cancelAnimationFrame(frame);
+  }, [editing, keyboardOpen, touchInput]);
   const editDirty = draft !== message.text ||
     editAttachments.length !== message.attachments.length ||
     editAttachments.some((attachment, index) =>
@@ -4348,7 +4391,7 @@ function PendingRow({
               onSelectionChange={setHasEditSelection}
               onEscape={(): boolean => {
                 if (desktop) requestDiscardEdit();
-                else saveEdit();
+                else finishMobileEdit();
                 return true;
               }}
             />
@@ -4403,32 +4446,40 @@ function PendingRow({
                     <Tune />
                   </MobileComposerAccessoryButton>
                 }
-                primaryLabel="Done editing"
-                primaryDisabled={!draft.trim() && editAttachments.length === 0}
-                onPrimary={saveEdit}
-                primaryIcon={<Check />}
+                primaryLabel="Hide keyboard"
+                primaryDisabled={false}
+                onPrimary={finishMobileEdit}
+                primaryIcon={<KeyboardHide />}
               />
             ))}
         </Paper>
         {/* Focused edit overlay: the row's expanded edit reuses the SAME component
             as the main input's expand — FullscreenComposer (the toolbar registry,
-            inline images, native caret) — NOT a bespoke DetentSheet. The edit is
-            transactional on every surface: Done saves, discard cancels, and the
-            panel cannot hide it until one of those outcomes is resolved. */}
+            inline images, native caret) — NOT a bespoke DetentSheet. Desktop keeps
+            explicit Done/discard semantics. Mobile auto-commits when its keyboard
+            is dismissed and immediately restores the ordinary pending card. */}
         {overlayOpen && (
           <FullscreenComposer
             editorRef={overlayEditorRef}
             value={draft}
             onChange={updateEditDraft}
             onSubmit={(): void => {
-              saveEdit();
-              setOverlayOpen(false);
+              if (touchInput) finishMobileEdit();
+              else {
+                saveEdit();
+                setOverlayOpen(false);
+              }
             }}
             onSaveDraft={(): void => {
-              saveEdit();
-              setOverlayOpen(false);
+              if (touchInput) finishMobileEdit();
+              else {
+                saveEdit();
+                setOverlayOpen(false);
+              }
             }}
-            onCollapse={touchInput ? saveEdit : (): void => setOverlayOpen(false)}
+            onCollapse={touchInput
+              ? finishMobileEdit
+              : (): void => setOverlayOpen(false)}
             onAttach={(): void => editFileInputRef.current?.click()}
             onPasteFiles={addEditFiles}
             sessionId={sessionId}
@@ -4438,8 +4489,8 @@ function PendingRow({
             // The parent layout effect owns exactly one focus transfer.
             autoFocus={false}
             showCollapse={false}
-            submitLabel="Done editing"
-            submitIcon={<Check />}
+            submitLabel={touchInput ? "Hide keyboard" : "Done editing"}
+            submitIcon={touchInput ? <KeyboardHide /> : <Check />}
             vim={vim}
             onVimMode={setVimMode}
             onDiscard={discardEdit}

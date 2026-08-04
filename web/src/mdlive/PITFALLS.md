@@ -435,10 +435,14 @@ here says otherwise.
     recreated by every fold. An active edit is different: it owns Mobile's only
     writing surface and therefore always forces the panel visually open. Never
     let a persisted disclosure preference hide an unresolved editor while the
-    parent still suppresses the ordinary composer. A clean edit may be abandoned
-    and folded immediately; a dirty edit must resolve through Keep editing,
-    Discard, or Save and collapse. Bulk send, clear, and reorder actions stay
-    disabled until that transaction resolves. Composer height is observed by the
+    parent still suppresses the ordinary composer. Desktop keeps an explicit
+    edit transaction: a clean edit may be abandoned and folded immediately; a
+    dirty edit must resolve through Keep editing, Discard, or Save and collapse.
+    Mobile is touch-first: its row buffer auto-commits when the software keyboard
+    is dismissed, then exits editing and restores the ordinary Queue/Draft card.
+    Its primary accessory action is therefore Hide keyboard, never a redundant
+    Save checkmark. Bulk send, clear, and reorder actions stay disabled until the
+    active edit resolves. Composer height is observed by the
     single persistent ResizeObserver in `App.tsx`; do not add a panel-local
     observer or per-frame React state. The Collapse height layer uses
     `will-change: height`, and its wrapper inner uses `contain: layout paint` so a
@@ -450,13 +454,15 @@ here says otherwise.
     fullscreen transfers the same draft and attachment state without changing
     transaction semantics.
 
-18. **Queued/Draft row edits are explicit transactions.** Local text and
-    attachments do not mutate the queued item until Done or Save and collapse.
-    Fullscreen row edits expose Done as their single completion action; discard
-    cancels the buffer. The main new-message composer still needs both Collapse
-    and Send because Collapse preserves a new draft while Send submits it. Keep
-    this distinction explicit through `showCollapse`; do not infer it from labels
-    or alter editor, focus, or IME behavior.
+18. **Queued/Draft edit completion follows the input model.** Desktop local text
+    and attachments remain an explicit transaction until Done/Save or Discard.
+    On Mobile, dismissing the software keyboard (system gesture or the accessory
+    button) auto-commits a non-empty buffer, exits inline/fullscreen editing, and
+    restores the default pending card; an emptied buffer reverts rather than
+    creating an invalid empty message. The main new-message composer remains
+    independent: keyboard dismissal only changes its focus/layout and never
+    submits or discards its draft. Keep these semantics explicit instead of
+    inferring them from labels.
 
 19. **Slash commands require explicit completion provenance.** ACP transports
     commands and ordinary prompt text through the same string field, so text
@@ -472,14 +478,16 @@ here says otherwise.
 20. **Fullscreen row-edit chrome is one non-selectable two-track keyboard dock.**
     The upper track owns only horizontally scrolling formatting commands. The
     lower track owns completion and editor-level actions, with Settings fixed in
-    its final 44pt slot. This keeps Done stable without mixing document formatting
+    its final 44pt slot. This keeps the completion action stable without mixing document formatting
     and message lifecycle in one crowded rail. Do not restore the wide Save pill,
     opaque detached rows, or a dismissal pill: on iOS each wastes the
     keyboard-adjacent area and detached labels can acquire native text-selection
     handles. The dock and its controls use `user-select: none`; this applies only
     to chrome, never the CM6 canvas, so native caret, selection, long-press Paste,
-    and IME behavior remain unchanged. The top-right ignore-modifications action
-    and confirmation dialog stay separate from Done.
+    and IME behavior remain unchanged. Desktop row editing retains Done; Mobile
+    shows Hide keyboard, auto-commits the row buffer when dismissal completes,
+    and returns to the default Queue/Draft card. The top-right
+    ignore-modifications action and confirmation dialog remain separate.
 
 21. **The native iOS shell can intermittently leave a gray strip above the
     keyboard when UIKit's predicted keyboard frame is taller than its final
@@ -667,10 +675,10 @@ here says otherwise.
 
 33. **Mobile formatting and completion actions share one two-track keyboard
     accessory dock.** The former single rail mixed Markdown transformations with
-    keyboard, attachment, and Send/Done lifecycle actions; overflow then made the
+    keyboard, attachment, and completion lifecycle actions; overflow then made the
     stable Settings area look like a selected column. `MobileComposerAccessoryDock`
     now owns one 96px material with two semantic tracks: keyboard/attachment and
-    contextual Send/Done remain stable above, while formatting scrolls alone on
+    contextual Send/Hide keyboard remain stable above, while formatting scrolls alone on
     the track nearest the keyboard. Fullscreen editors render that material as
     the same inset, rounded panel used by the compact composer, not as two
     edge-to-edge system bars. Both surfaces use the same 8px Mobile composer
@@ -908,6 +916,9 @@ fullscreen editor:
 - [ ] Tap a Queue/Draft message to edit: the compact editor appears with its caret
       at the end and the software keyboard opens in the same interaction
       (pitfall #40).
+- [ ] Dismiss the keyboard while editing a Queue/Draft row (inline and fullscreen):
+      the latest non-empty buffer persists and the default pending card returns;
+      the accessory action shows Hide keyboard rather than Save/Done (pitfall #18).
 - [ ] Toolbar quote/list/heading: caret lands AFTER the marker (pitfall #7).
 - [ ] Attach a photo, then type — keyboard returns, input works.
 - [ ] Paste a photo in the middle of text — the image lands at the caret and the
