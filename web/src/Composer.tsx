@@ -1900,23 +1900,6 @@ export function ComposerWorkspace({
                   </IconButton>
                 </span>
               </Tooltip>
-              <Tooltip title="Hide keyboard">
-                <IconButton
-                  data-mobile-keyboard-hide
-                  size="small"
-                  aria-label="hide keyboard"
-                  sx={{
-                    ...TOOLBAR_ICON_BTN,
-                    display: "none",
-                    color: "text.secondary",
-                    "& .MuiSvgIcon-root": { fontSize: "1.15rem" },
-                  }}
-                  onPointerDown={(event): void => event.preventDefault()}
-                  onClick={dismissMobileSoftwareKeyboard}
-                >
-                  <KeyboardHide />
-                </IconButton>
-              </Tooltip>
             </Stack>
           )
           : (
@@ -2270,6 +2253,7 @@ export function ComposerWorkspace({
               flexWrap: "nowrap",
               overflowX: "auto",
               overflowY: "hidden",
+              scrollPaddingRight: 48,
               scrollbarWidth: "none",
               "&::-webkit-scrollbar": { display: "none" },
               "@media (min-width: 700px)": {
@@ -2500,6 +2484,54 @@ export function ComposerWorkspace({
             </IconButton>
           </span>
         </Tooltip>
+        {/* Keyboard dismissal is an input action, not editor chrome. Keep it at
+            the trailing edge of the horizontally scrollable delivery row so it
+            never grows the top-right utility rail down across Force push or the
+            formatting divider. The subtle fade preserves the pinned affordance
+            while the preceding actions scroll underneath it on narrow phones. */}
+        {touchInput && (
+          <Box
+            data-mobile-keyboard-hide
+            sx={{
+              position: "sticky",
+              right: 0,
+              zIndex: 1,
+              display: "none",
+              flex: "0 0 44px",
+              alignItems: "center",
+              justifyContent: "center",
+              ml: 0.25,
+              bgcolor: "background.paper",
+              "&::before": {
+                content: '""',
+                position: "absolute",
+                top: 0,
+                bottom: 0,
+                left: -12,
+                width: 12,
+                pointerEvents: "none",
+                background: (theme) =>
+                  `linear-gradient(90deg, transparent, ${theme.palette.background.paper})`,
+              },
+            }}
+          >
+            <Tooltip title="Hide keyboard">
+              <IconButton
+                size="small"
+                aria-label="hide keyboard"
+                sx={{
+                  ...TOOLBAR_ICON_BTN,
+                  color: "text.secondary",
+                  "& .MuiSvgIcon-root": { fontSize: "1.15rem" },
+                }}
+                onPointerDown={(event): void => event.preventDefault()}
+                onClick={dismissMobileSoftwareKeyboard}
+              >
+                <KeyboardHide />
+              </IconButton>
+            </Tooltip>
+          </Box>
+        )}
         </Stack>
         {touchInput && (
           <ComposerToolbarSettings

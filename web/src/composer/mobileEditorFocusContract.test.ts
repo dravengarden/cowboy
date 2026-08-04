@@ -54,3 +54,30 @@ Deno.test("mobile composer does not reserve an empty strip above its first child
     true,
   );
 });
+
+Deno.test("mobile keyboard dismissal belongs to the delivery row, not the utility rail", () => {
+  const utilityStart = composerSource.indexOf(
+    "data-mobile-composer-utility-rail",
+  );
+  const utilityEnd = composerSource.indexOf(
+    '<Tooltip title={expanded ? "Collapse editor"',
+    utilityStart,
+  );
+  const actionStart = composerSource.indexOf("data-mobile-action-row");
+  const actionEnd = composerSource.indexOf(
+    "<ComposerToolbarSettings",
+    actionStart,
+  );
+  const utilityRail = composerSource.slice(utilityStart, utilityEnd);
+  const actionRow = composerSource.slice(actionStart, actionEnd);
+
+  assertEquals(utilityStart >= 0 && utilityEnd > utilityStart, true);
+  assertEquals(actionStart >= 0 && actionEnd > actionStart, true);
+  assertEquals(utilityRail.includes("data-mobile-keyboard-hide"), false);
+  assertEquals(actionRow.includes("data-mobile-keyboard-hide"), true);
+  assertEquals(
+    actionRow.indexOf('<Tooltip title="Force push">') <
+      actionRow.indexOf("data-mobile-keyboard-hide"),
+    true,
+  );
+});
