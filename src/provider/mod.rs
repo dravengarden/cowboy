@@ -6,7 +6,7 @@
 //! the generic ACP backend in [`crate::acp`] does the rest.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 // Per-provider specifics beyond launching. Today each holds its L1 confirm-detect
@@ -28,6 +28,8 @@ pub struct LaunchSpec {
     pub args: Vec<String>,
     /// Environment additions scoped to this adapter subprocess.
     pub env: HashMap<String, String>,
+    /// Inherited variables that must not cross this provider boundary.
+    pub remove_env: Vec<&'static str>,
 }
 
 const CODEX_FULL_ACCESS_ARGS: &[&str] = &[
@@ -36,6 +38,9 @@ const CODEX_FULL_ACCESS_ARGS: &[&str] = &[
     "-c",
     "sandbox_mode=\"danger-full-access\"",
 ];
+
+const CODEX_DEEPSEEK_CATALOG: &str = "/nix/var/nix/profiles/columbus-components/codex-deepseek/share/codex-deepseek/codex-models.json";
+const CODEX_DEEPSEEK_LEGACY_CATALOG: &str = "/etc/codex-deepseek/codex-models.json";
 
 // Note: whether an agent can resume via `session/load` (design §7) is read at
 // runtime from its `initialize` response (`agent_capabilities.load_session` —
@@ -114,26 +119,27 @@ fn builtin_with_env(get_env: impl Fn(&str) -> Option<String>) -> HashMap<&'stati
     deepseek
         .env
         .insert("MODEL_PROVIDER".to_owned(), "deepseek-local".to_owned());
-    deepseek.env.insert(
-        "CODEX_CONFIG".to_owned(),
-        serde_json::json!({
-            "model": "deepseek-v4-flash",
-            "model_provider": "deepseek-local",
-            "model_reasoning_effort": "high",
-            "model_catalog_json": "/etc/codex-deepseek/codex-models.json",
-            "model_providers": {
-                "deepseek-local": {
-                    "name": "Local DeepSeek Responses gateway",
-                    "base_url": "http://127.0.0.1:8088/v1",
-                    "wire_api": "responses",
-                    "request_max_retries": 1,
-                    "stream_max_retries": 0,
-                    "stream_idle_timeout_ms": 600000
-                }
-            }
-        })
-        .to_string(),
-    );
+    deepseek.remove_env = vec![
+        "CODEX_ACCESS_TOKEN",
+        "CODEX_API_KEY",
+        "CODEX_AUTH",
+        "CODEX_AUTHAPI_BASE_URL",
+        "CODEX_CLOUD_TASKS_BASE_URL",
+        "CODEX_CONFIG",
+        "CODEX_CONNECTORS_TOKEN",
+        "CODEX_REFRESH_TOKEN_URL_OVERRIDE",
+        "CODEX_REVOKE_TOKEN_URL_OVERRIDE",
+        "CODEX_URL",
+        "OPENAI_API_KEY",
+        "OPENAI_API_BASE",
+        "OPENAI_BASE_URL",
+        "OPENAI_ORG_ID",
+        "OPENAI_ORGANIZATION",
+        "OPENAI_PROJECT_ID",
+        "CHATGPT_BASE_URL",
+        "DEEPSEEK_API_KEY",
+        "DEEPSEEK_API_KEY_FILE",
+    ];
     m.insert("codex-deepseek", deepseek);
     m.insert(
         "gemini",
@@ -201,6 +207,7 @@ fn spec_with_custom_default_args(
                     .collect()
             }),
             env: HashMap::new(),
+            remove_env: Vec::new(),
         },
         // Default command (npx): `_ARGS` may still override the pinned adapter args.
         None => LaunchSpec {
@@ -209,6 +216,7 @@ fn spec_with_custom_default_args(
             args: arg_override
                 .unwrap_or_else(|| default_args.iter().map(|s| (*s).to_owned()).collect()),
             env: HashMap::new(),
+            remove_env: Vec::new(),
         },
     }
 }
@@ -238,24 +246,43 @@ pub fn is_codex(id: &str) -> bool {
     matches!(id, "codex" | "codex-deepseek")
 }
 
-fn prepare_codex_deepseek_home() -> std::io::Result<PathBuf> {
-    use std::io::Write as _;
-    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _, symlink};
+/// Return the first deployed DeepSeek-only model catalog. The legacy path is a
+/// bounded migration fallback for Machine generations that can roll before the
+/// independent component profile is initialized; neither path contains or
+/// references standard OpenAI Codex state.
+#[must_use]
+pub fn available_codex_deepseek_catalog() -> Option<PathBuf> {
+    first_available_catalog(&[
+        Path::new(CODEX_DEEPSEEK_CATALOG),
+        Path::new(CODEX_DEEPSEEK_LEGACY_CATALOG),
+    ])
+}
 
-    let home = std::env::var_os("HOME")
+fn first_available_catalog(paths: &[&Path]) -> Option<PathBuf> {
+    paths
+        .iter()
+        .map(|path| (*path).to_path_buf())
+        .find(|path| path.is_file())
+}
+
+fn prepare_codex_deepseek_home() -> std::io::Result<PathBuf> {
+    let user_home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/home/draven"));
-    let source = home.join(".codex");
-    let target = home.join(".local/state/cowboy/codex-deepseek-home");
+    prepare_codex_deepseek_home_at(&user_home)
+}
+
+fn prepare_codex_deepseek_home_at(user_home: &Path) -> std::io::Result<PathBuf> {
+    use std::io::Write as _;
+    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+
+    let target = user_home.join(".local/state/cowboy/providers/codex-deepseek/codex-home");
     std::fs::create_dir_all(&target)?;
     std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o700))?;
 
-    let base = match std::fs::read_to_string(source.join("config.toml")) {
-        Ok(config) => config,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(error) => return Err(error),
-    };
-    let config = render_codex_deepseek_config(&base);
+    let catalog =
+        available_codex_deepseek_catalog().unwrap_or_else(|| PathBuf::from(CODEX_DEEPSEEK_CATALOG));
+    let config = render_codex_deepseek_config(&catalog);
     static NEXT_CONFIG_WRITE: AtomicU64 = AtomicU64::new(1);
     let sequence = NEXT_CONFIG_WRITE.fetch_add(1, Ordering::Relaxed);
     let temporary = target.join(format!(".config.toml.{}.{sequence}", std::process::id()));
@@ -268,64 +295,26 @@ fn prepare_codex_deepseek_home() -> std::io::Result<PathBuf> {
     file.write_all(config.as_bytes())?;
     file.sync_all()?;
     std::fs::rename(&temporary, target.join("config.toml"))?;
-
-    for entry in [
-        "AGENTS.md",
-        "skills",
-        "plugins",
-        "rules",
-        "memories",
-        "memories_extensions",
-    ] {
-        let link = target.join(entry);
-        if !link.exists() && !link.is_symlink() {
-            let _ = symlink(source.join(entry), link);
-        }
-    }
     Ok(target)
 }
 
-fn render_codex_deepseek_config(base: &str) -> String {
-    let mut filtered = String::new();
-    let mut in_root = true;
-    let mut skip_managed_provider = false;
-    for line in base.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') {
-            in_root = false;
-            skip_managed_provider = trimmed == "[model_providers.deepseek-local]"
-                || trimmed.starts_with("[model_providers.deepseek-local.");
-            if skip_managed_provider {
-                continue;
-            }
-        } else if skip_managed_provider {
-            continue;
-        }
-        let key = line.split_once('=').map(|(key, _)| key.trim());
-        if in_root
-            && matches!(
-                key,
-                Some("model" | "model_provider" | "model_reasoning_effort" | "model_catalog_json")
-            )
-        {
-            continue;
-        }
-        filtered.push_str(line);
-        filtered.push('\n');
-    }
+fn render_codex_deepseek_config(catalog: &Path) -> String {
     format!(
         "model = \"deepseek-v4-flash\"\n\
-         model_provider = \"deepseek-local\"\n\
-         model_reasoning_effort = \"high\"\n\
-         model_catalog_json = \"/etc/codex-deepseek/codex-models.json\"\n\n\
-         {filtered}\n\
-         [model_providers.deepseek-local]\n\
-         name = \"Local DeepSeek Responses gateway\"\n\
-         base_url = \"http://127.0.0.1:8088/v1\"\n\
-         wire_api = \"responses\"\n\
-         request_max_retries = 1\n\
-         stream_max_retries = 0\n\
-         stream_idle_timeout_ms = 600000\n"
+     model_provider = \"deepseek-local\"\n\
+     model_reasoning_effort = \"high\"\n\
+     model_catalog_json = \"{}\"\n\
+     approval_policy = \"never\"\n\
+     sandbox_mode = \"danger-full-access\"\n\n\
+     [model_providers.deepseek-local]\n\
+     name = \"Isolated DeepSeek Responses gateway\"\n\
+     base_url = \"http://127.0.0.1:8088/v1\"\n\
+     wire_api = \"responses\"\n\
+     requires_openai_auth = false\n\
+     request_max_retries = 1\n\
+     stream_max_retries = 0\n\
+     stream_idle_timeout_ms = 600000\n",
+        catalog.display()
     )
 }
 
@@ -375,10 +364,13 @@ mod tests {
             deepseek.env.get("MODEL_PROVIDER").map(String::as_str),
             Some("deepseek-local")
         );
-        let config: serde_json::Value =
-            serde_json::from_str(deepseek.env.get("CODEX_CONFIG").expect("Codex config"))
-                .expect("valid Codex config JSON");
-        assert_eq!(config["model"], "deepseek-v4-flash");
+        assert!(!deepseek.env.contains_key("CODEX_CONFIG"));
+        assert!(deepseek.remove_env.contains(&"CODEX_ACCESS_TOKEN"));
+        assert!(deepseek.remove_env.contains(&"CODEX_AUTH"));
+        assert!(deepseek.remove_env.contains(&"OPENAI_API_KEY"));
+        assert!(deepseek.remove_env.contains(&"OPENAI_ORGANIZATION"));
+        assert!(deepseek.remove_env.contains(&"CODEX_CONFIG"));
+        assert!(deepseek.remove_env.contains(&"DEEPSEEK_API_KEY"));
 
         let deepseek_with_args = lookup_with(
             &[
@@ -441,21 +433,94 @@ mod tests {
     }
 
     #[test]
-    fn deepseek_overlay_preserves_base_config_without_base_model_defaults() {
-        let rendered = super::render_codex_deepseek_config(
-            "approval_policy = \"never\"\nmodel = \"gpt\"\n\n\
-             [model_providers.deepseek-local]\nbase_url = \"stale\"\n\n\
-             [features]\nmemories = true\n",
-        );
+    fn deepseek_config_is_self_contained() {
+        let rendered = super::render_codex_deepseek_config(std::path::Path::new(
+            super::CODEX_DEEPSEEK_CATALOG,
+        ));
         assert!(rendered.starts_with("model = \"deepseek-v4-flash\""));
-        assert!(!rendered.contains("model = \"gpt\""));
         assert!(rendered.contains("approval_policy = \"never\""));
-        assert!(rendered.contains("[features]\nmemories = true"));
         assert!(rendered.contains("[model_providers.deepseek-local]"));
+        assert!(rendered.contains("requires_openai_auth = false"));
+        assert!(rendered.contains("/nix/var/nix/profiles/columbus-components/codex-deepseek/"));
+        assert!(!rendered.contains("api.openai.com"));
+    }
+
+    #[test]
+    fn deepseek_catalog_prefers_component_profile_and_falls_back_during_rollout() {
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-codex-deepseek-catalog-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let profile = root.join("profile/catalog.json");
+        let legacy = root.join("legacy/catalog.json");
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        std::fs::write(&legacy, "legacy").unwrap();
         assert_eq!(
-            rendered.matches("[model_providers.deepseek-local]").count(),
-            1
+            super::first_available_catalog(&[&profile, &legacy]),
+            Some(legacy.clone())
         );
-        assert!(!rendered.contains("base_url = \"stale\""));
+
+        std::fs::create_dir_all(profile.parent().unwrap()).unwrap();
+        std::fs::write(&profile, "profile").unwrap();
+        assert_eq!(
+            super::first_available_catalog(&[&profile, &legacy]),
+            Some(profile)
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn deepseek_home_never_reads_or_links_openai_codex_state() {
+        use std::os::unix::fs::PermissionsExt as _;
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static NEXT_TEST_HOME: AtomicU64 = AtomicU64::new(1);
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-codex-deepseek-isolation-{}-{}",
+            std::process::id(),
+            NEXT_TEST_HOME.fetch_add(1, Ordering::Relaxed)
+        ));
+        let openai_home = root.join(".codex");
+        std::fs::create_dir_all(&openai_home).expect("create OpenAI Codex home");
+        let sentinel =
+            "model = \"gpt-secret-sentinel\"\n[mcp_servers.private]\ncommand = \"secret\"\n";
+        std::fs::write(openai_home.join("config.toml"), sentinel).expect("write OpenAI config");
+        std::fs::write(openai_home.join("auth.json"), "openai-auth-sentinel")
+            .expect("write OpenAI auth");
+
+        let isolated = super::prepare_codex_deepseek_home_at(&root).expect("prepare DeepSeek home");
+        let config =
+            std::fs::read_to_string(isolated.join("config.toml")).expect("read DeepSeek config");
+        assert!(!config.contains("gpt-secret-sentinel"));
+        assert!(!config.contains("mcp_servers.private"));
+        assert!(!config.contains("openai-auth-sentinel"));
+        assert_eq!(
+            std::fs::read_to_string(openai_home.join("config.toml")).unwrap(),
+            sentinel
+        );
+        assert_eq!(
+            std::fs::read_to_string(openai_home.join("auth.json")).unwrap(),
+            "openai-auth-sentinel"
+        );
+        assert_eq!(
+            std::fs::metadata(&isolated).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(isolated.join("config.toml"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        let entries = std::fs::read_dir(&isolated)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(entries, [std::ffi::OsString::from("config.toml")]);
+
+        std::fs::remove_dir_all(&root).expect("remove isolated test home");
     }
 }

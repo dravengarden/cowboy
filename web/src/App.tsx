@@ -73,7 +73,10 @@ import { machineVersionPresentation, type MachineComponentUpdate } from "./machi
 import { DelayedNetworkProgress, NetworkIconButton } from "./NetworkActionFeedback";
 import { setObservabilityContext } from "./observability";
 import { Transcript } from "./Transcript";
-import { providerName } from "./tools/presentation";
+import {
+    providerPresentation,
+    providerSelectionName,
+} from "./providerPresentation";
 import { desktopScrollbarSx } from "./desktop/desktopScrollbar";
 import {
     PROVIDERS,
@@ -1416,15 +1419,31 @@ function NewSessionDialog({
                 />
                 <TextField
                     select
-                    label="Provider"
+                    label="Agent / model provider"
                     value={provider}
                     onChange={(e): void => setProvider(e.target.value)}
+                    helperText="The selected runtime is scoped to this session"
+                    SelectProps={{
+                        renderValue: (value): string => providerSelectionName(String(value)),
+                    }}
                 >
-                    {PROVIDERS.map((p) => (
-                        <MenuItem key={p} value={p} disabled={!providerAvailable(p)}>
-                            {providerName(p)}
-                        </MenuItem>
-                    ))}
+                    {PROVIDERS.map((p) => {
+                        const presentation = providerPresentation(p);
+                        const available = providerAvailable(p);
+                        return (
+                            <MenuItem key={p} value={p} disabled={!available}>
+                                <ListItemIcon sx={{ minWidth: 36 }}>
+                                    <ProviderIcon provider={p} fontSize="small" />
+                                </ListItemIcon>
+                                <ListItemText
+                                    primary={presentation.agent}
+                                    secondary={`${presentation.modelProvider} · ${presentation.detail}${
+                                        available ? "" : " · Unavailable on this machine"
+                                    }`}
+                                />
+                            </MenuItem>
+                        );
+                    })}
                 </TextField>
                 {machines.length > 1 ? (
                     <TextField

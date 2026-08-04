@@ -52,9 +52,12 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
   diagnosing later service symptoms.
 
 ## Memory / sessions
-- cowboy does not own agent memory. Codex uses its native local-memory feature
-  through the normal user `CODEX_HOME`; required project guidance stays in
-  `AGENTS.md`, docs, tests, hooks, and skills.
+- cowboy does not own agent memory. Standard Codex uses its native local-memory
+  feature through the normal user `CODEX_HOME`. Provider variants such as
+  `codex-deepseek` use a fully separate provider-owned `CODEX_HOME` and must not
+  read, link, or mutate standard Codex config, auth, history, memory, rules,
+  plugins, or skills. Required project guidance stays in `AGENTS.md`, docs,
+  tests, hooks, and canonical skills.
 - The Web New Session picker (`GET /api/workspaces`) lists stable source roots,
   but a selected Machine must fetch the remote default branch and prepare or
   reuse a session-owned worktree before starting the ACP worker. The legacy

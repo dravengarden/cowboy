@@ -13,7 +13,7 @@ needed, hand-coded confirm-detection rules — the core never changes.
 |---|---|---|
 | `claude-code` | `npx -y @agentclientprotocol/claude-agent-acp` | Claude Code ACP adapter |
 | `codex` | `npx -y @agentclientprotocol/codex-acp` plus full-access defaults | adapter over Codex App Server |
-| `codex-deepseek` | the same Codex ACP adapter with process-local `CODEX_CONFIG` | Codex over the independent local DeepSeek Responses shim |
+| `codex-deepseek` | the same Codex ACP adapter with an isolated provider-owned `CODEX_HOME` | Codex over the independent local DeepSeek Responses gateway |
 | `gemini` | `npx -y @google/gemini-cli --acp` | Gemini's native ACP mode |
 
 Each entry is a **`LaunchSpec`**: `id` + `command` + `args` + scoped environment.
@@ -32,10 +32,31 @@ idempotent with an upstream adapter that starts sending the option itself.
 `codex-deepseek` is a runtime variant, not a second agent implementation. Codex
 still owns planning, tools, approvals, goals, memory, and execution; its model
 provider points at `codex-deepseek.service` on loopback. The shim owns only wire
-translation and has an independent lifecycle, port, credential, and health
-check. Restarting or upgrading it never restarts Cowboy Machine or resident ACP
-workers. A future Claude/DeepSeek bridge must use another process and profile;
-the two adapters must not grow into a shared provider router.
+compatibility and credential injection and has an independent release profile,
+lifecycle, port, credential, and health check. V4 Flash is forwarded byte-for-byte
+to DeepSeek's native Responses API; only V4 Pro uses the temporary Chat
+compatibility path until DeepSeek enables native Codex support for that model.
+Restarting or upgrading the gateway never restarts Cowboy, Cowboy Machine, or
+resident ACP workers.
+
+Its `CODEX_HOME` lives under
+`~/.local/state/cowboy/providers/codex-deepseek/codex-home` and is generated from
+a closed template. It does not inherit the user's normal Codex config and does
+not link `auth.json`, history, memories, rules, plugins, or skills. The worker
+also removes inherited OpenAI, Codex, and DeepSeek credential/config variables;
+the DeepSeek secret exists only in the gateway's systemd credential mount.
+Standard `codex` sessions therefore keep their ordinary account and state, and
+the two runtimes can execute concurrently without influencing one another.
+The generated config prefers the independently moved component-profile catalog.
+During the one-time rollout only, it may use the DeepSeek-only legacy `/etc`
+catalog if the profile has not yet been initialized; this fallback contains no
+OpenAI config or credentials and can be deleted after older Machine generations
+have drained.
+
+A future Claude/DeepSeek bridge gets another provider id, process, profile,
+port, credential, and isolated Claude configuration. It may reuse the generic
+model-gateway release mechanism and UI metadata shape, but it must not grow this
+process into a shared provider router.
 
 Gemini CLI stopped accepting Google Login for consumer, Google AI Pro, and AI
 Ultra accounts on 2026-06-18. Its ACP mode remains usable with a Gemini API key

@@ -519,9 +519,12 @@ async fn agent_main(
         std::path::absolute(&cwd).with_context(|| format!("resolving cwd {}", cwd.display()))?;
     tracing::info!(provider = spec.id, session = session_id, cwd = %cwd.display(), "spawning agent");
 
-    let mut child = Command::new(&spec.command)
-        .args(&spec.args)
-        .envs(&spec.env)
+    let mut command = Command::new(&spec.command);
+    command.args(&spec.args).envs(&spec.env);
+    for key in &spec.remove_env {
+        command.env_remove(key);
+    }
+    let mut child = command
         .current_dir(&cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1262,9 +1265,12 @@ pub async fn run_oneshot(spec: &LaunchSpec, cwd: PathBuf, prompt: String) -> Res
         std::path::absolute(&cwd).with_context(|| format!("resolving cwd {}", cwd.display()))?;
     tracing::info!(provider = spec.id, cwd = %cwd.display(), "spawning agent");
 
-    let mut child = Command::new(&spec.command)
-        .args(&spec.args)
-        .envs(&spec.env)
+    let mut command = Command::new(&spec.command);
+    command.args(&spec.args).envs(&spec.env);
+    for key in &spec.remove_env {
+        command.env_remove(key);
+    }
+    let mut child = command
         .current_dir(&cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
