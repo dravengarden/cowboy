@@ -13,18 +13,22 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
   linker wrapper is an environment failure, not a product-code failure.
 
 ## Deploy (read before deploying)
-- cowboy is a NixOS service (`services/cowboy` on hawk), consumed from its Git
-  remote by a locked flake input. To ship: commit and publish the Cowboy source,
-  then use an isolated Columbus worktree to update and commit the nested
-  `hawk/cowboy` input before rebuilding that worktree's `machines#hawk`. The standalone
-  `/etc/nixos` checkout and the Columbus stable checkout are not deployment
-  sources.
-- **Deploying restarts the daemon you may be driving Codex through.** Build
-  first from `/home/draven/columbus/machines/hawk/nixos`, then use its
-  `just sys-activate ./result`: it validates the canonical deployment marker and
-  hands activation to an independent root systemd unit that survives the cowboy
-  restart. Verify its journal and `/run/current-system`; never run a direct switch
-  from cowboy.
+- Cowboy application releases use project-owned Nix artifacts rather than a
+  full NixOS generation. From a clean committed task worktree, build either
+  `.#cowboy-controller-release` or `.#cowboy-machine-release`, then hand the
+  immutable result to the machine-owned Cowboy component activator. Publishing
+  the Cowboy commit is independent from local activation; the target pins an
+  unpublished successful revision until the task pushes it or deploys a
+  descendant revert. `/etc/nixos` and Columbus stable checkouts are never
+  deployment sources.
+- Controller releases atomically move the controller/web profile and restart
+  only `cowboy.service`. Machine releases are a separate explicit maintenance
+  boundary for the resident Machine, worker generation, and isolated Zed
+  adapter. Do not use a controller release to recycle active sessions.
+- **A controller deployment restarts the daemon you may be driving Codex
+  through.** The machine activator runs in an independent root systemd unit that
+  survives this restart. Follow its journal and verify the component receipt,
+  `/healthz`, `/version`, the SPA version/cache headers, and Machine presence.
   Web/bundle changes also need a PWA hard-reload (a WS reconnect keeps stale JS).
   (memories: cowboy-switch-restarts-approval-channel, cowboy-v1-deploy)
 

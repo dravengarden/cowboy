@@ -239,6 +239,51 @@
           chmod 0555 "$out/bin/cowboy-zed-server"
       '';
 
+      release-revision = if self ? rev then self.rev else null;
+      release-source = lane: {
+        schema = 1;
+        component = "cowboy";
+        inherit lane;
+        repository = "git@github.com:dravengarden/cowboy.git";
+        revision = release-revision;
+        dirty = release-revision == null;
+      };
+
+      # Machine configuration consumes stable component profiles instead of
+      # embedding these store paths in every NixOS generation. The two release
+      # boundaries deliberately keep a controller/web update from moving the
+      # resident Machine, worker, or Zed runtime.
+      cowboy-controller-release =
+        pkgs.runCommand "cowboy-controller-release" { } ''
+          mkdir -p "$out/bin" "$out/share/cowboy" "$out/etc/cowboy-release"
+          ln -s ${cowboy}/bin/cowboy "$out/bin/cowboy"
+          ln -s ${cowboy-web} "$out/share/cowboy/web"
+          cat >"$out/etc/cowboy-release/source.json" <<'EOF'
+          ${builtins.toJSON (release-source "controller")}
+          EOF
+        '';
+
+      cowboy-machine-release = pkgs.runCommand "cowboy-machine-release" { } ''
+        mkdir -p "$out/bin" "$out/etc/cowboy-release"
+        for binary in cowboy-machine cowboy-machine-install; do
+          ln -s ${cowboy-machine}/bin/"$binary" "$out/bin/$binary"
+        done
+        ln -s ${cowboy}/bin/cowboy-acp-worker "$out/bin/cowboy-acp-worker"
+        ln -s ${cowboy-code-adapter}/bin/cowboy-code-adapter \
+          "$out/bin/cowboy-code-adapter"
+        ln -s ${cowboy-zed-adapter}/bin/cowboy-zed-adapter \
+          "$out/bin/cowboy-zed-adapter"
+        ln -s ${cowboy-zed-server}/bin/cowboy-zed-server \
+          "$out/bin/cowboy-zed-server"
+        ${cowboy-machine}/bin/cowboy-machine --help \
+          | ${pkgs.gnugrep}/bin/grep -F -- '--compat-socket' >/dev/null
+        cat >"$out/etc/cowboy-release/source.json" <<'EOF'
+        ${builtins.toJSON ((release-source "machine") // {
+          workerGeneration = cowboy.workerGeneration;
+        })}
+        EOF
+      '';
+
       cowboy-source-boundary = pkgs.runCommand "cowboy-source-boundary" { } ''
         test ! -e ${cowboy-src}/docs
         test ! -e ${cowboy-src}/web/public
@@ -303,15 +348,17 @@
         cowboy-zed-adapter = cowboy-zed-adapter;
         cowboy-zed-server = cowboy-zed-server;
         cowboy-web = cowboy-web;
+        cowboy-controller-release = cowboy-controller-release;
+        cowboy-machine-release = cowboy-machine-release;
       };
 
       # `cowboy`'s buildRustPackage check phase runs the Rust tests; cowboy-web's
       # build runs TypeScript checking before Vite. Developer lint/test policy is
       # additionally enforced by `just check` in CI.
       checks.${system} = {
-        inherit cowboy cowboy-machine cowboy-code-adapter cowboy-source-boundary cowboy-web
-          cowboy-zed-integration
-          cowboy-zed-adapter cowboy-zed-server;
+        inherit cowboy cowboy-machine cowboy-code-adapter cowboy-source-boundary
+          cowboy-web cowboy-controller-release cowboy-machine-release
+          cowboy-zed-integration cowboy-zed-adapter cowboy-zed-server;
       };
 
       devShells.${system}.default = pkgs.mkShell {
