@@ -17,9 +17,7 @@
 //     It works for every agent, so it's always available.
 import type { AcpUpdate, AvailableCommand, Envelope } from "./protocol";
 
-export function latestAvailableCommands(
-  timeline: readonly Envelope[],
-): AvailableCommand[] {
+export function latestAvailableCommands(timeline: readonly Envelope[]): AvailableCommand[] {
   for (let index = timeline.length - 1; index >= 0; index -= 1) {
     const envelope = timeline[index];
     if (envelope?.kind !== "update") continue;
@@ -67,9 +65,7 @@ function resolveCompact(
   provider: string,
   available: readonly AvailableCommand[],
 ): SessionAction | null {
-  const advertised = available.find((c) =>
-    COMPACT_ALIASES.includes(c.name.toLowerCase())
-  );
+  const advertised = available.find((c) => COMPACT_ALIASES.includes(c.name.toLowerCase()));
   const name = advertised?.name ?? COMPACT_DEFAULT[provider];
   if (name === undefined) return null;
   return {

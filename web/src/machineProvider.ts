@@ -28,8 +28,7 @@ export function machineProviderAvailable(
     ? "claude"
     : null;
   if (!cliReady || isolatedBase === null) return cliReady;
-  const adapterActive = (adapterSlot: string): boolean =>
-    components.some((component) =>
+  const adapterActive = (adapterSlot: string): boolean => components.some((component) =>
       component.id.kind === "provider_adapter" &&
       component.id.slot === adapterSlot &&
       component.state === "active"

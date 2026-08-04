@@ -10,8 +10,8 @@ import {
   hasDiff,
   KeyValues,
   Labeled,
-  langFromPath,
   LineLayoutControl,
+  langFromPath,
   OutputBlocks,
   PreBlock,
   ShellCommandView,
@@ -71,18 +71,12 @@ function terminalText(content: unknown): string {
   return fenced?.[1] ?? text;
 }
 
-function TerminalOutput(
-  { text, running }: { text: string; running: boolean },
-): React.JSX.Element {
+function TerminalOutput({ text, running }: { text: string; running: boolean }): React.JSX.Element {
   const [wrapped, setWrapped] = useState(false);
   const segments = useMemo(() => terminalDisplaySegments(text), [text]);
   const control = text
     ? (
-      <LineLayoutControl
-        wrapped={wrapped}
-        onChange={setWrapped}
-        label="Output line layout"
-      />
+      <LineLayoutControl wrapped={wrapped} onChange={setWrapped} label="Output line layout" />
     )
     : undefined;
   return (
@@ -126,28 +120,12 @@ function FileReadContent({
   const text = terminalText(content);
   const [wrapped, setWrapped] = useState(false);
   if (!text) return null;
-  if (language === "markdown") {
-    return <OutputBlocks content={content} lang={language} />;
-  }
-  const control = (
-    <LineLayoutControl
-      wrapped={wrapped}
-      onChange={setWrapped}
-      label="File line layout"
-    />
-  );
+  if (language === "markdown") return <OutputBlocks content={content} lang={language} />;
+  const control = <LineLayoutControl wrapped={wrapped} onChange={setWrapped} label="File line layout" />;
   return (
     <Labeled label={language ? "Source" : "Contents"} action={control}>
       {language
-        ? (
-          <CodeView
-            code={text}
-            lang={language}
-            maxHeight={420}
-            wrap={wrapped}
-            wrapControl={false}
-          />
-        )
+        ? <CodeView code={text} lang={language} maxHeight={420} wrap={wrapped} wrapControl={false} />
         : <PreBlock text={text} maxHeight={420} wrap={wrapped} />}
     </Labeled>
   );
@@ -162,19 +140,12 @@ const executeTool: Renderer = ({ rawInput, content, running }) => {
   return (
     <>
       {cwd && (
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          sx={{ display: "block", mb: 0.75 }}
-        >
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.75 }}>
           {cwd}
         </Typography>
       )}
       {cmd && (
-        <Labeled
-          label="Command"
-          action={<CopyTextButton text={cmd} label="Command" />}
-        >
+        <Labeled label="Command" action={<CopyTextButton text={cmd} label="Command" />}>
           <ShellCommandView command={cmd} />
         </Labeled>
       )}
@@ -199,12 +170,7 @@ const readTool: Renderer = ({ rawInput, content, running }) => {
   return (
     <Stack spacing={0.75}>
       {path && (
-        <Stack
-          direction="row"
-          spacing={1}
-          alignItems="center"
-          sx={{ flexWrap: "wrap" }}
-        >
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: "wrap" }}>
           <FileChip path={path} />
           {(offset !== undefined || limit !== undefined) && (
             <Typography variant="caption" color="text.disabled">
@@ -214,11 +180,7 @@ const readTool: Renderer = ({ rawInput, content, running }) => {
           )}
         </Stack>
       )}
-      {has
-        ? <FileReadContent content={content} language={lang} />
-        : running
-        ? <RunningHint />
-        : <Empty />}
+      {has ? <FileReadContent content={content} language={lang} /> : running ? <RunningHint /> : <Empty />}
     </Stack>
   );
 };
@@ -252,38 +214,21 @@ const searchTool: Renderer = ({ rawInput, content, running }) => {
     ? action["query"]
     : "";
   const details = Object.fromEntries(
-    Object.entries(rawInput).filter(([key]) =>
-      !["type", "id", "query", "action"].includes(key)
-    ),
+    Object.entries(rawInput).filter(([key]) => !["type", "id", "query", "action"].includes(key)),
   );
   const hasResult = Boolean(textOfContent(content) || hasDiff(content));
   return (
     <Stack spacing={1}>
       {query && (
-        <Labeled
-          label="Query"
-          action={<CopyTextButton text={query} label="Query" />}
-        >
-          <CodeView
-            code={query}
-            lang="text"
-            maxHeight={160}
-            touchWrap
-            hideCopy
-          />
+        <Labeled label="Query" action={<CopyTextButton text={query} label="Query" />}>
+          <CodeView code={query} lang="text" maxHeight={160} touchWrap hideCopy />
         </Labeled>
       )}
       {Object.keys(details).length > 0 && (
-        <Labeled label="Options">
-          <KeyValues data={details} />
-        </Labeled>
+        <Labeled label="Options"><KeyValues data={details} /></Labeled>
       )}
       {hasResult
-        ? (
-          <Labeled label="Result">
-            <OutputBlocks content={content} />
-          </Labeled>
-        )
+        ? <Labeled label="Result"><OutputBlocks content={content} /></Labeled>
         : running
         ? <RunningHint />
         : null}
@@ -302,17 +247,10 @@ interface McpWidget {
 // servers. New MCPs therefore get a useful generic view before a tailored
 // primary field is added to this small registry.
 const MCP_WIDGETS: Record<string, McpWidget> = {
-  "chrome-devtools:evaluate_script": {
-    primary: "function",
-    label: "Script",
-    language: "javascript",
-  },
+  "chrome-devtools:evaluate_script": { primary: "function", label: "Script", language: "javascript" },
   "chrome-devtools:navigate_page": { primary: "url", label: "Destination" },
   "chrome-devtools:new_page": { primary: "url", label: "Destination" },
-  "openaiDeveloperDocs:search_openai_docs": {
-    primary: "query",
-    label: "Query",
-  },
+  "openaiDeveloperDocs:search_openai_docs": { primary: "query", label: "Query" },
   "openaiDeveloperDocs:fetch_openai_doc": { primary: "url", label: "Document" },
 };
 
@@ -328,22 +266,16 @@ const mcpTool: Renderer = (ctx) => {
       : typeof args.url === "string"
       ? { primary: "url", label: "URL" }
       : undefined);
-  const primary = widget && typeof args[widget.primary] === "string"
-    ? String(args[widget.primary])
-    : "";
+  const primary = widget && typeof args[widget.primary] === "string" ? String(args[widget.primary]) : "";
   if (widget) delete args[widget.primary];
   const hasResult = Boolean(textOfContent(ctx.content) || hasDiff(ctx.content));
   return (
     <Stack spacing={1}>
       {primary && widget && (
-        <Labeled
-          label={widget.label}
-          action={<CopyTextButton text={primary} label={widget.label} />}
-        >
+        <Labeled label={widget.label} action={<CopyTextButton text={primary} label={widget.label} />}>
           <CodeView
             code={primary}
-            lang={widget.language ??
-              (widget.primary === "query" ? "text" : "uri")}
+            lang={widget.language ?? (widget.primary === "query" ? "text" : "uri")}
             maxHeight={260}
             touchWrap={widget.primary !== "function"}
             hideCopy
@@ -356,11 +288,7 @@ const mcpTool: Renderer = (ctx) => {
         </Labeled>
       )}
       {hasResult
-        ? (
-          <Labeled label="Result">
-            <OutputBlocks content={ctx.content} />
-          </Labeled>
-        )
+        ? <Labeled label="Result"><OutputBlocks content={ctx.content} /></Labeled>
         : ctx.running
         ? <RunningHint />
         : <Empty />}
@@ -369,9 +297,7 @@ const mcpTool: Renderer = (ctx) => {
 };
 
 function Empty(): React.JSX.Element {
-  return (
-    <Typography variant="caption" color="text.disabled">No output</Typography>
-  );
+  return <Typography variant="caption" color="text.disabled">No output</Typography>;
 }
 
 const BY_KIND: Record<string, Renderer> = {
@@ -396,11 +322,7 @@ const todoTool: Renderer = (ctx) => {
           ? <CheckCircleRounded sx={{ fontSize: 16, color: "success.main" }} />
           : status === "in_progress"
           ? <AutorenewRounded sx={{ fontSize: 16, color: "primary.main" }} />
-          : (
-            <RadioButtonUncheckedRounded
-              sx={{ fontSize: 16, color: "text.disabled" }}
-            />
-          );
+          : <RadioButtonUncheckedRounded sx={{ fontSize: 16, color: "text.disabled" }} />;
         return (
           <Stack key={i} direction="row" spacing={0.75} alignItems="center">
             {icon}
@@ -408,12 +330,8 @@ const todoTool: Renderer = (ctx) => {
               variant="body2"
               sx={{
                 fontSize: "0.85em",
-                color: status === "completed"
-                  ? "text.disabled"
-                  : "text.primary",
-                textDecoration: status === "completed"
-                  ? "line-through"
-                  : "none",
+                color: status === "completed" ? "text.disabled" : "text.primary",
+                textDecoration: status === "completed" ? "line-through" : "none",
               }}
             >
               {todo.content ?? ""}
@@ -435,8 +353,7 @@ const BY_TOOL: Record<string, Renderer> = {
 // A tool renderer formats arbitrary agent-supplied data; a malformed payload
 // must never crash the whole transcript. This boundary catches a renderer throw
 // and degrades to a hint — the card's Raw toggle still shows the verbatim JSON.
-class ToolBoundary
-  extends Component<{ children: ReactNode }, { failed: boolean }> {
+class ToolBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   override state = { failed: false };
   static getDerivedStateFromError(): { failed: boolean } {
     return { failed: true };
@@ -445,8 +362,7 @@ class ToolBoundary
     if (this.state.failed) {
       return (
         <Typography variant="caption" color="text.disabled">
-          Couldn&apos;t format this tool — tap “{"{ } Raw"}” above to see the
-          data.
+          Couldn&apos;t format this tool — tap “{"{ } Raw"}” above to see the data.
         </Typography>
       );
     }
@@ -457,9 +373,7 @@ class ToolBoundary
 /** Render a tool call's expanded body — the public entry the card shell calls. */
 export function ToolBody({ ctx }: { ctx: ToolCtx }): React.JSX.Element {
   const renderer = BY_TOOL[`${ctx.provider}:${ctx.toolName}`] ??
-    (mcpIdentity(ctx.toolName, ctx.rawInput, ctx.title)
-      ? mcpTool
-      : undefined) ??
+    (mcpIdentity(ctx.toolName, ctx.rawInput, ctx.title) ? mcpTool : undefined) ??
     BY_KIND[ctx.kind] ?? genericTool;
   return (
     <Box>
