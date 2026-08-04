@@ -825,18 +825,16 @@ here says otherwise.
     token still promotes the document synchronously to CM6 so its widget remains
     in flow. Keep the live native value separate from CM6's frozen mount seed.
 
-    A native textarea fixes first-responder ownership, but UIKit still declines
-    to anchor its edit menu when the held point is well below the final laid-out
-    text line. The visible textarea can therefore be the correct full-height hit
-    target while the lower canvas still appears inert. Measure the wrapped text
-    height without touching the live control. A stationary long press below that
-    boundary opens Cowboy's small non-modal Paste menu; a second trusted tap uses
-    the async Clipboard API while pointer-down remains non-focusing. Text-near
-    presses stay entirely native, movement cancels the fallback, and the menu
-    never writes selection or focus during the original hold. Do not replace this
-    with a transparent overlay, synthetic pointer selection, `contextmenu`, or
-    delayed refocus: those either suppress native selection/IME or cannot summon
-    iOS's menu reliably.
+    Do not split long-press into a UIKit path near text and a Cowboy-drawn Paste
+    fallback in the blank canvas. The two menus have different appearance,
+    placement, permissions, and gesture semantics, so an empty document appears
+    to use a different editor. The fullscreen textarea already fills the visible
+    writing canvas; leave its touch sequence untouched and let UIKit own the edit
+    menu everywhere, including when the document is empty. The app may handle an
+    actual native `paste` event for attachments, but must not intercept the hold
+    that presents it. Do not replace this with a transparent overlay, synthetic
+    pointer selection, `contextmenu`, or delayed refocus: those either suppress
+    native selection/IME or cannot summon iOS's menu reliably.
 
     Register the blank-canvas hold directly on the textarea with a non-passive
     `touchstart` listener. React delegates `touchstart` passively, so UIKit's
@@ -919,8 +917,8 @@ fullscreen editor:
       and confirm it: the keyboard stays visible throughout, text clears only on
       confirm, and the same editor retains its caret (pitfall #43).
 - [ ] Long-press → the Paste/Select menu appears; Paste works (pitfall #3).
-- [ ] In fullscreen, long-press near text keeps the native menu; long-press far
-      below text opens Cowboy Paste, and tapping it keeps the keyboard visible.
+- [ ] In fullscreen, long-press near text and in an empty canvas both use the
+      same native iOS edit menu; no Cowboy-drawn Paste pill appears.
 - [ ] No stray dot near the caret / rendered markdown (pitfall #4).
 - [ ] `**`/`(`/`` ` ``/`[` then Backspace clears the whole pair (pitfall #5).
 - [ ] Type inline → expand → type → collapse: text is preserved (pitfall #6).
