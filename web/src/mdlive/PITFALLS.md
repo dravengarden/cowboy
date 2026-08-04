@@ -974,4 +974,10 @@ Desktop Vim + IME checks:
     wrapped/new lines or the explicit fullscreen surface. Inline-image CM6 keeps
     its resolvable height chain because its contenteditable widget canvas has a
     different ownership model. Do not replace either path with mirrored React
-    focus state or delayed refocus.
+    focus state or delayed refocus. iOS and third-party keyboards may dismiss
+    while leaving that real editor focused. Observe the shared
+    `visualViewport` keyboard signal and, only after a proven open-to-closed
+    transition, synchronously release the surviving Mobile Composer focus.
+    This keeps native `:focus-within` authoritative while preventing a hidden
+    keyboard from leaving the promoted canvas and toolbar behind. Never blur on
+    the initial focused-but-not-yet-resized interval.

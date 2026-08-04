@@ -83,6 +83,7 @@ import {
 } from "./composer/PlatformComposerEditor";
 import { useComposerDraftController } from "./composer/useComposerDraftController";
 import {
+  didMobileSoftwareKeyboardClose,
   dismissMobileSoftwareKeyboard,
   releaseMobileComposerFocus,
 } from "./composer/mobileComposerFocus";
@@ -1193,6 +1194,31 @@ export function ComposerWorkspace({
   // Touch and Desktop share CM6 document semantics. Touch keeps Vim disabled,
   // while preserving inline image tokens across compact/fullscreen handoff.
   const touchInput = useTouchComposer();
+  const keyboardOpen = useKeyboardOpen();
+  const mobileComposerKeyboardWasOpenRef = useRef(false);
+  useLayoutEffect(() => {
+    if (!touchInput) {
+      mobileComposerKeyboardWasOpenRef.current = false;
+      return;
+    }
+    if (keyboardOpen) {
+      mobileComposerKeyboardWasOpenRef.current = true;
+      return;
+    }
+    if (
+      !didMobileSoftwareKeyboardClose(
+        mobileComposerKeyboardWasOpenRef.current,
+        keyboardOpen,
+      )
+    ) return;
+
+    mobileComposerKeyboardWasOpenRef.current = false;
+    // iOS and third-party keyboards can hide without blurring their surviving
+    // textarea/contenteditable. The Composer chrome is intentionally driven by
+    // native :focus-within, so end that stale editing session at the actual
+    // visualViewport open→closed boundary before the next paint.
+    releaseMobileComposerFocus();
+  }, [keyboardOpen, touchInput]);
   const compactTrayAttachments = attachmentTrayForSurface(
     attachments,
     text,

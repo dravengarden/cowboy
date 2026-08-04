@@ -1,4 +1,5 @@
 import { assertEquals } from "jsr:@std/assert";
+import { didMobileSoftwareKeyboardClose } from "./mobileComposerFocus.ts";
 
 const composerSource = await Deno.readTextFile(
   new URL("../Composer.tsx", import.meta.url),
@@ -31,7 +32,7 @@ Deno.test("native textarea owns a content-sized mobile canvas", () => {
   assertEquals(composerSource.includes("minHeight: 132"), false);
   assertEquals(
     composerSource.includes(
-      'data-mobile-editor-area] > *, &:has([data-mobile-editor-area]:focus-within)',
+      "data-mobile-editor-area] > *, &:has([data-mobile-editor-area]:focus-within)",
     ),
     false,
   );
@@ -78,6 +79,21 @@ Deno.test("mobile keyboard dismissal belongs to the delivery row, not the utilit
   assertEquals(
     actionRow.indexOf('<Tooltip title="Force push">') <
       actionRow.indexOf("data-mobile-keyboard-hide"),
+    true,
+  );
+});
+
+Deno.test("mobile composer releases stale focus only after a visible keyboard closes", () => {
+  assertEquals(didMobileSoftwareKeyboardClose(false, false), false);
+  assertEquals(didMobileSoftwareKeyboardClose(false, true), false);
+  assertEquals(didMobileSoftwareKeyboardClose(true, true), false);
+  assertEquals(didMobileSoftwareKeyboardClose(true, false), true);
+  assertEquals(
+    composerSource.includes("mobileComposerKeyboardWasOpenRef"),
+    true,
+  );
+  assertEquals(
+    composerSource.includes("releaseMobileComposerFocus();"),
     true,
   );
 });

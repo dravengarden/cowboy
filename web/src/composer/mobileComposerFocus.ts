@@ -36,3 +36,14 @@ export function dismissMobileSoftwareKeyboard(): boolean {
   active.blur();
   return true;
 }
+
+/**
+ * Distinguish a real software-keyboard dismissal from the short interval
+ * between editor focus and iOS publishing its first visualViewport resize.
+ */
+export function didMobileSoftwareKeyboardClose(
+  wasOpen: boolean,
+  isOpen: boolean,
+): boolean {
+  return wasOpen && !isOpen;
+}
