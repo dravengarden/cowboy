@@ -19,7 +19,12 @@ export function DesktopReadingModeControl({
         size="small"
         color="inherit"
         variant="outlined"
-        startIcon={<MenuBookOutlined fontSize="small" />}
+        startIcon={
+          <MenuBookOutlined
+            fontSize="small"
+            sx={{ color: shortcutActive ? "primary.main" : "text.secondary" }}
+          />
+        }
         onClick={onEnter}
         sx={{
           ...desktopEmbeddedControlSx({ active: shortcutActive }),
