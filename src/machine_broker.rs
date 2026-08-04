@@ -230,13 +230,33 @@ impl Broker {
         });
     }
 
-    fn rehabilitate_generation(&self, generation: &str, provider: &str) -> Vec<String> {
-        self.healthy_generations
-            .lock()
-            .insert((generation.to_owned(), provider.to_owned()));
+    fn quarantine_generation_if_unproven(
+        &self,
+        generation: &str,
+        provider: &str,
+        session_id: &str,
+    ) {
+        let generation_key = (generation.to_owned(), provider.to_owned());
+        let healthy_generations = self.healthy_generations.lock();
+        if healthy_generations.contains(&generation_key) {
+            return;
+        }
         self.unhealthy_generations
             .lock()
-            .remove(&(generation.to_owned(), provider.to_owned()));
+            .entry(generation_key)
+            .or_default()
+            .insert(session_id.to_owned());
+        drop(healthy_generations);
+    }
+
+    fn rehabilitate_generation(&self, generation: &str, provider: &str) -> Vec<String> {
+        let generation_key = (generation.to_owned(), provider.to_owned());
+        let mut healthy_generations = self.healthy_generations.lock();
+        let mut unhealthy_generations = self.unhealthy_generations.lock();
+        healthy_generations.insert(generation_key.clone());
+        unhealthy_generations.remove(&generation_key);
+        drop(unhealthy_generations);
+        drop(healthy_generations);
         let sessions = self.sessions.lock();
         let rehabilitated: Vec<String> = self
             .fallback_targets
@@ -793,11 +813,16 @@ impl Broker {
                     if cancelled.contains(&selected.session_id) {
                         return Err(error);
                     }
-                    self.unhealthy_generations
-                        .lock()
-                        .entry((selected.generation.clone(), selected.provider.clone()))
-                        .or_default()
-                        .insert(selected.session_id.clone());
+                    // A session-local resume failure must not quarantine a
+                    // generation that another worker has already proved
+                    // healthy. The failing session can still use its pinned
+                    // fallback below; only an unproven rollout is held back
+                    // globally while a canary establishes readiness.
+                    self.quarantine_generation_if_unproven(
+                        &selected.generation,
+                        &selected.provider,
+                        &selected.session_id,
+                    );
                 }
                 let fallback = session_fallback
                     .clone()
@@ -1014,13 +1039,13 @@ impl Broker {
         connection_id: u64,
         runtime_seq: u64,
         event: &RuntimeEvent,
-    ) {
+    ) -> Vec<String> {
         let mut workers = self.workers.lock();
         let Some(worker) = workers.get_mut(session_id) else {
-            return;
+            return Vec::new();
         };
         if worker.connection_id != connection_id {
-            return;
+            return Vec::new();
         }
         worker.snapshot.last_runtime_seq = runtime_seq;
         match event {
@@ -1071,10 +1096,25 @@ impl Broker {
             | RuntimeEvent::Error { .. } => {}
         }
         let state = worker.snapshot.state;
+        let generation = worker.snapshot.generation.clone();
         drop(workers);
         self.session_states
             .lock()
             .insert(session_id.to_owned(), state);
+        if !matches!(event, RuntimeEvent::Ready { .. })
+            || generation != *self.desired_generation.lock()
+        {
+            return Vec::new();
+        }
+        let provider = self
+            .sessions
+            .lock()
+            .get(session_id)
+            .map_or_else(String::new, |session| session.provider.clone());
+        if provider.is_empty() {
+            return Vec::new();
+        }
+        self.rehabilitate_generation(&generation, &provider)
     }
 
     fn maybe_cutover(&self, session_id: &str) {
@@ -1867,7 +1907,8 @@ async fn handle_worker(
                 if cancelled.contains(session_id) {
                     continue;
                 }
-                broker.update_from_event(session_id, connection_id, runtime_seq, &event);
+                let rehabilitated =
+                    broker.update_from_event(session_id, connection_id, runtime_seq, &event);
                 broker.send_controller(Frame::WorkerEvent {
                     session_id: event_session,
                     worker_epoch,
@@ -1876,6 +1917,11 @@ async fn handle_worker(
                 });
                 broker.maybe_cutover(session_id);
                 drop(cancelled);
+                for fallback_session in rehabilitated {
+                    if fallback_session != session_id {
+                        broker.maybe_cutover(&fallback_session);
+                    }
+                }
             }
             Frame::CommandAck { .. } => broker.send_controller(frame),
             Frame::Heartbeat => {}
@@ -2332,6 +2378,112 @@ mod tests {
                 .lock()
                 .get("sess-late")
                 .is_some_and(|worker| worker.snapshot.drain_requested)
+        );
+    }
+
+    #[test]
+    fn ready_event_rehabilitates_generation_fallbacks() {
+        let broker = Broker::new(MachineBrokerArgs {
+            socket: PathBuf::from("/tmp/unused.sock"),
+            compatibility_sockets: Vec::new(),
+            worker_command: PathBuf::from("/bin/false"),
+            desired_generation: "gen-2".to_owned(),
+            spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
+            worker_ready_timeout: Duration::from_millis(10),
+        });
+        broker.sessions.lock().insert(
+            "sess-ready".to_owned(),
+            StartSession {
+                session_id: "sess-ready".to_owned(),
+                provider: "codex".to_owned(),
+                cwd: "/work".to_owned(),
+                agent_session_id: None,
+                system: false,
+                generation: "gen-2".to_owned(),
+                fallback_for: None,
+                adopt_only: false,
+            },
+        );
+        broker.sessions.lock().insert(
+            "sess-fallback".to_owned(),
+            StartSession {
+                session_id: "sess-fallback".to_owned(),
+                provider: "codex".to_owned(),
+                cwd: "/work".to_owned(),
+                agent_session_id: None,
+                system: false,
+                generation: "gen-1".to_owned(),
+                fallback_for: Some("gen-2".to_owned()),
+                adopt_only: false,
+            },
+        );
+        broker.pin_fallback("sess-fallback", "gen-1", "gen-2");
+        broker.unhealthy_generations.lock().insert(
+            ("gen-2".to_owned(), "codex".to_owned()),
+            HashSet::from(["sess-failed".to_owned()]),
+        );
+        let (tx, _rx) = mpsc::unbounded_channel();
+        broker
+            .register_worker(WorkerRegistration {
+                session_id: "sess-ready".to_owned(),
+                epoch: "epoch-ready".to_owned(),
+                generation: "gen-2".to_owned(),
+                executable: Some("/bin/false".to_owned()),
+                fallback_for: None,
+                connection_id: 1,
+                tx,
+            })
+            .expect("register desired worker");
+
+        assert_eq!(
+            broker.update_from_event(
+                "sess-ready",
+                1,
+                1,
+                &RuntimeEvent::Ready {
+                    agent_session_id: Some("agent-ready".to_owned()),
+                },
+            ),
+            vec!["sess-fallback".to_owned()]
+        );
+        assert!(broker.unhealthy_generations.lock().is_empty());
+        assert!(!broker.fallback_pins.lock().contains_key("sess-fallback"));
+        assert!(
+            broker
+                .healthy_generations
+                .lock()
+                .contains(&("gen-2".to_owned(), "codex".to_owned()))
+        );
+    }
+
+    #[test]
+    fn known_healthy_generation_is_not_requarantined() {
+        let broker = Broker::new(MachineBrokerArgs {
+            socket: PathBuf::from("/tmp/unused.sock"),
+            compatibility_sockets: Vec::new(),
+            worker_command: PathBuf::from("/bin/false"),
+            desired_generation: "gen-2".to_owned(),
+            spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
+            worker_ready_timeout: Duration::from_millis(10),
+        });
+        broker
+            .healthy_generations
+            .lock()
+            .insert(("gen-2".to_owned(), "codex".to_owned()));
+
+        broker.quarantine_generation_if_unproven("gen-2", "codex", "sess-late-failure");
+        assert!(broker.unhealthy_generations.lock().is_empty());
+
+        broker.quarantine_generation_if_unproven("gen-3", "codex", "sess-canary-failure");
+        assert_eq!(
+            broker
+                .unhealthy_generations
+                .lock()
+                .get(&("gen-3".to_owned(), "codex".to_owned()))
+                .cloned(),
+            Some(HashSet::from(["sess-canary-failure".to_owned()]))
         );
     }
 
