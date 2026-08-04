@@ -852,7 +852,7 @@ async fn collect_inventory(
         });
     }
     if !disabled.iter().any(|slot| slot == "codex-deepseek") {
-        let deepseek_ready = crate::provider::available_codex_deepseek_catalog().is_some()
+        let deepseek_ready = crate::provider_catalog::available_codex_deepseek_catalog().is_some()
             && tokio::time::timeout(
                 Duration::from_millis(500),
                 reqwest::Client::new()

@@ -53,6 +53,8 @@ mod observability;
 mod persistence;
 #[cfg(feature = "full")]
 mod provider;
+#[cfg(any(feature = "full", feature = "machine-host"))]
+mod provider_catalog;
 #[cfg(feature = "full")]
 mod remote_runtime;
 #[cfg(feature = "full")]

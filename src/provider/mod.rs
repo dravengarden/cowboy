@@ -9,6 +9,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::provider_catalog::{CODEX_DEEPSEEK_CATALOG, available_codex_deepseek_catalog};
+
 // Per-provider specifics beyond launching. Today each holds its L1 confirm-detect
 // (the volatile, often-changing turn-end markers — design §B), sharing the
 // portable stop-reason rule in `confirm`.
@@ -38,9 +40,6 @@ const CODEX_FULL_ACCESS_ARGS: &[&str] = &[
     "-c",
     "sandbox_mode=\"danger-full-access\"",
 ];
-
-const CODEX_DEEPSEEK_CATALOG: &str = "/nix/var/nix/profiles/columbus-components/codex-deepseek/share/codex-deepseek/codex-models.json";
-const CODEX_DEEPSEEK_LEGACY_CATALOG: &str = "/etc/codex-deepseek/codex-models.json";
 
 // Note: whether an agent can resume via `session/load` (design §7) is read at
 // runtime from its `initialize` response (`agent_capabilities.load_session` —
@@ -246,25 +245,6 @@ pub fn is_codex(id: &str) -> bool {
     matches!(id, "codex" | "codex-deepseek")
 }
 
-/// Return the first deployed DeepSeek-only model catalog. The legacy path is a
-/// bounded migration fallback for Machine generations that can roll before the
-/// independent component profile is initialized; neither path contains or
-/// references standard OpenAI Codex state.
-#[must_use]
-pub fn available_codex_deepseek_catalog() -> Option<PathBuf> {
-    first_available_catalog(&[
-        Path::new(CODEX_DEEPSEEK_CATALOG),
-        Path::new(CODEX_DEEPSEEK_LEGACY_CATALOG),
-    ])
-}
-
-fn first_available_catalog(paths: &[&Path]) -> Option<PathBuf> {
-    paths
-        .iter()
-        .map(|path| (*path).to_path_buf())
-        .find(|path| path.is_file())
-}
-
 fn prepare_codex_deepseek_home() -> std::io::Result<PathBuf> {
     let user_home = std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -443,31 +423,6 @@ mod tests {
         assert!(rendered.contains("requires_openai_auth = false"));
         assert!(rendered.contains("/nix/var/nix/profiles/columbus-components/codex-deepseek/"));
         assert!(!rendered.contains("api.openai.com"));
-    }
-
-    #[test]
-    fn deepseek_catalog_prefers_component_profile_and_falls_back_during_rollout() {
-        let root = std::env::temp_dir().join(format!(
-            "cowboy-codex-deepseek-catalog-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&root);
-        let profile = root.join("profile/catalog.json");
-        let legacy = root.join("legacy/catalog.json");
-        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
-        std::fs::write(&legacy, "legacy").unwrap();
-        assert_eq!(
-            super::first_available_catalog(&[&profile, &legacy]),
-            Some(legacy.clone())
-        );
-
-        std::fs::create_dir_all(profile.parent().unwrap()).unwrap();
-        std::fs::write(&profile, "profile").unwrap();
-        assert_eq!(
-            super::first_available_catalog(&[&profile, &legacy]),
-            Some(profile)
-        );
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

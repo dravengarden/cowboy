@@ -61,12 +61,18 @@ dependencies:
 typecheck:
     cd web && deno task typecheck
 
+# Keep independently packaged feature slices honest. An all-features build can
+# hide accidental dependencies on modules that are absent from these releases.
+feature-check:
+    cargo check --locked --no-default-features --features machine-host --bin cowboy-machine --bin cowboy-machine-install
+    cargo check --locked --no-default-features --features code-adapter --bin cowboy-code-adapter
+
 test:
     cargo test --all-targets --all-features --locked
     cd zed-adapter && cargo test --all-targets --locked
     cd web && deno task test
 
-check: toolchain-check fmt lint dependencies typecheck test build
+check: toolchain-check fmt lint dependencies typecheck feature-check test build
 
 test-fast:
     cargo nextest run --all-features --locked
