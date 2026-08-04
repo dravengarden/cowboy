@@ -81,15 +81,28 @@ Deno.test("native textarea owns a content-sized mobile canvas", () => {
   assertEquals(textareaSource.includes("maxRows={expanded ? 30 : 10}"), true);
 });
 
-Deno.test("mobile pending edit preserves slow third-party IME focus until a real keyboard lifecycle", () => {
+Deno.test("mobile pending edit exits when a third-party IME never reports an open frame", () => {
   assertEquals(
     composerSource.includes("() => finishMobileEditRef.current(),\n        700,"),
-    false,
+    true,
   );
   assertEquals(
     composerSource.includes("if (!mobileEditSawKeyboardRef.current) return undefined"),
+    false,
+  );
+  assertEquals(
+    composerSource.includes(
+      'display: !desktop && mobilePendingKeyboardEditing ? "none" : "flex"',
+    ),
     true,
   );
+  assertEquals(
+    composerSource.includes(
+      "const keyboardBoundEditing = editing && (\n    !touchInput || keyboardOpen || !mobileEditSawKeyboardRef.current",
+    ),
+    true,
+  );
+  assertEquals(composerSource.includes("if (keyboardBoundEditing) {"), true);
 });
 
 Deno.test("mobile composer does not reserve an empty strip above its first child", () => {

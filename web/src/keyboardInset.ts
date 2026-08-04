@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { inferKeyboardOpen } from "./keyboardGeometry.ts";
 import { isNativeShell } from "./nativeShell";
 
 // Publish the on-screen keyboard's overlap of the layout viewport as the
@@ -116,6 +117,13 @@ export function useKeyboardInset(): void {
   }, []);
 }
 
+function hasEditableFocus(doc: Document): boolean {
+  const active = doc.activeElement;
+  if (!(active instanceof Element)) return false;
+  return active.matches("input, textarea, [contenteditable='true']") ||
+    active.closest("[contenteditable='true']") !== null;
+}
+
 // Reactive "is the on-screen keyboard open?" — true when it overlaps the layout
 // viewport by more than a flicker threshold. Drives the compose sheet's
 // full-screen ↔ content-height switch: full-screen while typing, snug when the
@@ -124,20 +132,38 @@ export function useKeyboardInset(): void {
 // so it flips the moment the keyboard finishes animating.
 export function useKeyboardOpen(): boolean {
   const [open, setOpen] = useState(false);
+  const baselineHeightRef = useRef(0);
   useEffect(() => {
     const vv = globalThis.visualViewport;
     if (!vv) return undefined;
     const doc = globalThis.document;
     let raf = 0;
     let timers: number[] = [];
+    let poll = 0;
     const apply = (): void => {
       raf = 0;
-      // See useKeyboardInset: drop vv.offsetTop so an overscroll/rubber-band pan
-      // doesn't spike the reading.
-      const overlap = globalThis.innerHeight - vv.height;
-      // ≥120px so a stray inset (notch toolbar, rubber-band) never reads as a
-      // keyboard; a real keyboard overlaps far more.
-      setOpen(overlap > 120);
+      const layoutHeight = globalThis.innerHeight;
+      const visualHeight = vv.height;
+      const editableFocused = hasEditableFocus(doc);
+      const visibleHeight = Math.min(layoutHeight, visualHeight);
+      if (baselineHeightRef.current === 0) {
+        baselineHeightRef.current = Math.max(layoutHeight, visualHeight);
+      }
+      const next = inferKeyboardOpen({
+        layoutHeight,
+        visualHeight,
+        baselineHeight: baselineHeightRef.current,
+        editableFocused,
+      });
+      setOpen(next);
+      // Never learn the shrunken keyboard viewport as the baseline. Once focus
+      // is gone, accepting the settled height lets rotation and split-screen
+      // resizing establish a new keyboard-free baseline.
+      if (!editableFocused && !next) baselineHeightRef.current = visibleHeight;
+      else baselineHeightRef.current = Math.max(
+        baselineHeightRef.current,
+        visibleHeight,
+      );
     };
     const applyNow = (): void => {
       if (raf === 0) raf = globalThis.requestAnimationFrame(apply);
@@ -151,17 +177,38 @@ export function useKeyboardOpen(): boolean {
       clearTimers();
       timers = [120, 300, 550].map((d) => globalThis.setTimeout(apply, d));
     };
+    const startPoll = (): void => {
+      if (poll === 0) poll = globalThis.setInterval(apply, 250);
+    };
+    const stopPoll = (): void => {
+      if (poll !== 0) {
+        globalThis.clearInterval(poll);
+        poll = 0;
+      }
+    };
+    const onFocusIn = (): void => {
+      schedule();
+      startPoll();
+    };
+    const onFocusOut = (): void => {
+      schedule();
+      stopPoll();
+    };
     vv.addEventListener("resize", schedule);
     vv.addEventListener("scroll", applyNow);
-    doc.addEventListener("focusin", schedule);
-    doc.addEventListener("focusout", schedule);
+    globalThis.addEventListener("resize", schedule);
+    doc.addEventListener("focusin", onFocusIn);
+    doc.addEventListener("focusout", onFocusOut);
     schedule();
+    if (hasEditableFocus(doc)) startPoll();
     return () => {
       vv.removeEventListener("resize", schedule);
       vv.removeEventListener("scroll", applyNow);
-      doc.removeEventListener("focusin", schedule);
-      doc.removeEventListener("focusout", schedule);
+      globalThis.removeEventListener("resize", schedule);
+      doc.removeEventListener("focusin", onFocusIn);
+      doc.removeEventListener("focusout", onFocusOut);
       clearTimers();
+      stopPoll();
       if (raf !== 0) globalThis.cancelAnimationFrame(raf);
     };
   }, []);

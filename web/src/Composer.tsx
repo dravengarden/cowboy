@@ -1665,7 +1665,7 @@ export function ComposerWorkspace({
         elevation={0}
         sx={{
           position: "relative",
-          display: !desktop && mobilePendingEditing ? "none" : "flex",
+          display: !desktop && mobilePendingKeyboardEditing ? "none" : "flex",
           flexDirection: "column",
           ...(surface === "desktop" && {
             ...desktopSurfaceSx({ interactive: false, focusWithin: true }),
@@ -4200,16 +4200,30 @@ function PendingRow({
       mobileEditSawKeyboardRef.current = true;
       return undefined;
     }
-    // A focused third-party IME may publish its visualViewport resize late (or
-    // not at all during its candidate transition). Do not infer dismissal from
-    // the absence of an opening event: only a real visible→hidden lifecycle may
-    // finish this edit. Geometry remains compact independently above.
-    if (!mobileEditSawKeyboardRef.current) return undefined;
+    // Entering an edit and raising a third-party keyboard are not atomic. Give
+    // WebKit one animation window to report it; if the keyboard remains absent,
+    // end the keyboard-bound edit anyway. This also repairs stale ownership
+    // after an IME dismisses without ever publishing an observable open frame.
+    if (!mobileEditSawKeyboardRef.current) {
+      const timer = globalThis.setTimeout(
+        () => finishMobileEditRef.current(),
+        700,
+      );
+      return () => globalThis.clearTimeout(timer);
+    }
     const frame = globalThis.requestAnimationFrame(() =>
       finishMobileEditRef.current()
     );
     return () => globalThis.cancelAnimationFrame(frame);
   }, [editing, keyboardOpen, touchInput]);
+  // Mobile pending editing chrome is a keyboard-owned presentation state, not
+  // the durable edit ownership itself. Keep it mounted while the initiating
+  // tap is still raising the keyboard, but collapse it in the first render
+  // after a previously visible keyboard closes. Persistence finishes in the
+  // effect above without leaving a keyboard-less expanded editor on screen.
+  const keyboardBoundEditing = editing && (
+    !touchInput || keyboardOpen || !mobileEditSawKeyboardRef.current
+  );
   const editDirty = draft !== message.text ||
     editAttachments.length !== message.attachments.length ||
     editAttachments.some((attachment, index) =>
@@ -4282,7 +4296,7 @@ function PendingRow({
     });
     return () => globalThis.cancelAnimationFrame(frame);
   }, [editing, touchInput]);
-  if (editing) {
+  if (keyboardBoundEditing) {
     const addEditFiles = (files: File[]): void => {
       if (files.length === 0) return;
       void filesToAttachments(files).then((added) => {

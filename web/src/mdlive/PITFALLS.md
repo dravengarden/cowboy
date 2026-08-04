@@ -993,3 +993,14 @@ Desktop Vim + IME checks:
     scale icon and keycap geometry through `--cowboy-font-scale` or root-relative
     units; fixed pixel or minimum-font-clamped glyph sizes drift from the global
     font-size setting.
+
+47. **Queue/Draft editing chrome is keyboard-bound on touch surfaces.** The
+    initiating tap may briefly mount the editor before `visualViewport`
+    publishes an open keyboard, but once an open frame has been observed the
+    first closed frame must render the ordinary pending card immediately.
+    Buffer persistence and editing-ownership cleanup may finish in the next
+    animation frame; stale ownership must never keep the expanded editor or its
+    formatting/delivery rails visible without a software keyboard. Some iOS
+    third-party keyboards shrink `innerHeight` and `visualViewport.height`
+    together, so keyboard detection needs a keyboard-free baseline plus actual
+    editable focus, not only their instantaneous height difference.
