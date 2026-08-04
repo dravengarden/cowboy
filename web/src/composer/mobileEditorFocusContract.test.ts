@@ -42,7 +42,13 @@ Deno.test("mobile column and pending ownership cannot fill the viewport without 
   assertEquals(composerSource.includes("fill={desktop && column}"), true);
   assertEquals(
     composerSource.includes(
-      'maxHeight: mobilePendingKeyboardEditing ? "56vh" : "40vh"',
+      'maxHeight: mobilePendingKeyboardEditing ? "none" : "40vh"',
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      'overflowY: mobilePendingKeyboardEditing ? "hidden" : "auto"',
     ),
     true,
   );
@@ -59,7 +65,7 @@ Deno.test("Plan plus Queue or Draft editing cannot promote mobile geometry after
   );
   assertEquals(
     composerSource.includes(
-      "mobilePendingKeyboardEditing ? \"56vh\" : \"40vh\"",
+      "mobilePendingKeyboardEditing ? \"none\" : \"40vh\"",
     ),
     true,
   );
@@ -143,6 +149,12 @@ Deno.test("mobile keyboard focus presents one floating composer surface", () => 
   assertEquals(
     composerSource.includes(
       'data-mobile-floating-edit={mobileFloatingEdit ? "true" : undefined}',
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "& [data-mobile-pending-row]:not([data-mobile-pending-row-editing='true'])",
     ),
     true,
   );

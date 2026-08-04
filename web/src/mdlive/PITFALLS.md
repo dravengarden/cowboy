@@ -888,8 +888,10 @@ here says otherwise.
     one floating Composer card: keep Plan/Queue/Draft state mounted but hide its
     surrounding panels, and suppress the shell's full-width glass and hairline.
     Queue/Draft edits keep their transaction-owning scrollport mounted while
-    stripping only its header, sibling panels, and frame. Continue measuring the
-    invisible shell so transcript bottom clearance follows the focused card.
+    stripping its header, sibling panels, frame, and every non-editing row. The
+    outer pending region must not scroll in this state; only the active editor
+    owns any content overflow. Continue measuring the invisible shell so
+    transcript bottom clearance follows the focused card.
 
 42. **The Mobile keyboard-dismiss action is an explicit focus boundary, not an
     editor mutation.** Keep the button in the main action track's final slot and

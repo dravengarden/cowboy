@@ -1526,7 +1526,7 @@ export function ComposerWorkspace({
             // (flex-shrink:1 children) get squished to fit instead of overflowing +
             // scrolling, which crushed the last panel's (drafts) header. Block stacks
             // them at natural height and `overflowY: auto` scrolls the overflow.
-            overflowY: "auto",
+            overflowY: mobilePendingKeyboardEditing ? "hidden" : "auto",
             // Do not trap a vertical gesture when the bounded stack currently
             // fits or reaches an edge. WebKit can then finish normal scroll
             // chaining instead of leaving the touched cards feeling frozen.
@@ -1539,7 +1539,7 @@ export function ComposerWorkspace({
             // direction lock continues to recognise deliberate horizontal drawer
             // gestures.
             minHeight: 0,
-            maxHeight: mobilePendingKeyboardEditing ? "56vh" : "40vh",
+            maxHeight: mobilePendingKeyboardEditing ? "none" : "40vh",
             transition: "max-height 180ms cubic-bezier(.2,.8,.2,1)",
             flexShrink: 1,
             touchAction: "pan-y",
@@ -3634,6 +3634,9 @@ function PendingPanel({
           border: 0,
           bgcolor: "transparent",
           boxShadow: "none",
+          "& [data-mobile-pending-row]:not([data-mobile-pending-row-editing='true'])": {
+            display: "none",
+          },
         }),
         ...(desktop && {
           flexShrink: 0,
@@ -3891,6 +3894,10 @@ function PendingPanel({
             return (
               <Stack
                 key={m.id}
+                data-mobile-pending-row={!desktop ? "true" : undefined}
+                data-mobile-pending-row-editing={
+                  !desktop && editingId === m.id ? "true" : undefined
+                }
                 {...(desktop
                   ? {
                     "data-desktop-item": m.id,
