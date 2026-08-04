@@ -345,6 +345,7 @@ const todoTool: Renderer = (ctx) => {
 
 const BY_TOOL: Record<string, Renderer> = {
   "claude-code:TodoWrite": todoTool,
+  "claude-deepseek:TodoWrite": todoTool,
   // codex / others can add bespoke renderers here; everything else flows through
   // the kind layer, which already covers shell/apply_patch/read/etc.
 };

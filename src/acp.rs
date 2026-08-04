@@ -103,8 +103,10 @@ const fn select_resume_method(
 }
 
 fn startup_full_access_mode(provider_id: &str) -> Option<&'static str> {
+    if crate::provider::is_claude(provider_id) {
+        return Some("bypassPermissions");
+    }
     match provider_id {
-        "claude-code" => Some("bypassPermissions"),
         "gemini" => Some("yolo"),
         _ => None,
     }
@@ -125,6 +127,10 @@ mod startup_mode_tests {
     fn providers_use_their_native_full_access_mode() {
         assert_eq!(
             startup_full_access_mode("claude-code"),
+            Some("bypassPermissions")
+        );
+        assert_eq!(
+            startup_full_access_mode("claude-deepseek"),
             Some("bypassPermissions")
         );
         assert_eq!(startup_full_access_mode("gemini"), Some("yolo"));
@@ -532,10 +538,16 @@ async fn agent_main(
     tracing::info!(provider = spec.id, session = session_id, cwd = %cwd.display(), "spawning agent");
 
     let mut command = Command::new(&spec.command);
-    command.args(&spec.args).envs(&spec.env);
-    for key in &spec.remove_env {
-        command.env_remove(key);
+    command.args(&spec.args);
+    for (key, _) in std::env::vars_os() {
+        if key
+            .to_str()
+            .is_some_and(|name| spec.removes_inherited_env(name))
+        {
+            command.env_remove(key);
+        }
     }
+    command.envs(&spec.env);
     let mut child = command
         .current_dir(&cwd)
         .stdin(Stdio::piped())
@@ -1278,10 +1290,16 @@ pub async fn run_oneshot(spec: &LaunchSpec, cwd: PathBuf, prompt: String) -> Res
     tracing::info!(provider = spec.id, cwd = %cwd.display(), "spawning agent");
 
     let mut command = Command::new(&spec.command);
-    command.args(&spec.args).envs(&spec.env);
-    for key in &spec.remove_env {
-        command.env_remove(key);
+    command.args(&spec.args);
+    for (key, _) in std::env::vars_os() {
+        if key
+            .to_str()
+            .is_some_and(|name| spec.removes_inherited_env(name))
+        {
+            command.env_remove(key);
+        }
     }
+    command.envs(&spec.env);
     let mut child = command
         .current_dir(&cwd)
         .stdin(Stdio::piped())

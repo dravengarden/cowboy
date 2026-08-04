@@ -55,6 +55,7 @@ const COMPACT_ALIASES = ["compact", "compress", "summarize", "summarise"];
 // nothing yet (the cold-start window before the first available_commands_update).
 const COMPACT_DEFAULT: Record<string, string> = {
   "claude-code": "compact",
+  "claude-deepseek": "compact",
   "codex": "compact",
   "codex-deepseek": "compact",
   "gemini": "compress",

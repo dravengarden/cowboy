@@ -111,7 +111,8 @@ export function toolHeading({ provider, toolName, kind, title, rawInput }: {
   if (kind === "search") return "Web search";
   if (kind === "execute") {
     if (
-      provider === "claude-code" && typeof input.description === "string" &&
+      (provider === "claude-code" || provider === "claude-deepseek") &&
+      typeof input.description === "string" &&
       input.description.trim()
     ) {
       return input.description.trim();

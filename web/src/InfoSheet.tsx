@@ -24,6 +24,7 @@ import { Kbd, useConfirmEnter } from "./Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { useSkills } from "./store";
 import { NetworkButton, NetworkIconButton } from "./NetworkActionFeedback";
+import { providerName } from "./providerPresentation";
 import {
   acceptedScheduleTime,
   type JsonRecord,
@@ -156,13 +157,7 @@ function ProviderUsageCard({ usage, schedule, now, onUsageChanged }: {
   const nearestCredit = nearestAvailableResetCredit(usage);
   const nearestCreditId = str(nearestCredit?.id);
   const summary = record(usage.activity?.summary);
-  const title = usage.provider === "claude-code"
-    ? "Claude Code"
-    : usage.provider === "gemini"
-    ? "Gemini"
-    : usage.provider === "codex-deepseek"
-    ? "DeepSeek"
-    : "Codex";
+  const title = providerName(usage.provider);
   const statusLabel = plan
     ? plan.toUpperCase()
     : usage.status === "available"
@@ -309,6 +304,8 @@ function ProviderUsageCard({ usage, schedule, now, onUsageChanged }: {
             {usage.status === "unavailable"
               ? usage.provider === "claude-code"
                 ? "Waiting for Claude Code session activity. Plan limits appear after the Agent SDK reports them."
+                : usage.provider === "claude-deepseek"
+                ? "Waiting for Claude Code DeepSeek session activity. DeepSeek account quota is not exposed over ACP."
                 : usage.provider === "gemini"
                 ? "Waiting for Gemini session activity. Account quota is not exposed by Gemini ACP."
                 : usage.provider === "codex-deepseek"

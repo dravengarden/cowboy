@@ -8,6 +8,10 @@ const cmds = (...names: string[]): AvailableCommand[] =>
 // Compact is a slash-command: per-provider default when nothing is advertised.
 Deno.test("compact defaults: claude/codex use /compact, gemini /compress", () => {
   assert.equal(resolveSessionAction("compact", "claude-code", [])?.command, "/compact");
+  assert.equal(
+    resolveSessionAction("compact", "claude-deepseek", [])?.command,
+    "/compact",
+  );
   assert.equal(resolveSessionAction("compact", "codex", [])?.command, "/compact");
   assert.equal(resolveSessionAction("compact", "gemini", [])?.command, "/compress");
 });

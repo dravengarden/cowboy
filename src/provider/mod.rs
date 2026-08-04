@@ -32,6 +32,21 @@ pub struct LaunchSpec {
     pub env: HashMap<String, String>,
     /// Inherited variables that must not cross this provider boundary.
     pub remove_env: Vec<&'static str>,
+    /// Inherited variable prefixes removed before provider-owned values are
+    /// applied. This closes over newly added upstream variables instead of
+    /// relying on a permanently complete hand-written name list.
+    pub remove_env_prefixes: Vec<&'static str>,
+}
+
+impl LaunchSpec {
+    #[must_use]
+    pub fn removes_inherited_env(&self, key: &str) -> bool {
+        self.remove_env.contains(&key)
+            || self
+                .remove_env_prefixes
+                .iter()
+                .any(|prefix| key.starts_with(prefix))
+    }
 }
 
 // A compacted thread can retain a large carried prefix. Counting that immutable
@@ -89,6 +104,95 @@ fn builtin_with_env(get_env: impl Fn(&str) -> Option<String>) -> HashMap<&'stati
             &get_env,
         ),
     );
+    let mut claude_deepseek = spec(
+        "claude-deepseek",
+        "npx",
+        &["-y", "@agentclientprotocol/claude-agent-acp"],
+        &get_env,
+    );
+    // Reuse only the adapter executable. Claude runtime state, model routing,
+    // credentials, history, plugins, and config remain provider-owned.
+    if get_env("COWBOY_ACP_CLAUDE_DEEPSEEK_CMD").is_none()
+        && let Some(command) = get_env("COWBOY_ACP_CLAUDE_CODE_CMD")
+    {
+        claude_deepseek.command = command;
+        if get_env("COWBOY_ACP_CLAUDE_DEEPSEEK_ARGS").is_none() {
+            claude_deepseek.args.clear();
+        }
+    }
+    claude_deepseek.env.extend([
+        (
+            "ANTHROPIC_BASE_URL".to_owned(),
+            "http://127.0.0.1:8089".to_owned(),
+        ),
+        (
+            "ANTHROPIC_AUTH_TOKEN".to_owned(),
+            "cowboy-local-credential-boundary".to_owned(),
+        ),
+        (
+            "ANTHROPIC_MODEL".to_owned(),
+            "deepseek-v4-pro[1m]".to_owned(),
+        ),
+        (
+            "ANTHROPIC_DEFAULT_OPUS_MODEL".to_owned(),
+            "deepseek-v4-pro[1m]".to_owned(),
+        ),
+        (
+            "ANTHROPIC_DEFAULT_SONNET_MODEL".to_owned(),
+            "deepseek-v4-pro[1m]".to_owned(),
+        ),
+        (
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL".to_owned(),
+            "deepseek-v4-flash".to_owned(),
+        ),
+        (
+            "CLAUDE_CODE_SUBAGENT_MODEL".to_owned(),
+            "deepseek-v4-flash".to_owned(),
+        ),
+        ("CLAUDE_CODE_EFFORT_LEVEL".to_owned(), "max".to_owned()),
+        (
+            "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST".to_owned(),
+            "cowboy-claude-deepseek".to_owned(),
+        ),
+        (
+            "CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING".to_owned(),
+            "1".to_owned(),
+        ),
+        (
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".to_owned(),
+            "1".to_owned(),
+        ),
+        (
+            "CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK".to_owned(),
+            "1".to_owned(),
+        ),
+        (
+            "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL".to_owned(),
+            "1".to_owned(),
+        ),
+        (
+            "CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL".to_owned(),
+            "1".to_owned(),
+        ),
+        ("DISABLE_LOGIN_COMMAND".to_owned(), "1".to_owned()),
+        ("DISABLE_LOGOUT_COMMAND".to_owned(), "1".to_owned()),
+        ("DISABLE_UPGRADE_COMMAND".to_owned(), "1".to_owned()),
+        ("ENABLE_CLAUDEAI_MCP_SERVERS".to_owned(), "false".to_owned()),
+    ]);
+    claude_deepseek.remove_env_prefixes = vec!["ANTHROPIC_", "CLAUDE_", "DEEPSEEK_"];
+    claude_deepseek.remove_env = vec![
+        "API_TIMEOUT_MS",
+        "DISABLE_PROMPT_CACHING",
+        "DISABLE_PROMPT_CACHING_HAIKU",
+        "DISABLE_PROMPT_CACHING_OPUS",
+        "DISABLE_PROMPT_CACHING_SONNET",
+        "ENABLE_TOOL_SEARCH",
+        "ENABLE_CLAUDEAI_MCP_SERVERS",
+        "MAX_THINKING_TOKENS",
+        "MCP_TIMEOUT",
+        "MCP_TOOL_TIMEOUT",
+    ];
+    m.insert("claude-deepseek", claude_deepseek);
     m.insert(
         "codex",
         spec_with_custom_default_args(
@@ -212,6 +316,7 @@ fn spec_with_custom_default_args(
             }),
             env: HashMap::new(),
             remove_env: Vec::new(),
+            remove_env_prefixes: Vec::new(),
         },
         // Default command (npx): `_ARGS` may still override the pinned adapter args.
         None => LaunchSpec {
@@ -221,6 +326,7 @@ fn spec_with_custom_default_args(
                 .unwrap_or_else(|| default_args.iter().map(|s| (*s).to_owned()).collect()),
             env: HashMap::new(),
             remove_env: Vec::new(),
+            remove_env_prefixes: Vec::new(),
         },
     }
 }
@@ -241,6 +347,20 @@ pub fn lookup(id: &str) -> Option<LaunchSpec> {
             }
         }
     }
+    if id == "claude-deepseek" {
+        match prepare_claude_deepseek_config_dir() {
+            Ok(config_dir) => {
+                spec.env.insert(
+                    "CLAUDE_CONFIG_DIR".to_owned(),
+                    config_dir.display().to_string(),
+                );
+            }
+            Err(error) => {
+                tracing::warn!(%error, "failed to prepare isolated Claude DeepSeek config");
+                return None;
+            }
+        }
+    }
     Some(spec)
 }
 
@@ -248,6 +368,62 @@ pub fn lookup(id: &str) -> Option<LaunchSpec> {
 #[must_use]
 pub fn is_codex(id: &str) -> bool {
     matches!(id, "codex" | "codex-deepseek")
+}
+
+/// Whether a Cowboy provider uses Claude Code ACP/runtime semantics.
+#[must_use]
+pub fn is_claude(id: &str) -> bool {
+    matches!(id, "claude-code" | "claude-deepseek")
+}
+
+fn prepare_claude_deepseek_config_dir() -> std::io::Result<PathBuf> {
+    let user_home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/home/draven"));
+    prepare_claude_deepseek_config_dir_at(&user_home)
+}
+
+fn prepare_claude_deepseek_config_dir_at(user_home: &Path) -> std::io::Result<PathBuf> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let mut target = user_home.to_path_buf();
+    for component in [
+        ".local",
+        "state",
+        "cowboy",
+        "providers",
+        "claude-deepseek",
+        "claude-config",
+    ] {
+        target.push(component);
+        match std::fs::symlink_metadata(&target) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Claude DeepSeek config boundary must contain only real directories",
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                match std::fs::create_dir(&target) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                        let metadata = std::fs::symlink_metadata(&target)?;
+                        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "Claude DeepSeek config boundary must contain only real directories",
+                            ));
+                        }
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o700))?;
+    Ok(target)
 }
 
 fn prepare_codex_deepseek_home() -> std::io::Result<PathBuf> {
@@ -404,6 +580,84 @@ mod tests {
             "custom command drops the npx default args"
         );
 
+        let claude_deepseek = lookup_with(
+            &[(
+                "COWBOY_ACP_CLAUDE_CODE_CMD",
+                "/opt/npm-global/bin/claude-agent-acp",
+            )],
+            "claude-deepseek",
+        )
+        .expect("claude-deepseek registered");
+        assert_eq!(
+            claude_deepseek.command,
+            "/opt/npm-global/bin/claude-agent-acp"
+        );
+        assert!(claude_deepseek.args.is_empty());
+        assert_eq!(
+            claude_deepseek
+                .env
+                .get("ANTHROPIC_BASE_URL")
+                .map(String::as_str),
+            Some("http://127.0.0.1:8089")
+        );
+        assert_eq!(
+            claude_deepseek
+                .env
+                .get("ANTHROPIC_MODEL")
+                .map(String::as_str),
+            Some("deepseek-v4-pro[1m]")
+        );
+        assert_eq!(
+            claude_deepseek
+                .env
+                .get("CLAUDE_CODE_SUBAGENT_MODEL")
+                .map(String::as_str),
+            Some("deepseek-v4-flash")
+        );
+        assert_eq!(
+            claude_deepseek
+                .env
+                .get("ANTHROPIC_AUTH_TOKEN")
+                .map(String::as_str),
+            Some("cowboy-local-credential-boundary")
+        );
+        assert_eq!(
+            claude_deepseek
+                .env
+                .get("CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK")
+                .map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(
+            claude_deepseek
+                .env
+                .get("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST")
+                .map(String::as_str),
+            Some("cowboy-claude-deepseek")
+        );
+        assert!(
+            !claude_deepseek
+                .env
+                .contains_key("ANTHROPIC_SMALL_FAST_MODEL")
+        );
+        for inherited in [
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_BASE_URL",
+            "CLAUDE_CONFIG_DIR",
+            "CLAUDE_CODE_USE_BEDROCK",
+            "DEEPSEEK_API_KEY",
+            "DISABLE_PROMPT_CACHING",
+            "MAX_THINKING_TOKENS",
+        ] {
+            assert!(
+                claude_deepseek.removes_inherited_env(inherited),
+                "inherited {inherited} crossed the provider boundary"
+            );
+        }
+        for preserved in ["HOME", "PATH", "SSH_AUTH_SOCK", "HTTP_PROXY"] {
+            assert!(!claude_deepseek.removes_inherited_env(preserved));
+        }
+
         // _ARGS overrides independently (e.g. gemini's `--acp`).
         assert_eq!(
             lookup_with(
@@ -488,5 +742,117 @@ mod tests {
         assert_eq!(entries, [std::ffi::OsString::from("config.toml")]);
 
         std::fs::remove_dir_all(&root).expect("remove isolated test home");
+    }
+
+    #[test]
+    fn claude_deepseek_config_never_reads_or_links_standard_claude_state() {
+        use std::os::unix::fs::PermissionsExt as _;
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static NEXT_TEST_HOME: AtomicU64 = AtomicU64::new(1);
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-claude-deepseek-isolation-{}-{}",
+            std::process::id(),
+            NEXT_TEST_HOME.fetch_add(1, Ordering::Relaxed)
+        ));
+        let standard = root.join(".claude");
+        std::fs::create_dir_all(&standard).expect("create standard Claude config");
+        std::fs::write(
+            standard.join("settings.json"),
+            r#"{"model":"claude-secret-sentinel","mcpServers":{"private":{}}}"#,
+        )
+        .expect("write standard settings");
+        std::fs::write(standard.join(".credentials.json"), "claude-auth-sentinel")
+            .expect("write standard auth");
+        std::fs::write(root.join(".claude.json"), "claude-instance-sentinel")
+            .expect("write standard instance metadata");
+
+        let isolated = super::prepare_claude_deepseek_config_dir_at(&root)
+            .expect("prepare isolated Claude config");
+        assert_eq!(
+            std::fs::metadata(&isolated).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(std::fs::read_dir(&isolated).unwrap().count(), 0);
+        assert_eq!(
+            std::fs::read_to_string(standard.join("settings.json")).unwrap(),
+            r#"{"model":"claude-secret-sentinel","mcpServers":{"private":{}}}"#
+        );
+        assert_eq!(
+            std::fs::read_to_string(standard.join(".credentials.json")).unwrap(),
+            "claude-auth-sentinel"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join(".claude.json")).unwrap(),
+            "claude-instance-sentinel"
+        );
+
+        std::fs::remove_dir_all(&root).expect("remove isolated test home");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn claude_deepseek_config_rejects_symlink_boundaries_at_every_depth() {
+        use std::os::unix::fs::symlink;
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static NEXT_TEST_HOME: AtomicU64 = AtomicU64::new(1);
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-claude-deepseek-symlink-{}-{}",
+            std::process::id(),
+            NEXT_TEST_HOME.fetch_add(1, Ordering::Relaxed)
+        ));
+        for relative in [
+            ".local/state/cowboy/providers/claude-deepseek",
+            ".local/state/cowboy/providers/claude-deepseek/claude-config",
+        ] {
+            let case = root.join(relative.replace('/', "-"));
+            let boundary = case.join(relative);
+            std::fs::create_dir_all(boundary.parent().unwrap()).unwrap();
+            let outside = case.join("ordinary-claude-state");
+            std::fs::create_dir_all(&outside).unwrap();
+            symlink(&outside, &boundary).unwrap();
+
+            let error = super::prepare_claude_deepseek_config_dir_at(&case).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+            assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+        }
+
+        std::fs::remove_dir_all(&root).expect("remove symlink test home");
+    }
+
+    #[test]
+    fn claude_deepseek_config_creation_is_safe_under_concurrent_first_launches() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-claude-deepseek-concurrent-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).expect("create concurrent test home");
+
+        let barrier = Arc::new(Barrier::new(16));
+        let workers = (0..16)
+            .map(|_| {
+                let root = root.clone();
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    super::prepare_claude_deepseek_config_dir_at(&root)
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let mut expected = None;
+        for worker in workers {
+            let path = worker
+                .join()
+                .expect("config creation thread panicked")
+                .expect("concurrent config creation failed");
+            assert_eq!(expected.get_or_insert_with(|| path.clone()), &path);
+        }
+        std::fs::remove_dir_all(&root).expect("remove concurrent test home");
     }
 }

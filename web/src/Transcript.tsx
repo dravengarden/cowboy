@@ -217,7 +217,7 @@ function TranscriptSkeleton({
     return () => globalThis.clearTimeout(timer);
   }, []);
 
-  const agent = provider === "claude-code"
+  const agent = provider === "claude-code" || provider === "claude-deepseek"
     ? "Claude Code"
     : provider === "gemini"
     ? "Gemini"
@@ -831,7 +831,7 @@ function ThinkingIndicator({
 }: {
   provider: string;
 }): React.JSX.Element {
-  if (provider === "claude-code") return <ClaudeThinking />;
+  if (provider === "claude-code" || provider === "claude-deepseek") return <ClaudeThinking />;
   if (provider === "codex" || provider === "codex-deepseek") return <CodexThinking />;
   return <DefaultThinking />;
 }
@@ -926,6 +926,8 @@ function CompactingWidget({
   const muted = theme.palette.text.secondary;
   const accent = provider === "claude-code"
     ? "#D97757"
+    : provider === "claude-deepseek"
+    ? "#4D6BFE"
     : theme.palette.primary.main;
   const reducedMotion = globalThis.matchMedia?.(
     "(prefers-reduced-motion: reduce)",

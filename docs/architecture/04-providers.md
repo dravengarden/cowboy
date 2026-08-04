@@ -12,6 +12,7 @@ needed, hand-coded confirm-detection rules — the core never changes.
 | Provider | Launch | ACP on-ramp |
 |---|---|---|
 | `claude-code` | `npx -y @agentclientprotocol/claude-agent-acp` | Claude Code ACP adapter |
+| `claude-deepseek` | the same Claude ACP adapter with an isolated provider-owned `CLAUDE_CONFIG_DIR` | Claude Code over the independent local DeepSeek Anthropic Messages gateway |
 | `codex` | `npx -y @agentclientprotocol/codex-acp` plus full-access defaults | adapter over Codex App Server |
 | `codex-deepseek` | the same Codex ACP adapter with an isolated provider-owned `CODEX_HOME` | Codex over the independent local DeepSeek Responses gateway |
 | `gemini` | `npx -y @google/gemini-cli --acp` | Gemini's native ACP mode |
@@ -53,10 +54,25 @@ catalog if the profile has not yet been initialized; this fallback contains no
 OpenAI config or credentials and can be deleted after older Machine generations
 have drained.
 
-A future Claude/DeepSeek bridge gets another provider id, process, profile,
-port, credential, and isolated Claude configuration. It may reuse the generic
-model-gateway release mechanism and UI metadata shape, but it must not grow this
-process into a shared provider router.
+`claude-deepseek` is the corresponding Claude Code runtime variant, not another
+agent implementation. It uses `claude-deepseek.service` on loopback and a
+provider-owned config directory under
+`~/.local/state/cowboy/providers/claude-deepseek/claude-config`. The provider
+clears inherited Anthropic, Claude, and DeepSeek configuration before applying
+its closed base URL, placeholder client token, V4 Pro 1M main-model, V4 Flash
+fast/subagent models, and streaming settings. Claude Code is explicitly marked
+as provider-managed-by-host, so project or user settings cannot replace the
+endpoint or authentication selected by Cowboy. The real API key exists only in
+the gateway's distinct systemd credential.
+
+The isolated directory neither reads nor links ordinary `~/.claude`, top-level
+Claude instance metadata, settings, credentials, history, projects, plugins, or
+cache. Normal Claude and DeepSeek Claude may run concurrently; only the npm
+adapter executable and provider-agnostic ACP implementation are shared. The
+gateway in Columbus has its own process, profile, port, receipt, credential,
+tests, and release transaction. It preserves native Anthropic Messages/SSE and
+contains only current fixture-backed DeepSeek compatibility repairs; it is not
+a shared provider router.
 
 Gemini CLI stopped accepting Google Login for consumer, Google AI Pro, and AI
 Ultra accounts on 2026-06-18. Its ACP mode remains usable with a Gemini API key

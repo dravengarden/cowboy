@@ -38,6 +38,12 @@ export function ProviderIcon({
           <path d={CLAUDE_PATH} fill="#D97757" />
         </SvgIcon>
       );
+    case "claude-deepseek":
+      return (
+        <SvgIcon viewBox="0 0 24 24" {...props}>
+          <path d={CLAUDE_PATH} fill="#4D6BFE" />
+        </SvgIcon>
+      );
     case "codex":
       return (
         <SvgIcon viewBox="0 0 24 24" {...props}>

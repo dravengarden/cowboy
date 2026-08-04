@@ -138,6 +138,11 @@ impl UsageService {
                 codex,
                 unavailable("claude-code", "ACP", "Waiting for ACP rate-limit data"),
                 unavailable(
+                    "claude-deepseek",
+                    "ACP",
+                    "Waiting for DeepSeek session usage",
+                ),
+                unavailable(
                     "gemini",
                     "ACP",
                     "Provider does not expose account limits over ACP",
@@ -311,6 +316,11 @@ fn unavailable_providers() -> Vec<ProviderUsage> {
         unavailable("codex", "codex-app-server", "Not refreshed yet"),
         unavailable("claude-code", "ACP", "Waiting for ACP rate-limit data"),
         unavailable(
+            "claude-deepseek",
+            "ACP",
+            "Waiting for DeepSeek session usage",
+        ),
+        unavailable(
             "gemini",
             "ACP",
             "Provider does not expose account limits over ACP",
@@ -467,7 +477,12 @@ mod tests {
     #[test]
     fn unavailable_snapshot_is_explicit() {
         let providers = unavailable_providers();
-        assert_eq!(providers.len(), 3);
+        assert_eq!(providers.len(), 4);
+        assert!(
+            providers
+                .iter()
+                .any(|provider| provider.provider == "claude-deepseek")
+        );
         assert!(
             providers
                 .iter()
