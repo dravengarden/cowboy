@@ -1431,16 +1431,36 @@ function NewSessionDialog({
                         const presentation = providerPresentation(p);
                         const available = providerAvailable(p);
                         return (
-                            <MenuItem key={p} value={p} disabled={!available}>
-                                <ListItemIcon sx={{ minWidth: 36 }}>
+                            <MenuItem
+                                key={p}
+                                value={p}
+                                disabled={!available}
+                                sx={{ alignItems: "flex-start", py: 1, whiteSpace: "normal" }}
+                            >
+                                <ListItemIcon sx={{ minWidth: 36, mt: 0.25 }}>
                                     <ProviderIcon provider={p} fontSize="small" />
                                 </ListItemIcon>
-                                <ListItemText
-                                    primary={presentation.agent}
-                                    secondary={`${presentation.modelProvider} · ${presentation.detail}${
-                                        available ? "" : " · Unavailable on this machine"
-                                    }`}
-                                />
+                                <Box sx={{ flex: 1, minWidth: 0 }}>
+                                    <Typography variant="body1">
+                                        {presentation.agent}
+                                    </Typography>
+                                    <Typography
+                                        variant="body2"
+                                        color="text.secondary"
+                                        sx={{ lineHeight: 1.35, overflowWrap: "anywhere" }}
+                                    >
+                                        {presentation.modelProvider} · {presentation.detail}
+                                    </Typography>
+                                    {!available ? (
+                                        <Typography
+                                            variant="caption"
+                                            color="text.secondary"
+                                            sx={{ display: "block", mt: 0.25 }}
+                                        >
+                                            Unavailable on this machine
+                                        </Typography>
+                                    ) : null}
+                                </Box>
                             </MenuItem>
                         );
                     })}
