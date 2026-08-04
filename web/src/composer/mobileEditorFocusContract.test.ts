@@ -164,9 +164,8 @@ Deno.test("mobile keyboard focus presents one floating composer surface", () => 
     true,
   );
   assertEquals(
-    composerSource.includes(
-      "[data-mobile-composer-clear]\": {\n              display: \"none\"",
-    ),
+    composerSource.indexOf("data-mobile-composer-utility-rail") <
+      composerSource.indexOf("<span data-mobile-composer-clear>"),
     true,
   );
   assertEquals(

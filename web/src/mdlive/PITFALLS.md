@@ -894,8 +894,9 @@ here says otherwise.
     focused, fullscreen, and Queue/Draft edit transitions; do not key that inset
     on focus, because fullscreen handoff otherwise makes the gap jump. Internal
     stack children retain their independent 8px rhythm. Keep destructive Clear
-    out of the focused card's top-right utility rail; fullscreen remains there,
-    while keyboard dismissal stays at the trailing edge of the delivery row.
+    out of the card's top-right utility rail; fullscreen remains there, while
+    Clear joins the delivery actions and keyboard dismissal stays at their
+    unstyled trailing edge.
     Keep that dismissal control outside the horizontally scrollable action
     track: iOS rubber-band moves every descendant of the scroller, including a
     `position: sticky` child, before sticky settles back into place.

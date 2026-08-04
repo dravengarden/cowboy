@@ -1762,12 +1762,6 @@ export function ComposerWorkspace({
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-keyboard-hide]": {
               display: "inline-flex",
             },
-            // Clear is destructive, low-frequency chrome. In focused writing
-            // mode it formed an awkward vertical pair with the trailing keyboard
-            // action, so keep only fullscreen in the top-right utility rail.
-            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-composer-clear]": {
-              display: "none",
-            },
             "@media (prefers-reduced-motion: reduce)": {
               transition: "none",
             },
@@ -1949,24 +1943,6 @@ export function ComposerWorkspace({
                 >
                   <OpenInFull />
                 </IconButton>
-              </Tooltip>
-              <Tooltip title="Clear all">
-                <span data-mobile-composer-clear>
-                  <IconButton
-                    size="small"
-                    aria-label="clear composer"
-                    disabled={!clearable}
-                    sx={{
-                      ...TOOLBAR_ICON_BTN,
-                      color: "text.secondary",
-                      "& .MuiSvgIcon-root": { fontSize: "1.15rem" },
-                    }}
-                    onPointerDown={(event): void => event.preventDefault()}
-                    onClick={(event): void => setClearComposerAnchor(event.currentTarget)}
-                  >
-                    <DeleteOutline />
-                  </IconButton>
-                </span>
               </Tooltip>
             </Stack>
           )
@@ -2506,6 +2482,19 @@ export function ComposerWorkspace({
             </IconButton>
           </span>
         </Tooltip>
+        <Tooltip title="Clear composer">
+          <span data-mobile-composer-clear>
+            <IconButton
+              aria-label="clear composer"
+              disabled={!clearable}
+              sx={TOOLBAR_ICON_BTN}
+              onPointerDown={(event): void => event.preventDefault()}
+              onClick={(event): void => setClearComposerAnchor(event.currentTarget)}
+            >
+              <DeleteOutline fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
         {/* Schedule the current content: park it as a draft that the SERVER
             auto-sends at a future time (fires even with every client offline). */}
         <Tooltip title="定时发送">
@@ -2559,13 +2548,11 @@ export function ComposerWorkspace({
             data-mobile-keyboard-hide
             sx={{
               display: "none",
-              flex: "0 0 46px",
+              flex: "0 0 42px",
               alignItems: "center",
               justifyContent: "center",
               alignSelf: "stretch",
-              mx: 0.25,
-              borderLeft: 1,
-              borderColor: "divider",
+              mr: 0.25,
             }}
           >
             <Tooltip title="Hide keyboard">
@@ -2575,8 +2562,6 @@ export function ComposerWorkspace({
                 sx={{
                   ...TOOLBAR_ICON_BTN,
                   color: "text.secondary",
-                  borderRadius: 2,
-                  bgcolor: "action.hover",
                   "& .MuiSvgIcon-root": { fontSize: "1.1rem" },
                 }}
                 onPointerDown={(event): void => event.preventDefault()}
