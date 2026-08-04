@@ -182,7 +182,7 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
     );
     let worker_command =
         active_acp.map_or_else(|| args.worker_command.clone(), |(_, executable)| executable);
-    let worker_environment = managed_provider_environment(&components)?;
+    let worker_environment = managed_provider_environment(&components, &worker_command)?;
     let broker = MachineBrokerArgs {
         socket: args.socket,
         compatibility_sockets: args.compatibility_sockets,
@@ -258,6 +258,7 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
 
 fn managed_provider_environment(
     components: &ComponentStore,
+    worker_command: &Path,
 ) -> anyhow::Result<BTreeMap<String, String>> {
     let disabled = disabled_provider_slots();
     let active = components.active()?;
@@ -294,6 +295,13 @@ fn managed_provider_environment(
             "COWBOY_ACP_CODEX_CMD".to_owned(),
             components.command_path("codex-acp").display().to_string(),
         );
+    }
+    // Keep npm ownership of codex-acp while correcting its App Server resume
+    // request at the worker boundary. A signed standalone ACP runtime may omit
+    // the sibling shim and own its complete provider contract instead.
+    let codex_proxy = worker_command.with_file_name("cowboy-codex-app-server");
+    if !disabled.iter().any(|slot| slot == "codex") && codex_proxy.is_file() {
+        environment.insert("CODEX_PATH".to_owned(), codex_proxy.display().to_string());
     }
     if has(ComponentKind::ProviderAdapter, &["claude", "claude-code"]) {
         environment.insert(
@@ -2169,11 +2177,17 @@ mod tests {
             std::os::unix::fs::symlink(&generation, root.join("active").join(name))
                 .expect("active link");
         }
-        let environment = managed_provider_environment(&store).expect("provider environment");
+        let worker = root.join("release/bin/cowboy-acp-worker");
+        let proxy = worker.with_file_name("cowboy-codex-app-server");
+        std::fs::create_dir_all(proxy.parent().expect("proxy parent")).expect("proxy directory");
+        std::fs::write(&proxy, b"test").expect("proxy executable");
+        let environment =
+            managed_provider_environment(&store, &worker).expect("provider environment");
         assert!(environment["COWBOY_ACP_CODEX_CMD"].ends_with("commands/codex-acp"));
         assert!(environment["COWBOY_ACP_CLAUDE_CODE_CMD"].ends_with("commands/claude-agent-acp"));
         assert!(environment["COWBOY_ACP_GEMINI_CMD"].ends_with("commands/gemini"));
         assert_eq!(environment["COWBOY_ACP_GEMINI_ARGS"], "--acp");
+        assert_eq!(environment["CODEX_PATH"], proxy.display().to_string());
         std::fs::remove_dir_all(root).expect("cleanup");
     }
 

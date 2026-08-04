@@ -19,6 +19,15 @@ Each entry is a **`LaunchSpec`**: `id` + `command` + `args`. That's the whole
 contract a provider must satisfy to start; everything downstream
 (initialize/handshake/command loop) is provider-agnostic and lives in `acp.rs`.
 
+Managed Machine releases also set Codex ACP's `CODEX_PATH` to
+`cowboy-codex-app-server`. This transparent NDJSON proxy forwards the selected
+Codex CLI unchanged and adds `excludeTurns: true` only to App Server
+`thread/resume`. It prevents no-history ACP `session/resume` from hydrating and
+serializing the complete rollout while leaving `session/load` intact: the
+adapter still performs its explicit `thread/read(includeTurns=true)` afterward.
+The shim does not patch or take ownership of the npm-managed adapter and is
+idempotent with an upstream adapter that starts sending the option itself.
+
 Gemini CLI stopped accepting Google Login for consumer, Google AI Pro, and AI
 Ultra accounts on 2026-06-18. Its ACP mode remains usable with a Gemini API key
 or Code Assist Standard/Enterprise credentials. Machine authentication therefore

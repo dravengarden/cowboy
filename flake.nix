@@ -79,6 +79,7 @@
         ./src/acp.rs
         ./src/agent_model.rs
         ./src/agent_sink.rs
+        ./src/bin/cowboy-codex-app-server.rs
         ./src/cgroup.rs
         ./src/provider/mod.rs
         ./src/runtime_wire.rs
@@ -140,7 +141,14 @@
         version = "0.1.0";
         src = cowboy-src;
         cargoDeps = cowboy-cargo-deps;
-        cargoBuildFlags = [ "--bin" "cowboy" "--bin" "cowboy-acp-worker" ];
+        cargoBuildFlags = [
+          "--bin"
+          "cowboy"
+          "--bin"
+          "cowboy-acp-worker"
+          "--bin"
+          "cowboy-codex-app-server"
+        ];
         nativeCheckInputs = [ pkgs.cacert pkgs.gitMinimal pkgs.openssh ];
         preCheck = ''
           export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
@@ -287,6 +295,8 @@
         ln -s ${cowboy-machine}/bin/cowboy-machine-install \
           "$out/bin/cowboy-machine-install"
         ln -s ${cowboy}/bin/cowboy-acp-worker "$out/bin/cowboy-acp-worker"
+        ln -s ${cowboy}/bin/cowboy-codex-app-server \
+          "$out/bin/cowboy-codex-app-server"
         ln -s ${cowboy-code-adapter}/bin/cowboy-code-adapter \
           "$out/bin/cowboy-code-adapter"
         ln -s ${cowboy-zed-adapter}/bin/cowboy-zed-adapter \
@@ -311,6 +321,7 @@
         test -e ${machine-src}/src/session_workspace.rs
         test ! -e ${cowboy}/bin/cowboy-machine
         test ! -e ${cowboy}/bin/cowboy-machine-install
+        test -x ${cowboy}/bin/cowboy-codex-app-server
         test -x ${cowboy-machine}/bin/cowboy-machine
         test -x ${cowboy-machine}/bin/cowboy-machine-install
         test -x ${cowboy-code-adapter}/bin/cowboy-code-adapter
