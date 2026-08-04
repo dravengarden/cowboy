@@ -41,6 +41,7 @@
           ./Cargo.toml
           ./Cargo.lock
           ./src/lib.rs
+          ./src/claude_shell.rs
           ./src/machine_broker.rs
           ./src/machine_cli.rs
           ./src/machine_auth.rs
@@ -84,6 +85,7 @@
         ./src/agent_sink.rs
         ./src/bin/cowboy-codex-app-server.rs
         ./src/cgroup.rs
+        ./src/claude_shell.rs
         ./src/provider/mod.rs
         ./src/provider_catalog.rs
         ./src/runtime_wire.rs
