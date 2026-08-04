@@ -35,7 +35,7 @@ use tokio::net::TcpStream;
 use tokio::sync::{Notify, mpsc, oneshot};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
 
-use crate::acp::HANDSHAKE_TIMEOUT;
+use crate::acp::STARTUP_PHASE_TIMEOUT;
 use crate::cli::ServeAcpArgs;
 use crate::core::{Envelope, Event, Inbound, Outbound, SessionMeta, Status};
 
@@ -45,9 +45,9 @@ const CONFIG_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 // handshake. Zed decides whether to construct ConfigOptionsView from the
 // session/new response; a later config_option_update can refresh an existing
 // view, but cannot create one when the response contained no config options.
-// Therefore this wait must outlive the provider handshake watchdog. A cold
-// Codex start has been observed taking 23s, well beyond the old 10s timeout.
-const INITIAL_CONFIG_TIMEOUT: Duration = Duration::from_secs(HANDSHAKE_TIMEOUT.as_secs() + 5);
+// Therefore this wait must outlive one provider startup phase. A cold Codex
+// start has been observed taking 23s, well beyond the old 10s timeout.
+const INITIAL_CONFIG_TIMEOUT: Duration = Duration::from_secs(STARTUP_PHASE_TIMEOUT.as_secs() + 5);
 const DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(30);
 const RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(100);
 const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(5);
@@ -1563,7 +1563,7 @@ mod tests {
 
     #[test]
     fn initial_config_wait_outlives_provider_handshake() {
-        assert!(INITIAL_CONFIG_TIMEOUT > HANDSHAKE_TIMEOUT);
+        assert!(INITIAL_CONFIG_TIMEOUT > STARTUP_PHASE_TIMEOUT);
     }
 
     #[test]

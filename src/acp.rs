@@ -34,16 +34,16 @@ use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     CancelNotification, ContentBlock, InitializeRequest, LoadSessionRequest, NewSessionRequest,
     PermissionOptionId, PermissionOptionKind, PromptRequest, RequestPermissionOutcome,
-    RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
-    SessionConfigKind, SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption,
-    SessionConfigSelectOptions, SessionId, SessionModeId, SessionNotification, SessionUpdate,
-    SetSessionConfigOptionRequest, SetSessionModeRequest,
+    RequestPermissionRequest, RequestPermissionResponse, ResumeSessionRequest,
+    SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption, SessionConfigOptionValue,
+    SessionConfigSelectOption, SessionConfigSelectOptions, SessionId, SessionModeId,
+    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, SetSessionModeRequest,
 };
 use agent_client_protocol::{Agent, ByteStreams, Client, ConnectionTo, Error};
 use anyhow::{Context, Result};
 use tokio::io::{AsyncBufReadExt as _, BufReader};
 use tokio::process::Command;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::agent_model::{AUTO_CONTINUE_PREFIX, Event, SCHED_PREFIX, Status, WAKEUP_PREFIX};
@@ -51,18 +51,55 @@ use crate::agent_sink::AgentSink;
 use crate::cgroup;
 use crate::provider::LaunchSpec;
 
-/// How long the ACP handshake (`initialize` + optional `session/load` +
-/// `session/new`) may take before the spawn is declared stalled. Generous on
-/// purpose: a real stall is *indefinite* — a hung `npx` registry version-check
-/// on an ESTABLISHED-but-dead socket with no npm timeout (observed wedging a
-/// session in `Starting` for minutes) — so this only has to comfortably clear a
-/// legitimate cold start (npx cache-miss download + SDK + MCP-server bootstrap),
-/// not race it. Too tight would false-trip a slow-but-healthy start into a
-/// pointless respawn; a real stall is caught either way. `run_agent` auto-retries
-/// the spawn once before this ever surfaces as `Crashed`.
-pub(crate) const HANDSHAKE_TIMEOUT: Duration = Duration::from_mins(1);
+/// Maximum time allowed for each distinct ACP startup phase. The watchdog
+/// resets when the agent advances from initialize to session establishment and
+/// then startup configuration, so a slow but progressing launch is not charged
+/// against one opaque deadline.
+pub(crate) const STARTUP_PHASE_TIMEOUT: Duration = Duration::from_mins(1);
 const CODEX_FULL_ACCESS_CONFIG_ID: &str = "mode";
 const CODEX_FULL_ACCESS_CONFIG_VALUE: &str = "agent-full-access";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StartupPhase {
+    Initialize,
+    Resume,
+    Load,
+    New,
+    Configure,
+    Ready,
+}
+
+impl StartupPhase {
+    const fn method(self) -> &'static str {
+        match self {
+            Self::Initialize => "initialize",
+            Self::Resume => "session/resume",
+            Self::Load => "session/load",
+            Self::New => "session/new",
+            Self::Configure => "startup configuration",
+            Self::Ready => "ready",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResumeMethod {
+    Resume,
+    Load,
+}
+
+const fn select_resume_method(
+    agent_can_resume: bool,
+    agent_can_load: bool,
+) -> Option<ResumeMethod> {
+    if agent_can_resume {
+        Some(ResumeMethod::Resume)
+    } else if agent_can_load {
+        Some(ResumeMethod::Load)
+    } else {
+        None
+    }
+}
 
 fn startup_full_access_mode(provider_id: &str) -> Option<&'static str> {
     match provider_id {
@@ -75,7 +112,8 @@ fn startup_full_access_mode(provider_id: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod startup_mode_tests {
     use super::{
-        codex_full_access_available, codex_full_access_selected, session_config_value,
+        ResumeMethod, StartupPhase, StartupTimeout, codex_full_access_available,
+        codex_full_access_selected, select_resume_method, session_config_value,
         startup_full_access_mode,
     };
     use agent_client_protocol::schema::v1::{
@@ -129,25 +167,86 @@ mod startup_mode_tests {
         assert_eq!(enabled, SessionConfigOptionValue::boolean(true));
         assert!(session_config_value(&serde_json::json!(42)).is_err());
     }
+
+    #[test]
+    fn resume_prefers_no_replay_and_keeps_load_as_compatibility_fallback() {
+        assert_eq!(select_resume_method(true, true), Some(ResumeMethod::Resume));
+        assert_eq!(
+            select_resume_method(true, false),
+            Some(ResumeMethod::Resume)
+        );
+        assert_eq!(select_resume_method(false, true), Some(ResumeMethod::Load));
+        assert_eq!(select_resume_method(false, false), None);
+    }
+
+    #[test]
+    fn only_an_initialize_timeout_is_safe_to_retry() {
+        let initialize = StartupTimeout::new(StartupPhase::Initialize);
+        let resume = StartupTimeout::new(StartupPhase::Resume);
+
+        assert!(initialize.retryable());
+        assert!(!resume.retryable());
+        assert_eq!(
+            resume.to_string(),
+            "agent did not complete ACP session/resume within 60s"
+        );
+    }
 }
 
-/// The ACP handshake did not complete within [`HANDSHAKE_TIMEOUT`]. Carried as
-/// an `anyhow` cause so [`run_agent`] can tell a transient spawn stall (retry
-/// once, silently) apart from a genuine connection error (surface immediately).
+/// One ACP startup phase did not complete within [`STARTUP_PHASE_TIMEOUT`].
+/// Carried as an `anyhow` cause so [`run_agent_with_sink`] can retry only a
+/// pre-initialize adapter stall, never an ambiguous session operation.
 #[derive(Debug)]
-struct HandshakeTimeout(u64);
+struct StartupTimeout {
+    phase: StartupPhase,
+    seconds: u64,
+}
 
-impl std::fmt::Display for HandshakeTimeout {
+impl StartupTimeout {
+    const fn new(phase: StartupPhase) -> Self {
+        Self {
+            phase,
+            seconds: STARTUP_PHASE_TIMEOUT.as_secs(),
+        }
+    }
+
+    const fn retryable(&self) -> bool {
+        matches!(self.phase, StartupPhase::Initialize)
+    }
+}
+
+impl std::fmt::Display for StartupTimeout {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "agent did not complete the ACP handshake within {}s (likely an npx/registry stall)",
-            self.0
+            "agent did not complete ACP {} within {}s",
+            self.phase.method(),
+            self.seconds
         )
     }
 }
 
-impl std::error::Error for HandshakeTimeout {}
+impl std::error::Error for StartupTimeout {}
+
+async fn startup_watchdog(mut phases: watch::Receiver<StartupPhase>) -> StartupTimeout {
+    loop {
+        let phase = *phases.borrow_and_update();
+        if phase == StartupPhase::Ready {
+            std::future::pending::<()>().await;
+        }
+
+        tokio::select! {
+            () = tokio::time::sleep(STARTUP_PHASE_TIMEOUT) => {
+                return StartupTimeout::new(phase);
+            }
+            changed = phases.changed() => {
+                if changed.is_err() {
+                    std::future::pending::<()>().await;
+                }
+            }
+        }
+    }
+}
 
 fn codex_full_access_available(options: &[SessionConfigOption]) -> bool {
     options.iter().any(|option| {
@@ -325,11 +424,9 @@ pub fn run_agent_with_sink(
     // plain `block_on` suffices — no `LocalSet` needed now that the crate is
     // `Send`-based.
     //
-    // Auto-retry once on a handshake stall (Layer 2). `agent_main` bounds the
-    // handshake with `HANDSHAKE_TIMEOUT` and reports a `HandshakeTimeout` when a
-    // freshly-spawned `npx` adapter hangs on its registry check (a transient
-    // network/proxy blip). We re-spawn ONCE before surfacing it, so the common
-    // transient case self-heals and the user never sees an error. The queued
+    // Auto-retry once only when the adapter does not answer ACP initialize.
+    // This covers a transient launch/runtime stall without replaying an
+    // ambiguous session/resume, session/load, or session/new request. The queued
     // prompts are safe across the retry: they live in the Hub queue (pg) until
     // the session reaches `Running`, never in `cmd_rx`, so `cmd_rx` is empty here
     // — we keep it alive across both attempts only so the supervisor's sender
@@ -345,14 +442,15 @@ pub fn run_agent_with_sink(
             Arc::clone(sink),
         )
         .await;
-        let stalled = result
+        let retryable_startup_stall = result
             .as_ref()
             .err()
-            .is_some_and(|e| e.downcast_ref::<HandshakeTimeout>().is_some());
-        if stalled {
+            .and_then(|e| e.downcast_ref::<StartupTimeout>())
+            .is_some_and(StartupTimeout::retryable);
+        if retryable_startup_stall {
             tracing::warn!(
                 session = session_id,
-                "ACP handshake stalled; auto-retrying spawn once"
+                "ACP initialize stalled; auto-retrying spawn once"
             );
             // Stay in `Starting` (a spinner), not `Crashed`: this blip is
             // expected to self-heal, so don't flash an error for it.
@@ -478,12 +576,11 @@ async fn agent_main(
     let perm_state = state.clone();
     let main_state = state.clone();
 
-    // Set true by `run_session` the instant the handshake completes (session is
-    // `Running`). The watchdog below arms a `HANDSHAKE_TIMEOUT` deadline that
-    // only fires while this is still false, so it bounds a stuck spawn without
-    // ever tripping a healthy long-lived session.
-    let handshake_done = Arc::new(AtomicBool::new(false));
-    let run_done = handshake_done.clone();
+    // `run_session` advances this marker before every startup request. The
+    // watchdog resets its deadline at each transition and pends permanently
+    // once the session is Running.
+    let (startup_phase, startup_progress) = watch::channel(StartupPhase::Initialize);
+    let run_progress = startup_phase.clone();
 
     let conn = Client
         .builder()
@@ -594,7 +691,7 @@ async fn agent_main(
             agent_client_protocol::on_receive_request!(),
         )
         .connect_with(transport, async move |cx: ConnectionTo<Agent>| {
-            run_session(&main_state, cx, resume, cwd, cmd_rx, spec.id, &run_done).await
+            run_session(&main_state, cx, resume, cwd, cmd_rx, spec.id, &run_progress).await
         });
 
     // Race the connection against the subprocess's OWN exit. The connection
@@ -610,18 +707,10 @@ async fn agent_main(
     // here lands as `Status::Crashed` in `run_agent` (queue holds; resend
     // revives). `biased` prefers a clean `run_session` return when both are ready.
     //
-    // A THIRD ground truth `child.wait()` can't catch: a spawned-but-wedged
-    // adapter (the `npx` registry-check hang) — the process is alive (so
-    // `child.wait()` never fires) but never speaks ACP (so `conn` hangs in
-    // `initialize`), wedging the session in `Starting` forever. The watchdog
-    // sleeps `HANDSHAKE_TIMEOUT`, then fires ONLY if the handshake hasn't landed;
-    // once it has, it pends forever so a healthy long session is never disturbed.
-    let watchdog = async {
-        tokio::time::sleep(HANDSHAKE_TIMEOUT).await;
-        if handshake_done.load(Ordering::SeqCst) {
-            std::future::pending::<()>().await;
-        }
-    };
+    // A THIRD ground truth `child.wait()` cannot catch: a live but wedged
+    // adapter. The phase-aware watchdog also reports which request actually
+    // stalled instead of attributing every startup timeout to process launch.
+    let watchdog = startup_watchdog(startup_progress);
     let result = tokio::select! {
         biased;
         r = conn => r.map_err(|e| anyhow::anyhow!("acp connection: {e}")),
@@ -632,7 +721,7 @@ async fn agent_main(
                 Err(e) => format!("wait failed: {e}"),
             }
         )),
-        () = watchdog => Err(anyhow::Error::new(HandshakeTimeout(HANDSHAKE_TIMEOUT.as_secs()))),
+        timeout = watchdog => Err(anyhow::Error::new(timeout)),
     };
 
     // Keep the child alive for the whole connection; dropping it here lets the
@@ -743,7 +832,7 @@ async fn run_session(
     cwd: PathBuf,
     cmd_rx: &mut mpsc::UnboundedReceiver<AgentCommand>,
     provider_id: &str,
-    handshake_done: &AtomicBool,
+    startup_phase: &watch::Sender<StartupPhase>,
 ) -> Result<(), Error> {
     let session_id = state.session_id.clone();
 
@@ -752,14 +841,18 @@ async fn run_session(
         .block_task()
         .await?;
     let agent_can_load = init.agent_capabilities.load_session;
+    let agent_can_resume = init
+        .agent_capabilities
+        .session_capabilities
+        .resume
+        .is_some();
+    let resume_method = select_resume_method(agent_can_resume, agent_can_load);
 
-    // Establish the agent session. Resume the agent's own memory via
-    // `session/load` when (a) we were handed its prior id and (b) the agent
-    // advertises load support; otherwise open a fresh `session/new`. On a
-    // fresh start, persist the agent's assigned id so a later revive can
-    // resume it. A requested resume is strict: silently falling back to
-    // session/new would preserve the Cowboy row while losing the native Codex
-    // thread, which is worse than an actionable crashed state.
+    // Establish the agent session. Prefer `session/resume`: unlike
+    // `session/load`, ACP defines it to restore native state without replaying
+    // prior messages that Cowboy already persists. Retain `session/load` only
+    // for older agents. A requested resume is strict: silently falling back to
+    // session/new would preserve the Cowboy row while losing the native thread.
     let mut acp_id: Option<SessionId> = None;
     let mut modes = None;
     // Agents may return their initial config options (mode / model / effort) IN the
@@ -767,36 +860,61 @@ async fn run_session(
     // `config_option_update` notification (claude does that). We capture + surface
     // both, so codex's Model / approval chips render like claude's.
     let mut config_options = None;
-    if resume.is_some() && !agent_can_load {
+    if resume.is_some() && resume_method.is_none() {
         return Err(anyhow::anyhow!(
-            "agent does not support session/load; refusing to replace the existing native thread"
+            "agent supports neither session/resume nor session/load; refusing to replace the existing native thread"
         )
         .into());
     }
     if let Some(resume_id) = resume {
-        let load_id = SessionId::new(resume_id.as_str());
-        state.suppress_updates.store(true, Ordering::SeqCst);
-        let loaded = cx
-            .send_request(LoadSessionRequest::new(load_id.clone(), cwd.clone()))
-            .block_task()
-            .await;
-        state.suppress_updates.store(false, Ordering::SeqCst);
-        match loaded {
-            Ok(resp) => {
-                tracing::info!(session = %session_id, acp_id = %resume_id, "session resumed via session/load");
-                acp_id = Some(load_id);
-                modes = resp.modes;
-                config_options = resp.config_options;
+        let resume_id = SessionId::new(resume_id.as_str());
+        match resume_method.expect("resume support checked above") {
+            ResumeMethod::Resume => {
+                startup_phase.send_replace(StartupPhase::Resume);
+                match cx
+                    .send_request(ResumeSessionRequest::new(resume_id.clone(), cwd.clone()))
+                    .block_task()
+                    .await
+                {
+                    Ok(resp) => {
+                        tracing::info!(session = %session_id, acp_id = %resume_id.0, "session resumed via session/resume");
+                        acp_id = Some(resume_id);
+                        modes = resp.modes;
+                        config_options = resp.config_options;
+                    }
+                    Err(e) => {
+                        tracing::error!(session = %session_id, error = ?e, "session/resume failed; preserving native thread identity");
+                        return Err(e);
+                    }
+                }
             }
-            Err(e) => {
-                tracing::error!(session = %session_id, error = ?e, "session/load failed; preserving native thread identity");
-                return Err(e);
+            ResumeMethod::Load => {
+                startup_phase.send_replace(StartupPhase::Load);
+                state.suppress_updates.store(true, Ordering::SeqCst);
+                let loaded = cx
+                    .send_request(LoadSessionRequest::new(resume_id.clone(), cwd.clone()))
+                    .block_task()
+                    .await;
+                state.suppress_updates.store(false, Ordering::SeqCst);
+                match loaded {
+                    Ok(resp) => {
+                        tracing::info!(session = %session_id, acp_id = %resume_id.0, "session resumed via session/load compatibility fallback");
+                        acp_id = Some(resume_id);
+                        modes = resp.modes;
+                        config_options = resp.config_options;
+                    }
+                    Err(e) => {
+                        tracing::error!(session = %session_id, error = ?e, "session/load failed; preserving native thread identity");
+                        return Err(e);
+                    }
+                }
             }
         }
     }
     let acp_id = if let Some(id) = acp_id {
         id
     } else {
+        startup_phase.send_replace(StartupPhase::New);
         let session = cx
             .send_request(NewSessionRequest::new(cwd.clone()))
             .block_task()
@@ -811,6 +929,7 @@ async fn run_session(
         config_options = session.config_options;
         session.session_id
     };
+    startup_phase.send_replace(StartupPhase::Configure);
     if provider_id == "codex" {
         state.codex_full_access.store(
             config_options
@@ -877,8 +996,8 @@ async fn run_session(
     // Do not expose Running (which lets the broker drain queued prompts) until
     // the startup permission mode is authoritative.
     state.sink.set_status(&session_id, Status::Running, None);
-    // Handshake landed — disarm the spawn watchdog (see `agent_main`).
-    handshake_done.store(true, Ordering::SeqCst);
+    // Startup landed — disarm the phase watchdog (see `agent_main`).
+    startup_phase.send_replace(StartupPhase::Ready);
 
     // Surface config options the agent returned IN the session response (codex
     // ships its Model + approval options this way; claude instead emits a later

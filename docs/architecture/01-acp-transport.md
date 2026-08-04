@@ -61,10 +61,14 @@ is the single biggest scope-reducer in the design.
 
 ```mermaid
 flowchart TB
-    INIT["Initialize"] --> CAP["read caps<br/>(load_session?)"]
-    CAP --> RES{"resumable?"}
-    RES -->|yes| LOAD["LoadSession<br/>(replay)"]
-    RES -->|no| NEW["NewSession<br/>(persist id)"]
+    INIT["Initialize"] --> CAP["read caps<br/>(resume? / load_session?)"]
+    CAP --> NATIVE{"native id?"}
+    NATIVE -->|no| NEW["NewSession<br/>(persist id)"]
+    NATIVE -->|yes| FAST{"resume supported?"}
+    FAST -->|yes| RESUME["ResumeSession<br/>(no replay)"]
+    FAST -->|no, load supported| LOAD["LoadSession<br/>(compat replay)"]
+    FAST -->|neither| ERROR["fail closed<br/>(preserve id)"]
+    RESUME --> MODE["mode + config"]
     LOAD --> MODE["mode + config"]
     NEW --> MODE
     MODE --> LOOP["command loop"]
@@ -74,9 +78,14 @@ flowchart TB
 ```
 
 - **Resume** uses the agent's own session id (`agent_session_id`, persisted in
-  storage). On a daemon restart, if the agent supports `session/load`, cowboy
-  re-attaches and replays — updates are suppressed because cowboy already holds
-  the event log.
+  storage). Cowboy prefers ACP `session/resume`, which restores native state
+  without returning prior messages. Older agents may fall back to
+  `session/load`; only that compatibility path suppresses replayed updates
+  because Cowboy already holds the event log. If neither capability exists,
+  startup fails closed instead of silently replacing the native thread.
+- **Startup liveness** is bounded per phase (`initialize`, session
+  establishment, configuration). Only a pre-initialize stall is retried; an
+  ambiguous session operation is surfaced once with its actual method name.
 - **Mode setup** uses a Zed-style default: if the agent advertises a
   provider-specific full-access mode, cowboy selects it to avoid permission UX
   friction (`bypassPermissions` for Claude Code and `yolo` for Gemini; Codex
