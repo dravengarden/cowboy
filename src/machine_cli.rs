@@ -1957,23 +1957,25 @@ fn parse_workspaces(values: &[String]) -> anyhow::Result<Vec<MachineWorkspace>> 
         if id.trim().is_empty() || id.contains('/') {
             bail!("workspace id {id:?} is invalid");
         }
-        let canonical = match std::fs::canonicalize(path) {
-            Ok(canonical) => canonical,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                tracing::warn!(
-                    workspace_id = id,
-                    workspace_path = path,
-                    "skipping configured workspace that is not present on this Machine"
-                );
-                continue;
-            }
-            Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("canonicalizing workspace {id:?} at {path:?}"));
-            }
-        };
-        if !canonical.is_dir() {
+        let configured = Path::new(path);
+        if !configured.is_absolute()
+            || configured
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
+            bail!("workspace {id:?} must use a normalized absolute path");
+        }
+        let (canonical, available) = resolve_configured_workspace(configured)
+            .with_context(|| format!("canonicalizing workspace {id:?} at {path:?}"))?;
+        if available && !canonical.is_dir() {
             bail!("workspace {id:?} is not a directory");
+        }
+        if !available {
+            tracing::warn!(
+                workspace_id = id,
+                workspace_path = %canonical.display(),
+                "configured workspace is pending synchronization on this Machine"
+            );
         }
         out.push(MachineWorkspace {
             id: id.to_owned(),
@@ -1984,6 +1986,37 @@ fn parse_workspaces(values: &[String]) -> anyhow::Result<Vec<MachineWorkspace>> 
     out.sort_by(|a, b| a.id.cmp(&b.id));
     out.dedup_by(|a, b| a.id == b.id);
     Ok(out)
+}
+
+fn resolve_configured_workspace(path: &Path) -> std::io::Result<(PathBuf, bool)> {
+    let mut cursor = path;
+    let mut missing = Vec::new();
+    loop {
+        match std::fs::canonicalize(cursor) {
+            Ok(mut canonical) => {
+                for component in missing.iter().rev() {
+                    canonical.push(component);
+                }
+                return Ok((canonical, missing.is_empty()));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let name = cursor.file_name().ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "workspace path has no existing ancestor",
+                    )
+                })?;
+                missing.push(name.to_os_string());
+                cursor = cursor.parent().ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "workspace path has no existing ancestor",
+                    )
+                })?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 fn reject_untrusted_workspace(
@@ -2066,7 +2099,7 @@ mod tests {
         bootstrap_acp_inventory, disabled_provider_slots_from, gemini_auth_from_metadata,
         gemini_env_value_from, managed_provider_environment, npm_package_for_component,
         parse_workspaces, provider_for_component, reject_untrusted_workspace, selected_zed_pair,
-        validate_controller_url,
+        validate_controller_url, workspace_path_allowed,
     };
     use crate::machine_components::ComponentStore;
     use crate::machine_protocol::{ArtifactFormat, ComponentId, ComponentKind, DesiredComponent};
@@ -2315,7 +2348,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_optional_workspace_does_not_take_the_machine_offline() {
+    fn pending_workspace_becomes_usable_without_restarting_the_machine() {
         let root = std::env::temp_dir().join(format!(
             "cowboy-machine-partial-workspaces-{}",
             std::process::id()
@@ -2327,13 +2360,59 @@ mod tests {
             format!("available={}", available.display()),
             format!("awaiting-sync={}", root.join("missing").display()),
         ])
-        .expect("missing optional workspace should be skipped");
-        assert_eq!(workspaces.len(), 1);
-        assert_eq!(workspaces[0].id, "available");
+        .expect("pending workspace should remain configured");
+        assert_eq!(workspaces.len(), 2);
+        let available_workspace = workspaces
+            .iter()
+            .find(|workspace| workspace.id == "available")
+            .unwrap();
         assert_eq!(
-            workspaces[0].canonical_path,
+            available_workspace.canonical_path,
             available.canonicalize().unwrap().display().to_string()
         );
+        let pending_workspace = workspaces
+            .iter()
+            .find(|workspace| workspace.id == "awaiting-sync")
+            .unwrap();
+        assert_eq!(
+            pending_workspace.canonical_path,
+            root.canonicalize()
+                .unwrap()
+                .join("missing")
+                .display()
+                .to_string()
+        );
+
+        let synchronized = root.join("missing");
+        std::fs::create_dir(&synchronized).expect("synchronize pending workspace");
+        let synchronized = synchronized.canonicalize().unwrap();
+        assert!(workspace_path_allowed(
+            &synchronized,
+            &workspaces,
+            &root.join("unrelated-managed-root")
+        ));
+        assert!(parse_workspaces(&["relative=missing".to_owned()]).is_err());
+        assert!(parse_workspaces(&["parent=/tmp/../pending".to_owned()]).is_err());
+
+        let file = root.join("not-a-directory");
+        std::fs::write(&file, "not a workspace").expect("workspace-shaped file");
+        assert!(parse_workspaces(&[format!("file={}", file.display())]).is_err());
+
+        #[cfg(unix)]
+        {
+            let pending_link = root.join("pending-link");
+            let pending = parse_workspaces(&[format!("link={}", pending_link.display())])
+                .expect("pending link path");
+            let outside = root.with_extension("outside");
+            std::fs::create_dir(&outside).expect("outside workspace");
+            std::os::unix::fs::symlink(&outside, &pending_link).expect("late workspace symlink");
+            assert!(!workspace_path_allowed(
+                &outside.canonicalize().unwrap(),
+                &pending,
+                &root.join("unrelated-managed-root")
+            ));
+            std::fs::remove_dir_all(outside).expect("cleanup outside workspace");
+        }
 
         std::fs::remove_dir_all(root).expect("cleanup");
     }
