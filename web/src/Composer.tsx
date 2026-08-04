@@ -1332,12 +1332,12 @@ export function ComposerWorkspace({
         // tap — an earlier `inset − 20px` let them reach into the indicator /
         // rounded-corner zone, which read as "hard to tap" on iPad. Floored to 10px
         // off-device.
-        // Mobile owns vertical rhythm *inside* the composer stack. The shell's
-        // independent hairline already owns the transcript → composer boundary,
-        // so adding top padding here leaves a visible empty strip whenever Plan
-        // and Pending are absent. Keep the token only between mounted children.
+        // Mobile owns vertical rhythm across the whole composer stack. Keep the
+        // same small gap below the transcript hairline as between mounted Plan,
+        // Pending, and Composer children so the first surface never fuses with
+        // the transcript boundary.
         "--mobile-composer-stack-gap": "8px",
-        pt: desktop ? 1 : 0,
+        pt: desktop ? 1 : "var(--mobile-composer-stack-gap)",
         display: "flex",
         flexDirection: "column",
         rowGap: desktop ? 0 : "var(--mobile-composer-stack-gap)",

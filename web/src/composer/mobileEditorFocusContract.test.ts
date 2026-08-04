@@ -105,13 +105,12 @@ Deno.test("mobile pending edit exits when a third-party IME never reports an ope
   assertEquals(composerSource.includes("if (keyboardBoundEditing) {"), true);
 });
 
-Deno.test("mobile composer does not reserve an empty strip above its first child", () => {
-  assertEquals(composerSource.includes("pt: desktop ? 1 : 0"), true);
+Deno.test("mobile composer preserves its stack gap below the transcript boundary", () => {
   assertEquals(
     composerSource.includes(
       'pt: desktop ? 1 : "var(--mobile-composer-stack-gap)"',
     ),
-    false,
+    true,
   );
   assertEquals(
     composerSource.includes(

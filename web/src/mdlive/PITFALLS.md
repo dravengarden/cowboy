@@ -881,6 +881,9 @@ here says otherwise.
     immediately and controls appear after the card has started opening. Do not
     tune those durations independently: mismatched height, opacity, and padding
     transitions make keyboard dismissal look like several clipped panels.
+    Preserve the same 8px stack gap between the transcript hairline and the
+    first Composer surface as between Plan, Pending, and Composer children;
+    removing it visually fuses the transcript and input surfaces.
 
 42. **The Mobile keyboard-dismiss action is an explicit focus boundary, not an
     editor mutation.** Keep the button in the main action track's final slot and
