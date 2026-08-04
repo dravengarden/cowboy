@@ -38,3 +38,19 @@ Deno.test("native textarea owns a content-sized mobile canvas", () => {
   assertEquals(composerSource.includes('"& > *": { flex: 1 }'), false);
   assertEquals(textareaSource.includes("maxRows={expanded ? 30 : 10}"), true);
 });
+
+Deno.test("mobile composer does not reserve an empty strip above its first child", () => {
+  assertEquals(composerSource.includes("pt: desktop ? 1 : 0"), true);
+  assertEquals(
+    composerSource.includes(
+      'pt: desktop ? 1 : "var(--mobile-composer-stack-gap)"',
+    ),
+    false,
+  );
+  assertEquals(
+    composerSource.includes(
+      'rowGap: desktop ? 0 : "var(--mobile-composer-stack-gap)"',
+    ),
+    true,
+  );
+});
