@@ -250,6 +250,9 @@ Deno.test("mobile keyboard dismissal belongs to the delivery row, not the utilit
   assertEquals(actionRow.includes("{clearable && ("), true);
   assertEquals(actionRow.includes('left: "50%"'), true);
   assertEquals(actionRow.includes('bottom: 42'), true);
+  assertEquals(actionRow.includes('position: "absolute"'), true);
+  assertEquals(actionRow.includes('right: 4'), true);
+  assertEquals(actionRow.includes('pr: "48px"'), true);
   assertEquals(actionRow.includes("data-mobile-scrollable-actions"), true);
   assertEquals(actionRow.includes('position: "sticky"'), false);
   assertEquals(
