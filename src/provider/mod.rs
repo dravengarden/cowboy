@@ -120,6 +120,9 @@ fn builtin_with_env(get_env: impl Fn(&str) -> Option<String>) -> HashMap<&'stati
             claude_deepseek.args.clear();
         }
     }
+    let claude_deepseek_shell = get_env("COWBOY_CLAUDE_DEEPSEEK_SHELL")
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "/bin/sh".to_owned());
     claude_deepseek.env.extend([
         (
             "ANTHROPIC_BASE_URL".to_owned(),
@@ -174,6 +177,7 @@ fn builtin_with_env(get_env: impl Fn(&str) -> Option<String>) -> HashMap<&'stati
             "CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL".to_owned(),
             "1".to_owned(),
         ),
+        ("SHELL".to_owned(), claude_deepseek_shell),
         ("DISABLE_LOGIN_COMMAND".to_owned(), "1".to_owned()),
         ("DISABLE_LOGOUT_COMMAND".to_owned(), "1".to_owned()),
         ("DISABLE_UPGRADE_COMMAND".to_owned(), "1".to_owned()),
@@ -182,6 +186,7 @@ fn builtin_with_env(get_env: impl Fn(&str) -> Option<String>) -> HashMap<&'stati
     claude_deepseek.remove_env_prefixes = vec!["ANTHROPIC_", "CLAUDE_", "DEEPSEEK_"];
     claude_deepseek.remove_env = vec![
         "API_TIMEOUT_MS",
+        "COWBOY_CLAUDE_DEEPSEEK_SHELL",
         "DISABLE_PROMPT_CACHING",
         "DISABLE_PROMPT_CACHING_HAIKU",
         "DISABLE_PROMPT_CACHING_OPUS",
@@ -635,6 +640,11 @@ mod tests {
                 .map(String::as_str),
             Some("cowboy-claude-deepseek")
         );
+        assert_eq!(
+            claude_deepseek.env.get("SHELL").map(String::as_str),
+            Some("/bin/sh")
+        );
+        assert!(claude_deepseek.removes_inherited_env("COWBOY_CLAUDE_DEEPSEEK_SHELL"));
         assert!(
             !claude_deepseek
                 .env
@@ -657,6 +667,22 @@ mod tests {
         for preserved in ["HOME", "PATH", "SSH_AUTH_SOCK", "HTTP_PROXY"] {
             assert!(!claude_deepseek.removes_inherited_env(preserved));
         }
+
+        let claude_deepseek_with_shell = lookup_with(
+            &[(
+                "COWBOY_CLAUDE_DEEPSEEK_SHELL",
+                "/run/current-system/sw/bin/bash",
+            )],
+            "claude-deepseek",
+        )
+        .expect("claude-deepseek shell override");
+        assert_eq!(
+            claude_deepseek_with_shell
+                .env
+                .get("SHELL")
+                .map(String::as_str),
+            Some("/run/current-system/sw/bin/bash")
+        );
 
         // _ARGS overrides independently (e.g. gemini's `--acp`).
         assert_eq!(
