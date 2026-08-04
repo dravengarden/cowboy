@@ -890,12 +890,15 @@ here says otherwise.
     outer pending region must not scroll in this state; only the active editor
     owns any content overflow. Continue measuring the invisible shell so
     transcript bottom clearance follows the focused card.
-    The transcript boundary uses one constant 6px separation across idle,
+    The transcript boundary uses one constant 4px separation across idle,
     focused, fullscreen, and Queue/Draft edit transitions; do not key that inset
     on focus, because fullscreen handoff otherwise makes the gap jump. Internal
     stack children retain their independent 8px rhythm. Keep destructive Clear
     out of the focused card's top-right utility rail; fullscreen remains there,
     while keyboard dismissal stays at the trailing edge of the delivery row.
+    Keep that dismissal control outside the horizontally scrollable action
+    track: iOS rubber-band moves every descendant of the scroller, including a
+    `position: sticky` child, before sticky settles back into place.
 
 42. **The Mobile keyboard-dismiss action is an explicit focus boundary, not an
     editor mutation.** Keep the button in the main action track's final slot and
