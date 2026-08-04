@@ -122,6 +122,9 @@ receipt. Web activation changes only the atomic `/run/cowboy-web` link;
 controller activation restarts only `cowboy.service`; Machine activation is an
 explicit maintenance transaction. A commit may be activated before it is
 pushed, but the deploying task still owns publication or a descendant revert.
+The additional `cowboy-machine-bootstrap-release` output is recovery-only: Nix
+uses it to initialize an absent profile without silently authorizing a resident
+Machine restart, and the component activator refuses it as an ordinary release.
 
 The system `cowboy.service` runs **as the human SSH user** (so
 the API and Zed-over-SSH share one identity). A lingered user manager owns

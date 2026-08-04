@@ -169,8 +169,7 @@
         nativeBuildInputs = [ pkgs.makeWrapper ];
         postInstall = ''
           wrapProgram $out/bin/cowboy-machine \
-            --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.openssh ]} \
-            --add-flags "--desired-generation ${worker-generation}"
+            --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.openssh ]}
         '';
         doCheck = false;
         meta = {
@@ -241,14 +240,14 @@
       '';
 
       release-revision = if self ? rev then self.rev else null;
-      release-source = lane: {
+      release-source = lane: bootstrap: {
         schema = 1;
         component = "cowboy";
         inherit lane;
         repository = "git@github.com:dravengarden/cowboy.git";
         revision = release-revision;
         dirty = release-revision == null;
-      };
+      } // pkgs.lib.optionalAttrs bootstrap { bootstrap = true; };
 
       # Fully managed NixOS hosts consume stable component profiles instead of
       # embedding these store paths in every system generation. Web is its own
@@ -259,7 +258,7 @@
           mkdir -p "$out/bin" "$out/etc/cowboy-release"
           ln -s ${cowboy}/bin/cowboy "$out/bin/cowboy"
           cat >"$out/etc/cowboy-release/source.json" <<'EOF'
-          ${builtins.toJSON (release-source "controller")}
+          ${builtins.toJSON (release-source "controller" false)}
           EOF
         '';
 
@@ -267,15 +266,26 @@
         mkdir -p "$out/share/cowboy" "$out/etc/cowboy-release"
         ln -s ${cowboy-web} "$out/share/cowboy/web"
         cat >"$out/etc/cowboy-release/source.json" <<'EOF'
-        ${builtins.toJSON (release-source "web")}
+        ${builtins.toJSON (release-source "web" false)}
         EOF
       '';
 
-      cowboy-machine-release = pkgs.runCommand "cowboy-machine-release" { } ''
-        mkdir -p "$out/bin" "$out/etc/cowboy-release"
-        for binary in cowboy-machine cowboy-machine-install; do
-          ln -s ${cowboy-machine}/bin/"$binary" "$out/bin/$binary"
-        done
+      machine-release = bootstrap:
+        pkgs.runCommand
+          (if bootstrap then "cowboy-machine-bootstrap-release" else "cowboy-machine-release")
+          { nativeBuildInputs = [ pkgs.makeWrapper ]; } ''
+        mkdir -p "$out/bin" "$out/libexec" "$out/etc/cowboy-release"
+        ln -s ${cowboy-machine}/bin/cowboy-machine \
+          "$out/libexec/cowboy-machine"
+        ${
+          if bootstrap then
+            ''ln -s "$out/libexec/cowboy-machine" "$out/bin/cowboy-machine"''
+          else
+            ''makeWrapper "$out/libexec/cowboy-machine" "$out/bin/cowboy-machine" \
+              --add-flags "--desired-generation ${worker-generation}"''
+        }
+        ln -s ${cowboy-machine}/bin/cowboy-machine-install \
+          "$out/bin/cowboy-machine-install"
         ln -s ${cowboy}/bin/cowboy-acp-worker "$out/bin/cowboy-acp-worker"
         ln -s ${cowboy-code-adapter}/bin/cowboy-code-adapter \
           "$out/bin/cowboy-code-adapter"
@@ -286,11 +296,13 @@
         ${cowboy-machine}/bin/cowboy-machine --help \
           | ${pkgs.gnugrep}/bin/grep -F -- '--compat-socket' >/dev/null
         cat >"$out/etc/cowboy-release/source.json" <<'EOF'
-        ${builtins.toJSON ((release-source "machine") // {
+        ${builtins.toJSON ((release-source "machine" bootstrap) // {
           workerGeneration = cowboy.workerGeneration;
         })}
         EOF
       '';
+      cowboy-machine-bootstrap-release = machine-release true;
+      cowboy-machine-release = machine-release false;
 
       cowboy-source-boundary = pkgs.runCommand "cowboy-source-boundary" { } ''
         test ! -e ${cowboy-src}/docs
@@ -358,6 +370,7 @@
         cowboy-web = cowboy-web;
         cowboy-controller-release = cowboy-controller-release;
         cowboy-web-release = cowboy-web-release;
+        cowboy-machine-bootstrap-release = cowboy-machine-bootstrap-release;
         cowboy-machine-release = cowboy-machine-release;
       };
 
@@ -367,7 +380,7 @@
       checks.${system} = {
         inherit cowboy cowboy-machine cowboy-code-adapter cowboy-source-boundary
           cowboy-web cowboy-controller-release cowboy-web-release
-          cowboy-machine-release
+          cowboy-machine-bootstrap-release cowboy-machine-release
           cowboy-zed-integration cowboy-zed-adapter cowboy-zed-server;
       };
 
