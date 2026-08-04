@@ -1322,6 +1322,7 @@ export function ComposerWorkspace({
 
   return (
     <Box
+      data-mobile-composer-workspace={!desktop ? "true" : undefined}
       sx={{
         // Side gutter = the reading `padding` (so the composer lines up with the
         // transcript content above), but floored at the device safe-area inset:
@@ -1360,6 +1361,24 @@ export function ComposerWorkspace({
         bgcolor: "transparent",
         borderTop: 0,
         position: "relative", // anchor for Popper portal placement
+        ...(!desktop && {
+          // Keyboard Focus Mode is a single floating writing surface. Keep the
+          // auxiliary state mounted so Plan/Queue/Draft disclosure and edit
+          // ownership survive, but remove it from presentation while the main
+          // Composer owns the visible software keyboard.
+          "&:has(> [data-mobile-primary-composer='true'][data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within)) > [data-mobile-input-context]": {
+            display: "none",
+          },
+          // A Queue/Draft edit follows the same focus model. Its containing
+          // scrollport must stay mounted because it owns the transaction, so
+          // hide Plan and the inactive sibling panel instead of the scrollport.
+          "&:has([data-mobile-pending-editor='true'][data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within)) > [data-mobile-input-context='plan']": {
+            display: "none",
+          },
+          "&:has([data-mobile-pending-editor='true'][data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within)) [data-mobile-pending-panel]:not(:has([data-mobile-pending-editor='true']:focus-within))": {
+            display: "none",
+          },
+        }),
         // Column mode: a fill-height flex column (queued/drafts on top, the editor
         // card flex:1 below) instead of a bottom-floating stack. No safe-area
         // bottom inset (the AppStatusBar footer owns the column's bottom edge) and
@@ -1405,6 +1424,7 @@ export function ComposerWorkspace({
       }
       {showPlan && plan && (
         <Box
+          data-mobile-input-context={!desktop ? "plan" : undefined}
           {...(desktop
             ? {
               "data-desktop-region": "prompt.plan",
@@ -1494,6 +1514,7 @@ export function ComposerWorkspace({
       {(queue.length > 0 || draftList.length > 0) && !desktop && (
         <Box
           data-mobile-pending-scrollport
+          data-mobile-input-context="pending"
           // This is a native vertical scrollport, but it still participates in
           // the shell-wide direction-locked Sessions gesture. `pan-y` below
           // keeps vertical movement native; only a deliberate horizontal move
@@ -1655,6 +1676,7 @@ export function ComposerWorkspace({
           }
           : {})}
         data-mobile-focus-composer={touchInput ? "true" : undefined}
+        data-mobile-primary-composer={touchInput ? "true" : undefined}
         data-mobile-keyboard-open={
           touchInput && keyboardOpen ? "true" : undefined
         }
@@ -3584,8 +3606,10 @@ function PendingPanel({
     return () => list.removeEventListener("cowboy:desktop-reorder", onKeyboardReorder);
   }, [desktop, kind, sessionId, sortable.order]);
   const noun = kind === "queued" ? "Queued Message" : "Draft";
+  const mobileFloatingEdit = !desktop && editingId !== null && keyboardOpen;
   return (
     <Box
+      data-mobile-pending-panel={!desktop ? kind : undefined}
       {...(desktop
         ? {
           "data-desktop-region": `prompt.${kind}`,
@@ -3605,6 +3629,11 @@ function PendingPanel({
           ? desktopSurfaceSx({ interactive: false, focusWithin: true })
           : mobileComposerPanelFrameSx),
         bgcolor: kind === "draft" ? "action.selected" : "action.hover",
+        ...(mobileFloatingEdit && {
+          border: 0,
+          bgcolor: "transparent",
+          boxShadow: "none",
+        }),
         ...(desktop && {
           flexShrink: 0,
         }),
@@ -3618,6 +3647,7 @@ function PendingPanel({
       }}
     >
       <Stack
+        data-mobile-pending-header={!desktop ? "true" : undefined}
         direction="row"
         alignItems="center"
         // Pin the header to the SAME 44px as the composer input (ComposerTextarea
@@ -3625,6 +3655,7 @@ function PendingPanel({
         // read as the same-height pair. `py: 0` drops the old extra 8px that made
         // the bar (a 44px icon button + padding) taller than the input.
         sx={{
+          display: mobileFloatingEdit ? "none" : "flex",
           pr: 0.75,
           py: 0,
           minHeight: mobileComposerPanelHeaderMinHeight,
@@ -3832,8 +3863,8 @@ function PendingPanel({
             // Inner padding so the rows sit INSIDE the frame with a small inset
             // (the original framed look). The frame's OUTER edge is what aligns
             // with the input box, not the rows.
-            px: 0.5,
-            pb: 0.5,
+            px: mobileFloatingEdit ? 0 : 0.5,
+            pb: mobileFloatingEdit ? 0 : 0.5,
             // Standalone: cap so a long backlog scrolls instead of pushing the
             // editor off a phone viewport. `unbounded`: the composer's shared
             // queue+drafts scroller owns the cap, so don't nest a second scroller.
@@ -4378,6 +4409,10 @@ function PendingRow({
           variant="outlined"
           tabIndex={desktop ? -1 : undefined}
           data-mobile-focus-composer={touchInput ? "true" : undefined}
+          data-mobile-pending-editor={touchInput ? "true" : undefined}
+          data-mobile-keyboard-open={
+            touchInput && keyboardOpen ? "true" : undefined
+          }
           sx={{
             position: "relative",
             overflow: "hidden",

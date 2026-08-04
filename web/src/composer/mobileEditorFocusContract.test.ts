@@ -7,6 +7,9 @@ const composerSource = await Deno.readTextFile(
 const textareaSource = await Deno.readTextFile(
   new URL("../ComposerTextarea.tsx", import.meta.url),
 );
+const appSource = await Deno.readTextFile(
+  new URL("../App.tsx", import.meta.url),
+);
 
 Deno.test("mobile composer promotion requires a visible keyboard and real editor focus", () => {
   assertEquals(
@@ -115,6 +118,41 @@ Deno.test("mobile composer preserves its stack gap below the transcript boundary
   assertEquals(
     composerSource.includes(
       'rowGap: desktop ? 0 : "var(--mobile-composer-stack-gap)"',
+    ),
+    true,
+  );
+});
+
+Deno.test("mobile keyboard focus presents one floating composer surface", () => {
+  assertEquals(
+    composerSource.includes("data-mobile-primary-composer"),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "> [data-mobile-input-context]\": {\n            display: \"none\"",
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "const mobileFloatingEdit = !desktop && editingId !== null && keyboardOpen;",
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      'data-mobile-pending-editor={touchInput ? "true" : undefined}',
+    ),
+    true,
+  );
+  assertEquals(
+    appSource.includes("data-mobile-composer-shell-material=\"true\""),
+    true,
+  );
+  assertEquals(
+    appSource.includes(
+      "[data-mobile-composer-shell-material='true']\": {\n                        opacity: \"0 !important\"",
     ),
     true,
   );

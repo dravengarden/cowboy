@@ -884,6 +884,12 @@ here says otherwise.
     Preserve the same 8px stack gap between the transcript hairline and the
     first Composer surface as between Plan, Pending, and Composer children;
     removing it visually fuses the transcript and input surfaces.
+    Once a real touch editor owns the visible keyboard, switch presentation to
+    one floating Composer card: keep Plan/Queue/Draft state mounted but hide its
+    surrounding panels, and suppress the shell's full-width glass and hairline.
+    Queue/Draft edits keep their transaction-owning scrollport mounted while
+    stripping only its header, sibling panels, and frame. Continue measuring the
+    invisible shell so transcript bottom clearance follows the focused card.
 
 42. **The Mobile keyboard-dismiss action is an explicit focus boundary, not an
     editor mutation.** Keep the button in the main action track's final slot and
