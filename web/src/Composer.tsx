@@ -2296,32 +2296,32 @@ export function ComposerWorkspace({
             </Box>
           </Stack>
         )}
-        <Stack
+        <Box
           data-mobile-action-row={touchInput ? "true" : undefined}
-          direction="row"
-          alignItems="center"
-          // A phone is tight, so spread the icons across its action row. A touch
-          // tablet has enough room to keep the same actions as one compact,
-          // left-anchored group instead of stretching a handful of glyphs across
-          // the full iPad canvas. Desktop keeps its separate left group +
-          // config chips + right-pinned action cluster.
-          spacing={compact ? 0 : 0.5}
           sx={{
             order: touchInput ? 1 : undefined,
-            px: 0.5,
+            display: "flex",
+            alignItems: "center",
+            minWidth: 0,
             pb: 0.5,
-            // Compact (mobile): spread the icons when they fit, but let the row
-            // SCROLL horizontally when they don't (space-evenly collapses to a
-            // flex-start pack once there's no free space, so it never clips as
-            // more buttons are added — Compact/Clear today, whatever tomorrow).
-            // Buttons keep their full tap target (flexShrink:0 via TOOLBAR_ICON_BTN)
-            // instead of squeezing. Scrollbar hidden — it's a thin touch strip.
+            ...TOOLBAR_MIN_H,
+          }}
+        >
+        <Stack
+          data-mobile-scrollable-actions={touchInput ? "true" : undefined}
+          direction="row"
+          alignItems="center"
+          spacing={compact ? 0 : 0.5}
+          sx={{
+            flex: 1,
+            minWidth: 0,
+            px: 0.5,
             ...(compact && {
               justifyContent: "space-evenly",
               flexWrap: "nowrap",
               overflowX: "auto",
               overflowY: "hidden",
-              scrollPaddingRight: 48,
+              overscrollBehaviorX: "contain",
               scrollbarWidth: "none",
               "&::-webkit-scrollbar": { display: "none" },
               "@media (min-width: 700px)": {
@@ -2329,7 +2329,6 @@ export function ComposerWorkspace({
                 columnGap: 0.5,
               },
             }),
-            ...TOOLBAR_MIN_H,
           }}
         >
         {/* (Vim mode moved OUT of the toolbar into a Zed-style bottom status bar
@@ -2552,35 +2551,21 @@ export function ComposerWorkspace({
             </IconButton>
           </span>
         </Tooltip>
-        {/* Keyboard dismissal is an input action, not editor chrome. Keep it at
-            the trailing edge of the horizontally scrollable delivery row so it
-            never grows the top-right utility rail down across Force push or the
-            formatting divider. The subtle fade preserves the pinned affordance
-            while the preceding actions scroll underneath it on narrow phones. */}
+        </Stack>
+        {/* Keyboard dismissal is outside the horizontal scroller: iOS rubber-band
+            may move the delivery actions, but this terminal action stays still. */}
         {touchInput && (
           <Box
             data-mobile-keyboard-hide
             sx={{
-              position: "sticky",
-              right: 0,
-              zIndex: 1,
               display: "none",
-              flex: "0 0 44px",
+              flex: "0 0 46px",
               alignItems: "center",
               justifyContent: "center",
-              ml: 0.25,
-              bgcolor: "background.paper",
-              "&::before": {
-                content: '""',
-                position: "absolute",
-                top: 0,
-                bottom: 0,
-                left: -12,
-                width: 12,
-                pointerEvents: "none",
-                background: (theme) =>
-                  `linear-gradient(90deg, transparent, ${theme.palette.background.paper})`,
-              },
+              alignSelf: "stretch",
+              mx: 0.25,
+              borderLeft: 1,
+              borderColor: "divider",
             }}
           >
             <Tooltip title="Hide keyboard">
@@ -2590,7 +2575,9 @@ export function ComposerWorkspace({
                 sx={{
                   ...TOOLBAR_ICON_BTN,
                   color: "text.secondary",
-                  "& .MuiSvgIcon-root": { fontSize: "1.15rem" },
+                  borderRadius: 2,
+                  bgcolor: "action.hover",
+                  "& .MuiSvgIcon-root": { fontSize: "1.1rem" },
                 }}
                 onPointerDown={(event): void => event.preventDefault()}
                 onClick={dismissMobileSoftwareKeyboard}
@@ -2600,7 +2587,7 @@ export function ComposerWorkspace({
             </Tooltip>
           </Box>
         )}
-        </Stack>
+        </Box>
         {touchInput && (
           <ComposerToolbarSettings
             open={mobileToolbarSettingsOpen}
