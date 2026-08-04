@@ -825,18 +825,16 @@ here says otherwise.
     token still promotes the document synchronously to CM6 so its widget remains
     in flow. Keep the live native value separate from CM6's frozen mount seed.
 
-    A native textarea fixes first-responder ownership, but UIKit still declines
-    to anchor its edit menu when the held point is well below the final laid-out
-    text line. The visible textarea can therefore be the correct full-height hit
-    target while the lower canvas still appears inert. Measure the wrapped text
-    height without touching the live control. A stationary long press below that
-    boundary opens Cowboy's small non-modal Paste menu; a second trusted tap uses
-    the async Clipboard API while pointer-down remains non-focusing. Text-near
-    presses stay entirely native, movement cancels the fallback, and the menu
-    never writes selection or focus during the original hold. Do not replace this
-    with a transparent overlay, synthetic pointer selection, `contextmenu`, or
-    delayed refocus: those either suppress native selection/IME or cannot summon
-    iOS's menu reliably.
+    Do not split long-press into a UIKit path near text and a Cowboy-drawn Paste
+    fallback in the blank canvas. The two menus have different appearance,
+    placement, permissions, and gesture semantics, so an empty document appears
+    to use a different editor. The fullscreen textarea already fills the visible
+    writing canvas; leave its touch sequence untouched and let UIKit own the edit
+    menu everywhere, including when the document is empty. The app may handle an
+    actual native `paste` event for attachments, but must not intercept the hold
+    that presents it. Do not replace this with a transparent overlay, synthetic
+    pointer selection, `contextmenu`, or delayed refocus: those either suppress
+    native selection/IME or cannot summon iOS's menu reliably.
 
     Register the blank-canvas hold directly on the textarea with a non-passive
     `touchstart` listener. React delegates `touchstart` passively, so UIKit's
@@ -884,6 +882,24 @@ here says otherwise.
     Preserve the same 8px stack gap between the transcript hairline and the
     first Composer surface as between Plan, Pending, and Composer children;
     removing it visually fuses the transcript and input surfaces.
+    Once a real touch editor owns the visible keyboard, switch presentation to
+    one floating Composer card: keep Plan/Queue/Draft state mounted but hide its
+    surrounding panels, and suppress the shell's full-width glass and hairline.
+    Queue/Draft edits keep their transaction-owning scrollport mounted while
+    stripping its header, sibling panels, frame, and every non-editing row. The
+    outer pending region must not scroll in this state; only the active editor
+    owns any content overflow. Continue measuring the invisible shell so
+    transcript bottom clearance follows the focused card.
+    The transcript boundary uses one constant 4px separation across idle,
+    focused, fullscreen, and Queue/Draft edit transitions; do not key that inset
+    on focus, because fullscreen handoff otherwise makes the gap jump. Internal
+    stack children retain their independent 8px rhythm. Keep destructive Clear
+    out of the card's top-right utility rail; fullscreen remains there, while
+    Clear joins the delivery actions and keyboard dismissal stays at their
+    unstyled trailing edge.
+    Keep that dismissal control outside the horizontally scrollable action
+    track: iOS rubber-band moves every descendant of the scroller, including a
+    `position: sticky` child, before sticky settles back into place.
 
 42. **The Mobile keyboard-dismiss action is an explicit focus boundary, not an
     editor mutation.** Keep the button in the main action track's final slot and
@@ -905,8 +921,8 @@ fullscreen editor:
       and confirm it: the keyboard stays visible throughout, text clears only on
       confirm, and the same editor retains its caret (pitfall #43).
 - [ ] Long-press → the Paste/Select menu appears; Paste works (pitfall #3).
-- [ ] In fullscreen, long-press near text keeps the native menu; long-press far
-      below text opens Cowboy Paste, and tapping it keeps the keyboard visible.
+- [ ] In fullscreen, long-press near text and in an empty canvas both use the
+      same native iOS edit menu; no Cowboy-drawn Paste pill appears.
 - [ ] No stray dot near the caret / rendered markdown (pitfall #4).
 - [ ] `**`/`(`/`` ` ``/`[` then Backspace clears the whole pair (pitfall #5).
 - [ ] Type inline → expand → type → collapse: text is preserved (pitfall #6).
@@ -1007,3 +1023,12 @@ Desktop Vim + IME checks:
     third-party keyboards shrink `innerHeight` and `visualViewport.height`
     together, so keyboard detection needs a keyboard-free baseline plus actual
     editable focus, not only their instantaneous height difference.
+
+48. **Fullscreen delivery closes on acknowledgement, not on intent.** A main
+    Composer Send/Queue remains expanded while its authoritative operation is
+    pending, then closes only after success. Force push follows the same rule
+    after its confirmation action resolves; closing only the confirmation
+    Popover leaves an empty fullscreen editor behind. Cancellation, rejection,
+    and invalid/no-op delivery retain the editor and its draft so the user can
+    retry. Keep Draft/Queue row editing separate: its primary action finishes
+    the edit transaction rather than delivering that pending item.

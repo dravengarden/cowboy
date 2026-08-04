@@ -7,6 +7,9 @@ const composerSource = await Deno.readTextFile(
 const textareaSource = await Deno.readTextFile(
   new URL("../ComposerTextarea.tsx", import.meta.url),
 );
+const appSource = await Deno.readTextFile(
+  new URL("../App.tsx", import.meta.url),
+);
 
 Deno.test("mobile composer promotion requires a visible keyboard and real editor focus", () => {
   assertEquals(
@@ -39,7 +42,13 @@ Deno.test("mobile column and pending ownership cannot fill the viewport without 
   assertEquals(composerSource.includes("fill={desktop && column}"), true);
   assertEquals(
     composerSource.includes(
-      'maxHeight: mobilePendingKeyboardEditing ? "56vh" : "40vh"',
+      'maxHeight: mobilePendingKeyboardEditing ? "none" : "40vh"',
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      'overflowY: mobilePendingKeyboardEditing ? "hidden" : "auto"',
     ),
     true,
   );
@@ -56,7 +65,7 @@ Deno.test("Plan plus Queue or Draft editing cannot promote mobile geometry after
   );
   assertEquals(
     composerSource.includes(
-      "mobilePendingKeyboardEditing ? \"56vh\" : \"40vh\"",
+      "mobilePendingKeyboardEditing ? \"none\" : \"40vh\"",
     ),
     true,
   );
@@ -105,16 +114,113 @@ Deno.test("mobile pending edit exits when a third-party IME never reports an ope
   assertEquals(composerSource.includes("if (keyboardBoundEditing) {"), true);
 });
 
-Deno.test("mobile composer preserves its stack gap below the transcript boundary", () => {
+Deno.test("fullscreen delivery closes only after authoritative success", () => {
   assertEquals(
     composerSource.includes(
-      'pt: desktop ? 1 : "var(--mobile-composer-stack-gap)"',
+      "submitWithFeedback(() => setComposeFs(false))",
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "dismissAfterMobileDelivery();\n    setComposeFs(false);",
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "submitAndNotify();\n            setComposeFs(false);",
+    ),
+    false,
+  );
+});
+
+Deno.test("mobile composer keeps one boundary gap across focus transitions", () => {
+  assertEquals(
+    composerSource.includes(
+      'pt: desktop ? 1 : "var(--mobile-composer-boundary-gap)"',
     ),
     true,
   );
   assertEquals(
     composerSource.includes(
       'rowGap: desktop ? 0 : "var(--mobile-composer-stack-gap)"',
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes('"--mobile-composer-boundary-gap": "4px"'),
+    true,
+  );
+  assertEquals(
+    composerSource.includes('paddingTop: "4px"'),
+    false,
+  );
+});
+
+Deno.test("mobile keyboard focus presents one floating composer surface", () => {
+  assertEquals(
+    composerSource.includes("<span data-mobile-composer-clear>"),
+    true,
+  );
+  assertEquals(
+    composerSource.indexOf("data-mobile-composer-utility-rail") <
+      composerSource.indexOf("<span data-mobile-composer-clear>"),
+    true,
+  );
+  assertEquals(
+    composerSource.includes("data-mobile-primary-composer"),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "> [data-mobile-input-context]\": {\n            display: \"none\"",
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "const mobileFloatingEdit = !desktop && editingId !== null && keyboardOpen;",
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      'data-mobile-floating-edit={mobileFloatingEdit ? "true" : undefined}',
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "& [data-mobile-pending-row]:not([data-mobile-pending-row-editing='true'])",
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      'data-mobile-pending-editor={touchInput ? "true" : undefined}',
+    ),
+    true,
+  );
+  assertEquals(
+    appSource.includes("data-mobile-composer-shell-material=\"true\""),
+    true,
+  );
+  assertEquals(
+    appSource.includes(
+      "[data-mobile-composer-shell-material='true']\": {\n                        opacity: \"0 !important\"",
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "[data-mobile-primary-composer='true'][data-mobile-keyboard-open='true']:has(",
+    ),
+    false,
+  );
+  assertEquals(
+    appSource.includes(
+      "[data-mobile-pending-editor='true'][data-mobile-keyboard-open='true']:focus-within",
     ),
     true,
   );
@@ -140,6 +246,8 @@ Deno.test("mobile keyboard dismissal belongs to the delivery row, not the utilit
   assertEquals(actionStart >= 0 && actionEnd > actionStart, true);
   assertEquals(utilityRail.includes("data-mobile-keyboard-hide"), false);
   assertEquals(actionRow.includes("data-mobile-keyboard-hide"), true);
+  assertEquals(actionRow.includes("data-mobile-scrollable-actions"), true);
+  assertEquals(actionRow.includes('position: "sticky"'), false);
   assertEquals(
     actionRow.indexOf('<Tooltip title="Force push">') <
       actionRow.indexOf("data-mobile-keyboard-hide"),

@@ -32,6 +32,7 @@ import {
   ListItemButton,
   ListItemIcon,
   ListItemText,
+  LinearProgress,
   Menu,
   MenuItem,
   Paper,
@@ -856,6 +857,10 @@ export function ComposerWorkspace({
     return submitted;
   }, [desktop, onSubmitted, submit]);
   const submitFeedback = useNetworkActionState();
+  // Mobile-only fullscreen compose: the ↗ opens a near-full-screen sheet (the
+  // first-class long-form / future-markdown editor). Desktop keeps the Zed-style
+  // inline expand instead (composeFs is never set true there).
+  const [composeFs, setComposeFs] = useState(false);
   const dismissAfterMobileDelivery = useCallback((): void => {
     if (desktop) return;
 
@@ -870,7 +875,7 @@ export function ComposerWorkspace({
       releaseMobileComposerFocus();
     });
   }, [desktop]);
-  const submitWithFeedback = useCallback((): void => {
+  const submitWithFeedback = useCallback((onSucceeded?: () => void): void => {
     void (async () => {
       let submitted = false;
       const succeeded = await submitFeedback.run(() => {
@@ -880,7 +885,10 @@ export function ComposerWorkspace({
         onSubmitted?.();
         return confirmation;
       });
-      if (submitted && succeeded) dismissAfterMobileDelivery();
+      if (submitted && succeeded) {
+        dismissAfterMobileDelivery();
+        onSucceeded?.();
+      }
     })();
   }, [dismissAfterMobileDelivery, onSubmitted, submitFeedback, submitTracked]);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -951,10 +959,6 @@ export function ComposerWorkspace({
   const onMobileDraftEditingChange = useCallback((editing: boolean): void => {
     setMobileDraftEditing(editing);
   }, []);
-  // Mobile-only fullscreen compose: the ↗ opens a near-full-screen sheet (the
-  // first-class long-form / future-markdown editor). Desktop keeps the Zed-style
-  // inline expand instead (composeFs is never set true there).
-  const [composeFs, setComposeFs] = useState(false);
   // Inline-image selection popover. Tapping an inline image opens a small popover
   // (Preview / Delete) anchored to its <img>, ringed while open. The image widget
   // lives outside React, so it calls a module-level tap handler we register here.
@@ -1278,6 +1282,7 @@ export function ComposerWorkspace({
     await confirmation;
     setForceAnchor(null);
     dismissAfterMobileDelivery();
+    setComposeFs(false);
   }
   // "Jump to front of queue" (no interrupt): send the composed prompt to the
   // FRONT of the queue so it runs next after the current turn, ahead of the rest
@@ -1322,6 +1327,7 @@ export function ComposerWorkspace({
 
   return (
     <Box
+      data-mobile-composer-workspace={!desktop ? "true" : undefined}
       sx={{
         // Side gutter = the reading `padding` (so the composer lines up with the
         // transcript content above), but floored at the device safe-area inset:
@@ -1337,7 +1343,8 @@ export function ComposerWorkspace({
         // Pending, and Composer children so the first surface never fuses with
         // the transcript boundary.
         "--mobile-composer-stack-gap": "8px",
-        pt: desktop ? 1 : "var(--mobile-composer-stack-gap)",
+        "--mobile-composer-boundary-gap": "4px",
+        pt: desktop ? 1 : "var(--mobile-composer-boundary-gap)",
         display: "flex",
         flexDirection: "column",
         rowGap: desktop ? 0 : "var(--mobile-composer-stack-gap)",
@@ -1360,6 +1367,24 @@ export function ComposerWorkspace({
         bgcolor: "transparent",
         borderTop: 0,
         position: "relative", // anchor for Popper portal placement
+        ...(!desktop && {
+          // Keyboard Focus Mode is a single floating writing surface. Keep the
+          // auxiliary state mounted so Plan/Queue/Draft disclosure and edit
+          // ownership survive, but remove it from presentation while the main
+          // Composer owns the visible software keyboard.
+          "&:has(> [data-mobile-primary-composer='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within) > [data-mobile-input-context]": {
+            display: "none",
+          },
+          // A Queue/Draft edit follows the same focus model. Its containing
+          // scrollport must stay mounted because it owns the transaction, so
+          // hide Plan and the inactive sibling panel instead of the scrollport.
+          "&:has([data-mobile-pending-editor='true'][data-mobile-keyboard-open='true']:focus-within) > [data-mobile-input-context='plan']": {
+            display: "none",
+          },
+          "&:has([data-mobile-pending-editor='true'][data-mobile-keyboard-open='true']:focus-within) [data-mobile-pending-panel]:not([data-mobile-floating-edit='true'])": {
+            display: "none",
+          },
+        }),
         // Column mode: a fill-height flex column (queued/drafts on top, the editor
         // card flex:1 below) instead of a bottom-floating stack. No safe-area
         // bottom inset (the AppStatusBar footer owns the column's bottom edge) and
@@ -1405,6 +1430,7 @@ export function ComposerWorkspace({
       }
       {showPlan && plan && (
         <Box
+          data-mobile-input-context={!desktop ? "plan" : undefined}
           {...(desktop
             ? {
               "data-desktop-region": "prompt.plan",
@@ -1494,6 +1520,7 @@ export function ComposerWorkspace({
       {(queue.length > 0 || draftList.length > 0) && !desktop && (
         <Box
           data-mobile-pending-scrollport
+          data-mobile-input-context="pending"
           // This is a native vertical scrollport, but it still participates in
           // the shell-wide direction-locked Sessions gesture. `pan-y` below
           // keeps vertical movement native; only a deliberate horizontal move
@@ -1505,7 +1532,7 @@ export function ComposerWorkspace({
             // (flex-shrink:1 children) get squished to fit instead of overflowing +
             // scrolling, which crushed the last panel's (drafts) header. Block stacks
             // them at natural height and `overflowY: auto` scrolls the overflow.
-            overflowY: "auto",
+            overflowY: mobilePendingKeyboardEditing ? "hidden" : "auto",
             // Do not trap a vertical gesture when the bounded stack currently
             // fits or reaches an edge. WebKit can then finish normal scroll
             // chaining instead of leaving the touched cards feeling frozen.
@@ -1518,7 +1545,7 @@ export function ComposerWorkspace({
             // direction lock continues to recognise deliberate horizontal drawer
             // gestures.
             minHeight: 0,
-            maxHeight: mobilePendingKeyboardEditing ? "56vh" : "40vh",
+            maxHeight: mobilePendingKeyboardEditing ? "none" : "40vh",
             transition: "max-height 180ms cubic-bezier(.2,.8,.2,1)",
             flexShrink: 1,
             touchAction: "pan-y",
@@ -1655,6 +1682,7 @@ export function ComposerWorkspace({
           }
           : {})}
         data-mobile-focus-composer={touchInput ? "true" : undefined}
+        data-mobile-primary-composer={touchInput ? "true" : undefined}
         data-mobile-keyboard-open={
           touchInput && keyboardOpen ? "true" : undefined
         }
@@ -1916,24 +1944,6 @@ export function ComposerWorkspace({
                   <OpenInFull />
                 </IconButton>
               </Tooltip>
-              <Tooltip title="Clear all">
-                <span>
-                  <IconButton
-                    size="small"
-                    aria-label="clear composer"
-                    disabled={!clearable}
-                    sx={{
-                      ...TOOLBAR_ICON_BTN,
-                      color: "text.secondary",
-                      "& .MuiSvgIcon-root": { fontSize: "1.15rem" },
-                    }}
-                    onPointerDown={(event): void => event.preventDefault()}
-                    onClick={(event): void => setClearComposerAnchor(event.currentTarget)}
-                  >
-                    <DeleteOutline />
-                  </IconButton>
-                </span>
-              </Tooltip>
             </Stack>
           )
           : (
@@ -2177,7 +2187,7 @@ export function ComposerWorkspace({
               aria-label={busy || starting ? "queue message" : "send"}
               disabled={!sendable || submitFeedback.pending}
               aria-busy={submitFeedback.pending || undefined}
-              onClick={submitWithFeedback}
+              onClick={(): void => submitWithFeedback()}
               sx={{
                 ml: 0.5,
                 minWidth: 86,
@@ -2262,32 +2272,32 @@ export function ComposerWorkspace({
             </Box>
           </Stack>
         )}
-        <Stack
+        <Box
           data-mobile-action-row={touchInput ? "true" : undefined}
-          direction="row"
-          alignItems="center"
-          // A phone is tight, so spread the icons across its action row. A touch
-          // tablet has enough room to keep the same actions as one compact,
-          // left-anchored group instead of stretching a handful of glyphs across
-          // the full iPad canvas. Desktop keeps its separate left group +
-          // config chips + right-pinned action cluster.
-          spacing={compact ? 0 : 0.5}
           sx={{
             order: touchInput ? 1 : undefined,
-            px: 0.5,
+            display: "flex",
+            alignItems: "center",
+            minWidth: 0,
             pb: 0.5,
-            // Compact (mobile): spread the icons when they fit, but let the row
-            // SCROLL horizontally when they don't (space-evenly collapses to a
-            // flex-start pack once there's no free space, so it never clips as
-            // more buttons are added — Compact/Clear today, whatever tomorrow).
-            // Buttons keep their full tap target (flexShrink:0 via TOOLBAR_ICON_BTN)
-            // instead of squeezing. Scrollbar hidden — it's a thin touch strip.
+            ...TOOLBAR_MIN_H,
+          }}
+        >
+        <Stack
+          data-mobile-scrollable-actions={touchInput ? "true" : undefined}
+          direction="row"
+          alignItems="center"
+          spacing={compact ? 0 : 0.5}
+          sx={{
+            flex: 1,
+            minWidth: 0,
+            px: 0.5,
             ...(compact && {
               justifyContent: "space-evenly",
               flexWrap: "nowrap",
               overflowX: "auto",
               overflowY: "hidden",
-              scrollPaddingRight: 48,
+              overscrollBehaviorX: "contain",
               scrollbarWidth: "none",
               "&::-webkit-scrollbar": { display: "none" },
               "@media (min-width: 700px)": {
@@ -2295,7 +2305,6 @@ export function ComposerWorkspace({
                 columnGap: 0.5,
               },
             }),
-            ...TOOLBAR_MIN_H,
           }}
         >
         {/* (Vim mode moved OUT of the toolbar into a Zed-style bottom status bar
@@ -2448,7 +2457,7 @@ export function ComposerWorkspace({
                   disabled={!sendable || submitFeedback.pending}
                   aria-busy={submitFeedback.pending || undefined}
                   sx={TOOLBAR_ICON_BTN}
-                  onClick={submitWithFeedback}
+                  onClick={(): void => submitWithFeedback()}
                 >
                   {submitFeedback.progress
                     ? <CircularProgress size={18} color="inherit" />
@@ -2470,6 +2479,19 @@ export function ComposerWorkspace({
               onClick={saveDraft}
             >
               <EditNoteOutlined fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+        <Tooltip title="Clear composer">
+          <span data-mobile-composer-clear>
+            <IconButton
+              aria-label="clear composer"
+              disabled={!clearable}
+              sx={TOOLBAR_ICON_BTN}
+              onPointerDown={(event): void => event.preventDefault()}
+              onClick={(event): void => setClearComposerAnchor(event.currentTarget)}
+            >
+              <DeleteOutline fontSize="small" />
             </IconButton>
           </span>
         </Tooltip>
@@ -2518,35 +2540,19 @@ export function ComposerWorkspace({
             </IconButton>
           </span>
         </Tooltip>
-        {/* Keyboard dismissal is an input action, not editor chrome. Keep it at
-            the trailing edge of the horizontally scrollable delivery row so it
-            never grows the top-right utility rail down across Force push or the
-            formatting divider. The subtle fade preserves the pinned affordance
-            while the preceding actions scroll underneath it on narrow phones. */}
+        </Stack>
+        {/* Keyboard dismissal is outside the horizontal scroller: iOS rubber-band
+            may move the delivery actions, but this terminal action stays still. */}
         {touchInput && (
           <Box
             data-mobile-keyboard-hide
             sx={{
-              position: "sticky",
-              right: 0,
-              zIndex: 1,
               display: "none",
-              flex: "0 0 44px",
+              flex: "0 0 42px",
               alignItems: "center",
               justifyContent: "center",
-              ml: 0.25,
-              bgcolor: "background.paper",
-              "&::before": {
-                content: '""',
-                position: "absolute",
-                top: 0,
-                bottom: 0,
-                left: -12,
-                width: 12,
-                pointerEvents: "none",
-                background: (theme) =>
-                  `linear-gradient(90deg, transparent, ${theme.palette.background.paper})`,
-              },
+              alignSelf: "stretch",
+              mr: 0.25,
             }}
           >
             <Tooltip title="Hide keyboard">
@@ -2556,7 +2562,7 @@ export function ComposerWorkspace({
                 sx={{
                   ...TOOLBAR_ICON_BTN,
                   color: "text.secondary",
-                  "& .MuiSvgIcon-root": { fontSize: "1.15rem" },
+                  "& .MuiSvgIcon-root": { fontSize: "1.1rem" },
                 }}
                 onPointerDown={(event): void => event.preventDefault()}
                 onClick={dismissMobileSoftwareKeyboard}
@@ -2566,7 +2572,7 @@ export function ComposerWorkspace({
             </Tooltip>
           </Box>
         )}
-        </Stack>
+        </Box>
         {touchInput && (
           <ComposerToolbarSettings
             open={mobileToolbarSettingsOpen}
@@ -2860,10 +2866,8 @@ export function ComposerWorkspace({
           // the edit overlay) so inline text carries in; markdown stays literal.
           value={text}
           onChange={setText}
-          onSubmit={(): void => {
-            submitAndNotify();
-            setComposeFs(false);
-          }}
+          onSubmit={(): void =>
+            submitWithFeedback(() => setComposeFs(false))}
           onSaveDraft={(): void => {
             saveDraft();
             setComposeFs(false);
@@ -3584,8 +3588,11 @@ function PendingPanel({
     return () => list.removeEventListener("cowboy:desktop-reorder", onKeyboardReorder);
   }, [desktop, kind, sessionId, sortable.order]);
   const noun = kind === "queued" ? "Queued Message" : "Draft";
+  const mobileFloatingEdit = !desktop && editingId !== null && keyboardOpen;
   return (
     <Box
+      data-mobile-pending-panel={!desktop ? kind : undefined}
+      data-mobile-floating-edit={mobileFloatingEdit ? "true" : undefined}
       {...(desktop
         ? {
           "data-desktop-region": `prompt.${kind}`,
@@ -3605,6 +3612,14 @@ function PendingPanel({
           ? desktopSurfaceSx({ interactive: false, focusWithin: true })
           : mobileComposerPanelFrameSx),
         bgcolor: kind === "draft" ? "action.selected" : "action.hover",
+        ...(mobileFloatingEdit && {
+          border: 0,
+          bgcolor: "transparent",
+          boxShadow: "none",
+          "& [data-mobile-pending-row]:not([data-mobile-pending-row-editing='true'])": {
+            display: "none",
+          },
+        }),
         ...(desktop && {
           flexShrink: 0,
         }),
@@ -3618,6 +3633,7 @@ function PendingPanel({
       }}
     >
       <Stack
+        data-mobile-pending-header={!desktop ? "true" : undefined}
         direction="row"
         alignItems="center"
         // Pin the header to the SAME 44px as the composer input (ComposerTextarea
@@ -3625,6 +3641,7 @@ function PendingPanel({
         // read as the same-height pair. `py: 0` drops the old extra 8px that made
         // the bar (a 44px icon button + padding) taller than the input.
         sx={{
+          display: mobileFloatingEdit ? "none" : "flex",
           pr: 0.75,
           py: 0,
           minHeight: mobileComposerPanelHeaderMinHeight,
@@ -3832,8 +3849,8 @@ function PendingPanel({
             // Inner padding so the rows sit INSIDE the frame with a small inset
             // (the original framed look). The frame's OUTER edge is what aligns
             // with the input box, not the rows.
-            px: 0.5,
-            pb: 0.5,
+            px: mobileFloatingEdit ? 0 : 0.5,
+            pb: mobileFloatingEdit ? 0 : 0.5,
             // Standalone: cap so a long backlog scrolls instead of pushing the
             // editor off a phone viewport. `unbounded`: the composer's shared
             // queue+drafts scroller owns the cap, so don't nest a second scroller.
@@ -3859,6 +3876,10 @@ function PendingPanel({
             return (
               <Stack
                 key={m.id}
+                data-mobile-pending-row={!desktop ? "true" : undefined}
+                data-mobile-pending-row-editing={
+                  !desktop && editingId === m.id ? "true" : undefined
+                }
                 {...(desktop
                   ? {
                     "data-desktop-item": m.id,
@@ -4378,6 +4399,10 @@ function PendingRow({
           variant="outlined"
           tabIndex={desktop ? -1 : undefined}
           data-mobile-focus-composer={touchInput ? "true" : undefined}
+          data-mobile-pending-editor={touchInput ? "true" : undefined}
+          data-mobile-keyboard-open={
+            touchInput && keyboardOpen ? "true" : undefined
+          }
           sx={{
             position: "relative",
             overflow: "hidden",
@@ -5484,8 +5509,16 @@ function SessionInfoSection({
   // DISPLAY title, not the machine string. The parent owns the draft because
   // mobile replaces the footer Close action with an explicit Save action while
   // this field is being edited. Plain Enter is intentionally not a commit path.
+  const project = sessionProjectLabel(session);
+  const contextUsed = session.context_used ?? 0;
+  const contextSize = session.context_size ?? 0;
+  const hasContext = contextSize > 0;
+  const contextPercent = hasContext
+    ? Math.min(100, Math.max(0, contextUsed / contextSize * 100))
+    : 0;
   const rows: { label: string; value: string; mono?: boolean }[] = [
     { label: "Provider", value: session.provider },
+    { label: "Project", value: project },
     { label: "Working dir", value: session.cwd, mono: true },
     { label: "Source", value: originLabel(session.origin) },
     { label: "Status", value: session.status },
@@ -5541,8 +5574,43 @@ function SessionInfoSection({
           />
         ))}
       </List>
+      <Stack spacing={0.65} sx={{ pt: 0.75, pb: 1 }}>
+        <Stack direction="row" alignItems="baseline" justifyContent="space-between" spacing={2}>
+          <Typography variant="caption" color="text.secondary">
+            Context
+          </Typography>
+          <Typography variant="body2" sx={{ fontWeight: 600 }}>
+            {hasContext ? `${Math.round(contextPercent)}% used` : "Waiting for usage"}
+          </Typography>
+        </Stack>
+        <LinearProgress
+          variant="determinate"
+          value={contextPercent}
+          color={contextPercent >= 90 ? "error" : contextPercent >= 75 ? "warning" : "primary"}
+          aria-label="session context usage"
+          sx={{
+            height: 7,
+            borderRadius: 99,
+            bgcolor: "action.selected",
+            "& .MuiLinearProgress-bar": { borderRadius: 99 },
+          }}
+        />
+        {hasContext && (
+          <Typography variant="caption" color="text.secondary" sx={{ textAlign: "right" }}>
+            {contextUsed.toLocaleString()} / {contextSize.toLocaleString()} tokens
+          </Typography>
+        )}
+      </Stack>
     </>
   );
+}
+
+// Stable source checkouts can reveal the project from their path. Machine-backed
+// sessions currently expose only their isolated worktree path, so do not guess
+// from a mutable title or the `sess-*` directory name.
+function sessionProjectLabel(session: SessionMeta): string {
+  const match = session.cwd.match(/\/columbus\/projects\/([^/]+)(?:\/|$)/);
+  return match?.[1] ?? "Not recorded";
 }
 
 // The queue pause/resume control. Session-level and orthogonal to what's queued,

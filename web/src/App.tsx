@@ -2525,6 +2525,13 @@ export function App({
                         transition:
                             `max-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, min-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, opacity 90ms ease, transform ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, padding ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}`,
                     },
+                    // When a real touch editor owns the visible keyboard, the
+                    // Composer card becomes the only floating material. Keep the
+                    // measured shell height for transcript clearance, but remove
+                    // the old full-width slab and boundary hairline behind it.
+                    "&:has([data-mobile-primary-composer='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within, [data-mobile-pending-editor='true'][data-mobile-keyboard-open='true']:focus-within) [data-mobile-composer-shell-material='true']": {
+                        opacity: "0 !important",
+                    },
                 }}
             >
                 {mobile && (
@@ -2644,6 +2651,7 @@ export function App({
                 {!splitActive && (
                 <Box
                     aria-hidden
+                    data-mobile-composer-shell-material="true"
                     sx={{
                             position: "absolute",
                             left: 0,
@@ -2684,6 +2692,7 @@ export function App({
                 {!splitActive && (
                 <Box
                     aria-hidden
+                    data-mobile-composer-shell-material="true"
                     sx={{
                         position: "absolute",
                         left: 0,
