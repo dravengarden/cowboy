@@ -899,8 +899,10 @@ here says otherwise.
     and Clear sits one 40px touch row directly above it. The touch editor area
     keeps an 80px minimum so that compact fixed rail never manufactures a tall
     blank canvas or overlaps itself; content growth remains textarea-owned.
-    Render Clear only while text or attachments are clearable, and center it in
-    the fixed-width rail rather than deriving either axis from editor height.
+    Render Clear only while text or attachments are clearable. The fixed actions
+    are an absolute transparent overlay on the final standard toolbar slot, not
+    a sibling flex column: reserve one 48px end inset in the scroller so the row
+    reads continuously without letting iOS rubber-band move those actions.
     Keep Force push earlier in the scrollable action sequence and Schedule next
     to the fixed rail; two lightning-shaped glyphs beside each other make the
     terminal cluster visually ambiguous.

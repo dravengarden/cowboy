@@ -2280,6 +2280,7 @@ export function ComposerWorkspace({
             display: "flex",
             alignItems: "center",
             minWidth: 0,
+            position: "relative",
             pb: 0.5,
             ...TOOLBAR_MIN_H,
           }}
@@ -2293,6 +2294,7 @@ export function ComposerWorkspace({
             flex: 1,
             minWidth: 0,
             px: 0.5,
+            ...(touchInput && { pr: "48px" }),
             ...(compact && {
               justifyContent: "space-evenly",
               flexWrap: "nowrap",
@@ -2536,13 +2538,13 @@ export function ComposerWorkspace({
             data-mobile-keyboard-hide
             sx={{
               display: "none",
-              flex: "0 0 46px",
-              position: "relative",
+              position: "absolute",
+              top: 0,
+              right: 4,
+              width: 40,
+              height: 40,
               alignItems: "center",
               justifyContent: "center",
-              alignSelf: "stretch",
-              ml: 0.5,
-              mr: 0.75,
             }}
           >
             {clearable && (
