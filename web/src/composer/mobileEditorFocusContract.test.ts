@@ -254,6 +254,11 @@ Deno.test("mobile keyboard dismissal belongs to the delivery row, not the utilit
   assertEquals(actionRow.includes('position: "sticky"'), false);
   assertEquals(
     actionRow.indexOf('<Tooltip title="Force push">') <
+      actionRow.indexOf('<Tooltip title="定时发送">'),
+    true,
+  );
+  assertEquals(
+    actionRow.indexOf('<Tooltip title="定时发送">') <
       actionRow.indexOf("data-mobile-keyboard-hide"),
     true,
   );

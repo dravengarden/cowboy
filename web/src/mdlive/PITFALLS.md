@@ -901,6 +901,9 @@ here says otherwise.
     blank canvas or overlaps itself; content growth remains textarea-owned.
     Render Clear only while text or attachments are clearable, and center it in
     the fixed-width rail rather than deriving either axis from editor height.
+    Keep Force push earlier in the scrollable action sequence and Schedule next
+    to the fixed rail; two lightning-shaped glyphs beside each other make the
+    terminal cluster visually ambiguous.
     Keep that dismissal control outside the horizontally scrollable action
     track: iOS rubber-band moves every descendant of the scroller, including a
     `position: sticky` child, before sticky settles back into place.

@@ -2483,17 +2483,18 @@ export function ComposerWorkspace({
             </IconButton>
           </span>
         </Tooltip>
-        {/* Schedule the current content: park it as a draft that the SERVER
-            auto-sends at a future time (fires even with every client offline). */}
-        <Tooltip title="定时发送">
+        <Tooltip title="Force push">
           <span>
             <IconButton
-              aria-label="schedule send"
-              disabled={!sendable}
+              color="warning"
+              aria-label="force push"
+              // Usable while a turn runs (busy/starting) OR the queue is paused —
+              // in both cases ⚡ pushes this message ahead of the held/queued work.
+              disabled={!sendable || !(busy || starting || paused)}
               sx={TOOLBAR_ICON_BTN}
-              onClick={(): void => setScheduleTarget({ id: undefined, initial: null })}
+              onClick={(e): void => setForceAnchor(e.currentTarget)}
             >
-              <Schedule fontSize="small" />
+              <Bolt fontSize="small" />
             </IconButton>
           </span>
         </Tooltip>
@@ -2513,18 +2514,17 @@ export function ComposerWorkspace({
             </IconButton>
           </span>
         </Tooltip>
-        <Tooltip title="Force push">
+        {/* Schedule the current content: park it as a draft that the SERVER
+            auto-sends at a future time (fires even with every client offline). */}
+        <Tooltip title="定时发送">
           <span>
             <IconButton
-              color="warning"
-              aria-label="force push"
-              // Usable while a turn runs (busy/starting) OR the queue is paused —
-              // in both cases ⚡ pushes this message ahead of the held/queued work.
-              disabled={!sendable || !(busy || starting || paused)}
+              aria-label="schedule send"
+              disabled={!sendable}
               sx={TOOLBAR_ICON_BTN}
-              onClick={(e): void => setForceAnchor(e.currentTarget)}
+              onClick={(): void => setScheduleTarget({ id: undefined, initial: null })}
             >
-              <Bolt fontSize="small" />
+              <Schedule fontSize="small" />
             </IconButton>
           </span>
         </Tooltip>
@@ -2536,12 +2536,13 @@ export function ComposerWorkspace({
             data-mobile-keyboard-hide
             sx={{
               display: "none",
-              flex: "0 0 42px",
+              flex: "0 0 46px",
               position: "relative",
               alignItems: "center",
               justifyContent: "center",
               alignSelf: "stretch",
-              mr: 0.25,
+              ml: 0.5,
+              mr: 0.75,
             }}
           >
             {clearable && (
@@ -2571,7 +2572,7 @@ export function ComposerWorkspace({
                 sx={{
                   ...TOOLBAR_ICON_BTN,
                   color: "text.secondary",
-                  "& .MuiSvgIcon-root": { fontSize: "1.1rem" },
+                  "& .MuiSvgIcon-root": { fontSize: "1.15rem" },
                 }}
                 onPointerDown={(event): void => event.preventDefault()}
                 onClick={dismissMobileSoftwareKeyboard}
