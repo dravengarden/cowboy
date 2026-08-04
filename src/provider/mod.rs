@@ -34,11 +34,16 @@ pub struct LaunchSpec {
     pub remove_env: Vec<&'static str>,
 }
 
-const CODEX_FULL_ACCESS_ARGS: &[&str] = &[
+// A compacted thread can retain a large carried prefix. Counting that immutable
+// prefix again leaves almost no headroom and can make Codex compact after every
+// tool call; only post-compaction growth should trigger the next auto-compact.
+const CODEX_RUNTIME_ARGS: &[&str] = &[
     "-c",
     "approval_policy=\"never\"",
     "-c",
     "sandbox_mode=\"danger-full-access\"",
+    "-c",
+    "model_auto_compact_token_limit_scope=\"body_after_prefix\"",
 ];
 
 // Note: whether an agent can resume via `session/load` (design §7) is read at
@@ -91,9 +96,9 @@ fn builtin_with_env(get_env: impl Fn(&str) -> Option<String>) -> HashMap<&'stati
             "npx",
             &concat_slices(
                 &["-y", "@agentclientprotocol/codex-acp"],
-                CODEX_FULL_ACCESS_ARGS,
+                CODEX_RUNTIME_ARGS,
             ),
-            CODEX_FULL_ACCESS_ARGS,
+            CODEX_RUNTIME_ARGS,
             &get_env,
         ),
     );
@@ -286,6 +291,7 @@ fn render_codex_deepseek_config(catalog: &Path) -> String {
      model_catalog_json = \"{}\"\n\
      approval_policy = \"never\"\n\
      sandbox_mode = \"danger-full-access\"\n\n\
+     model_auto_compact_token_limit_scope = \"body_after_prefix\"\n\n\
      [model_providers.deepseek-local]\n\
      name = \"Isolated DeepSeek Responses gateway\"\n\
      base_url = \"http://127.0.0.1:8088/v1\"\n\
@@ -325,6 +331,8 @@ mod tests {
                 "approval_policy=\"never\"",
                 "-c",
                 "sandbox_mode=\"danger-full-access\"",
+                "-c",
+                "model_auto_compact_token_limit_scope=\"body_after_prefix\"",
             ]
         );
         assert_eq!(
@@ -377,6 +385,8 @@ mod tests {
                 "approval_policy=\"never\"",
                 "-c",
                 "sandbox_mode=\"danger-full-access\"",
+                "-c",
+                "model_auto_compact_token_limit_scope=\"body_after_prefix\"",
             ]
         );
         // Other custom commands still drop the npx-specific default args.
@@ -419,6 +429,7 @@ mod tests {
         ));
         assert!(rendered.starts_with("model = \"deepseek-v4-flash\""));
         assert!(rendered.contains("approval_policy = \"never\""));
+        assert!(rendered.contains("model_auto_compact_token_limit_scope = \"body_after_prefix\""));
         assert!(rendered.contains("[model_providers.deepseek-local]"));
         assert!(rendered.contains("requires_openai_auth = false"));
         assert!(rendered.contains("/nix/var/nix/profiles/columbus-components/codex-deepseek/"));
