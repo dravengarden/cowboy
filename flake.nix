@@ -169,7 +169,8 @@
         nativeBuildInputs = [ pkgs.makeWrapper ];
         postInstall = ''
           wrapProgram $out/bin/cowboy-machine \
-            --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.openssh ]}
+            --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.openssh ]} \
+            --add-flags "--desired-generation ${worker-generation}"
         '';
         doCheck = false;
         meta = {
@@ -249,19 +250,26 @@
         dirty = release-revision == null;
       };
 
-      # Machine configuration consumes stable component profiles instead of
-      # embedding these store paths in every NixOS generation. The two release
-      # boundaries deliberately keep a controller/web update from moving the
-      # resident Machine, worker, or Zed runtime.
+      # Fully managed NixOS hosts consume stable component profiles instead of
+      # embedding these store paths in every system generation. Web is its own
+      # zero-restart lane; controller and resident Machine maintenance remain
+      # explicit, independently recoverable transactions.
       cowboy-controller-release =
         pkgs.runCommand "cowboy-controller-release" { } ''
-          mkdir -p "$out/bin" "$out/share/cowboy" "$out/etc/cowboy-release"
+          mkdir -p "$out/bin" "$out/etc/cowboy-release"
           ln -s ${cowboy}/bin/cowboy "$out/bin/cowboy"
-          ln -s ${cowboy-web} "$out/share/cowboy/web"
           cat >"$out/etc/cowboy-release/source.json" <<'EOF'
           ${builtins.toJSON (release-source "controller")}
           EOF
         '';
+
+      cowboy-web-release = pkgs.runCommand "cowboy-web-release" { } ''
+        mkdir -p "$out/share/cowboy" "$out/etc/cowboy-release"
+        ln -s ${cowboy-web} "$out/share/cowboy/web"
+        cat >"$out/etc/cowboy-release/source.json" <<'EOF'
+        ${builtins.toJSON (release-source "web")}
+        EOF
+      '';
 
       cowboy-machine-release = pkgs.runCommand "cowboy-machine-release" { } ''
         mkdir -p "$out/bin" "$out/etc/cowboy-release"
@@ -349,6 +357,7 @@
         cowboy-zed-server = cowboy-zed-server;
         cowboy-web = cowboy-web;
         cowboy-controller-release = cowboy-controller-release;
+        cowboy-web-release = cowboy-web-release;
         cowboy-machine-release = cowboy-machine-release;
       };
 
@@ -357,7 +366,8 @@
       # additionally enforced by `just check` in CI.
       checks.${system} = {
         inherit cowboy cowboy-machine cowboy-code-adapter cowboy-source-boundary
-          cowboy-web cowboy-controller-release cowboy-machine-release
+          cowboy-web cowboy-controller-release cowboy-web-release
+          cowboy-machine-release
           cowboy-zed-integration cowboy-zed-adapter cowboy-zed-server;
       };
 

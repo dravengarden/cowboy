@@ -14,17 +14,19 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
 
 ## Deploy (read before deploying)
 - Cowboy application releases use project-owned Nix artifacts rather than a
-  full NixOS generation. From a clean committed task worktree, build either
-  `.#cowboy-controller-release` or `.#cowboy-machine-release`, then hand the
+  full NixOS generation. From a clean committed task worktree, build the
+  narrowest affected output: `.#cowboy-web-release`,
+  `.#cowboy-controller-release`, or `.#cowboy-machine-release`. Hand each
   immutable result to the machine-owned Cowboy component activator. Publishing
   the Cowboy commit is independent from local activation; the target pins an
   unpublished successful revision until the task pushes it or deploys a
   descendant revert. `/etc/nixos` and Columbus stable checkouts are never
   deployment sources.
-- Controller releases atomically move the controller/web profile and restart
-  only `cowboy.service`. Machine releases are a separate explicit maintenance
-  boundary for the resident Machine, worker generation, and isolated Zed
-  adapter. Do not use a controller release to recycle active sessions.
+- Web releases atomically move only `/run/cowboy-web` and restart no process.
+  Controller releases restart only `cowboy.service`. Machine releases are a
+  separate explicit maintenance boundary for the resident Machine, worker
+  generation, and isolated Zed adapter. Do not use a controller or Web release
+  to recycle active sessions.
 - **A controller deployment restarts the daemon you may be driving Codex
   through.** The machine activator runs in an independent root systemd unit that
   survives this restart. Follow its journal and verify the component receipt,

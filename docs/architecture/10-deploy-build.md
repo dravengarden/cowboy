@@ -106,12 +106,24 @@ idle.
 
 ## NixOS service shape
 
-cowboy is consumed by the hawk config through a remote Git flake input. To ship
-a change: commit and publish here, then update the Cowboy input and commit the
-lock file in an isolated Columbus worktree before using Hawk's deployment
-transaction. Publishing the application source makes its lock reproducible;
-the Columbus machine-config commit itself may still deploy before push. The
-system `cowboy.service` runs **as the human SSH user** (so
+The aggregate machine flake carries only a pinned cold-start recovery release.
+Ordinary application changes do not update its lock. From a clean committed
+Cowboy task worktree, build the narrowest affected project-owned release:
+
+```bash
+nix build .#cowboy-web-release --out-link result-web
+nix build .#cowboy-controller-release --out-link result-controller
+nix build .#cowboy-machine-release --out-link result-machine
+```
+
+The target's machine-owned activator moves a stable Nix profile, verifies the
+running release, rolls back failure, pins the Cowboy commit, and records a
+receipt. Web activation changes only the atomic `/run/cowboy-web` link;
+controller activation restarts only `cowboy.service`; Machine activation is an
+explicit maintenance transaction. A commit may be activated before it is
+pushed, but the deploying task still owns publication or a descendant revert.
+
+The system `cowboy.service` runs **as the human SSH user** (so
 the API and Zed-over-SSH share one identity). A lingered user manager owns
 `cowboy-machine.service`, `cowboy-agents.slice`, and the
 transient per-session workers. Agent-owned local state remains in the user's
@@ -120,9 +132,10 @@ normal tool-managed home.
 Do not hot-deploy Cowboy with `systemctl edit --runtime` or a store-path
 `ExecStart` override. Such a drop-in outranks the newly activated NixOS unit and
 can leave an older controller running behind a healthy endpoint. Temporary
-integration releases still use a committed Columbus machine worktree and its
-normal activation transaction; push remains optional until that transaction
-has passed.
+integration releases use the same committed component transaction; push
+remains optional until that transaction has passed. Change the aggregate
+machine configuration only when the service contract, bootstrap recovery pin,
+or host integration itself changes.
 
 See [Zero-interruption rolling updates](12-rolling-updates.md) for ownership,
 drain, rollback, monitoring, and failure semantics.
@@ -135,20 +148,22 @@ system profile moved but before `/run/current-system` and restarted units
 converged. A dropped approval channel therefore proves neither success nor
 failure.
 
-After committing the complete Columbus integration, build from that clean task
-worktree and dispatch activation into an independent root systemd unit:
+After committing the Cowboy change, build its immutable release and dispatch it
+into an independent root systemd unit through the current machine interface:
 
 ```bash
-cd /home/draven/worktrees/columbus/<task>/machines/hawk/nixos
-just sys-build
-just sys-activate ./result
+cd /home/draven/worktrees/cowboy/<task>
+nix build .#cowboy-web-release --out-link result-web
+nix develop /home/draven/columbus/machines -c \
+  just --justfile /home/draven/columbus/machines/justfile \
+  cowboy-web-activate "$(readlink -f result-web)"
 ```
 
-`hawk activate` resolves the already-built closure, then the transient unit sets
-the system profile and runs that closure's `switch-to-configuration`. The unit is
-under `system.slice`, not `cowboy.service`, so a cowboy restart cannot kill it.
-The target serializes activation, rejects a candidate that does not descend from
-the active revision, rolls back new unit failures, and writes a receipt. Verify
-that receipt, the unit journal, and `/run/current-system`; never blindly re-run a switch.
-Web changes still require a `sw.js` VERSION bump so installed PWAs reload, but
-they do not restart Cowboy or the detached runtime.
+Use `cowboy-controller-activate` for the controller output and
+`cowboy-machine-activate` for an explicitly approved Machine maintenance
+release. The detached unit is under `system.slice`, so a controller restart
+cannot kill it. The target serializes activation, rejects divergent lane
+history, rolls back failed health checks, and writes a component receipt. Verify
+the receipt and unit journal; never blindly repeat an activation. Web changes
+still require a `sw.js` VERSION bump so installed PWAs reload, but they restart
+neither Cowboy nor the detached runtime.

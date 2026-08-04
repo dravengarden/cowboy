@@ -34,8 +34,11 @@ would terminate Machine and every transient worker even though the system daemon
 remained up.
 
 Machine has `restartIfChanged = false`; a generic Nix switch never restarts it
-in the same uncontrolled batch as Cowboy. Machine-host updates use its signed
-component lifecycle and readiness gate; worker sibling units stay up throughout.
+in the same uncontrolled batch as Cowboy. Signed components are the portable
+Machine-host lifecycle. On fully managed NixOS hosts where a signing manifest
+has not yet been provisioned, the machine-owned profile transaction is the
+bounded fallback and uses the same explicit maintenance/readiness boundary;
+worker sibling units stay up throughout.
 The roll trigger covers both the Machine package and its effective adapter/PATH
 configuration, so a real low-frequency configuration change cannot remain
 silently unapplied. The worker slice itself also has `restartIfChanged = false`:
