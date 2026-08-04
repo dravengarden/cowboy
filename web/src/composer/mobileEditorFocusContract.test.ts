@@ -170,9 +170,9 @@ Deno.test("mobile keyboard focus presents one floating composer surface", () => 
   );
   assertEquals(
     appSource.includes(
-      "[data-mobile-focus-composer='true'][data-mobile-keyboard-open='true']:has(",
+      "[data-mobile-pending-editor='true'][data-mobile-keyboard-open='true']:focus-within",
     ),
-    false,
+    true,
   );
 });
 

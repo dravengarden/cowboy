@@ -2529,7 +2529,7 @@ export function App({
                     // Composer card becomes the only floating material. Keep the
                     // measured shell height for transcript clearance, but remove
                     // the old full-width slab and boundary hairline behind it.
-                    "&:has([data-mobile-focus-composer='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within) [data-mobile-composer-shell-material='true']": {
+                    "&:has([data-mobile-primary-composer='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within, [data-mobile-pending-editor='true'][data-mobile-keyboard-open='true']:focus-within) [data-mobile-composer-shell-material='true']": {
                         opacity: "0 !important",
                     },
                 }}

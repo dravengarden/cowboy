@@ -1372,10 +1372,10 @@ export function ComposerWorkspace({
           // A Queue/Draft edit follows the same focus model. Its containing
           // scrollport must stay mounted because it owns the transaction, so
           // hide Plan and the inactive sibling panel instead of the scrollport.
-          "&:has([data-mobile-pending-editor='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within) > [data-mobile-input-context='plan']": {
+          "&:has([data-mobile-pending-editor='true'][data-mobile-keyboard-open='true']:focus-within) > [data-mobile-input-context='plan']": {
             display: "none",
           },
-          "&:has([data-mobile-pending-editor='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within) [data-mobile-pending-panel]:not([data-mobile-floating-edit='true'])": {
+          "&:has([data-mobile-pending-editor='true'][data-mobile-keyboard-open='true']:focus-within) [data-mobile-pending-panel]:not([data-mobile-floating-edit='true'])": {
             display: "none",
           },
         }),
