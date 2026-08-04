@@ -948,3 +948,14 @@ Desktop Vim + IME checks:
     classify iPad as Desktop to obtain this layout; this is a visual density
     rule inside the touch product and does not change editor, focus, keyboard,
     or gesture ownership.
+
+45. **A focused Mobile Composer is owned by the real editor, not by its outer
+    card.** The compact card contains utility buttons, so card-wide
+    `:focus-within` can remain true after the textarea/contenteditable has
+    blurred and leave a tall canvas that looks editable but cannot summon the
+    iOS keyboard. Promote the card, formatting row, and keyboard action only
+    from `[data-mobile-editor-area]:focus-within`. When the token-free native
+    textarea is promoted, stretch the complete MUI root, form-control, input
+    wrapper, and textarea chain to the visible canvas height; every visible
+    blank point must remain a real UIKit text-input hit target. Do not replace
+    this with mirrored React focus state or delayed refocus.

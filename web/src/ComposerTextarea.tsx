@@ -727,6 +727,7 @@ export const ComposerTextarea = forwardRef<
   return (
     <Box
       ref={rootRef}
+      data-mobile-native-editor
       data-mobile-pager-ignore
       data-mobile-drawer-ignore
       sx={{

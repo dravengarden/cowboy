@@ -14,9 +14,9 @@ export function releaseMobileComposerFocus(): boolean {
   // Opening the full-cover toolbar settings is a transition out of the whole
   // composer focus region, not merely out of its text node. By click time iOS
   // may already have moved document.activeElement from the editor to the Tune
-  // button. That button still satisfies the card's :focus-within selector; if
-  // we only blur textarea/contenteditable nodes, the keyboard disappears while
-  // the focused card remains expanded as a large empty canvas.
+  // button. Blur whichever focus owner remains so the sheet starts from a clean
+  // boundary. The card itself promotes only from editor-area focus; utility
+  // focus must never leave behind an expanded inert canvas.
   active.blur();
   return true;
 }

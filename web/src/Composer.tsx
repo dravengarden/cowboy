@@ -1650,7 +1650,11 @@ export function ComposerWorkspace({
             borderRadius: mobileComposerPanelFrameSx.borderRadius,
             transition:
               `border-color ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, background-color ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, box-shadow ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}`,
-            "&:focus-within": {
+            // Only the editor is allowed to promote the compact card. Utility
+            // buttons also live inside this Paper, so plain :focus-within can
+            // leave a tall, inert canvas after Settings or another action takes
+            // focus while the native textarea has already blurred.
+            "&:has([data-mobile-editor-area]:focus-within)": {
               borderColor: (t) => alpha(t.palette.primary.main, 0.42),
               // Focus changes hierarchy inside the same card. Keep the outer
               // edge fixed so opening the keyboard does not look like a second
@@ -1661,7 +1665,7 @@ export function ComposerWorkspace({
               boxShadow: (t) =>
                 `0 10px 28px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.24 : 0.09)}`,
             },
-            "&:focus-within [data-mobile-editor-area]": {
+            "&:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area]": {
               minHeight: 132,
             },
             // An inline image promotes the compact native textarea to CM6. Keep
@@ -1669,15 +1673,36 @@ export function ComposerWorkspace({
             // chain; otherwise CM6 collapses to its 14px text line while the
             // surrounding card remains tall, so an iOS long-press in the visible
             // blank area lands on an inert wrapper and cannot open Paste/AutoFill.
-            "&:focus-within [data-mobile-editor-area] > *, &:focus-within [data-mobile-editor-area] .cm-theme-none, &:focus-within [data-mobile-editor-area] .cm-editor, &:focus-within [data-mobile-editor-area] .cm-scroller": {
+            "&:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] > *, &:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-theme-none, &:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-editor, &:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-scroller": {
               flex: 1,
               minHeight: 0,
               height: "100%",
             },
-            "&:focus-within [data-mobile-editor-area] .cm-content": {
+            "&:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-content": {
               minHeight: "100%",
             },
-            "&:focus-within [data-mobile-focus-format-row]": {
+            // The token-free touch editor is a native textarea. Stretch its
+            // complete MUI height chain as well, otherwise only the first 44px
+            // are a real UIKit editing target and the visible canvas below it
+            // cannot summon the software keyboard or native Paste menu.
+            "&:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor]": {
+              flex: 1,
+              minHeight: 0,
+              height: "100%",
+              display: "flex",
+              flexDirection: "column",
+            },
+            "&:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor] > .MuiFormControl-root, &:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor] .MuiInputBase-root": {
+              flex: 1,
+              minHeight: 0,
+              height: "100%",
+            },
+            "&:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor] textarea": {
+              minHeight: "100%",
+              height: "100% !important",
+              overflowY: "auto !important",
+            },
+            "&:has([data-mobile-editor-area]:focus-within) [data-mobile-focus-format-row]": {
               maxHeight: 48,
               opacity: 1,
               transform: "translateY(0)",
@@ -1686,7 +1711,7 @@ export function ComposerWorkspace({
               transition:
                 `max-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, opacity 110ms ease 55ms, transform ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, border-color 120ms ease`,
             },
-            "&:focus-within [data-mobile-keyboard-hide]": {
+            "&:has([data-mobile-editor-area]:focus-within) [data-mobile-keyboard-hide]": {
               display: "inline-flex",
             },
             "@media (prefers-reduced-motion: reduce)": {
