@@ -2,6 +2,7 @@ import { MenuBookOutlined } from "@mui/icons-material";
 import { Button, Tooltip } from "@mui/material";
 import { ShortcutKeycap } from "../ShortcutKeycap";
 import { desktopEmbeddedControlSx } from "./DesktopEmbeddedControl";
+import { desktopEmbeddedControlIconSx } from "./DesktopEmbeddedIcon";
 
 export function DesktopReadingModeControl({
   shortcutActive,
@@ -21,8 +22,10 @@ export function DesktopReadingModeControl({
         variant="outlined"
         startIcon={
           <MenuBookOutlined
-            fontSize="small"
-            sx={{ color: shortcutActive ? "primary.main" : "text.secondary" }}
+            sx={{
+              ...desktopEmbeddedControlIconSx(),
+              color: shortcutActive ? "primary.main" : "text.disabled",
+            }}
           />
         }
         onClick={onEnter}

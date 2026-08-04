@@ -63,6 +63,7 @@ import {
   DESKTOP_INSET_RADIUS,
   desktopEmbeddedControlSx,
 } from "./DesktopEmbeddedControl";
+import { desktopEmbeddedControlIconSx } from "./DesktopEmbeddedIcon";
 import { useDesktopWorkspace } from "./DesktopWorkspaceController";
 import {
   type DesktopCommand,
@@ -899,7 +900,12 @@ export function DesktopTopBarControls({
                 size="small"
                 color="inherit"
                 variant="outlined"
-                startIcon={<Tune fontSize="small" />}
+                startIcon={
+                  <Tune sx={{
+                    ...desktopEmbeddedControlIconSx(),
+                    color: "text.secondary",
+                  }} />
+                }
                 endIcon={<ExpandMore fontSize="small" />}
                 disabled={dead || options.length === 0}
                 onClick={(event): void => setConfigAnchor(event.currentTarget)}
