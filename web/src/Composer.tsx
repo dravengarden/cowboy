@@ -1665,9 +1665,6 @@ export function ComposerWorkspace({
               boxShadow: (t) =>
                 `0 10px 28px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.24 : 0.09)}`,
             },
-            "&:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area]": {
-              minHeight: 132,
-            },
             // An inline image promotes the compact native textarea to CM6. Keep
             // the complete focused canvas inside the same contenteditable height
             // chain; otherwise CM6 collapses to its 14px text line while the
@@ -1681,26 +1678,15 @@ export function ComposerWorkspace({
             "&:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-content": {
               minHeight: "100%",
             },
-            // The token-free touch editor is a native textarea. Stretch its
-            // complete MUI height chain as well, otherwise only the first 44px
-            // are a real UIKit editing target and the visible canvas below it
-            // cannot summon the software keyboard or native Paste menu.
+            // The token-free touch editor remains content-sized. MUI's textarea
+            // autosizer grows it with the text (up to maxRows), so a short prompt
+            // does not manufacture a large inert-looking blank canvas. The
+            // surrounding editor area has no independent height: every visible
+            // pixel is still backed by the real native textarea and therefore
+            // remains a valid UIKit tap/long-press target.
             "&:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor]": {
-              flex: 1,
-              minHeight: 0,
-              height: "100%",
               display: "flex",
               flexDirection: "column",
-            },
-            "&:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor] > .MuiFormControl-root, &:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor] .MuiInputBase-root": {
-              flex: 1,
-              minHeight: 0,
-              height: "100%",
-            },
-            "&:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor] textarea": {
-              minHeight: "100%",
-              height: "100% !important",
-              overflowY: "auto !important",
             },
             "&:has([data-mobile-editor-area]:focus-within) [data-mobile-focus-format-row]": {
               maxHeight: 48,

@@ -954,8 +954,13 @@ Desktop Vim + IME checks:
     `:focus-within` can remain true after the textarea/contenteditable has
     blurred and leave a tall canvas that looks editable but cannot summon the
     iOS keyboard. Promote the card, formatting row, and keyboard action only
-    from `[data-mobile-editor-area]:focus-within`. When the token-free native
-    textarea is promoted, stretch the complete MUI root, form-control, input
-    wrapper, and textarea chain to the visible canvas height; every visible
-    blank point must remain a real UIKit text-input hit target. Do not replace
-    this with mirrored React focus state or delayed refocus.
+    from `[data-mobile-editor-area]:focus-within`. The token-free native
+    textarea must remain content-sized and grow through MUI's native autosizer
+    up to its row limit. Do not give its parent an independent focused minimum
+    height or force the MUI/textarea chain to `height: 100%`: that manufactures
+    a large blank writing canvas below a short prompt. Every *visible* writing
+    pixel must still belong to the native textarea; a larger editor is earned by
+    wrapped/new lines or the explicit fullscreen surface. Inline-image CM6 keeps
+    its resolvable height chain because its contenteditable widget canvas has a
+    different ownership model. Do not replace either path with mirrored React
+    focus state or delayed refocus.

@@ -20,13 +20,14 @@ Deno.test("mobile composer promotion is owned by the real editor focus region", 
   );
 });
 
-Deno.test("native textarea fills the complete promoted mobile canvas", () => {
+Deno.test("native textarea owns a content-sized mobile canvas", () => {
   assertEquals(textareaSource.includes("data-mobile-native-editor"), true);
   assertEquals(
     composerSource.includes(
       '"&:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor] textarea"',
     ),
-    true,
+    false,
   );
-  assertEquals(composerSource.includes('height: "100% !important"'), true);
+  assertEquals(composerSource.includes("minHeight: 132"), false);
+  assertEquals(textareaSource.includes("maxRows={expanded ? 30 : 10}"), true);
 });
