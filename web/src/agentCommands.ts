@@ -17,7 +17,9 @@
 //     It works for every agent, so it's always available.
 import type { AcpUpdate, AvailableCommand, Envelope } from "./protocol";
 
-export function latestAvailableCommands(timeline: readonly Envelope[]): AvailableCommand[] {
+export function latestAvailableCommands(
+  timeline: readonly Envelope[],
+): AvailableCommand[] {
   for (let index = timeline.length - 1; index >= 0; index -= 1) {
     const envelope = timeline[index];
     if (envelope?.kind !== "update") continue;
@@ -55,6 +57,7 @@ const COMPACT_ALIASES = ["compact", "compress", "summarize", "summarise"];
 // nothing yet (the cold-start window before the first available_commands_update).
 const COMPACT_DEFAULT: Record<string, string> = {
   "claude-code": "compact",
+  "claude-deepseek": "compact",
   "codex": "compact",
   "codex-deepseek": "compact",
   "gemini": "compress",
@@ -64,7 +67,9 @@ function resolveCompact(
   provider: string,
   available: readonly AvailableCommand[],
 ): SessionAction | null {
-  const advertised = available.find((c) => COMPACT_ALIASES.includes(c.name.toLowerCase()));
+  const advertised = available.find((c) =>
+    COMPACT_ALIASES.includes(c.name.toLowerCase())
+  );
   const name = advertised?.name ?? COMPACT_DEFAULT[provider];
   if (name === undefined) return null;
   return {

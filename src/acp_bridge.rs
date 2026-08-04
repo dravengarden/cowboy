@@ -463,6 +463,7 @@ impl Bridge {
         match self.provider.as_ref() {
             "codex" => "Cowboy · Codex",
             "claude-code" => "Cowboy · Claude Code",
+            "claude-deepseek" => "Cowboy · Claude Code · DeepSeek",
             "gemini" => "Cowboy · Gemini",
             provider => provider,
         }

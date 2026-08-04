@@ -58,6 +58,14 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
   read, link, or mutate standard Codex config, auth, history, memory, rules,
   plugins, or skills. Required project guidance stays in `AGENTS.md`, docs,
   tests, hooks, and canonical skills.
+- `claude-deepseek` follows the same stronger boundary for Claude Code: use a
+  provider-owned `CLAUDE_CONFIG_DIR`, remove every inherited `ANTHROPIC_`,
+  `CLAUDE_`, and `DEEPSEEK_` variable before applying the closed provider
+  environment, mark routing as host-managed so settings cannot override the
+  endpoint or authentication, and never read, link, or mutate ordinary Claude
+  settings, credentials, history, projects, plugins, cache, or instance
+  metadata. Sharing the adapter executable is allowed; sharing its mutable
+  instance state is not.
 - The Web New Session picker (`GET /api/workspaces`) lists stable source roots,
   but a selected Machine must fetch the remote default branch and prepare or
   reuse a session-owned worktree before starting the ACP worker. The legacy

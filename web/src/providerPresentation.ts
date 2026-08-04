@@ -24,6 +24,12 @@ const PRESENTATIONS: Readonly<Record<string, ProviderPresentation>> = {
     detail: "Standard Claude Code account and configuration",
     isolated: false,
   },
+  "claude-deepseek": {
+    agent: "Claude Code",
+    modelProvider: "DeepSeek",
+    detail: "Isolated instance configuration · V4 Pro 1M + V4 Flash subagents",
+    isolated: true,
+  },
   gemini: {
     agent: "Gemini",
     modelProvider: "Google",
@@ -51,4 +57,10 @@ export function providerName(provider: string): string {
 export function providerSelectionName(provider: string): string {
   const presentation = providerPresentation(provider);
   return `${presentation.agent} · ${presentation.modelProvider}`;
+}
+
+export function providerAgentFamily(provider: string): string {
+  if (provider === "claude-deepseek") return "claude-code";
+  if (provider === "codex-deepseek") return "codex";
+  return provider;
 }

@@ -24,16 +24,17 @@ import { Kbd, useConfirmEnter } from "./Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { useSkills } from "./store";
 import { NetworkButton, NetworkIconButton } from "./NetworkActionFeedback";
+import { providerName } from "./providerPresentation";
 import {
   acceptedScheduleTime,
   type JsonRecord,
+  nearestAvailableResetCredit,
   num,
   type ProviderUsage,
   record,
   relativeUpdateTime,
   scheduledResetCountdown,
   type UsageLimit,
-  nearestAvailableResetCredit,
   usageLimits,
   type UsageSnapshot,
 } from "./usageLimits";
@@ -52,11 +53,21 @@ function formatBytes(n: number): string {
 
 function InfoRow({ k, v }: { k: string; v: string }): React.JSX.Element {
   return (
-    <Stack direction="row" spacing={2} sx={{ justifyContent: "space-between", alignItems: "baseline" }}>
-      <Typography variant="caption" sx={{ color: "text.secondary", flexShrink: 0 }}>
+    <Stack
+      direction="row"
+      spacing={2}
+      sx={{ justifyContent: "space-between", alignItems: "baseline" }}
+    >
+      <Typography
+        variant="caption"
+        sx={{ color: "text.secondary", flexShrink: 0 }}
+      >
         {k}
       </Typography>
-      <Typography variant="body2" sx={{ wordBreak: "break-all", textAlign: "right" }}>
+      <Typography
+        variant="body2"
+        sx={{ wordBreak: "break-all", textAlign: "right" }}
+      >
         {v}
       </Typography>
     </Stack>
@@ -110,7 +121,9 @@ function resetText(epochSeconds: number | undefined): string | undefined {
     ? `${String(mins)}m`
     : mins < 1440
     ? `${String(Math.floor(mins / 60))}h ${String(mins % 60)}m`
-    : `${String(Math.floor(mins / 1440))}d ${String(Math.floor((mins % 1440) / 60))}h`;
+    : `${String(Math.floor(mins / 1440))}d ${
+      String(Math.floor((mins % 1440) / 60))
+    }h`;
   return `Resets in ${relative} · ${fullDateTime(epochSeconds)}`;
 }
 
@@ -119,15 +132,24 @@ function LimitRow({ limit }: { limit: UsageLimit }): React.JSX.Element {
     <Stack spacing={0.65}>
       <Stack direction="row" justifyContent="space-between" spacing={1}>
         <Typography variant="body2">{limit.label}</Typography>
-        <Typography variant="body2" sx={{ fontWeight: 600 }}>{limit.remaining}% remaining</Typography>
+        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+          {limit.remaining}% remaining
+        </Typography>
       </Stack>
       <LinearProgress
         variant="determinate"
         value={limit.remaining}
-        sx={{ height: 7, borderRadius: 99, bgcolor: "action.selected", "& .MuiLinearProgress-bar": { borderRadius: 99 } }}
+        sx={{
+          height: 7,
+          borderRadius: 99,
+          bgcolor: "action.selected",
+          "& .MuiLinearProgress-bar": { borderRadius: 99 },
+        }}
       />
       {resetText(limit.resetsAt) && (
-        <Typography variant="caption" color="text.secondary">{resetText(limit.resetsAt)}</Typography>
+        <Typography variant="caption" color="text.secondary">
+          {resetText(limit.resetsAt)}
+        </Typography>
       )}
     </Stack>
   );
@@ -149,16 +171,20 @@ function ProviderUsageCard({ usage, schedule, now, onUsageChanged }: {
   const account = record(usage.account?.account);
   const plan = account ? str(account.planType) : undefined;
   const resetCredits = record(usage.rate_limits?.rateLimitResetCredits);
-  const availableCredits = resetCredits ? num(resetCredits.availableCount) : undefined;
+  const availableCredits = resetCredits
+    ? num(resetCredits.availableCount)
+    : undefined;
   const credits = Array.isArray(resetCredits?.credits)
-    ? resetCredits.credits.map(record).filter((v): v is JsonRecord => v !== undefined)
+    ? resetCredits.credits.map(record).filter((v): v is JsonRecord =>
+      v !== undefined
+    )
     : [];
   const nearestCredit = nearestAvailableResetCredit(usage);
   const nearestCreditId = str(nearestCredit?.id);
   const summary = record(usage.activity?.summary);
   const sessionUsage = record(usage.activity?.session);
   const sessionCost = record(sessionUsage?.cost);
-  const title = usage.provider === "claude-code" ? "Claude Code" : usage.provider === "gemini" ? "Gemini" : "Codex";
+  const title = providerName(usage.provider);
   const statusLabel = plan
     ? plan.toUpperCase()
     : usage.status === "available"
@@ -166,7 +192,8 @@ function ProviderUsageCard({ usage, schedule, now, onUsageChanged }: {
     : usage.status === "session-only"
     ? "SESSION"
     : "WAITING";
-  const scheduleValid = fireAt !== "" && new Date(fireAt).getTime() > Date.now();
+  const scheduleValid = fireAt !== "" &&
+    new Date(fireAt).getTime() > Date.now();
   const openResetDialog = () => {
     setResetMode("schedule");
     setFireAt("");
@@ -186,18 +213,28 @@ function ProviderUsageCard({ usage, schedule, now, onUsageChanged }: {
     setResetBusy(true);
     setResetError(null);
     try {
-      const response = await fetch("/api/usage/codex/reset/schedule", { method: "DELETE" });
-      if (!response.ok) throw new Error(await response.text() || `HTTP ${String(response.status)}`);
+      const response = await fetch("/api/usage/codex/reset/schedule", {
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        throw new Error(
+          await response.text() || `HTTP ${String(response.status)}`,
+        );
+      }
       await onUsageChanged();
     } catch (cause) {
-      setResetError(cause instanceof Error ? cause.message : "Could not cancel schedule");
+      setResetError(
+        cause instanceof Error ? cause.message : "Could not cancel schedule",
+      );
     } finally {
       setResetBusy(false);
     }
   };
   const submitReset = async (): Promise<void> => {
-    if (resetBusy || confirmText !== "confirm" ||
-      (resetMode === "schedule" && !scheduleValid)) return;
+    if (
+      resetBusy || confirmText !== "confirm" ||
+      (resetMode === "schedule" && !scheduleValid)
+    ) return;
     setResetBusy(true);
     setResetError(null);
     try {
@@ -205,20 +242,32 @@ function ProviderUsageCard({ usage, schedule, now, onUsageChanged }: {
         ? await fetch("/api/usage/codex/reset/schedule", {
           method: "PUT",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ fire_at_ms: new Date(fireAt).getTime(), confirm: confirmText }),
+          body: JSON.stringify({
+            fire_at_ms: new Date(fireAt).getTime(),
+            confirm: confirmText,
+          }),
         })
         : await fetch("/api/usage/codex/reset", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ confirm: confirmText, expected_credit_id: nearestCreditId }),
+          body: JSON.stringify({
+            confirm: confirmText,
+            expected_credit_id: nearestCreditId,
+          }),
         });
-      if (!response.ok) throw new Error(await response.text() || `HTTP ${String(response.status)}`);
+      if (!response.ok) {
+        throw new Error(
+          await response.text() || `HTTP ${String(response.status)}`,
+        );
+      }
       setResetOpen(false);
       setResetMode("schedule");
       setConfirmText("");
       await onUsageChanged();
     } catch (cause) {
-      setResetError(cause instanceof Error ? cause.message : "Could not use reset");
+      setResetError(
+        cause instanceof Error ? cause.message : "Could not use reset",
+      );
     } finally {
       setResetBusy(false);
     }
@@ -226,19 +275,45 @@ function ProviderUsageCard({ usage, schedule, now, onUsageChanged }: {
   useConfirmEnter(resetOpen, () => void submitReset());
 
   return (
-    <Box sx={{ border: 1, borderColor: "divider", borderRadius: 2, px: 1.5, py: 1.4 }}>
+    <Box
+      sx={{
+        border: 1,
+        borderColor: "divider",
+        borderRadius: 2,
+        px: 1.5,
+        py: 1.4,
+      }}
+    >
       <Stack spacing={1.35}>
-        <Stack direction="row" justifyContent="space-between" alignItems="baseline">
-          <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>{title}</Typography>
-          <Typography variant="caption" color={usage.status === "available" ? "success.main" : "text.secondary"}>
+        <Stack
+          direction="row"
+          justifyContent="space-between"
+          alignItems="baseline"
+        >
+          <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+            {title}
+          </Typography>
+          <Typography
+            variant="caption"
+            color={usage.status === "available"
+              ? "success.main"
+              : "text.secondary"}
+          >
             {statusLabel}
           </Typography>
         </Stack>
         {limits.map((limit) => <LimitRow key={limit.id} limit={limit} />)}
         {usage.provider === "codex" && credits.length > 0 && (
           <Stack spacing={0} sx={{ pt: 0.5 }}>
-            <Stack direction="row" justifyContent="space-between" alignItems="baseline" sx={{ pb: 0.75 }}>
-              <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Usage limit resets</Typography>
+            <Stack
+              direction="row"
+              justifyContent="space-between"
+              alignItems="baseline"
+              sx={{ pb: 0.75 }}
+            >
+              <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+                Usage limit resets
+              </Typography>
               {availableCredits !== undefined && (
                 <Typography variant="caption" color="text.secondary">
                   {String(availableCredits)} available
@@ -251,34 +326,75 @@ function ProviderUsageCard({ usage, schedule, now, onUsageChanged }: {
               const actionable = str(credit.id) === nearestCreditId;
               const row = (
                 <Box sx={{ py: 1.1, width: "100%", textAlign: "left" }}>
-                  <Stack direction="row" justifyContent="space-between" spacing={1} alignItems="baseline">
+                  <Stack
+                    direction="row"
+                    justifyContent="space-between"
+                    spacing={1}
+                    alignItems="baseline"
+                  >
                     <Typography variant="body2" sx={{ fontWeight: 600 }}>
                       {str(credit.title) ?? "Rate-limit reset"}
                     </Typography>
-                    <Typography variant="caption" color={actionable ? "primary.main" : "text.secondary"} fontWeight={actionable ? 700 : 400}>
-                      {actionable ? schedule ? "Scheduled" : "Use next" : "Available"}
+                    <Typography
+                      variant="caption"
+                      color={actionable ? "primary.main" : "text.secondary"}
+                      fontWeight={actionable ? 700 : 400}
+                    >
+                      {actionable
+                        ? schedule ? "Scheduled" : "Use next"
+                        : "Available"}
                     </Typography>
                   </Stack>
-                  <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.25 }}>
-                    {expiresAt === undefined ? "No expiry reported" : `Expires ${fullDateTime(expiresAt)}`}
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ display: "block", mt: 0.25 }}
+                  >
+                    {expiresAt === undefined
+                      ? "No expiry reported"
+                      : `Expires ${fullDateTime(expiresAt)}`}
                   </Typography>
                 </Box>
               );
               return (
                 <Box
                   key={str(credit.id) ?? index}
-                  sx={{ borderBottom: index < credits.length - 1 ? 1 : 0, borderColor: "divider" }}
+                  sx={{
+                    borderBottom: index < credits.length - 1 ? 1 : 0,
+                    borderColor: "divider",
+                  }}
                 >
                   {actionable && !schedule
-                    ? <ButtonBase onClick={openResetDialog} sx={{ width: "100%", borderRadius: 1 }}>{row}</ButtonBase>
+                    ? (
+                      <ButtonBase
+                        onClick={openResetDialog}
+                        sx={{ width: "100%", borderRadius: 1 }}
+                      >
+                        {row}
+                      </ButtonBase>
+                    )
                     : row}
                   {actionable && schedule && (
-                    <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1} sx={{ pb: 1.1 }}>
+                    <Stack
+                      direction="row"
+                      alignItems="center"
+                      justifyContent="space-between"
+                      spacing={1}
+                      sx={{ pb: 1.1 }}
+                    >
                       <Box>
-                        <Typography variant="caption" color="primary.main" fontWeight={700}>
+                        <Typography
+                          variant="caption"
+                          color="primary.main"
+                          fontWeight={700}
+                        >
                           {scheduledResetCountdown(schedule.fire_at_ms, now)}
                         </Typography>
-                        <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          sx={{ display: "block" }}
+                        >
                           {fullDateTime(schedule.fire_at_ms / 1000)}
                         </Typography>
                       </Box>
@@ -294,22 +410,34 @@ function ProviderUsageCard({ usage, schedule, now, onUsageChanged }: {
                 </Box>
               );
             })}
-            {resetError && !resetOpen && <Typography color="error.main" variant="caption">{resetError}</Typography>}
+            {resetError && !resetOpen && (
+              <Typography color="error.main" variant="caption">
+                {resetError}
+              </Typography>
+            )}
           </Stack>
         )}
         {summary && num(summary.lifetimeTokens) !== undefined && (
-          <InfoRow k="Lifetime tokens" v={num(summary.lifetimeTokens)?.toLocaleString() ?? "—"} />
+          <InfoRow
+            k="Lifetime tokens"
+            v={num(summary.lifetimeTokens)?.toLocaleString() ?? "—"}
+          />
         )}
-        {sessionUsage && num(sessionUsage.used) !== undefined && num(sessionUsage.size) !== undefined && (
+        {sessionUsage && num(sessionUsage.used) !== undefined &&
+          num(sessionUsage.size) !== undefined && (
           <InfoRow
             k="Latest context"
-            v={`${num(sessionUsage.used)?.toLocaleString() ?? "0"} / ${num(sessionUsage.size)?.toLocaleString() ?? "0"}`}
+            v={`${num(sessionUsage.used)?.toLocaleString() ?? "0"} / ${
+              num(sessionUsage.size)?.toLocaleString() ?? "0"
+            }`}
           />
         )}
         {sessionCost && num(sessionCost.amount) !== undefined && (
           <InfoRow
             k="Session cost"
-            v={`${str(sessionCost.currency) ?? "USD"} ${String(num(sessionCost.amount) ?? 0)}`}
+            v={`${str(sessionCost.currency) ?? "USD"} ${
+              String(num(sessionCost.amount) ?? 0)
+            }`}
           />
         )}
         {limits.length === 0 && (
@@ -317,6 +445,8 @@ function ProviderUsageCard({ usage, schedule, now, onUsageChanged }: {
             {usage.status === "unavailable"
               ? usage.provider === "claude-code"
                 ? "Waiting for Claude Code session activity. Plan limits appear after the Agent SDK reports them."
+                : usage.provider === "claude-deepseek"
+                ? "Waiting for Claude Code DeepSeek session activity. DeepSeek account quota is not exposed over ACP."
                 : usage.provider === "gemini"
                 ? "Waiting for Gemini session activity. Account quota is not exposed by Gemini ACP."
                 : usage.error ?? "Waiting for usage data."
@@ -327,8 +457,17 @@ function ProviderUsageCard({ usage, schedule, now, onUsageChanged }: {
           {usage.source} · Updated {relativeUpdateTime(usage.observed_at_ms)}
         </Typography>
       </Stack>
-      <Dialog open={resetOpen} onClose={closeResetDialog} fullWidth maxWidth="xs">
-        <DialogTitle>{resetMode === "schedule" ? "Schedule nearest reset" : "Use nearest reset now?"}</DialogTitle>
+      <Dialog
+        open={resetOpen}
+        onClose={closeResetDialog}
+        fullWidth
+        maxWidth="xs"
+      >
+        <DialogTitle>
+          {resetMode === "schedule"
+            ? "Schedule nearest reset"
+            : "Use nearest reset now?"}
+        </DialogTitle>
         <DialogContent>
           <DialogContentText>
             {resetMode === "schedule"
@@ -351,14 +490,19 @@ function ProviderUsageCard({ usage, schedule, now, onUsageChanged }: {
             <ToggleButton value="schedule">Schedule</ToggleButton>
             <ToggleButton value="now" color="error">Now</ToggleButton>
           </ToggleButtonGroup>
-          {resetError && <Typography color="error.main" variant="body2" sx={{ mt: 1 }}>{resetError}</Typography>}
+          {resetError && (
+            <Typography color="error.main" variant="body2" sx={{ mt: 1 }}>
+              {resetError}
+            </Typography>
+          )}
           {resetMode === "schedule" && (
             <TextField
               type="datetime-local"
               fullWidth
               label="Run at"
               value={fireAt}
-              onChange={(event) => setFireAt(acceptedScheduleTime(event.target.value))}
+              onChange={(event) =>
+                setFireAt(acceptedScheduleTime(event.target.value))}
               slotProps={{ inputLabel: { shrink: true } }}
               helperText="Choose a time at least one minute ahead"
               sx={{ mt: 2 }}
@@ -376,18 +520,23 @@ function ProviderUsageCard({ usage, schedule, now, onUsageChanged }: {
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={closeResetDialog} disabled={resetBusy}>
             Cancel
-            <Kbd keys="Esc" availability={resetBusy ? "inactive" : "available"} />
+            <Kbd
+              keys="Esc"
+              availability={resetBusy ? "inactive" : "available"}
+            />
           </Button>
           <NetworkButton
             variant="contained"
             color={resetMode === "now" ? "error" : "primary"}
-            disabled={resetBusy || confirmText !== "confirm" || (resetMode === "schedule" && !scheduleValid)}
+            disabled={resetBusy || confirmText !== "confirm" ||
+              (resetMode === "schedule" && !scheduleValid)}
             networkAction={submitReset}
           >
             {resetMode === "schedule" ? "Schedule reset" : "Reset now"}
             <Kbd
               keys={`${MOD_LABEL}${ENTER_LABEL}`}
-              availability={resetBusy || confirmText !== "confirm" || (resetMode === "schedule" && !scheduleValid)
+              availability={resetBusy || confirmText !== "confirm" ||
+                  (resetMode === "schedule" && !scheduleValid)
                 ? "inactive"
                 : "available"}
             />
@@ -408,7 +557,9 @@ function UsageInfoSection(): React.JSX.Element {
     setRefreshing(true);
     setError(null);
     try {
-      const response = await fetch("/api/usage", { method: manual ? "POST" : "GET" });
+      const response = await fetch("/api/usage", {
+        method: manual ? "POST" : "GET",
+      });
       if (!response.ok) throw new Error(`HTTP ${String(response.status)}`);
       setSnapshot(await response.json() as UsageSnapshot);
     } catch (cause) {
@@ -417,7 +568,9 @@ function UsageInfoSection(): React.JSX.Element {
       setRefreshing(false);
     }
   }, [refreshing]);
-  useEffect(() => { void load(false); }, []); // load only when Info mounts
+  useEffect(() => {
+    void load(false);
+  }, []); // load only when Info mounts
   useEffect(() => {
     const timer = window.setInterval(() => setClock(Date.now()), 30_000);
     return (): void => window.clearInterval(timer);
@@ -431,10 +584,20 @@ function UsageInfoSection(): React.JSX.Element {
     <Stack spacing={1.25}>
       <Stack direction="row" alignItems="center" justifyContent="space-between">
         <Box>
-          <Typography variant="overline" color="text.secondary">Usage</Typography>
-          <Typography variant="caption" color={error ? "error.main" : "text.secondary"} sx={{ display: "block" }}>
-            {error ? `Refresh failed · Updated ${refreshed}` : `Updated ${refreshed}`}
-            {nextRefreshMinutes !== null ? ` · Auto refresh in ${String(nextRefreshMinutes)}m` : ""}
+          <Typography variant="overline" color="text.secondary">
+            Usage
+          </Typography>
+          <Typography
+            variant="caption"
+            color={error ? "error.main" : "text.secondary"}
+            sx={{ display: "block" }}
+          >
+            {error
+              ? `Refresh failed · Updated ${refreshed}`
+              : `Updated ${refreshed}`}
+            {nextRefreshMinutes !== null
+              ? ` · Auto refresh in ${String(nextRefreshMinutes)}m`
+              : ""}
           </Typography>
         </Box>
         <NetworkIconButton
@@ -455,7 +618,11 @@ function UsageInfoSection(): React.JSX.Element {
           onUsageChanged={() => load(false)}
         />
       ))}
-      {!snapshot && !error && <Typography variant="body2" color="text.secondary">Loading usage…</Typography>}
+      {!snapshot && !error && (
+        <Typography variant="body2" color="text.secondary">
+          Loading usage…
+        </Typography>
+      )}
     </Stack>
   );
 }
@@ -490,12 +657,24 @@ function StorageInfoSection(): React.JSX.Element {
       <InfoRow k="Live sessions" v={String(m.sessions_live)} />
       <InfoRow k="Deleted (purge ≤3d)" v={String(m.sessions_deleted)} />
       <InfoRow k="Daemon memory" v={formatBytes(m.daemon_rss_bytes)} />
-      <InfoRow k="Telemetry pending" v={m.observability_pending.toLocaleString()} />
-      <InfoRow k="Telemetry accepted" v={m.observability_accepted_batches.toLocaleString()} />
-      <InfoRow k="Telemetry dropped" v={m.observability_dropped_batches.toLocaleString()} />
+      <InfoRow
+        k="Telemetry pending"
+        v={m.observability_pending.toLocaleString()}
+      />
+      <InfoRow
+        k="Telemetry accepted"
+        v={m.observability_accepted_batches.toLocaleString()}
+      />
+      <InfoRow
+        k="Telemetry dropped"
+        v={m.observability_dropped_batches.toLocaleString()}
+      />
       <InfoRow
         k="Victoria write failures"
-        v={String(m.observability_failed_log_batches + m.observability_failed_metric_batches)}
+        v={String(
+          m.observability_failed_log_batches +
+            m.observability_failed_metric_batches,
+        )}
       />
     </Stack>
   );
@@ -506,7 +685,9 @@ function RuntimeIncidentsSection(): React.JSX.Element {
   useEffect(() => {
     const controller = new AbortController();
     void fetch("/api/observability/incidents", { signal: controller.signal })
-      .then((response) => response.ok ? response.json() as Promise<RuntimeIncident[]> : [])
+      .then((response) =>
+        response.ok ? response.json() as Promise<RuntimeIncident[]> : []
+      )
       .then(setIncidents)
       .catch(() => setIncidents([]));
     return (): void => controller.abort();
@@ -516,24 +697,37 @@ function RuntimeIncidentsSection(): React.JSX.Element {
       <Typography variant="overline" color="text.secondary">
         Runtime incidents
       </Typography>
-      {incidents === null && <Typography variant="caption" color="text.secondary">Loading…</Typography>}
+      {incidents === null && (
+        <Typography variant="caption" color="text.secondary">
+          Loading…
+        </Typography>
+      )}
       {incidents?.length === 0 && (
-        <Typography variant="caption" color="text.secondary">No incidents recorded.</Typography>
+        <Typography variant="caption" color="text.secondary">
+          No incidents recorded.
+        </Typography>
       )}
       {incidents?.slice(0, 5).map((incident) => (
-        <Box key={incident.id} sx={{ py: 0.75, borderTop: 1, borderColor: "divider" }}>
+        <Box
+          key={incident.id}
+          sx={{ py: 0.75, borderTop: 1, borderColor: "divider" }}
+        >
           <Stack direction="row" justifyContent="space-between" spacing={1}>
             <Typography variant="caption" sx={{ fontWeight: 700 }}>
               {incident.classification.replaceAll("_", " ")}
             </Typography>
             <Typography
               variant="caption"
-              color={incident.state === "recovered" ? "success.main" : "error.main"}
+              color={incident.state === "recovered"
+                ? "success.main"
+                : "error.main"}
             >
               {incident.state}
             </Typography>
           </Stack>
-          <Typography variant="body2" sx={{ mt: 0.35 }}>{incident.summary}</Typography>
+          <Typography variant="body2" sx={{ mt: 0.35 }}>
+            {incident.summary}
+          </Typography>
           <Typography variant="caption" color="text.secondary">
             {relativeUpdateTime(incident.occurred_at_ms, Date.now())}
             {incident.session_id ? ` · ${incident.session_id}` : ""}
@@ -567,111 +761,149 @@ export function InfoContent({
         }
         : { mt: 1, display: "flex", flexDirection: "column", gap: 2.5 }}
     >
-        <Box sx={desktop ? { gridRow: "1 / span 4" } : undefined}><UsageInfoSection /></Box>
-        {!desktop && <Divider />}
-        <Box sx={desktop ? { p: 1.5, border: 1, borderColor: "divider", borderRadius: 2 } : undefined}>
-          <Typography variant="overline" color="text.secondary">
-            Turn classifier
-          </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-            Normal turn endings use isolated Codex Luna threads on one shared
-            app-server; deterministic stop reasons need no model call.
-          </Typography>
-          <InfoRow k="Runtime" v="Codex app-server" />
-          <InfoRow k="Model" v="gpt-5.6-luna" />
-        </Box>
+      <Box sx={desktop ? { gridRow: "1 / span 4" } : undefined}>
+        <UsageInfoSection />
+      </Box>
+      {!desktop && <Divider />}
+      <Box
+        sx={desktop
+          ? { p: 1.5, border: 1, borderColor: "divider", borderRadius: 2 }
+          : undefined}
+      >
+        <Typography variant="overline" color="text.secondary">
+          Turn classifier
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+          Normal turn endings use isolated Codex Luna threads on one shared
+          app-server; deterministic stop reasons need no model call.
+        </Typography>
+        <InfoRow k="Runtime" v="Codex app-server" />
+        <InfoRow k="Model" v="gpt-5.6-luna" />
+      </Box>
 
-        {/* Skills — provider-agnostic capability units run at turn-end. Each is
+      {
+        /* Skills — provider-agnostic capability units run at turn-end. Each is
             expandable to show the exact prompt + how the output is extracted, so
-            the judgment logic is inspectable (not a black box). */}
-        <Box sx={desktop ? { p: 1.5, border: 1, borderColor: "divider", borderRadius: 2 } : undefined}>
-          <Typography variant="overline" color="text.secondary">
-            Skills
-          </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-            Run after each turn to classify what the agent did.
-          </Typography>
-          <Stack spacing={1}>
-            {skills.length === 0 && (
-              <Typography variant="caption" color="text.secondary">
-                No skills reported (connecting…).
-              </Typography>
-            )}
-            {skills.map((sk) => (
-              <Accordion key={sk.id} disableGutters sx={{ borderRadius: 2, "&:before": { display: "none" } }}>
-                <AccordionSummary expandIcon={<ExpandMore />}>
+            the judgment logic is inspectable (not a black box). */
+      }
+      <Box
+        sx={desktop
+          ? { p: 1.5, border: 1, borderColor: "divider", borderRadius: 2 }
+          : undefined}
+      >
+        <Typography variant="overline" color="text.secondary">
+          Skills
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+          Run after each turn to classify what the agent did.
+        </Typography>
+        <Stack spacing={1}>
+          {skills.length === 0 && (
+            <Typography variant="caption" color="text.secondary">
+              No skills reported (connecting…).
+            </Typography>
+          )}
+          {skills.map((sk) => (
+            <Accordion
+              key={sk.id}
+              disableGutters
+              sx={{ borderRadius: 2, "&:before": { display: "none" } }}
+            >
+              <AccordionSummary expandIcon={<ExpandMore />}>
+                <Box>
+                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                    {sk.title}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {sk.description}
+                  </Typography>
+                </Box>
+              </AccordionSummary>
+              <AccordionDetails>
+                <Stack spacing={1.5}>
                   <Box>
-                    <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                      {sk.title}
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      sx={{ fontWeight: 600 }}
+                    >
+                      Prompt
                     </Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      {sk.description}
+                    <Box
+                      component="pre"
+                      sx={{
+                        m: 0,
+                        mt: 0.5,
+                        p: 1,
+                        borderRadius: 1.5,
+                        bgcolor: "action.hover",
+                        fontSize: 11,
+                        lineHeight: 1.5,
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-word",
+                        maxHeight: 260,
+                        overflow: "auto",
+                      }}
+                    >
+                      {sk.prompt_template}
+                    </Box>
+                  </Box>
+                  <Box>
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      sx={{ fontWeight: 600 }}
+                    >
+                      Extraction
+                    </Typography>
+                    <Typography variant="body2" sx={{ mt: 0.5 }}>
+                      {sk.extract}
                     </Typography>
                   </Box>
-                </AccordionSummary>
-                <AccordionDetails>
-                  <Stack spacing={1.5}>
-                    <Box>
-                      <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-                        Prompt
-                      </Typography>
-                      <Box
-                        component="pre"
-                        sx={{
-                          m: 0,
-                          mt: 0.5,
-                          p: 1,
-                          borderRadius: 1.5,
-                          bgcolor: "action.hover",
-                          fontSize: 11,
-                          lineHeight: 1.5,
-                          whiteSpace: "pre-wrap",
-                          wordBreak: "break-word",
-                          maxHeight: 260,
-                          overflow: "auto",
-                        }}
-                      >
-                        {sk.prompt_template}
-                      </Box>
-                    </Box>
-                    <Box>
-                      <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-                        Extraction
-                      </Typography>
-                      <Typography variant="body2" sx={{ mt: 0.5 }}>
-                        {sk.extract}
-                      </Typography>
-                    </Box>
-                  </Stack>
-                </AccordionDetails>
-              </Accordion>
-            ))}
-          </Stack>
-        </Box>
-
-        {!desktop && <Divider />}
-        <Stack spacing={1} sx={desktop ? { p: 1.5, border: 1, borderColor: "divider", borderRadius: 2 } : undefined}>
-          <Typography variant="overline" color="text.secondary">
-            Storage
-          </Typography>
-          <StorageInfoSection />
+                </Stack>
+              </AccordionDetails>
+            </Accordion>
+          ))}
         </Stack>
-
-        {!desktop && <Divider />}
-        <Box sx={desktop ? { p: 1.5, border: 1, borderColor: "divider", borderRadius: 2 } : undefined}>
-          <RuntimeIncidentsSection />
-        </Box>
-
-        {!desktop && <Divider />}
-        <Stack spacing={0.5} sx={desktop ? { p: 1.5, border: 1, borderColor: "divider", borderRadius: 2 } : undefined}>
-          <Typography variant="overline" color="text.secondary">
-            About
-          </Typography>
-          <Typography variant="body2" color="text.secondary">
-            cowboy v0.1 — multi-agent panel driving Claude Code / Codex over ACP.
-          </Typography>
-        </Stack>
-        {aside}
       </Box>
+
+      {!desktop && <Divider />}
+      <Stack
+        spacing={1}
+        sx={desktop
+          ? { p: 1.5, border: 1, borderColor: "divider", borderRadius: 2 }
+          : undefined}
+      >
+        <Typography variant="overline" color="text.secondary">
+          Storage
+        </Typography>
+        <StorageInfoSection />
+      </Stack>
+
+      {!desktop && <Divider />}
+      <Box
+        sx={desktop
+          ? { p: 1.5, border: 1, borderColor: "divider", borderRadius: 2 }
+          : undefined}
+      >
+        <RuntimeIncidentsSection />
+      </Box>
+
+      {!desktop && <Divider />}
+      <Stack
+        spacing={0.5}
+        sx={desktop
+          ? { p: 1.5, border: 1, borderColor: "divider", borderRadius: 2 }
+          : undefined}
+      >
+        <Typography variant="overline" color="text.secondary">
+          About
+        </Typography>
+        <Typography variant="body2" color="text.secondary">
+          cowboy v0.1 — multi-agent panel driving Claude Code / Codex over ACP.
+        </Typography>
+      </Stack>
+      {aside}
+    </Box>
   );
 }

@@ -37,6 +37,34 @@ Deno.test("maps the Codex DeepSeek runtime to the managed Codex slots", () => {
   );
 });
 
+Deno.test("maps Claude DeepSeek to isolated gateway and shared Claude adapter", () => {
+  assertEquals(
+    machineProviderAvailable("claude-deepseek", [{
+      id: { kind: "provider_cli", slot: "claude" },
+      state: "active",
+      auth: "signed_in",
+    }, {
+      id: { kind: "provider_adapter", slot: "claude" },
+      state: "active",
+    }]),
+    false,
+  );
+  assertEquals(
+    machineProviderAvailable("claude-deepseek", [{
+      id: { kind: "provider_cli", slot: "claude" },
+      state: "active",
+      auth: "signed_out",
+    }, {
+      id: { kind: "provider_adapter", slot: "claude" },
+      state: "active",
+    }, {
+      id: { kind: "provider_adapter", slot: "claude-deepseek" },
+      state: "active",
+    }]),
+    true,
+  );
+});
+
 Deno.test("requires an active and confirmed signed-in provider", () => {
   assertEquals(
     machineProviderAvailable("gemini", [{

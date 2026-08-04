@@ -1889,7 +1889,10 @@ async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
                                                     let provider = session.provider.as_str();
                                                     provider == slot
                                                         || (slot == "claude"
-                                                            && provider == "claude-code")
+                                                            && matches!(
+                                                                provider,
+                                                                "claude-code" | "claude-deepseek"
+                                                            ))
                                                 })
                                                 .count(),
                                         )
@@ -2943,7 +2946,7 @@ fn machine_supports_provider(
 ) -> bool {
     use crate::machine_protocol::{AuthState, ComponentKind, ComponentState};
     let cli_slot = match provider {
-        "claude-code" => "claude",
+        "claude-code" | "claude-deepseek" => "claude",
         "codex-deepseek" => "codex",
         provider => provider,
     };
@@ -2951,7 +2954,8 @@ fn machine_supports_provider(
         component.id.kind == ComponentKind::ProviderCli
             && matches!(component.id.slot.as_str(), candidate if candidate == cli_slot || candidate == provider)
             && component.state == ComponentState::Active
-            && (provider == "codex-deepseek" || component.auth == Some(AuthState::SignedIn))
+            && (matches!(provider, "codex-deepseek" | "claude-deepseek")
+                || component.auth == Some(AuthState::SignedIn))
     });
     if !cli_ready {
         return false;
@@ -2968,6 +2972,8 @@ fn machine_supports_provider(
     };
     if provider == "codex-deepseek" {
         adapter_active("codex") && adapter_active("codex-deepseek")
+    } else if provider == "claude-deepseek" {
+        adapter_active("claude") && adapter_active("claude-deepseek")
     } else {
         adapter_active(cli_slot) || adapter_active(provider)
     }
@@ -3084,6 +3090,29 @@ mod machine_provider_tests {
             &signed_out_components,
             "codex-deepseek"
         ));
+    }
+
+    #[test]
+    fn deepseek_runtime_reuses_claude_adapter_without_claude_login() {
+        let claude_only = [
+            component(
+                ComponentKind::ProviderCli,
+                "claude",
+                Some(AuthState::SignedIn),
+            ),
+            component(ComponentKind::ProviderAdapter, "claude", None),
+        ];
+        assert!(!machine_supports_provider(&claude_only, "claude-deepseek"));
+        let components = [
+            component(
+                ComponentKind::ProviderCli,
+                "claude",
+                Some(AuthState::SignedOut),
+            ),
+            component(ComponentKind::ProviderAdapter, "claude", None),
+            component(ComponentKind::ProviderAdapter, "claude-deepseek", None),
+        ];
+        assert!(machine_supports_provider(&components, "claude-deepseek"));
     }
 
     #[test]

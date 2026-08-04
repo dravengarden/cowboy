@@ -43,8 +43,10 @@ pub(crate) fn stop_reason_l1(stop: Option<&str>) -> Option<Verdict> {
 /// DETERMINISTIC (the caller skips the LLM); `None` to fall through to L2.
 #[must_use]
 pub fn l1(provider_id: &str, ctx: &TurnEndCtx) -> Option<Verdict> {
+    if super::is_claude(provider_id) {
+        return super::claude_code::confirm_l1(ctx);
+    }
     match provider_id {
-        "claude-code" => super::claude_code::confirm_l1(ctx),
         "codex" | "codex-deepseek" => super::codex::confirm_l1(ctx),
         "gemini" => super::gemini::confirm_l1(ctx),
         // Unknown provider → only the portable stop-reason rule applies.
@@ -83,12 +85,14 @@ mod tests {
             stop_reason: Some("Cancelled"),
         };
         assert!(l1("claude-code", &ctx).is_some());
+        assert!(l1("claude-deepseek", &ctx).is_some());
         assert!(l1("codex", &ctx).is_some());
         // EndTurn always falls through, every provider.
         let end = TurnEndCtx {
             stop_reason: Some("EndTurn"),
         };
         assert!(l1("claude-code", &end).is_none());
+        assert!(l1("claude-deepseek", &end).is_none());
         assert!(l1("codex", &end).is_none());
     }
 }

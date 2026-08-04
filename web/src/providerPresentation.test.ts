@@ -1,4 +1,5 @@
 import {
+  providerAgentFamily,
   providerName,
   providerPresentation,
   providerSelectionName,
@@ -23,10 +24,18 @@ Deno.test("provider presentation separates the agent from its model provider", (
   assertEquals(providerName("codex-deepseek"), "Codex · DeepSeek");
   assertEquals(providerSelectionName("codex"), "Codex · OpenAI");
   assertEquals(providerSelectionName("codex-deepseek"), "Codex · DeepSeek");
+
+  const claudeDeepSeek = providerPresentation("claude-deepseek");
+  assertEquals(claudeDeepSeek.agent, "Claude Code");
+  assertEquals(claudeDeepSeek.modelProvider, "DeepSeek");
+  assertEquals(claudeDeepSeek.isolated, true);
+  assertEquals(providerName("claude-deepseek"), "Claude Code · DeepSeek");
+  assertEquals(providerAgentFamily("claude-deepseek"), "claude-code");
+  assertEquals(providerAgentFamily("codex-deepseek"), "codex");
 });
 
 Deno.test("future provider variants degrade to machine-provided metadata", () => {
-  const unknown = providerPresentation("claude-deepseek");
-  assertEquals(unknown.agent, "claude-deepseek");
+  const unknown = providerPresentation("future-agent");
+  assertEquals(unknown.agent, "future-agent");
   assertEquals(unknown.modelProvider, "Custom");
 });

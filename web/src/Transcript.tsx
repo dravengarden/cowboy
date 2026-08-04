@@ -52,8 +52,8 @@ import {
   ExpandLess,
   ExpandMore,
   Folder,
-  LightbulbOutlined,
   KeyboardArrowDown,
+  LightbulbOutlined,
   MyLocation,
   NavigateBefore,
   NavigateNext,
@@ -69,8 +69,13 @@ import { Markdown } from "./Markdown";
 import { attachmentDisplayParts } from "./attachments";
 import { CodeView, Labeled } from "./tools/blocks";
 import { ToolBody, type ToolCtx } from "./tools/registry";
-import { toolCopyText, toolHeading, toolUsesRawOnly, toolVariantLabel } from "./tools/presentation";
-import { toolRuns, type ToolItem, type ToolRun } from "./tools/runs";
+import {
+  toolCopyText,
+  toolHeading,
+  toolUsesRawOnly,
+  toolVariantLabel,
+} from "./tools/presentation";
+import { type ToolItem, type ToolRun, toolRuns } from "./tools/runs";
 import { formatShellForDisplay } from "./shellFormatter";
 import {
   COMPACTING_NOTICE,
@@ -115,9 +120,9 @@ import {
   scrollbackReplacementFromTop,
   shouldBackfillTranscriptViewport,
   shouldContinueScrollbackFill,
+  shouldMagnetizeTranscript,
   shouldRecoverUnrenderableHistory,
   shouldShowFreshSessionEmptyState,
-  shouldMagnetizeTranscript,
 } from "./transcriptViewport";
 import {
   advanceTimelinePresentation,
@@ -166,13 +171,17 @@ async function waitForScrollbackMount(
 ): Promise<void> {
   const deadline = performance.now() + SCROLLBACK_MOUNT_WAIT_MS;
   while (stillCurrent() && performance.now() < deadline) {
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => resolve())
+    );
     const bandHeight = el.querySelector<HTMLElement>(
       "[data-transcript-scrollback-fill]",
     )?.getBoundingClientRect().height ?? 0;
     const rowCount = el.querySelectorAll<HTMLElement>("[data-key]").length;
     const contentHeight = Math.max(0, el.scrollHeight - bandHeight);
-    if (rowCount > previousRowCount || contentHeight > previousContentHeight + 1) {
+    if (
+      rowCount > previousRowCount || contentHeight > previousContentHeight + 1
+    ) {
       return;
     }
     await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 32));
@@ -217,7 +226,7 @@ function TranscriptSkeleton({
     return () => globalThis.clearTimeout(timer);
   }, []);
 
-  const agent = provider === "claude-code"
+  const agent = provider === "claude-code" || provider === "claude-deepseek"
     ? "Claude Code"
     : provider === "gemini"
     ? "Gemini"
@@ -230,14 +239,26 @@ function TranscriptSkeleton({
       sx={{
         minHeight: desktop ? undefined : "100%",
         py: desktop ? 2 : { xs: 2, sm: 3 },
-        justifyContent: desktop ? undefined : { xs: "flex-end", sm: "flex-start" },
+        justifyContent: desktop
+          ? undefined
+          : { xs: "flex-end", sm: "flex-start" },
       }}
       aria-busy="true"
       aria-label="Loading chat history"
     >
       {!desktop && (
-        <Stack direction="row" spacing={1} alignItems="center" sx={{ color: "text.secondary" }}>
-          <CircularProgress size={14} thickness={4} color="inherit" aria-hidden />
+        <Stack
+          direction="row"
+          spacing={1}
+          alignItems="center"
+          sx={{ color: "text.secondary" }}
+        >
+          <CircularProgress
+            size={14}
+            thickness={4}
+            color="inherit"
+            aria-hidden
+          />
           <Typography variant="caption" sx={{ fontWeight: 650 }}>
             Restoring {agent} conversation…
           </Typography>
@@ -345,16 +366,14 @@ function TranscriptLoadingFill({
         }}
       >
         <Stack direction="row" spacing={1} alignItems="center">
-          {paused
-            ? null
-            : (
-              <CircularProgress
-                size={13}
-                thickness={4}
-                color="inherit"
-                aria-hidden
-              />
-            )}
+          {paused ? null : (
+            <CircularProgress
+              size={13}
+              thickness={4}
+              color="inherit"
+              aria-hidden
+            />
+          )}
           <Typography
             variant="caption"
             sx={{ color: "text.secondary", fontWeight: 600 }}
@@ -480,7 +499,9 @@ function ScrollbackLoadingSkeleton({
               <Stack key={title} spacing={0.55}>
                 <Skeleton
                   variant="text"
-                  animation={loading && index >= rows.length - 2 ? "wave" : false}
+                  animation={loading && index >= rows.length - 2
+                    ? "wave"
+                    : false}
                   width={title}
                   height={13}
                   sx={{ ml: 1.5, transform: "none" }}
@@ -831,8 +852,12 @@ function ThinkingIndicator({
 }: {
   provider: string;
 }): React.JSX.Element {
-  if (provider === "claude-code") return <ClaudeThinking />;
-  if (provider === "codex" || provider === "codex-deepseek") return <CodexThinking />;
+  if (provider === "claude-code" || provider === "claude-deepseek") {
+    return <ClaudeThinking />;
+  }
+  if (provider === "codex" || provider === "codex-deepseek") {
+    return <CodexThinking />;
+  }
   return <DefaultThinking />;
 }
 
@@ -926,6 +951,8 @@ function CompactingWidget({
   const muted = theme.palette.text.secondary;
   const accent = provider === "claude-code"
     ? "#D97757"
+    : provider === "claude-deepseek"
+    ? "#4D6BFE"
     : theme.palette.primary.main;
   const reducedMotion = globalThis.matchMedia?.(
     "(prefers-reduced-motion: reduce)",
@@ -1081,7 +1108,13 @@ function ChunkView({
   if (chunk.type === "image") {
     return <TranscriptImage src={chunk.src} alt={chunk.alt ?? ""} />;
   }
-  return <Markdown text={chunk.text} invert={invert} touchWrap={touchSurface} />;
+  return (
+    <Markdown
+      text={chunk.text}
+      invert={invert}
+      touchWrap={touchSurface}
+    />
+  );
 }
 
 function ThoughtSteps({
@@ -1644,7 +1677,10 @@ function ToolCard({
   const [headerTitle, setHeaderTitle] = useState(fallbackTitle);
   useEffect(() => {
     setHeaderTitle(fallbackTitle);
-    if (item.toolKind !== "execute" || !item.rawInput || typeof item.rawInput !== "object") return;
+    if (
+      item.toolKind !== "execute" || !item.rawInput ||
+      typeof item.rawInput !== "object"
+    ) return;
     const input = item.rawInput as Record<string, unknown>;
     const raw = input["command"] ?? input["cmd"];
     const command = typeof raw === "string"
@@ -1660,7 +1696,8 @@ function ToolCard({
     let active = true;
     void formatShellForDisplay(command, 88).then((display) => {
       if (!active || !display?.context) return;
-      const summary = display.summary || display.text.split("\n").find((line) => line.trim())?.trim();
+      const summary = display.summary ||
+        display.text.split("\n").find((line) => line.trim())?.trim();
       if (summary) setHeaderTitle(summary);
     });
     return () => {
@@ -1669,106 +1706,106 @@ function ToolCard({
   }, [fallbackTitle, item.rawInput, item.toolKind]);
   return (
     <Paper
-        elevation={0}
+      elevation={0}
+      sx={{
+        alignSelf: "stretch",
+        overflow: "hidden",
+        // Borderless: a filled `background.paper` surface (a touch lighter than
+        // the transcript bg) reads as a soft card WITHOUT a 1px outline. The
+        // outlined border (theme `divider`) drew a faint violet line top+bottom
+        // on every collapsed card, and a tool-heavy transcript stacked them into
+        // a "ruled paper" look. The icon + status chip already mark it as a tool.
+        bgcolor: "background.paper",
+        borderRadius: desktop ? `${DESKTOP_INSET_RADIUS}px` : 1,
+        // Subtle breathing while a tool is mid-flight; nothing while
+        // completed/failed (those are static states).
+        animation: running ? `${pulse} 1.6s ease-in-out infinite` : undefined,
+      }}
+    >
+      <Stack
+        {...(hasDetail
+          ? {
+            ...openTap,
+            role: "button",
+            tabIndex: desktop ? -1 : 0,
+            "aria-expanded": selected,
+            "aria-haspopup": "dialog" as const,
+            onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>): void => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                openDetail();
+              }
+            },
+          }
+          : {})}
+        {...(hasDetail ? { "data-desktop-item-action": "default" } : {})}
+        {...(desktop && hasDetail
+          ? {
+            "data-desktop-widget-toggle": "tool",
+          }
+          : {})}
+        direction="row"
+        spacing={1}
+        alignItems="center"
         sx={{
-          alignSelf: "stretch",
-          overflow: "hidden",
-          // Borderless: a filled `background.paper` surface (a touch lighter than
-          // the transcript bg) reads as a soft card WITHOUT a 1px outline. The
-          // outlined border (theme `divider`) drew a faint violet line top+bottom
-          // on every collapsed card, and a tool-heavy transcript stacked them into
-          // a "ruled paper" look. The icon + status chip already mark it as a tool.
-          bgcolor: "background.paper",
-          borderRadius: desktop ? `${DESKTOP_INSET_RADIUS}px` : 1,
-          // Subtle breathing while a tool is mid-flight; nothing while
-          // completed/failed (those are static states).
-          animation: running ? `${pulse} 1.6s ease-in-out infinite` : undefined,
+          p: 1,
+          cursor: hasDetail ? "pointer" : "default",
+          "&:hover": hasDetail ? { bgcolor: "action.hover" } : undefined,
+          ...(desktop && hasDetail && {
+            outline: "none",
+            "&:focus-visible": {
+              bgcolor: "action.focus",
+              boxShadow: (theme) =>
+                `inset 3px 0 0 ${alpha(theme.palette.primary.main, 0.78)}`,
+            },
+          }),
         }}
       >
-        <Stack
-          {...(hasDetail
-            ? {
-              ...openTap,
-              role: "button",
-              tabIndex: desktop ? -1 : 0,
-              "aria-expanded": selected,
-              "aria-haspopup": "dialog" as const,
-              onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>): void => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  openDetail();
-                }
-              },
-            }
-            : {})}
-          {...(hasDetail ? { "data-desktop-item-action": "default" } : {})}
-          {...(desktop && hasDetail
-            ? {
-              "data-desktop-widget-toggle": "tool",
-            }
-            : {})}
-          direction="row"
-          spacing={1}
-          alignItems="center"
+        {toolIcon(item.toolKind)}
+        <Typography
+          variant="body2"
           sx={{
-            p: 1,
-            cursor: hasDetail ? "pointer" : "default",
-            "&:hover": hasDetail ? { bgcolor: "action.hover" } : undefined,
-            ...(desktop && hasDetail && {
-              outline: "none",
-              "&:focus-visible": {
-                bgcolor: "action.focus",
-                boxShadow: (theme) =>
-                  `inset 3px 0 0 ${alpha(theme.palette.primary.main, 0.78)}`,
-              },
-            }),
+            flex: 1,
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            // Match the prose typography so a tool card reads as part of the same
+            // document, not as smaller UI chrome:
+            //  - FAMILY: follow the `--cowboy-reading-font` setting like the prose
+            //    does, instead of letting MUI Typography pin the theme font —
+            //    otherwise picking a serif/sans reading face restyles the messages
+            //    but the tool cards stay on the system font, which reads as
+            //    inconsistent. Shell commands (execute) stay monospace: they're
+            //    code, and a path full of slashes in a serif is worse, not better.
+            //  - SIZE: `inherit` (not body2's fixed 0.875rem) so the title tracks
+            //    the transcript's reading-size scale (the scroll container's
+            //    `${fontScale}em`) exactly like the markdown body. A fixed rem made
+            //    the title visibly smaller than the prose and, worse, it didn't
+            //    grow when the reading size was bumped — same family but reading as
+            //    two different fonts.
+            fontSize: "inherit",
+            fontFamily: item.toolKind === "execute"
+              ? "ui-monospace, SFMono-Regular, Menlo, monospace"
+              : "var(--cowboy-reading-font, inherit)",
           }}
         >
-          {toolIcon(item.toolKind)}
-          <Typography
-            variant="body2"
-            sx={{
-              flex: 1,
-              minWidth: 0,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-              // Match the prose typography so a tool card reads as part of the same
-              // document, not as smaller UI chrome:
-              //  - FAMILY: follow the `--cowboy-reading-font` setting like the prose
-              //    does, instead of letting MUI Typography pin the theme font —
-              //    otherwise picking a serif/sans reading face restyles the messages
-              //    but the tool cards stay on the system font, which reads as
-              //    inconsistent. Shell commands (execute) stay monospace: they're
-              //    code, and a path full of slashes in a serif is worse, not better.
-              //  - SIZE: `inherit` (not body2's fixed 0.875rem) so the title tracks
-              //    the transcript's reading-size scale (the scroll container's
-              //    `${fontScale}em`) exactly like the markdown body. A fixed rem made
-              //    the title visibly smaller than the prose and, worse, it didn't
-              //    grow when the reading size was bumped — same family but reading as
-              //    two different fonts.
-              fontSize: "inherit",
-              fontFamily: item.toolKind === "execute"
-                ? "ui-monospace, SFMono-Regular, Menlo, monospace"
-                : "var(--cowboy-reading-font, inherit)",
-            }}
-          >
-            {headerTitle}
-          </Typography>
-          <Chip
-            size="small"
-            color={toolColor(item.status)}
-            label={item.status}
-            variant="outlined"
+          {headerTitle}
+        </Typography>
+        <Chip
+          size="small"
+          color={toolColor(item.status)}
+          label={item.status}
+          variant="outlined"
+        />
+        {hasDetail && (
+          <ExpandMore
+            fontSize="medium"
+            sx={{ transform: "rotate(-90deg)", color: "text.secondary" }}
           />
-          {hasDetail && (
-            <ExpandMore
-              fontSize="medium"
-              sx={{ transform: "rotate(-90deg)", color: "text.secondary" }}
-            />
-          )}
-        </Stack>
-      </Paper>
+        )}
+      </Stack>
+    </Paper>
   );
 }
 
@@ -1803,7 +1840,9 @@ function toolContextBlocks(items: RenderItem[]): ToolContextBlock[] {
     if (item.kind === "message") {
       tone = item.role === "user" ? "user" : "prose";
       text = item.chunks
-        .filter((chunk): chunk is Extract<ContentChunk, { type: "text" }> => chunk.type === "text")
+        .filter((chunk): chunk is Extract<ContentChunk, { type: "text" }> =>
+          chunk.type === "text"
+        )
         .map((chunk) => chunk.text)
         .join("\n\n");
     } else if (item.kind === "thought") {
@@ -1862,7 +1901,9 @@ function ToolTranscriptContext({
   const canExpand = blocks.length > 0;
   return (
     <Box
-      aria-label={`${position === "before" ? "Previous" : "Following"} transcript context`}
+      aria-label={`${
+        position === "before" ? "Previous" : "Following"
+      } transcript context`}
       sx={{
         border: 1,
         borderColor: open ? "divider" : "transparent",
@@ -1870,7 +1911,8 @@ function ToolTranscriptContext({
         borderRadius: 1.5,
         overflow: "hidden",
         transition: "background-color .18s ease, border-color .18s ease",
-        ...(phase === "ready" && { animation: `${nextToolArrival} .28s cubic-bezier(.2,.8,.2,1) 1` }),
+        ...(phase === "ready" &&
+          { animation: `${nextToolArrival} .28s cubic-bezier(.2,.8,.2,1) 1` }),
       }}
     >
       <ButtonBase
@@ -1894,10 +1936,18 @@ function ToolTranscriptContext({
         <Box sx={{ minWidth: 0 }}>
           <Typography
             variant="overline"
-            sx={{ display: "flex", alignItems: "center", gap: 0.625, color: "text.disabled", lineHeight: 1.35 }}
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              gap: 0.625,
+              color: "text.disabled",
+              lineHeight: 1.35,
+            }}
           >
             {label}
-            {phase === "running" && <CircularProgress size={10} thickness={5} color="inherit" />}
+            {phase === "running" && (
+              <CircularProgress size={10} thickness={5} color="inherit" />
+            )}
           </Typography>
           {!open && (
             <Typography
@@ -1926,7 +1976,15 @@ function ToolTranscriptContext({
         )}
       </ButtonBase>
       {open && (
-        <Stack spacing={1} sx={{ px: 1.25, pb: 1.25, borderLeft: 2, borderColor: "primary.main" }}>
+        <Stack
+          spacing={1}
+          sx={{
+            px: 1.25,
+            pb: 1.25,
+            borderLeft: 2,
+            borderColor: "primary.main",
+          }}
+        >
           {blocks.map((block) => (
             <Box
               key={block.key}
@@ -1974,9 +2032,12 @@ function ToolDetailsBrowser({
 }): React.JSX.Element | null {
   const runIndex = selectedKey === null
     ? -1
-    : runs.findIndex((candidate) => candidate.tools.some((tool) => tool.key === selectedKey));
+    : runs.findIndex((candidate) =>
+      candidate.tools.some((tool) => tool.key === selectedKey)
+    );
   const run = runIndex >= 0 ? runs[runIndex] : undefined;
-  const itemIndex = run?.tools.findIndex((tool) => tool.key === selectedKey) ?? -1;
+  const itemIndex = run?.tools.findIndex((tool) => tool.key === selectedKey) ??
+    -1;
   const item = itemIndex >= 0 ? run?.tools[itemIndex] : undefined;
   const [rawByKey, setRawByKey] = useState<Record<string, boolean>>({});
   const [detailReadyKey, setDetailReadyKey] = useState<string | null>(null);
@@ -2018,9 +2079,15 @@ function ToolDetailsBrowser({
       // its following prose. Re-run after the sheet computes its cover height.
       spacer.style.height = "0px";
       const currentTop = scroller.scrollTop +
-        current.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
-      const maxWithoutSpacer = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
-      spacer.style.height = `${Math.max(0, currentTop - maxWithoutSpacer + 8)}px`;
+        current.getBoundingClientRect().top -
+        scroller.getBoundingClientRect().top;
+      const maxWithoutSpacer = Math.max(
+        0,
+        scroller.scrollHeight - scroller.clientHeight,
+      );
+      spacer.style.height = `${
+        Math.max(0, currentTop - maxWithoutSpacer + 8)
+      }px`;
       scroller.scrollTop = saved ?? currentTop;
     };
     align();
@@ -2130,13 +2197,21 @@ function ToolDetailsBrowser({
   // transport JSON as the single, inspectable representation so input and
   // output retain their exact shape across Codex, Claude and future ACPs.
   const raw = rawOnly || (rawByKey[item.key] ?? false);
-  const firstRunItemIndex = items.findIndex((candidate) => candidate.key === run?.tools[0]?.key);
-  const lastRunItemIndex = items.findIndex((candidate) => candidate.key === run?.tools.at(-1)?.key);
+  const firstRunItemIndex = items.findIndex((candidate) =>
+    candidate.key === run?.tools[0]?.key
+  );
+  const lastRunItemIndex = items.findIndex((candidate) =>
+    candidate.key === run?.tools.at(-1)?.key
+  );
   const previousToolIndex = runIndex > 0
-    ? items.findIndex((candidate) => candidate.key === runs[runIndex - 1]?.tools.at(-1)?.key)
+    ? items.findIndex((candidate) =>
+      candidate.key === runs[runIndex - 1]?.tools.at(-1)?.key
+    )
     : -1;
   const nextToolIndex = runIndex < runs.length - 1
-    ? items.findIndex((candidate) => candidate.key === runs[runIndex + 1]?.tools[0]?.key)
+    ? items.findIndex((candidate) =>
+      candidate.key === runs[runIndex + 1]?.tools[0]?.key
+    )
     : items.length;
   const before = items.slice(previousToolIndex + 1, firstRunItemIndex);
   const after = items.slice(lastRunItemIndex + 1, nextToolIndex);
@@ -2146,7 +2221,8 @@ function ToolDetailsBrowser({
     toolName: item.toolName,
     kind: item.toolKind,
     title: item.title,
-    rawInput: item.rawInput && typeof item.rawInput === "object" && !Array.isArray(item.rawInput)
+    rawInput: item.rawInput && typeof item.rawInput === "object" &&
+        !Array.isArray(item.rawInput)
       ? (item.rawInput as Record<string, unknown>)
       : {},
     content: item.content,
@@ -2160,7 +2236,9 @@ function ToolDetailsBrowser({
     rawInput: item.rawInput,
   });
   const runTitle = run?.server
-    ? run.server.split(/[-_]/u).filter(Boolean).map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" ")
+    ? run.server.split(/[-_]/u).filter(Boolean).map((word) =>
+      word.charAt(0).toUpperCase() + word.slice(1)
+    ).join(" ")
     : null;
 
   const mobileNavigationItems = (
@@ -2174,14 +2252,26 @@ function ToolDetailsBrowser({
         <NavigateBefore />
       </IconButton>
       <Typography
-        aria-label={`Tool run ${runIndex + 1} of ${runs.length}${historyComplete ? "" : " loaded"}`}
+        aria-label={`Tool run ${runIndex + 1} of ${runs.length}${
+          historyComplete ? "" : " loaded"
+        }`}
         variant="caption"
-        sx={{ px: 0.75, fontWeight: 700, color: "text.secondary", fontVariantNumeric: "tabular-nums" }}
+        sx={{
+          px: 0.75,
+          fontWeight: 700,
+          color: "text.secondary",
+          fontVariantNumeric: "tabular-nums",
+        }}
       >
-        {runIndex + 1} / {runs.length}{historyComplete ? "" : "+"}
+        {runIndex + 1} / {runs.length}
+        {historyComplete ? "" : "+"}
       </Typography>
       <Tooltip title="Close details">
-        <IconButton aria-label="Close tool details" onClick={onClose} sx={{ width: 44, height: 44, justifySelf: "center" }}>
+        <IconButton
+          aria-label="Close tool details"
+          onClick={onClose}
+          sx={{ width: 44, height: 44, justifySelf: "center" }}
+        >
           <Close />
         </IconButton>
       </Tooltip>
@@ -2194,7 +2284,11 @@ function ToolDetailsBrowser({
         <NavigateNext />
       </IconButton>
       <Tooltip title="Locate in transcript">
-        <IconButton aria-label="Locate tool in transcript" onClick={(): void => onLocate(item.key)} sx={{ width: 44, height: 44 }}>
+        <IconButton
+          aria-label="Locate tool in transcript"
+          onClick={(): void => onLocate(item.key)}
+          sx={{ width: 44, height: 44 }}
+        >
           <MyLocation fontSize="small" />
         </IconButton>
       </Tooltip>
@@ -2210,205 +2304,256 @@ function ToolDetailsBrowser({
   );
 
   const details = (
-      <Box ref={bodyRef} sx={{ position: "relative", maxWidth: desktop ? 1280 : "none", mx: desktop ? "auto" : 0 }}>
-        <Stack spacing={1.25}>
-            <ToolTranscriptContext
-              key={`${item.key}-before`}
-              items={before}
-              position="before"
-              defaultOpen={desktop}
-            />
-            {run && run.tools.length > 1 && (
-              <Box
-                aria-label={`${runTitle ?? "MCP"} run with ${run.tools.length} calls`}
+    <Box
+      ref={bodyRef}
+      sx={{
+        position: "relative",
+        maxWidth: desktop ? 1280 : "none",
+        mx: desktop ? "auto" : 0,
+      }}
+    >
+      <Stack spacing={1.25}>
+        <ToolTranscriptContext
+          key={`${item.key}-before`}
+          items={before}
+          position="before"
+          defaultOpen={desktop}
+        />
+        {run && run.tools.length > 1 && (
+          <Box
+            aria-label={`${
+              runTitle ?? "MCP"
+            } run with ${run.tools.length} calls`}
+            sx={{
+              border: 1,
+              borderColor: "divider",
+              borderRadius: 1.5,
+              overflow: "hidden",
+              bgcolor: "action.hover",
+            }}
+          >
+            <Stack
+              direction="row"
+              alignItems="baseline"
+              justifyContent="space-between"
+              sx={{ px: 1.25, pt: 0.875, pb: 0.5 }}
+            >
+              <Typography
+                variant="caption"
+                sx={{ color: "text.secondary", fontWeight: 700 }}
+              >
+                {runTitle}
+              </Typography>
+              <Typography
+                variant="caption"
                 sx={{
-                  border: 1,
-                  borderColor: "divider",
-                  borderRadius: 1.5,
-                  overflow: "hidden",
-                  bgcolor: "action.hover",
+                  color: "text.disabled",
+                  fontVariantNumeric: "tabular-nums",
                 }}
               >
-                <Stack
-                  direction="row"
-                  alignItems="baseline"
-                  justifyContent="space-between"
-                  sx={{ px: 1.25, pt: 0.875, pb: 0.5 }}
+                {itemIndex + 1} / {run.tools.length} calls
+              </Typography>
+            </Stack>
+            <Stack sx={{ pb: 0.375 }}>
+              {run.tools.map((tool, callIndex) => {
+                const selected = tool.key === item.key;
+                const callHeading = toolHeading({
+                  provider,
+                  toolName: tool.toolName,
+                  kind: tool.toolKind,
+                  title: tool.title,
+                  rawInput: tool.rawInput,
+                });
+                return (
+                  <ButtonBase
+                    key={tool.key}
+                    aria-current={selected ? "step" : undefined}
+                    onClick={(): void => select(tool)}
+                    sx={{
+                      width: "100%",
+                      minHeight: 42,
+                      px: 1.25,
+                      display: "grid",
+                      gridTemplateColumns: "20px minmax(0, 1fr) auto",
+                      gap: 0.75,
+                      alignItems: "center",
+                      textAlign: "left",
+                      bgcolor: selected ? "action.selected" : "transparent",
+                      borderLeft: 2,
+                      borderColor: selected ? "primary.main" : "transparent",
+                    }}
+                  >
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        color: selected ? "primary.main" : "text.disabled",
+                        fontWeight: 700,
+                      }}
+                    >
+                      {callIndex + 1}
+                    </Typography>
+                    <Typography
+                      variant="body2"
+                      noWrap
+                      sx={{ fontWeight: selected ? 700 : 500 }}
+                    >
+                      {callHeading}
+                    </Typography>
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        color: tool.status === "failed"
+                          ? "error.main"
+                          : tool.status === "in_progress" ||
+                              tool.status === "pending"
+                          ? "warning.main"
+                          : "text.disabled",
+                      }}
+                    >
+                      {tool.status === "in_progress" ? "running" : tool.status}
+                    </Typography>
+                  </ButtonBase>
+                );
+              })}
+            </Stack>
+          </Box>
+        )}
+        <Stack ref={currentRef} direction="row" spacing={1} alignItems="center">
+          <Box sx={{ pt: 0.25, color: "text.secondary" }}>
+            {toolIcon(item.toolKind)}
+          </Box>
+          <Typography
+            sx={{
+              flex: 1,
+              minWidth: 0,
+              overflowWrap: "anywhere",
+              fontFamily: item.toolKind === "execute"
+                ? "ui-monospace, SFMono-Regular, Menlo, monospace"
+                : "var(--cowboy-reading-font, inherit)",
+            }}
+          >
+            {heading}
+          </Typography>
+          <Chip
+            size="small"
+            color={toolColor(item.status)}
+            label={item.status}
+            variant="outlined"
+            sx={{ flexShrink: 0 }}
+          />
+        </Stack>
+        <Box sx={{ borderTop: 1, borderColor: "divider", pt: 1 }}>
+          {!rawOnly && (
+            <Stack
+              direction="row"
+              alignItems="center"
+              justifyContent="space-between"
+              sx={{ mb: 0.75 }}
+            >
+              <Typography variant="caption" color="text.disabled">
+                {toolVariantLabel({
+                  provider,
+                  toolName: item.toolName,
+                  kind: item.toolKind,
+                  title: item.title,
+                  rawInput: item.rawInput,
+                })}
+              </Typography>
+              <Stack direction="row" alignItems="center" spacing={0.25}>
+                <Box
+                  role="group"
+                  aria-label="Tool detail view"
+                  sx={{
+                    display: "flex",
+                    p: 0.25,
+                    borderRadius: 1.25,
+                    bgcolor: "action.hover",
+                  }}
                 >
-                  <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 700 }}>
-                    {runTitle}
-                  </Typography>
-                  <Typography variant="caption" sx={{ color: "text.disabled", fontVariantNumeric: "tabular-nums" }}>
-                    {itemIndex + 1} / {run.tools.length} calls
-                  </Typography>
-                </Stack>
-                <Stack sx={{ pb: 0.375 }}>
-                  {run.tools.map((tool, callIndex) => {
-                    const selected = tool.key === item.key;
-                    const callHeading = toolHeading({
-                      provider,
-                      toolName: tool.toolName,
-                      kind: tool.toolKind,
-                      title: tool.title,
-                      rawInput: tool.rawInput,
-                    });
-                    return (
-                      <ButtonBase
-                        key={tool.key}
-                        aria-current={selected ? "step" : undefined}
-                        onClick={(): void => select(tool)}
-                        sx={{
-                          width: "100%",
-                          minHeight: 42,
-                          px: 1.25,
-                          display: "grid",
-                          gridTemplateColumns: "20px minmax(0, 1fr) auto",
-                          gap: 0.75,
-                          alignItems: "center",
-                          textAlign: "left",
-                          bgcolor: selected ? "action.selected" : "transparent",
-                          borderLeft: 2,
-                          borderColor: selected ? "primary.main" : "transparent",
-                        }}
-                      >
-                        <Typography variant="caption" sx={{ color: selected ? "primary.main" : "text.disabled", fontWeight: 700 }}>
-                          {callIndex + 1}
-                        </Typography>
-                        <Typography variant="body2" noWrap sx={{ fontWeight: selected ? 700 : 500 }}>
-                          {callHeading}
-                        </Typography>
-                        <Typography
-                          variant="caption"
-                          sx={{
-                            color: tool.status === "failed"
-                              ? "error.main"
-                              : tool.status === "in_progress" || tool.status === "pending"
-                              ? "warning.main"
-                              : "text.disabled",
-                          }}
-                        >
-                          {tool.status === "in_progress" ? "running" : tool.status}
-                        </Typography>
-                      </ButtonBase>
-                    );
-                  })}
-                </Stack>
+                  {[false, true].map((isRaw) => (
+                    <ButtonBase
+                      key={String(isRaw)}
+                      aria-pressed={raw === isRaw}
+                      onClick={(): void =>
+                        setRawByKey((state) => ({
+                          ...state,
+                          [item.key]: isRaw,
+                        }))}
+                      sx={{
+                        minHeight: 32,
+                        px: 1,
+                        borderRadius: 1,
+                        fontSize: "0.6875rem",
+                        fontWeight: raw === isRaw ? 700 : 500,
+                        color: raw === isRaw ? "text.primary" : "text.disabled",
+                        bgcolor: raw === isRaw
+                          ? "background.paper"
+                          : "transparent",
+                        boxShadow: raw === isRaw ? 1 : 0,
+                      }}
+                    >
+                      {isRaw ? "Raw" : "Formatted"}
+                    </ButtonBase>
+                  ))}
+                </Box>
+              </Stack>
+            </Stack>
+          )}
+          {detailReadyKey !== item.key
+            ? (
+              <Stack spacing={0.75} aria-label="Loading tool details">
+                <Skeleton animation="wave" width="92%" />
+                <Skeleton animation="wave" width="78%" />
+                <Skeleton animation="wave" width="86%" />
+              </Stack>
+            )
+            : raw
+            ? (
+              <Stack spacing={1}>
+                {item.rawInput !== undefined && (
+                  <Labeled label="Input">
+                    <CodeView
+                      code={JSON.stringify(item.rawInput, null, 2) ??
+                        String(item.rawInput)}
+                      lang="json"
+                      maxHeight={desktop ? 640 : 360}
+                      touchWrap={!rawOnly}
+                    />
+                  </Labeled>
+                )}
+                {item.content !== undefined && (
+                  <Labeled label="Output">
+                    <CodeView
+                      code={JSON.stringify(item.content, null, 2) ??
+                        String(item.content)}
+                      lang="json"
+                      maxHeight={desktop ? 640 : 360}
+                      touchWrap={!rawOnly}
+                    />
+                  </Labeled>
+                )}
+              </Stack>
+            )
+            : (
+              <Box>
+                <ToolBody ctx={ctx} />
               </Box>
             )}
-            <Stack ref={currentRef} direction="row" spacing={1} alignItems="center">
-              <Box sx={{ pt: 0.25, color: "text.secondary" }}>
-                {toolIcon(item.toolKind)}
-              </Box>
-              <Typography
-                sx={{
-                  flex: 1,
-                  minWidth: 0,
-                  overflowWrap: "anywhere",
-                  fontFamily: item.toolKind === "execute"
-                    ? "ui-monospace, SFMono-Regular, Menlo, monospace"
-                    : "var(--cowboy-reading-font, inherit)",
-                }}
-              >
-                {heading}
-              </Typography>
-              <Chip
-                size="small"
-                color={toolColor(item.status)}
-                label={item.status}
-                variant="outlined"
-                sx={{ flexShrink: 0 }}
-              />
-            </Stack>
-            <Box sx={{ borderTop: 1, borderColor: "divider", pt: 1 }}>
-              {!rawOnly && (
-                <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 0.75 }}>
-                  <Typography variant="caption" color="text.disabled">
-                    {toolVariantLabel({
-                      provider,
-                      toolName: item.toolName,
-                      kind: item.toolKind,
-                      title: item.title,
-                      rawInput: item.rawInput,
-                    })}
-                  </Typography>
-                  <Stack direction="row" alignItems="center" spacing={0.25}>
-                    <Box
-                      role="group"
-                      aria-label="Tool detail view"
-                      sx={{ display: "flex", p: 0.25, borderRadius: 1.25, bgcolor: "action.hover" }}
-                    >
-                      {[false, true].map((isRaw) => (
-                        <ButtonBase
-                          key={String(isRaw)}
-                          aria-pressed={raw === isRaw}
-                          onClick={(): void => setRawByKey((state) => ({ ...state, [item.key]: isRaw }))}
-                          sx={{
-                            minHeight: 32,
-                            px: 1,
-                            borderRadius: 1,
-                            fontSize: "0.6875rem",
-                            fontWeight: raw === isRaw ? 700 : 500,
-                            color: raw === isRaw ? "text.primary" : "text.disabled",
-                            bgcolor: raw === isRaw ? "background.paper" : "transparent",
-                            boxShadow: raw === isRaw ? 1 : 0,
-                          }}
-                        >
-                          {isRaw ? "Raw" : "Formatted"}
-                        </ButtonBase>
-                      ))}
-                    </Box>
-                  </Stack>
-                </Stack>
-              )}
-              {detailReadyKey !== item.key
-                ? (
-                  <Stack spacing={0.75} aria-label="Loading tool details">
-                    <Skeleton animation="wave" width="92%" />
-                    <Skeleton animation="wave" width="78%" />
-                    <Skeleton animation="wave" width="86%" />
-                  </Stack>
-                )
-                : raw
-                ? (
-                  <Stack spacing={1}>
-                    {item.rawInput !== undefined && (
-                      <Labeled label="Input">
-                        <CodeView
-                          code={JSON.stringify(item.rawInput, null, 2) ?? String(item.rawInput)}
-                          lang="json"
-                          maxHeight={desktop ? 640 : 360}
-                          touchWrap={!rawOnly}
-                        />
-                      </Labeled>
-                    )}
-                    {item.content !== undefined && (
-                      <Labeled label="Output">
-                        <CodeView
-                          code={JSON.stringify(item.content, null, 2) ?? String(item.content)}
-                          lang="json"
-                          maxHeight={desktop ? 640 : 360}
-                          touchWrap={!rawOnly}
-                        />
-                      </Labeled>
-                    )}
-                  </Stack>
-                )
-                : (
-                  <Box>
-                    <ToolBody ctx={ctx} />
-                  </Box>
-                )}
-            </Box>
-            <ToolTranscriptContext
-              key={`${item.key}-after`}
-              items={after}
-              position="after"
-              phase={running ? "running" : runIndex < runs.length - 1 ? "ready" : "settled"}
-              defaultOpen={desktop}
-            />
-            <Box ref={anchorSpacerRef} aria-hidden />
-          </Stack>
-      </Box>
+        </Box>
+        <ToolTranscriptContext
+          key={`${item.key}-after`}
+          items={after}
+          position="after"
+          phase={running
+            ? "running"
+            : runIndex < runs.length - 1
+            ? "ready"
+            : "settled"}
+          defaultOpen={desktop}
+        />
+        <Box ref={anchorSpacerRef} aria-hidden />
+      </Stack>
+    </Box>
   );
 
   const desktopHistory = (
@@ -2426,12 +2571,28 @@ function ToolDetailsBrowser({
         userSelect: "none",
       }}
     >
-      <Box sx={{ position: "sticky", top: 0, zIndex: 1, px: 1.5, py: 1.25, bgcolor: "background.paper", borderBottom: 1, borderColor: "divider" }}>
-        <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 800 }}>
+      <Box
+        sx={{
+          position: "sticky",
+          top: 0,
+          zIndex: 1,
+          px: 1.5,
+          py: 1.25,
+          bgcolor: "background.paper",
+          borderBottom: 1,
+          borderColor: "divider",
+        }}
+      >
+        <Typography
+          variant="overline"
+          color="text.secondary"
+          sx={{ fontWeight: 800 }}
+        >
           Agent history
         </Typography>
         <Typography variant="caption" display="block" color="text.disabled">
-          {runs.length} runs{historyComplete ? "" : "+"} · newest agent activity last
+          {runs.length} runs{historyComplete ? "" : "+"}{" "}
+          · newest agent activity last
         </Typography>
       </Box>
       <Stack sx={{ py: 0.5 }}>
@@ -2477,18 +2638,46 @@ function ToolDetailsBrowser({
                 },
               }}
             >
-              <Typography variant="caption" color={active ? "primary.main" : "text.disabled"} sx={{ fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>
+              <Typography
+                variant="caption"
+                color={active ? "primary.main" : "text.disabled"}
+                sx={{ fontWeight: 800, fontVariantNumeric: "tabular-nums" }}
+              >
                 {candidateIndex + 1}
               </Typography>
               <Box sx={{ minWidth: 0 }}>
-                <Typography variant="body2" noWrap sx={{ fontFamily: candidateTool.toolKind === "execute" ? "ui-monospace, SFMono-Regular, Menlo, monospace" : "inherit", fontWeight: active ? 750 : 550 }}>
+                <Typography
+                  variant="body2"
+                  noWrap
+                  sx={{
+                    fontFamily: candidateTool.toolKind === "execute"
+                      ? "ui-monospace, SFMono-Regular, Menlo, monospace"
+                      : "inherit",
+                    fontWeight: active ? 750 : 550,
+                  }}
+                >
                   {candidateSummary}
                 </Typography>
                 <Typography variant="caption" color="text.disabled" noWrap>
-                  {candidateHeading}{candidate.tools.length > 1 ? ` · ${candidate.tools.length} calls` : ""}
+                  {candidateHeading}
+                  {candidate.tools.length > 1
+                    ? ` · ${candidate.tools.length} calls`
+                    : ""}
                 </Typography>
               </Box>
-              <Box sx={{ width: 8, height: 8, borderRadius: "50%", bgcolor: candidateTool.status === "failed" ? "error.main" : candidateTool.status === "in_progress" || candidateTool.status === "pending" ? "warning.main" : "success.main" }} />
+              <Box
+                sx={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: "50%",
+                  bgcolor: candidateTool.status === "failed"
+                    ? "error.main"
+                    : candidateTool.status === "in_progress" ||
+                        candidateTool.status === "pending"
+                    ? "warning.main"
+                    : "success.main",
+                }}
+              />
             </ButtonBase>
           );
         })}
@@ -2517,19 +2706,53 @@ function ToolDetailsBrowser({
             },
           }}
         >
-          <Box sx={{ height: "100%", minHeight: 0, display: "grid", gridTemplateRows: "auto minmax(0, 1fr) auto" }}>
-            <Box sx={{ px: 2.5, py: 1.25, display: "grid", gridTemplateColumns: "clamp(280px, 24vw, 380px) minmax(0, 1fr)", alignItems: "center", gap: 2.5, borderBottom: 1, borderColor: "divider", userSelect: "none" }}>
+          <Box
+            sx={{
+              height: "100%",
+              minHeight: 0,
+              display: "grid",
+              gridTemplateRows: "auto minmax(0, 1fr) auto",
+            }}
+          >
+            <Box
+              sx={{
+                px: 2.5,
+                py: 1.25,
+                display: "grid",
+                gridTemplateColumns: "clamp(280px, 24vw, 380px) minmax(0, 1fr)",
+                alignItems: "center",
+                gap: 2.5,
+                borderBottom: 1,
+                borderColor: "divider",
+                userSelect: "none",
+              }}
+            >
               <Box>
-                <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>Tool history inspector</Typography>
+                <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
+                  Tool history inspector
+                </Typography>
                 <Typography variant="caption" color="text.secondary">
                   Review what the agent ran, changed, and observed
                 </Typography>
               </Box>
-              <Stack direction="row" alignItems="center" spacing={1.25} sx={{ minWidth: 0 }}>
+              <Stack
+                direction="row"
+                alignItems="center"
+                spacing={1.25}
+                sx={{ minWidth: 0 }}
+              >
                 <Box sx={{ minWidth: 0, flex: 1 }}>
-                  <Typography variant="body2" noWrap sx={{ fontWeight: 750 }}>{heading}</Typography>
-                  <Typography variant="caption" color="text.secondary" sx={{ fontVariantNumeric: "tabular-nums" }}>
-                    Run {runIndex + 1} of {runs.length}{historyComplete ? "" : "+"}{runTitle ? ` · ${runTitle}` : ""}
+                  <Typography variant="body2" noWrap sx={{ fontWeight: 750 }}>
+                    {heading}
+                  </Typography>
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ fontVariantNumeric: "tabular-nums" }}
+                  >
+                    Run {runIndex + 1} of {runs.length}
+                    {historyComplete ? "" : "+"}
+                    {runTitle ? ` · ${runTitle}` : ""}
                   </Typography>
                 </Box>
                 <Button
@@ -2549,80 +2772,106 @@ function ToolDetailsBrowser({
                   Next
                 </Button>
                 <Tooltip title="Locate in transcript">
-                  <IconButton aria-label="Locate tool in transcript" onClick={(): void => onLocate(item.key)}>
+                  <IconButton
+                    aria-label="Locate tool in transcript"
+                    onClick={(): void => onLocate(item.key)}
+                  >
                     <MyLocation fontSize="small" />
                   </IconButton>
                 </Tooltip>
-                <Button onClick={onClose} endIcon={<KeyboardArrowDown />} sx={{ textTransform: "none", flexShrink: 0 }}>
+                <Button
+                  onClick={onClose}
+                  endIcon={<KeyboardArrowDown />}
+                  sx={{ textTransform: "none", flexShrink: 0 }}
+                >
                   Close
                 </Button>
               </Stack>
             </Box>
-            <Box sx={{ minHeight: 0, display: "grid", gridTemplateColumns: "clamp(280px, 24vw, 380px) minmax(0, 1fr)" }}>
+            <Box
+              sx={{
+                minHeight: 0,
+                display: "grid",
+                gridTemplateColumns: "clamp(280px, 24vw, 380px) minmax(0, 1fr)",
+              }}
+            >
               {desktopHistory}
-              <DialogContent sx={{ minHeight: 0, overflowY: "auto", px: { md: 3, xl: 4 }, py: 2.5 }}>
+              <DialogContent
+                sx={{
+                  minHeight: 0,
+                  overflowY: "auto",
+                  px: { md: 3, xl: 4 },
+                  py: 2.5,
+                }}
+              >
                 {details}
               </DialogContent>
             </Box>
             <DesktopShortcutBar
-                groups={[
-                  {
-                    label: "Navigate",
-                    slots: [
-                      {
-                        shortcut: "J/K",
-                        label: "Run",
-                        availability: navigationPrefixArmed ? "inactive" : "available",
-                      },
-                      {
-                        shortcut: "H/L",
-                        label: "View",
-                        availability: rawOnly || navigationPrefixArmed
-                          ? "inactive"
-                          : "available",
-                      },
-                      {
-                        shortcut: "Enter",
-                        label: "Locate",
-                        availability: navigationPrefixArmed ? "inactive" : "available",
-                      },
-                    ],
-                  },
-                  {
-                    label: "Go",
-                    slots: [
-                      {
-                        shortcut: "G",
-                        label: "Prefix",
-                        availability: sequentialShortcutAvailability({
-                          scopeAvailable: true,
-                          armed: navigationPrefixArmed,
-                          prefix: true,
-                        }),
-                      },
-                      {
-                        shortcut: "G",
-                        label: "Oldest",
-                        availability: sequentialShortcutAvailability({
-                          scopeAvailable: true,
-                          armed: navigationPrefixArmed,
-                          prefix: false,
-                        }),
-                      },
-                      {
-                        shortcut: "Shift+G",
-                        label: "Latest",
-                        availability: navigationPrefixArmed ? "inactive" : "available",
-                      },
-                    ],
-                  },
-                  {
-                    slots: [{
-                      shortcut: "Esc",
-                      label: navigationPrefixArmed ? "Cancel prefix" : "Close",
-                    }],
-                  },
-                ]}
+              groups={[
+                {
+                  label: "Navigate",
+                  slots: [
+                    {
+                      shortcut: "J/K",
+                      label: "Run",
+                      availability: navigationPrefixArmed
+                        ? "inactive"
+                        : "available",
+                    },
+                    {
+                      shortcut: "H/L",
+                      label: "View",
+                      availability: rawOnly || navigationPrefixArmed
+                        ? "inactive"
+                        : "available",
+                    },
+                    {
+                      shortcut: "Enter",
+                      label: "Locate",
+                      availability: navigationPrefixArmed
+                        ? "inactive"
+                        : "available",
+                    },
+                  ],
+                },
+                {
+                  label: "Go",
+                  slots: [
+                    {
+                      shortcut: "G",
+                      label: "Prefix",
+                      availability: sequentialShortcutAvailability({
+                        scopeAvailable: true,
+                        armed: navigationPrefixArmed,
+                        prefix: true,
+                      }),
+                    },
+                    {
+                      shortcut: "G",
+                      label: "Oldest",
+                      availability: sequentialShortcutAvailability({
+                        scopeAvailable: true,
+                        armed: navigationPrefixArmed,
+                        prefix: false,
+                      }),
+                    },
+                    {
+                      shortcut: "Shift+G",
+                      label: "Latest",
+                      availability: navigationPrefixArmed
+                        ? "inactive"
+                        : "available",
+                    },
+                  ],
+                },
+                {
+                  slots: [{
+                    shortcut: "Esc",
+                    label: navigationPrefixArmed ? "Cancel prefix" : "Close",
+                  }],
+                },
+              ]}
             />
           </Box>
         </Dialog>
@@ -2731,7 +2980,9 @@ const ItemView = memo(function ItemView({
             color: "text.secondary",
             alignSelf: "stretch",
             maxWidth: "100%",
-            px: provider === "codex" || provider === "codex-deepseek" ? 0.25 : 0,
+            px: provider === "codex" || provider === "codex-deepseek"
+              ? 0.25
+              : 0,
           }}
         >
           <Box sx={{ fontSize: "0.84rem", flex: 1, minWidth: 0 }}>
@@ -2837,13 +3088,17 @@ const GEMINI_CONSUMER_GUIDANCE =
   "Gemini CLI no longer supports Google Login for personal, Google AI Pro, or AI Ultra accounts. Use an API key, Code Assist Standard/Enterprise, or migrate to Antigravity.";
 
 function presentedCrashDetail(detail: string): string {
-  return detail.includes(GEMINI_CONSUMER_RETIRED) ? GEMINI_CONSUMER_GUIDANCE : detail;
+  return detail.includes(GEMINI_CONSUMER_RETIRED)
+    ? GEMINI_CONSUMER_GUIDANCE
+    : detail;
 }
 
 function latestCrashDetail(items: RenderItem[]): string | null {
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
-    if (item?.kind === "lifecycle" && item.status === "crashed" && item.detail) {
+    if (
+      item?.kind === "lifecycle" && item.status === "crashed" && item.detail
+    ) {
       return presentedCrashDetail(item.detail);
     }
   }
@@ -2868,7 +3123,8 @@ function SessionStatusBar({
   } else if (status === "crashed") {
     tone = "error";
     icon = <ErrorOutline fontSize="small" />;
-    text = crashDetail ?? "Agent stopped unexpectedly — send a message to restart it.";
+    text = crashDetail ??
+      "Agent stopped unexpectedly — send a message to restart it.";
   } else if (status === "exited") {
     tone = "neutral";
     icon = <Bedtime fontSize="small" />;
@@ -3160,7 +3416,9 @@ export function Transcript({
     });
     return () => cancelAnimationFrame(frame);
   }, [drawerCatchupStep, sessionId]);
-  const allItems = useMemo(() => derive(presentedTimeline), [presentedTimeline]);
+  const allItems = useMemo(() => derive(presentedTimeline), [
+    presentedTimeline,
+  ]);
   const crashDetail = useMemo(() => latestCrashDetail(allItems), [allItems]);
   const items = useMemo(
     () =>
@@ -3174,17 +3432,25 @@ export function Transcript({
   const [selectedToolKey, setSelectedToolKey] = useState<string | null>(null);
   const [locatedToolKey, setLocatedToolKey] = useState<string | null>(null);
   const locateTimerRef = useRef<number | null>(null);
-  const openTool = useCallback((key: string): void => setSelectedToolKey(key), []);
+  const openTool = useCallback(
+    (key: string): void => setSelectedToolKey(key),
+    [],
+  );
   const closeTool = useCallback((): void => setSelectedToolKey(null), []);
 
   useEffect(() => {
-    if (selectedToolKey !== null && !tools.some((tool) => tool.key === selectedToolKey)) {
+    if (
+      selectedToolKey !== null &&
+      !tools.some((tool) => tool.key === selectedToolKey)
+    ) {
       setSelectedToolKey(null);
     }
   }, [selectedToolKey, tools]);
 
   useEffect(() => () => {
-    if (locateTimerRef.current !== null) globalThis.clearTimeout(locateTimerRef.current);
+    if (locateTimerRef.current !== null) {
+      globalThis.clearTimeout(locateTimerRef.current);
+    }
   }, []);
   // Reader-comfort controls (Settings → Reading). The font-size SCALE is now a
   // GLOBAL app zoom on the root <html> font-size (useGlobalFontScale at the app
@@ -3375,13 +3641,16 @@ export function Transcript({
       try {
         // Give React/WebKit one paint with the promoted boundary before the
         // first network request can resolve and prepend rows.
-        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => resolve())
+        );
         if (scrollbackFillRunRef.current !== run) return;
         for (let page = 0; page < SCROLLBACK_FILL_PAGE_LIMIT; page += 1) {
           const previousBandHeight = el.querySelector<HTMLElement>(
             "[data-transcript-scrollback-fill]",
           )?.getBoundingClientRect().height ?? 0;
-          const previousRowCount = el.querySelectorAll<HTMLElement>("[data-key]").length;
+          const previousRowCount =
+            el.querySelectorAll<HTMLElement>("[data-key]").length;
           const previousContentHeight = Math.max(
             0,
             el.scrollHeight - previousBandHeight,
@@ -3400,7 +3669,8 @@ export function Transcript({
                 const currentEl = parentRef.current;
                 if (!currentEl) return;
                 const fromBottom = Math.abs(currentEl.scrollTop);
-                const fromTop = currentEl.scrollHeight - currentEl.clientHeight - fromBottom;
+                const fromTop = currentEl.scrollHeight -
+                  currentEl.clientHeight - fromBottom;
                 if (fromTop <= currentEl.clientHeight * 3) {
                   requestOlderPageRef.current();
                 }
@@ -3426,13 +3696,18 @@ export function Transcript({
           const mountedBandHeight = el.querySelector<HTMLElement>(
             "[data-transcript-scrollback-fill]",
           )?.getBoundingClientRect().height ?? 0;
-          const mountedContentHeight = Math.max(0, el.scrollHeight - mountedBandHeight);
+          const mountedContentHeight = Math.max(
+            0,
+            el.scrollHeight - mountedBandHeight,
+          );
           mountedContent = mountedContent ||
             mountedRowCount > previousRowCount ||
             mountedContentHeight > previousContentHeight + 1;
           await new Promise<void>((resolve) => {
-            globalThis.setTimeout(() => requestAnimationFrame(() => resolve()),
-              SCROLLBACK_FILL_SETTLE_MS);
+            globalThis.setTimeout(
+              () => requestAnimationFrame(() => resolve()),
+              SCROLLBACK_FILL_SETTLE_MS,
+            );
           });
           if (scrollbackFillRunRef.current !== run) return;
           const bandHeight = el.querySelector<HTMLElement>(
@@ -3452,24 +3727,27 @@ export function Transcript({
           const currentPaging = pagingRef.current;
           const loadedRows = Math.max(
             0,
-            el.querySelectorAll<HTMLElement>("[data-key]").length - baseRowCount,
+            el.querySelectorAll<HTMLElement>("[data-key]").length -
+              baseRowCount,
           );
           const fromBottom = Math.abs(el.scrollTop);
           const fromTop = el.scrollHeight - el.clientHeight - fromBottom;
-          if (!currentPaging || !shouldContinueScrollbackFill({
-            remaining,
-            loadedRows,
-            minimumRows: SCROLLBACK_FILL_MINIMUM_ROWS,
-            fromTop,
-            viewportHeight: el.clientHeight,
-            reachedStart: currentPaging.reachedStart,
-            // `loadOlder` has completed canonically; React may not have
-            // published that synchronous store update into this ref yet.
-            // Treating its stale `loadingOlder` bit as authoritative would
-            // stop sparse-page filling after the first request.
-            loadingOlder: false,
-            beforeSeq: currentPaging.beforeSeq,
-          })) break;
+          if (
+            !currentPaging || !shouldContinueScrollbackFill({
+              remaining,
+              loadedRows,
+              minimumRows: SCROLLBACK_FILL_MINIMUM_ROWS,
+              fromTop,
+              viewportHeight: el.clientHeight,
+              reachedStart: currentPaging.reachedStart,
+              // `loadOlder` has completed canonically; React may not have
+              // published that synchronous store update into this ref yet.
+              // Treating its stale `loadingOlder` bit as authoritative would
+              // stop sparse-page filling after the first request.
+              loadingOlder: false,
+              beforeSeq: currentPaging.beforeSeq,
+            })
+          ) break;
         }
       } finally {
         if (scrollbackFillRunRef.current === run) {
@@ -3482,31 +3760,34 @@ export function Transcript({
           // This is the missing replacement hand-off: fetched rows take the
           // old skeleton's place while the next skeleton remains just above.
           if (mountedContent) {
-            requestAnimationFrame(() => requestAnimationFrame(() => {
-              if (scrollbackFillRunRef.current !== run) return;
-              const currentEl = parentRef.current;
-              const boundary = currentEl?.querySelector<HTMLElement>(
-                "[data-transcript-scrollback-fill]",
-              );
-              if (!currentEl || !boundary) return;
-              const fromBottom = Math.abs(currentEl.scrollTop);
-              const currentFromTop = Math.max(
-                0,
-                currentEl.scrollHeight - currentEl.clientHeight - fromBottom,
-              );
-              const desiredFromTop = scrollbackReplacementFromTop({
-                currentFromTop,
-                boundaryHeight: boundary.getBoundingClientRect().height,
-                mountedContent: true,
-              });
-              if (desiredFromTop === null) return;
-              const desiredFromBottom = Math.max(
-                0,
-                currentEl.scrollHeight - currentEl.clientHeight - desiredFromTop,
-              );
-              const direction = currentEl.scrollTop > 0.5 ? 1 : -1;
-              currentEl.scrollTop = direction * desiredFromBottom;
-            }));
+            requestAnimationFrame(() =>
+              requestAnimationFrame(() => {
+                if (scrollbackFillRunRef.current !== run) return;
+                const currentEl = parentRef.current;
+                const boundary = currentEl?.querySelector<HTMLElement>(
+                  "[data-transcript-scrollback-fill]",
+                );
+                if (!currentEl || !boundary) return;
+                const fromBottom = Math.abs(currentEl.scrollTop);
+                const currentFromTop = Math.max(
+                  0,
+                  currentEl.scrollHeight - currentEl.clientHeight - fromBottom,
+                );
+                const desiredFromTop = scrollbackReplacementFromTop({
+                  currentFromTop,
+                  boundaryHeight: boundary.getBoundingClientRect().height,
+                  mountedContent: true,
+                });
+                if (desiredFromTop === null) return;
+                const desiredFromBottom = Math.max(
+                  0,
+                  currentEl.scrollHeight - currentEl.clientHeight -
+                    desiredFromTop,
+                );
+                const direction = currentEl.scrollTop > 0.5 ? 1 : -1;
+                currentEl.scrollTop = direction * desiredFromBottom;
+              })
+            );
           }
         }
       }
@@ -3572,14 +3853,16 @@ export function Transcript({
       // the indexed previous question page instead; the server bounds it at
       // TurnEnd, so background terminal output cannot make this recovery
       // response grow forever.
-      if (shouldRecoverUnrenderableHistory({
-        managed: managesScrollHistoryRef.current,
-        itemCount: renderableItemCountRef.current,
-        timelineEventCount: timelineEventCountRef.current,
-        reachedStart: paging.reachedStart,
-        loadingOlder: paging.loadingOlder,
-        beforeSeq: paging.beforeSeq,
-      })) {
+      if (
+        shouldRecoverUnrenderableHistory({
+          managed: managesScrollHistoryRef.current,
+          itemCount: renderableItemCountRef.current,
+          timelineEventCount: timelineEventCountRef.current,
+          reachedStart: paging.reachedStart,
+          loadingOlder: paging.loadingOlder,
+          beforeSeq: paging.beforeSeq,
+        })
+      ) {
         const cursor = paging.beforeSeq;
         if (semanticRecoveryCursorRef.current === cursor) {
           setBackfillingViewport(false);
@@ -3602,7 +3885,8 @@ export function Transcript({
       const loadingFill = el.querySelector<HTMLElement>(
         "[data-transcript-loading-fill]",
       );
-      const loadingFillHeight = loadingFill?.getBoundingClientRect().height ?? null;
+      const loadingFillHeight = loadingFill?.getBoundingClientRect().height ??
+        null;
       const hasVisibleGap = shouldBackfillTranscriptViewport({
         managed: managesScrollHistoryRef.current,
         allowed: true,
@@ -3652,11 +3936,14 @@ export function Transcript({
             if (viewportBackfillSettleTimerRef.current !== null) {
               globalThis.clearTimeout(viewportBackfillSettleTimerRef.current);
             }
-            viewportBackfillSettleTimerRef.current = globalThis.setTimeout(() => {
-              viewportBackfillSettleTimerRef.current = null;
-              viewportBackfillSettlingRef.current = false;
-              requestViewportBackfillRef.current(false);
-            }, VIEWPORT_BACKFILL_SETTLE_MS);
+            viewportBackfillSettleTimerRef.current = globalThis.setTimeout(
+              () => {
+                viewportBackfillSettleTimerRef.current = null;
+                viewportBackfillSettlingRef.current = false;
+                requestViewportBackfillRef.current(false);
+              },
+              VIEWPORT_BACKFILL_SETTLE_MS,
+            );
           }
         });
       }
@@ -3743,10 +4030,15 @@ export function Transcript({
     stick.current = false;
     setSticky(sessionIdRef.current, false);
     setLocatedToolKey(key);
-    if (locateTimerRef.current !== null) globalThis.clearTimeout(locateTimerRef.current);
+    if (locateTimerRef.current !== null) {
+      globalThis.clearTimeout(locateTimerRef.current);
+    }
     // Let the cover sheet unmount before scrolling the transcript beneath it.
     globalThis.setTimeout(() => {
-      const row = [...(parentRef.current?.querySelectorAll<HTMLElement>("[data-key]") ?? [])]
+      const row = [
+        ...(parentRef.current?.querySelectorAll<HTMLElement>("[data-key]") ??
+          []),
+      ]
         .find((candidate) => candidate.dataset["key"] === key);
       // Tool history can be tens of thousands of pixels away. An animated
       // journey delays the destination highlight until after it has already
@@ -3829,7 +4121,8 @@ export function Transcript({
     let directManipulationShouldFollow = false;
     let nativeScrollSettleTimer: number | undefined;
     const magneticThreshold = (): number => {
-      const lineHeight = Number.parseFloat(globalThis.getComputedStyle(el).lineHeight) || 24;
+      const lineHeight =
+        Number.parseFloat(globalThis.getComputedStyle(el).lineHeight) || 24;
       return Math.max(40, lineHeight * 2);
     };
     const detach = (): void => {
@@ -3897,9 +4190,10 @@ export function Transcript({
           freezeRef.current.key = null;
           el.scrollTo({
             top: 0,
-            behavior: globalThis.matchMedia("(prefers-reduced-motion: reduce)").matches
-              ? "auto"
-              : "smooth",
+            behavior:
+              globalThis.matchMedia("(prefers-reduced-motion: reduce)").matches
+                ? "auto"
+                : "smooth",
           });
           saveViewport();
           scheduleHistoryRelease();
@@ -4589,10 +4883,12 @@ export function Transcript({
             // item's STABLE key (first envelope seq) so prepending older history
             // doesn't re-mount/jump rows.
             <>
-              {/* column-reverse makes the first DOM child visually lowest.
+              {
+                /* column-reverse makes the first DOM child visually lowest.
                   Keep the page-turn footer next to the persistent Page Dock;
                   the flexible remainder belongs between short content and its
-                  footer, never below the footer as a large dead zone. */}
+                  footer, never below the footer as a large dead zone. */
+              }
               {pageFooter}
               {shortContentAtTop && (
                 <Box
@@ -4700,7 +4996,9 @@ export function Transcript({
                       // This does not size-contain the row: intrinsic Markdown and
                       // tool height still contribute normally to scrollHeight.
                       contain: "layout paint",
-                      color: locatedToolKey === item.key ? "primary.main" : undefined,
+                      color: locatedToolKey === item.key
+                        ? "primary.main"
+                        : undefined,
                       animation: locatedToolKey === item.key
                         ? `${toolLocateFlash} 1.4s ease-out`
                         : undefined,
@@ -4723,7 +5021,7 @@ export function Transcript({
                   </Box>
                 ))}
               {managesScrollHistory && !backfillingViewport && paging != null &&
-                  paging.beforeSeq !== null && !paging.reachedStart && (
+                paging.beforeSeq !== null && !paging.reachedStart && (
                 <ScrollbackLoadingSkeleton
                   height={scrollbackFailed
                     ? 44
