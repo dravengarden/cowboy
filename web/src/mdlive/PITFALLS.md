@@ -885,6 +885,9 @@ here says otherwise.
     Once a real touch editor owns the visible keyboard, switch presentation to
     one floating Composer card: keep Plan/Queue/Draft state mounted but hide its
     surrounding panels, and suppress the shell's full-width glass and hairline.
+    The focused card must then own its own clipped `backdrop-filter`; a translucent
+    tint alone leaves transcript glyphs readable through the editor, especially
+    in light mode. Keep the prefixed WebKit property beside the standard one.
     Queue/Draft edits keep their transaction-owning scrollport mounted while
     stripping its header, sibling panels, frame, and every non-editing row. The
     outer pending region must not scroll in this state; only the active editor

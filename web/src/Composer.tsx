@@ -1723,7 +1723,12 @@ export function ComposerWorkspace({
               // component replacing the compact composer.
               borderRadius: mobileComposerPanelFrameSx.borderRadius,
               bgcolor: (t) =>
-                alpha(t.palette.background.paper, t.palette.mode === "dark" ? 0.58 : 0.82),
+                alpha(t.palette.background.paper, t.palette.mode === "dark" ? 0.68 : 0.78),
+              backdropFilter: "blur(24px) saturate(140%)",
+              WebkitBackdropFilter: "blur(24px) saturate(140%)",
+              // Clip the filtered sample to the same rounded card. Without this,
+              // WebKit leaves a sharp readable fringe around the glass edge.
+              overflow: "hidden",
               boxShadow: (t) =>
                 `0 10px 28px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.24 : 0.09)}`,
             },
