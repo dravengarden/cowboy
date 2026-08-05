@@ -83,6 +83,7 @@ import {
   type RenderItem,
 } from "./derive";
 import type { Envelope, Status } from "./protocol";
+import { TranscriptJudgingActivity } from "./TranscriptTurnActivity";
 import {
   canonicalTimeline,
   discardMessage,
@@ -96,6 +97,7 @@ import {
 } from "./store";
 import { importantHaptic, magneticHaptic } from "./haptic";
 import { useReadingSettings } from "./readingSettings";
+import { mobileTranscriptActivitySurfaceGap } from "./mobileComposerPrimitives";
 import {
   requestStickToBottom,
   resetSticky,
@@ -661,11 +663,12 @@ const toolLocateFlash = keyframes`
 const shimmer = keyframes`to { background-position: -200% 0; }`;
 // The active thought line is itself live state, not merely prose. A restrained
 // colour band moving through the glyphs makes that clear without adding another
-// spinner beside the existing work icon. Only the newest streaming step uses
-// this animation; completed reasoning stays still and cheap to paint.
+// spinner beside the existing work icon. Travel from 100% to 0% while the image
+// remains wider than the glyph run: the default repeating 110% → -110% motion
+// brought an adjacent gradient tile through the text as a second flash.
 const thoughtTextShimmer = keyframes`
-  from { background-position: 110% 0; }
-  to   { background-position: -110% 0; }
+  from { background-position: 100% 0; }
+  to   { background-position: 0% 0; }
 `;
 const codexPhraseFade = keyframes`
   0%   { opacity: 0.28; transform: translateY(1px); }
@@ -1179,16 +1182,29 @@ function ThoughtSteps({
   sections,
   streaming,
   codex,
+  touch,
 }: {
   sections: string[];
   streaming: boolean;
   codex: boolean;
+  touch: boolean;
 }): React.JSX.Element {
   const visible = sections.filter((section) => section.trim() !== "");
   return (
     <Stack
       spacing={0}
-      sx={{ flex: 1, minWidth: 0 }}
+      sx={{
+        flex: 1,
+        minWidth: 0,
+        // The ordinary provider working line includes 6px of visible breathing
+        // space before the Mobile Composer boundary. A live thought has a tinted
+        // final surface, so its background otherwise ends only at the timeline
+        // row's 5px padding and reads as stuck to the hairline. Match the working
+        // line without loosening completed transcript rows or Desktop density.
+        pb: touch && streaming
+          ? `${mobileTranscriptActivitySurfaceGap}px`
+          : 0,
+      }}
       aria-label="Thinking steps"
     >
       {
@@ -1220,6 +1236,7 @@ function ThoughtSteps({
                   return `linear-gradient(100deg, ${quiet} 0%, ${quiet} 35%, ${primary} 50%, ${quiet} 65%, ${quiet} 100%)`;
                 },
                 backgroundSize: "220% 100%",
+                backgroundRepeat: "no-repeat",
                 WebkitBackgroundClip: "text",
                 backgroundClip: "text",
                 color: "transparent",
@@ -1328,6 +1345,7 @@ function ThoughtSteps({
                     return `linear-gradient(100deg, ${quiet} 0%, ${quiet} 34%, ${primary} 46%, ${accent} 54%, ${quiet} 66%, ${quiet} 100%)`;
                   },
                   backgroundSize: "240% 100%",
+                  backgroundRepeat: "no-repeat",
                   WebkitBackgroundClip: "text",
                   backgroundClip: "text",
                   color: "transparent",
@@ -2831,6 +2849,7 @@ const ItemView = memo(function ItemView({
               sections={item.sections}
               streaming={!!streaming}
               codex={provider === "codex" || provider === "codex-deepseek"}
+              touch={!desktop}
             />
           </Box>
         </Box>
@@ -3124,6 +3143,7 @@ export function Transcript({
   cwd,
   loading,
   connected,
+  judging = false,
   topInset,
   bottomInset,
   onScrollableChange,
@@ -3153,6 +3173,9 @@ export function Transcript({
    *  stale and the agent is unreachable, so we must NOT keep spinning "thinking".
    *  The connection banner communicates the disconnect instead. */
   connected: boolean;
+  /** Transient post-turn judge work. It belongs to the live Transcript tail;
+   * settled/actionable verdicts remain in the Composer status stack. */
+  judging?: boolean | undefined;
   /** Extra top padding for the scroll content (a CSS length), so content clears
    *  the bottom-mode glass status-bar strip at rest. Undefined = none. */
   topInset?: string | undefined;
@@ -3304,6 +3327,11 @@ export function Transcript({
   // spinner is wrong; the ConnectionBanner conveys the disconnect and reconnect
   // re-broadcasts the real status.
   const working = connected && busy && liveTail;
+  // The judge is launched only after Busy settles back to Running. Requiring
+  // that authoritative state prevents a stale flag from surviving a crash,
+  // interruption, reconnect, or immediately-started next turn as a false live
+  // activity row.
+  const showJudging = judging && connected && liveTail && status === "running";
   // No messages yet + a LIVE session (a freshly created session is Running-idle,
   // waiting for the first prompt) → show the "send a message to start" empty state
   // instead of a blank wall. Non-live empties (exited/interrupted/crashed) are
@@ -4699,6 +4727,7 @@ export function Transcript({
                   }}
                 />
               )}
+              {showJudging && <TranscriptJudgingActivity />}
               {
                 /* Still-waiting row: after QUIET_BADGE_MIN of no timeline activity on a
                 working turn, surface the silence (count-up) + a REAL red Stop button.

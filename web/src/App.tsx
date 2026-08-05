@@ -1555,6 +1555,10 @@ const StoreTranscript = memo(function StoreTranscript({
         snapshot.hydrated.has(sessionId)
     );
     const connected = useStoreSelector((snapshot) => snapshot.connected);
+    const judging = useStoreSelector((snapshot) =>
+        snapshot.sessions.find((session) => session.id === sessionId)?.judging ??
+        false
+    );
     const { projection, transitionAnchorKey } = useExploreSessionState(sessionId);
 
     return projection === "explore" ? (
@@ -1567,6 +1571,7 @@ const StoreTranscript = memo(function StoreTranscript({
             cwd={cwd}
             loading={!hydrated}
             connected={connected}
+            judging={judging}
             topInset={topInset}
             bottomInset={bottomInset}
             onScrollableChange={onScrollableChange}
@@ -1581,6 +1586,7 @@ const StoreTranscript = memo(function StoreTranscript({
             cwd={cwd}
             loading={!hydrated}
             connected={connected}
+            judging={judging}
             topInset={topInset}
             bottomInset={bottomInset}
             onScrollableChange={onScrollableChange}

@@ -1,5 +1,9 @@
 import { assertEquals } from "jsr:@std/assert";
-import { FROSTED_PILL_DROP_SHADOW_GEOMETRY } from "./floatingOverlayPolicy";
+import {
+  FROSTED_PILL_DROP_SHADOW_GEOMETRY,
+  TURN_STATUS_PILL_MIN_HEIGHT,
+} from "./floatingOverlayPolicy";
+import { mobileTranscriptActivitySurfaceGap } from "./mobileComposerPrimitives";
 
 const composerSource = await Deno.readTextFile(
   new URL("./Composer.tsx", import.meta.url),
@@ -15,6 +19,9 @@ const geometrySource = await Deno.readTextFile(
 );
 const turnStatusSource = await Deno.readTextFile(
   new URL("./TurnStatusOverlay.tsx", import.meta.url),
+);
+const transcriptActivitySource = await Deno.readTextFile(
+  new URL("./TranscriptTurnActivity.tsx", import.meta.url),
 );
 const permissionSource = await Deno.readTextFile(
   new URL("./PermissionOverlay.tsx", import.meta.url),
@@ -49,6 +56,35 @@ Deno.test("frosted pill elevation stays close to the floating surface", () => {
   assertEquals(FROSTED_PILL_DROP_SHADOW_GEOMETRY, "0 5px 16px -10px");
 });
 
+Deno.test("judge progress is transcript-owned with a zero-jump pill handoff", () => {
+  assertEquals(TURN_STATUS_PILL_MIN_HEIGHT, 36);
+  assertEquals(
+    transcriptActivitySource.includes(
+      'data-transcript-turn-activity="judging"',
+    ),
+    true,
+  );
+  assertEquals(
+    transcriptActivitySource.includes("TURN_STATUS_PILL_MIN_HEIGHT"),
+    true,
+  );
+  assertEquals(
+    turnStatusSource.includes("TURN_STATUS_PILL_MIN_HEIGHT"),
+    true,
+  );
+  assertEquals(
+    transcriptActivitySource.includes("data-composer-stack-slot"),
+    false,
+  );
+  assertEquals(
+    transcriptSource.includes(
+      "showJudging && <TranscriptJudgingActivity />",
+    ),
+    true,
+  );
+  assertEquals(appSource.includes("judging={judging}"), true);
+});
+
 Deno.test("focused mobile composer owns a real frosted material", () => {
   assertEquals(
     composerSource.includes('backdropFilter: "blur(24px) saturate(140%)"'),
@@ -58,4 +94,31 @@ Deno.test("focused mobile composer owns a real frosted material", () => {
     composerSource.includes('WebkitBackdropFilter: "blur(24px) saturate(140%)"'),
     true,
   );
+});
+
+Deno.test("live Mobile thought surfaces breathe above the composer boundary", () => {
+  assertEquals(mobileTranscriptActivitySurfaceGap, 6);
+  assertEquals(
+    transcriptSource.includes(
+      "pb: touch && streaming\n          ? `${mobileTranscriptActivitySurfaceGap}px`",
+    ),
+    true,
+  );
+  assertEquals(transcriptSource.includes("touch={!desktop}"), true);
+});
+
+Deno.test("live thought shimmer crosses each glyph run once per cycle", () => {
+  assertEquals(
+    transcriptSource.includes("from { background-position: 100% 0; }"),
+    true,
+  );
+  assertEquals(
+    transcriptSource.includes("to   { background-position: 0% 0; }"),
+    true,
+  );
+  assertEquals(
+    transcriptSource.match(/backgroundRepeat: "no-repeat"/g)?.length,
+    2,
+  );
+  assertEquals(transcriptSource.includes("background-position: -110% 0"), false);
 });
