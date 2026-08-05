@@ -45,16 +45,16 @@ Deno.test("percentLabel renders two decimals", () => {
 
 Deno.test("deepseekListPrice maps aliases to v4-flash and defaults unknown models", () => {
   const flash = deepseekListPrice("deepseek-v4-flash");
-  assertEquals(flash.inputMissUsdPerMTokens, 0.14);
-  assertEquals(flash.inputHitUsdPerMTokens, 0.0028);
-  assertEquals(flash.outputUsdPerMTokens, 0.28);
+  assertEquals(flash.inputMissCnyPerMTokens, 1);
+  assertEquals(flash.inputHitCnyPerMTokens, 0.02);
+  assertEquals(flash.outputCnyPerMTokens, 2);
   assertEquals(deepseekListPrice("deepseek-chat"), flash);
   assertEquals(deepseekListPrice("deepseek/deepseek-reasoner"), flash);
   assertEquals(deepseekListPrice(undefined), flash);
   const pro = deepseekListPrice("deepseek-v4-pro");
-  assertEquals(pro.inputMissUsdPerMTokens, 0.435);
-  assertEquals(pro.inputHitUsdPerMTokens, 0.003625);
-  assertEquals(pro.outputUsdPerMTokens, 0.87);
+  assertEquals(pro.inputMissCnyPerMTokens, 3);
+  assertEquals(pro.inputHitCnyPerMTokens, 0.025);
+  assertEquals(pro.outputCnyPerMTokens, 6);
 });
 
 Deno.test("deepseekCostStats estimates spend at list prices", () => {
@@ -68,9 +68,9 @@ Deno.test("deepseekCostStats estimates spend at list prices", () => {
     durationMs: 25_000,
     durationObservations: 10,
   }, "deepseek-v4-flash");
-  // 0.1M miss × $0.14 + 0.9M hit × $0.0028 + 0.06M output × $0.28
-  assertEquals(stats?.estimatedUsd, 0.014 + 0.00252 + 0.0168);
-  assertEquals(stats?.costPerRequestUsd, 0.03332 / 10);
+  // 0.1M miss × ¥1 + 0.9M hit × ¥0.02 + 0.06M output × ¥2
+  assertEquals(stats?.estimatedCny, 0.1 + 0.018 + 0.12);
+  assertEquals(stats?.costPerRequestCny, 0.238 / 10);
   assertEquals(stats?.avgTokensPerRequest, 1_060_000 / 10);
   assertEquals(stats?.avgGatewayMs, 2500);
   assertEquals(stats?.totalGatewayMinutes, 25_000 / 60_000);
@@ -78,8 +78,8 @@ Deno.test("deepseekCostStats estimates spend at list prices", () => {
 
 Deno.test("deepseekCostStats degrades to zero without tokens and stays unknown without totals", () => {
   const empty = deepseekCostStats({ requests: 0 }, undefined);
-  assertEquals(empty?.estimatedUsd, 0);
-  assertEquals(empty?.costPerRequestUsd, 0);
+  assertEquals(empty?.estimatedCny, 0);
+  assertEquals(empty?.costPerRequestCny, 0);
   assertEquals(empty?.avgGatewayMs, undefined);
   assertEquals(deepseekCostStats(undefined, undefined), undefined);
 });

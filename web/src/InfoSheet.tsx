@@ -91,9 +91,9 @@ function formatTokens(value: number | undefined): string {
   return value === undefined ? "—" : value.toLocaleString();
 }
 
-/** USD with enough decimals that even tiny DeepSeek spends stay readable. */
-function formatUsd(value: number): string {
-  return value < 0.01 ? `$${value.toFixed(4)}` : `$${value.toFixed(2)}`;
+/** CNY with enough decimals that even tiny DeepSeek spends stay readable. */
+function formatCny(value: number): string {
+  return value < 0.01 ? `¥${value.toFixed(4)}` : `¥${value.toFixed(2)}`;
 }
 
 function formatDurationMs(value: number): string {
@@ -151,8 +151,8 @@ function DeepSeekDetails(
       }];
     })
     : [];
-  const totalSpendUsd = agentLanes.reduce(
-    (sum, lane) => sum + (lane.cost?.estimatedUsd ?? 0),
+  const totalSpendCny = agentLanes.reduce(
+    (sum, lane) => sum + (lane.cost?.estimatedCny ?? 0),
     0,
   );
   const daily = Array.isArray(usage.activity?.daily)
@@ -246,8 +246,8 @@ function DeepSeekDetails(
             {agentLanes.length > 0 && (
               <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "repeat(2, minmax(0, 1fr))" }, gap: 1 }}>
                 {agentLanes.map(({ agent, totals, cache, cost }) => {
-                  const spendShare = totalSpendUsd > 0 && cost
-                    ? cost.estimatedUsd * 100 / totalSpendUsd
+                  const spendShare = totalSpendCny > 0 && cost
+                    ? cost.estimatedCny * 100 / totalSpendCny
                     : undefined;
                   return (
                     <Box key={agent} sx={{ borderRadius: 1.5, bgcolor: "action.hover", px: 1.1, py: 0.9 }}>
@@ -258,11 +258,11 @@ function DeepSeekDetails(
                         </Stack>
                         <Box sx={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 1 }}>
                           <Box>
-                            <Tooltip title="DeepSeek list prices × verified tokens; unobserved requests are excluded.">
+                            <Tooltip title="DeepSeek off-peak list prices (CNY) × verified tokens; peak hours 09:00–12:00 / 14:00–18:00 CST bill double. Unobserved requests are excluded.">
                               <Typography variant="caption" color="text.secondary" sx={{ cursor: "help", textDecoration: "underline dotted" }}>Est. spend</Typography>
                             </Tooltip>
                             <Typography variant="subtitle2" fontWeight={700}>
-                              {cost ? formatUsd(cost.estimatedUsd) : "—"}
+                              {cost ? formatCny(cost.estimatedCny) : "—"}
                             </Typography>
                           </Box>
                           <Box>
@@ -393,15 +393,15 @@ function DeepSeekDetails(
                           />
                           <InfoRow
                             k="Est. spend"
-                            v={cost ? formatUsd(cost.estimatedUsd) : "—"}
+                            v={cost ? formatCny(cost.estimatedCny) : "—"}
                           />
                           <InfoRow
                             k="Cost / request"
-                            v={cost ? formatUsd(cost.costPerRequestUsd) : "—"}
+                            v={cost ? formatCny(cost.costPerRequestCny) : "—"}
                           />
                           <InfoRow
                             k="Cost / 1M tokens"
-                            v={cost ? formatUsd(cost.costPerMTokensUsd) : "—"}
+                            v={cost ? formatCny(cost.costPerMTokensCny) : "—"}
                           />
                           <Typography variant="caption" color="text.secondary">
                             {formatTokens(cache.explicitRequests)} explicit · {formatTokens(cache.derivedRequests)} exact-derived · {formatTokens(cache.absentRequests)} missing cache observations

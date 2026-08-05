@@ -57,44 +57,46 @@ export function percentLabel(value: number | undefined): string {
 }
 
 /**
- * DeepSeek list prices, USD per 1M tokens, as of the 2026-04-26 cache-hit
- * price cut (deepseek-chat / deepseek-reasoner are billing aliases of
- * deepseek-v4-flash; deepseek-v4-pro carries its permanent 1/4 discount from
- * 2026-05-31). Prices move; keep the estimate labelled "list price" in the UI.
+ * DeepSeek list prices, CNY per 1M tokens (off-peak), after the V4 price
+ * cuts; deepseek-chat / deepseek-reasoner are billing aliases of
+ * deepseek-v4-flash. Peak hours (09:00-12:00 and 14:00-18:00 Beijing time)
+ * bill at double the off-peak rate; this estimate uses the off-peak list
+ * price, so peak-period usage is understated. Prices move; keep the estimate
+ * labelled "list price" in the UI.
  */
 export interface DeepSeekPrice {
-  inputMissUsdPerMTokens: number;
-  inputHitUsdPerMTokens: number;
-  outputUsdPerMTokens: number;
+  inputMissCnyPerMTokens: number;
+  inputHitCnyPerMTokens: number;
+  outputCnyPerMTokens: number;
 }
 
 const DEEPSEEK_LIST_PRICES: Record<string, DeepSeekPrice> = {
   "deepseek-v4-flash": {
-    inputMissUsdPerMTokens: 0.14,
-    inputHitUsdPerMTokens: 0.0028,
-    outputUsdPerMTokens: 0.28,
+    inputMissCnyPerMTokens: 1,
+    inputHitCnyPerMTokens: 0.02,
+    outputCnyPerMTokens: 2,
   },
   "deepseek-chat": {
-    inputMissUsdPerMTokens: 0.14,
-    inputHitUsdPerMTokens: 0.0028,
-    outputUsdPerMTokens: 0.28,
+    inputMissCnyPerMTokens: 1,
+    inputHitCnyPerMTokens: 0.02,
+    outputCnyPerMTokens: 2,
   },
   "deepseek-reasoner": {
-    inputMissUsdPerMTokens: 0.14,
-    inputHitUsdPerMTokens: 0.0028,
-    outputUsdPerMTokens: 0.28,
+    inputMissCnyPerMTokens: 1,
+    inputHitCnyPerMTokens: 0.02,
+    outputCnyPerMTokens: 2,
   },
   "deepseek-v4-pro": {
-    inputMissUsdPerMTokens: 0.435,
-    inputHitUsdPerMTokens: 0.003625,
-    outputUsdPerMTokens: 0.87,
+    inputMissCnyPerMTokens: 3,
+    inputHitCnyPerMTokens: 0.025,
+    outputCnyPerMTokens: 6,
   },
 };
 
 const DEEPSEEK_DEFAULT_PRICE: DeepSeekPrice = {
-  inputMissUsdPerMTokens: 0.14,
-  inputHitUsdPerMTokens: 0.0028,
-  outputUsdPerMTokens: 0.28,
+  inputMissCnyPerMTokens: 1,
+  inputHitCnyPerMTokens: 0.02,
+  outputCnyPerMTokens: 2,
 };
 
 /** List price for a model name, tolerating provider prefixes (e.g. "deepseek/deepseek-chat"). */
@@ -134,14 +136,14 @@ export function primaryDeepSeekModel(
   return best;
 }
 
-/** Estimated spend + efficiency ratios for one agent lane. */
+/** Estimated spend + efficiency ratios for one agent lane (CNY, off-peak list price). */
 export interface DeepSeekCostStats {
   model: string | undefined;
-  estimatedUsd: number;
+  estimatedCny: number;
   totalTokens: number;
   requests: number;
-  costPerRequestUsd: number;
-  costPerMTokensUsd: number;
+  costPerRequestCny: number;
+  costPerMTokensCny: number;
   avgTokensPerRequest: number;
   avgGatewayMs: number | undefined;
   totalGatewayMinutes: number | undefined;
@@ -162,10 +164,10 @@ export function deepseekCostStats(
   const inputHitTokens = finite(totals.cacheHitTokens);
   const outputTokens = finite(totals.outputTokens);
   const reasoningTokens = finite(totals.reasoningTokens);
-  const estimatedUsd =
-    inputMissTokens / 1e6 * price.inputMissUsdPerMTokens +
-    inputHitTokens / 1e6 * price.inputHitUsdPerMTokens +
-    (outputTokens + reasoningTokens) / 1e6 * price.outputUsdPerMTokens;
+  const estimatedCny =
+    inputMissTokens / 1e6 * price.inputMissCnyPerMTokens +
+    inputHitTokens / 1e6 * price.inputHitCnyPerMTokens +
+    (outputTokens + reasoningTokens) / 1e6 * price.outputCnyPerMTokens;
   const requests = finite(totals.requests);
   const totalTokens = inputMissTokens + inputHitTokens +
     outputTokens + reasoningTokens;
@@ -173,11 +175,11 @@ export function deepseekCostStats(
   const durationMs = finite(totals.durationMs);
   return {
     model,
-    estimatedUsd,
+    estimatedCny,
     totalTokens,
     requests,
-    costPerRequestUsd: requests > 0 ? estimatedUsd / requests : 0,
-    costPerMTokensUsd: totalTokens > 0 ? estimatedUsd / totalTokens * 1e6 : 0,
+    costPerRequestCny: requests > 0 ? estimatedCny / requests : 0,
+    costPerMTokensCny: totalTokens > 0 ? estimatedCny / totalTokens * 1e6 : 0,
     avgTokensPerRequest: requests > 0 ? totalTokens / requests : 0,
     avgGatewayMs: durationObservations > 0 ? durationMs / durationObservations
       : undefined,
