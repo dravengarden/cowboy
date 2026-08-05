@@ -879,7 +879,7 @@ here says otherwise.
     immediately and controls appear after the card has started opening. Do not
     tune those durations independently: mismatched height, opacity, and padding
     transitions make keyboard dismissal look like several clipped panels.
-    Preserve the same 8px stack gap between the transcript hairline and the
+    Preserve the same 4px stack gap between the transcript hairline and the
     first Composer surface as between Plan, Pending, and Composer children;
     removing it visually fuses the transcript and input surfaces.
     Once a real touch editor owns the visible keyboard, switch presentation to
@@ -893,7 +893,8 @@ here says otherwise.
     The transcript boundary uses one constant 4px separation across idle,
     focused, fullscreen, and Queue/Draft edit transitions; do not key that inset
     on focus, because fullscreen handoff otherwise makes the gap jump. Internal
-    stack children retain their independent 8px rhythm. Keep destructive Clear
+    stack children use that same 4px rhythm so optional Pending panels have
+    equal space above and below. Keep destructive Clear
     out of the card's top-right utility rail; fullscreen remains there. During
     keyboard focus, keyboard dismissal owns the unstyled trailing action slot
     and Clear sits one 40px touch row directly above it. The touch editor area

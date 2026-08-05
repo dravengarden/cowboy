@@ -1342,7 +1342,7 @@ export function ComposerWorkspace({
         // same small gap below the transcript hairline as between mounted Plan,
         // Pending, and Composer children so the first surface never fuses with
         // the transcript boundary.
-        "--mobile-composer-stack-gap": "8px",
+        "--mobile-composer-stack-gap": "4px",
         "--mobile-composer-boundary-gap": "4px",
         pt: desktop ? 1 : "var(--mobile-composer-boundary-gap)",
         display: "flex",
