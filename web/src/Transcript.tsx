@@ -553,6 +553,95 @@ function EmptyTranscript(
   );
 }
 
+const prepareSweep = keyframes`
+  0% { transform: translateX(-110%); }
+  55%, 100% { transform: translateX(310%); }
+`;
+
+function PreparingTranscript(
+  { provider, cwd }: { provider: string; cwd: string },
+): React.JSX.Element {
+  return (
+    <Stack
+      role="status"
+      aria-live="polite"
+      sx={{
+        m: "auto",
+        width: "min(360px, calc(100% - 48px))",
+        px: 1,
+        py: 6,
+        alignItems: "center",
+        textAlign: "center",
+        gap: 1.25,
+        color: "text.secondary",
+      }}
+    >
+      <Box
+        sx={{
+          width: 42,
+          height: 42,
+          borderRadius: "50%",
+          border: 1,
+          borderColor: "divider",
+          display: "grid",
+          placeItems: "center",
+          bgcolor: (theme) => alpha(theme.palette.primary.main, 0.08),
+        }}
+      >
+        <Terminal sx={{ fontSize: 21, color: "primary.main" }} />
+      </Box>
+      <Typography variant="body1" sx={{ fontWeight: 650, color: "text.primary" }}>
+        Preparing this session
+      </Typography>
+      <Typography variant="caption" sx={{ lineHeight: 1.55 }}>
+        Creating the workspace and starting {provider}. You can write your first
+        message while Cowboy connects everything.
+      </Typography>
+      <Box
+        aria-hidden
+        sx={{
+          position: "relative",
+          width: "min(240px, 72vw)",
+          height: 3,
+          mt: 0.5,
+          overflow: "hidden",
+          borderRadius: 99,
+          bgcolor: "action.selected",
+          "&::after": {
+            content: '""',
+            position: "absolute",
+            inset: 0,
+            width: "38%",
+            borderRadius: "inherit",
+            bgcolor: "primary.main",
+            animation: `${prepareSweep} 1.65s cubic-bezier(.4,0,.2,1) infinite`,
+          },
+          "@media (prefers-reduced-motion: reduce)": {
+            "&::after": { animation: "none", width: "55%", opacity: 0.72 },
+          },
+        }}
+      />
+      {cwd && (
+        <Typography
+          variant="caption"
+          sx={{
+            mt: 0.25,
+            maxWidth: "100%",
+            opacity: 0.68,
+            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+            fontSize: "0.72rem",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {cwd}
+        </Typography>
+      )}
+    </Stack>
+  );
+}
+
 // Soft opacity breathing — used both for the in-flight tool card and the
 // Claude "thinking" spark. CSS keyframes instead of a JS animation lib so it's
 // free on bundle size and runs on the compositor (smooth on low-end phones).
@@ -4575,7 +4664,9 @@ export function Transcript({
           },
         }}
       >
-        {loading && items.length === 0
+        {status === "starting" && items.length === 0
+          ? <PreparingTranscript provider={provider} cwd={cwd} />
+          : loading && items.length === 0
           ? (
             <TranscriptSkeleton
               desktop={desktopNavigation}

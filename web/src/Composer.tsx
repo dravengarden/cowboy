@@ -807,6 +807,7 @@ export function ComposerWorkspace({
   // handle) off and turns the root into a fill-height flex column instead.
   const column = variant === "column";
   const desktop = surface === "desktop";
+  const preparing = status === "starting";
   const desktopShortcut = (
     child: ReactNode,
     badge: string,
@@ -849,13 +850,14 @@ export function ComposerWorkspace({
   // removable from the utility rail.
   const clearable = text.trim().length > 0 || attachments.length > 0;
   const submitAndNotify = useCallback((): boolean => {
+    if (preparing) return false;
     const submitted = submit();
     if (submitted) {
       if (!desktop) dismissMobileSoftwareKeyboard();
       onSubmitted?.();
     }
     return submitted;
-  }, [desktop, onSubmitted, submit]);
+  }, [desktop, onSubmitted, preparing, submit]);
   const submitFeedback = useNetworkActionState();
   // Mobile-only fullscreen compose: the ↗ opens a near-full-screen sheet (the
   // first-class long-form / future-markdown editor). Desktop keeps the Zed-style
@@ -876,6 +878,7 @@ export function ComposerWorkspace({
     });
   }, [desktop]);
   const submitWithFeedback = useCallback((onSucceeded?: () => void): void => {
+    if (preparing) return;
     void (async () => {
       let submitted = false;
       const succeeded = await submitFeedback.run(() => {
@@ -890,7 +893,7 @@ export function ComposerWorkspace({
         onSucceeded?.();
       }
     })();
-  }, [dismissAfterMobileDelivery, onSubmitted, submitFeedback, submitTracked]);
+  }, [dismissAfterMobileDelivery, onSubmitted, preparing, submitFeedback, submitTracked]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const draftList = useStoreSelector((snapshot) =>
     snapshot.drafts.get(sessionId) ?? EMPTY_QUEUED_MESSAGES
@@ -1903,7 +1906,7 @@ export function ComposerWorkspace({
             endInset={36}
             // Hold ⌘⏎ while busy → the same force-push confirm the Queue button's
             // long-press opens, anchored to that button.
-            holdToForce={busy || starting}
+            holdToForce={!preparing && (busy || starting)}
             onForceHold={(): void => {
               if (!sendable || queueBtnRef.current === null) return;
               haptic();
@@ -1911,7 +1914,9 @@ export function ComposerWorkspace({
             }}
             sessionId={sessionId}
             commands={(): AvailableCommand[] => availableCommands}
-            placeholder={dead
+            placeholder={preparing
+              ? "You can start typing while this session prepares…"
+              : dead
               ? "Send to resume this session…"
               : "Message the agent…"}
             // Vim is desktop-only — never load it on touch (no physical keyboard /
@@ -2385,7 +2390,7 @@ export function ComposerWorkspace({
             a one-tap `/` insertion that is easy to hit accidentally. Slash
             completion remains available by typing `/` in the editor. Desktop
             keeps its dedicated slash affordance in the separate toolbar above. */}
-        {!desktop && compactAction && (
+        {!preparing && !desktop && compactAction && (
           <Tooltip
             title={compacting
               ? "Compacting…"
@@ -2411,7 +2416,7 @@ export function ComposerWorkspace({
         )}
         {/* @ folds out on compact (mobile) — the row is too tight, and typing
             "@" raises the same file picker. Desktop keeps the dedicated button. */}
-        {!compact && (
+        {!preparing && !compact && (
           <Tooltip title="Reference a file (@)">
             <span>
               <IconButton
@@ -2439,7 +2444,7 @@ export function ComposerWorkspace({
         </Tooltip>
         {/* Session-lifecycle Clear action. Compact is mobile's first button above;
             both actions still require confirmation before they run. */}
-        {clearAction && (
+        {!preparing && clearAction && (
           <Tooltip title="Clear conversation">
             <span>
               <IconButton
@@ -2461,7 +2466,22 @@ export function ComposerWorkspace({
         {/* Primary action: Send (idle) / Queue (busy — long-press → force push).
             Moved here from the old absolute overlay so the whole composer is one
             card; the long-press force-push ring + haptics are preserved. */}
-        {busy || starting
+        {preparing
+          ? (
+            <Tooltip title="Preparing session">
+              <span>
+                <IconButton
+                  color="primary"
+                  aria-label="preparing session"
+                  disabled
+                  sx={TOOLBAR_ICON_BTN}
+                >
+                  <CircularProgress size={17} color="inherit" />
+                </IconButton>
+              </span>
+            </Tooltip>
+          )
+          : busy || starting
           ? (
             <Box component="span" sx={{ position: "relative", display: "inline-flex", flexShrink: 0 }}>
                 <IconButton
@@ -2542,6 +2562,7 @@ export function ComposerWorkspace({
             (with a queue), Force-push (while busy/starting). The narrow-phone ⋮ fold
             is gone — moving the session-level controls (config / auto-scroll / Stop)
             out to the navbar freed the room that fold used to reclaim. */}
+        {!preparing && <>
         <Tooltip title="Save as draft">
           <span>
             <IconButton
@@ -2599,6 +2620,7 @@ export function ComposerWorkspace({
             </IconButton>
           </span>
         </Tooltip>
+        </>}
         <Tooltip title="Clear composer">
           <span data-mobile-composer-clear>
             <IconButton

@@ -97,8 +97,11 @@ impl Supervisor {
         format!("sess-{}", self.counter.fetch_add(1, Ordering::Relaxed))
     }
 
-    /// Create a session after Machine-local workspace preparation has completed.
-    pub fn new_session_on_with_id(
+    /// Register a session before Machine-local workspace preparation begins.
+    /// The caller may return this stable id to the UI immediately; the session
+    /// remains `Starting` until [`Self::start_registered_session`] installs its
+    /// worker, or becomes `Crashed` with the preparation error.
+    pub fn register_session_on_with_id(
         &self,
         id: &str,
         provider: &str,
@@ -110,8 +113,7 @@ impl Supervisor {
         if !self.router.connected(machine_id) {
             return Err(format!("machine {machine_id:?} is not connected"));
         }
-        let spec =
-            provider::lookup(provider).ok_or_else(|| format!("unknown provider {provider:?}"))?;
+        provider::lookup(provider).ok_or_else(|| format!("unknown provider {provider:?}"))?;
 
         // Resolve cwd. Relative paths join the workspace_root; absolute
         // paths are honoured as-is. Remote paths have already been validated
@@ -140,9 +142,35 @@ impl Supervisor {
             system,
         });
 
-        // Fresh session — no agent id to resume.
-        self.ensure_worker(id, &spec, &cwd, None)?;
         Ok(id.to_owned())
+    }
+
+    /// Start the worker for an already registered fresh session.
+    pub fn start_registered_session(&self, session_id: &str) -> Result<(), String> {
+        let meta = self
+            .hub
+            .session_list()
+            .into_iter()
+            .find(|meta| meta.id == session_id)
+            .ok_or_else(|| format!("unknown session {session_id:?}"))?;
+        let spec = provider::lookup(&meta.provider)
+            .ok_or_else(|| format!("unknown provider {:?}", meta.provider))?;
+        self.ensure_worker(session_id, &spec, std::path::Path::new(&meta.cwd), None)
+    }
+
+    /// Compatibility path for callers that already own a prepared workspace.
+    pub fn new_session_on_with_id(
+        &self,
+        id: &str,
+        provider: &str,
+        cwd: Option<String>,
+        origin: SessionOrigin,
+        system: bool,
+        machine_id: &str,
+    ) -> Result<String, String> {
+        let id = self.register_session_on_with_id(id, provider, cwd, origin, system, machine_id)?;
+        self.start_registered_session(&id)?;
+        Ok(id)
     }
 
     /// Ensure the selected Machine owns a detached worker for `session_id`.

@@ -2,7 +2,6 @@ import {
     forwardRef,
     lazy,
     memo,
-    startTransition,
     Suspense,
     useCallback,
     useEffect,
@@ -1314,7 +1313,15 @@ function NewSessionDialog({
                 const response = await fetch("/api/sessions", {
                     method: "POST",
                     headers: { "content-type": "application/json" },
-                    body: JSON.stringify({ provider, machine_id: machineId, cwd, origin: "web" }),
+                    body: JSON.stringify({
+                        provider,
+                        machine_id: machineId,
+                        cwd,
+                        origin: "web",
+                        initial_prompt: selectedWorkItem
+                            ? `Resume Columbus work item ${selectedWorkItem.id}. Read its durable metadata and relevant artifact, then set the native Codex goal. Keep plan, progress, review, and session state in Codex.`
+                            : undefined,
+                    }),
                 });
                 if (!response.ok) {
                     const detail = (await response.text()).trim();
@@ -1332,15 +1339,6 @@ function NewSessionDialog({
                 // daemon default + first-prompt auto-title.
                 renameSession(data.session_id, title);
                 onCreated(data.session_id);
-                if (selectedWorkItem) {
-                    void fetch(`/api/sessions/${encodeURIComponent(data.session_id)}/prompt`, {
-                        method: "POST",
-                        headers: { "content-type": "application/json" },
-                        body: JSON.stringify({
-                            text: `Resume Columbus work item ${selectedWorkItem.id}. Read its durable metadata and relevant artifact, then set the native Codex goal. Keep plan, progress, review, and session state in Codex.`,
-                        }),
-                    });
-                }
                 onClose();
             } catch (error) {
                 setCreateError(error instanceof Error ? error.message : "Session creation failed");
@@ -3211,17 +3209,15 @@ export function App({
                 open={dialogOpen}
                 onClose={(): void => setDialogOpen(false)}
                 onCreated={(id): void => {
-                    // Focus the freshly-created session as soon as the daemon
-                    // returns its id; the `sessions` broadcast that adds it to
-                    // the list arrives moments later and `active` resolves it.
+                    // The daemon returns a durable Starting session before its
+                    // Machine workspace and worker are ready. Select it now so
+                    // preparation belongs to the destination page, not to the
+                    // creation sheet. Do not defer this state behind drawer
+                    // animation: the id already names a real persisted session.
+                    setActiveId(id);
                     if (mobile && settleMobileDrawerRef.current) {
-                        settleMobileDrawerRef.current(false, 0, () => {
-                            requestAnimationFrame(() => {
-                                startTransition(() => setActiveId(id));
-                            });
-                        });
+                        settleMobileDrawerRef.current(false, 0);
                     } else {
-                        setActiveId(id);
                         setDrawerOpen(false);
                     }
                 }}
