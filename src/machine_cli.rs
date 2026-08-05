@@ -48,6 +48,7 @@ struct ControllerConfig {
     worktree_root: PathBuf,
     capacity: MachineCapacity,
     local: bool,
+    provider_usage: crate::provider_usage_spool::ProviderUsageSpool,
 }
 
 // The Machine and controller multiplex runtime traffic, adapter responses, and
@@ -100,6 +101,13 @@ pub struct Args {
         default_value = ".cowboy-machine"
     )]
     state_dir: PathBuf,
+    /// Machine-local ingestion socket for provider gateways.
+    #[arg(
+        long,
+        env = "COWBOY_MACHINE_PROVIDER_USAGE_SOCKET",
+        default_value = "/run/user/1000/cowboy-provider-usage.sock"
+    )]
+    provider_usage_socket: PathBuf,
     /// One-time secret. Prefer the environment variable so it is absent from
     /// shell history; omit after the first successful enrollment.
     #[arg(long, env = "COWBOY_MACHINE_ENROLLMENT_TOKEN")]
@@ -227,6 +235,9 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
     let code_adapter_socket = args.code_adapter_socket.clone();
     let zed_adapter_socket = args.zed_adapter_socket.clone();
     let worktree_root = args.state_dir.join("worktrees");
+    let provider_usage = crate::provider_usage_spool::ProviderUsageSpool::open(
+        &args.state_dir.join("provider-usage.sqlite3"),
+    )?;
     let controller = controller_loop(ControllerConfig {
         controller_url,
         machine_id: args.machine_id,
@@ -243,7 +254,10 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
             draining: args.draining,
         },
         local: args.local,
+        provider_usage: provider_usage.clone(),
     });
+    let provider_usage_listener =
+        crate::provider_usage_spool::serve(args.provider_usage_socket, provider_usage);
     let code_adapter = supervise_code_adapter(
         Arc::clone(&components),
         code_adapter_socket,
@@ -257,6 +271,7 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
     tokio::try_join!(
         crate::machine_broker::run(broker),
         controller,
+        provider_usage_listener,
         code_adapter,
         zed_adapter
     )?;
@@ -574,6 +589,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
     hello.challenge_signature = Some(config.identity.sign(&proof)?);
     send_frame(&mut socket, &MachineFrame::Hello { hello }).await?;
     let MachineFrame::Welcome {
+        protocol,
         heartbeat_interval_ms,
         desired_components,
         ..
@@ -625,6 +641,11 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
         tokio::select! {
             _ = heartbeat.tick() => {
                 send_frame(&mut socket, &MachineFrame::Heartbeat { sent_at_ms: unix_ms() }).await?;
+                if protocol >= 2
+                    && let Some(event) = config.provider_usage.pending_batch()?
+                {
+                    send_frame(&mut socket, &MachineFrame::Event { event }).await?;
+                }
             }
             event = event_rx.recv() => {
                 let Some(event) = event else { continue };
@@ -650,6 +671,10 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                                 crate::runtime_wire::write_frame(&mut runtime_writer, &frame).await?;
                             }
                             MachineFrame::Command { command } => {
+                                if let MachineCommand::ProviderUsageAck { producer_id, sequence } = &command {
+                                    config.provider_usage.acknowledge(producer_id, *sequence)?;
+                                    continue;
+                                }
                                 handle_machine_command(command, MachineCommandContext {
                                     events: event_tx.clone(),
                                     components: Arc::clone(&config.components),
@@ -1424,6 +1449,10 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
                     detail: result.err().map(|error| format!("{error:#}")),
                 });
             });
+        }
+        MachineCommand::ProviderUsageAck { .. } => {
+            // Consumed synchronously by the controller connection so the
+            // durable spool advances before another batch is selected.
         }
     }
 }

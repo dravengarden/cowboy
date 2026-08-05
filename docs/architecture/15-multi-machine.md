@@ -124,6 +124,24 @@ stores and displays a redacted status such as `signed_out`, `pending`,
 `signed_in`, `expired`, or `error`, plus non-secret account labels returned by
 the provider.
 
+### Provider usage ledger
+
+Provider-owned account facts and Cowboy-observed activity are separate data
+planes. DeepSeek gateways expose only official balance fields through
+`/provider-info`. After a completed inference response, a gateway submits a
+content-free usage event to the local Machine Unix socket. Machine commits it
+to a SQLite WAL before acknowledging the gateway, replays ordered batches over
+Machine protocol v2, and deletes them only after the controller commits and
+acknowledges the sequence watermark. PostgreSQL uniqueness on Machine,
+producer, and sequence makes reconnect replay idempotent.
+
+The UI labels these aggregates `Cowboy measured`; they cover only requests
+observed by reporting Cowboy Machines and never imply provider-wide billing
+usage. VictoriaLogs remains operational observability and is not a product data
+source. Protocol v1 Machines remain compatible but do not contribute usage.
+The UI window is 14 days; the internal ledger is pruned after 30 days by the
+existing Cowboy database sweeper.
+
 Login is capability-driven:
 
 - Codex App Server exposes account status plus a device-code flow. The Machine

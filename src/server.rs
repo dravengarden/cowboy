@@ -123,20 +123,6 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // requeue against the writer closing its receiver.
     let (store_shutdown_tx, store_shutdown_rx) = watch::channel(false);
     let runtime_health = Arc::new(RuntimeHealth::default());
-    let usage = UsageService::new(args.codex_command.clone());
-    let initial_usage = usage.clone();
-    let mut usage_shutdown = shutdown_rx.clone();
-    tokio::spawn(async move {
-        loop {
-            initial_usage.refresh().await;
-            tokio::select! {
-                _ = tokio::time::sleep(crate::usage::AUTO_REFRESH_INTERVAL) => {}
-                changed = usage_shutdown.changed() => {
-                    if changed.is_err() || *usage_shutdown.borrow() { break; }
-                }
-            }
-        }
-    });
     // Phase 2: when --postgres-url is supplied, hook in the persistent store.
     // Migrations run on every start (sqlx tracks applied versions, so it's
     // idempotent); the in-memory Hub is then warmed from the DB before WS
@@ -228,6 +214,20 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             tracing::info!("no --postgres-url: running in-memory only");
             (Hub::new(), None, None, None, None, 1)
         };
+    let usage = UsageService::new(args.codex_command.clone(), store.clone());
+    let initial_usage = usage.clone();
+    let mut usage_shutdown = shutdown_rx.clone();
+    tokio::spawn(async move {
+        loop {
+            initial_usage.refresh().await;
+            tokio::select! {
+                _ = tokio::time::sleep(crate::usage::AUTO_REFRESH_INTERVAL) => {}
+                changed = usage_shutdown.changed() => {
+                    if changed.is_err() || *usage_shutdown.borrow() { break; }
+                }
+            }
+        }
+    });
     let machine_presence_task = store.as_ref().map(|store| {
         let store = store.clone();
         let shutdown = shutdown_rx.clone();
@@ -997,6 +997,7 @@ mod store_writer_tests {
 /// Retention (days) for soft-deleted sessions before the sweeper hard-deletes
 /// them + their events.
 const PURGE_RETENTION_DAYS: i64 = 3;
+const PROVIDER_USAGE_RETENTION_DAYS: i32 = 30;
 
 /// Periodically hard-delete sessions soft-deleted past [`PURGE_RETENTION_DAYS`],
 /// reclaiming their event storage. `interval` fires immediately on the first
@@ -1010,6 +1011,14 @@ async fn run_purge_sweeper(store: Store) {
             Ok(0) => {}
             Ok(n) => tracing::info!(purged = n, "swept soft-deleted sessions past retention"),
             Err(e) => tracing::warn!(error = %e, "purge sweep failed"),
+        }
+        match store
+            .purge_provider_usage(PROVIDER_USAGE_RETENTION_DAYS)
+            .await
+        {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(purged = n, "swept expired provider usage events"),
+            Err(e) => tracing::warn!(error = %e, "provider usage purge failed"),
         }
     }
 }
@@ -2598,6 +2607,55 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                 store
                     .machine_seen(&hello.machine_id, &challenge_id, Some(&inventory))
                     .await
+            }
+            crate::machine_protocol::MachineFrame::Event {
+                event:
+                    crate::machine_protocol::MachineEvent::ProviderUsageBatch {
+                        producer_id,
+                        first_sequence,
+                        last_sequence,
+                        events,
+                    },
+            } => {
+                let bounded = events.len() <= 200
+                    && events
+                        .first()
+                        .is_some_and(|event| event.sequence == first_sequence)
+                    && events
+                        .last()
+                        .is_some_and(|event| event.sequence == last_sequence)
+                    && events
+                        .windows(2)
+                        .all(|pair| pair[0].sequence < pair[1].sequence);
+                if !bounded {
+                    Err(anyhow::anyhow!("invalid provider usage sequence envelope"))
+                } else {
+                    match store
+                        .ingest_provider_usage(&hello.machine_id, &producer_id, &events)
+                        .await
+                    {
+                        Ok(acknowledged) => {
+                            let ack = crate::machine_protocol::MachineFrame::Command {
+                                command:
+                                    crate::machine_protocol::MachineCommand::ProviderUsageAck {
+                                        producer_id,
+                                        sequence: acknowledged,
+                                    },
+                            };
+                            match send_json(&mut socket, &ack).await {
+                                Ok(()) => {
+                                    store
+                                        .machine_seen(&hello.machine_id, &challenge_id, None)
+                                        .await
+                                }
+                                Err(()) => Err(anyhow::anyhow!(
+                                    "Machine disconnected while acknowledging provider usage"
+                                )),
+                            }
+                        }
+                        Err(error) => Err(error),
+                    }
+                }
             }
             crate::machine_protocol::MachineFrame::Event { event } => {
                 state.machine_control.record(&hello.machine_id, event);

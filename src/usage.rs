@@ -77,6 +77,7 @@ impl std::error::Error for CodexResetError {}
 #[derive(Clone)]
 pub struct UsageService {
     codex_command: String,
+    store: Option<crate::store::Store>,
     snapshot: Arc<Mutex<UsageSnapshot>>,
     refresh_lock: Arc<Mutex<()>>,
     reset_lock: Arc<Mutex<()>>,
@@ -84,9 +85,10 @@ pub struct UsageService {
 }
 
 impl UsageService {
-    pub fn new(codex_command: String) -> Self {
+    pub fn new(codex_command: String, store: Option<crate::store::Store>) -> Self {
         Self {
             codex_command,
+            store,
             snapshot: Arc::new(Mutex::new(UsageSnapshot {
                 refreshed_at_ms: 0,
                 next_refresh_at_ms: 0,
@@ -123,7 +125,7 @@ impl UsageService {
             ),
             tokio::time::timeout(
                 std::time::Duration::from_secs(12),
-                crate::provider_info::collect_deepseek(),
+                crate::provider_info::collect_deepseek(self.store.as_ref()),
             ),
         );
         let openai = match openai {

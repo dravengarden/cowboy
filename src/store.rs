@@ -30,6 +30,7 @@ use anyhow::{Context as _, Result};
 use base64::Engine as _;
 use chrono::{DateTime, Utc};
 use sha2::Digest as _;
+use sqlx::Row as _;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
 use crate::core::{
@@ -1675,6 +1676,229 @@ fn status_from_str(s: &str) -> Status {
         "crashed" => Status::Crashed,
         "interrupted" => Status::Interrupted,
         _ => Status::Starting,
+    }
+}
+
+impl Store {
+    /// Persist one authenticated Machine usage batch idempotently and advance
+    /// its producer watermark in the same transaction.
+    pub async fn ingest_provider_usage(
+        &self,
+        machine_id: &str,
+        producer_id: &str,
+        events: &[crate::machine_protocol::ProviderUsageEvent],
+    ) -> Result<u64> {
+        if !valid_machine_id(machine_id)
+            || producer_id.is_empty()
+            || producer_id.len() > 128
+            || events.is_empty()
+            || events.len() > 200
+        {
+            anyhow::bail!("invalid provider usage batch");
+        }
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("begin provider usage batch")?;
+        for event in events {
+            if event.producer_id != producer_id
+                || event.provider != "deepseek"
+                || !matches!(event.agent.as_str(), "codex" | "claude")
+                || event.account_fingerprint.len() != 16
+                || event.model.len() > 128
+                || !(100..=599).contains(&event.status)
+            {
+                anyhow::bail!("invalid provider usage event");
+            }
+            let token = |value: Option<u64>| -> Result<Option<i64>> {
+                value
+                    .map(i64::try_from)
+                    .transpose()
+                    .context("provider usage token count overflow")
+            };
+            sqlx::query(
+                "INSERT INTO provider_usage_events (machine_id, producer_id, sequence, occurred_at, \
+                 account_fingerprint, provider, agent, model, status, input_tokens, output_tokens, \
+                 reasoning_tokens, cache_hit_tokens, cache_miss_tokens) VALUES ( \
+                 $1, $2, $3, to_timestamp($4::double precision / 1000), $5, $6, $7, $8, $9, \
+                 $10, $11, $12, $13, $14) ON CONFLICT DO NOTHING",
+            )
+            .bind(machine_id)
+            .bind(producer_id)
+            .bind(i64::try_from(event.sequence).context("usage sequence overflow")?)
+            .bind(event.occurred_at_ms)
+            .bind(&event.account_fingerprint)
+            .bind(&event.provider)
+            .bind(&event.agent)
+            .bind(&event.model)
+            .bind(i32::from(event.status))
+            .bind(token(event.input_tokens)?)
+            .bind(token(event.output_tokens)?)
+            .bind(token(event.reasoning_tokens)?)
+            .bind(token(event.cache_hit_tokens)?)
+            .bind(token(event.cache_miss_tokens)?)
+            .execute(&mut *transaction)
+            .await
+            .context("insert provider usage event")?;
+        }
+        let last = events.iter().map(|event| event.sequence).max().unwrap_or(0);
+        let newest = events
+            .iter()
+            .max_by_key(|event| event.occurred_at_ms)
+            .context("empty provider usage batch")?;
+        sqlx::query(
+            "INSERT INTO provider_usage_producers (machine_id, producer_id, provider, \
+             account_fingerprint, agent, last_sequence, last_occurred_at) VALUES \
+             ($1, $2, $3, $4, $5, $6, to_timestamp($7::double precision / 1000)) \
+             ON CONFLICT (machine_id, producer_id) \
+             DO UPDATE SET provider = EXCLUDED.provider, \
+             account_fingerprint = EXCLUDED.account_fingerprint, agent = EXCLUDED.agent, \
+             last_sequence = GREATEST(provider_usage_producers.last_sequence, \
+             EXCLUDED.last_sequence), last_occurred_at = GREATEST( \
+             provider_usage_producers.last_occurred_at, EXCLUDED.last_occurred_at), \
+             last_received_at = now()",
+        )
+        .bind(machine_id)
+        .bind(producer_id)
+        .bind(&newest.provider)
+        .bind(&newest.account_fingerprint)
+        .bind(&newest.agent)
+        .bind(i64::try_from(last).context("usage watermark overflow")?)
+        .bind(newest.occurred_at_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("upsert provider usage producer")?;
+        transaction
+            .commit()
+            .await
+            .context("commit provider usage batch")?;
+        Ok(last)
+    }
+
+    /// Aggregate Cowboy-measured usage separately from provider-owned account facts.
+    pub async fn provider_usage_summary(
+        &self,
+        provider: &str,
+        account_fingerprint: &str,
+        days: i32,
+    ) -> Result<serde_json::Value> {
+        let rows = sqlx::query(
+            "SELECT agent, machine_id, count(*)::bigint AS requests, \
+             count(*) FILTER (WHERE status >= 400)::bigint AS errors, \
+             coalesce(sum(input_tokens), 0)::bigint AS input_tokens, \
+             coalesce(sum(output_tokens), 0)::bigint AS output_tokens, \
+             coalesce(sum(reasoning_tokens), 0)::bigint AS reasoning_tokens, \
+             coalesce(sum(cache_hit_tokens), 0)::bigint AS cache_hit_tokens, \
+             coalesce(sum(cache_miss_tokens), 0)::bigint AS cache_miss_tokens, \
+             count(*) FILTER (WHERE cache_hit_tokens IS NOT NULL AND \
+             cache_miss_tokens IS NOT NULL)::bigint AS cache_observations \
+             FROM provider_usage_events WHERE provider = $1 AND account_fingerprint = $2 \
+             AND received_at >= now() - make_interval(days => $3::int) GROUP BY agent, machine_id",
+        )
+        .bind(provider)
+        .bind(account_fingerprint)
+        .bind(days)
+        .fetch_all(&self.pool)
+        .await
+        .context("aggregate provider usage")?;
+        let mut total = UsageAggregate::default();
+        let mut by_agent = std::collections::BTreeMap::<String, UsageAggregate>::new();
+        let mut by_machine = std::collections::BTreeMap::<String, UsageAggregate>::new();
+        for row in rows {
+            let aggregate = UsageAggregate::from_row(&row);
+            total.add(&aggregate);
+            by_agent
+                .entry(row.get("agent"))
+                .or_default()
+                .add(&aggregate);
+            by_machine
+                .entry(row.get("machine_id"))
+                .or_default()
+                .add(&aggregate);
+        }
+        let producers = sqlx::query(
+            "SELECT machine_id, agent, last_sequence, \
+             (extract(epoch FROM last_received_at) * 1000)::bigint AS last_received_at_ms \
+             FROM provider_usage_producers WHERE provider = $1 AND account_fingerprint = $2 \
+             ORDER BY machine_id, agent",
+        )
+        .bind(provider)
+        .bind(account_fingerprint)
+        .fetch_all(&self.pool)
+        .await
+        .context("load provider usage coverage")?
+        .into_iter()
+        .map(|row| {
+            serde_json::json!({
+                "machine": row.get::<String, _>("machine_id"),
+                "agent": row.get::<String, _>("agent"),
+                "lastSequence": row.get::<i64, _>("last_sequence"),
+                "lastReceivedAtMs": row.get::<i64, _>("last_received_at_ms"),
+            })
+        })
+        .collect::<Vec<_>>();
+        Ok(serde_json::json!({
+            "source": "cowboy", "retentionDays": days, "summary": total,
+            "byAgent": by_agent, "byMachine": by_machine,
+            "coverage": { "producers": producers },
+        }))
+    }
+
+    /// Bound the internal ledger independently from the shorter UI window.
+    pub async fn purge_provider_usage(&self, retention_days: i32) -> Result<u64> {
+        let result = sqlx::query(
+            "DELETE FROM provider_usage_events WHERE received_at < \
+             now() - make_interval(days => $1::int)",
+        )
+        .bind(retention_days)
+        .execute(&self.pool)
+        .await
+        .context("purge provider usage ledger")?;
+        Ok(result.rows_affected())
+    }
+}
+
+#[derive(Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UsageAggregate {
+    requests: i64,
+    errors: i64,
+    input_tokens: i64,
+    output_tokens: i64,
+    reasoning_tokens: i64,
+    cache_hit_tokens: i64,
+    cache_miss_tokens: i64,
+    cache_observations: i64,
+}
+
+impl UsageAggregate {
+    fn from_row(row: &sqlx::postgres::PgRow) -> Self {
+        Self {
+            requests: row.get("requests"),
+            errors: row.get("errors"),
+            input_tokens: row.get("input_tokens"),
+            output_tokens: row.get("output_tokens"),
+            reasoning_tokens: row.get("reasoning_tokens"),
+            cache_hit_tokens: row.get("cache_hit_tokens"),
+            cache_miss_tokens: row.get("cache_miss_tokens"),
+            cache_observations: row.get("cache_observations"),
+        }
+    }
+
+    fn add(&mut self, other: &Self) {
+        self.requests = self.requests.saturating_add(other.requests);
+        self.errors = self.errors.saturating_add(other.errors);
+        self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
+        self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
+        self.reasoning_tokens = self.reasoning_tokens.saturating_add(other.reasoning_tokens);
+        self.cache_hit_tokens = self.cache_hit_tokens.saturating_add(other.cache_hit_tokens);
+        self.cache_miss_tokens = self
+            .cache_miss_tokens
+            .saturating_add(other.cache_miss_tokens);
+        self.cache_observations = self
+            .cache_observations
+            .saturating_add(other.cache_observations);
     }
 }
 

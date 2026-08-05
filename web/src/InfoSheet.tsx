@@ -103,13 +103,19 @@ function DeepSeekDetails(
   };
   const summary = record(usage.activity?.summary);
   const byAgent = record(usage.activity?.byAgent);
+  const byMachine = record(usage.activity?.byMachine);
+  const coverage = record(usage.activity?.coverage);
+  const producers = Array.isArray(coverage?.producers)
+    ? coverage.producers.map(record).filter((value): value is JsonRecord => value !== undefined)
+    : [];
+  const machineCount = new Set(producers.map((producer) => str(producer.machine)).filter(Boolean)).size;
   const daily = Array.isArray(usage.activity?.daily)
     ? usage.activity.daily.map(record).filter((value): value is JsonRecord => value !== undefined).slice(-7)
     : [];
   const hit = num(summary?.cacheHitTokens) ?? 0;
   const miss = num(summary?.cacheMissTokens) ?? 0;
   const cacheTotal = hit + miss;
-  const hitRate = cacheTotal > 0
+  const hitRate = (num(summary?.cacheObservations) ?? 0) > 0 && cacheTotal > 0
     ? Math.round(hit * 100 / cacheTotal)
     : undefined;
   const requests = num(summary?.requests);
@@ -123,7 +129,7 @@ function DeepSeekDetails(
           sx={{ borderRadius: 1.5, bgcolor: "action.hover", px: 1.25, py: 1 }}
         >
           <Typography variant="caption" color="text.secondary">
-            Available balance
+            Available balance · DeepSeek official
           </Typography>
           <Typography variant="h6" sx={{ fontWeight: 700 }}>
             {formatMoney(preferred.total_balance)}
@@ -141,6 +147,15 @@ function DeepSeekDetails(
       {requests !== undefined && requests > 0
         ? (
           <>
+            <Stack spacing={0.15}>
+              <Typography variant="caption" fontWeight={700}>
+                Cowboy measured · all Machines
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {machineCount > 0 ? `${String(machineCount)} Machines reporting · ` : ""}
+                Does not include calls made outside Cowboy.
+              </Typography>
+            </Stack>
             <Box
               sx={{
                 display: "grid",
@@ -222,7 +237,7 @@ function DeepSeekDetails(
                     const agentHit = num(totals?.cacheHitTokens) ?? 0;
                     const agentMiss = num(totals?.cacheMissTokens) ?? 0;
                     const agentCacheTotal = agentHit + agentMiss;
-                    const agentHitRate = agentCacheTotal > 0
+                    const agentHitRate = (num(totals?.cacheObservations) ?? 0) > 0 && agentCacheTotal > 0
                       ? Math.round(agentHit * 100 / agentCacheTotal)
                       : undefined;
                     return (
@@ -267,6 +282,20 @@ function DeepSeekDetails(
                       </Box>
                     );
                   })}
+                  {byMachine && Object.keys(byMachine).length > 0 && (
+                    <Box sx={{ pt: 0.35 }}>
+                      <Typography variant="caption" color="text.secondary">
+                        Coverage by Machine
+                      </Typography>
+                      {Object.entries(byMachine).map(([machine, value]) => (
+                        <InfoRow
+                          key={machine}
+                          k={machine}
+                          v={`${formatTokens(num(record(value)?.requests))} requests`}
+                        />
+                      ))}
+                    </Box>
+                  )}
                   {daily.length > 0 && (
                     <Stack spacing={0.35} sx={{ pt: 0.25 }}>
                       <Typography variant="caption" color="text.secondary">
@@ -295,6 +324,15 @@ function DeepSeekDetails(
             gateway release.
           </Typography>
         )}
+      {(requests === undefined || requests === 0) && !telemetryError && (
+        <Stack spacing={0.15}>
+          <Typography variant="body2">No Cowboy usage recorded yet.</Typography>
+          <Typography variant="caption" color="text.secondary">
+            {machineCount > 0 ? `${String(machineCount)} Machines reporting. ` : ""}
+            Cowboy-measured activity excludes calls made outside Cowboy.
+          </Typography>
+        </Stack>
+      )}
       {telemetryError && (
         <Typography variant="caption" color="warning.main">
           Request telemetry unavailable; balance is current.

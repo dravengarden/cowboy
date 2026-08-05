@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 1;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 2;
 pub const MIN_MACHINE_PROTOCOL_VERSION: u16 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -282,6 +282,27 @@ pub enum MachineCommand {
         adapter: String,
         payload: serde_json::Value,
     },
+    ProviderUsageAck {
+        producer_id: String,
+        sequence: u64,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderUsageEvent {
+    pub producer_id: String,
+    pub sequence: u64,
+    pub occurred_at_ms: i64,
+    pub account_fingerprint: String,
+    pub provider: String,
+    pub agent: String,
+    pub model: String,
+    pub status: u16,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub reasoning_tokens: Option<u64>,
+    pub cache_hit_tokens: Option<u64>,
+    pub cache_miss_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -327,6 +348,12 @@ pub enum MachineEvent {
         payload: Option<serde_json::Value>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         detail: Option<String>,
+    },
+    ProviderUsageBatch {
+        producer_id: String,
+        first_sequence: u64,
+        last_sequence: u64,
+        events: Vec<ProviderUsageEvent>,
     },
 }
 

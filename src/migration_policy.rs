@@ -93,6 +93,10 @@ const PUBLISHED_MIGRATIONS: &[(&str, &str)] = &[
         "0021_runtime_incidents.sql",
         "6b80aa0284f9a113ac4ebde0f72e43565677aec5b0d66e2378fe207ff797db58",
     ),
+    (
+        "0022_provider_usage_ledger.sql",
+        "3f5bc917df416351be2dc46fab91fe4e4e66510ad49c66f71fc88fc720c17d22",
+    ),
 ];
 
 #[test]
