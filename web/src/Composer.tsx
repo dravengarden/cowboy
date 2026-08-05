@@ -87,6 +87,7 @@ import {
   didMobileSoftwareKeyboardClose,
   dismissMobileSoftwareKeyboard,
   releaseMobileComposerFocus,
+  shouldPresentMobileKeyboardSurface,
 } from "./composer/mobileComposerFocus";
 import { useKeyboardOpen } from "./keyboardInset";
 import { attachmentTrayForSurface } from "./composer/attachmentPresentation";
@@ -812,6 +813,11 @@ export function ComposerWorkspace({
   const desktop = surface === "desktop";
   const touchInput = useTouchComposer();
   const keyboardOpen = useKeyboardOpen();
+  const [mobileInputResetBlocked, setMobileInputResetBlocked] = useState(false);
+  const mobileKeyboardPresentationOpen = shouldPresentMobileKeyboardSurface(
+    keyboardOpen,
+    mobileInputResetBlocked,
+  );
   const preparing = status === "starting";
   const desktopShortcut = (
     child: ReactNode,
@@ -1140,9 +1146,16 @@ export function ComposerWorkspace({
       sessionId,
       seq: timelineState.contextClearedSeq,
     };
-    if (previous.sessionId !== sessionId) return;
+    if (previous.sessionId !== sessionId) {
+      setMobileInputResetBlocked(false);
+      return;
+    }
     if (timelineState.contextClearedSeq <= previous.seq) return;
-    if (touchInput) releaseMobileComposerFocus();
+    if (touchInput) {
+      setMobileInputResetBlocked(true);
+      dismissMobileSoftwareKeyboard();
+      releaseMobileComposerFocus();
+    }
   }, [sessionId, timelineState.contextClearedSeq, touchInput]);
   const compactContext = useCompactionContext({
     sessionId,
@@ -1174,6 +1187,12 @@ export function ComposerWorkspace({
     // tall floating composer over a keyboard-free transcript.
     setCmdConfirm(null);
     if (touchInput && action.kind === "reset") {
+      setMobileInputResetBlocked(true);
+      setComposeFs(false);
+      setMobileToolbarSettingsOpen(false);
+      setClearComposerAnchor(null);
+      setImgSel(null);
+      dismissMobileSoftwareKeyboard();
       releaseMobileComposerFocus();
       globalThis.requestAnimationFrame(() => releaseMobileComposerFocus());
     }
@@ -1265,7 +1284,8 @@ export function ComposerWorkspace({
   // Editing ownership and visual expansion are deliberately separate. Queue or
   // Draft may still own the buffer while WebKit is dismissing (or declined to
   // open) the keyboard; that must not grant a mobile surface fill-height.
-  const mobilePendingKeyboardEditing = mobilePendingEditing && keyboardOpen;
+  const mobilePendingKeyboardEditing = mobilePendingEditing &&
+    mobileKeyboardPresentationOpen;
   const mobileComposerKeyboardWasOpenRef = useRef(false);
   useLayoutEffect(() => {
     if (!touchInput) {
@@ -1391,6 +1411,15 @@ export function ComposerWorkspace({
   return (
     <Box
       data-mobile-composer-workspace={!desktop ? "true" : undefined}
+      onPointerDownCapture={(event): void => {
+        if (!touchInput || !mobileInputResetBlocked) return;
+        const target = event.target instanceof HTMLElement ? event.target : null;
+        if (
+          target?.closest(
+            "[data-mobile-editor-area], [data-pending-edit-target], [data-mobile-pending-editor]",
+          )
+        ) setMobileInputResetBlocked(false);
+      }}
       sx={{
         // Side gutter = the reading `padding` (so the composer lines up with the
         // transcript content above), but floored at the device safe-area inset:
@@ -1645,6 +1674,7 @@ export function ComposerWorkspace({
           {queue.length > 0 && (
             <PendingPanel
               desktop={false}
+              keyboardOpen={mobileKeyboardPresentationOpen}
               kind="queued"
               sessionId={sessionId}
               items={queue}
@@ -1658,6 +1688,7 @@ export function ComposerWorkspace({
           {draftList.length > 0 && (
             <PendingPanel
               desktop={false}
+              keyboardOpen={mobileKeyboardPresentationOpen}
               kind="draft"
               sessionId={sessionId}
               items={draftList}
@@ -1689,6 +1720,7 @@ export function ComposerWorkspace({
           {queue.length > 0 && (
             <PendingPanel
               desktop
+              keyboardOpen={keyboardOpen}
               kind="queued"
               sessionId={sessionId}
               items={queue}
@@ -1699,6 +1731,7 @@ export function ComposerWorkspace({
           {draftList.length > 0 && (
             <PendingPanel
               desktop
+              keyboardOpen={keyboardOpen}
               kind="draft"
               sessionId={sessionId}
               items={draftList}
@@ -1765,7 +1798,7 @@ export function ComposerWorkspace({
         data-mobile-focus-composer={touchInput ? "true" : undefined}
         data-mobile-primary-composer={touchInput ? "true" : undefined}
         data-mobile-keyboard-open={
-          touchInput && keyboardOpen ? "true" : undefined
+          touchInput && mobileKeyboardPresentationOpen ? "true" : undefined
         }
         // Column mode is a dedicated writing workspace. Its subtle card boundary
         // makes an empty tall editor read as an intentional canvas, not a blank
@@ -2929,6 +2962,7 @@ export function ComposerWorkspace({
       <Dialog
         open={cmdConfirm !== null}
         onClose={(): void => setCmdConfirm(null)}
+        disableRestoreFocus={touchInput && cmdConfirm?.kind === "reset"}
         maxWidth="xs"
         fullWidth
       >
@@ -3513,6 +3547,7 @@ interface PendingEditController {
 // above the composer (see the Composer render).
 function PendingPanel({
   desktop,
+  keyboardOpen,
   kind,
   sessionId,
   items,
@@ -3524,6 +3559,7 @@ function PendingPanel({
   unbounded,
 }: {
   desktop: boolean;
+  keyboardOpen: boolean;
   kind: "queued" | "draft";
   sessionId: string;
   items: QueuedMessage[];
@@ -3556,7 +3592,6 @@ function PendingPanel({
   // One viewport/focus observer per panel, not per message row. A long queue can
   // contain dozens of rows; registering the iOS keyboard listeners in every row
   // makes one dismissal fan out through unnecessary handlers and causes jank.
-  const keyboardOpen = useKeyboardOpen();
   const [editingId, setEditingId] = useState<string | null>(null);
   const editControllerRef = useRef<PendingEditController | null>(null);
   const suppressEditFocusRestoreRef = useRef(false);

@@ -1,5 +1,8 @@
 import { assertEquals } from "jsr:@std/assert";
-import { didMobileSoftwareKeyboardClose } from "./mobileComposerFocus.ts";
+import {
+  didMobileSoftwareKeyboardClose,
+  shouldPresentMobileKeyboardSurface,
+} from "./mobileComposerFocus.ts";
 import { mobileComposerStackGap } from "../mobileComposerPrimitives.ts";
 
 const composerSource = await Deno.readTextFile(
@@ -31,7 +34,7 @@ Deno.test("mobile composer promotion requires a visible keyboard and real editor
 Deno.test("mobile column and pending ownership cannot fill the viewport without a keyboard", () => {
   assertEquals(
     composerSource.includes(
-      "const mobilePendingKeyboardEditing = mobilePendingEditing && keyboardOpen;",
+      "const mobilePendingKeyboardEditing = mobilePendingEditing &&\n    mobileKeyboardPresentationOpen;",
     ),
     true,
   );
@@ -355,4 +358,14 @@ Deno.test("clearing session context always ends the mobile input interaction", (
     ),
     true,
   );
+  assertEquals(composerSource.includes("setMobileInputResetBlocked(true)"), true);
+  assertEquals(composerSource.includes("disableRestoreFocus={"), true);
+  assertEquals(composerSource.includes("data-pending-edit-target"), true);
+});
+
+Deno.test("a context reset gate can only reopen from a new input interaction", () => {
+  assertEquals(shouldPresentMobileKeyboardSurface(false, false), false);
+  assertEquals(shouldPresentMobileKeyboardSurface(true, false), true);
+  assertEquals(shouldPresentMobileKeyboardSurface(false, true), false);
+  assertEquals(shouldPresentMobileKeyboardSurface(true, true), false);
 });
