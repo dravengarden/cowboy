@@ -2287,6 +2287,7 @@ async fn api_machine_enroll(
 
 const MACHINE_HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 const MACHINE_HEARTBEAT_MS: u64 = 15_000;
+const WEBSOCKET_FRAME_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 async fn machine_ws_upgrade(
     ws: WebSocketUpgrade,
@@ -5720,8 +5721,23 @@ where
     S: SinkExt<Message> + Unpin,
     T: Serialize,
 {
+    send_json_with_timeout(sink, msg, WEBSOCKET_FRAME_SEND_TIMEOUT).await
+}
+
+async fn send_json_with_timeout<S, T>(
+    sink: &mut S,
+    msg: &T,
+    timeout: std::time::Duration,
+) -> Result<(), ()>
+where
+    S: SinkExt<Message> + Unpin,
+    T: Serialize,
+{
     let text = serde_json::to_string(msg).map_err(|_| ())?;
-    sink.send(Message::Text(text.into())).await.map_err(|_| ())
+    tokio::time::timeout(timeout, sink.send(Message::Text(text.into())))
+        .await
+        .map_err(|_| ())?
+        .map_err(|_| ())
 }
 
 #[cfg(test)]
@@ -5750,6 +5766,29 @@ mod reset_policy_tests {
             scheduled_reset_failure_policy(false, 2),
             ScheduledResetFailurePolicy::StopFailed
         );
+    }
+}
+
+#[cfg(test)]
+mod websocket_send_tests {
+    use super::send_json_with_timeout;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn stalled_websocket_write_times_out_so_the_connection_can_reconcile() {
+        let sink = futures::sink::unfold((), |(), _message| async move {
+            std::future::pending::<Result<(), std::io::Error>>().await
+        });
+        futures::pin_mut!(sink);
+
+        let result = send_json_with_timeout(
+            &mut sink,
+            &serde_json::json!({ "type": "runtime" }),
+            Duration::from_millis(10),
+        )
+        .await;
+
+        assert!(result.is_err(), "a stalled WebSocket write must be fenced");
     }
 }
 

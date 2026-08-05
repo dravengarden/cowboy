@@ -879,12 +879,15 @@ here says otherwise.
     immediately and controls appear after the card has started opening. Do not
     tune those durations independently: mismatched height, opacity, and padding
     transitions make keyboard dismissal look like several clipped panels.
-    Preserve the same 8px stack gap between the transcript hairline and the
+    Preserve the same 4px stack gap between the transcript hairline and the
     first Composer surface as between Plan, Pending, and Composer children;
     removing it visually fuses the transcript and input surfaces.
     Once a real touch editor owns the visible keyboard, switch presentation to
     one floating Composer card: keep Plan/Queue/Draft state mounted but hide its
     surrounding panels, and suppress the shell's full-width glass and hairline.
+    The focused card must then own its own clipped `backdrop-filter`; a translucent
+    tint alone leaves transcript glyphs readable through the editor, especially
+    in light mode. Keep the prefixed WebKit property beside the standard one.
     Queue/Draft edits keep their transaction-owning scrollport mounted while
     stripping its header, sibling panels, frame, and every non-editing row. The
     outer pending region must not scroll in this state; only the active editor
@@ -893,16 +896,17 @@ here says otherwise.
     The transcript boundary uses one constant 4px separation across idle,
     focused, fullscreen, and Queue/Draft edit transitions; do not key that inset
     on focus, because fullscreen handoff otherwise makes the gap jump. Internal
-    stack children retain their independent 8px rhythm. Keep destructive Clear
+    stack children use that same 4px rhythm so optional Pending panels have
+    equal space above and below. Keep destructive Clear
     out of the card's top-right utility rail; fullscreen remains there. During
     keyboard focus, keyboard dismissal owns the unstyled trailing action slot
     and Clear sits one 40px touch row directly above it. The touch editor area
     keeps an 80px minimum so that compact fixed rail never manufactures a tall
     blank canvas or overlaps itself; content growth remains textarea-owned.
-    Render Clear only while text or attachments are clearable. The fixed actions
-    are an absolute transparent overlay on the final standard toolbar slot, not
-    a sibling flex column: reserve one 48px end inset in the scroller so the row
-    reads continuously without letting iOS rubber-band move those actions.
+    Keep keyboard dismissal in the fixed top-right utility rail directly below
+    Fullscreen, so iOS rubber-band cannot move it. Clear belongs immediately
+    after Schedule in the scrollable delivery actions and stays mounted disabled
+    when there is no clearable text or attachment.
     Keep Force push earlier in the scrollable action sequence and Schedule next
     to the fixed rail; two lightning-shaped glyphs beside each other make the
     terminal cluster visually ambiguous.

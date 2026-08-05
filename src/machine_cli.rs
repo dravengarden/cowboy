@@ -50,6 +50,13 @@ struct ControllerConfig {
     local: bool,
 }
 
+// The Machine and controller multiplex runtime traffic, adapter responses, and
+// heartbeats over one full-duplex WebSocket. A large frame in each direction
+// can otherwise leave both peers awaiting socket write capacity while neither
+// returns to its read branch. Treat a stalled write as a dead connection so
+// controller_loop reconnects and reattaches the surviving workers.
+const MACHINE_FRAME_SEND_TIMEOUT: Duration = Duration::from_secs(15);
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum CliSpawnMode {
     Direct,
@@ -2046,11 +2053,23 @@ where
     S: futures::Sink<Message> + Unpin,
     S::Error: std::error::Error + Send + Sync + 'static,
 {
+    send_frame_with_timeout(socket, frame, MACHINE_FRAME_SEND_TIMEOUT).await
+}
+
+async fn send_frame_with_timeout<S>(
+    socket: &mut S,
+    frame: &MachineFrame,
+    timeout: Duration,
+) -> anyhow::Result<()>
+where
+    S: futures::Sink<Message> + Unpin,
+    S::Error: std::error::Error + Send + Sync + 'static,
+{
     let text = serde_json::to_string(frame).context("serializing Machine frame")?;
-    socket
-        .send(Message::Text(text.into()))
+    tokio::time::timeout(timeout, socket.send(Message::Text(text.into())))
         .await
-        .context("sending Machine frame")
+        .context("Machine frame send timed out")??;
+    Ok(())
 }
 
 async fn receive_frame<S>(socket: &mut S) -> anyhow::Result<MachineFrame>
@@ -2072,15 +2091,18 @@ where
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::time::Duration;
 
     use super::{
         bootstrap_acp_inventory, disabled_provider_slots_from, gemini_auth_from_metadata,
         gemini_env_value_from, managed_provider_environment, npm_package_for_component,
         parse_workspaces, provider_for_component, reject_untrusted_workspace, selected_zed_pair,
-        validate_controller_url, workspace_path_allowed,
+        send_frame_with_timeout, validate_controller_url, workspace_path_allowed,
     };
     use crate::machine_components::ComponentStore;
-    use crate::machine_protocol::{ArtifactFormat, ComponentId, ComponentKind, DesiredComponent};
+    use crate::machine_protocol::{
+        ArtifactFormat, ComponentId, ComponentKind, DesiredComponent, MachineFrame,
+    };
     use crate::runtime_wire::{CoreCommand, Frame, StartSession};
 
     #[test]
@@ -2093,6 +2115,22 @@ mod tests {
     fn loopback_controller_allows_plaintext_for_hermetic_tests() {
         assert!(validate_controller_url("http://127.0.0.1:43333").is_ok());
         assert!(validate_controller_url("http://localhost:43333").is_ok());
+    }
+
+    #[tokio::test]
+    async fn stalled_controller_write_times_out_instead_of_fencing_all_workers() {
+        let sink = futures::sink::unfold((), |(), _message| async move {
+            std::future::pending::<Result<(), std::io::Error>>().await
+        });
+        futures::pin_mut!(sink);
+        let error = send_frame_with_timeout(
+            &mut sink,
+            &MachineFrame::Heartbeat { sent_at_ms: 1 },
+            Duration::from_millis(10),
+        )
+        .await
+        .expect_err("stalled write must fail closed");
+        assert!(error.to_string().contains("Machine frame send timed out"));
     }
 
     #[test]
