@@ -1,6 +1,7 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
   didMobileSoftwareKeyboardClose,
+  mobilePendingKeyboardCloseSettleMs,
   shouldPresentMobileKeyboardSurface,
 } from "./mobileComposerFocus.ts";
 import { mobileComposerStackGap } from "../mobileComposerPrimitives.ts";
@@ -107,7 +108,9 @@ Deno.test("native textarea owns a content-sized mobile canvas", () => {
 
 Deno.test("mobile pending edit exits when a third-party IME never reports an open frame", () => {
   assertEquals(
-    composerSource.includes("() => finishMobileEditRef.current(),\n        700,"),
+    composerSource.includes(
+      "setMobileEditKeyboardSettledClosed(true);\n          finishMobileEditRef.current();\n        },\n        700,",
+    ),
     true,
   );
   assertEquals(
@@ -122,11 +125,33 @@ Deno.test("mobile pending edit exits when a third-party IME never reports an ope
   );
   assertEquals(
     composerSource.includes(
-      "const keyboardBoundEditing = editing && (\n    !touchInput || keyboardOpen || !mobileEditSawKeyboardRef.current",
+      "const keyboardBoundEditing = editing && (\n    !touchInput || !mobileEditKeyboardSettledClosed",
     ),
     true,
   );
   assertEquals(composerSource.includes("if (keyboardBoundEditing) {"), true);
+});
+
+Deno.test("mobile pending editor survives the native long-press keyboard settle window", () => {
+  assertEquals(mobilePendingKeyboardCloseSettleMs, 550);
+  assertEquals(
+    composerSource.includes(
+      "setMobileEditKeyboardSettledClosed(true);\n        finishMobileEditRef.current();",
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "mobilePendingKeyboardCloseSettleMs,\n    );",
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "const frame = globalThis.requestAnimationFrame(() =>\n      finishMobileEditRef.current()",
+    ),
+    false,
+  );
 });
 
 Deno.test("fullscreen delivery closes only after authoritative success", () => {

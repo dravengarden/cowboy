@@ -86,6 +86,7 @@ import { useComposerDraftController } from "./composer/useComposerDraftControlle
 import {
   didMobileSoftwareKeyboardClose,
   dismissMobileSoftwareKeyboard,
+  mobilePendingKeyboardCloseSettleMs,
   releaseMobileComposerFocus,
   shouldPresentMobileKeyboardSurface,
 } from "./composer/mobileComposerFocus";
@@ -4380,6 +4381,8 @@ function PendingRow({
   // ordinary pending card. Desktop deliberately keeps its explicit transaction.
   const mobileEditSawKeyboardRef = useRef(false);
   const mobileEditFinishingRef = useRef(false);
+  const [mobileEditKeyboardSettledClosed, setMobileEditKeyboardSettledClosed] =
+    useState(false);
   const finishMobileEdit = (): void => {
     if (!touchInput || mobileEditFinishingRef.current) return;
     mobileEditFinishingRef.current = true;
@@ -4393,10 +4396,12 @@ function PendingRow({
     if (!touchInput || !editing) {
       mobileEditSawKeyboardRef.current = false;
       mobileEditFinishingRef.current = false;
+      setMobileEditKeyboardSettledClosed(false);
       return undefined;
     }
     if (keyboardOpen) {
       mobileEditSawKeyboardRef.current = true;
+      setMobileEditKeyboardSettledClosed(false);
       return undefined;
     }
     // Entering an edit and raising a third-party keyboard are not atomic. Give
@@ -4405,15 +4410,27 @@ function PendingRow({
     // after an IME dismisses without ever publishing an observable open frame.
     if (!mobileEditSawKeyboardRef.current) {
       const timer = globalThis.setTimeout(
-        () => finishMobileEditRef.current(),
+        () => {
+          setMobileEditKeyboardSettledClosed(true);
+          finishMobileEditRef.current();
+        },
         700,
       );
       return () => globalThis.clearTimeout(timer);
     }
-    const frame = globalThis.requestAnimationFrame(() =>
-      finishMobileEditRef.current()
+    // A native long press can transiently report a closed keyboard while UIKit
+    // promotes the textarea gesture into Paste/Select. Keep the REAL textarea
+    // mounted through the same final settle window as keyboardInset; replacing
+    // it in the first false frame cancels the native popup. Explicit Hide
+    // keyboard still calls finishMobileEdit directly and remains immediate.
+    const timer = globalThis.setTimeout(
+      () => {
+        setMobileEditKeyboardSettledClosed(true);
+        finishMobileEditRef.current();
+      },
+      mobilePendingKeyboardCloseSettleMs,
     );
-    return () => globalThis.cancelAnimationFrame(frame);
+    return () => globalThis.clearTimeout(timer);
   }, [editing, keyboardOpen, touchInput]);
   // Mobile pending editing chrome is a keyboard-owned presentation state, not
   // the durable edit ownership itself. Keep it mounted while the initiating
@@ -4421,7 +4438,7 @@ function PendingRow({
   // after a previously visible keyboard closes. Persistence finishes in the
   // effect above without leaving a keyboard-less expanded editor on screen.
   const keyboardBoundEditing = editing && (
-    !touchInput || keyboardOpen || !mobileEditSawKeyboardRef.current
+    !touchInput || !mobileEditKeyboardSettledClosed
   );
   const editDirty = draft !== message.text ||
     editAttachments.length !== message.attachments.length ||

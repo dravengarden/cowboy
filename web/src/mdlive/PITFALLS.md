@@ -1088,3 +1088,15 @@ Desktop Vim + IME checks:
     content-sized; only an overlong prompt is clamped by the available WebView
     height and scrolls inside the real textarea. Never cap or scroll the complete
     card, because that hides the rich-text row and moves editor chrome with text.
+
+50. **Queue/Draft keyboard completion must survive native long-press setup.**
+    iOS can briefly publish a keyboard-closed `visualViewport` frame while UIKit
+    promotes a textarea long press into its Paste/Select menu. Pending-row edits
+    used to treat that first false frame as completion, immediately auto-save,
+    and unmount the textarea; UIKit then lost its native anchor and only the
+    keyboard dismissal remained visible. Keep the real touch editor mounted for
+    the shared 550ms keyboard settle window and finish only if the keyboard stays
+    closed. A renewed open frame cancels the timer. The explicit Hide keyboard
+    action remains immediate. Do not intercept pointer, touch, `contextmenu`, or
+    selection events to implement this guard: UIKit must continue to own the
+    long-press sequence end to end.

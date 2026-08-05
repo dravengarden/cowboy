@@ -48,6 +48,14 @@ export function didMobileSoftwareKeyboardClose(
   return wasOpen && !isOpen;
 }
 
+/**
+ * Keep a pending-message editor mounted through WebKit's keyboard-geometry
+ * settle window. iOS can briefly publish a closed visual viewport while it is
+ * promoting a long press into the native Paste/Select menu; unmounting the
+ * textarea in that frame cancels the menu.
+ */
+export const mobilePendingKeyboardCloseSettleMs = 550;
+
 /** A context reset blocks stale WebKit focus restoration from re-promoting UI. */
 export function shouldPresentMobileKeyboardSurface(
   keyboardOpen: boolean,
