@@ -210,6 +210,7 @@ import {
   useNetworkActionState,
 } from "./NetworkActionFeedback";
 import { originLabel } from "./protocol";
+import { providerConfigOptions } from "./providerConfigOptions";
 import type {
   AvailableCommand,
   ConfigOption,
@@ -5381,7 +5382,7 @@ export function SessionControls({
   // never reshuffle between config_option_update notifications.
   const options = useMemo(() => {
     const order = ["mode", "model", "effort"];
-    return [...configOptions].sort((a, b) => {
+    return providerConfigOptions(session?.provider, configOptions).sort((a, b) => {
       const ai = order.indexOf(a.id);
       const bi = order.indexOf(b.id);
       if (ai === -1 && bi === -1) return a.id.localeCompare(b.id);
@@ -5389,7 +5390,7 @@ export function SessionControls({
       if (bi === -1) return -1;
       return ai - bi;
     });
-  }, [configOptions]);
+  }, [configOptions, session?.provider]);
   const showSkeleton = !dead && options.length === 0 &&
     (status === "starting" || status === "running");
   const hasConfig = showSkeleton || options.length > 0;

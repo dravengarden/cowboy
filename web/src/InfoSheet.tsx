@@ -423,11 +423,18 @@ function LimitRow({ limit }: { limit: UsageLimit }): React.JSX.Element {
   );
 }
 
-function ProviderUsageCard({ usage, schedule, now, onUsageChanged }: {
+function ProviderUsageCard({
+  usage,
+  schedule,
+  now,
+  onUsageChanged,
+  onRefresh,
+}: {
   usage: ProviderUsage;
   schedule: { fire_at_ms: number } | undefined;
   now: number;
   onUsageChanged: () => Promise<void>;
+  onRefresh?: (() => Promise<void>) | undefined;
 }): React.JSX.Element {
   const [resetOpen, setResetOpen] = useState(false);
   const [resetMode, setResetMode] = useState<"schedule" | "now">("schedule");
@@ -561,14 +568,26 @@ function ProviderUsageCard({ usage, schedule, now, onUsageChanged }: {
           <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
             {title}
           </Typography>
-          <Typography
-            variant="caption"
-            color={usage.status === "available"
-              ? "success.main"
-              : "text.secondary"}
-          >
-            {statusLabel}
-          </Typography>
+          <Stack direction="row" alignItems="center" spacing={0.25}>
+            <Typography
+              variant="caption"
+              color={usage.status === "available"
+                ? "success.main"
+                : "text.secondary"}
+            >
+              {statusLabel}
+            </Typography>
+            {onRefresh && (
+              <NetworkIconButton
+                aria-label={`Refresh ${title}`}
+                networkAction={onRefresh}
+                size="small"
+                sx={{ width: 32, height: 32 }}
+              >
+                <Refresh sx={{ fontSize: 17 }} />
+              </NetworkIconButton>
+            )}
+          </Stack>
         </Stack>
         {limits.map((limit) => <LimitRow key={limit.id} limit={limit} />)}
         {usage.provider === "openai" && credits.length > 0 && (
@@ -841,6 +860,19 @@ function UsageInfoSection(): React.JSX.Element {
       setRefreshing(false);
     }
   }, [refreshing]);
+  const loadProvider = useCallback(async (provider: string): Promise<void> => {
+    setError(null);
+    try {
+      const response = await fetch(`/api/usage/${encodeURIComponent(provider)}`, {
+        method: "POST",
+      });
+      if (!response.ok) throw new Error(`HTTP ${String(response.status)}`);
+      setSnapshot(await response.json() as UsageSnapshot);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Refresh failed");
+      throw cause;
+    }
+  }, []);
   useEffect(() => {
     void load(false);
   }, []); // load only when Info mounts
@@ -889,6 +921,7 @@ function UsageInfoSection(): React.JSX.Element {
           schedule={snapshot.codex_reset_schedule}
           now={clock}
           onUsageChanged={() => load(false)}
+          onRefresh={() => loadProvider(provider.provider)}
         />
       ))}
       {!snapshot && !error && (

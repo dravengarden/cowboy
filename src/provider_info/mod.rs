@@ -17,7 +17,7 @@ use crate::usage::ProviderUsage;
 pub(crate) use deepseek::collect as collect_deepseek;
 pub(crate) use openai::collect as collect_openai;
 
-pub(crate) const PROVIDERS: [&str; 4] = ["openai", "anthropic", "deepseek", "gemini"];
+pub(crate) const PROVIDERS: [&str; 4] = ["deepseek", "openai", "anthropic", "gemini"];
 
 pub(crate) fn account_provider(agent: &str) -> Option<&'static str> {
     match agent {

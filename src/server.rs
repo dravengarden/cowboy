@@ -1180,6 +1180,7 @@ async fn serve_axum(
             get(api_observability_incidents),
         )
         .route("/api/usage", get(api_usage).post(api_usage_refresh))
+        .route("/api/usage/{provider}", post(api_usage_provider_refresh))
         .route("/api/usage/logs", get(api_usage_logs))
         .route("/api/usage/codex/reset", post(api_codex_reset))
         .route(
@@ -1496,6 +1497,20 @@ async fn api_usage_refresh(State(state): State<Arc<AppState>>) -> Response {
     let snapshot =
         crate::usage::with_session_usage(state.usage.refresh().await, &state.hub.session_list());
     Json(snapshot).into_response()
+}
+
+async fn api_usage_provider_refresh(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(provider): axum::extract::Path<String>,
+) -> Response {
+    match state.usage.refresh_provider(&provider).await {
+        Ok(snapshot) => Json(crate::usage::with_session_usage(
+            snapshot,
+            &state.hub.session_list(),
+        ))
+        .into_response(),
+        Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    }
 }
 
 #[derive(Deserialize)]

@@ -131,7 +131,7 @@ fn builtin_with_env_and_shell(
     claude_deepseek.env.extend([
         (
             "ANTHROPIC_BASE_URL".to_owned(),
-            "http://127.0.0.1:8089".to_owned(),
+            "http://127.0.0.1:43872".to_owned(),
         ),
         (
             "ANTHROPIC_AUTH_TOKEN".to_owned(),
@@ -139,7 +139,7 @@ fn builtin_with_env_and_shell(
         ),
         (
             "ANTHROPIC_MODEL".to_owned(),
-            "deepseek-v4-pro[1m]".to_owned(),
+            "deepseek-v4-flash[1m]".to_owned(),
         ),
         (
             "ANTHROPIC_DEFAULT_OPUS_MODEL".to_owned(),
@@ -147,7 +147,7 @@ fn builtin_with_env_and_shell(
         ),
         (
             "ANTHROPIC_DEFAULT_SONNET_MODEL".to_owned(),
-            "deepseek-v4-pro[1m]".to_owned(),
+            "deepseek-v4-flash[1m]".to_owned(),
         ),
         (
             "ANTHROPIC_DEFAULT_HAIKU_MODEL".to_owned(),
@@ -157,7 +157,6 @@ fn builtin_with_env_and_shell(
             "CLAUDE_CODE_SUBAGENT_MODEL".to_owned(),
             "deepseek-v4-flash".to_owned(),
         ),
-        ("CLAUDE_CODE_EFFORT_LEVEL".to_owned(), "max".to_owned()),
         (
             "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST".to_owned(),
             "cowboy-claude-deepseek".to_owned(),
@@ -491,7 +490,7 @@ fn render_codex_deepseek_config(catalog: &Path) -> String {
      model_auto_compact_token_limit_scope = \"body_after_prefix\"\n\n\
      [model_providers.deepseek-local]\n\
      name = \"Isolated DeepSeek Responses gateway\"\n\
-     base_url = \"http://127.0.0.1:8088/v1\"\n\
+     base_url = \"http://127.0.0.1:43871/v1\"\n\
      wire_api = \"responses\"\n\
      requires_openai_auth = false\n\
      request_max_retries = 1\n\
@@ -622,14 +621,14 @@ mod tests {
                 .env
                 .get("ANTHROPIC_BASE_URL")
                 .map(String::as_str),
-            Some("http://127.0.0.1:8089")
+            Some("http://127.0.0.1:43872")
         );
         assert_eq!(
             claude_deepseek
                 .env
                 .get("ANTHROPIC_MODEL")
                 .map(String::as_str),
-            Some("deepseek-v4-pro[1m]")
+            Some("deepseek-v4-flash[1m]")
         );
         assert_eq!(
             claude_deepseek
@@ -638,6 +637,7 @@ mod tests {
                 .map(String::as_str),
             Some("deepseek-v4-flash")
         );
+        assert!(!claude_deepseek.env.contains_key("CLAUDE_CODE_EFFORT_LEVEL"));
         assert_eq!(
             claude_deepseek
                 .env

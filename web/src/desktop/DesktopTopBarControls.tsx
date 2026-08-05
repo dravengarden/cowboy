@@ -38,6 +38,7 @@ import { resolveSessionAction } from "../agentCommands";
 import { desktopImeOwnsKey } from "./commands/imeShortcut";
 import { workspaceCommandKey } from "./commands/workspaceCommandKey";
 import type { ConfigOption, Status } from "../protocol";
+import { providerConfigOptions } from "../providerConfigOptions";
 import { send, submitPrompt, useStoreSelector } from "../store";
 import { useCompactionContext } from "../useCompactionContext";
 import { NetworkButton } from "../NetworkActionFeedback";
@@ -607,13 +608,13 @@ export function DesktopTopBarControls({
   const dead = status === "exited" || status === "crashed" ||
     status === "interrupted";
   const options = useMemo(() => {
-    return [...rawOptions].sort((left, right) => {
+    return providerConfigOptions(session?.provider, rawOptions).sort((left, right) => {
       const leftIndex = OPTION_RANK[left.id] ?? Number.MAX_SAFE_INTEGER;
       const rightIndex = OPTION_RANK[right.id] ?? Number.MAX_SAFE_INTEGER;
       if (leftIndex === rightIndex) return left.name.localeCompare(right.name);
       return leftIndex - rightIndex;
     });
-  }, [rawOptions]);
+  }, [rawOptions, session?.provider]);
   const configSummary = options.map(compactOptionName).join(" · ");
   const loadUsage = useCallback(async (manual: boolean): Promise<void> => {
     if (refreshing) return;

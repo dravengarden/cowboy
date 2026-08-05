@@ -161,13 +161,13 @@ impl UsageService {
             refresh_interval_ms: i64::try_from(AUTO_REFRESH_INTERVAL.as_millis())
                 .unwrap_or(i64::MAX),
             providers: vec![
+                deepseek,
                 openai,
                 crate::provider_info::unavailable(
                     "anthropic",
                     "Anthropic Agent SDK via ACP",
                     "Waiting for Anthropic rate-limit data",
                 ),
-                deepseek,
                 crate::provider_info::unavailable(
                     "gemini",
                     "Gemini ACP",
@@ -178,6 +178,46 @@ impl UsageService {
         };
         *self.snapshot.lock().await = next.clone();
         next
+    }
+
+    /// Refresh one provider adapter without making unrelated cards wait on a
+    /// slower account API. Session-only providers are recomputed by the HTTP
+    /// response overlay and therefore keep their adapter placeholder here.
+    pub async fn refresh_provider(&self, provider: &str) -> Result<UsageSnapshot> {
+        let _guard = self.refresh_lock.lock().await;
+        let replacement = match provider {
+            "openai" => tokio::time::timeout(
+                std::time::Duration::from_secs(12),
+                crate::provider_info::collect_openai(&self.codex_command),
+            )
+            .await
+            .context("OpenAI provider refresh timed out")??,
+            "deepseek" => tokio::time::timeout(
+                std::time::Duration::from_secs(12),
+                crate::provider_info::collect_deepseek(self.store.as_ref()),
+            )
+            .await
+            .context("DeepSeek provider refresh timed out")??,
+            "anthropic" | "gemini" => {
+                let snapshot = self.snapshot.lock().await.clone();
+                return Ok(snapshot);
+            }
+            _ => bail!("unknown usage provider"),
+        };
+        let mut snapshot = self.snapshot.lock().await;
+        let Some(slot) = snapshot
+            .providers
+            .iter_mut()
+            .find(|candidate| candidate.provider == provider)
+        else {
+            bail!("usage provider is not configured");
+        };
+        *slot = replacement;
+        snapshot.refreshed_at_ms = now_ms();
+        snapshot.next_refresh_at_ms = snapshot
+            .refreshed_at_ms
+            .saturating_add(i64::try_from(AUTO_REFRESH_INTERVAL.as_millis()).unwrap_or(i64::MAX));
+        Ok(snapshot.clone())
     }
 
     pub async fn set_reset_schedule(&self, schedule: Option<CodexResetSchedule>) {
@@ -435,11 +475,8 @@ mod tests {
     fn unavailable_snapshot_is_explicit() {
         let providers = unavailable_providers();
         assert_eq!(providers.len(), 4);
-        assert!(
-            providers
-                .iter()
-                .any(|provider| provider.provider == "deepseek")
-        );
+        assert_eq!(providers[0].provider, "deepseek");
+        assert_eq!(providers[1].provider, "openai");
         assert!(
             providers
                 .iter()
