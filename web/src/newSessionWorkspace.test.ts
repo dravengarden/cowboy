@@ -33,6 +33,10 @@ Deno.test("new session navigation precedes Machine preparation completion", () =
   assertEquals(composerSource.includes("if (preparing) return false;"), true);
   assertEquals(appSource.includes("initial_prompt: selectedWorkItem"), true);
   assertEquals(appSource.includes("/prompt`, {"), false);
+  assertEquals(
+    appSource.includes("snapshot.configOptions.get(sessionId) ?? []"),
+    false,
+  );
 });
 
 Deno.test("new sessions prefer Columbus regardless of workspace ordering", () => {

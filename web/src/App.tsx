@@ -1563,10 +1563,10 @@ const StoreTranscript = memo(function StoreTranscript({
     const session = useStoreSelector((snapshot) =>
         snapshot.sessions.find((candidate) => candidate.id === sessionId)
     );
-    const configOptions = useStoreSelector((snapshot) =>
-        snapshot.configOptions.get(sessionId) ?? []
+    const model = useStoreSelector((snapshot) =>
+        snapshot.configOptions.get(sessionId)?.find((option) => option.id === "model")
+            ?.currentValue
     );
-    const model = configOptions.find((option) => option.id === "model")?.currentValue;
     const emptyContext = {
         provider,
         project: session ? sessionProjectLabel(session) : null,
