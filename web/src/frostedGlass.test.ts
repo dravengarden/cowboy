@@ -3,7 +3,7 @@ import {
   FROSTED_PILL_DROP_SHADOW_GEOMETRY,
   TURN_STATUS_PILL_MIN_HEIGHT,
 } from "./floatingOverlayPolicy";
-import { mobileTranscriptActivitySurfaceGap } from "./mobileComposerPrimitives";
+import { mobileTranscriptTailGap } from "./mobileComposerPrimitives";
 
 const composerSource = await Deno.readTextFile(
   new URL("./Composer.tsx", import.meta.url),
@@ -76,12 +76,10 @@ Deno.test("judge progress is transcript-owned with a zero-jump pill handoff", ()
     transcriptActivitySource.includes("data-composer-stack-slot"),
     false,
   );
-  assertEquals(
-    transcriptSource.includes(
-      "showJudging && <TranscriptJudgingActivity />",
-    ),
-    true,
-  );
+  assertEquals(transcriptSource.includes('data-transcript-tail-row="judging"'), true);
+  assertEquals(transcriptSource.includes("showJudging && ("), true);
+  assertEquals(transcriptSource.includes("<TranscriptJudgingActivity />"), true);
+  assertEquals(transcriptSource.includes("data-transcript-tail-clearance"), true);
   assertEquals(appSource.includes("judging={judging}"), true);
 });
 
@@ -96,15 +94,22 @@ Deno.test("focused mobile composer owns a real frosted material", () => {
   );
 });
 
-Deno.test("live Mobile thought surfaces breathe above the composer boundary", () => {
-  assertEquals(mobileTranscriptActivitySurfaceGap, 6);
+Deno.test("every Mobile transcript tail shares one external boundary gap", () => {
+  assertEquals(mobileTranscriptTailGap, 6);
   assertEquals(
     transcriptSource.includes(
-      "pb: touch && streaming\n          ? `${mobileTranscriptActivitySurfaceGap}px`",
+      "data-transcript-tail-clearance",
     ),
     true,
   );
-  assertEquals(transcriptSource.includes("touch={!desktop}"), true);
+  assertEquals(
+    transcriptSource.includes("height: `${mobileTranscriptTailGap}px`"),
+    true,
+  );
+  assertEquals(
+    transcriptSource.includes("mobileTranscriptActivitySurfaceGap"),
+    false,
+  );
 });
 
 Deno.test("live thought shimmer crosses each glyph run once per cycle", () => {

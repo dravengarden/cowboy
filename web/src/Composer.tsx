@@ -1435,6 +1435,12 @@ export function ComposerWorkspace({
         borderTop: 0,
         position: "relative", // anchor for Popper portal placement
         ...(!desktop && {
+          minHeight: 0,
+          maxHeight: "100%",
+          "&:has(> [data-mobile-primary-composer='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within)": {
+            flex: "1 1 auto",
+            overflow: "hidden",
+          },
           // Every visible slot shares one horizontal contract. Explicitly zero
           // the flex minimum so a long pending row, CodeMirror canvas, or
           // container-query child cannot shrink or widen the whole bottom stack.
@@ -1792,6 +1798,9 @@ export function ComposerWorkspace({
             // leave a tall, inert canvas after Settings or another action takes
             // focus while the native textarea has already blurred.
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within)": {
+              flex: "1 1 auto",
+              minHeight: 0,
+              maxHeight: "100%",
               borderColor: (t) => alpha(t.palette.primary.main, 0.42),
               // Focus changes hierarchy inside the same card. Keep the outer
               // edge fixed so opening the keyboard does not look like a second
@@ -1808,7 +1817,23 @@ export function ComposerWorkspace({
                 `0 10px 28px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.24 : 0.09)}`,
             },
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area]": {
+              flex: "0 1 auto",
               minHeight: MOBILE_COMPOSER_INPUT_EDITOR_MIN_H,
+              maxHeight: "100%",
+              overflow: "hidden",
+            },
+            // Preserve native autosize for short prompts, but complete the
+            // shrink chain for long ones. Once the keyboard leaves less room
+            // than the textarea's intrinsic maxRows height, only the real
+            // textarea scrolls; both action rows remain fixed and visible.
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor], &[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor] > .MuiFormControl-root, &[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor] .MuiInputBase-root": {
+              minHeight: 0,
+              maxHeight: "100%",
+              overflow: "hidden",
+            },
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor] .MuiInputBase-input": {
+              maxHeight: "100%",
+              overflowY: "auto !important",
             },
             // An inline image promotes the compact native textarea to CM6. Keep
             // the complete focused canvas inside the same contenteditable height
@@ -2321,6 +2346,7 @@ export function ComposerWorkspace({
             spacing={0.125}
             sx={{
               order: 2,
+              flexShrink: 0,
               maxHeight: 0,
               minHeight: 0,
               px: 0.75,
@@ -2387,6 +2413,7 @@ export function ComposerWorkspace({
             order: touchInput ? 1 : undefined,
             display: "flex",
             alignItems: "center",
+            flexShrink: 0,
             minWidth: 0,
             pb: 0.5,
             ...TOOLBAR_MIN_H,

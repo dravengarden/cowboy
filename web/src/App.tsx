@@ -2989,6 +2989,16 @@ export function App({
                                 minWidth: 0,
                                 width: "100%",
                                 alignSelf: "stretch",
+                                ...(mobile && {
+                                    // The keyboard-resized column is the hard
+                                    // height boundary. Let an overlong Composer
+                                    // shrink inside it so the editor, rather than
+                                    // the formatting/delivery rows, owns overflow.
+                                    minHeight: 0,
+                                    maxHeight: "100%",
+                                    display: "flex",
+                                    flexDirection: "column",
+                                }),
                                 // Lift the composer content above the frosted slab behind
                                 // it (zIndex 1) in BOTH modes — the composer is transparent,
                                 // the slab is the glass, the transcript scrolls under both.

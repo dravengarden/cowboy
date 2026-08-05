@@ -97,7 +97,7 @@ import {
 } from "./store";
 import { importantHaptic, magneticHaptic } from "./haptic";
 import { useReadingSettings } from "./readingSettings";
-import { mobileTranscriptActivitySurfaceGap } from "./mobileComposerPrimitives";
+import { mobileTranscriptTailGap } from "./mobileComposerPrimitives";
 import {
   requestStickToBottom,
   resetSticky,
@@ -1182,12 +1182,10 @@ function ThoughtSteps({
   sections,
   streaming,
   codex,
-  touch,
 }: {
   sections: string[];
   streaming: boolean;
   codex: boolean;
-  touch: boolean;
 }): React.JSX.Element {
   const visible = sections.filter((section) => section.trim() !== "");
   return (
@@ -1196,14 +1194,6 @@ function ThoughtSteps({
       sx={{
         flex: 1,
         minWidth: 0,
-        // The ordinary provider working line includes 6px of visible breathing
-        // space before the Mobile Composer boundary. A live thought has a tinted
-        // final surface, so its background otherwise ends only at the timeline
-        // row's 5px padding and reads as stuck to the hairline. Match the working
-        // line without loosening completed transcript rows or Desktop density.
-        pb: touch && streaming
-          ? `${mobileTranscriptActivitySurfaceGap}px`
-          : 0,
       }}
       aria-label="Thinking steps"
     >
@@ -2860,7 +2850,6 @@ const ItemView = memo(function ItemView({
               sections={item.sections}
               streaming={!!streaming}
               codex={provider === "codex" || provider === "codex-deepseek"}
-              touch={!desktop}
             />
           </Box>
         </Box>
@@ -4724,6 +4713,15 @@ export function Transcript({
                   Keep the page-turn footer next to the persistent Page Dock;
                   the flexible remainder belongs between short content and its
                   footer, never below the footer as a large dead zone. */}
+              <Box
+                aria-hidden
+                data-transcript-tail-clearance
+                sx={{
+                  height: `${mobileTranscriptTailGap}px`,
+                  flex: `0 0 ${mobileTranscriptTailGap}px !important`,
+                  pointerEvents: "none",
+                }}
+              />
               {pageFooter}
               {shortContentAtTop && (
                 <Box
@@ -4738,7 +4736,11 @@ export function Transcript({
                   }}
                 />
               )}
-              {showJudging && <TranscriptJudgingActivity />}
+              {showJudging && (
+                <Box data-transcript-tail-row="judging" sx={{ py: 0.625 }}>
+                  <TranscriptJudgingActivity />
+                </Box>
+              )}
               {
                 /* Still-waiting row: after QUIET_BADGE_MIN of no timeline activity on a
                 working turn, surface the silence (count-up) + a REAL red Stop button.
@@ -4748,7 +4750,7 @@ export function Transcript({
               {working && quietMin >= QUIET_BADGE_MIN && (
                 <Box
                   sx={{
-                    py: 0.5,
+                    py: 0.625,
                     display: "flex",
                     justifyContent: "center",
                     alignItems: "center",

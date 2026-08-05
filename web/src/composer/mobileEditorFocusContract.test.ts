@@ -186,6 +186,34 @@ Deno.test("mobile composer keeps one boundary gap across focus transitions", () 
   );
 });
 
+Deno.test("long touch prompts scroll inside the editor without hiding chrome", () => {
+  const formatRowStart = composerSource.indexOf("data-mobile-focus-format-row");
+  const actionRowStart = composerSource.indexOf("data-mobile-action-row={");
+  const formatRowSource = composerSource.slice(formatRowStart, actionRowStart);
+  const actionRowSource = composerSource.slice(actionRowStart, actionRowStart + 420);
+
+  assertEquals(
+    appSource.includes(
+      'maxHeight: "100%",\n                                    display: "flex",\n                                    flexDirection: "column"',
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      '"&[data-mobile-keyboard-open=\'true\']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor] .MuiInputBase-input"',
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes('overflowY: "auto !important"'),
+    true,
+  );
+  assertEquals(formatRowStart >= 0, true);
+  assertEquals(actionRowStart >= 0, true);
+  assertEquals(formatRowSource.includes("flexShrink: 0"), true);
+  assertEquals(actionRowSource.includes("flexShrink: 0"), true);
+});
+
 Deno.test("mobile keyboard focus presents one floating composer surface", () => {
   assertEquals(
     composerSource.includes("<span data-mobile-composer-clear>"),

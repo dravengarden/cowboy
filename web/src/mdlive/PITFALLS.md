@@ -1072,15 +1072,19 @@ Desktop Vim + IME checks:
     `min-width: 0`; a long editor or pending row must never transfer its intrinsic
     width to the stack. This changes layout ownership only—do not add editor
     remounts, delayed focus, controlled values, or IME event handling to repair
-    geometry. A tinted live Thinking surface at the end of the Mobile Transcript
-    owns 6px of clear trailing space in addition to its timeline row padding. Its
-    visible bottom therefore sits 11px above the Composer boundary, matching the
-    effective clearance of the provider-only working phrase (`Burrowing…`, etc.).
-    Keep this outside the tinted surface and Mobile-only: changing the shared 4px
-    Composer stack rhythm would loosen Plan/Draft/Queue spacing and changing the
-    thought's internal padding would merely make the pill taller. Each Thought
+    geometry. The Mobile Transcript owns one DOM-first 6px tail spacer below
+    whichever element is visually last: Markdown, Thinking, Judging, optimistic
+    content, quiet recovery, or a Page footer. Keep this external to every item;
+    type-specific padding recreates unequal boundaries whenever the final item
+    changes. The Composer stack separately retains its 4px internal rhythm.
+    Each Thought
     step owns a dedicated indicator grid lane: the bulb/dot centre is anchored to
     `0.5lh`, the inherited first-line centre, while the lane stretches with
     multi-line content for its connector. Do not restore separate current/done
     `em` top offsets; they drift whenever Reading font size or surface padding
-    changes.
+    changes. A keyboard-focused Mobile Composer is also one bounded flex column:
+    the shell, workspace, card, and editor may shrink with `min-height: 0`, while
+    formatting and delivery rows never shrink. A short native textarea remains
+    content-sized; only an overlong prompt is clamped by the available WebView
+    height and scrolls inside the real textarea. Never cap or scroll the complete
+    card, because that hides the rich-text row and moves editor chrome with text.

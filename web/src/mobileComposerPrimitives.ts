@@ -17,11 +17,11 @@ export const mobileComposerKeyboardGap = 6;
 /** The one outer rhythm shared by Transcript, status, Plan, Pending, and input. */
 export const mobileComposerStackGap = 4;
 
-/** Extra clear space after a tinted live-thought surface at the Transcript edge.
- * The provider-only working indicator already carries the same effective
- * clearance in its own vertical padding; this keeps both activity forms from
- * looking fused to the Composer boundary. */
-export const mobileTranscriptActivitySurfaceGap = 6;
+/** One external clearance after whichever row owns the live Transcript tail.
+ * Row internals must never manufacture their own boundary exception: Markdown,
+ * Thinking, Judging, optimistic messages, and Page footers all terminate above
+ * this same spacer. */
+export const mobileTranscriptTailGap = 6;
 
 /** One coordinated timeline for the Mobile composer's focus expansion and
  * collapse. Keep adjacent surfaces on this curve so dismissing the keyboard
