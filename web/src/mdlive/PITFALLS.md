@@ -836,13 +836,11 @@ here says otherwise.
     pointer selection, `contextmenu`, or delayed refocus: those either suppress
     native selection/IME or cannot summon iOS's menu reliably.
 
-    Register the blank-canvas hold directly on the textarea with a non-passive
-    `touchstart` listener. React delegates `touchstart` passively, so UIKit's
-    text recognizer can cancel or suspend the synthetic event sequence before a
-    JavaScript hold timer runs. Only after geometry proves the press is below
-    laid-out text should the listener prevent the unusable native default and
-    own the gesture through `touchend`/`touchcancel`. Never prevent presses near
-    text: they must retain native Select/Paste and selection handles.
+    Keep the obsolete blank-canvas clipboard reader deleted as well as its
+    visual menu. A dead `navigator.clipboard.read()` fallback makes it too easy
+    to accidentally restore a second paste interaction later. The only
+    application hook is the textarea's real `paste` event, used to extract file
+    attachments after UIKit has completed the native gesture.
 
 39. **Native-to-CM6 image promotion transfers selection, not only text and
     focus.** The first inline-image token immediately unmounts the native iOS
