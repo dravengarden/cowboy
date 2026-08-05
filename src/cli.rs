@@ -169,6 +169,10 @@ impl Cli {
     /// Returns an error when command validation, startup, or the selected
     /// long-running service fails.
     pub async fn run(self) -> anyhow::Result<()> {
+        // Reqwest is deliberately provider-neutral. Install the one selected
+        // rustls provider before any command can construct an HTTPS client;
+        // background startup order must not decide whether TLS panics.
+        let _ = rustls::crypto::ring::default_provider().install_default();
         match self.command {
             Command::Serve(args) => crate::server::serve(args).await,
             Command::ServeAcp(args) => {
