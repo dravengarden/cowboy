@@ -47,3 +47,11 @@ export function didMobileSoftwareKeyboardClose(
 ): boolean {
   return wasOpen && !isOpen;
 }
+
+/** A context reset blocks stale WebKit focus restoration from re-promoting UI. */
+export function shouldPresentMobileKeyboardSurface(
+  keyboardOpen: boolean,
+  resetBlocked: boolean,
+): boolean {
+  return keyboardOpen && !resetBlocked;
+}
