@@ -1684,6 +1684,398 @@ fn status_from_str(s: &str) -> Status {
     }
 }
 
+fn provider_usage_metrics_within_bounds(
+    event: &crate::machine_protocol::ProviderUsageEvent,
+) -> bool {
+    ![
+        event.input_tokens,
+        event.output_tokens,
+        event.reasoning_tokens,
+        event.cache_hit_tokens,
+        event.cache_miss_tokens,
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| value > crate::machine_protocol::PROVIDER_USAGE_MAX_TOKENS)
+        && event
+            .duration_ms
+            .is_none_or(|value| value <= crate::machine_protocol::PROVIDER_USAGE_MAX_DURATION_MS)
+        && event
+            .request_bytes
+            .is_none_or(|value| value <= crate::machine_protocol::PROVIDER_USAGE_MAX_REQUEST_BYTES)
+        && ![
+            event.input_item_count,
+            event.tool_count,
+            event.system_block_count,
+            event.compatibility_fixes,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|value| value > crate::machine_protocol::PROVIDER_USAGE_MAX_SHAPE_COUNT)
+}
+
+fn validate_provider_usage_event(
+    producer_id: &str,
+    event: &crate::machine_protocol::ProviderUsageEvent,
+) -> Result<()> {
+    if event.producer_id != producer_id
+        || event.provider != "deepseek"
+        || !matches!(event.agent.as_str(), "codex" | "claude")
+        || event.account_fingerprint.len() != 16
+        || !event
+            .account_fingerprint
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+        || event.model.len() > 128
+        || !(100..=599).contains(&event.status)
+        || !matches!(event.schema_version, 1 | 2)
+        || !matches!(
+            event.operation.as_str(),
+            "legacy" | "responses" | "compact" | "messages"
+        )
+        || !matches!(
+            event.protocol.as_str(),
+            "legacy" | "responses" | "chat_completions" | "anthropic_messages"
+        )
+        || !matches!(
+            event.cache_observation.as_str(),
+            "legacy" | "absent" | "derived" | "explicit"
+        )
+        || !matches!(
+            (
+                producer_id,
+                event.producer_id.as_str(),
+                event.agent.as_str()
+            ),
+            ("codex-deepseek", "codex-deepseek", "codex")
+                | ("claude-deepseek", "claude-deepseek", "claude")
+        )
+        || !provider_usage_metrics_within_bounds(event)
+    {
+        anyhow::bail!("invalid provider usage event");
+    }
+    if event.schema_version == 2
+        && (event.operation == "legacy"
+            || event.protocol == "legacy"
+            || event.cache_observation == "legacy"
+            || event.usage_observed.is_none()
+            || event.completed.is_none()
+            || event.streaming.is_none()
+            || event.duration_ms.is_none()
+            || event.request_bytes.is_none()
+            || event.input_item_count.is_none()
+            || event.tool_count.is_none()
+            || event.system_block_count.is_none()
+            || event.has_previous_response_id.is_none()
+            || event.compatibility_fixes.is_none())
+    {
+        anyhow::bail!("incomplete version two provider usage event");
+    }
+    if event.schema_version == 2
+        && !matches!(
+            (
+                event.agent.as_str(),
+                event.operation.as_str(),
+                event.protocol.as_str()
+            ),
+            (
+                "codex",
+                "responses" | "compact",
+                "responses" | "chat_completions"
+            ) | ("claude", "messages", "anthropic_messages")
+        )
+    {
+        anyhow::bail!("inconsistent provider usage dimensions");
+    }
+    match event.cache_observation.as_str() {
+        "absent" if event.cache_hit_tokens.is_some() || event.cache_miss_tokens.is_some() => {
+            anyhow::bail!("cache counters require a measured observation");
+        }
+        "derived" | "explicit"
+            if event.usage_observed != Some(true)
+                || event.cache_hit_tokens.is_none()
+                || event.cache_miss_tokens.is_none() =>
+        {
+            anyhow::bail!("measured cache observations require complete counters");
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod provider_usage_validation_tests {
+    use super::*;
+    use crate::machine_protocol::ProviderUsageEvent;
+
+    fn event() -> ProviderUsageEvent {
+        ProviderUsageEvent {
+            schema_version: 2,
+            producer_id: "codex-deepseek".to_owned(),
+            sequence: 1,
+            occurred_at_ms: 1_786_000_000_000,
+            account_fingerprint: "0123456789abcdef".to_owned(),
+            provider: "deepseek".to_owned(),
+            agent: "codex".to_owned(),
+            model: "deepseek-v4-flash".to_owned(),
+            status: 200,
+            input_tokens: Some(10),
+            output_tokens: Some(4),
+            reasoning_tokens: Some(1),
+            cache_hit_tokens: Some(7),
+            cache_miss_tokens: Some(3),
+            operation: "responses".to_owned(),
+            protocol: "responses".to_owned(),
+            cache_observation: "derived".to_owned(),
+            usage_observed: Some(true),
+            completed: Some(true),
+            streaming: Some(true),
+            duration_ms: Some(42),
+            request_bytes: Some(123),
+            input_item_count: Some(2),
+            tool_count: Some(1),
+            system_block_count: Some(1),
+            has_previous_response_id: Some(true),
+            compatibility_fixes: Some(0),
+        }
+    }
+
+    #[test]
+    fn controller_rejects_unknown_usage_producer() {
+        let mut candidate = event();
+        candidate.producer_id = "custom-deepseek".to_owned();
+        assert!(validate_provider_usage_event("custom-deepseek", &candidate).is_err());
+    }
+
+    #[test]
+    fn controller_rejects_oversized_usage_metric() {
+        let mut candidate = event();
+        candidate.cache_hit_tokens = Some(crate::machine_protocol::PROVIDER_USAGE_MAX_TOKENS + 1);
+        assert!(validate_provider_usage_event("codex-deepseek", &candidate).is_err());
+    }
+}
+
+fn provider_usage_metric(value: Option<u64>) -> Result<Option<i64>> {
+    value
+        .map(i64::try_from)
+        .transpose()
+        .context("provider usage metric overflow")
+}
+
+async fn insert_provider_usage_event(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    machine_id: &str,
+    producer_id: &str,
+    event: &crate::machine_protocol::ProviderUsageEvent,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO provider_usage_events (machine_id, producer_id, sequence, occurred_at, \
+         account_fingerprint, provider, agent, model, status, input_tokens, output_tokens, \
+         reasoning_tokens, cache_hit_tokens, cache_miss_tokens, schema_version, operation, \
+         protocol, cache_observation, usage_observed, completed, streaming, duration_ms, \
+         request_bytes, input_item_count, tool_count, system_block_count, \
+         has_previous_response_id, compatibility_fixes) VALUES ( \
+         $1, $2, $3, to_timestamp($4::double precision / 1000), $5, $6, $7, $8, $9, \
+         $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, \
+         $24, $25, $26, $27, $28) ON CONFLICT DO NOTHING",
+    )
+    .bind(machine_id)
+    .bind(producer_id)
+    .bind(i64::try_from(event.sequence).context("usage sequence overflow")?)
+    .bind(event.occurred_at_ms)
+    .bind(&event.account_fingerprint)
+    .bind(&event.provider)
+    .bind(&event.agent)
+    .bind(&event.model)
+    .bind(i32::from(event.status))
+    .bind(provider_usage_metric(event.input_tokens)?)
+    .bind(provider_usage_metric(event.output_tokens)?)
+    .bind(provider_usage_metric(event.reasoning_tokens)?)
+    .bind(provider_usage_metric(event.cache_hit_tokens)?)
+    .bind(provider_usage_metric(event.cache_miss_tokens)?)
+    .bind(i32::from(event.schema_version))
+    .bind(&event.operation)
+    .bind(&event.protocol)
+    .bind(&event.cache_observation)
+    .bind(event.usage_observed)
+    .bind(event.completed)
+    .bind(event.streaming)
+    .bind(provider_usage_metric(event.duration_ms)?)
+    .bind(provider_usage_metric(event.request_bytes)?)
+    .bind(provider_usage_metric(event.input_item_count)?)
+    .bind(provider_usage_metric(event.tool_count)?)
+    .bind(provider_usage_metric(event.system_block_count)?)
+    .bind(event.has_previous_response_id)
+    .bind(provider_usage_metric(event.compatibility_fixes)?)
+    .execute(&mut **transaction)
+    .await
+    .context("insert provider usage event")?;
+    Ok(())
+}
+
+const PROVIDER_USAGE_AGGREGATE_COLUMNS: &str = "count(*)::bigint AS requests, \
+     count(*) FILTER (WHERE status >= 400)::bigint AS errors, \
+     count(*) FILTER (WHERE completed IS TRUE)::bigint AS completed_requests, \
+     count(completed)::bigint AS completion_observations, \
+     count(*) FILTER (WHERE usage_observed IS TRUE)::bigint AS usage_observations, \
+     least(coalesce(sum(input_tokens::numeric), 0), 9223372036854775807)::bigint AS input_tokens, \
+     least(coalesce(sum(output_tokens::numeric), 0), 9223372036854775807)::bigint AS output_tokens, \
+     least(coalesce(sum(reasoning_tokens::numeric), 0), 9223372036854775807)::bigint AS reasoning_tokens, \
+     least(coalesce(sum(cache_hit_tokens::numeric) FILTER (WHERE cache_observation IN ('explicit', 'derived')), 0), 9223372036854775807)::bigint AS cache_hit_tokens, \
+     least(coalesce(sum(cache_miss_tokens::numeric) FILTER (WHERE cache_observation IN ('explicit', 'derived')), 0), 9223372036854775807)::bigint AS cache_miss_tokens, \
+     count(*) FILTER (WHERE cache_observation IN ('explicit', 'derived') AND cache_hit_tokens IS NOT NULL AND cache_miss_tokens IS NOT NULL)::bigint AS cache_observations, \
+     count(*) FILTER (WHERE cache_observation = 'explicit')::bigint AS explicit_cache_observations, \
+     count(*) FILTER (WHERE cache_observation = 'derived')::bigint AS derived_cache_observations, \
+     count(*) FILTER (WHERE cache_observation = 'absent')::bigint AS absent_cache_observations, \
+     count(*) FILTER (WHERE cache_observation = 'legacy')::bigint AS legacy_cache_observations, \
+     count(*) FILTER (WHERE cache_observation IN ('explicit', 'derived') AND cache_hit_tokens::numeric + cache_miss_tokens::numeric > 0 AND cache_hit_tokens::numeric * 10 < cache_hit_tokens::numeric + cache_miss_tokens::numeric)::bigint AS cold_cache_requests, \
+     count(*) FILTER (WHERE cache_observation IN ('explicit', 'derived') AND cache_hit_tokens::numeric + cache_miss_tokens::numeric > 0 AND cache_hit_tokens::numeric * 10 >= 9 * (cache_hit_tokens::numeric + cache_miss_tokens::numeric))::bigint AS hot_cache_requests, \
+     least(coalesce(sum(duration_ms::numeric), 0), 9223372036854775807)::bigint AS duration_ms, \
+     count(duration_ms)::bigint AS duration_observations, \
+     least(coalesce(sum(request_bytes::numeric), 0), 9223372036854775807)::bigint AS request_bytes, \
+     count(request_bytes)::bigint AS request_shape_observations, \
+     least(coalesce(sum(input_item_count::numeric), 0), 9223372036854775807)::bigint AS input_item_count, \
+     least(coalesce(sum(tool_count::numeric), 0), 9223372036854775807)::bigint AS tool_count, \
+     least(coalesce(sum(system_block_count::numeric), 0), 9223372036854775807)::bigint AS system_block_count, \
+     count(*) FILTER (WHERE has_previous_response_id IS TRUE)::bigint AS previous_response_requests, \
+     least(coalesce(sum(compatibility_fixes::numeric), 0), 9223372036854775807)::bigint AS compatibility_fixes, \
+     count(*) FILTER (WHERE streaming IS TRUE)::bigint AS streaming_requests";
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderUsageBreakdown {
+    summary: UsageAggregate,
+    by_agent: std::collections::BTreeMap<String, UsageAggregate>,
+    by_machine: std::collections::BTreeMap<String, UsageAggregate>,
+    by_operation: std::collections::BTreeMap<String, UsageAggregate>,
+    by_model: std::collections::BTreeMap<String, UsageAggregate>,
+    by_protocol: std::collections::BTreeMap<String, UsageAggregate>,
+    by_agent_operation:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, UsageAggregate>>,
+}
+
+async fn load_provider_usage_breakdown(
+    pool: &PgPool,
+    provider: &str,
+    days: i32,
+) -> Result<ProviderUsageBreakdown> {
+    let query = format!(
+        "SELECT agent, machine_id, coalesce(model, '') AS model, operation, protocol, \
+         {PROVIDER_USAGE_AGGREGATE_COLUMNS} FROM provider_usage_events WHERE provider = $1 \
+         AND occurred_at >= now() - make_interval(days => $2::int) \
+         GROUP BY agent, machine_id, model, operation, protocol"
+    );
+    let rows = sqlx::query(&query)
+        .bind(provider)
+        .bind(days)
+        .fetch_all(pool)
+        .await
+        .context("aggregate provider usage")?;
+    let mut breakdown = ProviderUsageBreakdown {
+        summary: UsageAggregate::default(),
+        by_agent: std::collections::BTreeMap::new(),
+        by_machine: std::collections::BTreeMap::new(),
+        by_operation: std::collections::BTreeMap::new(),
+        by_model: std::collections::BTreeMap::new(),
+        by_protocol: std::collections::BTreeMap::new(),
+        by_agent_operation: std::collections::BTreeMap::new(),
+    };
+    for row in rows {
+        let aggregate = UsageAggregate::from_row(&row);
+        let agent = row.get::<String, _>("agent");
+        let operation = row.get::<String, _>("operation");
+        breakdown.summary.add(&aggregate);
+        breakdown
+            .by_agent
+            .entry(agent.clone())
+            .or_default()
+            .add(&aggregate);
+        breakdown
+            .by_machine
+            .entry(row.get("machine_id"))
+            .or_default()
+            .add(&aggregate);
+        breakdown
+            .by_operation
+            .entry(operation.clone())
+            .or_default()
+            .add(&aggregate);
+        breakdown
+            .by_model
+            .entry(row.get("model"))
+            .or_default()
+            .add(&aggregate);
+        breakdown
+            .by_protocol
+            .entry(row.get("protocol"))
+            .or_default()
+            .add(&aggregate);
+        breakdown
+            .by_agent_operation
+            .entry(agent)
+            .or_default()
+            .entry(operation)
+            .or_default()
+            .add(&aggregate);
+    }
+    Ok(breakdown)
+}
+
+async fn load_daily_provider_usage(
+    pool: &PgPool,
+    provider: &str,
+    days: i32,
+) -> Result<Vec<serde_json::Value>> {
+    let query = format!(
+        "SELECT to_char(date_trunc('day', occurred_at), 'YYYY-MM-DD') AS day, \
+         {PROVIDER_USAGE_AGGREGATE_COLUMNS} FROM provider_usage_events WHERE provider = $1 \
+         AND occurred_at >= now() - make_interval(days => $2::int) \
+         GROUP BY date_trunc('day', occurred_at) ORDER BY date_trunc('day', occurred_at)"
+    );
+    Ok(sqlx::query(&query)
+        .bind(provider)
+        .bind(days)
+        .fetch_all(pool)
+        .await
+        .context("aggregate daily provider usage")?
+        .into_iter()
+        .map(|row| {
+            serde_json::json!({
+                "day": row.get::<String, _>("day"),
+                "totals": UsageAggregate::from_row(&row),
+            })
+        })
+        .collect())
+}
+
+async fn load_provider_usage_coverage(
+    pool: &PgPool,
+    provider: &str,
+    days: i32,
+) -> Result<Vec<serde_json::Value>> {
+    Ok(sqlx::query(
+        "SELECT machine_id, agent, last_sequence, \
+         (extract(epoch FROM last_received_at) * 1000)::bigint AS last_received_at_ms \
+         FROM provider_usage_producers WHERE provider = $1 AND last_received_at >= \
+         now() - make_interval(days => $2::int) ORDER BY machine_id, agent",
+    )
+    .bind(provider)
+    .bind(days)
+    .fetch_all(pool)
+    .await
+    .context("load provider usage coverage")?
+    .into_iter()
+    .map(|row| {
+        serde_json::json!({
+            "machine": row.get::<String, _>("machine_id"),
+            "agent": row.get::<String, _>("agent"),
+            "lastSequence": row.get::<i64, _>("last_sequence"),
+            "lastReceivedAtMs": row.get::<i64, _>("last_received_at_ms"),
+        })
+    })
+    .collect())
+}
+
 impl Store {
     /// Persist one authenticated Machine usage batch idempotently and advance
     /// its producer watermark in the same transaction.
@@ -1707,45 +2099,8 @@ impl Store {
             .await
             .context("begin provider usage batch")?;
         for event in events {
-            if event.producer_id != producer_id
-                || event.provider != "deepseek"
-                || !matches!(event.agent.as_str(), "codex" | "claude")
-                || event.account_fingerprint.len() != 16
-                || event.model.len() > 128
-                || !(100..=599).contains(&event.status)
-            {
-                anyhow::bail!("invalid provider usage event");
-            }
-            let token = |value: Option<u64>| -> Result<Option<i64>> {
-                value
-                    .map(i64::try_from)
-                    .transpose()
-                    .context("provider usage token count overflow")
-            };
-            sqlx::query(
-                "INSERT INTO provider_usage_events (machine_id, producer_id, sequence, occurred_at, \
-                 account_fingerprint, provider, agent, model, status, input_tokens, output_tokens, \
-                 reasoning_tokens, cache_hit_tokens, cache_miss_tokens) VALUES ( \
-                 $1, $2, $3, to_timestamp($4::double precision / 1000), $5, $6, $7, $8, $9, \
-                 $10, $11, $12, $13, $14) ON CONFLICT DO NOTHING",
-            )
-            .bind(machine_id)
-            .bind(producer_id)
-            .bind(i64::try_from(event.sequence).context("usage sequence overflow")?)
-            .bind(event.occurred_at_ms)
-            .bind(&event.account_fingerprint)
-            .bind(&event.provider)
-            .bind(&event.agent)
-            .bind(&event.model)
-            .bind(i32::from(event.status))
-            .bind(token(event.input_tokens)?)
-            .bind(token(event.output_tokens)?)
-            .bind(token(event.reasoning_tokens)?)
-            .bind(token(event.cache_hit_tokens)?)
-            .bind(token(event.cache_miss_tokens)?)
-            .execute(&mut *transaction)
-            .await
-            .context("insert provider usage event")?;
+            validate_provider_usage_event(producer_id, event)?;
+            insert_provider_usage_event(&mut transaction, machine_id, producer_id, event).await?;
         }
         let last = events.iter().map(|event| event.sequence).max().unwrap_or(0);
         let newest = events
@@ -1785,67 +2140,17 @@ impl Store {
     pub async fn provider_usage_summary(
         &self,
         provider: &str,
-        account_fingerprint: &str,
         days: i32,
     ) -> Result<serde_json::Value> {
-        let rows = sqlx::query(
-            "SELECT agent, machine_id, count(*)::bigint AS requests, \
-             count(*) FILTER (WHERE status >= 400)::bigint AS errors, \
-             coalesce(sum(input_tokens), 0)::bigint AS input_tokens, \
-             coalesce(sum(output_tokens), 0)::bigint AS output_tokens, \
-             coalesce(sum(reasoning_tokens), 0)::bigint AS reasoning_tokens, \
-             coalesce(sum(cache_hit_tokens), 0)::bigint AS cache_hit_tokens, \
-             coalesce(sum(cache_miss_tokens), 0)::bigint AS cache_miss_tokens, \
-             count(*) FILTER (WHERE cache_hit_tokens IS NOT NULL AND \
-             cache_miss_tokens IS NOT NULL)::bigint AS cache_observations \
-             FROM provider_usage_events WHERE provider = $1 AND account_fingerprint = $2 \
-             AND received_at >= now() - make_interval(days => $3::int) GROUP BY agent, machine_id",
-        )
-        .bind(provider)
-        .bind(account_fingerprint)
-        .bind(days)
-        .fetch_all(&self.pool)
-        .await
-        .context("aggregate provider usage")?;
-        let mut total = UsageAggregate::default();
-        let mut by_agent = std::collections::BTreeMap::<String, UsageAggregate>::new();
-        let mut by_machine = std::collections::BTreeMap::<String, UsageAggregate>::new();
-        for row in rows {
-            let aggregate = UsageAggregate::from_row(&row);
-            total.add(&aggregate);
-            by_agent
-                .entry(row.get("agent"))
-                .or_default()
-                .add(&aggregate);
-            by_machine
-                .entry(row.get("machine_id"))
-                .or_default()
-                .add(&aggregate);
-        }
-        let producers = sqlx::query(
-            "SELECT machine_id, agent, last_sequence, \
-             (extract(epoch FROM last_received_at) * 1000)::bigint AS last_received_at_ms \
-             FROM provider_usage_producers WHERE provider = $1 AND account_fingerprint = $2 \
-             ORDER BY machine_id, agent",
-        )
-        .bind(provider)
-        .bind(account_fingerprint)
-        .fetch_all(&self.pool)
-        .await
-        .context("load provider usage coverage")?
-        .into_iter()
-        .map(|row| {
-            serde_json::json!({
-                "machine": row.get::<String, _>("machine_id"),
-                "agent": row.get::<String, _>("agent"),
-                "lastSequence": row.get::<i64, _>("last_sequence"),
-                "lastReceivedAtMs": row.get::<i64, _>("last_received_at_ms"),
-            })
-        })
-        .collect::<Vec<_>>();
+        let breakdown = load_provider_usage_breakdown(&self.pool, provider, days).await?;
+        let daily = load_daily_provider_usage(&self.pool, provider, days).await?;
+        let producers = load_provider_usage_coverage(&self.pool, provider, days).await?;
         Ok(serde_json::json!({
-            "source": "cowboy", "retentionDays": days, "summary": total,
-            "byAgent": by_agent, "byMachine": by_machine,
+            "source": "cowboy", "windowField": "occurred_at", "retentionDays": days,
+            "summary": breakdown.summary, "byAgent": breakdown.by_agent,
+            "byMachine": breakdown.by_machine, "byOperation": breakdown.by_operation,
+            "byModel": breakdown.by_model, "byProtocol": breakdown.by_protocol,
+            "byAgentOperation": breakdown.by_agent_operation, "daily": daily,
             "coverage": { "producers": producers },
         }))
     }
@@ -1869,12 +2174,31 @@ impl Store {
 struct UsageAggregate {
     requests: i64,
     errors: i64,
+    completed_requests: i64,
+    completion_observations: i64,
+    usage_observations: i64,
     input_tokens: i64,
     output_tokens: i64,
     reasoning_tokens: i64,
     cache_hit_tokens: i64,
     cache_miss_tokens: i64,
     cache_observations: i64,
+    explicit_cache_observations: i64,
+    derived_cache_observations: i64,
+    absent_cache_observations: i64,
+    legacy_cache_observations: i64,
+    cold_cache_requests: i64,
+    hot_cache_requests: i64,
+    duration_ms: i64,
+    duration_observations: i64,
+    request_bytes: i64,
+    request_shape_observations: i64,
+    input_item_count: i64,
+    tool_count: i64,
+    system_block_count: i64,
+    previous_response_requests: i64,
+    compatibility_fixes: i64,
+    streaming_requests: i64,
 }
 
 impl UsageAggregate {
@@ -1882,18 +2206,46 @@ impl UsageAggregate {
         Self {
             requests: row.get("requests"),
             errors: row.get("errors"),
+            completed_requests: row.get("completed_requests"),
+            completion_observations: row.get("completion_observations"),
+            usage_observations: row.get("usage_observations"),
             input_tokens: row.get("input_tokens"),
             output_tokens: row.get("output_tokens"),
             reasoning_tokens: row.get("reasoning_tokens"),
             cache_hit_tokens: row.get("cache_hit_tokens"),
             cache_miss_tokens: row.get("cache_miss_tokens"),
             cache_observations: row.get("cache_observations"),
+            explicit_cache_observations: row.get("explicit_cache_observations"),
+            derived_cache_observations: row.get("derived_cache_observations"),
+            absent_cache_observations: row.get("absent_cache_observations"),
+            legacy_cache_observations: row.get("legacy_cache_observations"),
+            cold_cache_requests: row.get("cold_cache_requests"),
+            hot_cache_requests: row.get("hot_cache_requests"),
+            duration_ms: row.get("duration_ms"),
+            duration_observations: row.get("duration_observations"),
+            request_bytes: row.get("request_bytes"),
+            request_shape_observations: row.get("request_shape_observations"),
+            input_item_count: row.get("input_item_count"),
+            tool_count: row.get("tool_count"),
+            system_block_count: row.get("system_block_count"),
+            previous_response_requests: row.get("previous_response_requests"),
+            compatibility_fixes: row.get("compatibility_fixes"),
+            streaming_requests: row.get("streaming_requests"),
         }
     }
 
     fn add(&mut self, other: &Self) {
         self.requests = self.requests.saturating_add(other.requests);
         self.errors = self.errors.saturating_add(other.errors);
+        self.completed_requests = self
+            .completed_requests
+            .saturating_add(other.completed_requests);
+        self.completion_observations = self
+            .completion_observations
+            .saturating_add(other.completion_observations);
+        self.usage_observations = self
+            .usage_observations
+            .saturating_add(other.usage_observations);
         self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
         self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
         self.reasoning_tokens = self.reasoning_tokens.saturating_add(other.reasoning_tokens);
@@ -1904,6 +2256,46 @@ impl UsageAggregate {
         self.cache_observations = self
             .cache_observations
             .saturating_add(other.cache_observations);
+        self.explicit_cache_observations = self
+            .explicit_cache_observations
+            .saturating_add(other.explicit_cache_observations);
+        self.derived_cache_observations = self
+            .derived_cache_observations
+            .saturating_add(other.derived_cache_observations);
+        self.absent_cache_observations = self
+            .absent_cache_observations
+            .saturating_add(other.absent_cache_observations);
+        self.legacy_cache_observations = self
+            .legacy_cache_observations
+            .saturating_add(other.legacy_cache_observations);
+        self.cold_cache_requests = self
+            .cold_cache_requests
+            .saturating_add(other.cold_cache_requests);
+        self.hot_cache_requests = self
+            .hot_cache_requests
+            .saturating_add(other.hot_cache_requests);
+        self.duration_ms = self.duration_ms.saturating_add(other.duration_ms);
+        self.duration_observations = self
+            .duration_observations
+            .saturating_add(other.duration_observations);
+        self.request_bytes = self.request_bytes.saturating_add(other.request_bytes);
+        self.request_shape_observations = self
+            .request_shape_observations
+            .saturating_add(other.request_shape_observations);
+        self.input_item_count = self.input_item_count.saturating_add(other.input_item_count);
+        self.tool_count = self.tool_count.saturating_add(other.tool_count);
+        self.system_block_count = self
+            .system_block_count
+            .saturating_add(other.system_block_count);
+        self.previous_response_requests = self
+            .previous_response_requests
+            .saturating_add(other.previous_response_requests);
+        self.compatibility_fixes = self
+            .compatibility_fixes
+            .saturating_add(other.compatibility_fixes);
+        self.streaming_requests = self
+            .streaming_requests
+            .saturating_add(other.streaming_requests);
     }
 }
 

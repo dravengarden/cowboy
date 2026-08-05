@@ -24,6 +24,7 @@ import { Kbd, useConfirmEnter } from "./Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { useSkills } from "./store";
 import { NetworkButton, NetworkIconButton } from "./NetworkActionFeedback";
+import { deepseekCacheStats } from "./deepseekUsage";
 import {
   acceptedScheduleTime,
   type JsonRecord,
@@ -87,15 +88,25 @@ function formatTokens(value: number | undefined): string {
 function DeepSeekDetails(
   { usage }: { usage: ProviderUsage },
 ): React.JSX.Element {
-  const balances = Array.isArray(usage.account?.balanceInfos)
-    ? usage.account.balanceInfos.map(record).filter((
+  const accountViews = Array.isArray(usage.account?.accounts)
+    ? usage.account.accounts.map(record).filter((
       value,
     ): value is JsonRecord => value !== undefined)
     : [];
-  const preferred = balances.find((balance) => balance.currency === "CNY") ??
-    balances[0];
-  const currency = str(preferred?.currency) ?? "CNY";
-  const formatMoney = (value: unknown): string => {
+  const legacyBalances = Array.isArray(usage.account?.balanceInfos)
+    ? usage.account.balanceInfos
+    : [];
+  const balanceAccounts = accountViews.length > 0
+    ? accountViews
+    : legacyBalances.length > 0
+    ? [{ balanceInfos: legacyBalances }]
+    : [];
+  const accountErrors = Array.isArray(usage.account?.adapterErrors)
+    ? usage.account.adapterErrors.filter((value): value is string =>
+      typeof value === "string"
+    )
+    : [];
+  const formatMoney = (value: unknown, currency: string): string => {
     const amount = typeof value === "string" ? Number(value) : num(value);
     if (amount === undefined || !Number.isFinite(amount)) return "—";
     return new Intl.NumberFormat(undefined, { style: "currency", currency })
@@ -103,6 +114,7 @@ function DeepSeekDetails(
   };
   const summary = record(usage.activity?.summary);
   const byAgent = record(usage.activity?.byAgent);
+  const byAgentOperation = record(usage.activity?.byAgentOperation);
   const byMachine = record(usage.activity?.byMachine);
   const coverage = record(usage.activity?.coverage);
   const producers = Array.isArray(coverage?.producers)
@@ -118,25 +130,45 @@ function DeepSeekDetails(
   const telemetryError = str(usage.activity?.telemetryError);
   return (
     <Stack spacing={1.15}>
-      {preferred && (
-        <Box
-          sx={{ borderRadius: 1.5, bgcolor: "action.hover", px: 1.25, py: 1 }}
-        >
-          <Typography variant="caption" color="text.secondary">
-            Available balance · DeepSeek official
-          </Typography>
-          <Typography variant="h6" sx={{ fontWeight: 700 }}>
-            {formatMoney(preferred.total_balance)}
-          </Typography>
-          <Stack direction="row" spacing={2}>
+      {balanceAccounts.map((account, index) => {
+        const balances = Array.isArray(account.balanceInfos)
+          ? account.balanceInfos.map(record).filter((
+            value,
+          ): value is JsonRecord => value !== undefined)
+          : [];
+        const preferred = balances.find((balance) => balance.currency === "CNY") ?? balances[0];
+        if (!preferred) return null;
+        const currency = str(preferred.currency) ?? "CNY";
+        const agents = Array.isArray(account.agents)
+          ? account.agents.filter((value): value is string => typeof value === "string")
+          : [];
+        const lanes = agents.map((agent) => agent === "claude" ? "Claude Code" : agent === "codex" ? "Codex" : agent).join(" + ");
+        return (
+          <Box
+            key={str(account.accountFingerprint) ?? index}
+            sx={{ borderRadius: 1.5, bgcolor: "action.hover", px: 1.25, py: 1 }}
+          >
             <Typography variant="caption" color="text.secondary">
-              Funded {formatMoney(preferred.topped_up_balance)}
+              Available balance · DeepSeek official{lanes ? ` · ${lanes}` : ""}
             </Typography>
-            <Typography variant="caption" color="text.secondary">
-              Granted {formatMoney(preferred.granted_balance)}
+            <Typography variant="h6" sx={{ fontWeight: 700 }}>
+              {formatMoney(preferred.total_balance, currency)}
             </Typography>
-          </Stack>
-        </Box>
+            <Stack direction="row" spacing={2}>
+              <Typography variant="caption" color="text.secondary">
+                Funded {formatMoney(preferred.topped_up_balance, currency)}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                Granted {formatMoney(preferred.granted_balance, currency)}
+              </Typography>
+            </Stack>
+          </Box>
+        );
+      })}
+      {accountErrors.length > 0 && (
+        <Typography variant="caption" color="warning.main">
+          {String(accountErrors.length)} DeepSeek account lane{accountErrors.length === 1 ? "" : "s"} could not refresh; other available balances are still shown.
+        </Typography>
       )}
       {requests !== undefined && requests > 0
         ? (
@@ -182,12 +214,9 @@ function DeepSeekDetails(
                 {["claude", "codex"].flatMap((agent) => {
                   const totals = record(byAgent[agent]);
                   if (!totals) return [];
-                  const hit = num(totals.cacheHitTokens) ?? 0;
-                  const miss = num(totals.cacheMissTokens) ?? 0;
-                  const total = hit + miss;
-                  const rate = (num(totals.cacheObservations) ?? 0) > 0 && total > 0
-                    ? Math.round(hit * 100 / total)
-                    : undefined;
+                  const cache = deepseekCacheStats(totals);
+                  const rate = cache.hitRate === undefined ? undefined : Math.round(cache.hitRate);
+                  const coverageRate = cache.coverageRate === undefined ? undefined : Math.round(cache.coverageRate);
                   return [
                     <Box key={agent} sx={{ borderRadius: 1.5, bgcolor: "action.hover", px: 1.1, py: 0.9 }}>
                       <Stack spacing={0.5}>
@@ -200,7 +229,23 @@ function DeepSeekDetails(
                           <Typography variant="body2" fontWeight={600}>{rate === undefined ? "—" : `${String(rate)}%`}</Typography>
                         </Stack>
                         <LinearProgress variant="determinate" value={rate ?? 0} sx={{ height: 7, borderRadius: 99 }} />
-                        <Typography variant="caption" color="text.secondary">{formatTokens(hit)} hit · {formatTokens(miss)} miss tokens</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {formatTokens(cache.hitTokens)} hit · {formatTokens(cache.missTokens)} miss tokens
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          Verified telemetry {formatTokens(cache.measuredRequests)} / {formatTokens(cache.eligibleRequests)} requests
+                          {coverageRate === undefined ? "" : ` · ${String(coverageRate)}% coverage`}
+                        </Typography>
+                        {cache.measuredRequests > 0 && (
+                          <Typography variant="caption" color="text.secondary">
+                            {formatTokens(cache.hotRequests)} hot (≥90%) · {formatTokens(cache.coldRequests)} cold (&lt;10%) requests
+                          </Typography>
+                        )}
+                        {cache.legacyRequests > 0 && (
+                          <Typography variant="caption" color="text.secondary">
+                            {formatTokens(cache.legacyRequests)} legacy requests excluded from cache rate
+                          </Typography>
+                        )}
                       </Stack>
                     </Box>,
                   ];
@@ -240,12 +285,17 @@ function DeepSeekDetails(
                   <InfoRow k="Errors" v={(errors ?? 0).toLocaleString()} />
                   {byAgent && Object.entries(byAgent).map(([agent, value]) => {
                     const totals = record(value);
-                    const agentHit = num(totals?.cacheHitTokens) ?? 0;
-                    const agentMiss = num(totals?.cacheMissTokens) ?? 0;
-                    const agentCacheTotal = agentHit + agentMiss;
-                    const agentHitRate = (num(totals?.cacheObservations) ?? 0) > 0 && agentCacheTotal > 0
-                      ? Math.round(agentHit * 100 / agentCacheTotal)
-                      : undefined;
+                    const cache = deepseekCacheStats(totals);
+                    const agentHitRate = cache.hitRate === undefined ? undefined : Math.round(cache.hitRate);
+                    const durationObservations = num(totals?.durationObservations) ?? 0;
+                    const requestShapeObservations = num(totals?.requestShapeObservations) ?? 0;
+                    const operations = record(byAgentOperation?.[agent]);
+                    const operationSummary = operations
+                      ? Object.entries(operations)
+                        .filter(([operation]) => operation !== "legacy")
+                        .map(([operation, operationTotals]) => `${operation === "responses" ? "Responses" : operation === "compact" ? "Compact" : operation === "messages" ? "Messages" : operation} ${formatTokens(num(record(operationTotals)?.requests))}`)
+                        .join(" · ")
+                      : "";
                     return (
                       <Box
                         key={agent}
@@ -282,8 +332,33 @@ function DeepSeekDetails(
                             v={agentHitRate === undefined ? "—" : `${String(agentHitRate)}%`}
                           />
                           <Typography variant="caption" color="text.secondary">
-                            {formatTokens(agentHit)} hit · {formatTokens(agentMiss)} miss tokens
+                            {formatTokens(cache.explicitRequests)} explicit · {formatTokens(cache.derivedRequests)} exact-derived · {formatTokens(cache.absentRequests)} missing cache observations
                           </Typography>
+                          {operationSummary && <InfoRow k="Operations" v={operationSummary} />}
+                          {requestShapeObservations > 0 && (
+                            <InfoRow
+                              k="Average request"
+                              v={formatBytes((num(totals?.requestBytes) ?? 0) / requestShapeObservations)}
+                            />
+                          )}
+                          {durationObservations > 0 && (
+                            <InfoRow
+                              k="Average gateway time"
+                              v={`${Math.round((num(totals?.durationMs) ?? 0) / durationObservations).toLocaleString()} ms`}
+                            />
+                          )}
+                          {(num(totals?.completionObservations) ?? 0) > 0 && (
+                            <InfoRow
+                              k="Complete responses"
+                              v={`${formatTokens(num(totals?.completedRequests))} / ${formatTokens(num(totals?.completionObservations))}`}
+                            />
+                          )}
+                          {(num(totals?.compatibilityFixes) ?? 0) > 0 && (
+                            <InfoRow
+                              k="Compatibility fixes"
+                              v={formatTokens(num(totals?.compatibilityFixes))}
+                            />
+                          )}
                         </Stack>
                       </Box>
                     );
@@ -309,11 +384,15 @@ function DeepSeekDetails(
                       </Typography>
                       {daily.map((entry) => {
                         const totals = record(entry.totals);
+                        const dailyCache = deepseekCacheStats(totals);
+                        const cacheLabel = dailyCache.hitRate === undefined
+                          ? ""
+                          : ` · ${String(Math.round(dailyCache.hitRate))}% cache`;
                         return (
                           <InfoRow
                             key={str(entry.day)}
                             k={str(entry.day) ?? "Unknown day"}
-                            v={`${formatTokens(num(totals?.requests))} req · ${formatTokens(num(totals?.inputTokens))} in`}
+                            v={`${formatTokens(num(totals?.requests))} req · ${formatTokens(num(totals?.inputTokens))} in${cacheLabel}`}
                           />
                         );
                       })}
@@ -324,12 +403,7 @@ function DeepSeekDetails(
             </Accordion>
           </>
         )
-        : (
-          <Typography variant="body2" color="text.secondary">
-            No request telemetry yet. Token and cache trends start with this
-            gateway release.
-          </Typography>
-        )}
+        : null}
       {(requests === undefined || requests === 0) && !telemetryError && (
         <Stack spacing={0.15}>
           <Typography variant="body2">No Cowboy usage recorded yet.</Typography>

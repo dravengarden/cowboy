@@ -897,7 +897,7 @@ async fn collect_inventory(
             && tokio::time::timeout(
                 Duration::from_millis(500),
                 reqwest::Client::new()
-                    .get("http://127.0.0.1:8088/healthz")
+                    .get("http://127.0.0.1:28471/healthz")
                     .send(),
             )
             .await
@@ -926,7 +926,7 @@ async fn collect_inventory(
         let gateway_ready = tokio::time::timeout(
             Duration::from_millis(500),
             reqwest::Client::new()
-                .get("http://127.0.0.1:8089/healthz")
+                .get("http://127.0.0.1:28472/healthz")
                 .send(),
         )
         .await

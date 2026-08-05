@@ -142,6 +142,37 @@ source. Protocol v1 Machines remain compatible but do not contribute usage.
 The UI window is 14 days; the internal ledger is pruned after 30 days by the
 existing Cowboy database sweeper.
 
+Usage event schema v2 adds only content-free request shape and delivery facts:
+agent lane, model, wire protocol, ordinary/compact operation, byte and item
+counts, tool and system-block counts, previous-response presence, compatibility
+repair count, streaming, duration, status, completion, and provider token
+counters. It never carries prompt text, tool arguments, reasoning content,
+session identity, response bodies, or credentials. Gateway delivery remains
+fail-open, so telemetry cannot change an inference result.
+
+Cache rates use only v2 rows marked `explicit` (the provider returned hit and
+miss counters) or `derived` (the provider returned cached tokens plus total
+input, making miss tokens an exact subtraction). Rows marked `absent` contribute
+to coverage but not the rate. Version-one rows are `legacy` and excluded rather
+than silently treated as misses. The 14-day window uses provider occurrence
+time; receipt time is retained only for pipeline freshness. The card keeps
+Codex and Claude Code rates separate, shows hot and cold request counts, and
+breaks ordinary Responses, compaction, Messages, model, protocol, and Machine
+coverage apart so a token-weighted average cannot hide a bimodal workload.
+
+DeepSeek credentials and mutable runtime state remain independent per agent
+lane. The provider adapter may collapse duplicate official balances only when
+both gateways report the same irreversible account fingerprint; distinct
+accounts stay separate. Cowboy-measured usage spans credential rotation because
+it describes calls made through Cowboy, not one current account balance.
+
+Cache tuning starts only after each lane has at least seven days and 100
+verified requests. Compare hit tokens, verified coverage, compact frequency,
+hot/cold request distribution, error rate, completion rate, and gateway latency
+before changing prompt or compaction behavior. Reject an optimization if agent
+quality regresses, cache coverage falls, errors rise, or the apparent gain comes
+only from legacy or missing observations.
+
 Login is capability-driven:
 
 - Codex App Server exposes account status plus a device-code flow. The Machine

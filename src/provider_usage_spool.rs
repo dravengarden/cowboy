@@ -12,13 +12,18 @@ use serde::Deserialize;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::UnixListener;
 
-use crate::machine_protocol::{MachineEvent, ProviderUsageEvent};
+use crate::machine_protocol::{
+    MachineEvent, PROVIDER_USAGE_MAX_DURATION_MS, PROVIDER_USAGE_MAX_REQUEST_BYTES,
+    PROVIDER_USAGE_MAX_SHAPE_COUNT, PROVIDER_USAGE_MAX_TOKENS, ProviderUsageEvent,
+};
 
 const MAX_EVENT_BYTES: usize = 16 * 1024;
 const MAX_BATCH: usize = 100;
 
 #[derive(Debug, Deserialize)]
 struct GatewayUsage {
+    #[serde(default = "default_schema_version")]
+    schema_version: u16,
     event_id: String,
     producer_id: String,
     occurred_at_ms: i64,
@@ -32,6 +37,40 @@ struct GatewayUsage {
     reasoning_tokens: Option<u64>,
     cache_hit_tokens: Option<u64>,
     cache_miss_tokens: Option<u64>,
+    #[serde(default = "legacy_dimension")]
+    operation: String,
+    #[serde(default = "legacy_dimension")]
+    protocol: String,
+    #[serde(default = "legacy_dimension")]
+    cache_observation: String,
+    #[serde(default)]
+    usage_observed: Option<bool>,
+    #[serde(default)]
+    completed: Option<bool>,
+    #[serde(default)]
+    streaming: Option<bool>,
+    #[serde(default)]
+    duration_ms: Option<u64>,
+    #[serde(default)]
+    request_bytes: Option<u64>,
+    #[serde(default)]
+    input_item_count: Option<u64>,
+    #[serde(default)]
+    tool_count: Option<u64>,
+    #[serde(default)]
+    system_block_count: Option<u64>,
+    #[serde(default)]
+    has_previous_response_id: Option<bool>,
+    #[serde(default)]
+    compatibility_fixes: Option<u64>,
+}
+
+const fn default_schema_version() -> u16 {
+    1
+}
+
+fn legacy_dimension() -> String {
+    "legacy".to_owned()
 }
 
 #[derive(Clone)]
@@ -89,6 +128,7 @@ impl ProviderUsageSpool {
             |row| row.get(0),
         )?;
         let protocol = ProviderUsageEvent {
+            schema_version: event.schema_version,
             producer_id: event.producer_id.clone(),
             sequence: u64::try_from(sequence).context("negative usage sequence")?,
             occurred_at_ms: event.occurred_at_ms,
@@ -102,6 +142,19 @@ impl ProviderUsageSpool {
             reasoning_tokens: event.reasoning_tokens,
             cache_hit_tokens: event.cache_hit_tokens,
             cache_miss_tokens: event.cache_miss_tokens,
+            operation: std::mem::take(&mut event.operation),
+            protocol: std::mem::take(&mut event.protocol),
+            cache_observation: std::mem::take(&mut event.cache_observation),
+            usage_observed: event.usage_observed,
+            completed: event.completed,
+            streaming: event.streaming,
+            duration_ms: event.duration_ms,
+            request_bytes: event.request_bytes,
+            input_item_count: event.input_item_count,
+            tool_count: event.tool_count,
+            system_block_count: event.system_block_count,
+            has_previous_response_id: event.has_previous_response_id,
+            compatibility_fixes: event.compatibility_fixes,
         };
         transaction.execute(
             "INSERT INTO events (producer_id, sequence, event_id, payload) VALUES (?1, ?2, ?3, ?4)",
@@ -157,6 +210,34 @@ impl ProviderUsageSpool {
     }
 }
 
+fn metrics_within_bounds(event: &GatewayUsage) -> bool {
+    ![
+        event.input_tokens,
+        event.output_tokens,
+        event.reasoning_tokens,
+        event.cache_hit_tokens,
+        event.cache_miss_tokens,
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| value > PROVIDER_USAGE_MAX_TOKENS)
+        && event
+            .duration_ms
+            .is_none_or(|value| value <= PROVIDER_USAGE_MAX_DURATION_MS)
+        && event
+            .request_bytes
+            .is_none_or(|value| value <= PROVIDER_USAGE_MAX_REQUEST_BYTES)
+        && ![
+            event.input_item_count,
+            event.tool_count,
+            event.system_block_count,
+            event.compatibility_fixes,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|value| value > PROVIDER_USAGE_MAX_SHAPE_COUNT)
+}
+
 fn validate(event: &GatewayUsage) -> Result<()> {
     if event.event_id.is_empty()
         || event.event_id.len() > 128
@@ -165,10 +246,78 @@ fn validate(event: &GatewayUsage) -> Result<()> {
         || event.provider != "deepseek"
         || !matches!(event.agent.as_str(), "codex" | "claude")
         || event.account_fingerprint.len() != 16
+        || !event
+            .account_fingerprint
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
         || event.model.len() > 128
         || !(100..=599).contains(&event.status)
+        || !matches!(event.schema_version, 1 | 2)
+        || !matches!(
+            event.operation.as_str(),
+            "legacy" | "responses" | "compact" | "messages"
+        )
+        || !matches!(
+            event.protocol.as_str(),
+            "legacy" | "responses" | "chat_completions" | "anthropic_messages"
+        )
+        || !matches!(
+            event.cache_observation.as_str(),
+            "legacy" | "absent" | "derived" | "explicit"
+        )
+        || !matches!(
+            (event.producer_id.as_str(), event.agent.as_str()),
+            ("codex-deepseek", "codex") | ("claude-deepseek", "claude")
+        )
+        || !metrics_within_bounds(event)
     {
         anyhow::bail!("invalid gateway usage event");
+    }
+    if event.schema_version == 2
+        && (event.operation == "legacy"
+            || event.protocol == "legacy"
+            || event.cache_observation == "legacy"
+            || event.usage_observed.is_none()
+            || event.completed.is_none()
+            || event.streaming.is_none()
+            || event.duration_ms.is_none()
+            || event.request_bytes.is_none()
+            || event.input_item_count.is_none()
+            || event.tool_count.is_none()
+            || event.system_block_count.is_none()
+            || event.has_previous_response_id.is_none()
+            || event.compatibility_fixes.is_none())
+    {
+        anyhow::bail!("incomplete version two gateway usage event");
+    }
+    if event.schema_version == 2
+        && !matches!(
+            (
+                event.agent.as_str(),
+                event.operation.as_str(),
+                event.protocol.as_str()
+            ),
+            (
+                "codex",
+                "responses" | "compact",
+                "responses" | "chat_completions"
+            ) | ("claude", "messages", "anthropic_messages")
+        )
+    {
+        anyhow::bail!("inconsistent gateway usage dimensions");
+    }
+    match event.cache_observation.as_str() {
+        "absent" if event.cache_hit_tokens.is_some() || event.cache_miss_tokens.is_some() => {
+            anyhow::bail!("cache counters must be absent without an observation");
+        }
+        "derived" | "explicit"
+            if event.usage_observed != Some(true)
+                || event.cache_hit_tokens.is_none()
+                || event.cache_miss_tokens.is_none() =>
+        {
+            anyhow::bail!("measured cache observations require complete counters");
+        }
+        _ => {}
     }
     Ok(())
 }
@@ -223,6 +372,7 @@ mod tests {
 
     fn event(id: &str) -> Vec<u8> {
         serde_json::to_vec(&serde_json::json!({
+            "schema_version": 2,
             "event_id": id,
             "producer_id": "codex-deepseek",
             "occurred_at_ms": 1_786_000_000_000_i64,
@@ -235,7 +385,20 @@ mod tests {
             "output_tokens": 4,
             "reasoning_tokens": 1,
             "cache_hit_tokens": 7,
-            "cache_miss_tokens": 3
+            "cache_miss_tokens": 3,
+            "operation": "responses",
+            "protocol": "responses",
+            "cache_observation": "derived",
+            "usage_observed": true,
+            "completed": true,
+            "streaming": true,
+            "duration_ms": 42,
+            "request_bytes": 123,
+            "input_item_count": 2,
+            "tool_count": 1,
+            "system_block_count": 1,
+            "has_previous_response_id": true,
+            "compatibility_fixes": 0
         }))
         .expect("serialize event")
     }
@@ -259,6 +422,9 @@ mod tests {
         };
         assert_eq!(producer_id, "codex-deepseek");
         assert_eq!((first_sequence, last_sequence, events.len()), (1, 1, 1));
+        assert_eq!(events[0].operation, "responses");
+        assert_eq!(events[0].cache_observation, "derived");
+        assert_eq!(events[0].request_bytes, Some(123));
         drop(spool);
 
         let reopened = ProviderUsageSpool::open(&path).expect("reopen spool");
@@ -280,6 +446,84 @@ mod tests {
         value["status"] = 99.into();
         assert!(spool.ingest(&serde_json::to_vec(&value).unwrap()).is_err());
         assert!(spool.pending_batch().expect("empty batch").is_none());
+        drop(spool);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn rejects_unknown_producer_and_lane_mismatch() {
+        let (spool, path) = spool();
+        for (producer, agent) in [("custom-deepseek", "codex"), ("codex-deepseek", "claude")] {
+            let mut value: serde_json::Value =
+                serde_json::from_slice(&event(producer)).expect("parse event");
+            value["producer_id"] = producer.into();
+            value["agent"] = agent.into();
+            assert!(spool.ingest(&serde_json::to_vec(&value).unwrap()).is_err());
+        }
+        assert!(spool.pending_batch().expect("empty batch").is_none());
+        drop(spool);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn rejects_metrics_above_supported_bounds() {
+        let (spool, path) = spool();
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&event("oversized-event")).expect("parse event");
+        value["cache_hit_tokens"] = (PROVIDER_USAGE_MAX_TOKENS + 1).into();
+        assert!(spool.ingest(&serde_json::to_vec(&value).unwrap()).is_err());
+        assert!(spool.pending_batch().expect("empty batch").is_none());
+        drop(spool);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn accepts_legacy_events_without_version_two_dimensions() {
+        let (spool, path) = spool();
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&event("legacy-event")).expect("parse event");
+        for key in [
+            "schema_version",
+            "operation",
+            "protocol",
+            "cache_observation",
+            "usage_observed",
+            "completed",
+            "streaming",
+            "duration_ms",
+            "request_bytes",
+            "input_item_count",
+            "tool_count",
+            "system_block_count",
+            "has_previous_response_id",
+            "compatibility_fixes",
+        ] {
+            value.as_object_mut().expect("event object").remove(key);
+        }
+        spool
+            .ingest(&serde_json::to_vec(&value).expect("legacy JSON"))
+            .expect("legacy event accepted");
+        let MachineEvent::ProviderUsageBatch { events, .. } = spool
+            .pending_batch()
+            .expect("read batch")
+            .expect("batch exists")
+        else {
+            panic!("unexpected event")
+        };
+        assert_eq!(events[0].schema_version, 1);
+        assert_eq!(events[0].operation, "legacy");
+        assert_eq!(events[0].completed, None);
+        drop(spool);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn rejects_cache_counters_without_observation() {
+        let (spool, path) = spool();
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&event("invalid-cache")).expect("parse event");
+        value["cache_observation"] = "absent".into();
+        assert!(spool.ingest(&serde_json::to_vec(&value).unwrap()).is_err());
         drop(spool);
         let _ = std::fs::remove_file(path);
     }
