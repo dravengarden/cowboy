@@ -911,6 +911,12 @@ here says otherwise.
     Keep that dismissal control outside the horizontally scrollable action
     track: iOS rubber-band moves every descendant of the scroller, including a
     `position: sticky` child, before sticky settles back into place.
+    The scrollable action track uses compact fixed gaps rather than
+    `space-evenly`: distribution space made adjacent Schedule and Clear actions
+    look unrelated and hid the fact that the row could scroll. Fade only the
+    edge that has offscreen content, measured from the real scroll extent; the
+    affordance disappears at either end and never animates the fixed utility
+    rail with iOS rubber-band.
 
 42. **The Mobile keyboard-dismiss action is an explicit focus boundary, not an
     editor mutation.** Keep the button in the main action track's final slot and

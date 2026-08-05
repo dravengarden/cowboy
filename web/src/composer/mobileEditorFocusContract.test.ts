@@ -253,6 +253,9 @@ Deno.test("mobile keyboard dismissal belongs to the fixed utility rail", () => {
   assertEquals(actionRow.includes("data-mobile-composer-clear"), true);
   assertEquals(actionRow.includes("disabled={!clearable}"), true);
   assertEquals(actionRow.includes("data-mobile-scrollable-actions"), true);
+  assertEquals(actionRow.includes('justifyContent: "flex-start"'), true);
+  assertEquals(actionRow.includes("WebkitMaskImage: mobileActionEdges"), true);
+  assertEquals(actionRow.includes('columnGap: "clamp(2px, 1vw, 5px)"'), true);
   assertEquals(actionRow.includes('position: "sticky"'), false);
   assertEquals(
     actionRow.indexOf('<Tooltip title="Force push">') <

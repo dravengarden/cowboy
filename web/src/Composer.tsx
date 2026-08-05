@@ -1040,6 +1040,11 @@ export function ComposerWorkspace({
   // The Queue button — also the anchor for a KEYBOARD-triggered force-push (held
   // ⌘⏎), so the confirm rises from the same spot whether opened by hold or key.
   const queueBtnRef = useRef<HTMLButtonElement | null>(null);
+  const mobileActionsRef = useRef<HTMLDivElement | null>(null);
+  const [mobileActionEdges, setMobileActionEdges] = useState({
+    left: false,
+    right: false,
+  });
   const lpTimer = useRef<number | undefined>(undefined);
   // Set when the hold crosses the threshold, so the trailing click (pointerup
   // fires onClick) is suppressed instead of also queuing the message.
@@ -1199,6 +1204,34 @@ export function ComposerWorkspace({
   // while preserving inline image tokens across compact/fullscreen handoff.
   const touchInput = useTouchComposer();
   const keyboardOpen = useKeyboardOpen();
+  useLayoutEffect(() => {
+    if (!touchInput) return undefined;
+    const track = mobileActionsRef.current;
+    if (!track) return undefined;
+    const measure = (): void => {
+      const maxScroll = Math.max(0, track.scrollWidth - track.clientWidth);
+      const next = {
+        left: track.scrollLeft > 2,
+        right: track.scrollLeft < maxScroll - 2,
+      };
+      setMobileActionEdges((current) =>
+        current.left === next.left && current.right === next.right
+          ? current
+          : next
+      );
+    };
+    measure();
+    track.addEventListener("scroll", measure, { passive: true });
+    const resizeObserver = new ResizeObserver(measure);
+    resizeObserver.observe(track);
+    const mutationObserver = new MutationObserver(measure);
+    mutationObserver.observe(track, { childList: true, subtree: true });
+    return (): void => {
+      track.removeEventListener("scroll", measure);
+      resizeObserver.disconnect();
+      mutationObserver.disconnect();
+    };
+  }, [touchInput]);
   // Editing ownership and visual expansion are deliberately separate. Queue or
   // Draft may still own the buffer while WebKit is dismissing (or declined to
   // open) the keyboard; that must not grant a mobile surface fill-height.
@@ -2307,6 +2340,7 @@ export function ComposerWorkspace({
           }}
         >
         <Stack
+          ref={mobileActionsRef}
           data-mobile-scrollable-actions={touchInput ? "true" : undefined}
           direction="row"
           alignItems="center"
@@ -2316,12 +2350,27 @@ export function ComposerWorkspace({
             minWidth: 0,
             px: 0.5,
             ...(compact && {
-              justifyContent: "space-evenly",
+              justifyContent: "flex-start",
+              columnGap: "clamp(2px, 1vw, 5px)",
               flexWrap: "nowrap",
               overflowX: "auto",
               overflowY: "hidden",
               overscrollBehaviorX: "contain",
               scrollbarWidth: "none",
+              WebkitMaskImage: mobileActionEdges.left && mobileActionEdges.right
+                ? "linear-gradient(to right, transparent 0, black 16px, black calc(100% - 16px), transparent 100%)"
+                : mobileActionEdges.left
+                ? "linear-gradient(to right, transparent 0, black 16px)"
+                : mobileActionEdges.right
+                ? "linear-gradient(to right, black calc(100% - 16px), transparent 100%)"
+                : "none",
+              maskImage: mobileActionEdges.left && mobileActionEdges.right
+                ? "linear-gradient(to right, transparent 0, black 16px, black calc(100% - 16px), transparent 100%)"
+                : mobileActionEdges.left
+                ? "linear-gradient(to right, transparent 0, black 16px)"
+                : mobileActionEdges.right
+                ? "linear-gradient(to right, black calc(100% - 16px), transparent 100%)"
+                : "none",
               "&::-webkit-scrollbar": { display: "none" },
               "@media (min-width: 700px)": {
                 justifyContent: "flex-start",
