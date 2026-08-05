@@ -2891,33 +2891,50 @@ const ItemView = memo(function ItemView({
       );
     }
     case "cleared":
-      // "Conversation cleared" divider (the Clear action reset the agent's
-      // context here). A centered label between two rules — everything above is
-      // transcript-only now; the agent starts fresh below.
+      // A compact context boundary, not a full-width divider. The old pair of
+      // rules visually split an otherwise empty transcript and competed with
+      // the Composer. This quiet badge still records the durable reset while
+      // reading naturally whether older history exists above it or not.
       return (
-        <Stack
-          direction="row"
-          spacing={1.25}
-          alignItems="center"
-          sx={{ color: "text.disabled", alignSelf: "stretch", my: 0.5 }}
+        <Box
+          data-transcript-context-boundary
+          role="status"
+          aria-label="Conversation cleared. New context started."
+          sx={(theme) => ({
+            alignSelf: "center",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 0.625,
+            my: 0.75,
+            px: 1,
+            py: 0.5,
+            borderRadius: 999,
+            color: "text.secondary",
+            bgcolor: alpha(theme.palette.background.paper, 0.66),
+            border: `1px solid ${alpha(theme.palette.divider, 0.72)}`,
+            boxShadow: `0 4px 14px ${alpha(theme.palette.common.black, 0.045)}`,
+            backdropFilter: "blur(10px) saturate(120%)",
+            WebkitBackdropFilter: "blur(10px) saturate(120%)",
+          })}
         >
-          <Box sx={{ flex: 1, height: "1px", bgcolor: "divider" }} />
-          <Stack
-            direction="row"
-            spacing={0.5}
-            alignItems="center"
-            sx={{ flexShrink: 0 }}
+          <Box
+            sx={(theme) => ({
+              width: 22,
+              height: 22,
+              borderRadius: "50%",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "primary.main",
+              bgcolor: alpha(theme.palette.primary.main, 0.09),
+            })}
           >
-            <CleaningServices sx={{ fontSize: "0.95rem" }} />
-            <Typography
-              variant="caption"
-              sx={{ fontWeight: 600, letterSpacing: 0.3 }}
-            >
-              Conversation cleared
-            </Typography>
-          </Stack>
-          <Box sx={{ flex: 1, height: "1px", bgcolor: "divider" }} />
-        </Stack>
+            <CleaningServices sx={{ fontSize: 13 }} />
+          </Box>
+          <Typography variant="caption" sx={{ fontWeight: 650, letterSpacing: 0.1 }}>
+            New conversation
+          </Typography>
+        </Box>
       );
   }
 });

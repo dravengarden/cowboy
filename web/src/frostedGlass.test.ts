@@ -56,6 +56,15 @@ Deno.test("frosted pill elevation stays close to the floating surface", () => {
   assertEquals(FROSTED_PILL_DROP_SHADOW_GEOMETRY, "0 5px 16px -10px");
 });
 
+Deno.test("a context reset renders as one quiet boundary badge", () => {
+  assertEquals(
+    transcriptSource.includes("data-transcript-context-boundary"),
+    true,
+  );
+  assertEquals(transcriptSource.includes("New conversation"), true);
+  assertEquals(transcriptSource.includes("Conversation cleared\n"), false);
+});
+
 Deno.test("judge progress is transcript-owned with a zero-jump pill handoff", () => {
   assertEquals(TURN_STATUS_PILL_MIN_HEIGHT, 36);
   assertEquals(

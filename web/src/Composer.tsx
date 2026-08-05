@@ -3237,7 +3237,10 @@ const QueuedAttachmentChips = memo(function QueuedAttachmentChips({
   attachments: Attachment[];
 }): React.JSX.Element {
   return (
-    <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, mt: 0.5 }}>
+    <Box
+      data-pending-content-action="attachment-preview"
+      sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, mt: 0.5 }}
+    >
       {attachments.map((a, i) =>
         a.isImage && a.previewUrl
           ? (
@@ -4897,9 +4900,17 @@ function PendingRow({
       variant="outlined"
       sx={{ p: 0.75, display: "flex", alignItems: "flex-start", gap: 0.5 }}
     >
-      <Box sx={{ flex: 1, minWidth: 0 }}>
+      <Box
+        data-pending-edit-target
+        onClick={(event): void => {
+          const target = event.target instanceof HTMLElement ? event.target : null;
+          if (target?.closest("[data-pending-content-action]")) return;
+          beginEdit();
+        }}
+        sx={{ flex: 1, minWidth: 0, cursor: "text" }}
+      >
         {stripImageTokens(message.text).trim() !== "" && (
-          <MessagePreview text={stripImageTokens(message.text)} onClick={beginEdit} />
+          <MessagePreview text={stripImageTokens(message.text)} />
         )}
         {message.attachments.length > 0 && (
           <QueuedAttachmentChips attachments={message.attachments} />
@@ -4909,6 +4920,7 @@ function PendingRow({
             schedule is a notice, not a failure (conventions/ui.md §4). */}
         {message.schedule && (
           <Chip
+            data-pending-content-action="schedule"
             size="small"
             clickable
             icon={<Schedule sx={{ fontSize: 15 }} />}

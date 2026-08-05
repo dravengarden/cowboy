@@ -2,6 +2,10 @@ import { assertEquals } from "jsr:@std/assert";
 import type { Attachment } from "../attachments.ts";
 import { attachmentTrayForSurface } from "./attachmentPresentation.ts";
 
+const composerSource = await Deno.readTextFile(
+  new URL("../Composer.tsx", import.meta.url),
+);
+
 function attachment(id: string, isImage: boolean): Attachment {
   return {
     id,
@@ -38,5 +42,19 @@ Deno.test("fullscreen keeps only images without CM inline tokens in its tray", (
       "before ![shot](cowboy-att:placed) after",
     ).map((a) => a.id),
     ["staged", "file"],
+  );
+});
+
+Deno.test("attachment-only pending rows retain a full content edit target", () => {
+  assertEquals(composerSource.includes("data-pending-edit-target"), true);
+  assertEquals(
+    composerSource.includes('data-pending-content-action="attachment-preview"'),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      'target?.closest("[data-pending-content-action]")',
+    ),
+    true,
   );
 });

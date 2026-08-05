@@ -4,6 +4,7 @@ import {
   expandedSelection,
   hasHorizontalScroller,
   horizontalSwipe,
+  inputOverlayOwnsDrawerGesture,
   MOBILE_DRAWER_DIRECTION_LOCK_PX,
 } from "./touchGestures";
 
@@ -30,8 +31,7 @@ export function bindMobileSpatialDrawer({
   getOpen,
   setOpen,
   holdPresentation,
-  ignoreSelector =
-    "input, textarea, [contenteditable='true'], [data-mobile-drawer-ignore]",
+  ignoreSelector = "[data-mobile-drawer-ignore]",
 }: {
   gestureTarget: HTMLElement;
   surface: HTMLElement;
@@ -218,13 +218,15 @@ export function bindMobileSpatialDrawer({
   const onTouchStart = (event: TouchEvent): void => {
     const touch = event.touches[0];
     const target = event.target instanceof HTMLElement ? event.target : null;
-    const focusedComposerOwnsGesture = target?.closest(
-      "[data-mobile-focus-composer='true']",
-    )?.matches(":focus-within") === true;
+    const inputOverlay = target?.closest("[data-mobile-keyboard-open]");
+    const focusedInputOverlayOwnsGesture = inputOverlayOwnsDrawerGesture(
+      inputOverlay?.getAttribute("data-mobile-keyboard-open") === "true",
+      inputOverlay?.matches(":focus-within") === true,
+    );
     if (
       !touch ||
       expandedSelection(globalThis.getSelection?.() ?? null) ||
-      focusedComposerOwnsGesture ||
+      focusedInputOverlayOwnsGesture ||
       target?.closest(ignoreSelector) ||
       hasHorizontalScroller(event.target, gestureTarget)
     ) {

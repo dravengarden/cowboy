@@ -2,6 +2,7 @@ import { assertEquals } from "jsr:@std/assert";
 import {
   expandedSelection,
   horizontalSwipe,
+  inputOverlayOwnsDrawerGesture,
   MOBILE_DRAWER_DIRECTION_LOCK_PX,
   RELIABLE_TOUCH_TAP_MOVE_SLOP_PX,
   shouldFreezePreviewPointer,
@@ -12,6 +13,13 @@ Deno.test("expanded native text selection owns horizontal handle drags", () => {
   assertEquals(expandedSelection(null), false);
   assertEquals(expandedSelection({ rangeCount: 1, isCollapsed: true }), false);
   assertEquals(expandedSelection({ rangeCount: 1, isCollapsed: false }), true);
+});
+
+Deno.test("only the focused keyboard overlay reserves the drawer gesture", () => {
+  assertEquals(inputOverlayOwnsDrawerGesture(false, false), false);
+  assertEquals(inputOverlayOwnsDrawerGesture(false, true), false);
+  assertEquals(inputOverlayOwnsDrawerGesture(true, false), false);
+  assertEquals(inputOverlayOwnsDrawerGesture(true, true), true);
 });
 
 Deno.test("horizontal swipe waits for a deliberate direction lock", () => {
