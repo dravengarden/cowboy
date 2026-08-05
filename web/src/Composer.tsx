@@ -4757,8 +4757,8 @@ function PendingRow({
             // The parent layout effect owns exactly one focus transfer.
             autoFocus={false}
             showCollapse={false}
-            submitLabel={touchInput ? "Hide keyboard" : "Done editing"}
-            submitIcon={touchInput ? <KeyboardHide /> : <Check />}
+            submitLabel={touchInput ? "Collapse editor" : "Done editing"}
+            submitIcon={touchInput ? <CloseFullscreen /> : <Check />}
             vim={vim}
             onVimMode={setVimMode}
             onDiscard={discardEdit}

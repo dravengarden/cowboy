@@ -1097,6 +1097,10 @@ Desktop Vim + IME checks:
     keyboard dismissal remained visible. Keep the real touch editor mounted for
     the shared 550ms keyboard settle window and finish only if the keyboard stays
     closed. A renewed open frame cancels the timer. The explicit Hide keyboard
-    action remains immediate. Do not intercept pointer, touch, `contextmenu`, or
+    action remains immediate. In fullscreen pending-row editing, keep that
+    keyboard-only action in the left utility track and use `CloseFullscreen` for
+    the right completion action that saves and returns to the ordinary card; two
+    KeyboardHide glyphs falsely present different actions as duplicates. Do not
+    intercept pointer, touch, `contextmenu`, or
     selection events to implement this guard: UIKit must continue to own the
     long-press sequence end to end.

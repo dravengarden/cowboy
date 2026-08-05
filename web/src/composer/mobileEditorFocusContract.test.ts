@@ -154,6 +154,21 @@ Deno.test("mobile pending editor survives the native long-press keyboard settle 
   );
 });
 
+Deno.test("fullscreen pending edit distinguishes collapse from keyboard dismissal", () => {
+  assertEquals(
+    composerSource.includes(
+      'submitLabel={touchInput ? "Collapse editor" : "Done editing"}',
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "submitIcon={touchInput ? <CloseFullscreen /> : <Check />}",
+    ),
+    true,
+  );
+});
+
 Deno.test("fullscreen delivery closes only after authoritative success", () => {
   assertEquals(
     composerSource.includes(
