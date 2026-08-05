@@ -2507,6 +2507,17 @@ export function App({
                     // group (composer, or the navbar in bottom mode) rises clear
                     // of the keyboard. 0 when no keyboard.
                     pb: "var(--kb-inset, 0px)",
+                    // TurnStatusOverlay and PermissionOverlay publish their
+                    // measured reservation through a root CSS variable because
+                    // Transcript is their sibling. Effect cleanup can lag one
+                    // commit behind a Draft/Queue edit finishing, leaving the
+                    // old height inherited after the overlay DOM is already
+                    // gone. Make DOM presence authoritative: without a real
+                    // overlay this session surface locally masks any stale root
+                    // value in the same style calculation.
+                    "&:not(:has([data-turn-status-overlay], [data-permission-overlay]))": {
+                        "--awaiting-h": "0px",
+                    },
                     // Keyboard Focus Mode is one coordinated transition: the
                     // persistent composer grows its formatting track while this
                     // session nav yields the scarce keyboard-adjacent space. CSS
