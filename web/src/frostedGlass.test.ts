@@ -7,9 +7,24 @@ import {
 const composerSource = await Deno.readTextFile(
   new URL("./Composer.tsx", import.meta.url),
 );
+const transcriptSource = await Deno.readTextFile(
+  new URL("./Transcript.tsx", import.meta.url),
+);
 
 Deno.test("floating composer overlays keep a narrow boundary seam", () => {
   assertEquals(FLOATING_OVERLAY_BOUNDARY_GAP_PX, 4);
+  assertEquals(
+    transcriptSource.includes(
+      "`calc(${bottomInset} + var(--awaiting-h, 0px))`",
+    ),
+    true,
+  );
+  assertEquals(
+    transcriptSource.includes(
+      "`calc(${bottomInset} + var(--awaiting-h, 0px) + 8px)`",
+    ),
+    false,
+  );
 });
 
 Deno.test("frosted pill elevation stays close to the floating surface", () => {

@@ -23,6 +23,7 @@ export interface ComposerTimelineSlice {
   availableCommands: AvailableCommand[];
   compactingTail: boolean;
   completionSeq: number;
+  contextClearedSeq: number;
 }
 
 const EMPTY_COMMANDS: AvailableCommand[] = [];
@@ -32,6 +33,7 @@ const EMPTY_SLICE: ComposerTimelineSlice = {
   availableCommands: EMPTY_COMMANDS,
   compactingTail: false,
   completionSeq: 0,
+  contextClearedSeq: 0,
 };
 const CACHE = new WeakMap<Envelope[], ComposerTimelineSlice>();
 
@@ -48,6 +50,7 @@ export function composerTimelineSlice(
     availableCommands: commands.length === 0 ? EMPTY_COMMANDS : commands,
     compactingTail: isCompactingTail(timeline),
     completionSeq: latestCompactionCompletionSeq(timeline),
+    contextClearedSeq: latestContextClearedSeq(timeline),
   };
   CACHE.set(timeline, slice);
   return slice;
@@ -106,7 +109,19 @@ export function sameComposerTimelineSlice(
   return a === b ||
     (a.compactingTail === b.compactingTail &&
       a.completionSeq === b.completionSeq &&
+      a.contextClearedSeq === b.contextClearedSeq &&
       samePlan(a.plan, b.plan) &&
       samePendingPermission(a.pendingPermission, b.pendingPermission) &&
       sameArray(a.availableCommands, b.availableCommands, sameCommand));
+}
+
+function latestContextClearedSeq(timeline: readonly Envelope[]): number {
+  for (let index = timeline.length - 1; index >= 0; index -= 1) {
+    const event = timeline[index]!;
+    if (
+      event.kind === "update" &&
+      event.update.sessionUpdate === "context_cleared"
+    ) return event.seq;
+  }
+  return 0;
 }

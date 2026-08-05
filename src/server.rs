@@ -2692,7 +2692,9 @@ async fn api_session_prompt(
 ///
 /// The retired WS `Inbound::NewSession` was fire-and-forget without a
 /// `sessionId` reply or Machine placement. This endpoint is the only Web
-/// creation path so workspace preparation completes before the id is returned.
+/// creation path. It returns a durable `Starting` session before remote
+/// workspace preparation completes, so clients can navigate immediately and
+/// observe the authoritative preparation lifecycle on the destination page.
 #[derive(Debug, Deserialize)]
 struct NewSessionRequest {
     provider: String,
@@ -2711,6 +2713,11 @@ struct NewSessionRequest {
     /// UI never sets it.
     #[serde(default)]
     system: bool,
+    /// Optional first turn owned by the creation transaction (for example a
+    /// Columbus work-item resume). It is dispatched only after the prepared
+    /// workspace has been committed and the worker has started.
+    #[serde(default)]
+    initial_prompt: Option<String>,
 }
 
 fn default_machine_id() -> String {
@@ -2870,47 +2877,94 @@ async fn api_new_session(
             )
                 .into_response();
         };
-        let prepared = match state
-            .machine_control
-            .adapter_request(
-                &req.machine_id,
-                "workspace",
-                serde_json::json!({
-                    "root": source_path,
-                    "session_id": &session_id,
-                }),
-            )
-            .await
-        {
-            Ok(value) => match serde_json::from_value::<PreparedMachineWorkspace>(value) {
+        if let Err(message) = state.supervisor.register_session_on_with_id(
+            &session_id,
+            &req.provider,
+            Some(source_path.to_owned()),
+            req.origin,
+            req.system,
+            &req.machine_id,
+        ) {
+            return (StatusCode::BAD_REQUEST, message).into_response();
+        }
+
+        let prepare_state = Arc::clone(&state);
+        let prepare_session_id = session_id.clone();
+        let prepare_machine_id = req.machine_id.clone();
+        let prepare_source_path = source_path.to_owned();
+        let initial_prompt = req.initial_prompt;
+        tokio::spawn(async move {
+            let result = prepare_state
+                .machine_control
+                .adapter_request(
+                    &prepare_machine_id,
+                    "workspace",
+                    serde_json::json!({
+                        "root": &prepare_source_path,
+                        "session_id": &prepare_session_id,
+                    }),
+                )
+                .await
+                .map_err(|error| {
+                    format!("Machine could not prepare an isolated workspace: {error}")
+                })
+                .and_then(|value| {
+                    serde_json::from_value::<PreparedMachineWorkspace>(value).map_err(|error| {
+                        format!("Machine returned invalid workspace metadata: {error}")
+                    })
+                });
+
+            let prepared = match result {
                 Ok(prepared) => prepared,
                 Err(error) => {
-                    return (
-                        StatusCode::CONFLICT,
-                        format!("Machine returned invalid workspace metadata: {error}"),
-                    )
-                        .into_response();
+                    prepare_state.hub.set_status(
+                        &prepare_session_id,
+                        crate::agent_model::Status::Crashed,
+                        Some(error),
+                    );
+                    return;
                 }
-            },
-            Err(error) => {
-                return (
-                    StatusCode::CONFLICT,
-                    format!("Machine could not prepare an isolated workspace: {error}"),
-                )
-                    .into_response();
+            };
+            tracing::info!(
+                session_id = %prepare_session_id,
+                machine_id = %prepare_machine_id,
+                source_path = %prepared.source_path,
+                prepared_path = %prepared.path,
+                revision = ?prepared.revision,
+                isolated = prepared.isolated,
+                created = prepared.created,
+                "prepared Machine workspace for session"
+            );
+            let prepared_session = prepare_state
+                .hub
+                .update_session_cwd(&prepare_session_id, prepared.path)
+                .and_then(|()| {
+                    prepare_state
+                        .supervisor
+                        .start_registered_session(&prepare_session_id)
+                });
+            if let Err(error) = prepared_session {
+                prepare_state.hub.set_status(
+                    &prepare_session_id,
+                    crate::agent_model::Status::Crashed,
+                    Some(format!("Session preparation failed: {error}")),
+                );
+                return;
             }
-        };
-        tracing::info!(
-            session_id,
-            machine_id = %req.machine_id,
-            source_path = %prepared.source_path,
-            prepared_path = %prepared.path,
-            revision = ?prepared.revision,
-            isolated = prepared.isolated,
-            created = prepared.created,
-            "prepared Machine workspace for session"
-        );
-        cwd = Some(prepared.path);
+            if let Some(prompt) = initial_prompt.filter(|prompt| !prompt.trim().is_empty())
+                && let Err(error) = prepare_state.supervisor.send(
+                    &prepare_session_id,
+                    AgentCommand::Prompt(vec![ContentBlock::from(prompt)], None, None),
+                )
+            {
+                prepare_state.hub.set_status(
+                    &prepare_session_id,
+                    crate::agent_model::Status::Crashed,
+                    Some(format!("Initial prompt failed: {error}")),
+                );
+            }
+        });
+        return (StatusCode::CREATED, Json(NewSessionResponse { session_id })).into_response();
     }
     match state.supervisor.new_session_on_with_id(
         &session_id,
@@ -2921,6 +2975,20 @@ async fn api_new_session(
         &req.machine_id,
     ) {
         Ok(session_id) => {
+            if let Some(prompt) = req
+                .initial_prompt
+                .filter(|prompt| !prompt.trim().is_empty())
+                && let Err(message) = state.supervisor.send(
+                    &session_id,
+                    AgentCommand::Prompt(vec![ContentBlock::from(prompt)], None, None),
+                )
+            {
+                state.hub.set_status(
+                    &session_id,
+                    crate::agent_model::Status::Crashed,
+                    Some(format!("Initial prompt failed: {message}")),
+                );
+            }
             (StatusCode::CREATED, Json(NewSessionResponse { session_id })).into_response()
         }
         Err(message) => (StatusCode::BAD_REQUEST, message).into_response(),

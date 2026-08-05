@@ -79,7 +79,18 @@ Deno.test("native textarea owns a content-sized mobile canvas", () => {
     ),
     false,
   );
-  assertEquals(composerSource.includes("minHeight: 80"), true);
+  assertEquals(
+    composerSource.includes(
+      "minHeight: MOBILE_COMPOSER_IDLE_EDITOR_MIN_H",
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "minHeight: MOBILE_COMPOSER_INPUT_EDITOR_MIN_H",
+    ),
+    true,
+  );
   assertEquals(
     composerSource.includes(
       "data-mobile-editor-area] > *, &:has([data-mobile-editor-area]:focus-within)",
@@ -253,6 +264,9 @@ Deno.test("mobile keyboard dismissal belongs to the fixed utility rail", () => {
   assertEquals(actionRow.includes("data-mobile-composer-clear"), true);
   assertEquals(actionRow.includes("disabled={!clearable}"), true);
   assertEquals(actionRow.includes("data-mobile-scrollable-actions"), true);
+  assertEquals(actionRow.includes('justifyContent: "flex-start"'), true);
+  assertEquals(actionRow.includes("WebkitMaskImage: mobileActionEdges"), true);
+  assertEquals(actionRow.includes('columnGap: "clamp(2px, 1vw, 5px)"'), true);
   assertEquals(actionRow.includes('position: "sticky"'), false);
   assertEquals(
     actionRow.indexOf('<Tooltip title="Force push">') <
@@ -277,6 +291,27 @@ Deno.test("mobile composer releases stale focus only after a visible keyboard cl
   );
   assertEquals(
     composerSource.includes("releaseMobileComposerFocus();"),
+    true,
+  );
+});
+
+Deno.test("clearing session context always ends the mobile input interaction", () => {
+  assertEquals(
+    composerSource.includes(
+      "timelineState.contextClearedSeq <= previous.seq",
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      'if (touchInput && action.kind === "reset")',
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "requestAnimationFrame(() => releaseMobileComposerFocus())",
+    ),
     true,
   );
 });

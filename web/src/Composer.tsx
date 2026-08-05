@@ -291,6 +291,8 @@ const TOOLBAR_MIN_H = {
   minHeight: 34,
   "@media (pointer: coarse)": { minHeight: 40 },
 } as const;
+const MOBILE_COMPOSER_IDLE_EDITOR_MIN_H = 48;
+const MOBILE_COMPOSER_INPUT_EDITOR_MIN_H = 80;
 
 // MUI's Button start-icon selector assigns a fixed px size with more
 // specificity than an SvgIcon's own sx prop. Own the glyph size at the button
@@ -807,6 +809,9 @@ export function ComposerWorkspace({
   // handle) off and turns the root into a fill-height flex column instead.
   const column = variant === "column";
   const desktop = surface === "desktop";
+  const touchInput = useTouchComposer();
+  const keyboardOpen = useKeyboardOpen();
+  const preparing = status === "starting";
   const desktopShortcut = (
     child: ReactNode,
     badge: string,
@@ -849,13 +854,14 @@ export function ComposerWorkspace({
   // removable from the utility rail.
   const clearable = text.trim().length > 0 || attachments.length > 0;
   const submitAndNotify = useCallback((): boolean => {
+    if (preparing) return false;
     const submitted = submit();
     if (submitted) {
       if (!desktop) dismissMobileSoftwareKeyboard();
       onSubmitted?.();
     }
     return submitted;
-  }, [desktop, onSubmitted, submit]);
+  }, [desktop, onSubmitted, preparing, submit]);
   const submitFeedback = useNetworkActionState();
   // Mobile-only fullscreen compose: the ↗ opens a near-full-screen sheet (the
   // first-class long-form / future-markdown editor). Desktop keeps the Zed-style
@@ -876,6 +882,7 @@ export function ComposerWorkspace({
     });
   }, [desktop]);
   const submitWithFeedback = useCallback((onSucceeded?: () => void): void => {
+    if (preparing) return;
     void (async () => {
       let submitted = false;
       const succeeded = await submitFeedback.run(() => {
@@ -890,7 +897,7 @@ export function ComposerWorkspace({
         onSucceeded?.();
       }
     })();
-  }, [dismissAfterMobileDelivery, onSubmitted, submitFeedback, submitTracked]);
+  }, [dismissAfterMobileDelivery, onSubmitted, preparing, submitFeedback, submitTracked]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const draftList = useStoreSelector((snapshot) =>
     snapshot.drafts.get(sessionId) ?? EMPTY_QUEUED_MESSAGES
@@ -1040,6 +1047,11 @@ export function ComposerWorkspace({
   // The Queue button — also the anchor for a KEYBOARD-triggered force-push (held
   // ⌘⏎), so the confirm rises from the same spot whether opened by hold or key.
   const queueBtnRef = useRef<HTMLButtonElement | null>(null);
+  const mobileActionsRef = useRef<HTMLDivElement | null>(null);
+  const [mobileActionEdges, setMobileActionEdges] = useState({
+    left: false,
+    right: false,
+  });
   const lpTimer = useRef<number | undefined>(undefined);
   // Set when the hold crosses the threshold, so the trailing click (pointerup
   // fires onClick) is suppressed instead of also queuing the message.
@@ -1117,6 +1129,20 @@ export function ComposerWorkspace({
     [provider, availableCommands],
   );
   const [cmdConfirm, setCmdConfirm] = useState<SessionAction | null>(null);
+  const contextClearedRef = useRef({
+    sessionId,
+    seq: timelineState.contextClearedSeq,
+  });
+  useEffect(() => {
+    const previous = contextClearedRef.current;
+    contextClearedRef.current = {
+      sessionId,
+      seq: timelineState.contextClearedSeq,
+    };
+    if (previous.sessionId !== sessionId) return;
+    if (timelineState.contextClearedSeq <= previous.seq) return;
+    if (touchInput) releaseMobileComposerFocus();
+  }, [sessionId, timelineState.contextClearedSeq, touchInput]);
   const compactContext = useCompactionContext({
     sessionId,
     status,
@@ -1139,8 +1165,18 @@ export function ComposerWorkspace({
   async function confirmSessionAction(): Promise<void> {
     if (cmdConfirm === null) return;
     const action = cmdConfirm;
-    await runSessionAction(action);
+    // A context reset is a hard end to the current input interaction. Close the
+    // Dialog before the request, then clear both the current focus owner and the
+    // focus MUI may restore while the closing transition commits. Without the
+    // post-close pass WebKit can resurrect a stale textarea first responder and
+    // combine it with a lagging visualViewport keyboard measurement, leaving a
+    // tall floating composer over a keyboard-free transcript.
     setCmdConfirm(null);
+    if (touchInput && action.kind === "reset") {
+      releaseMobileComposerFocus();
+      globalThis.requestAnimationFrame(() => releaseMobileComposerFocus());
+    }
+    await runSessionAction(action);
   }
   useConfirmEnter(cmdConfirm !== null, () => {
     void confirmSessionAction();
@@ -1197,8 +1233,34 @@ export function ComposerWorkspace({
   }, [expanded, composerHeight]);
   // Touch and Desktop share CM6 document semantics. Touch keeps Vim disabled,
   // while preserving inline image tokens across compact/fullscreen handoff.
-  const touchInput = useTouchComposer();
-  const keyboardOpen = useKeyboardOpen();
+  useLayoutEffect(() => {
+    if (!touchInput) return undefined;
+    const track = mobileActionsRef.current;
+    if (!track) return undefined;
+    const measure = (): void => {
+      const maxScroll = Math.max(0, track.scrollWidth - track.clientWidth);
+      const next = {
+        left: track.scrollLeft > 2,
+        right: track.scrollLeft < maxScroll - 2,
+      };
+      setMobileActionEdges((current) =>
+        current.left === next.left && current.right === next.right
+          ? current
+          : next
+      );
+    };
+    measure();
+    track.addEventListener("scroll", measure, { passive: true });
+    const resizeObserver = new ResizeObserver(measure);
+    resizeObserver.observe(track);
+    const mutationObserver = new MutationObserver(measure);
+    mutationObserver.observe(track, { childList: true, subtree: true });
+    return (): void => {
+      track.removeEventListener("scroll", measure);
+      resizeObserver.disconnect();
+      mutationObserver.disconnect();
+    };
+  }, [touchInput]);
   // Editing ownership and visual expansion are deliberately separate. Queue or
   // Draft may still own the buffer while WebKit is dismissing (or declined to
   // open) the keyboard; that must not grant a mobile surface fill-height.
@@ -1732,6 +1794,9 @@ export function ComposerWorkspace({
               boxShadow: (t) =>
                 `0 10px 28px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.24 : 0.09)}`,
             },
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area]": {
+              minHeight: MOBILE_COMPOSER_INPUT_EDITOR_MIN_H,
+            },
             // An inline image promotes the compact native textarea to CM6. Keep
             // the complete focused canvas inside the same contenteditable height
             // chain; otherwise CM6 collapses to its 14px text line while the
@@ -1838,7 +1903,13 @@ export function ComposerWorkspace({
               flexDirection: "column",
               minHeight: 0,
               ...(touchInput && {
-                minHeight: 80,
+                // Resting compose only has the fullscreen control in its right
+                // rail, so one 44px touch target plus the card edge is enough.
+                // The keyboard-only hide control joins that rail in the focused
+                // state above, which promotes this to the two-control height.
+                // Keeping the resting height content-tight prevents a permanent
+                // blank "padding" band regardless of Plan/Queue/Draft presence.
+                minHeight: MOBILE_COMPOSER_IDLE_EDITOR_MIN_H,
                 transition:
                   `min-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}`,
                 "@media (prefers-reduced-motion: reduce)": { transition: "none" },
@@ -1870,7 +1941,7 @@ export function ComposerWorkspace({
             endInset={36}
             // Hold ⌘⏎ while busy → the same force-push confirm the Queue button's
             // long-press opens, anchored to that button.
-            holdToForce={busy || starting}
+            holdToForce={!preparing && (busy || starting)}
             onForceHold={(): void => {
               if (!sendable || queueBtnRef.current === null) return;
               haptic();
@@ -1878,7 +1949,9 @@ export function ComposerWorkspace({
             }}
             sessionId={sessionId}
             commands={(): AvailableCommand[] => availableCommands}
-            placeholder={dead
+            placeholder={preparing
+              ? "You can start typing while this session prepares…"
+              : dead
               ? "Send to resume this session…"
               : "Message the agent…"}
             // Vim is desktop-only — never load it on touch (no physical keyboard /
@@ -2307,6 +2380,7 @@ export function ComposerWorkspace({
           }}
         >
         <Stack
+          ref={mobileActionsRef}
           data-mobile-scrollable-actions={touchInput ? "true" : undefined}
           direction="row"
           alignItems="center"
@@ -2316,12 +2390,27 @@ export function ComposerWorkspace({
             minWidth: 0,
             px: 0.5,
             ...(compact && {
-              justifyContent: "space-evenly",
+              justifyContent: "flex-start",
+              columnGap: "clamp(2px, 1vw, 5px)",
               flexWrap: "nowrap",
               overflowX: "auto",
               overflowY: "hidden",
               overscrollBehaviorX: "contain",
               scrollbarWidth: "none",
+              WebkitMaskImage: mobileActionEdges.left && mobileActionEdges.right
+                ? "linear-gradient(to right, transparent 0, black 16px, black calc(100% - 16px), transparent 100%)"
+                : mobileActionEdges.left
+                ? "linear-gradient(to right, transparent 0, black 16px)"
+                : mobileActionEdges.right
+                ? "linear-gradient(to right, black calc(100% - 16px), transparent 100%)"
+                : "none",
+              maskImage: mobileActionEdges.left && mobileActionEdges.right
+                ? "linear-gradient(to right, transparent 0, black 16px, black calc(100% - 16px), transparent 100%)"
+                : mobileActionEdges.left
+                ? "linear-gradient(to right, transparent 0, black 16px)"
+                : mobileActionEdges.right
+                ? "linear-gradient(to right, black calc(100% - 16px), transparent 100%)"
+                : "none",
               "&::-webkit-scrollbar": { display: "none" },
               "@media (min-width: 700px)": {
                 justifyContent: "flex-start",
@@ -2336,7 +2425,7 @@ export function ComposerWorkspace({
             a one-tap `/` insertion that is easy to hit accidentally. Slash
             completion remains available by typing `/` in the editor. Desktop
             keeps its dedicated slash affordance in the separate toolbar above. */}
-        {!desktop && compactAction && (
+        {!preparing && !desktop && compactAction && (
           <Tooltip
             title={compacting
               ? "Compacting…"
@@ -2362,7 +2451,7 @@ export function ComposerWorkspace({
         )}
         {/* @ folds out on compact (mobile) — the row is too tight, and typing
             "@" raises the same file picker. Desktop keeps the dedicated button. */}
-        {!compact && (
+        {!preparing && !compact && (
           <Tooltip title="Reference a file (@)">
             <span>
               <IconButton
@@ -2390,7 +2479,7 @@ export function ComposerWorkspace({
         </Tooltip>
         {/* Session-lifecycle Clear action. Compact is mobile's first button above;
             both actions still require confirmation before they run. */}
-        {clearAction && (
+        {!preparing && clearAction && (
           <Tooltip title="Clear conversation">
             <span>
               <IconButton
@@ -2412,7 +2501,22 @@ export function ComposerWorkspace({
         {/* Primary action: Send (idle) / Queue (busy — long-press → force push).
             Moved here from the old absolute overlay so the whole composer is one
             card; the long-press force-push ring + haptics are preserved. */}
-        {busy || starting
+        {preparing
+          ? (
+            <Tooltip title="Preparing session">
+              <span>
+                <IconButton
+                  color="primary"
+                  aria-label="preparing session"
+                  disabled
+                  sx={TOOLBAR_ICON_BTN}
+                >
+                  <CircularProgress size={17} color="inherit" />
+                </IconButton>
+              </span>
+            </Tooltip>
+          )
+          : busy || starting
           ? (
             <Box component="span" sx={{ position: "relative", display: "inline-flex", flexShrink: 0 }}>
                 <IconButton
@@ -2493,6 +2597,7 @@ export function ComposerWorkspace({
             (with a queue), Force-push (while busy/starting). The narrow-phone ⋮ fold
             is gone — moving the session-level controls (config / auto-scroll / Stop)
             out to the navbar freed the room that fold used to reclaim. */}
+        {!preparing && <>
         <Tooltip title="Save as draft">
           <span>
             <IconButton
@@ -2550,6 +2655,7 @@ export function ComposerWorkspace({
             </IconButton>
           </span>
         </Tooltip>
+        </>}
         <Tooltip title="Clear composer">
           <span data-mobile-composer-clear>
             <IconButton
