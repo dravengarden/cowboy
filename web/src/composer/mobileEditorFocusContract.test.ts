@@ -1,5 +1,6 @@
 import { assertEquals } from "jsr:@std/assert";
 import { didMobileSoftwareKeyboardClose } from "./mobileComposerFocus.ts";
+import { mobileComposerStackGap } from "../mobileComposerPrimitives.ts";
 
 const composerSource = await Deno.readTextFile(
   new URL("../Composer.tsx", import.meta.url),
@@ -147,6 +148,7 @@ Deno.test("fullscreen delivery closes only after authoritative success", () => {
 });
 
 Deno.test("mobile composer keeps one boundary gap across focus transitions", () => {
+  assertEquals(mobileComposerStackGap, 4);
   assertEquals(
     composerSource.includes(
       'pt: desktop ? 1 : "var(--mobile-composer-boundary-gap)"',
@@ -160,16 +162,27 @@ Deno.test("mobile composer keeps one boundary gap across focus transitions", () 
     true,
   );
   assertEquals(
-    composerSource.includes('"--mobile-composer-boundary-gap": "4px"'),
+    composerSource.includes(
+      '"--mobile-composer-boundary-gap": `${mobileComposerStackGap}px`',
+    ),
     true,
   );
   assertEquals(
-    composerSource.includes('"--mobile-composer-stack-gap": "4px"'),
+    composerSource.includes(
+      '"--mobile-composer-stack-gap": `${mobileComposerStackGap}px`',
+    ),
     true,
   );
   assertEquals(
     composerSource.includes('paddingTop: "4px"'),
     false,
+  );
+  assertEquals(composerSource.includes('alignItems: "stretch"'), true);
+  assertEquals(
+    composerSource.includes(
+      '"& > *": {\n            width: "100%",\n            minWidth: 0,',
+    ),
+    true,
   );
 });
 
@@ -189,7 +202,7 @@ Deno.test("mobile keyboard focus presents one floating composer surface", () => 
   );
   assertEquals(
     composerSource.includes(
-      "> [data-mobile-input-context]\": {\n            display: \"none\"",
+      "> [data-composer-stack-slot]:not([data-composer-stack-slot='primary'])\": {\n            display: \"none\"",
     ),
     true,
   );

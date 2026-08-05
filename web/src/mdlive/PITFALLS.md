@@ -1049,3 +1049,21 @@ Desktop Vim + IME checks:
     and invalid/no-op delivery retain the editor and its draft so the user can
     retry. Keep Draft/Queue row editing separate: its primary action finishes
     the edit transaction rather than delivering that pending item.
+
+49. **The floating Composer stack has one border-box geometry owner.** Status,
+    Permission, Plan, Queue/Draft, attachments, and the primary Composer stay in
+    one ordinary flex column with one 4px rhythm. Status and Permission must not
+    return to absolute positioning or publish a root-level height variable:
+    separate mount/cleanup timing lets Transcript combine stale reservations
+    after context clear, panel editing, and keyboard dismissal. App measures the
+    complete stack once and publishes one settled Transcript bottom inset.
+    Observe the AppBar and Composer with `ResizeObserver`'s `border-box`, not its
+    default content box: iOS keyboard dismissal restores safe-area padding while
+    leaving the content box unchanged, so the old observer kept a 44px navbar
+    reservation after the real outer height returned to 60px. Viewport and focus
+    settle measurements remain the final safety net for WebKit frames that omit
+    the last resize callback. Every direct Mobile stack child is full-width with
+    `min-width: 0`; a long editor or pending row must never transfer its intrinsic
+    width to the stack. This changes layout ownership only—do not add editor
+    remounts, delayed focus, controlled values, or IME event handling to repair
+    geometry.

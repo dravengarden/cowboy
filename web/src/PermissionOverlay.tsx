@@ -1,11 +1,10 @@
-import { type ReactNode, useEffect, useMemo, useRef } from "react";
+import { type ReactNode, useMemo } from "react";
 import { alpha, Box, Button, Stack, Typography } from "@mui/material";
 import WarningAmberRounded from "@mui/icons-material/WarningAmberRounded";
 import type { PendingPermission } from "./derive";
 import { send } from "./store";
 import { requestStickToBottom, useSticky } from "./stickyStore";
 import { frostedPanel, frostedPill } from "./frostedGlass";
-import { FLOATING_OVERLAY_BOUNDARY_GAP_PX } from "./floatingOverlayPolicy";
 import { haptic } from "./haptic";
 
 // The pending tool-permission overlay — a sticky frosted surface floating just
@@ -21,25 +20,21 @@ import { haptic } from "./haptic";
 //     covers history while you read; tapping it scrolls back to the bottom
 //     (`requestStickToBottom`), which re-expands it.
 //
-// Publishes its height into `--awaiting-h` — the var the transcript already
-// reserves as padding-bottom for the turn-status pill — so it never paints over
-// the last message.
+// It participates in the Composer stack's normal flow, so the single outer
+// geometry owner reserves its border box together with every other slot.
 export function PermissionOverlay({
   item,
   sessionId,
-  inline = false,
   shortcutForAction,
 }: {
   item: PendingPermission;
   sessionId: string;
-  inline?: boolean;
   shortcutForAction?: (action: "approve" | "reject") => ReactNode;
 }): React.JSX.Element {
   // `useSticky` is the existing "is the transcript pinned to the bottom" signal,
   // toggled the instant the user wheels/touches away — so it's exactly the
   // auto-collapse trigger (no new scroll listener on the fragile scroll model).
   const expanded = useSticky(sessionId);
-  const measureRef = useRef<HTMLDivElement | null>(null);
   const preferredActions = useMemo(() => {
     const find = (prefix: "allow" | "reject"): number => {
       const once = item.options.findIndex((option) =>
@@ -54,23 +49,6 @@ export function PermissionOverlay({
     return { approve, reject };
   }, [item.options]);
 
-  useEffect(() => {
-    const el = measureRef.current;
-    if (!el) return undefined;
-    const set = (): void =>
-      document.documentElement.style.setProperty(
-        "--awaiting-h",
-        `${el.offsetHeight}px`,
-      );
-    set();
-    const ro = new ResizeObserver(set);
-    ro.observe(el);
-    return () => {
-      ro.disconnect();
-      document.documentElement.style.setProperty("--awaiting-h", "0px");
-    };
-  }, [expanded]);
-
   const respond = (optionId: string): void => {
     haptic();
     send({
@@ -83,23 +61,16 @@ export function PermissionOverlay({
 
   return (
     <Box
-      ref={measureRef}
       data-permission-overlay
+      data-composer-stack-slot="status"
       sx={{
-        // Same anchor as TurnStatusOverlay: floats just above the composer (its
-        // relative container), so it's positioned correctly in BOTH the mobile
-        // (transcript-is-absolute-background) and desktop (two-column) layouts.
-        position: inline ? "relative" : "absolute",
-        left: 0,
-        right: 0,
-        bottom: inline ? "auto" : "100%",
+        position: "relative",
         display: "flex",
         justifyContent: "center",
         px: 2,
-        // Match TurnStatusOverlay's narrow boundary seam only while occupying
-        // the absolute mobile slot. The desktop inline panel already receives
-        // spacing from its normal layout flow.
-        pb: inline ? 0 : `${FLOATING_OVERLAY_BOUNDARY_GAP_PX}px`,
+        width: "100%",
+        minWidth: 0,
+        boxSizing: "border-box",
         pointerEvents: "none",
         zIndex: 3,
         fontFamily: "var(--cowboy-reading-font, inherit)",

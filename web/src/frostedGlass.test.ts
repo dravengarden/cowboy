@@ -1,8 +1,5 @@
 import { assertEquals } from "jsr:@std/assert";
-import {
-  FROSTED_PILL_DROP_SHADOW_GEOMETRY,
-  FLOATING_OVERLAY_BOUNDARY_GAP_PX,
-} from "./floatingOverlayPolicy";
+import { FROSTED_PILL_DROP_SHADOW_GEOMETRY } from "./floatingOverlayPolicy";
 
 const composerSource = await Deno.readTextFile(
   new URL("./Composer.tsx", import.meta.url),
@@ -13,28 +10,39 @@ const transcriptSource = await Deno.readTextFile(
 const appSource = await Deno.readTextFile(
   new URL("./App.tsx", import.meta.url),
 );
+const geometrySource = await Deno.readTextFile(
+  new URL("./floatingComposerGeometry.ts", import.meta.url),
+);
+const turnStatusSource = await Deno.readTextFile(
+  new URL("./TurnStatusOverlay.tsx", import.meta.url),
+);
+const permissionSource = await Deno.readTextFile(
+  new URL("./PermissionOverlay.tsx", import.meta.url),
+);
 
-Deno.test("floating composer overlays keep a narrow boundary seam", () => {
-  assertEquals(FLOATING_OVERLAY_BOUNDARY_GAP_PX, 4);
+Deno.test("floating composer stack has one border-box geometry owner", () => {
   assertEquals(
-    transcriptSource.includes(
-      "`calc(${bottomInset} + var(--awaiting-h, 0px))`",
-    ),
+    transcriptSource.includes('pb: bottomInset ?? "12px"'),
     true,
   );
   assertEquals(
-    transcriptSource.includes(
-      "`calc(${bottomInset} + var(--awaiting-h, 0px) + 8px)`",
+    [transcriptSource, appSource, turnStatusSource, permissionSource].some(
+      (source) => source.includes("--awaiting-h"),
     ),
     false,
   );
   assertEquals(
-    appSource.includes(
-      '"&:not(:has([data-turn-status-overlay], [data-permission-overlay]))"',
-    ),
+    geometrySource.includes('observer.observe(element, { box: "border-box" })'),
     true,
   );
-  assertEquals(appSource.includes('"--awaiting-h": "0px"'), true);
+  assertEquals(geometrySource.includes('"--floating-stack-h"'), true);
+  assertEquals(geometrySource.includes('"--transcript-bottom-inset"'), true);
+  assertEquals(
+    appSource.includes('bottomInset="var(--transcript-bottom-inset, 0px)"'),
+    true,
+  );
+  assertEquals(turnStatusSource.includes('position: "relative"'), true);
+  assertEquals(permissionSource.includes('position: "relative"'), true);
 });
 
 Deno.test("frosted pill elevation stays close to the floating surface", () => {

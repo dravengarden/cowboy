@@ -115,6 +115,7 @@ import {
   mobileComposerPanelFrameSx,
   mobileComposerPanelHeaderMinHeight,
   mobileComposerKeyboardGap,
+  mobileComposerStackGap,
 } from "./mobileComposerPrimitives";
 import { TurnStatusOverlay } from "./TurnStatusOverlay";
 import { PermissionOverlay } from "./PermissionOverlay";
@@ -805,7 +806,7 @@ export function ComposerWorkspace({
   // `variant` is intentionally constrained by the product shell wrappers:
   // Mobile always requests overlay; only Desktop can request a column.
   // Two-column (desktop split) mode — gates every overlay-specific affordance
-  // (float padding, --composer-h reservation lives in App, expand toggle, resize
+  // (floating-stack reservation lives in App, expand toggle, resize
   // handle) off and turns the root into a fill-height flex column instead.
   const column = variant === "column";
   const desktop = surface === "desktop";
@@ -1404,12 +1405,16 @@ export function ComposerWorkspace({
         // same small gap below the transcript hairline as between mounted Plan,
         // Pending, and Composer children so the first surface never fuses with
         // the transcript boundary.
-        "--mobile-composer-stack-gap": "4px",
-        "--mobile-composer-boundary-gap": "4px",
+        "--mobile-composer-stack-gap": `${mobileComposerStackGap}px`,
+        "--mobile-composer-boundary-gap": `${mobileComposerStackGap}px`,
         pt: desktop ? 1 : "var(--mobile-composer-boundary-gap)",
         display: "flex",
         flexDirection: "column",
+        alignItems: "stretch",
         rowGap: desktop ? 0 : "var(--mobile-composer-stack-gap)",
+        width: "100%",
+        minWidth: 0,
+        boxSizing: "border-box",
         // Bottom inset only when the composer is the bottom-most element. With
         // the navbar at the bottom it sits below us and owns the home-indicator
         // inset, so we drop to a plain (tight) gap.
@@ -1430,17 +1435,26 @@ export function ComposerWorkspace({
         borderTop: 0,
         position: "relative", // anchor for Popper portal placement
         ...(!desktop && {
+          // Every visible slot shares one horizontal contract. Explicitly zero
+          // the flex minimum so a long pending row, CodeMirror canvas, or
+          // container-query child cannot shrink or widen the whole bottom stack.
+          "& > *": {
+            width: "100%",
+            minWidth: 0,
+            maxWidth: "100%",
+            boxSizing: "border-box",
+          },
           // Keyboard Focus Mode is a single floating writing surface. Keep the
           // auxiliary state mounted so Plan/Queue/Draft disclosure and edit
           // ownership survive, but remove it from presentation while the main
           // Composer owns the visible software keyboard.
-          "&:has(> [data-mobile-primary-composer='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within) > [data-mobile-input-context]": {
+          "&:has(> [data-mobile-primary-composer='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within) > [data-composer-stack-slot]:not([data-composer-stack-slot='primary'])": {
             display: "none",
           },
           // A Queue/Draft edit follows the same focus model. Its containing
           // scrollport must stay mounted because it owns the transaction, so
           // hide Plan and the inactive sibling panel instead of the scrollport.
-          "&:has([data-mobile-pending-editor='true'][data-mobile-keyboard-open='true']:focus-within) > [data-mobile-input-context='plan']": {
+          "&:has([data-mobile-pending-editor='true'][data-mobile-keyboard-open='true']:focus-within) > [data-composer-stack-slot]:not([data-composer-stack-slot='pending'])": {
             display: "none",
           },
           "&:has([data-mobile-pending-editor='true'][data-mobile-keyboard-open='true']:focus-within) [data-mobile-pending-panel]:not([data-mobile-floating-edit='true'])": {
@@ -1485,52 +1499,14 @@ export function ComposerWorkspace({
       }}
     >
       {
-        /* Agent plan (very top): a pinned, collapsible progress summary so the
-          task's plan stays visible above the queue without scrolling. Hidden
-          when there's no plan, when dismissed, or when a finished plan has been
-          superseded by a new turn (see showPlan). */
-      }
-      {showPlan && plan && (
-        <Box
-          data-mobile-input-context={!desktop ? "plan" : undefined}
-          {...(desktop
-            ? {
-              "data-desktop-region": "prompt.plan",
-              tabIndex: -1,
-            }
-            : {})}
-        >
-          <PlanDock
-            entries={plan.entries}
-            onDismiss={dismissPlan}
-            desktop={desktop}
-            shortcut={desktop
-              ? (
-                <Suspense fallback={null}>
-                  <DesktopRegionShortcut
-                    shortcut={DESKTOP_FOCUS_PLAN_SHORTCUT}
-                    title="Focus Plan"
-                    singleKeycap={`${MOD_LABEL}P`}
-                  />
-                </Suspense>
-              )
-              : undefined}
-          />
-        </Box>
-      )}
-      {
-        /* The floating slot above the composer. A pending tool-permission OUTRANKS
-          the turn-status pill (a blocking decision beats a status), and the two
-          share the slot + frosted material — so they're mutually exclusive here,
-          never overlapping. Otherwise the unified turn-status overlay decides its
-          own visibility (awaiting / done / interrupted / error, hidden
-          while working). */
+        /* Status is the first ordinary stack slot, not a second absolute layer.
+          A pending tool-permission outranks the turn-status pill (a blocking
+          decision beats a status), and the two remain mutually exclusive. */
       }
       {pendingPermission ? (
         <PermissionOverlay
           item={pendingPermission}
           sessionId={sessionId}
-          inline={column}
           {...(desktop
             ? {
               shortcutForAction: (action: "approve" | "reject") => (
@@ -1560,6 +1536,40 @@ export function ComposerWorkspace({
       ) : (
         null
       )}
+      {
+        /* Agent plan: a pinned, collapsible progress summary above Pending and
+          Composer. Hidden when there is no plan, when dismissed, or when a
+          finished plan has been superseded by a new turn (see showPlan). */
+      }
+      {showPlan && plan && (
+        <Box
+          data-composer-stack-slot="plan"
+          data-mobile-input-context={!desktop ? "plan" : undefined}
+          {...(desktop
+            ? {
+              "data-desktop-region": "prompt.plan",
+              tabIndex: -1,
+            }
+            : {})}
+        >
+          <PlanDock
+            entries={plan.entries}
+            onDismiss={dismissPlan}
+            desktop={desktop}
+            shortcut={desktop
+              ? (
+                <Suspense fallback={null}>
+                  <DesktopRegionShortcut
+                    shortcut={DESKTOP_FOCUS_PLAN_SHORTCUT}
+                    title="Focus Plan"
+                    singleKeycap={`${MOD_LABEL}P`}
+                  />
+                </Suspense>
+              )
+              : undefined}
+          />
+        </Box>
+      )}
       <ScheduleSheet
         open={scheduleTarget !== null}
         onClose={(): void => setScheduleTarget(null)}
@@ -1581,6 +1591,7 @@ export function ComposerWorkspace({
       }
       {(queue.length > 0 || draftList.length > 0) && !desktop && (
         <Box
+          data-composer-stack-slot="pending"
           data-mobile-pending-scrollport
           data-mobile-input-context="pending"
           // This is a native vertical scrollport, but it still participates in
@@ -1663,6 +1674,7 @@ export function ComposerWorkspace({
       )}
       {(queue.length > 0 || draftList.length > 0) && desktop && (
         <Box
+          data-composer-stack-slot="pending"
           sx={{
             flexShrink: 0,
             minHeight: 0,
@@ -1736,6 +1748,7 @@ export function ComposerWorkspace({
           floats over the frosted bottom slab (a solid paper would hide the glass).
           A flex column so a later step can pin an inline toolbar to the bottom. */}
       <Paper
+        data-composer-stack-slot="primary"
         {...(surface === "desktop"
           ? {
             "data-desktop-region": "prompt.composer",
@@ -1976,7 +1989,7 @@ export function ComposerWorkspace({
         )}
         {/* Expand toggle, top-right INSIDE the card. DESKTOP: Zed-style inline
             expand — toggles a taller editor in place (flows through the
-            --composer-h ResizeObserver). MOBILE: space is tight inline, so ↗ goes
+            floating-stack ResizeObserver). MOBILE: space is tight inline, so ↗ goes
             straight to the FULLSCREEN compose sheet (the first-class long-form /
             future-markdown editor). The editor reserves a right gutter (endInset)
             so text never runs under it. Glyph sized at the BUTTON level so it
