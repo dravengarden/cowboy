@@ -219,16 +219,52 @@ function DeepSeekDetails(
                   <InfoRow k="Errors" v={(errors ?? 0).toLocaleString()} />
                   {byAgent && Object.entries(byAgent).map(([agent, value]) => {
                     const totals = record(value);
+                    const agentHit = num(totals?.cacheHitTokens) ?? 0;
+                    const agentMiss = num(totals?.cacheMissTokens) ?? 0;
+                    const agentCacheTotal = agentHit + agentMiss;
+                    const agentHitRate = agentCacheTotal > 0
+                      ? Math.round(agentHit * 100 / agentCacheTotal)
+                      : undefined;
                     return (
-                      <InfoRow
+                      <Box
                         key={agent}
-                        k={agent === "codex"
-                          ? "Via Codex"
-                          : agent === "claude"
-                          ? "Via Claude Code"
-                          : agent}
-                        v={`${formatTokens(num(totals?.requests))} requests`}
-                      />
+                        sx={{
+                          borderRadius: 1.5,
+                          bgcolor: "action.hover",
+                          px: 1.1,
+                          py: 0.9,
+                        }}
+                      >
+                        <Stack spacing={0.55}>
+                          <Stack direction="row" justifyContent="space-between">
+                            <Typography variant="body2" fontWeight={700}>
+                              {agent === "codex"
+                                ? "Codex"
+                                : agent === "claude"
+                                ? "Claude Code"
+                                : agent}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              {formatTokens(num(totals?.requests))} requests
+                            </Typography>
+                          </Stack>
+                          <InfoRow
+                            k="Input / output"
+                            v={`${formatTokens(num(totals?.inputTokens))} / ${formatTokens(num(totals?.outputTokens))}`}
+                          />
+                          <InfoRow
+                            k="Reasoning"
+                            v={formatTokens(num(totals?.reasoningTokens))}
+                          />
+                          <InfoRow
+                            k="Cache hit rate"
+                            v={agentHitRate === undefined ? "—" : `${String(agentHitRate)}%`}
+                          />
+                          <Typography variant="caption" color="text.secondary">
+                            {formatTokens(agentHit)} hit · {formatTokens(agentMiss)} miss tokens
+                          </Typography>
+                        </Stack>
+                      </Box>
                     );
                   })}
                   {daily.length > 0 && (
