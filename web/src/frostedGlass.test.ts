@@ -10,6 +10,9 @@ const composerSource = await Deno.readTextFile(
 const transcriptSource = await Deno.readTextFile(
   new URL("./Transcript.tsx", import.meta.url),
 );
+const appSource = await Deno.readTextFile(
+  new URL("./App.tsx", import.meta.url),
+);
 
 Deno.test("floating composer overlays keep a narrow boundary seam", () => {
   assertEquals(FLOATING_OVERLAY_BOUNDARY_GAP_PX, 4);
@@ -25,6 +28,13 @@ Deno.test("floating composer overlays keep a narrow boundary seam", () => {
     ),
     false,
   );
+  assertEquals(
+    appSource.includes(
+      '"&:not(:has([data-turn-status-overlay], [data-permission-overlay]))"',
+    ),
+    true,
+  );
+  assertEquals(appSource.includes('"--awaiting-h": "0px"'), true);
 });
 
 Deno.test("frosted pill elevation stays close to the floating surface", () => {
