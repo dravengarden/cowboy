@@ -283,3 +283,24 @@ Deno.test("mobile composer releases stale focus only after a visible keyboard cl
     true,
   );
 });
+
+Deno.test("clearing session context always ends the mobile input interaction", () => {
+  assertEquals(
+    composerSource.includes(
+      "timelineState.contextClearedSeq <= previous.seq",
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      'if (touchInput && action.kind === "reset")',
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "requestAnimationFrame(() => releaseMobileComposerFocus())",
+    ),
+    true,
+  );
+});

@@ -111,3 +111,16 @@ Deno.test("composer timeline slice reacts to every composer-owned signal", () =>
   assert(!sameComposerTimelineSlice(initial, completed));
   assertEquals(completed.completionSeq, 8);
 });
+
+Deno.test("context clear is a composer input-interaction boundary", () => {
+  const before = composerTimelineSlice([
+    update(1, "available_commands_update"),
+  ]);
+  const after = composerTimelineSlice([
+    update(1, "available_commands_update"),
+    update(2, "context_cleared"),
+  ]);
+  assertEquals(before.contextClearedSeq, 0);
+  assertEquals(after.contextClearedSeq, 2);
+  assert(!sameComposerTimelineSlice(before, after));
+});

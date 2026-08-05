@@ -807,6 +807,8 @@ export function ComposerWorkspace({
   // handle) off and turns the root into a fill-height flex column instead.
   const column = variant === "column";
   const desktop = surface === "desktop";
+  const touchInput = useTouchComposer();
+  const keyboardOpen = useKeyboardOpen();
   const preparing = status === "starting";
   const desktopShortcut = (
     child: ReactNode,
@@ -1125,6 +1127,20 @@ export function ComposerWorkspace({
     [provider, availableCommands],
   );
   const [cmdConfirm, setCmdConfirm] = useState<SessionAction | null>(null);
+  const contextClearedRef = useRef({
+    sessionId,
+    seq: timelineState.contextClearedSeq,
+  });
+  useEffect(() => {
+    const previous = contextClearedRef.current;
+    contextClearedRef.current = {
+      sessionId,
+      seq: timelineState.contextClearedSeq,
+    };
+    if (previous.sessionId !== sessionId) return;
+    if (timelineState.contextClearedSeq <= previous.seq) return;
+    if (touchInput) releaseMobileComposerFocus();
+  }, [sessionId, timelineState.contextClearedSeq, touchInput]);
   const compactContext = useCompactionContext({
     sessionId,
     status,
@@ -1147,8 +1163,18 @@ export function ComposerWorkspace({
   async function confirmSessionAction(): Promise<void> {
     if (cmdConfirm === null) return;
     const action = cmdConfirm;
-    await runSessionAction(action);
+    // A context reset is a hard end to the current input interaction. Close the
+    // Dialog before the request, then clear both the current focus owner and the
+    // focus MUI may restore while the closing transition commits. Without the
+    // post-close pass WebKit can resurrect a stale textarea first responder and
+    // combine it with a lagging visualViewport keyboard measurement, leaving a
+    // tall floating composer over a keyboard-free transcript.
     setCmdConfirm(null);
+    if (touchInput && action.kind === "reset") {
+      releaseMobileComposerFocus();
+      globalThis.requestAnimationFrame(() => releaseMobileComposerFocus());
+    }
+    await runSessionAction(action);
   }
   useConfirmEnter(cmdConfirm !== null, () => {
     void confirmSessionAction();
@@ -1205,8 +1231,6 @@ export function ComposerWorkspace({
   }, [expanded, composerHeight]);
   // Touch and Desktop share CM6 document semantics. Touch keeps Vim disabled,
   // while preserving inline image tokens across compact/fullscreen handoff.
-  const touchInput = useTouchComposer();
-  const keyboardOpen = useKeyboardOpen();
   useLayoutEffect(() => {
     if (!touchInput) return undefined;
     const track = mobileActionsRef.current;
