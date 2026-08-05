@@ -25,10 +25,11 @@ Deno.test("Claude DeepSeek exposes real models and distinct effort behavior", ()
   }];
   const normalized = providerConfigOptions("claude-deepseek", options);
   assertEquals(normalized[0]?.options.map((option) => option.name), [
-    "Default (recommended)",
+    "Default · Flash (recommended)",
+    "deepseek-v4-flash[1m]",
     "deepseek-v4-pro[1m]",
   ]);
-  assertEquals(normalized[0]?.currentValue, "default");
+  assertEquals(normalized[0]?.currentValue, "deepseek-v4-flash[1m]");
   assertEquals(normalized[1]?.options.map((option) => option.value), [
     "default",
     "high",

@@ -18,24 +18,41 @@ export function providerConfigOptions(
             : candidate.name.replace(/\[1m\]$/, ""),
         ]),
       );
+      const defaultCandidate = option.options.find((candidate) =>
+        candidate.value === "default"
+      );
       const representative = new Map<string, string | boolean>();
-      representative.set("deepseek-v4-flash", "default");
-      for (const candidate of option.options) {
-        const model = modelFor.get(String(candidate.value));
-        if (model && !representative.has(model)) {
-          representative.set(model, candidate.value);
-        }
+      for (const model of ["deepseek-v4-flash", "deepseek-v4-pro"]) {
+        const candidates = option.options.filter((candidate) =>
+          candidate.value !== "default" &&
+          modelFor.get(String(candidate.value)) === model
+        );
+        const exact = candidates.find((candidate) =>
+          String(candidate.value).replace(/\[1m\]$/, "") === model
+        );
+        const selected = exact ?? candidates[0];
+        if (selected) representative.set(model, selected.value);
       }
       const currentModel = modelFor.get(String(option.currentValue));
       return {
         ...option,
-        currentValue: currentModel
+        currentValue: option.currentValue === "default"
+          ? "default"
+          : currentModel
           ? representative.get(currentModel) ?? option.currentValue
           : option.currentValue,
-        options: option.options.filter((candidate) =>
-          representative.get(modelFor.get(String(candidate.value)) ?? "") ===
-            candidate.value
-        ),
+        options: [
+          ...(defaultCandidate
+            ? [{ ...defaultCandidate, name: "Default · Flash (recommended)" }]
+            : []),
+          ...["deepseek-v4-flash", "deepseek-v4-pro"].flatMap((model) => {
+            const value = representative.get(model);
+            const candidate = option.options.find((item) =>
+              item.value === value
+            );
+            return candidate ? [candidate] : [];
+          }),
+        ],
       };
     }
     if (option.id === "effort" || option.id === "reasoning_effort") {

@@ -112,12 +112,6 @@ function DeepSeekDetails(
   const daily = Array.isArray(usage.activity?.daily)
     ? usage.activity.daily.map(record).filter((value): value is JsonRecord => value !== undefined).slice(-7)
     : [];
-  const hit = num(summary?.cacheHitTokens) ?? 0;
-  const miss = num(summary?.cacheMissTokens) ?? 0;
-  const cacheTotal = hit + miss;
-  const hitRate = (num(summary?.cacheObservations) ?? 0) > 0 && cacheTotal > 0
-    ? Math.round(hit * 100 / cacheTotal)
-    : undefined;
   const requests = num(summary?.requests);
   const errors = num(summary?.errors);
   const retentionDays = num(usage.activity?.retentionDays) ?? 14;
@@ -183,24 +177,36 @@ function DeepSeekDetails(
                 </Typography>
               </Box>
             </Box>
-            <Stack spacing={0.5}>
-              <Stack direction="row" justifyContent="space-between">
-                <Typography variant="caption" color="text.secondary">
-                  Prompt cache hit rate
-                </Typography>
-                <Typography variant="body2" fontWeight={600}>
-                  {hitRate === undefined ? "—" : `${String(hitRate)}%`}
-                </Typography>
-              </Stack>
-              <LinearProgress
-                variant="determinate"
-                value={hitRate ?? 0}
-                sx={{ height: 7, borderRadius: 99 }}
-              />
-              <Typography variant="caption" color="text.secondary">
-                {formatTokens(hit)} hit · {formatTokens(miss)} miss tokens
-              </Typography>
-            </Stack>
+            {byAgent && (
+              <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "repeat(2, minmax(0, 1fr))" }, gap: 1 }}>
+                {["claude", "codex"].flatMap((agent) => {
+                  const totals = record(byAgent[agent]);
+                  if (!totals) return [];
+                  const hit = num(totals.cacheHitTokens) ?? 0;
+                  const miss = num(totals.cacheMissTokens) ?? 0;
+                  const total = hit + miss;
+                  const rate = (num(totals.cacheObservations) ?? 0) > 0 && total > 0
+                    ? Math.round(hit * 100 / total)
+                    : undefined;
+                  return [
+                    <Box key={agent} sx={{ borderRadius: 1.5, bgcolor: "action.hover", px: 1.1, py: 0.9 }}>
+                      <Stack spacing={0.5}>
+                        <Stack direction="row" justifyContent="space-between">
+                          <Typography variant="body2" fontWeight={700}>{agent === "claude" ? "Claude Code" : "Codex"}</Typography>
+                          <Typography variant="caption" color="text.secondary">{formatTokens(num(totals.requests))} requests</Typography>
+                        </Stack>
+                        <Stack direction="row" justifyContent="space-between">
+                          <Typography variant="caption" color="text.secondary">Prompt cache</Typography>
+                          <Typography variant="body2" fontWeight={600}>{rate === undefined ? "—" : `${String(rate)}%`}</Typography>
+                        </Stack>
+                        <LinearProgress variant="determinate" value={rate ?? 0} sx={{ height: 7, borderRadius: 99 }} />
+                        <Typography variant="caption" color="text.secondary">{formatTokens(hit)} hit · {formatTokens(miss)} miss tokens</Typography>
+                      </Stack>
+                    </Box>,
+                  ];
+                })}
+              </Box>
+            )}
             <Accordion
               disableGutters
               elevation={0}
@@ -441,6 +447,7 @@ function ProviderUsageCard({
   const [fireAt, setFireAt] = useState("");
   const [confirmText, setConfirmText] = useState("");
   const [resetBusy, setResetBusy] = useState(false);
+  const [refreshBusy, setRefreshBusy] = useState(false);
   const [resetError, setResetError] = useState<string | null>(null);
   const limits = useMemo(() => usageLimits(usage), [usage]);
   const account = record(usage.account?.account);
@@ -548,6 +555,15 @@ function ProviderUsageCard({
     }
   };
   useConfirmEnter(resetOpen, () => void submitReset());
+  const refresh = async (): Promise<void> => {
+    if (!onRefresh || refreshBusy) return;
+    setRefreshBusy(true);
+    try {
+      await onRefresh();
+    } finally {
+      setRefreshBusy(false);
+    }
+  };
 
   return (
     <Box
@@ -580,11 +596,18 @@ function ProviderUsageCard({
             {onRefresh && (
               <NetworkIconButton
                 aria-label={`Refresh ${title}`}
-                networkAction={onRefresh}
+                networkAction={refresh}
+                disabled={refreshBusy}
                 size="small"
                 sx={{ width: 32, height: 32 }}
               >
-                <Refresh sx={{ fontSize: 17 }} />
+                <Refresh sx={{
+                  fontSize: 17,
+                  ...(refreshBusy && {
+                    animation: "cowboy-card-refresh 700ms linear infinite",
+                    "@keyframes cowboy-card-refresh": { to: { transform: "rotate(360deg)" } },
+                  }),
+                }} />
               </NetworkIconButton>
             )}
           </Stack>
