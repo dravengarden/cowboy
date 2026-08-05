@@ -291,6 +291,8 @@ const TOOLBAR_MIN_H = {
   minHeight: 34,
   "@media (pointer: coarse)": { minHeight: 40 },
 } as const;
+const MOBILE_COMPOSER_IDLE_EDITOR_MIN_H = 48;
+const MOBILE_COMPOSER_INPUT_EDITOR_MIN_H = 80;
 
 // MUI's Button start-icon selector assigns a fixed px size with more
 // specificity than an SvgIcon's own sx prop. Own the glyph size at the button
@@ -1792,6 +1794,9 @@ export function ComposerWorkspace({
               boxShadow: (t) =>
                 `0 10px 28px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.24 : 0.09)}`,
             },
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area]": {
+              minHeight: MOBILE_COMPOSER_INPUT_EDITOR_MIN_H,
+            },
             // An inline image promotes the compact native textarea to CM6. Keep
             // the complete focused canvas inside the same contenteditable height
             // chain; otherwise CM6 collapses to its 14px text line while the
@@ -1898,7 +1903,13 @@ export function ComposerWorkspace({
               flexDirection: "column",
               minHeight: 0,
               ...(touchInput && {
-                minHeight: 80,
+                // Resting compose only has the fullscreen control in its right
+                // rail, so one 44px touch target plus the card edge is enough.
+                // The keyboard-only hide control joins that rail in the focused
+                // state above, which promotes this to the two-control height.
+                // Keeping the resting height content-tight prevents a permanent
+                // blank "padding" band regardless of Plan/Queue/Draft presence.
+                minHeight: MOBILE_COMPOSER_IDLE_EDITOR_MIN_H,
                 transition:
                   `min-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}`,
                 "@media (prefers-reduced-motion: reduce)": { transition: "none" },

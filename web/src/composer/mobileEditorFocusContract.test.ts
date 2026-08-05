@@ -79,7 +79,18 @@ Deno.test("native textarea owns a content-sized mobile canvas", () => {
     ),
     false,
   );
-  assertEquals(composerSource.includes("minHeight: 80"), true);
+  assertEquals(
+    composerSource.includes(
+      "minHeight: MOBILE_COMPOSER_IDLE_EDITOR_MIN_H",
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "minHeight: MOBILE_COMPOSER_INPUT_EDITOR_MIN_H",
+    ),
+    true,
+  );
   assertEquals(
     composerSource.includes(
       "data-mobile-editor-area] > *, &:has([data-mobile-editor-area]:focus-within)",
