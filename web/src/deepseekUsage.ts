@@ -6,7 +6,6 @@ export interface DeepSeekCacheStats {
   explicitRequests: number;
   derivedRequests: number;
   absentRequests: number;
-  legacyRequests: number;
   coldRequests: number;
   hotRequests: number;
   hitRate: number | undefined;
@@ -28,7 +27,6 @@ export function deepseekCacheStats(
   const explicitRequests = finite(totals?.explicitCacheObservations);
   const derivedRequests = finite(totals?.derivedCacheObservations);
   const absentRequests = finite(totals?.absentCacheObservations);
-  const legacyRequests = finite(totals?.legacyCacheObservations);
   const eligibleRequests = explicitRequests + derivedRequests + absentRequests;
   const measuredTokens = hitTokens + missTokens;
   return {
@@ -39,7 +37,6 @@ export function deepseekCacheStats(
     explicitRequests,
     derivedRequests,
     absentRequests,
-    legacyRequests,
     coldRequests: finite(totals?.coldCacheRequests),
     hotRequests: finite(totals?.hotCacheRequests),
     hitRate: measuredRequests > 0 && measuredTokens > 0

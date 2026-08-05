@@ -301,11 +301,6 @@ function DeepSeekDetails(
                             {formatTokens(cache.hotRequests)} hot (≥90%) · {formatTokens(cache.coldRequests)} cold (&lt;10%) requests
                           </Typography>
                         )}
-                        {cache.legacyRequests > 0 && (
-                          <Typography variant="caption" color="text.secondary">
-                            {formatTokens(cache.legacyRequests)} legacy requests excluded from cache rate
-                          </Typography>
-                        )}
                       </Stack>
                     </Box>
                   );

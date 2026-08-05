@@ -16,13 +16,11 @@ Deno.test("DeepSeek cache rate uses only verified token observations", () => {
     explicitCacheObservations: 3,
     derivedCacheObservations: 2,
     absentCacheObservations: 1,
-    legacyCacheObservations: 6,
     coldCacheRequests: 1,
     hotCacheRequests: 3,
   });
   assertEquals(stats.hitRate, 90);
   assertEquals(stats.coverageRate, 5 * 100 / 6);
-  assertEquals(stats.legacyRequests, 6);
   assertEquals(stats.coldRequests, 1);
 });
 
