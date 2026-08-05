@@ -116,15 +116,39 @@ impl UsageService {
         if current.refreshed_at_ms > 0 && now_ms().saturating_sub(current.refreshed_at_ms) < 3_000 {
             return current;
         }
-        let codex = match tokio::time::timeout(
-            std::time::Duration::from_secs(12),
-            collect_codex(&self.codex_command),
-        )
-        .await
-        {
+        let (openai, deepseek) = tokio::join!(
+            tokio::time::timeout(
+                std::time::Duration::from_secs(12),
+                crate::provider_info::collect_openai(&self.codex_command),
+            ),
+            tokio::time::timeout(
+                std::time::Duration::from_secs(12),
+                crate::provider_info::collect_deepseek(),
+            ),
+        );
+        let openai = match openai {
             Ok(Ok(value)) => value,
-            Ok(Err(error)) => provider_error("codex", "codex-app-server", error.to_string()),
-            Err(_) => provider_error("codex", "codex-app-server", "refresh timed out".into()),
+            Ok(Err(error)) => {
+                crate::provider_info::error("openai", "OpenAI Codex app-server", error.to_string())
+            }
+            Err(_) => crate::provider_info::error(
+                "openai",
+                "OpenAI Codex app-server",
+                "refresh timed out".into(),
+            ),
+        };
+        let deepseek = match deepseek {
+            Ok(Ok(value)) => value,
+            Ok(Err(error)) => crate::provider_info::error(
+                "deepseek",
+                "DeepSeek provider adapter",
+                error.to_string(),
+            ),
+            Err(_) => crate::provider_info::error(
+                "deepseek",
+                "DeepSeek provider adapter",
+                "refresh timed out".into(),
+            ),
         };
         let refreshed_at_ms = now_ms();
         let next = UsageSnapshot {
@@ -135,16 +159,16 @@ impl UsageService {
             refresh_interval_ms: i64::try_from(AUTO_REFRESH_INTERVAL.as_millis())
                 .unwrap_or(i64::MAX),
             providers: vec![
-                codex,
-                unavailable("claude-code", "ACP", "Waiting for ACP rate-limit data"),
-                unavailable(
-                    "claude-deepseek",
-                    "ACP",
-                    "Waiting for DeepSeek session usage",
+                openai,
+                crate::provider_info::unavailable(
+                    "anthropic",
+                    "Anthropic Agent SDK via ACP",
+                    "Waiting for Anthropic rate-limit data",
                 ),
-                unavailable(
+                deepseek,
+                crate::provider_info::unavailable(
                     "gemini",
-                    "ACP",
+                    "Gemini ACP",
                     "Provider does not expose account limits over ACP",
                 ),
             ],
@@ -261,94 +285,25 @@ fn nearest_available_credit_id(rate_limits: Option<&Value>) -> Option<String> {
 /// Overlay the newest live ACP usage per provider onto the account snapshot.
 /// This is evaluated at response time so token/cost updates stay push-fresh and
 /// never wait for the slower account collector.
-pub fn with_session_usage(mut snapshot: UsageSnapshot, sessions: &[SessionMeta]) -> UsageSnapshot {
-    for provider in &mut snapshot.providers {
-        let Some((_, usage)) = sessions
-            .iter()
-            .filter(|session| session.provider == provider.provider)
-            .filter_map(|session| {
-                session
-                    .usage
-                    .as_ref()
-                    .map(|usage| (usage.observed_at_ms, usage))
-            })
-            .max_by_key(|(observed_at, _)| *observed_at)
-        else {
-            continue;
-        };
-        let provider_limits = (provider.provider == "claude-code")
-            .then(|| claude_account_limits(&usage.raw))
-            .flatten();
-        let has_account_limits = provider_limits.is_some();
-        if provider.rate_limits.is_none() {
-            provider.rate_limits = provider_limits;
-        }
-        provider.activity = Some(json!({ "session": usage.raw }));
-        provider.observed_at_ms = usage.observed_at_ms;
-        if has_account_limits {
-            provider.status = "available";
-            provider.source = "Claude Agent SDK via ACP";
-            provider.error = None;
-        } else if provider.status != "available" {
-            provider.status = "session-only";
-            provider.error =
-                Some("Account quota is not exposed; showing ACP session activity".into());
-        }
-    }
-    snapshot
+pub fn with_session_usage(snapshot: UsageSnapshot, sessions: &[SessionMeta]) -> UsageSnapshot {
+    crate::provider_info::overlay_session_usage(snapshot, sessions)
 }
 
-fn claude_account_limits(raw: &Value) -> Option<Value> {
-    let limits = raw.pointer("/_meta/_claude~1rateLimit")?;
-    limits.get("utilization").and_then(Value::as_f64)?;
-    limits.get("rateLimitType").and_then(Value::as_str)?;
-    Some(json!({ "rateLimits": limits }))
-}
-
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
 fn unavailable_providers() -> Vec<ProviderUsage> {
-    vec![
-        unavailable("codex", "codex-app-server", "Not refreshed yet"),
-        unavailable("claude-code", "ACP", "Waiting for ACP rate-limit data"),
-        unavailable(
-            "claude-deepseek",
-            "ACP",
-            "Waiting for DeepSeek session usage",
-        ),
-        unavailable(
-            "gemini",
-            "ACP",
-            "Provider does not expose account limits over ACP",
-        ),
-    ]
+    crate::provider_info::PROVIDERS
+        .map(|provider| {
+            crate::provider_info::unavailable(provider, "Provider adapter", "Not refreshed yet")
+        })
+        .to_vec()
 }
 
-fn unavailable(provider: &'static str, source: &'static str, message: &str) -> ProviderUsage {
-    ProviderUsage {
-        provider,
-        status: "unavailable",
-        source,
-        observed_at_ms: now_ms(),
-        account: None,
-        rate_limits: None,
-        activity: None,
-        error: Some(message.to_owned()),
-    }
-}
-
-fn provider_error(provider: &'static str, source: &'static str, message: String) -> ProviderUsage {
-    ProviderUsage {
-        error: Some(message),
-        ..unavailable(provider, source, "")
-    }
-}
-
-async fn collect_codex(command: &str) -> Result<ProviderUsage> {
+pub(crate) async fn collect_codex(command: &str) -> Result<ProviderUsage> {
     let mut server = JsonRpcProcess::start(command).await?;
     let account = server
         .request("account/read", json!({ "refreshToken": false }))
@@ -481,7 +436,7 @@ mod tests {
         assert!(
             providers
                 .iter()
-                .any(|provider| provider.provider == "claude-deepseek")
+                .any(|provider| provider.provider == "deepseek")
         );
         assert!(
             providers
@@ -510,21 +465,5 @@ mod tests {
             nearest_available_credit_id(Some(&limits)).as_deref(),
             Some("nearest")
         );
-    }
-
-    #[test]
-    fn claude_rate_limit_event_extracts_account_limits() {
-        let limits = claude_account_limits(&json!({
-            "sessionUpdate": "usage_update",
-            "_meta": { "_claude/rateLimit": {
-                "status": "allowed",
-                "rateLimitType": "five_hour",
-                "utilization": 23.5,
-                "resetsAt": 100
-            }}
-        }))
-        .unwrap();
-        assert_eq!(limits["rateLimits"]["utilization"], 23.5);
-        assert_eq!(limits["rateLimits"]["rateLimitType"], "five_hour");
     }
 }

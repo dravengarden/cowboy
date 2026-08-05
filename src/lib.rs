@@ -58,6 +58,8 @@ mod provider;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod provider_catalog;
 #[cfg(feature = "full")]
+mod provider_info;
+#[cfg(feature = "full")]
 mod remote_runtime;
 #[cfg(feature = "full")]
 mod runtime;

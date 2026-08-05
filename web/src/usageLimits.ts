@@ -19,12 +19,16 @@ export interface UsageSnapshot {
   codex_reset_schedule?: { fire_at_ms: number };
 }
 
-export function nearestAvailableResetCredit(usage: ProviderUsage): JsonRecord | undefined {
+export function nearestAvailableResetCredit(
+  usage: ProviderUsage,
+): JsonRecord | undefined {
   const root = record(usage.rate_limits?.rateLimitResetCredits);
   if (!Array.isArray(root?.credits)) return undefined;
   return root.credits
     .map(record)
-    .filter((credit): credit is JsonRecord => credit?.status === "available" && typeof credit.id === "string")
+    .filter((credit): credit is JsonRecord =>
+      credit?.status === "available" && typeof credit.id === "string"
+    )
     .sort((left, right) =>
       (num(left.expiresAt) ?? Number.MAX_SAFE_INTEGER) -
       (num(right.expiresAt) ?? Number.MAX_SAFE_INTEGER)
@@ -46,7 +50,9 @@ export function record(value: unknown): JsonRecord | undefined {
 }
 
 export function num(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }
 
 export function windowLabel(minutes: number | undefined): string {
@@ -59,20 +65,24 @@ export function windowLabel(minutes: number | undefined): string {
 
 export function usageLimits(usage: ProviderUsage | undefined): UsageLimit[] {
   const rateRoot = record(usage?.rate_limits?.rateLimits);
-  if (usage?.provider === "claude-code" && rateRoot) {
+  if (usage?.provider === "anthropic" && rateRoot) {
     const utilization = num(rateRoot.utilization);
     const kind = typeof rateRoot.rateLimitType === "string"
       ? rateRoot.rateLimitType
       : undefined;
     if (utilization !== undefined && kind) {
-      const labels: Record<string, { label: string; windowMinutes?: number }> = {
-        five_hour: { label: "5h", windowMinutes: 300 },
-        seven_day: { label: "Weekly", windowMinutes: 10080 },
-        seven_day_opus: { label: "Opus · Weekly", windowMinutes: 10080 },
-        seven_day_sonnet: { label: "Sonnet · Weekly", windowMinutes: 10080 },
-        seven_day_overage_included: { label: "Extra usage · Weekly", windowMinutes: 10080 },
-        overage: { label: "Extra usage" },
-      };
+      const labels: Record<string, { label: string; windowMinutes?: number }> =
+        {
+          five_hour: { label: "5h", windowMinutes: 300 },
+          seven_day: { label: "Weekly", windowMinutes: 10080 },
+          seven_day_opus: { label: "Opus · Weekly", windowMinutes: 10080 },
+          seven_day_sonnet: { label: "Sonnet · Weekly", windowMinutes: 10080 },
+          seven_day_overage_included: {
+            label: "Extra usage · Weekly",
+            windowMinutes: 10080,
+          },
+          overage: { label: "Extra usage" },
+        };
       const presentation = labels[kind] ?? { label: "Plan usage" };
       return [{
         id: `claude-${kind}`,
@@ -93,9 +103,13 @@ export function usageLimits(usage: ProviderUsage | undefined): UsageLimit[] {
       const bucket = record(value);
       return bucket ? [{ id, bucket }] : [];
     })
-    : rateRoot ? [{ id: "default", bucket: rateRoot }] : [];
+    : rateRoot
+    ? [{ id: "default", bucket: rateRoot }]
+    : [];
   return source.flatMap(({ id, bucket }) => {
-    const prefix = typeof bucket.limitName === "string" ? bucket.limitName : undefined;
+    const prefix = typeof bucket.limitName === "string"
+      ? bucket.limitName
+      : undefined;
     return [record(bucket.primary), record(bucket.secondary)]
       .flatMap((value, index) => {
         if (!value) return [];
@@ -105,7 +119,9 @@ export function usageLimits(usage: ProviderUsage | undefined): UsageLimit[] {
           id: `${id}-${String(index)}`,
           label: `${prefix ? `${prefix} · ` : ""}${windowLabel(windowMinutes)}`,
           remaining: Math.round(100 - used),
-          ...(num(value.resetsAt) === undefined ? {} : { resetsAt: num(value.resetsAt) as number }),
+          ...(num(value.resetsAt) === undefined
+            ? {}
+            : { resetsAt: num(value.resetsAt) as number }),
           ...(windowMinutes === undefined ? {} : { windowMinutes }),
         }];
       });
@@ -125,10 +141,14 @@ export function usageLimits(usage: ProviderUsage | undefined): UsageLimit[] {
 export function topBarUsageLimits(
   usage: ProviderUsage | undefined,
 ): UsageLimit[] {
-  const account = usageLimits(usage).filter((limit) => !limit.label.includes(" · "));
-  if (usage?.provider === "codex") {
+  const account = usageLimits(usage).filter((limit) =>
+    !limit.label.includes(" · ")
+  );
+  if (usage?.provider === "openai") {
     return [300, 10080].flatMap((windowMinutes) => {
-      const limit = account.find((candidate) => candidate.windowMinutes === windowMinutes);
+      const limit = account.find((candidate) =>
+        candidate.windowMinutes === windowMinutes
+      );
       return limit ? [limit] : [];
     });
   }
@@ -139,17 +159,24 @@ export function fullResetTime(epochSeconds: number | undefined): string {
   if (epochSeconds === undefined) return "Reset not reported";
   const date = new Date(epochSeconds * 1000);
   const pad = (value: number): string => String(value).padStart(2, "0");
-  return `${String(date.getFullYear())}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return `${String(date.getFullYear())}-${pad(date.getMonth() + 1)}-${
+    pad(date.getDate())
+  } ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 export function shortResetTime(epochSeconds: number | undefined): string {
   if (epochSeconds === undefined) return "No reset";
   const date = new Date(epochSeconds * 1000);
-  const time = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(date);
+  const time = new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
   const today = new Date();
   return date.toDateString() === today.toDateString()
     ? time
-    : `${date.toLocaleString(undefined, { month: "short", day: "numeric" })} ${time}`;
+    : `${
+      date.toLocaleString(undefined, { month: "short", day: "numeric" })
+    } ${time}`;
 }
 
 export function relativeUpdateTime(ms: number, now = Date.now()): string {
@@ -170,20 +197,41 @@ export function acceptedScheduleTime(value: string, now = Date.now()): string {
   return Number.isFinite(timestamp) && timestamp >= now + 60_000 ? value : "";
 }
 
-export function scheduledResetCountdown(fireAtMs: number, now = Date.now()): string {
+export function scheduledResetCountdown(
+  fireAtMs: number,
+  now = Date.now(),
+): string {
   const minutes = Math.max(0, Math.ceil((fireAtMs - now) / 60_000));
   if (minutes === 0) return "Due now";
   if (minutes < 60) return `Runs in ${String(minutes)}m`;
   const hours = Math.floor(minutes / 60);
   const remainder = minutes % 60;
-  if (hours < 24) return `Runs in ${String(hours)}h${remainder === 0 ? "" : ` ${String(remainder)}m`}`;
+  if (hours < 24) {
+    return `Runs in ${String(hours)}h${
+      remainder === 0 ? "" : ` ${String(remainder)}m`
+    }`;
+  }
   const days = Math.floor(hours / 24);
   const remainingHours = hours % 24;
-  return `Runs in ${String(days)}d${remainingHours === 0 ? "" : ` ${String(remainingHours)}h`}`;
+  return `Runs in ${String(days)}d${
+    remainingHours === 0 ? "" : ` ${String(remainingHours)}h`
+  }`;
 }
 
-export function providerUsage(snapshot: UsageSnapshot | null, provider: string | undefined): ProviderUsage | undefined {
+export function providerUsage(
+  snapshot: UsageSnapshot | null,
+  provider: string | undefined,
+): ProviderUsage | undefined {
   if (!provider) return undefined;
-  const normalized = provider === "claude" ? "claude-code" : provider;
-  return snapshot?.providers.find((candidate) => candidate.provider === normalized);
+  const normalized: Record<string, string> = {
+    codex: "openai",
+    claude: "anthropic",
+    "claude-code": "anthropic",
+    "codex-deepseek": "deepseek",
+    "claude-deepseek": "deepseek",
+    gemini: "gemini",
+  };
+  return snapshot?.providers.find((candidate) =>
+    candidate.provider === normalized[provider]
+  );
 }
