@@ -105,7 +105,7 @@ pub struct Args {
     #[arg(
         long,
         env = "COWBOY_MACHINE_PROVIDER_USAGE_SOCKET",
-        default_value = "/run/user/1000/cowboy-provider-usage.sock"
+        default_value = "/run/cowboy/provider-usage.sock"
     )]
     provider_usage_socket: PathBuf,
     /// One-time secret. Prefer the environment variable so it is absent from

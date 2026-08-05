@@ -2,6 +2,7 @@
 
 #![warn(clippy::pedantic)]
 
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -181,6 +182,9 @@ pub async fn serve(socket: PathBuf, spool: ProviderUsageSpool) -> Result<()> {
     }
     let listener = UnixListener::bind(&socket)
         .with_context(|| format!("binding provider usage socket {}", socket.display()))?;
+    tokio::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o660))
+        .await
+        .with_context(|| format!("setting provider usage socket mode {}", socket.display()))?;
     loop {
         let (mut stream, _) = listener.accept().await?;
         let spool = spool.clone();
