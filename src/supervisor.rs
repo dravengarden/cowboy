@@ -24,6 +24,13 @@ use crate::workspace::{
     current_project_checkout, resolve_session_workspace, session_belongs_to_project,
 };
 
+/// Stable Machine placement selected for a newly registered session.
+#[derive(Clone, Copy)]
+pub struct SessionPlacement<'a> {
+    pub machine_id: &'a str,
+    pub workspace: Option<&'a crate::machine_protocol::MachineWorkspace>,
+}
+
 /// Spawns and tracks agent sessions; routes commands to their threads.
 pub struct Supervisor {
     hub: Hub,
@@ -108,8 +115,12 @@ impl Supervisor {
         cwd: Option<String>,
         origin: SessionOrigin,
         system: bool,
-        machine_id: &str,
+        placement: SessionPlacement<'_>,
     ) -> Result<String, String> {
+        let SessionPlacement {
+            machine_id,
+            workspace,
+        } = placement;
         if !self.router.connected(machine_id) {
             return Err(format!("machine {machine_id:?} is not connected"));
         }
@@ -136,6 +147,9 @@ impl Supervisor {
             id: id.to_owned(),
             provider: provider.to_owned(),
             machine_id: machine_id.to_owned(),
+            workspace_id: workspace.map(|value| value.id.clone()),
+            workspace_name: workspace.map(|value| value.display_name.clone()),
+            workspace_source_path: workspace.map(|value| value.canonical_path.clone()),
             cwd: cwd.display().to_string(),
             title,
             origin,
@@ -168,7 +182,17 @@ impl Supervisor {
         system: bool,
         machine_id: &str,
     ) -> Result<String, String> {
-        let id = self.register_session_on_with_id(id, provider, cwd, origin, system, machine_id)?;
+        let id = self.register_session_on_with_id(
+            id,
+            provider,
+            cwd,
+            origin,
+            system,
+            SessionPlacement {
+                machine_id,
+                workspace: None,
+            },
+        )?;
         self.start_registered_session(&id)?;
         Ok(id)
     }

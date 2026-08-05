@@ -764,7 +764,8 @@ impl Store {
     /// If a query fails or a payload is unparseable.
     pub async fn load_all(&self) -> Result<Vec<LoadedSession>> {
         let session_rows: Vec<SessionRow> = sqlx::query_as::<_, SessionRow>(
-            "SELECT id, provider, machine_id, cwd, title, origin, status, agent_session_id, auto_resume, \
+            "SELECT id, provider, machine_id, workspace_id, workspace_name, workspace_source_path, \
+             cwd, title, origin, status, agent_session_id, auto_resume, \
              awaiting_user, done, system, next_seq, queue, drafts, judge_runs, \
              mobile_review_state, created_at \
              FROM sessions WHERE deleted_at IS NULL ORDER BY position ASC NULLS LAST, created_at ASC",
@@ -1151,12 +1152,16 @@ impl Store {
     /// If the row already exists or the INSERT fails.
     pub async fn insert_session(&self, m: &SessionMeta) -> Result<()> {
         sqlx::query(
-            "INSERT INTO sessions(id, provider, machine_id, cwd, title, origin, status, next_seq, system) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, 0, $8)",
+            "INSERT INTO sessions(id, provider, machine_id, workspace_id, workspace_name, \
+             workspace_source_path, cwd, title, origin, status, next_seq, system) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, $11)",
         )
         .bind(&m.id)
         .bind(&m.provider)
         .bind(&m.machine_id)
+        .bind(m.workspace_id.as_deref())
+        .bind(m.workspace_name.as_deref())
+        .bind(m.workspace_source_path.as_deref())
         .bind(&m.cwd)
         .bind(strip_nul_str(&m.title))
         .bind(origin_to_str(m.origin))
@@ -1909,6 +1914,9 @@ struct SessionRow {
     id: String,
     provider: String,
     machine_id: String,
+    workspace_id: Option<String>,
+    workspace_name: Option<String>,
+    workspace_source_path: Option<String>,
     cwd: String,
     title: String,
     origin: String,
@@ -1933,6 +1941,9 @@ impl SessionRow {
             id: self.id,
             provider: self.provider,
             machine_id: self.machine_id,
+            workspace_id: self.workspace_id,
+            workspace_name: self.workspace_name,
+            workspace_source_path: self.workspace_source_path,
             cwd: self.cwd,
             title: self.title,
             status: status_from_str(&self.status),
