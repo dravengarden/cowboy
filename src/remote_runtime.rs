@@ -1006,6 +1006,7 @@ fn pending_prompt_for(shared: &Shared, session_id: &str) -> bool {
 
 fn reconcile_idle_snapshot(shared: &Shared, worker: &WorkerSnapshot) {
     let idle = worker.current_turn_id.is_none()
+        && worker.pending_prompt_count == 0
         && matches!(worker.state, WorkerState::Running | WorkerState::Draining);
     if idle && !pending_prompt_for(shared, &worker.session_id) {
         shared.hub.reconcile_runtime_idle(&worker.session_id);
@@ -1486,6 +1487,44 @@ mod tests {
         reconcile_idle_snapshot(&runtime.shared, &idle);
         assert_eq!(
             rx.recv().await.expect("dispatch after reconciliation").text,
+            "second"
+        );
+    }
+
+    #[tokio::test]
+    async fn idle_snapshot_waits_for_broker_pending_prompt_before_reconciliation() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        hub.set_dispatch_tx(tx);
+        hub.set_status("s", Status::Running, None);
+        hub.submit("s", "first".to_owned(), vec![], None);
+        assert_eq!(rx.recv().await.expect("first dispatch").text, "first");
+        hub.submit("s", "second".to_owned(), vec![], None);
+
+        let runtime = RemoteRuntime::for_test(hub, vec![snapshot("s")]);
+        let mut snapshot_with_pending = snapshot("s");
+        snapshot_with_pending.state = WorkerState::Running;
+        snapshot_with_pending.current_turn_id = None;
+        snapshot_with_pending.pending_prompt_count = 1;
+
+        reconcile_idle_snapshot(&runtime.shared, &snapshot_with_pending);
+        assert!(
+            rx.try_recv().is_err(),
+            "broker-owned prompt must retain the guard"
+        );
+
+        snapshot_with_pending.pending_prompt_count = 0;
+        reconcile_idle_snapshot(&runtime.shared, &snapshot_with_pending);
+        assert_eq!(
+            rx.recv().await.expect("dispatch after broker drained").text,
             "second"
         );
     }
