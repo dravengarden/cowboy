@@ -63,7 +63,15 @@ its closed base URL, placeholder client token, V4 Pro 1M main-model, V4 Flash
 fast/subagent models, and streaming settings. Claude Code is explicitly marked
 as provider-managed-by-host, so project or user settings cannot replace the
 endpoint or authentication selected by Cowboy. The real API key exists only in
-the gateway's distinct systemd credential.
+the gateway's distinct systemd credential. Cowboy also supplies provider-only
+`CLAUDE_CODE_SHELL` and `SHELL` values because a detached systemd Machine worker
+does not inherit an interactive login shell. Claude Code accepts bash or zsh
+specifically, so Cowboy selects an executable absolute path from the host
+override, inherited shell, worker `PATH`, or stable platform profile paths in
+that order; it never treats generic `/bin/sh` as sufficient. The host override
+is `COWBOY_ACP_CLAUDE_DEEPSEEK_SHELL`; it crosses the detached worker boundary
+but is removed before Claude Code starts. A Machine advertises this provider as
+active only when both the gateway and a supported executable shell are ready.
 
 The isolated directory neither reads nor links ordinary `~/.claude`, top-level
 Claude instance metadata, settings, credentials, history, projects, plugins, or

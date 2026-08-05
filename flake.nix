@@ -41,6 +41,7 @@
           ./Cargo.toml
           ./Cargo.lock
           ./src/lib.rs
+          ./src/claude_shell.rs
           ./src/machine_broker.rs
           ./src/machine_cli.rs
           ./src/machine_auth.rs
@@ -50,6 +51,7 @@
           ./src/provider_catalog.rs
           ./src/runtime_wire.rs
           ./src/session_workspace.rs
+          ./src/workspace_roots.rs
           ./src/bin/cowboy-machine-install.rs
           ./src/bin/cowboy-machine.rs
         ];
@@ -64,6 +66,7 @@
           ./src/code_adapter.rs
           ./src/code_review.rs
           ./src/files.rs
+          ./src/workspace_roots.rs
           ./src/bin/cowboy-code-adapter.rs
         ];
       };
@@ -82,6 +85,7 @@
         ./src/agent_sink.rs
         ./src/bin/cowboy-codex-app-server.rs
         ./src/cgroup.rs
+        ./src/claude_shell.rs
         ./src/provider/mod.rs
         ./src/provider_catalog.rs
         ./src/runtime_wire.rs

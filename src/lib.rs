@@ -17,6 +17,8 @@ mod agent_sink;
 mod artifacts;
 #[cfg(feature = "full")]
 mod cgroup;
+#[cfg(any(feature = "full", feature = "machine-host"))]
+mod claude_shell;
 #[cfg(feature = "full")]
 pub mod cli;
 #[cfg(any(feature = "full", feature = "code-adapter"))]
@@ -56,6 +58,8 @@ mod provider;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod provider_catalog;
 #[cfg(feature = "full")]
+mod provider_info;
+#[cfg(feature = "full")]
 mod remote_runtime;
 #[cfg(feature = "full")]
 mod runtime;
@@ -81,6 +85,8 @@ mod usage;
 pub mod worker;
 #[cfg(feature = "full")]
 mod workspace;
+#[cfg(any(feature = "full", feature = "machine-host", feature = "code-adapter"))]
+mod workspace_roots;
 
 #[cfg(all(test, feature = "full"))]
 mod migration_policy;

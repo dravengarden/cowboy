@@ -297,6 +297,15 @@ fn managed_provider_environment(
             environment.insert(key.to_owned(), value);
         }
     }
+    if !disabled.iter().any(|slot| slot == "claude-deepseek")
+        && let Some(shell) = crate::claude_shell::resolve(&|key| std::env::var(key).ok())
+    {
+        // Pin the same readiness-checked path into every detached worker. This
+        // preserves a nonstandard inherited shell across the systemd boundary;
+        // the Claude DeepSeek launch spec removes this control variable before
+        // starting the adapter.
+        environment.insert("COWBOY_ACP_CLAUDE_DEEPSEEK_SHELL".to_owned(), shell);
+    }
     if has(ComponentKind::ProviderAdapter, &["codex"]) {
         environment.insert(
             "COWBOY_ACP_CODEX_CMD".to_owned(),
@@ -889,7 +898,7 @@ async fn collect_inventory(
         });
     }
     if !disabled.iter().any(|slot| slot == "claude-deepseek") {
-        let deepseek_ready = tokio::time::timeout(
+        let gateway_ready = tokio::time::timeout(
             Duration::from_millis(500),
             reqwest::Client::new()
                 .get("http://127.0.0.1:8089/healthz")
@@ -897,12 +906,13 @@ async fn collect_inventory(
         )
         .await
         .is_ok_and(|result| result.is_ok_and(|response| response.status().is_success()));
+        let shell_ready = crate::claude_shell::available();
         inventory.push(ComponentInventory {
             id: ComponentId {
                 kind: ComponentKind::ProviderAdapter,
                 slot: "claude-deepseek".to_owned(),
             },
-            state: if deepseek_ready {
+            state: if gateway_ready && shell_ready {
                 ComponentState::Active
             } else {
                 ComponentState::Missing
@@ -913,7 +923,11 @@ async fn collect_inventory(
             rollback_generation: None,
             active_leases: 0,
             auth: None,
-            detail: Some("isolated loopback Anthropic Messages gateway".to_owned()),
+            detail: Some(if shell_ready {
+                "isolated loopback Anthropic Messages gateway".to_owned()
+            } else {
+                "Claude Code requires an executable absolute bash or zsh path".to_owned()
+            }),
             update: None,
         });
     }
@@ -1964,10 +1978,18 @@ fn parse_workspaces(values: &[String]) -> anyhow::Result<Vec<MachineWorkspace>> 
         if id.trim().is_empty() || id.contains('/') {
             bail!("workspace id {id:?} is invalid");
         }
-        let canonical = std::fs::canonicalize(path)
-            .with_context(|| format!("canonicalizing workspace {id:?} at {path:?}"))?;
-        if !canonical.is_dir() {
+        let (canonical, available) =
+            crate::workspace_roots::resolve_configured_root(Path::new(path))
+                .with_context(|| format!("canonicalizing workspace {id:?} at {path:?}"))?;
+        if available && !canonical.is_dir() {
             bail!("workspace {id:?} is not a directory");
+        }
+        if !available {
+            tracing::warn!(
+                workspace_id = id,
+                workspace_path = %canonical.display(),
+                "configured workspace is pending synchronization on this Machine"
+            );
         }
         out.push(MachineWorkspace {
             id: id.to_owned(),
@@ -2011,8 +2033,10 @@ fn workspace_path_allowed(
     worktree_root: &Path,
 ) -> bool {
     workspaces.iter().any(|workspace| {
-        let root = Path::new(&workspace.canonical_path);
-        target == root || target.starts_with(root)
+        crate::workspace_roots::canonical_target_within_root(
+            target,
+            Path::new(&workspace.canonical_path),
+        )
     }) || worktree_root
         .canonicalize()
         .is_ok_and(|root| target.starts_with(root))
@@ -2073,7 +2097,7 @@ mod tests {
         bootstrap_acp_inventory, disabled_provider_slots_from, gemini_auth_from_metadata,
         gemini_env_value_from, managed_provider_environment, npm_package_for_component,
         parse_workspaces, provider_for_component, reject_untrusted_workspace, selected_zed_pair,
-        send_frame_with_timeout, validate_controller_url,
+        send_frame_with_timeout, validate_controller_url, workspace_path_allowed,
     };
     use crate::machine_components::ComponentStore;
     use crate::machine_protocol::{
@@ -2282,6 +2306,12 @@ mod tests {
             managed_provider_environment(&store, &worker).expect("provider environment");
         assert!(environment["COWBOY_ACP_CODEX_CMD"].ends_with("commands/codex-acp"));
         assert!(environment["COWBOY_ACP_CLAUDE_CODE_CMD"].ends_with("commands/claude-agent-acp"));
+        assert!(matches!(
+            std::path::Path::new(&environment["COWBOY_ACP_CLAUDE_DEEPSEEK_SHELL"])
+                .file_name()
+                .and_then(std::ffi::OsStr::to_str),
+            Some("bash" | "zsh")
+        ));
         assert!(environment["COWBOY_ACP_GEMINI_CMD"].ends_with("commands/gemini"));
         assert_eq!(environment["COWBOY_ACP_GEMINI_ARGS"], "--acp");
         assert_eq!(environment["CODEX_PATH"], proxy.display().to_string());
@@ -2336,6 +2366,76 @@ mod tests {
             )
             .is_some()
         );
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn pending_workspace_becomes_usable_without_restarting_the_machine() {
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-machine-partial-workspaces-{}",
+            std::process::id()
+        ));
+        let available = root.join("available");
+        std::fs::create_dir_all(&available).expect("available workspace");
+
+        let workspaces = parse_workspaces(&[
+            format!("available={}", available.display()),
+            format!("awaiting-sync={}", root.join("missing").display()),
+        ])
+        .expect("pending workspace should remain configured");
+        assert_eq!(workspaces.len(), 2);
+        let available_workspace = workspaces
+            .iter()
+            .find(|workspace| workspace.id == "available")
+            .unwrap();
+        assert_eq!(
+            available_workspace.canonical_path,
+            available.canonicalize().unwrap().display().to_string()
+        );
+        let pending_workspace = workspaces
+            .iter()
+            .find(|workspace| workspace.id == "awaiting-sync")
+            .unwrap();
+        assert_eq!(
+            pending_workspace.canonical_path,
+            root.canonicalize()
+                .unwrap()
+                .join("missing")
+                .display()
+                .to_string()
+        );
+
+        let synchronized = root.join("missing");
+        std::fs::create_dir(&synchronized).expect("synchronize pending workspace");
+        let synchronized = synchronized.canonicalize().unwrap();
+        assert!(workspace_path_allowed(
+            &synchronized,
+            &workspaces,
+            &root.join("unrelated-managed-root")
+        ));
+        assert!(parse_workspaces(&["relative=missing".to_owned()]).is_err());
+        assert!(parse_workspaces(&["parent=/tmp/../pending".to_owned()]).is_err());
+
+        let file = root.join("not-a-directory");
+        std::fs::write(&file, "not a workspace").expect("workspace-shaped file");
+        assert!(parse_workspaces(&[format!("file={}", file.display())]).is_err());
+
+        #[cfg(unix)]
+        {
+            let pending_link = root.join("pending-link");
+            let pending = parse_workspaces(&[format!("link={}", pending_link.display())])
+                .expect("pending link path");
+            let outside = root.with_extension("outside");
+            std::fs::create_dir(&outside).expect("outside workspace");
+            std::os::unix::fs::symlink(&outside, &pending_link).expect("late workspace symlink");
+            assert!(!workspace_path_allowed(
+                &outside.canonicalize().unwrap(),
+                &pending,
+                &root.join("unrelated-managed-root")
+            ));
+            std::fs::remove_dir_all(outside).expect("cleanup outside workspace");
+        }
+
         std::fs::remove_dir_all(root).expect("cleanup");
     }
 }

@@ -94,6 +94,14 @@ pub fn builtin() -> HashMap<&'static str, LaunchSpec> {
 }
 
 fn builtin_with_env(get_env: impl Fn(&str) -> Option<String>) -> HashMap<&'static str, LaunchSpec> {
+    let claude_deepseek_shell = crate::claude_shell::resolve(&get_env);
+    builtin_with_env_and_shell(get_env, claude_deepseek_shell)
+}
+
+fn builtin_with_env_and_shell(
+    get_env: impl Fn(&str) -> Option<String>,
+    claude_deepseek_shell: Option<String>,
+) -> HashMap<&'static str, LaunchSpec> {
     let mut m = HashMap::new();
     m.insert(
         "claude-code",
@@ -179,9 +187,18 @@ fn builtin_with_env(get_env: impl Fn(&str) -> Option<String>) -> HashMap<&'stati
         ("DISABLE_UPGRADE_COMMAND".to_owned(), "1".to_owned()),
         ("ENABLE_CLAUDEAI_MCP_SERVERS".to_owned(), "false".to_owned()),
     ]);
+    if let Some(shell) = claude_deepseek_shell {
+        // `CLAUDE_CODE_SHELL` is the authoritative override. Also set `SHELL`
+        // for subprocesses and older Claude Code releases that consult it.
+        claude_deepseek
+            .env
+            .insert("CLAUDE_CODE_SHELL".to_owned(), shell.clone());
+        claude_deepseek.env.insert("SHELL".to_owned(), shell);
+    }
     claude_deepseek.remove_env_prefixes = vec!["ANTHROPIC_", "CLAUDE_", "DEEPSEEK_"];
     claude_deepseek.remove_env = vec![
         "API_TIMEOUT_MS",
+        "COWBOY_ACP_CLAUDE_DEEPSEEK_SHELL",
         "DISABLE_PROMPT_CACHING",
         "DISABLE_PROMPT_CACHING_HAIKU",
         "DISABLE_PROMPT_CACHING_OPUS",
@@ -348,6 +365,10 @@ pub fn lookup(id: &str) -> Option<LaunchSpec> {
         }
     }
     if id == "claude-deepseek" {
+        if !crate::claude_shell::available() {
+            tracing::warn!("Claude DeepSeek requires an executable absolute bash or zsh path");
+            return None;
+        }
         match prepare_claude_deepseek_config_dir() {
             Ok(config_dir) => {
                 spec.env.insert(
@@ -486,8 +507,11 @@ mod tests {
 
     fn lookup_with(overrides: &[(&str, &str)], id: &str) -> Option<super::LaunchSpec> {
         let overrides: HashMap<_, _> = overrides.iter().copied().collect();
-        super::builtin_with_env(|key| overrides.get(key).map(|value| (*value).to_owned()))
-            .remove(id)
+        super::builtin_with_env_and_shell(
+            |key| overrides.get(key).map(|value| (*value).to_owned()),
+            Some("/test/bin/bash".to_owned()),
+        )
+        .remove(id)
     }
 
     #[test]
@@ -635,6 +659,22 @@ mod tests {
                 .map(String::as_str),
             Some("cowboy-claude-deepseek")
         );
+        let shell = claude_deepseek
+            .env
+            .get("CLAUDE_CODE_SHELL")
+            .expect("Claude Code shell detected");
+        assert_eq!(shell, "/test/bin/bash");
+        let shell = std::path::Path::new(shell);
+        assert!(shell.is_absolute());
+        assert!(matches!(
+            shell.file_name().and_then(std::ffi::OsStr::to_str),
+            Some("bash" | "zsh")
+        ));
+        assert_eq!(
+            claude_deepseek.env.get("SHELL").map(String::as_str),
+            shell.to_str()
+        );
+        assert!(claude_deepseek.removes_inherited_env("COWBOY_ACP_CLAUDE_DEEPSEEK_SHELL"));
         assert!(
             !claude_deepseek
                 .env
@@ -644,6 +684,7 @@ mod tests {
             "ANTHROPIC_API_KEY",
             "ANTHROPIC_BASE_URL",
             "CLAUDE_CONFIG_DIR",
+            "CLAUDE_CODE_SHELL",
             "CLAUDE_CODE_USE_BEDROCK",
             "DEEPSEEK_API_KEY",
             "DISABLE_PROMPT_CACHING",
