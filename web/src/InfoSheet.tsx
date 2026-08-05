@@ -141,29 +141,33 @@ function DeepSeekDetails(
       {requests !== undefined && requests > 0
         ? (
           <>
-            <Stack
-              direction="row"
-              spacing={2}
-              sx={{ justifyContent: "space-between" }}
+            <Box
+              sx={{
+                display: "grid",
+                gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                gap: 1,
+              }}
             >
-              <InfoRow
-                k={`${String(retentionDays)}d requests`}
-                v={requests.toLocaleString()}
-              />
-              <InfoRow k="Errors" v={(errors ?? 0).toLocaleString()} />
-            </Stack>
-            <InfoRow
-              k="Input tokens"
-              v={formatTokens(num(summary?.inputTokens))}
-            />
-            <InfoRow
-              k="Output tokens"
-              v={formatTokens(num(summary?.outputTokens))}
-            />
-            <InfoRow
-              k="Reasoning tokens"
-              v={formatTokens(num(summary?.reasoningTokens))}
-            />
+              <Box>
+                <Typography variant="caption" color="text.secondary">
+                  {String(retentionDays)}d requests
+                </Typography>
+                <Typography variant="subtitle2" fontWeight={700}>
+                  {requests.toLocaleString()}
+                </Typography>
+              </Box>
+              <Box>
+                <Typography variant="caption" color="text.secondary">
+                  Tokens processed
+                </Typography>
+                <Typography variant="subtitle2" fontWeight={700}>
+                  {formatTokens(
+                    (num(summary?.inputTokens) ?? 0) +
+                      (num(summary?.outputTokens) ?? 0),
+                  )}
+                </Typography>
+              </Box>
+            </Box>
             <Stack spacing={0.5}>
               <Stack direction="row" justifyContent="space-between">
                 <Typography variant="caption" color="text.secondary">
@@ -182,35 +186,71 @@ function DeepSeekDetails(
                 {formatTokens(hit)} hit · {formatTokens(miss)} miss tokens
               </Typography>
             </Stack>
-            {byAgent && Object.entries(byAgent).map(([agent, value]) => {
-              const totals = record(value);
-              return (
-                <InfoRow
-                  key={agent}
-                  k={agent === "codex"
-                    ? "Via Codex"
-                    : agent === "claude"
-                    ? "Via Claude Code"
-                    : agent}
-                  v={`${formatTokens(num(totals?.requests))} requests`}
-                />
-              );
-            })}
-            {daily.length > 0 && (
-              <Stack spacing={0.35} sx={{ pt: 0.25 }}>
-                <Typography variant="caption" color="text.secondary">Recent daily activity</Typography>
-                {daily.map((entry) => {
-                  const totals = record(entry.totals);
-                  return (
-                    <InfoRow
-                      key={str(entry.day)}
-                      k={str(entry.day) ?? "Unknown day"}
-                      v={`${formatTokens(num(totals?.requests))} req · ${formatTokens(num(totals?.inputTokens))} in`}
-                    />
-                  );
-                })}
-              </Stack>
-            )}
+            <Accordion
+              disableGutters
+              elevation={0}
+              sx={{
+                bgcolor: "transparent",
+                "&::before": { display: "none" },
+              }}
+            >
+              <AccordionSummary
+                expandIcon={<ExpandMore />}
+                sx={{ minHeight: 40, px: 0, "& .MuiAccordionSummary-content": { my: 0.5 } }}
+              >
+                <Typography variant="body2" fontWeight={600}>
+                  Usage details
+                </Typography>
+              </AccordionSummary>
+              <AccordionDetails sx={{ px: 0, pt: 0 }}>
+                <Stack spacing={0.75}>
+                  <InfoRow
+                    k="Input tokens"
+                    v={formatTokens(num(summary?.inputTokens))}
+                  />
+                  <InfoRow
+                    k="Output tokens"
+                    v={formatTokens(num(summary?.outputTokens))}
+                  />
+                  <InfoRow
+                    k="Reasoning tokens"
+                    v={formatTokens(num(summary?.reasoningTokens))}
+                  />
+                  <InfoRow k="Errors" v={(errors ?? 0).toLocaleString()} />
+                  {byAgent && Object.entries(byAgent).map(([agent, value]) => {
+                    const totals = record(value);
+                    return (
+                      <InfoRow
+                        key={agent}
+                        k={agent === "codex"
+                          ? "Via Codex"
+                          : agent === "claude"
+                          ? "Via Claude Code"
+                          : agent}
+                        v={`${formatTokens(num(totals?.requests))} requests`}
+                      />
+                    );
+                  })}
+                  {daily.length > 0 && (
+                    <Stack spacing={0.35} sx={{ pt: 0.25 }}>
+                      <Typography variant="caption" color="text.secondary">
+                        Recent daily activity
+                      </Typography>
+                      {daily.map((entry) => {
+                        const totals = record(entry.totals);
+                        return (
+                          <InfoRow
+                            key={str(entry.day)}
+                            k={str(entry.day) ?? "Unknown day"}
+                            v={`${formatTokens(num(totals?.requests))} req · ${formatTokens(num(totals?.inputTokens))} in`}
+                          />
+                        );
+                      })}
+                    </Stack>
+                  )}
+                </Stack>
+              </AccordionDetails>
+            </Accordion>
           </>
         )
         : (
@@ -456,24 +496,32 @@ function ProviderUsageCard({ usage, schedule, now, onUsageChanged }: {
         </Stack>
         {limits.map((limit) => <LimitRow key={limit.id} limit={limit} />)}
         {usage.provider === "openai" && credits.length > 0 && (
-          <Stack spacing={0} sx={{ pt: 0.5 }}>
-            <Stack
-              direction="row"
-              justifyContent="space-between"
-              alignItems="baseline"
-              sx={{ pb: 0.75 }}
+          <Accordion
+            disableGutters
+            elevation={0}
+            sx={{
+              bgcolor: "transparent",
+              "&::before": { display: "none" },
+            }}
+          >
+            <AccordionSummary
+              expandIcon={<ExpandMore />}
+              sx={{ minHeight: 40, px: 0, "& .MuiAccordionSummary-content": { my: 0.5 } }}
             >
-              <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-                Usage limit resets
-              </Typography>
-              {availableCredits !== undefined && (
-                <Typography variant="caption" color="text.secondary">
-                  {String(availableCredits)} available
+              <Stack direction="row" justifyContent="space-between" sx={{ width: "100%", pr: 1 }}>
+                <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                  Usage limit resets
                 </Typography>
-              )}
-            </Stack>
-            <Divider />
-            {credits.map((credit, index) => {
+                {availableCredits !== undefined && (
+                  <Typography variant="caption" color="text.secondary">
+                    {String(availableCredits)} available
+                  </Typography>
+                )}
+              </Stack>
+            </AccordionSummary>
+            <AccordionDetails sx={{ px: 0, pt: 0 }}>
+              <Divider />
+              {credits.map((credit, index) => {
               const expiresAt = num(credit.expiresAt);
               const actionable = str(credit.id) === nearestCreditId;
               const row = (
@@ -561,19 +609,34 @@ function ProviderUsageCard({ usage, schedule, now, onUsageChanged }: {
                   )}
                 </Box>
               );
-            })}
-            {resetError && !resetOpen && (
-              <Typography color="error.main" variant="caption">
-                {resetError}
-              </Typography>
-            )}
-          </Stack>
+              })}
+              {resetError && !resetOpen && (
+                <Typography color="error.main" variant="caption">
+                  {resetError}
+                </Typography>
+              )}
+            </AccordionDetails>
+          </Accordion>
         )}
         {summary && num(summary.lifetimeTokens) !== undefined && (
-          <InfoRow
-            k="Lifetime tokens"
-            v={num(summary.lifetimeTokens)?.toLocaleString() ?? "—"}
-          />
+          <Accordion
+            disableGutters
+            elevation={0}
+            sx={{ bgcolor: "transparent", "&::before": { display: "none" } }}
+          >
+            <AccordionSummary
+              expandIcon={<ExpandMore />}
+              sx={{ minHeight: 40, px: 0, "& .MuiAccordionSummary-content": { my: 0.5 } }}
+            >
+              <Typography variant="body2" fontWeight={600}>Activity details</Typography>
+            </AccordionSummary>
+            <AccordionDetails sx={{ px: 0, pt: 0 }}>
+              <InfoRow
+                k="Lifetime tokens"
+                v={num(summary.lifetimeTokens)?.toLocaleString() ?? "—"}
+              />
+            </AccordionDetails>
+          </Accordion>
         )}
         {usage.provider === "deepseek" && <DeepSeekDetails usage={usage} />}
         {limits.length === 0 && usage.provider !== "deepseek" && (
