@@ -1950,6 +1950,23 @@ export function ComposerWorkspace({
                   <OpenInFull />
                 </IconButton>
               </Tooltip>
+              <Box data-mobile-keyboard-hide sx={{ display: "none" }}>
+                <Tooltip title="Hide keyboard">
+                  <IconButton
+                    size="small"
+                    aria-label="hide keyboard"
+                    sx={{
+                      ...TOOLBAR_ICON_BTN,
+                      color: "text.secondary",
+                      "& .MuiSvgIcon-root": { fontSize: "1.15rem" },
+                    }}
+                    onPointerDown={(event): void => event.preventDefault()}
+                    onClick={dismissMobileSoftwareKeyboard}
+                  >
+                    <KeyboardHide />
+                  </IconButton>
+                </Tooltip>
+              </Box>
             </Stack>
           )
           : (
@@ -2285,7 +2302,6 @@ export function ComposerWorkspace({
             display: "flex",
             alignItems: "center",
             minWidth: 0,
-            position: "relative",
             pb: 0.5,
             ...TOOLBAR_MIN_H,
           }}
@@ -2299,7 +2315,6 @@ export function ComposerWorkspace({
             flex: 1,
             minWidth: 0,
             px: 0.5,
-            ...(touchInput && { pr: "48px" }),
             ...(compact && {
               justifyContent: "space-evenly",
               flexWrap: "nowrap",
@@ -2535,60 +2550,20 @@ export function ComposerWorkspace({
             </IconButton>
           </span>
         </Tooltip>
+        <Tooltip title="Clear composer">
+          <span data-mobile-composer-clear>
+            <IconButton
+              aria-label="clear composer"
+              disabled={!clearable}
+              sx={TOOLBAR_ICON_BTN}
+              onPointerDown={(event): void => event.preventDefault()}
+              onClick={(event): void => setClearComposerAnchor(event.currentTarget)}
+            >
+              <DeleteOutline fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
         </Stack>
-        {/* Keyboard dismissal is outside the horizontal scroller: iOS rubber-band
-            may move the delivery actions, but this terminal action stays still. */}
-        {touchInput && (
-          <Box
-            data-mobile-keyboard-hide
-            sx={{
-              display: "none",
-              position: "absolute",
-              top: 0,
-              right: 4,
-              width: 40,
-              height: 40,
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            {clearable && (
-              <Tooltip title="Clear composer">
-                <span data-mobile-composer-clear>
-                  <IconButton
-                    aria-label="clear composer"
-                    sx={{
-                      ...TOOLBAR_ICON_BTN,
-                      position: "absolute",
-                      left: "50%",
-                      bottom: 42,
-                      transform: "translateX(-50%)",
-                    }}
-                    onPointerDown={(event): void => event.preventDefault()}
-                    onClick={(event): void => setClearComposerAnchor(event.currentTarget)}
-                  >
-                    <DeleteOutline fontSize="small" />
-                  </IconButton>
-                </span>
-              </Tooltip>
-            )}
-            <Tooltip title="Hide keyboard">
-              <IconButton
-                size="small"
-                aria-label="hide keyboard"
-                sx={{
-                  ...TOOLBAR_ICON_BTN,
-                  color: "text.secondary",
-                  "& .MuiSvgIcon-root": { fontSize: "1.15rem" },
-                }}
-                onPointerDown={(event): void => event.preventDefault()}
-                onClick={dismissMobileSoftwareKeyboard}
-              >
-                <KeyboardHide />
-              </IconButton>
-            </Tooltip>
-          </Box>
-        )}
         </Box>
         {touchInput && (
           <ComposerToolbarSettings

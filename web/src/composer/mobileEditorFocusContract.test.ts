@@ -230,7 +230,7 @@ Deno.test("mobile keyboard focus presents one floating composer surface", () => 
   );
 });
 
-Deno.test("mobile keyboard dismissal belongs to the delivery row, not the utility rail", () => {
+Deno.test("mobile keyboard dismissal belongs to the fixed utility rail", () => {
   const utilityStart = composerSource.indexOf(
     "data-mobile-composer-utility-rail",
   );
@@ -248,15 +248,10 @@ Deno.test("mobile keyboard dismissal belongs to the delivery row, not the utilit
 
   assertEquals(utilityStart >= 0 && utilityEnd > utilityStart, true);
   assertEquals(actionStart >= 0 && actionEnd > actionStart, true);
-  assertEquals(utilityRail.includes("data-mobile-keyboard-hide"), false);
-  assertEquals(actionRow.includes("data-mobile-keyboard-hide"), true);
+  assertEquals(utilityRail.includes("data-mobile-keyboard-hide"), true);
+  assertEquals(actionRow.includes("data-mobile-keyboard-hide"), false);
   assertEquals(actionRow.includes("data-mobile-composer-clear"), true);
-  assertEquals(actionRow.includes("{clearable && ("), true);
-  assertEquals(actionRow.includes('left: "50%"'), true);
-  assertEquals(actionRow.includes('bottom: 42'), true);
-  assertEquals(actionRow.includes('position: "absolute"'), true);
-  assertEquals(actionRow.includes('right: 4'), true);
-  assertEquals(actionRow.includes('pr: "48px"'), true);
+  assertEquals(actionRow.includes("disabled={!clearable}"), true);
   assertEquals(actionRow.includes("data-mobile-scrollable-actions"), true);
   assertEquals(actionRow.includes('position: "sticky"'), false);
   assertEquals(
@@ -266,7 +261,7 @@ Deno.test("mobile keyboard dismissal belongs to the delivery row, not the utilit
   );
   assertEquals(
     actionRow.indexOf('<Tooltip title="定时发送">') <
-      actionRow.indexOf("data-mobile-keyboard-hide"),
+      actionRow.indexOf("data-mobile-composer-clear"),
     true,
   );
 });
