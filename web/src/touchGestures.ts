@@ -35,6 +35,14 @@ export function swipeCommits(distance: number, viewportWidth: number): boolean {
   return distance >= Math.min(112, Math.max(88, viewportWidth * 0.24));
 }
 
+/** Only a real keyboard-owned floating editor reserves the shell swipe. */
+export function inputOverlayOwnsDrawerGesture(
+  keyboardOpen: boolean,
+  focusWithin: boolean,
+): boolean {
+  return keyboardOpen && focusWithin;
+}
+
 /** Native selection-handle drags own the touch stream until the range collapses. */
 export function expandedSelection(
   selection: Pick<Selection, "isCollapsed" | "rangeCount"> | null,
