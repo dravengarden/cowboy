@@ -122,3 +122,28 @@ Deno.test("live thought shimmer crosses each glyph run once per cycle", () => {
   );
   assertEquals(transcriptSource.includes("background-position: -110% 0"), false);
 });
+
+Deno.test("thought indicators align to the inherited first-line box", () => {
+  assertEquals(
+    transcriptSource.includes("data-thought-step-indicator-lane"),
+    true,
+  );
+  assertEquals(
+    transcriptSource.includes('minHeight: "1lh"'),
+    true,
+  );
+  assertEquals(
+    transcriptSource.includes(
+      "top: `calc(0.5lh - ${indicatorSize / 2}px)`,",
+    ),
+    true,
+  );
+  assertEquals(
+    transcriptSource.includes(
+      "gridTemplateColumns: `${indicatorSize}px minmax(0, 1fr)`,",
+    ),
+    true,
+  );
+  assertEquals(transcriptSource.includes('top: current ? "0.43em"'), false);
+  assertEquals(transcriptSource.includes('top: "0.62em"'), false);
+});

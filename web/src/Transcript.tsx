@@ -1256,14 +1256,25 @@ function ThoughtSteps({
       {visible.map((section, index) => {
         const current = streaming && index === visible.length - 1;
         const hasNext = index < visible.length - 1;
+        // Keep the text at its existing horizontal position while giving the
+        // indicator its own layout lane. The lane inherits the reading
+        // line-height, so `0.5lh` is the actual first-line centre at every user
+        // font scale; current-surface padding no longer needs a second offset.
+        const indicatorSize = codex ? 15 : 5;
+        const indicatorPaddingLeft = codex ? 3 : 2;
+        const indicatorGap = codex ? 4 : 9;
         return (
           <Box
             // A thought section has no upstream id. Its index is stable because
             // Codex only appends sections while streaming this item.
             key={index}
+            data-thought-step-current={current ? "true" : undefined}
             sx={{
               position: "relative",
-              pl: codex ? 2.75 : 2,
+              display: "grid",
+              gridTemplateColumns: `${indicatorSize}px minmax(0, 1fr)`,
+              columnGap: `${indicatorGap}px`,
+              pl: `${indicatorPaddingLeft}px`,
               pr: codex && current ? 1 : 0,
               py: codex && current ? 0.5 : 0,
               mb: hasNext ? (codex ? 0.25 : 0.75) : 0,
@@ -1271,67 +1282,67 @@ function ThoughtSteps({
               bgcolor: codex && current ? "action.hover" : "transparent",
             }}
           >
-            {codex
-              ? (
+            <Box
+              aria-hidden="true"
+              data-thought-step-indicator-lane
+              sx={{
+                position: "relative",
+                alignSelf: "stretch",
+                minHeight: "1lh",
+              }}
+            >
+              <Box
+                data-thought-step-indicator
+                sx={{
+                  position: "absolute",
+                  left: "50%",
+                  top: `calc(0.5lh - ${indicatorSize / 2}px)`,
+                  transform: "translateX(-50%)",
+                  width: indicatorSize,
+                  height: indicatorSize,
+                  display: "grid",
+                  placeItems: "center",
+                  ...(codex
+                    ? {
+                      color: current ? "primary.main" : "text.disabled",
+                      animation: current
+                        ? `${pulse} 1.5s ease-in-out infinite`
+                        : "none",
+                    }
+                    : {
+                      borderRadius: "50%",
+                      bgcolor: current ? "primary.main" : "text.disabled",
+                      animation: current
+                        ? `${pulse} 1.4s ease-in-out infinite`
+                        : "none",
+                    }),
+                  "@media (prefers-reduced-motion: reduce)": {
+                    animation: "none",
+                  },
+                }}
+              >
+                {codex && <LightbulbOutlined sx={{ fontSize: 14 }} />}
+              </Box>
+              {hasNext && (
                 <Box
                   aria-hidden="true"
+                  data-thought-step-connector
                   sx={{
                     position: "absolute",
-                    left: 3,
-                    top: current ? "0.43em" : "0.08em",
-                    width: 15,
-                    height: 15,
-                    display: "grid",
-                    placeItems: "center",
-                    color: current ? "primary.main" : "text.disabled",
-                    animation: current
-                      ? `${pulse} 1.5s ease-in-out infinite`
-                      : "none",
-                    "@media (prefers-reduced-motion: reduce)": {
-                      animation: "none",
-                    },
-                  }}
-                >
-                  <LightbulbOutlined sx={{ fontSize: 14 }} />
-                </Box>
-              )
-              : (
-                <Box
-                  aria-hidden="true"
-                  sx={{
-                    position: "absolute",
-                    left: codex ? 7 : 2,
-                    top: "0.62em",
-                    width: 5,
-                    height: 5,
-                    borderRadius: codex ? 1 : "50%",
-                    bgcolor: current ? "primary.main" : "text.disabled",
-                    animation: current
-                      ? `${pulse} 1.4s ease-in-out infinite`
-                      : "none",
-                    "@media (prefers-reduced-motion: reduce)": {
-                      animation: "none",
-                    },
+                    left: "50%",
+                    top: `calc(0.5lh + ${indicatorSize / 2}px)`,
+                    bottom: -2,
+                    width: "1px",
+                    transform: "translateX(-50%)",
+                    bgcolor: "divider",
                   }}
                 />
               )}
-            {hasNext && (
-              <Box
-                aria-hidden="true"
-                sx={{
-                  position: "absolute",
-                  left: codex ? 9 : 4,
-                  top: codex
-                    ? (current ? "calc(0.43em + 15px)" : "calc(0.08em + 15px)")
-                    : "calc(0.62em + 6px)",
-                  bottom: -2,
-                  width: "1px",
-                  bgcolor: "divider",
-                }}
-              />
-            )}
+            </Box>
             <Box
+              data-thought-step-content
               sx={{
+                minWidth: 0,
                 opacity: current || !streaming ? 1 : (codex ? 0.55 : 0.68),
                 fontStyle: "normal",
                 color: current ? "text.primary" : "text.secondary",

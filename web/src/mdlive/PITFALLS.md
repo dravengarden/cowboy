@@ -1078,4 +1078,9 @@ Desktop Vim + IME checks:
     effective clearance of the provider-only working phrase (`Burrowing…`, etc.).
     Keep this outside the tinted surface and Mobile-only: changing the shared 4px
     Composer stack rhythm would loosen Plan/Draft/Queue spacing and changing the
-    thought's internal padding would merely make the pill taller.
+    thought's internal padding would merely make the pill taller. Each Thought
+    step owns a dedicated indicator grid lane: the bulb/dot centre is anchored to
+    `0.5lh`, the inherited first-line centre, while the lane stretches with
+    multi-line content for its connector. Do not restore separate current/done
+    `em` top offsets; they drift whenever Reading font size or surface padding
+    changes.
