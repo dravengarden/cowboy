@@ -1927,7 +1927,6 @@ const PROVIDER_USAGE_AGGREGATE_COLUMNS: &str = "count(*)::bigint AS requests, \
      count(*) FILTER (WHERE cache_observation = 'explicit')::bigint AS explicit_cache_observations, \
      count(*) FILTER (WHERE cache_observation = 'derived')::bigint AS derived_cache_observations, \
      count(*) FILTER (WHERE cache_observation = 'absent')::bigint AS absent_cache_observations, \
-     count(*) FILTER (WHERE cache_observation = 'legacy')::bigint AS legacy_cache_observations, \
      count(*) FILTER (WHERE cache_observation IN ('explicit', 'derived') AND cache_hit_tokens::numeric + cache_miss_tokens::numeric > 0 AND cache_hit_tokens::numeric * 10 < cache_hit_tokens::numeric + cache_miss_tokens::numeric)::bigint AS cold_cache_requests, \
      count(*) FILTER (WHERE cache_observation IN ('explicit', 'derived') AND cache_hit_tokens::numeric + cache_miss_tokens::numeric > 0 AND cache_hit_tokens::numeric * 10 >= 9 * (cache_hit_tokens::numeric + cache_miss_tokens::numeric))::bigint AS hot_cache_requests, \
      least(coalesce(sum(duration_ms::numeric), 0), 9223372036854775807)::bigint AS duration_ms, \
@@ -2186,7 +2185,6 @@ struct UsageAggregate {
     explicit_cache_observations: i64,
     derived_cache_observations: i64,
     absent_cache_observations: i64,
-    legacy_cache_observations: i64,
     cold_cache_requests: i64,
     hot_cache_requests: i64,
     duration_ms: i64,
@@ -2218,7 +2216,6 @@ impl UsageAggregate {
             explicit_cache_observations: row.get("explicit_cache_observations"),
             derived_cache_observations: row.get("derived_cache_observations"),
             absent_cache_observations: row.get("absent_cache_observations"),
-            legacy_cache_observations: row.get("legacy_cache_observations"),
             cold_cache_requests: row.get("cold_cache_requests"),
             hot_cache_requests: row.get("hot_cache_requests"),
             duration_ms: row.get("duration_ms"),
@@ -2265,9 +2262,6 @@ impl UsageAggregate {
         self.absent_cache_observations = self
             .absent_cache_observations
             .saturating_add(other.absent_cache_observations);
-        self.legacy_cache_observations = self
-            .legacy_cache_observations
-            .saturating_add(other.legacy_cache_observations);
         self.cold_cache_requests = self
             .cold_cache_requests
             .saturating_add(other.cold_cache_requests);
