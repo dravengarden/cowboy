@@ -290,6 +290,8 @@ pub enum MachineCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderUsageEvent {
+    #[serde(default = "default_provider_usage_schema_version")]
+    pub schema_version: u16,
     pub producer_id: String,
     pub sequence: u64,
     pub occurred_at_ms: i64,
@@ -303,6 +305,48 @@ pub struct ProviderUsageEvent {
     pub reasoning_tokens: Option<u64>,
     pub cache_hit_tokens: Option<u64>,
     pub cache_miss_tokens: Option<u64>,
+    #[serde(default = "legacy_provider_usage_dimension")]
+    pub operation: String,
+    #[serde(default = "legacy_provider_usage_dimension")]
+    pub protocol: String,
+    #[serde(default = "legacy_provider_usage_dimension")]
+    pub cache_observation: String,
+    #[serde(default)]
+    pub usage_observed: Option<bool>,
+    #[serde(default)]
+    pub completed: Option<bool>,
+    #[serde(default)]
+    pub streaming: Option<bool>,
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
+    #[serde(default)]
+    pub request_bytes: Option<u64>,
+    #[serde(default)]
+    pub input_item_count: Option<u64>,
+    #[serde(default)]
+    pub tool_count: Option<u64>,
+    #[serde(default)]
+    pub system_block_count: Option<u64>,
+    #[serde(default)]
+    pub has_previous_response_id: Option<bool>,
+    #[serde(default)]
+    pub compatibility_fixes: Option<u64>,
+}
+
+// These bounds are deliberately above every supported model/request limit.
+// They keep a compromised same-user producer from poisoning long-lived SQL
+// aggregates while preserving headroom for future DeepSeek models.
+pub(crate) const PROVIDER_USAGE_MAX_TOKENS: u64 = 10_000_000;
+pub(crate) const PROVIDER_USAGE_MAX_DURATION_MS: u64 = 86_400_000;
+pub(crate) const PROVIDER_USAGE_MAX_REQUEST_BYTES: u64 = 64 << 20;
+pub(crate) const PROVIDER_USAGE_MAX_SHAPE_COUNT: u64 = 1_000_000;
+
+const fn default_provider_usage_schema_version() -> u16 {
+    1
+}
+
+fn legacy_provider_usage_dimension() -> String {
+    "legacy".to_owned()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

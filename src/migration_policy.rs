@@ -101,6 +101,10 @@ const PUBLISHED_MIGRATIONS: &[(&str, &str)] = &[
         "0023_session_workspace_identity.sql",
         "0ea62043bcb20ee9e994b4213739ad82243ef2fb1661b92dbeb75cac2610b6b2",
     ),
+    (
+        "0024_provider_usage_telemetry_v2.sql",
+        "ea29fe4759ab4b77534a021eb22447c56be580d63f66822d527f44c5476448df",
+    ),
 ];
 
 #[test]
