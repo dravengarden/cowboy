@@ -16,7 +16,15 @@ Deno.test("new session navigation precedes Machine preparation completion", () =
   const active = appSource.indexOf("setActiveId(id);", created);
   const settle = appSource.indexOf("settleMobileDrawerRef.current(false, 0);", created);
   assertEquals(created >= 0 && active > created && settle > active, true);
-  assertEquals(transcriptSource.includes("Preparing this session"), true);
+  assertEquals(
+    transcriptSource.includes('<ConversationEmptyState kind="preparing"'),
+    true,
+  );
+  assertEquals(transcriptSource.includes("Preparing session"), true);
+  assertEquals(
+    transcriptSource.includes("Creating an isolated workspace"),
+    true,
+  );
   assertEquals(
     composerSource.includes('placeholder={preparing\n              ? "You can start typing while this session prepares…"'),
     true,

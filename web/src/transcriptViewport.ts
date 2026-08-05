@@ -26,6 +26,17 @@ export function shouldShowFreshSessionEmptyState(input: {
   return input.reachedStart ?? input.timelineEventCount === 0;
 }
 
+export function shouldShowClearedConversationEmptyState(
+  itemKinds: readonly string[],
+): boolean {
+  const clearedAt = itemKinds.lastIndexOf("cleared");
+  if (clearedAt < 0) return false;
+  return !itemKinds.slice(clearedAt + 1).some((kind) =>
+    kind === "message" || kind === "thought" || kind === "tool" ||
+    kind === "permission"
+  );
+}
+
 export function shouldRecoverUnrenderableHistory(input: {
   managed: boolean;
   itemCount: number;

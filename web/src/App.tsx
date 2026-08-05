@@ -72,6 +72,7 @@ import { machineVersionPresentation, type MachineComponentUpdate } from "./machi
 import { DelayedNetworkProgress, NetworkIconButton } from "./NetworkActionFeedback";
 import { setObservabilityContext } from "./observability";
 import { Transcript } from "./Transcript";
+import { sessionProjectLabel } from "./sessionProject";
 import {
     providerPresentation,
     providerSelectionName,
@@ -1559,6 +1560,19 @@ const StoreTranscript = memo(function StoreTranscript({
         snapshot.sessions.find((session) => session.id === sessionId)?.judging ??
         false
     );
+    const session = useStoreSelector((snapshot) =>
+        snapshot.sessions.find((candidate) => candidate.id === sessionId)
+    );
+    const configOptions = useStoreSelector((snapshot) =>
+        snapshot.configOptions.get(sessionId) ?? []
+    );
+    const model = configOptions.find((option) => option.id === "model")?.currentValue;
+    const emptyContext = {
+        provider,
+        project: session ? sessionProjectLabel(session) : null,
+        machine: session?.machine_id ?? null,
+        model: typeof model === "string" ? model : null,
+    };
     const { projection, transitionAnchorKey } = useExploreSessionState(sessionId);
 
     return projection === "explore" ? (
@@ -1587,6 +1601,7 @@ const StoreTranscript = memo(function StoreTranscript({
             loading={!hydrated}
             connected={connected}
             judging={judging}
+            emptyContext={emptyContext}
             topInset={topInset}
             bottomInset={bottomInset}
             onScrollableChange={onScrollableChange}

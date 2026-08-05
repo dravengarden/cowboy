@@ -56,9 +56,19 @@ Deno.test("frosted pill elevation stays close to the floating surface", () => {
   assertEquals(FROSTED_PILL_DROP_SHADOW_GEOMETRY, "0 5px 16px -10px");
 });
 
-Deno.test("a context reset renders as one quiet boundary badge", () => {
+Deno.test("a context reset becomes a full conversation start until new content", () => {
   assertEquals(
     transcriptSource.includes("data-transcript-context-boundary"),
+    true,
+  );
+  assertEquals(
+    transcriptSource.includes('data-conversation-empty-state={kind}'),
+    true,
+  );
+  assertEquals(
+    transcriptSource.includes(
+      '<ConversationEmptyState kind="cleared" context={conversationContext} />',
+    ),
     true,
   );
   assertEquals(transcriptSource.includes("New conversation"), true);

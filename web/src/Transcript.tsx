@@ -64,6 +64,7 @@ import {
   UnfoldLess,
   WarningAmberRounded,
 } from "@mui/icons-material";
+import { providerPresentation } from "./providerPresentation";
 import { CLAUDE_VERBS } from "./claudeVerbs";
 import { Markdown } from "./Markdown";
 import { attachmentDisplayParts } from "./attachments";
@@ -119,6 +120,7 @@ import {
   shouldContinueScrollbackFill,
   shouldRecoverUnrenderableHistory,
   shouldShowFreshSessionEmptyState,
+  shouldShowClearedConversationEmptyState,
   shouldMagnetizeTranscript,
 } from "./transcriptViewport";
 import {
@@ -510,134 +512,168 @@ function ScrollbackLoadingSkeleton({
 // wrong and a blank wall reads as broken). Dormant / interrupted / crashed empty
 // sessions are NOT handled here — their SessionStatusBar already carries the
 // matching "send a message to wake/restart it" line, so this would just double it.
-function EmptyTranscript(
-  { provider, cwd }: { provider: string; cwd: string },
-): React.JSX.Element {
-  return (
-    <Stack
-      // m:auto centers the single child within the column-reverse scroll area.
-      sx={{
-        m: "auto",
-        maxWidth: 360,
-        px: 3,
-        py: 6,
-        alignItems: "center",
-        textAlign: "center",
-        gap: 1.25,
-        color: "text.secondary",
-      }}
-    >
-      <ChatBubbleOutline sx={{ fontSize: 38, opacity: 0.4 }} />
-      <Typography
-        variant="body1"
-        sx={{ fontWeight: 600, color: "text.primary" }}
-      >
-        Send a message to start
-      </Typography>
-      <Typography variant="caption" sx={{ lineHeight: 1.55 }}>
-        The {provider}{" "}
-        agent is ready and waiting — your first message kicks off the turn.
-      </Typography>
-      {cwd && (
-        <Typography
-          variant="caption"
-          sx={{
-            opacity: 0.7,
-            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-            fontSize: "0.72rem",
-            wordBreak: "break-all",
-          }}
-        >
-          {cwd}
-        </Typography>
-      )}
-    </Stack>
-  );
-}
-
 const prepareSweep = keyframes`
   0% { transform: translateX(-110%); }
   55%, 100% { transform: translateX(310%); }
 `;
 
-function PreparingTranscript(
-  { provider, cwd }: { provider: string; cwd: string },
-): React.JSX.Element {
+type ConversationEmptyKind = "preparing" | "ready" | "cleared";
+
+interface ConversationEmptyContext {
+  provider: string;
+  project: string | null;
+  machine: string | null;
+  model: string | null;
+}
+
+function focusPrimaryComposer(): void {
+  document.querySelector<HTMLElement>(
+    "[data-mobile-primary-composer] [data-mobile-editor-area] textarea, " +
+      "[data-mobile-primary-composer] [data-mobile-editor-area] [contenteditable='true'], " +
+      "[data-desktop-region='prompt.composer'] [contenteditable='true']",
+  )?.focus();
+}
+
+function ConversationEmptyState({
+  kind,
+  context,
+}: {
+  kind: ConversationEmptyKind;
+  context: ConversationEmptyContext;
+}): React.JSX.Element {
+  const agent = providerPresentation(context.provider).agent;
+  const location = [context.project, context.machine].filter(Boolean).join(" on ");
+  const title = kind === "preparing"
+    ? "Preparing session"
+    : kind === "cleared"
+    ? "New conversation"
+    : "Start a conversation";
+  const detail = kind === "preparing"
+    ? location
+      ? `Creating an isolated workspace for ${location}.`
+      : "Creating an isolated workspace and starting the agent."
+    : kind === "cleared"
+    ? `Previous context was cleared. ${agent} is ready with a fresh context.`
+    : location
+    ? `${agent} is ready in ${location}.`
+    : `${agent} is ready for your first message.`;
+  const facts = [context.model, context.project, context.machine]
+    .filter((value, index, values): value is string =>
+      Boolean(value) && values.indexOf(value) === index
+    );
+  const interactive = kind !== "preparing";
   return (
     <Stack
-      role="status"
+      data-conversation-empty-state={kind}
+      role={interactive ? "button" : "status"}
+      tabIndex={interactive ? 0 : undefined}
       aria-live="polite"
+      aria-label={`${title}. ${detail}`}
+      onClick={interactive ? focusPrimaryComposer : undefined}
+      onKeyDown={interactive
+        ? (event): void => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          focusPrimaryComposer();
+        }
+        : undefined}
       sx={{
-        m: "auto",
-        width: "min(360px, calc(100% - 48px))",
-        px: 1,
-        py: 6,
+        flex: "1 1 0 !important",
+        minHeight: 220,
+        width: "100%",
+        px: { xs: 2.5, sm: 4 },
+        py: { xs: 4, sm: 6 },
         alignItems: "center",
+        justifyContent: "center",
         textAlign: "center",
-        gap: 1.25,
+        gap: 1.1,
         color: "text.secondary",
+        cursor: interactive ? "text" : "default",
+        userSelect: "none",
+        WebkitUserSelect: "none",
+        outline: "none",
+        borderRadius: 3,
+        transition: "background-color 180ms ease",
+        "&:focus-visible": {
+          bgcolor: (theme) => alpha(theme.palette.primary.main, 0.045),
+        },
       }}
     >
       <Box
-        sx={{
-          width: 42,
-          height: 42,
+        sx={(theme) => ({
+          width: 48,
+          height: 48,
           borderRadius: "50%",
-          border: 1,
-          borderColor: "divider",
           display: "grid",
           placeItems: "center",
-          bgcolor: (theme) => alpha(theme.palette.primary.main, 0.08),
-        }}
+          color: "primary.main",
+          bgcolor: alpha(theme.palette.primary.main, 0.09),
+          border: `1px solid ${alpha(theme.palette.primary.main, 0.16)}`,
+          boxShadow: `0 10px 30px ${alpha(theme.palette.primary.main, 0.08)}`,
+        })}
       >
-        <Terminal sx={{ fontSize: 21, color: "primary.main" }} />
+        {kind === "preparing"
+          ? <Terminal sx={{ fontSize: 22 }} />
+          : kind === "cleared"
+          ? <CleaningServices sx={{ fontSize: 22 }} />
+          : <ChatBubbleOutline sx={{ fontSize: 22 }} />}
       </Box>
-      <Typography variant="body1" sx={{ fontWeight: 650, color: "text.primary" }}>
-        Preparing this session
+      <Typography variant="body1" sx={{ fontWeight: 700, color: "text.primary" }}>
+        {title}
       </Typography>
-      <Typography variant="caption" sx={{ lineHeight: 1.55 }}>
-        Creating the workspace and starting {provider}. You can write your first
-        message while Cowboy connects everything.
+      <Typography variant="body2" sx={{ maxWidth: 420, lineHeight: 1.55 }}>
+        {detail}
       </Typography>
-      <Box
-        aria-hidden
-        sx={{
-          position: "relative",
-          width: "min(240px, 72vw)",
-          height: 3,
-          mt: 0.5,
-          overflow: "hidden",
-          borderRadius: 99,
-          bgcolor: "action.selected",
-          "&::after": {
-            content: '""',
-            position: "absolute",
-            inset: 0,
-            width: "38%",
-            borderRadius: "inherit",
-            bgcolor: "primary.main",
-            animation: `${prepareSweep} 1.65s cubic-bezier(.4,0,.2,1) infinite`,
-          },
-          "@media (prefers-reduced-motion: reduce)": {
-            "&::after": { animation: "none", width: "55%", opacity: 0.72 },
-          },
-        }}
-      />
-      {cwd && (
-        <Typography
-          variant="caption"
+      {kind === "preparing" && (
+        <Box
+          aria-hidden
           sx={{
-            mt: 0.25,
-            maxWidth: "100%",
-            opacity: 0.68,
-            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-            fontSize: "0.72rem",
+            position: "relative",
+            width: "min(240px, 62vw)",
+            height: 3,
+            mt: 0.5,
             overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
+            borderRadius: 99,
+            bgcolor: "action.selected",
+            "&::after": {
+              content: '""',
+              position: "absolute",
+              inset: 0,
+              width: "38%",
+              borderRadius: "inherit",
+              bgcolor: "primary.main",
+              animation: `${prepareSweep} 1.65s cubic-bezier(.4,0,.2,1) infinite`,
+            },
+            "@media (prefers-reduced-motion: reduce)": {
+              "&::after": { animation: "none", width: "55%", opacity: 0.72 },
+            },
           }}
-        >
-          {cwd}
+        />
+      )}
+      {facts.length > 0 && (
+        <Stack direction="row" useFlexGap flexWrap="wrap" justifyContent="center" gap={0.75}>
+          {facts.map((fact) => (
+            <Chip
+              key={fact}
+              label={fact}
+              size="small"
+              variant="outlined"
+              sx={(theme) => ({
+                height: 25,
+                color: "text.secondary",
+                borderColor: alpha(theme.palette.divider, 0.72),
+                bgcolor: alpha(theme.palette.background.paper, 0.42),
+                backdropFilter: "blur(8px)",
+                WebkitBackdropFilter: "blur(8px)",
+                "& .MuiChip-label": { px: 1, fontSize: "0.72rem" },
+              })}
+            />
+          ))}
+        </Stack>
+      )}
+      {interactive && (
+        <Typography variant="caption" sx={{ mt: 0.25, opacity: 0.72 }}>
+          Tap anywhere here to write
         </Typography>
       )}
     </Stack>
@@ -3158,6 +3194,7 @@ export function Transcript({
   status,
   provider,
   cwd,
+  emptyContext,
   loading,
   connected,
   judging = false,
@@ -3182,6 +3219,8 @@ export function Transcript({
   /** The session's working directory — shown in the empty-state hint so a brand
    *  new session reads as "ready in <cwd>", not a blank wall. */
   cwd: string;
+  /** Stable creation identity for the preparing/ready/cleared empty states. */
+  emptyContext?: ConversationEmptyContext | undefined;
   /** True until this session's history snapshot has arrived — show a skeleton
    *  instead of an empty column during the initial load. */
   loading: boolean;
@@ -3457,6 +3496,14 @@ export function Transcript({
     reachedStart: paging?.reachedStart,
     timelineEventCount: timeline.length,
   });
+  const showClearedEmptyState = isLive && !loading &&
+    shouldShowClearedConversationEmptyState(items.map((item) => item.kind));
+  const conversationContext: ConversationEmptyContext = emptyContext ?? {
+    provider,
+    project: cwd ? cwd.replace(/\/+$/, "").split("/").at(-1) ?? null : null,
+    machine: null,
+    model: null,
+  };
 
   // Tool details deliberately browses only the retained history window. Never
   // page an entire long-running session merely to make its denominator exact:
@@ -4709,7 +4756,7 @@ export function Transcript({
         }}
       >
         {status === "starting" && items.length === 0
-          ? <PreparingTranscript provider={provider} cwd={cwd} />
+          ? <ConversationEmptyState kind="preparing" context={conversationContext} />
           : loading && items.length === 0
           ? (
             <TranscriptSkeleton
@@ -4717,8 +4764,10 @@ export function Transcript({
               provider={provider}
             />
           )
+          : showClearedEmptyState
+          ? <ConversationEmptyState kind="cleared" context={conversationContext} />
           : showFreshSessionEmptyState
-          ? <EmptyTranscript provider={provider} cwd={cwd} />
+          ? <ConversationEmptyState kind="ready" context={conversationContext} />
           : (
             // Rendered NEWEST-FIRST in the DOM; column-reverse flips it to
             // oldest-at-top / newest-at-bottom on screen. The trailing dots are

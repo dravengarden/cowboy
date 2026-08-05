@@ -8,6 +8,7 @@ import {
   shouldContinueScrollbackFill,
   shouldRecoverUnrenderableHistory,
   shouldShowFreshSessionEmptyState,
+  shouldShowClearedConversationEmptyState,
   shouldMagnetizeTranscript,
 } from "./transcriptViewport.ts";
 
@@ -30,6 +31,22 @@ Deno.test("scrollback skeleton is replaced by measured older content", () => {
     }),
     0,
   );
+});
+
+Deno.test("cleared conversation empty state yields to new content", () => {
+  assertEquals(
+    shouldShowClearedConversationEmptyState(["message", "cleared"]),
+    true,
+  );
+  assertEquals(
+    shouldShowClearedConversationEmptyState(["cleared", "lifecycle"]),
+    true,
+  );
+  assertEquals(
+    shouldShowClearedConversationEmptyState(["cleared", "message"]),
+    false,
+  );
+  assertEquals(shouldShowClearedConversationEmptyState([]), false);
 });
 
 Deno.test("mounted scrollback content hands the viewport to real rows", () => {
