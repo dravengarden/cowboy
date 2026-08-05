@@ -37,6 +37,10 @@ export interface SessionMeta {
   provider: string;
   /** Stable machine placement. Missing on older daemons means local. */
   machine_id?: string;
+  /** Stable selected workspace identity; cwd may point at its isolated worktree. */
+  workspace_id?: string;
+  workspace_name?: string;
+  workspace_source_path?: string;
   cwd: string;
   title: string;
   status: Status;

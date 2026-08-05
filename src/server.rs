@@ -2882,10 +2882,11 @@ async fn api_new_session(
             .cloned()
             .and_then(|value| serde_json::from_value(value).ok())
             .unwrap_or_default();
-        cwd = match resolve_machine_workspace(&workspaces, cwd.as_deref()) {
-            Ok(path) => Some(path),
+        let selected_workspace = match resolve_machine_workspace(&workspaces, cwd.as_deref()) {
+            Ok(workspace) => workspace.clone(),
             Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
         };
+        cwd = Some(selected_workspace.canonical_path.clone());
         let capacity: crate::machine_protocol::MachineCapacity = machine
             .inventory
             .get("capacity")
@@ -2941,7 +2942,10 @@ async fn api_new_session(
             Some(source_path.to_owned()),
             req.origin,
             req.system,
-            &req.machine_id,
+            crate::supervisor::SessionPlacement {
+                machine_id: &req.machine_id,
+                workspace: Some(&selected_workspace),
+            },
         ) {
             return (StatusCode::BAD_REQUEST, message).into_response();
         }
@@ -3053,17 +3057,16 @@ async fn api_new_session(
     }
 }
 
-fn resolve_machine_workspace(
-    workspaces: &[crate::machine_protocol::MachineWorkspace],
+fn resolve_machine_workspace<'a>(
+    workspaces: &'a [crate::machine_protocol::MachineWorkspace],
     requested_id: Option<&str>,
-) -> Result<String, String> {
+) -> Result<&'a crate::machine_protocol::MachineWorkspace, String> {
     let requested_id = requested_id
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| "remote session requires a trusted workspace id".to_owned())?;
     workspaces
         .iter()
         .find(|workspace| workspace.id == requested_id)
-        .map(|workspace| workspace.canonical_path.clone())
         .ok_or_else(|| format!("unknown trusted workspace {requested_id:?}"))
 }
 
@@ -3269,8 +3272,9 @@ mod machine_provider_tests {
             canonical_path: "/srv/cowboy".to_owned(),
         }];
         assert_eq!(
-            resolve_machine_workspace(&workspaces, Some("cowboy")),
-            Ok("/srv/cowboy".to_owned())
+            resolve_machine_workspace(&workspaces, Some("cowboy"))
+                .map(|workspace| { (workspace.id.as_str(), workspace.canonical_path.as_str()) }),
+            Ok(("cowboy", "/srv/cowboy"))
         );
         assert!(resolve_machine_workspace(&workspaces, Some("/srv/cowboy")).is_err());
         assert!(resolve_machine_workspace(&workspaces, Some("unknown")).is_err());

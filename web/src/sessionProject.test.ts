@@ -1,0 +1,45 @@
+import { assertEquals } from "jsr:@std/assert";
+import type { SessionMeta } from "./protocol";
+import { sessionProjectLabel } from "./sessionProject";
+
+function session(overrides: Partial<SessionMeta> = {}): SessionMeta {
+  return {
+    id: "sess-1",
+    provider: "codex",
+    cwd: "/tmp/worktree/sess-1",
+    title: "Session",
+    status: "running",
+    ...overrides,
+  };
+}
+
+Deno.test("session project prefers persisted workspace display name", () => {
+  assertEquals(
+    sessionProjectLabel(session({
+      workspace_id: "cowboy",
+      workspace_name: "Cowboy",
+      workspace_source_path: "/home/draven/columbus/projects/cowboy",
+    })),
+    "Cowboy",
+  );
+});
+
+Deno.test("session project survives an isolated session cwd", () => {
+  assertEquals(
+    sessionProjectLabel(session({
+      workspace_id: "blackpearl",
+      workspace_source_path: "/home/draven/columbus/projects/blackpearl",
+    })),
+    "blackpearl",
+  );
+});
+
+Deno.test("session project preserves legacy stable-checkout fallback", () => {
+  assertEquals(
+    sessionProjectLabel(session({
+      cwd: "/home/draven/columbus/projects/carrack/main",
+    })),
+    "carrack",
+  );
+  assertEquals(sessionProjectLabel(session()), null);
+});

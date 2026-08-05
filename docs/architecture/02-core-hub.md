@@ -9,7 +9,8 @@ persistence intents to the write-behind writer.
 
 Each `Session` (private to the Hub) carries:
 
-- **`SessionMeta`** — `id`, `provider`, `cwd`, `title`, `status`, `origin`,
+- **`SessionMeta`** — `id`, `provider`, stable Machine workspace identity,
+  isolated runtime `cwd`, `title`, `status`, `origin`,
   `agent_session_id` (for resume), `auto_resume` override, and the confirm-detect
   flags `awaiting_user` / `done` / `judging`, plus `paused` / `system`.
 - an **event log** — `Vec<Envelope>` — and the `next_seq` counter.

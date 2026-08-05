@@ -218,6 +218,7 @@ import type {
   SessionMeta,
   Status,
 } from "./protocol";
+import { sessionProjectLabel } from "./sessionProject";
 import { Sheet } from "./Sheet";
 import {
   FloatingActionIsland,
@@ -5694,7 +5695,7 @@ function SessionInfoSection({
   // DISPLAY title, not the machine string. The parent owns the draft because
   // mobile replaces the footer Close action with an explicit Save action while
   // this field is being edited. Plain Enter is intentionally not a commit path.
-  const project = sessionProjectLabel(session);
+  const project = sessionProjectLabel(session) ?? "Not recorded";
   const contextUsed = session.context_used ?? 0;
   const contextSize = session.context_size ?? 0;
   const hasContext = contextSize > 0;
@@ -5788,14 +5789,6 @@ function SessionInfoSection({
       </Stack>
     </>
   );
-}
-
-// Stable source checkouts can reveal the project from their path. Machine-backed
-// sessions currently expose only their isolated worktree path, so do not guess
-// from a mutable title or the `sess-*` directory name.
-function sessionProjectLabel(session: SessionMeta): string {
-  const match = session.cwd.match(/\/columbus\/projects\/([^/]+)(?:\/|$)/);
-  return match?.[1] ?? "Not recorded";
 }
 
 // The queue pause/resume control. Session-level and orthogonal to what's queued,

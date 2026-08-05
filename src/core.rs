@@ -436,6 +436,14 @@ pub struct SessionMeta {
     /// belong to the selected host.
     #[serde(default = "local_machine_id")]
     pub machine_id: String,
+    /// Stable advertised Machine workspace identity selected at creation.
+    /// Kept separately because `cwd` is replaced with an isolated worktree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_source_path: Option<String>,
     pub cwd: String,
     pub title: String,
     pub status: Status,
@@ -521,6 +529,9 @@ pub struct SessionRegistration {
     pub id: String,
     pub provider: String,
     pub machine_id: String,
+    pub workspace_id: Option<String>,
+    pub workspace_name: Option<String>,
+    pub workspace_source_path: Option<String>,
     pub cwd: String,
     pub title: String,
     pub origin: SessionOrigin,
@@ -2166,6 +2177,9 @@ impl Hub {
             id,
             provider,
             machine_id: "local".to_owned(),
+            workspace_id: None,
+            workspace_name: None,
+            workspace_source_path: None,
             cwd,
             title,
             origin,
@@ -2179,6 +2193,9 @@ impl Hub {
             id,
             provider,
             machine_id,
+            workspace_id,
+            workspace_name,
+            workspace_source_path,
             cwd,
             title,
             origin,
@@ -2188,6 +2205,9 @@ impl Hub {
             id: id.clone(),
             provider,
             machine_id,
+            workspace_id,
+            workspace_name,
+            workspace_source_path,
             cwd,
             title,
             status: Status::Starting,
@@ -4803,6 +4823,9 @@ mod runtime_reconciliation_tests {
                 id: id.to_owned(),
                 provider: "codex".to_owned(),
                 machine_id: "hawk".to_owned(),
+                workspace_id: None,
+                workspace_name: None,
+                workspace_source_path: None,
                 cwd: "/tmp".to_owned(),
                 title: "test".to_owned(),
                 status: Status::Busy,

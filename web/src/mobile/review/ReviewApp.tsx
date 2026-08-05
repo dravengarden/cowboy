@@ -55,6 +55,7 @@ import {
   useStoreSelector,
 } from "../../store";
 import type { SessionMeta } from "../../protocol";
+import { sessionProjectLabel } from "../../sessionProject";
 import { useSurfaceProfile } from "../../surface/SurfaceProfile";
 import {
   closeCodeBuffer,
@@ -106,6 +107,8 @@ import {
 const CodeViewer = lazy(() => import("./CodeViewer"));
 
 function sessionProject(session: SessionMeta): string {
+  const stableProject = sessionProjectLabel(session);
+  if (stableProject) return stableProject;
   const normalized = session.cwd.replace(/\/+$/, "");
   return normalized.split("/").at(-1) || session.cwd;
 }

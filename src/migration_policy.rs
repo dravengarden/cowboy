@@ -97,6 +97,10 @@ const PUBLISHED_MIGRATIONS: &[(&str, &str)] = &[
         "0022_provider_usage_ledger.sql",
         "3f5bc917df416351be2dc46fab91fe4e4e66510ad49c66f71fc88fc720c17d22",
     ),
+    (
+        "0023_session_workspace_identity.sql",
+        "0ea62043bcb20ee9e994b4213739ad82243ef2fb1661b92dbeb75cac2610b6b2",
+    ),
 ];
 
 #[test]
