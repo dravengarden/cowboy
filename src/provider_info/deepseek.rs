@@ -8,8 +8,8 @@ use serde_json::{Value, json};
 use crate::store::Store;
 use crate::usage::ProviderUsage;
 
-const DEFAULT_INFO_URL: &str = "http://127.0.0.1:28471/provider-info";
-const DEFAULT_FALLBACK_INFO_URL: &str = "http://127.0.0.1:28472/provider-info";
+const DEFAULT_INFO_URL: &str = "http://127.0.0.1:61137/provider-info";
+const DEFAULT_FALLBACK_INFO_URL: &str = "http://127.0.0.1:61138/provider-info";
 const USAGE_DAYS: i32 = 14;
 
 #[derive(Debug, Deserialize)]

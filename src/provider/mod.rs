@@ -131,7 +131,7 @@ fn builtin_with_env_and_shell(
     claude_deepseek.env.extend([
         (
             "ANTHROPIC_BASE_URL".to_owned(),
-            "http://127.0.0.1:28472".to_owned(),
+            "http://127.0.0.1:61138".to_owned(),
         ),
         (
             "ANTHROPIC_AUTH_TOKEN".to_owned(),
@@ -490,7 +490,7 @@ fn render_codex_deepseek_config(catalog: &Path) -> String {
      model_auto_compact_token_limit_scope = \"body_after_prefix\"\n\n\
      [model_providers.deepseek-local]\n\
      name = \"Isolated DeepSeek Responses gateway\"\n\
-     base_url = \"http://127.0.0.1:28471/v1\"\n\
+     base_url = \"http://127.0.0.1:61137/v1\"\n\
      wire_api = \"responses\"\n\
      requires_openai_auth = false\n\
      request_max_retries = 1\n\
@@ -621,7 +621,7 @@ mod tests {
                 .env
                 .get("ANTHROPIC_BASE_URL")
                 .map(String::as_str),
-            Some("http://127.0.0.1:28472")
+            Some("http://127.0.0.1:61138")
         );
         assert_eq!(
             claude_deepseek
