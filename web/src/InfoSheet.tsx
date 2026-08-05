@@ -17,6 +17,7 @@ import {
   TextField,
   ToggleButton,
   ToggleButtonGroup,
+  Tooltip,
   Typography,
 } from "@mui/material";
 import { ExpandMore, Refresh } from "@mui/icons-material";
@@ -24,7 +25,12 @@ import { Kbd, useConfirmEnter } from "./Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { useSkills } from "./store";
 import { NetworkButton, NetworkIconButton } from "./NetworkActionFeedback";
-import { deepseekCacheStats } from "./deepseekUsage";
+import {
+  deepseekCacheStats,
+  deepseekCostStats,
+  percentLabel,
+  primaryDeepSeekModel,
+} from "./deepseekUsage";
 import {
   acceptedScheduleTime,
   type JsonRecord,
@@ -85,6 +91,17 @@ function formatTokens(value: number | undefined): string {
   return value === undefined ? "—" : value.toLocaleString();
 }
 
+/** USD with enough decimals that even tiny DeepSeek spends stay readable. */
+function formatUsd(value: number): string {
+  return value < 0.01 ? `$${value.toFixed(4)}` : `$${value.toFixed(2)}`;
+}
+
+function formatDurationMs(value: number): string {
+  if (value < 1000) return `${Math.round(value)} ms`;
+  if (value < 60_000) return `${(value / 1000).toFixed(1)} s`;
+  return `${(value / 60_000).toFixed(1)} min`;
+}
+
 function DeepSeekDetails(
   { usage }: { usage: ProviderUsage },
 ): React.JSX.Element {
@@ -121,6 +138,23 @@ function DeepSeekDetails(
     ? coverage.producers.map(record).filter((value): value is JsonRecord => value !== undefined)
     : [];
   const machineCount = new Set(producers.map((producer) => str(producer.machine)).filter(Boolean)).size;
+  const byModel = record(usage.activity?.byModel);
+  const agentLanes = byAgent
+    ? ["claude", "codex"].flatMap((agent) => {
+      const totals = record(byAgent[agent]);
+      if (!totals) return [];
+      return [{
+        agent,
+        totals,
+        cache: deepseekCacheStats(totals),
+        cost: deepseekCostStats(totals, primaryDeepSeekModel(byModel)),
+      }];
+    })
+    : [];
+  const totalSpendUsd = agentLanes.reduce(
+    (sum, lane) => sum + (lane.cost?.estimatedUsd ?? 0),
+    0,
+  );
   const daily = Array.isArray(usage.activity?.daily)
     ? usage.activity.daily.map(record).filter((value): value is JsonRecord => value !== undefined).slice(-7)
     : [];
@@ -209,32 +243,58 @@ function DeepSeekDetails(
                 </Typography>
               </Box>
             </Box>
-            {byAgent && (
+            {agentLanes.length > 0 && (
               <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "repeat(2, minmax(0, 1fr))" }, gap: 1 }}>
-                {["claude", "codex"].flatMap((agent) => {
-                  const totals = record(byAgent[agent]);
-                  if (!totals) return [];
-                  const cache = deepseekCacheStats(totals);
-                  const rate = cache.hitRate === undefined ? undefined : Math.round(cache.hitRate);
-                  const coverageRate = cache.coverageRate === undefined ? undefined : Math.round(cache.coverageRate);
-                  return [
+                {agentLanes.map(({ agent, totals, cache, cost }) => {
+                  const spendShare = totalSpendUsd > 0 && cost
+                    ? cost.estimatedUsd * 100 / totalSpendUsd
+                    : undefined;
+                  return (
                     <Box key={agent} sx={{ borderRadius: 1.5, bgcolor: "action.hover", px: 1.1, py: 0.9 }}>
                       <Stack spacing={0.5}>
                         <Stack direction="row" justifyContent="space-between">
                           <Typography variant="body2" fontWeight={700}>{agent === "claude" ? "Claude Code" : "Codex"}</Typography>
                           <Typography variant="caption" color="text.secondary">{formatTokens(num(totals.requests))} requests</Typography>
                         </Stack>
+                        <Box sx={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 1 }}>
+                          <Box>
+                            <Tooltip title="DeepSeek list prices × verified tokens; unobserved requests are excluded.">
+                              <Typography variant="caption" color="text.secondary" sx={{ cursor: "help", textDecoration: "underline dotted" }}>Est. spend</Typography>
+                            </Tooltip>
+                            <Typography variant="subtitle2" fontWeight={700}>
+                              {cost ? formatUsd(cost.estimatedUsd) : "—"}
+                            </Typography>
+                          </Box>
+                          <Box>
+                            <Typography variant="caption" color="text.secondary">Spend share</Typography>
+                            <Typography variant="subtitle2" fontWeight={700}>
+                              {spendShare === undefined ? "—" : percentLabel(spendShare)}
+                            </Typography>
+                          </Box>
+                          <Box>
+                            <Typography variant="caption" color="text.secondary">Avg gateway</Typography>
+                            <Typography variant="subtitle2" fontWeight={700}>
+                              {cost?.avgGatewayMs === undefined ? "—" : formatDurationMs(cost.avgGatewayMs)}
+                            </Typography>
+                          </Box>
+                          <Box>
+                            <Typography variant="caption" color="text.secondary">Tokens</Typography>
+                            <Typography variant="subtitle2" fontWeight={700}>
+                              {cost ? formatTokens(cost.totalTokens) : "—"}
+                            </Typography>
+                          </Box>
+                        </Box>
                         <Stack direction="row" justifyContent="space-between">
                           <Typography variant="caption" color="text.secondary">Prompt cache</Typography>
-                          <Typography variant="body2" fontWeight={600}>{rate === undefined ? "—" : `${String(rate)}%`}</Typography>
+                          <Typography variant="body2" fontWeight={600}>{percentLabel(cache.hitRate)}</Typography>
                         </Stack>
-                        <LinearProgress variant="determinate" value={rate ?? 0} sx={{ height: 7, borderRadius: 99 }} />
+                        <LinearProgress variant="determinate" value={cache.hitRate ?? 0} sx={{ height: 7, borderRadius: 99 }} />
                         <Typography variant="caption" color="text.secondary">
                           {formatTokens(cache.hitTokens)} hit · {formatTokens(cache.missTokens)} miss tokens
                         </Typography>
                         <Typography variant="caption" color="text.secondary">
                           Verified telemetry {formatTokens(cache.measuredRequests)} / {formatTokens(cache.eligibleRequests)} requests
-                          {coverageRate === undefined ? "" : ` · ${String(coverageRate)}% coverage`}
+                          {cache.coverageRate === undefined ? "" : ` · ${percentLabel(cache.coverageRate)} coverage`}
                         </Typography>
                         {cache.measuredRequests > 0 && (
                           <Typography variant="caption" color="text.secondary">
@@ -247,8 +307,8 @@ function DeepSeekDetails(
                           </Typography>
                         )}
                       </Stack>
-                    </Box>,
-                  ];
+                    </Box>
+                  );
                 })}
               </Box>
             )}
@@ -286,7 +346,7 @@ function DeepSeekDetails(
                   {byAgent && Object.entries(byAgent).map(([agent, value]) => {
                     const totals = record(value);
                     const cache = deepseekCacheStats(totals);
-                    const agentHitRate = cache.hitRate === undefined ? undefined : Math.round(cache.hitRate);
+                    const cost = deepseekCostStats(totals, primaryDeepSeekModel(byModel));
                     const durationObservations = num(totals?.durationObservations) ?? 0;
                     const requestShapeObservations = num(totals?.requestShapeObservations) ?? 0;
                     const operations = record(byAgentOperation?.[agent]);
@@ -329,7 +389,19 @@ function DeepSeekDetails(
                           />
                           <InfoRow
                             k="Cache hit rate"
-                            v={agentHitRate === undefined ? "—" : `${String(agentHitRate)}%`}
+                            v={percentLabel(cache.hitRate)}
+                          />
+                          <InfoRow
+                            k="Est. spend"
+                            v={cost ? formatUsd(cost.estimatedUsd) : "—"}
+                          />
+                          <InfoRow
+                            k="Cost / request"
+                            v={cost ? formatUsd(cost.costPerRequestUsd) : "—"}
+                          />
+                          <InfoRow
+                            k="Cost / 1M tokens"
+                            v={cost ? formatUsd(cost.costPerMTokensUsd) : "—"}
                           />
                           <Typography variant="caption" color="text.secondary">
                             {formatTokens(cache.explicitRequests)} explicit · {formatTokens(cache.derivedRequests)} exact-derived · {formatTokens(cache.absentRequests)} missing cache observations
@@ -387,7 +459,7 @@ function DeepSeekDetails(
                         const dailyCache = deepseekCacheStats(totals);
                         const cacheLabel = dailyCache.hitRate === undefined
                           ? ""
-                          : ` · ${String(Math.round(dailyCache.hitRate))}% cache`;
+                          : ` · ${percentLabel(dailyCache.hitRate)} cache`;
                         return (
                           <InfoRow
                             key={str(entry.day)}
