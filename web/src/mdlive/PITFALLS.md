@@ -1066,4 +1066,10 @@ Desktop Vim + IME checks:
     `min-width: 0`; a long editor or pending row must never transfer its intrinsic
     width to the stack. This changes layout ownership only—do not add editor
     remounts, delayed focus, controlled values, or IME event handling to repair
-    geometry.
+    geometry. A tinted live Thinking surface at the end of the Mobile Transcript
+    owns 6px of clear trailing space in addition to its timeline row padding. Its
+    visible bottom therefore sits 11px above the Composer boundary, matching the
+    effective clearance of the provider-only working phrase (`Burrowing…`, etc.).
+    Keep this outside the tinted surface and Mobile-only: changing the shared 4px
+    Composer stack rhythm would loosen Plan/Draft/Queue spacing and changing the
+    thought's internal padding would merely make the pill taller.

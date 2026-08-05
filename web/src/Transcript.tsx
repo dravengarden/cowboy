@@ -96,6 +96,7 @@ import {
 } from "./store";
 import { importantHaptic, magneticHaptic } from "./haptic";
 import { useReadingSettings } from "./readingSettings";
+import { mobileTranscriptActivitySurfaceGap } from "./mobileComposerPrimitives";
 import {
   requestStickToBottom,
   resetSticky,
@@ -1179,16 +1180,29 @@ function ThoughtSteps({
   sections,
   streaming,
   codex,
+  touch,
 }: {
   sections: string[];
   streaming: boolean;
   codex: boolean;
+  touch: boolean;
 }): React.JSX.Element {
   const visible = sections.filter((section) => section.trim() !== "");
   return (
     <Stack
       spacing={0}
-      sx={{ flex: 1, minWidth: 0 }}
+      sx={{
+        flex: 1,
+        minWidth: 0,
+        // The ordinary provider working line includes 6px of visible breathing
+        // space before the Mobile Composer boundary. A live thought has a tinted
+        // final surface, so its background otherwise ends only at the timeline
+        // row's 5px padding and reads as stuck to the hairline. Match the working
+        // line without loosening completed transcript rows or Desktop density.
+        pb: touch && streaming
+          ? `${mobileTranscriptActivitySurfaceGap}px`
+          : 0,
+      }}
       aria-label="Thinking steps"
     >
       {
@@ -2831,6 +2845,7 @@ const ItemView = memo(function ItemView({
               sections={item.sections}
               streaming={!!streaming}
               codex={provider === "codex" || provider === "codex-deepseek"}
+              touch={!desktop}
             />
           </Box>
         </Box>

@@ -1,5 +1,6 @@
 import { assertEquals } from "jsr:@std/assert";
 import { FROSTED_PILL_DROP_SHADOW_GEOMETRY } from "./floatingOverlayPolicy";
+import { mobileTranscriptActivitySurfaceGap } from "./mobileComposerPrimitives";
 
 const composerSource = await Deno.readTextFile(
   new URL("./Composer.tsx", import.meta.url),
@@ -58,4 +59,15 @@ Deno.test("focused mobile composer owns a real frosted material", () => {
     composerSource.includes('WebkitBackdropFilter: "blur(24px) saturate(140%)"'),
     true,
   );
+});
+
+Deno.test("live Mobile thought surfaces breathe above the composer boundary", () => {
+  assertEquals(mobileTranscriptActivitySurfaceGap, 6);
+  assertEquals(
+    transcriptSource.includes(
+      "pb: touch && streaming\n          ? `${mobileTranscriptActivitySurfaceGap}px`",
+    ),
+    true,
+  );
+  assertEquals(transcriptSource.includes("touch={!desktop}"), true);
 });
