@@ -15,7 +15,6 @@ import {
 import { openJudgeInspector } from "./JudgeInspector";
 import { confirmationHaptic } from "./haptic";
 import { frostedPill } from "./frostedGlass";
-import { FLOATING_OVERLAY_BOUNDARY_GAP_PX } from "./floatingOverlayPolicy";
 
 type Kind =
   | "offline"
@@ -172,29 +171,6 @@ export function TurnStatusOverlay({
     setExpanded(false);
   }, [kind]);
 
-  // Publish the pill height so the transcript reserves it (sticky-not-covering).
-  const measureRef = useRef<HTMLDivElement | null>(null);
-  const visible = kind !== null;
-  useEffect(() => {
-    const el = measureRef.current;
-    if (!el || !visible) {
-      document.documentElement.style.setProperty("--awaiting-h", "0px");
-      return undefined;
-    }
-    const set = (): void =>
-      document.documentElement.style.setProperty(
-        "--awaiting-h",
-        `${el.offsetHeight}px`,
-      );
-    set();
-    const ro = new ResizeObserver(set);
-    ro.observe(el);
-    return () => {
-      ro.disconnect();
-      document.documentElement.style.setProperty("--awaiting-h", "0px");
-    };
-  }, [visible, expanded]);
-
   if (kind === null) return null;
   const meta = KIND_META[kind];
   const held = queue.length > 0;
@@ -227,20 +203,16 @@ export function TurnStatusOverlay({
 
   return (
     <Box
-      ref={measureRef}
       data-turn-status-overlay
+      data-composer-stack-slot="status"
       sx={{
-        position: "absolute",
-        left: 0,
-        right: 0,
-        bottom: "100%",
+        position: "relative",
         display: "flex",
         justifyContent: "center",
         px: 2,
-        // This absolute layer does not participate in the Composer's rowGap.
-        // Preserve only a narrow seam so the pill never merges with the card's
-        // top edge; the old full 8px stack token double-counted the spacing.
-        pb: `${FLOATING_OVERLAY_BOUNDARY_GAP_PX}px`,
+        width: "100%",
+        minWidth: 0,
+        boxSizing: "border-box",
         pointerEvents: "none",
         zIndex: 3,
       }}

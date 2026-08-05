@@ -4627,16 +4627,11 @@ export function Transcript({
           // So scrollIntoView (e.g. a ToolCard expanding) aligns a row BELOW the
           // frosted AppBar, not under it — content scrolls under the bar otherwise.
           scrollPaddingTop: topInset ? `calc(${topInset} + 8px)` : 8,
-          // `--awaiting-h` (set by TurnStatusOverlay, 0 when absent) RESERVES the
-          // floating status pill's height so the newest message clears it at rest
-          // while the pill stays pinned above the composer (sticky-not-covering).
-          // `bottomInset` already includes the Composer workspace's measured
-          // height, including its single 4px boundary token. Adding another
-          // transcript gutter here doubled the visible gap whenever the latest
-          // row re-anchored after context clear or disclosure changes.
-          pb: bottomInset
-            ? `calc(${bottomInset} + var(--awaiting-h, 0px))`
-            : `calc(var(--awaiting-h, 0px) + 12px)`,
+          // `bottomInset` is the one settled border-box measurement for the
+          // complete floating stack (status, Plan, Pending, Composer and the
+          // bottom navbar when present). Transcript must not recombine child
+          // heights or add another boundary token here.
+          pb: bottomInset ?? "12px",
           // Reading prose line-height. The markdown paragraph renderer inherits
           // this (MarkdownImpl `p`); headings + code keep their own fixed
           // leading, and MUI Typography chrome sets its own, so only body text

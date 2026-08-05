@@ -122,6 +122,7 @@ import {
 } from "./readingSettings";
 import { useNavbarAtBottom } from "./navbarSettings";
 import { mobileComposerFocusMotion } from "./mobileComposerPrimitives";
+import { useFloatingComposerGeometry } from "./floatingComposerGeometry";
 import { releaseMobileComposerFocus } from "./composer/mobileComposerFocus";
 import { FONT_PRESETS, getFontPreset } from "./fonts";
 import { ProviderIcon } from "./ProviderIcon";
@@ -1642,22 +1643,20 @@ export function App({
     // rather than centered dialogs.
     const prefersNavbarAtBottom = useNavbarAtBottom();
     const navbarAtBottom = mobile && prefersNavbarAtBottom;
-    const floatingPanelHeight = navbarAtBottom
-        ? "calc(var(--composer-h, 0px) + var(--navbar-h, 0px))"
-        : "var(--composer-h, 0px)";
+    const floatingPanelHeight = "var(--floating-stack-h, 0px)";
     // A full-screen frosted COVER sheet (compose/edit/settings) bleeds the app's
     // own frosted navbar/composer chrome through it as a bright blob (double
     // frosting). Fade that chrome out while ANY sheet is open so the cover shows
     // only the uniformly-dimmed transcript — consistent top color, like Settings.
     const anySheetOpen = useAnyDetentSheetOpen();
-    // Floating-glass bottom (bottom-navbar mode): the composer + navbar float as
-    // frosted overlays over a full-height transcript. Publish their measured
-    // heights as CSS vars on the column so the transcript reserves that space
-    // (its `bottomInset`) — content scrolls UNDER the glass but the newest message
-    // clears it. Re-measures on drafts/queue expand + keyboard, so the scroll
-    // RANGE tracks the panel with NO column reflow (column-reverse keeps the
-    // newest pinned just above the growing panel).
+    // One geometry owner measures the complete floating bottom stack. The live
+    // frosted material and the settled Transcript inset consume its two outputs;
+    // no child panel publishes an independent reservation.
     const columnRef = useRef<HTMLDivElement>(null);
+    const { appBarRef, composerRef } = useFloatingComposerGeometry({
+        surfaceRef: columnRef,
+        navbarAtBottom,
+    });
     const activeId = useActiveSessionId();
     const setActiveId = setActiveSessionId;
     const observabilityMachineId = sessions.find((session) => session.id === activeId)?.machine_id;
@@ -1667,108 +1666,6 @@ export function App({
             ...(observabilityMachineId ? { machine_id: observabilityMachineId } : {}),
         });
     }, [activeId, observabilityMachineId]);
-    // Floating-glass inset: publish the panel's TRUE live height — the AppBar plus
-    // the composer (the latter INCLUDING an expanded queue/drafts panel) — as CSS
-    // vars on the column. The glass follows every animation frame, while the
-    // transcript reservation is frozen during disclosure transitions: changing
-    // padding-bottom on a long column-reverse transcript lays out every retained
-    // row, so mirroring a 200ms Collapse transition frame-for-frame wastes the
-    // mobile main thread and rate-limiting it merely turns motion into visible
-    // stair-steps. One final, non-animated alignment is both cheaper and calmer.
-    //
-    // Driven by CALLBACK refs + ONE persistent ResizeObserver, NOT a mount-time
-    // effect. Why: the composer mounts only once the session list arrives and
-    // `active` flips non-null, which happens WITHOUT activeId changing (activeId is
-    // restored from localStorage at first render). A `[navbarAtBottom, activeId]`-
-    // keyed effect therefore ran while the composer was still unmounted — wrote
-    // --composer-h: 0px, observed a null element, and never re-fired — so the panel
-    // permanently covered the newest messages (the "看不到 / 没有动态适应" bug).
-    // Callback refs observe each element the instant it actually mounts and
-    // re-measure, so the reservation is right from first paint and tracks resizes.
-    //
-    // Deliberately NOT gated on scroll/sticky state: the reservation must stay
-    // accurate at all times so the newest message can never hide behind the glass.
-    // Reserving the space is orthogonal to auto-scroll (that stays the Transcript's
-    // FOLLOW decision); column-reverse keeps the newest pinned just above the panel,
-    // so an accurate inset just lifts it clear with no content reflow.
-    const roRef = useRef<ResizeObserver | null>(null);
-    const appBarElRef = useRef<HTMLElement | null>(null);
-    const composerElRef = useRef<HTMLElement | null>(null);
-    const activeDisclosureTransitionsRef = useRef(new Set<EventTarget>());
-    const pendingTranscriptInsetRef = useRef("0px");
-    const publishTranscriptInset = useCallback((): void => {
-        const col = columnRef.current;
-        if (!col) return;
-        col.style.setProperty("--transcript-composer-h", pendingTranscriptInsetRef.current);
-    }, []);
-    const measureGlass = useCallback((): void => {
-        const col = columnRef.current;
-        if (!col) return;
-        const navbarHeight = `${appBarElRef.current?.offsetHeight ?? 0}px`;
-        const composerHeight = `${composerElRef.current?.offsetHeight ?? 0}px`;
-        col.style.setProperty("--navbar-h", navbarHeight);
-        col.style.setProperty("--composer-h", composerHeight);
-        pendingTranscriptInsetRef.current = composerHeight;
-        if (activeDisclosureTransitionsRef.current.size === 0) publishTranscriptInset();
-    }, [publishTranscriptInset]);
-    const disclosureTransition = useCallback((event: TransitionEvent): void => {
-        const target = event.target;
-        if (
-            event.propertyName !== "height" ||
-            !(target instanceof HTMLElement) ||
-            !target.classList.contains("MuiCollapse-root")
-        ) return;
-        if (event.type === "transitionrun") {
-            activeDisclosureTransitionsRef.current.add(target);
-            return;
-        }
-        activeDisclosureTransitionsRef.current.delete(target);
-        if (activeDisclosureTransitionsRef.current.size === 0) publishTranscriptInset();
-    }, [publishTranscriptInset]);
-    const observeGlass = useCallback(
-        (slot: "appbar" | "composer", el: HTMLElement | null): void => {
-            roRef.current ??= new ResizeObserver((): void => measureGlass());
-            const ro = roRef.current;
-            const prev = slot === "appbar" ? appBarElRef.current : composerElRef.current;
-            if (prev) ro.unobserve(prev);
-            if (slot === "composer" && prev) {
-                prev.removeEventListener("transitionrun", disclosureTransition, true);
-                prev.removeEventListener("transitionend", disclosureTransition, true);
-                prev.removeEventListener("transitioncancel", disclosureTransition, true);
-                activeDisclosureTransitionsRef.current.clear();
-            }
-            if (slot === "appbar") appBarElRef.current = el;
-            else composerElRef.current = el;
-            if (el) {
-                ro.observe(el);
-                if (slot === "composer") {
-                    el.addEventListener("transitionrun", disclosureTransition, true);
-                    el.addEventListener("transitionend", disclosureTransition, true);
-                    el.addEventListener("transitioncancel", disclosureTransition, true);
-                }
-            }
-            measureGlass();
-        },
-        [disclosureTransition, measureGlass],
-    );
-    const appBarRef = useCallback(
-        (el: HTMLDivElement | null): void => observeGlass("appbar", el),
-        [observeGlass],
-    );
-    const composerRef = useCallback(
-        (el: HTMLDivElement | null): void => observeGlass("composer", el),
-        [observeGlass],
-    );
-    // Disconnect the shared observer and transition listeners on unmount.
-    useEffect(() => (): void => {
-        roRef.current?.disconnect();
-        const composer = composerElRef.current;
-        if (composer) {
-            composer.removeEventListener("transitionrun", disclosureTransition, true);
-            composer.removeEventListener("transitionend", disclosureTransition, true);
-            composer.removeEventListener("transitioncancel", disclosureTransition, true);
-        }
-    }, [disclosureTransition]);
     // Whether the transcript actually overflows (has content scrolling under the
     // floating composer glass). Gates the composer slab's up-shadow: an
     // empty/short conversation has nothing beneath the glass, so the "floating
@@ -2507,17 +2404,6 @@ export function App({
                     // group (composer, or the navbar in bottom mode) rises clear
                     // of the keyboard. 0 when no keyboard.
                     pb: "var(--kb-inset, 0px)",
-                    // TurnStatusOverlay and PermissionOverlay publish their
-                    // measured reservation through a root CSS variable because
-                    // Transcript is their sibling. Effect cleanup can lag one
-                    // commit behind a Draft/Queue edit finishing, leaving the
-                    // old height inherited after the overlay DOM is already
-                    // gone. Make DOM presence authoritative: without a real
-                    // overlay this session surface locally masks any stale root
-                    // value in the same style calculation.
-                    "&:not(:has([data-turn-status-overlay], [data-permission-overlay]))": {
-                        "--awaiting-h": "0px",
-                    },
                     // Keyboard Focus Mode is one coordinated transition: the
                     // persistent composer grows its formatting track while this
                     // session nav yields the scarce keyboard-adjacent space. CSS
@@ -2643,8 +2529,7 @@ export function App({
                 )}
                 {/* ONE frosted-glass slab behind BOTH the composer and the navbar,
                     so they read as a single piece of glass — not two stacked panes
-                    with a seam. Its height is exactly the measured panel height
-                    (--composer-h + --navbar-h, the same vars the transcript reserves),
+                    with a seam. Its height is exactly the measured floating stack,
                     pinned to the bottom (above the keyboard inset). The composer +
                     navbar above it are made transparent (no own backdrop-filter), so
                     there's ONE blur context and no dividing line. zIndex 1 sits it
@@ -3015,7 +2900,7 @@ export function App({
                         // A flex ROW below the in-flow AppBar (order 1): composer column
                         // (left, fixed width) | drag splitter | transcript (right, flex:1).
                         // The transcript is a normal in-flow column here — NOT the absolute
-                        // overlay — so it reserves no --composer-h and the composer no longer
+                        // overlay — so it reserves no floating-stack inset and the composer no longer
                         // floats over it. The AppStatusBar is a full-width footer (order 2).
                         <>
                             <Suspense fallback={null}><DesktopWorkspace
@@ -3077,15 +2962,9 @@ export function App({
                                 // content clears it at rest: the status-bar strip in
                                 // mobile mode, the full navbar height in desktop mode.
                                 topInset={navbarAtBottom ? "env(safe-area-inset-top, 0px)" : "var(--navbar-h, 0px)"}
-                                // Reserve the floating bottom bar height (measured into CSS
-                                // vars) so the newest message clears the glass at rest:
-                                // composer+navbar in mobile mode, composer-only in desktop
-                                // mode (the navbar is reserved at the top instead).
-                                bottomInset={
-                                    navbarAtBottom
-                                        ? "calc(var(--transcript-composer-h, 0px) + var(--navbar-h, 0px))"
-                                        : "var(--transcript-composer-h, 0px)"
-                                }
+                                // The geometry owner has already resolved whether
+                                // this is Composer alone or Composer + navbar.
+                                bottomInset="var(--transcript-bottom-inset, 0px)"
                             />
                         </Box>
                         {/* A flex:1 spacer takes the place the (now absolute) transcript
@@ -3102,6 +2981,8 @@ export function App({
                             sx={{
                                 order: navbarAtBottom ? 1 : 2,
                                 minWidth: 0,
+                                width: "100%",
+                                alignSelf: "stretch",
                                 // Lift the composer content above the frosted slab behind
                                 // it (zIndex 1) in BOTH modes — the composer is transparent,
                                 // the slab is the glass, the transcript scrolls under both.

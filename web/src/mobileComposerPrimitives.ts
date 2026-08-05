@@ -14,6 +14,9 @@ export const mobileComposerPanelHeaderMinHeight = 44;
 /** Quiet separation between a focused Mobile composer and the native keyboard. */
 export const mobileComposerKeyboardGap = 6;
 
+/** The one outer rhythm shared by Transcript, status, Plan, Pending, and input. */
+export const mobileComposerStackGap = 4;
+
 /** One coordinated timeline for the Mobile composer's focus expansion and
  * collapse. Keep adjacent surfaces on this curve so dismissing the keyboard
  * reads as one card settling, rather than several independently clipped rows. */
