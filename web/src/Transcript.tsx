@@ -4630,8 +4630,12 @@ export function Transcript({
           // `--awaiting-h` (set by TurnStatusOverlay, 0 when absent) RESERVES the
           // floating status pill's height so the newest message clears it at rest
           // while the pill stays pinned above the composer (sticky-not-covering).
+          // `bottomInset` already includes the Composer workspace's measured
+          // height, including its single 4px boundary token. Adding another
+          // transcript gutter here doubled the visible gap whenever the latest
+          // row re-anchored after context clear or disclosure changes.
           pb: bottomInset
-            ? `calc(${bottomInset} + var(--awaiting-h, 0px) + 8px)`
+            ? `calc(${bottomInset} + var(--awaiting-h, 0px))`
             : `calc(var(--awaiting-h, 0px) + 12px)`,
           // Reading prose line-height. The markdown paragraph renderer inherits
           // this (MarkdownImpl `p`); headings + code keep their own fixed
