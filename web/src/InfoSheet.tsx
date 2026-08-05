@@ -453,6 +453,8 @@ function ProviderUsageCard({ usage, schedule, now, onUsageChanged }: {
   const title = ACCOUNT_PROVIDER_NAMES[usage.provider] ?? usage.provider;
   const statusLabel = plan
     ? plan.toUpperCase()
+    : usage.provider === "deepseek" && usage.status === "available"
+    ? "API"
     : usage.status === "available"
     ? "LIVE"
     : usage.status === "session-only"
