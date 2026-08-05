@@ -1,5 +1,6 @@
 // Shared "liquid glass" frosted surfaces — the SINGLE source for the floating
-// overlays' material (the turn-status pill + the permission overlay). iOS-style
+// overlays' material (Transcript/Composer turn-status pills + the permission
+// overlay). iOS-style
 // vibrancy: a heavy blur+saturate+brightness for the lens, a soft drop shadow to
 // float it, and (for the pill) a bottom inner shadow for glass thickness + a flat
 // tone tint. Legibility comes from the blur, not opacity.

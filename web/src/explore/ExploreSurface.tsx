@@ -433,6 +433,7 @@ export interface ExploreTranscriptProps {
   cwd: string;
   loading: boolean;
   connected: boolean;
+  judging?: boolean | undefined;
   topInset?: string | undefined;
   bottomInset?: string | undefined;
   onScrollableChange?: ((scrollable: boolean) => void) | undefined;
@@ -1975,6 +1976,7 @@ export function ExploreTranscript(
               cwd={props.cwd}
               loading={props.loading}
               connected={props.connected}
+              judging={props.judging}
               topInset={props.topInset}
               bottomInset={props.bottomInset}
               onScrollableChange={props.onScrollableChange}

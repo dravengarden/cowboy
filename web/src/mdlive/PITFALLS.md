@@ -1050,13 +1050,19 @@ Desktop Vim + IME checks:
     retry. Keep Draft/Queue row editing separate: its primary action finishes
     the edit transaction rather than delivering that pending item.
 
-49. **The floating Composer stack has one border-box geometry owner.** Status,
-    Permission, Plan, Queue/Draft, attachments, and the primary Composer stay in
-    one ordinary flex column with one 4px rhythm. Status and Permission must not
-    return to absolute positioning or publish a root-level height variable:
-    separate mount/cleanup timing lets Transcript combine stale reservations
-    after context clear, panel editing, and keyboard dismissal. App measures the
-    complete stack once and publishes one settled Transcript bottom inset.
+49. **The floating Composer stack has one border-box geometry owner.** Settled
+    actionable status, Permission, Plan, Queue/Draft, attachments, and the
+    primary Composer stay in one ordinary flex column with one 4px rhythm.
+    Transient judge progress is different: it belongs to the live Transcript
+    tail and must never mount a Composer stack slot. Its pill shares the settled
+    status pill's height and relies on the existing Transcript bottom inset, so
+    judge-progress removal and verdict-status insertion exchange the same visual
+    band without another reservation or a boundary jump. Settled Status and
+    Permission must not return to absolute positioning or publish a root-level
+    height variable: separate mount/cleanup timing lets Transcript combine stale
+    reservations after context clear, panel editing, and keyboard dismissal. App
+    measures the complete stack once and publishes one settled Transcript bottom
+    inset.
     Observe the AppBar and Composer with `ResizeObserver`'s `border-box`, not its
     default content box: iOS keyboard dismissal restores safe-area padding while
     leaving the content box unchanged, so the old observer kept a 44px navbar

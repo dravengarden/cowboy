@@ -15,66 +15,20 @@ import {
 import { openJudgeInspector } from "./JudgeInspector";
 import { confirmationHaptic } from "./haptic";
 import { frostedPill } from "./frostedGlass";
+import { TURN_STATUS_PILL_MIN_HEIGHT } from "./floatingOverlayPolicy";
+import {
+  deriveTurnStatusKind,
+  type TurnStatusKind,
+} from "./turnStatusPolicy";
 
-type Kind =
-  | "offline"
-  | "judging"
-  | "awaiting"
-  | "paused"
-  | "done"
-  | "interrupted"
-  | "error";
 type PaletteKey = "primary" | "success" | "warning" | "error" | "info";
 
-// The unified "turn status" overlay (replaces the old AwaitingBar): one floating
-// frosted pill above the composer that surfaces a NON-RUNNING turn-end state and
-// its actions. Hidden while the agent is working (busy) or on a fresh session —
-// it only appears when something needs your attention. Colour-coded per the locked
-// palette: awaiting=purple, done=green, interrupted=amber, error=red.
-//
-// `awaiting`/`done` come from the confirm-detect judge; `interrupted`/`error` from
-// the session status.
-
-function deriveKind(args: {
-  offline: boolean;
-  status: Status;
-  working: boolean;
-  judging: boolean;
-  awaitingUser: boolean;
-  done: boolean;
-  paused: boolean;
-}): Kind | null {
-  const { offline, status, working, judging, awaitingUser, done, paused } = args;
-  // Connection loss outranks everything: while the socket is down the `status` is
-  // stale (we can't know the real turn state), so surface "Reconnecting…" instead —
-  // even mid-turn — so you're never silently typing into a dead socket.
-  if (offline) return "offline";
-  if (status === "busy" || status === "starting") return null; // working / fresh
-  // Working == the ACP turn in flight (Zed's `Generating`). The working spinner owns
-  // the slot; do NOT show a settled pill (Queue paused / done / awaiting) beside it.
-  // `working` already excludes the awaiting-user case, so "Waiting for your reply"
-  // still shows when the turn has truly ended.
-  if (working) return null;
-  if (status === "crashed") return "error";
-  if (status === "interrupted") return "interrupted";
-  // The async judge is in flight: show the loading pill INSTEAD of the provisional
-  // "awaiting" (which the daemon sets at the same moment) so it doesn't flash
-  // purple then settle.
-  if (judging) return "judging";
-  if (awaitingUser) return "awaiting";
-  // User manually paused the queue → surface a prominent "Resume" pill, the same
-  // affordance as an interrupted turn (Stop is itself a kind of interrupt). Shown
-  // once the turn settles (busy returns null above, like every other state), with
-  // the ⏸ toggle covering the mid-turn case. Outranks `done` so a finished-but-
-  // -held session shows how to release it, not just "Task complete".
-  if (paused) return "paused";
-  if (done) return "done";
-  return null;
-}
-
-const KIND_META: Record<Kind, { color: PaletteKey; label: string }> = {
+// The settled/actionable half of turn status. Transient judge progress belongs
+// to the live Transcript tail; this Composer-owned pill appears only when the
+// verdict or session state leaves the user something persistent to understand
+// or act on.
+const KIND_META: Record<TurnStatusKind, { color: PaletteKey; label: string }> = {
   offline: { color: "warning", label: "Reconnecting…" },
-  judging: { color: "info", label: "Judging…" },
   awaiting: { color: "primary", label: "Waiting for your reply" },
   done: { color: "success", label: "Task complete" },
   interrupted: { color: "warning", label: "Turn interrupted" },
@@ -120,7 +74,7 @@ export function TurnStatusOverlay({
     return () => globalThis.clearTimeout(t);
   }, [connected]);
 
-  const kind = deriveKind({
+  const kind = deriveTurnStatusKind({
     offline,
     status,
     working,
@@ -326,14 +280,14 @@ export function TurnStatusOverlay({
             // Resume / Send) sits with a uniform ~4px inset instead of the old
             // lopsided pt0.75/pb1 gap that left it floating with ugly margin.
             py: 0.5,
-            minHeight: 36,
+            minHeight: TURN_STATUS_PILL_MIN_HEIGHT,
             borderRadius: 999,
             // Shared with PermissionOverlay so every occupant of this floating
             // slot has the same glass depth and boundary-safe elevation.
             ...frostedPill(t, tone(t).main),
           })}
         >
-          {(kind === "judging" || kind === "offline") && (
+          {kind === "offline" && (
             <CircularProgress
               size={14}
               thickness={5}
