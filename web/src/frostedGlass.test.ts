@@ -59,6 +59,12 @@ Deno.test("frosted pill elevation stays close to the floating surface", () => {
   assertEquals(FROSTED_PILL_DROP_SHADOW_GEOMETRY, "0 5px 16px -10px");
 });
 
+Deno.test("permission actions follow the global reading font scale", () => {
+  assertEquals(permissionSource.includes('fontSize: "1rem"'), true);
+  assertEquals(permissionSource.includes('fontSize: "0.875rem"'), true);
+  assertEquals(permissionSource.includes("fontSize: { xs: 15, sm: 14 }"), false);
+});
+
 Deno.test("a context reset becomes a full conversation start until new content", () => {
   assertEquals(
     transcriptSource.includes("data-transcript-context-boundary"),

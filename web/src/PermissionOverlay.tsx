@@ -78,6 +78,7 @@ export function PermissionOverlay({
         pointerEvents: "none",
         zIndex: 3,
         fontFamily: "var(--cowboy-reading-font, inherit)",
+        fontSize: "1rem",
         "& .MuiTypography-root, & .MuiButton-root": {
           fontFamily: "inherit",
         },
@@ -150,7 +151,7 @@ export function PermissionOverlay({
               borderRadius: 1,
               bgcolor: "action.hover",
               fontFamily: "inherit",
-              fontSize: 13,
+              fontSize: "0.875rem",
               whiteSpace: "pre-wrap",
               wordBreak: "break-word",
             }}
@@ -179,7 +180,7 @@ export function PermissionOverlay({
                     minHeight: { xs: 48, sm: 40 },
                     py: 0.75,
                     textTransform: "none",
-                    fontSize: { xs: 15, sm: 14 },
+                    fontSize: { xs: "1rem", sm: "0.9375rem" },
                     lineHeight: 1.35,
                   }}
                 >

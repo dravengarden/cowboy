@@ -107,8 +107,7 @@ fn startup_full_access_mode(provider_id: &str) -> Option<&'static str> {
         return Some("bypassPermissions");
     }
     match provider_id {
-        "gemini" => Some("yolo"),
-        "reasonix-deepseek" => Some("bypassPermissions"),
+        "gemini" | "reasonix-deepseek" => Some("yolo"),
         _ => None,
     }
 }
@@ -117,8 +116,8 @@ fn startup_full_access_mode(provider_id: &str) -> Option<&'static str> {
 mod startup_mode_tests {
     use super::{
         ResumeMethod, StartupPhase, StartupTimeout, codex_full_access_available,
-        codex_full_access_selected, select_resume_method, session_config_value,
-        startup_full_access_mode,
+        codex_full_access_selected, reasonix_yolo_selected, reasonix_yolo_tool_permission,
+        select_resume_method, session_config_value, startup_full_access_mode,
     };
     use agent_client_protocol::schema::v1::{
         SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption,
@@ -135,10 +134,7 @@ mod startup_mode_tests {
             Some("bypassPermissions")
         );
         assert_eq!(startup_full_access_mode("gemini"), Some("yolo"));
-        assert_eq!(
-            startup_full_access_mode("reasonix-deepseek"),
-            Some("bypassPermissions")
-        );
+        assert_eq!(startup_full_access_mode("reasonix-deepseek"), Some("yolo"));
         assert_eq!(startup_full_access_mode("codex"), None);
     }
 
@@ -165,6 +161,42 @@ mod startup_mode_tests {
         assert!(!codex_full_access_selected(&restricted));
         assert!(!codex_full_access_available(&full_access));
         assert!(codex_full_access_selected(&full_access));
+    }
+
+    #[test]
+    fn reasonix_yolo_tracks_its_tool_approval_config() {
+        let choices = vec![
+            SessionConfigSelectOption::new("ask", "Ask"),
+            SessionConfigSelectOption::new("yolo", "Yolo"),
+        ];
+        let ask = vec![SessionConfigOption::select(
+            "tool_approval",
+            "Tool Approval",
+            "ask",
+            choices.clone(),
+        )];
+        let yolo = vec![SessionConfigOption::select(
+            "tool_approval",
+            "Tool Approval",
+            "yolo",
+            choices,
+        )];
+
+        assert!(!reasonix_yolo_selected(&ask));
+        assert!(reasonix_yolo_selected(&yolo));
+    }
+
+    #[test]
+    fn reasonix_yolo_only_absorbs_ordinary_coding_tool_approvals() {
+        assert!(reasonix_yolo_tool_permission(
+            &serde_json::json!({"title":"Bash=git status"})
+        ));
+        assert!(reasonix_yolo_tool_permission(
+            &serde_json::json!({"title":"Edit src/main.rs"})
+        ));
+        assert!(!reasonix_yolo_tool_permission(
+            &serde_json::json!({"title":"Remember global preference"})
+        ));
     }
 
     #[test]
@@ -301,6 +333,41 @@ fn codex_full_access_selected(options: &[SessionConfigOption]) -> bool {
     })
 }
 
+fn reasonix_yolo_selected(options: &[SessionConfigOption]) -> bool {
+    options.iter().any(|option| match &option.kind {
+        SessionConfigKind::Select(select) => {
+            select.current_value.0.as_ref() == "yolo"
+                && config_select_options_contain(&select.options, "yolo")
+        }
+        #[allow(unreachable_patterns)]
+        _ => false,
+    })
+}
+
+fn reasonix_yolo_tool_permission(tool_call: &serde_json::Value) -> bool {
+    let title = tool_call
+        .get("title")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .trim_start()
+        .to_ascii_lowercase();
+    [
+        "bash",
+        "edit",
+        "write",
+        "multi_edit",
+        "move",
+        "delete",
+        "mkdir",
+    ]
+    .iter()
+    .any(|tool| {
+        title == *tool
+            || title.starts_with(&format!("{tool} "))
+            || title.starts_with(&format!("{tool}="))
+    })
+}
+
 fn config_select_options_contain(options: &SessionConfigSelectOptions, value: &str) -> bool {
     match options {
         SessionConfigSelectOptions::Ungrouped(options) => options
@@ -412,6 +479,11 @@ struct ClientState {
     /// from blocking an explicitly unrestricted Cowboy session. This is never
     /// enabled for a restricted mode or another provider.
     codex_full_access: AtomicBool,
+    /// Reasonix's Tool Approval config is YOLO. Reasonix may replay a stale
+    /// ordinary tool request while restoring an ACP session; absorb only the
+    /// normal coding-tool class here. Fresh human reviews (notably durable
+    /// memory decisions) remain visible even in YOLO.
+    reasonix_yolo: AtomicBool,
     /// While `true`, incoming `session/update` notifications are dropped rather
     /// than pushed to the Hub. Set only around a `session/load` resume: the
     /// agent replays the whole prior conversation as updates, but cowboy's own
@@ -602,6 +674,7 @@ async fn agent_main(
         pending: Mutex::new(HashMap::new()),
         capture: Mutex::new(None),
         codex_full_access: AtomicBool::new(false),
+        reasonix_yolo: AtomicBool::new(false),
         suppress_updates: AtomicBool::new(false),
     });
 
@@ -638,7 +711,11 @@ async fn agent_main(
                 // continue through the human permission path below.
                 let system_session = perm_state.sink.session_is_system(&perm_state.session_id);
                 let codex_full_access = perm_state.codex_full_access.load(Ordering::SeqCst);
-                if system_session || codex_full_access {
+                let tool_call =
+                    serde_json::to_value(&req.tool_call).unwrap_or(serde_json::Value::Null);
+                let reasonix_yolo = perm_state.reasonix_yolo.load(Ordering::SeqCst)
+                    && reasonix_yolo_tool_permission(&tool_call);
+                if system_session || codex_full_access || reasonix_yolo {
                     let allow = req
                         .options
                         .iter()
@@ -655,6 +732,7 @@ async fn agent_main(
                                 session = %perm_state.session_id,
                                 system_session,
                                 codex_full_access,
+                                reasonix_yolo,
                                 "auto-approving permission"
                             );
                             RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
@@ -671,8 +749,6 @@ async fn agent_main(
                 // correlation remains tied to the wire request.
                 let request_id = serde_json::to_string(responder.id())
                     .unwrap_or_else(|_| responder.id().to_string());
-                let tool_call =
-                    serde_json::to_value(&req.tool_call).unwrap_or(serde_json::Value::Null);
                 let options = serde_json::to_value(&req.options).unwrap_or(serde_json::Value::Null);
 
                 let (tx, rx) = oneshot::channel::<Option<String>>();
@@ -971,6 +1047,17 @@ async fn run_session(
             Ordering::SeqCst,
         );
     }
+    if provider_id == "reasonix-deepseek" {
+        state.reasonix_yolo.store(
+            config_options
+                .as_ref()
+                .is_some_and(|options| reasonix_yolo_selected(options))
+                || modes
+                    .as_ref()
+                    .is_some_and(|modes| modes.current_mode_id.0.as_ref() == "yolo"),
+            Ordering::SeqCst,
+        );
+    }
 
     // Codex ACP exposes its approval preset as a config option instead of a
     // session mode. Default new/revived Codex panels to Full Access when the
@@ -1018,6 +1105,9 @@ async fn run_session(
                             }),
                         },
                     );
+                    if provider_id == "reasonix-deepseek" && want == "yolo" {
+                        state.reasonix_yolo.store(true, Ordering::SeqCst);
+                    }
                 }
                 Err(e) => {
                     tracing::warn!(mode = want, error = ?e, "setting full-access startup mode failed");
@@ -1241,6 +1331,7 @@ async fn run_session(
                 let sid = session_id.clone();
                 let acp = acp_id.clone();
                 let state = Arc::clone(state);
+                let is_reasonix = provider_id == "reasonix-deepseek";
                 cx.clone().spawn(async move {
                     let config_value = match session_config_value(&value) {
                         Ok(value) => value,
@@ -1259,6 +1350,12 @@ async fn run_session(
                             if config_id == CODEX_FULL_ACCESS_CONFIG_ID {
                                 let selected = codex_full_access_selected(&response.config_options);
                                 state.codex_full_access.store(selected, Ordering::SeqCst);
+                            }
+                            if is_reasonix {
+                                state.reasonix_yolo.store(
+                                    reasonix_yolo_selected(&response.config_options),
+                                    Ordering::SeqCst,
+                                );
                             }
                             match serde_json::to_value(response.config_options) {
                                 Ok(options) => sink.set_config_options(&sid, options),
