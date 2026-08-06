@@ -429,8 +429,13 @@ const CLAUDE_SHARED_SETTINGS_KEYS: &[&str] = &["enabledPlugins", "extraKnownMark
 /// Link one shared entry into an isolated home, leaving real files untouched.
 ///
 /// A missing source is not an error: the ordinary home may simply not have that
-/// entry yet. An existing real file or directory at the destination is left
-/// alone, because provider-owned state must never be replaced by shared state.
+/// entry yet. An existing real file at the destination is left alone, because
+/// provider-owned state must never be replaced by shared state.
+///
+/// A directory the runtime pre-created is the common case rather than the
+/// exception: Codex writes `skills/.system` into every home it opens, so
+/// refusing the whole directory would mean the user's skills never arrive.
+/// Share its entries instead, which keeps the provider's own scaffolding.
 fn link_shared_entry(isolated: &Path, ordinary: &Path, name: &str) -> std::io::Result<()> {
     let source = ordinary.join(name);
     if !source.exists() {
@@ -439,11 +444,30 @@ fn link_shared_entry(isolated: &Path, ordinary: &Path, name: &str) -> std::io::R
     let destination = isolated.join(name);
     match std::fs::symlink_metadata(&destination) {
         Ok(metadata) if metadata.file_type().is_symlink() => std::fs::remove_file(&destination)?,
+        Ok(metadata) if metadata.is_dir() && source.is_dir() => {
+            return link_shared_children(&destination, &source);
+        }
         Ok(_) => return Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),
     }
     std::os::unix::fs::symlink(&source, &destination)
+}
+
+/// Link each child of a shared directory, never shadowing provider-owned state.
+fn link_shared_children(destination: &Path, source: &Path) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let child = destination.join(entry.file_name());
+        match std::fs::symlink_metadata(&child) {
+            Ok(metadata) if metadata.file_type().is_symlink() => std::fs::remove_file(&child)?,
+            Ok(_) => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        std::os::unix::fs::symlink(entry.path(), &child)?;
+    }
+    Ok(())
 }
 
 /// Copy the allowlisted `config.toml` tables from the ordinary Codex home.
@@ -994,10 +1018,49 @@ mod tests {
 
         let isolated = super::prepare_codex_deepseek_home_at(&root).expect("prepare DeepSeek home");
 
-        // A real provider-owned directory is never replaced by a shared link.
+        // A real provider-owned entry is never replaced by a shared link.
         assert!(isolated.join("skills/owned.md").is_file());
         assert!(
             !std::fs::symlink_metadata(isolated.join("skills"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+
+        std::fs::remove_dir_all(&root).expect("remove isolated test home");
+    }
+
+    #[test]
+    fn codex_deepseek_home_shares_skills_beside_the_runtime_scaffolding() {
+        // Codex writes skills/.system into every home it opens, so the shared
+        // directory is always pre-created; refusing it outright shared nothing.
+        let root = isolation_test_root("cowboy-codex-deepseek-skills");
+        let openai_home = root.join(".codex");
+        std::fs::create_dir_all(openai_home.join("skills/omega")).expect("create shared skill");
+        std::fs::create_dir_all(openai_home.join("skills/.system"))
+            .expect("create ordinary system");
+        let scaffolding =
+            root.join(".local/state/cowboy/providers/codex-deepseek/codex-home/skills/.system");
+        std::fs::create_dir_all(&scaffolding).expect("create provider scaffolding");
+        std::fs::write(scaffolding.join("marker"), "provider owned").expect("write marker");
+
+        let isolated = super::prepare_codex_deepseek_home_at(&root).expect("prepare DeepSeek home");
+
+        // The user's skill arrives even though the directory already existed.
+        assert!(isolated.join("skills/omega").is_dir());
+        assert!(
+            std::fs::symlink_metadata(isolated.join("skills/omega"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        // The runtime's own scaffolding is kept, not shadowed by the shared one.
+        assert_eq!(
+            std::fs::read_to_string(isolated.join("skills/.system/marker")).unwrap(),
+            "provider owned"
+        );
+        assert!(
+            !std::fs::symlink_metadata(isolated.join("skills/.system"))
                 .unwrap()
                 .file_type()
                 .is_symlink()
