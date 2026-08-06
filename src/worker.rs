@@ -640,22 +640,31 @@ fn handle_command(
                 return command_ack(shared, command_id, true, None);
             }
         };
+    // Publish the turn edge before handing the prompt to the ACP thread. Some
+    // agents can complete a trivial prompt synchronously; sending first lets
+    // their TurnEnded race ahead of TurnStarted and leaves the controller busy.
+    if let Some(turn_id) = turn.as_ref() {
+        shared.emit(RuntimeEvent::TurnStarted {
+            turn_id: turn_id.clone(),
+            command_id: command_id.clone(),
+        });
+    }
     let sent = match (agent_command, cmd_tx.as_ref()) {
         (Some(command), Some(tx)) => tx.send(command).is_ok(),
         (Some(_), None) => false,
         (None, _) => true,
     };
     if sent {
-        if let Some(turn_id) = turn {
-            shared.emit(RuntimeEvent::TurnStarted {
-                turn_id,
-                command_id: command_id.clone(),
-            });
-        }
         command_ack(shared, command_id, true, None)
     } else {
         // A reconnect may safely retry a command that never reached ACP.
         shared.unmark_command(&command_id);
+        if turn.is_some() {
+            shared.emit(RuntimeEvent::Status {
+                state: WorkerState::Crashed,
+                detail: Some("ACP command loop is closed".to_owned()),
+            });
+        }
         command_ack(
             shared,
             command_id,
@@ -759,6 +768,33 @@ mod tests {
         );
         assert!(matches!(rx.try_recv(), Ok(AgentCommand::Cancel)));
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn prompt_turn_starts_before_acp_can_receive_it() {
+        let (shared, _rx) = shared();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut tx = Some(tx);
+        let ack = handle_command(
+            &shared,
+            &mut tx,
+            WorkerCommand::Prompt {
+                command_id: "cmd-1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+                content: vec![serde_json::json!({"type": "text", "text": "hello"})],
+                cmid: None,
+            },
+        );
+
+        assert!(matches!(ack, Frame::CommandAck { accepted: true, .. }));
+        let snapshot = shared.snapshot();
+        assert_eq!(snapshot.current_turn_id.as_deref(), Some("turn-1"));
+        assert_eq!(snapshot.state, WorkerState::Busy);
+        assert!(matches!(rx.try_recv(), Ok(AgentCommand::Prompt(..))));
+        assert!(matches!(
+            shared.outbox.lock().get(&1),
+            Some(RuntimeEvent::TurnStarted { turn_id, .. }) if turn_id == "turn-1"
+        ));
     }
 
     #[test]
