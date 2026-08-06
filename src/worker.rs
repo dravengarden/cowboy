@@ -100,10 +100,10 @@ impl Shared {
                 } else {
                     *state
                 };
-                if matches!(
-                    state,
-                    WorkerState::Running | WorkerState::Exited | WorkerState::Crashed
-                ) {
+                // A late startup/idle Running edge can arrive after a prompt
+                // was accepted. Only TurnEnded owns clean turn completion;
+                // process death may clear it without that edge.
+                if matches!(state, WorkerState::Exited | WorkerState::Crashed) {
                     snapshot.current_turn_id = None;
                 }
             }
@@ -795,6 +795,23 @@ mod tests {
             shared.outbox.lock().get(&1),
             Some(RuntimeEvent::TurnStarted { turn_id, .. }) if turn_id == "turn-1"
         ));
+    }
+
+    #[test]
+    fn stale_running_status_does_not_clear_active_turn() {
+        let (shared, _rx) = shared();
+        shared.emit(RuntimeEvent::TurnStarted {
+            turn_id: "turn-1".to_owned(),
+            command_id: "cmd-1".to_owned(),
+        });
+        shared.emit(RuntimeEvent::Status {
+            state: WorkerState::Running,
+            detail: None,
+        });
+
+        let snapshot = shared.snapshot();
+        assert_eq!(snapshot.current_turn_id.as_deref(), Some("turn-1"));
+        assert_eq!(snapshot.state, WorkerState::Running);
     }
 
     #[test]
