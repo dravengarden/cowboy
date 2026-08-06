@@ -65,6 +65,7 @@ import {
   WarningAmberRounded,
 } from "@mui/icons-material";
 import { providerPresentation } from "./providerPresentation";
+import { providerVisual } from "./providerVisual";
 import { CLAUDE_VERBS } from "./claudeVerbs";
 import { Markdown } from "./Markdown";
 import { attachmentDisplayParts } from "./attachments";
@@ -793,18 +794,17 @@ const CLAUDE_SPINNER_FRAMES = ["·", "✢", "*", "✶", "✻", "✽"];
 const CLAUDE_FRAME_MS = 200;
 
 // Claude-code indicator: a character-level recreation of Claude Code's own
-// status line — its morphing star glyph (CLAUDE_SPINNER_FRAMES @ 200ms, in CC's
-// terracotta brand fill #D97757) + a shimmer-swept verb that rotates through the
-// playful 黑话 bank (~3.5s) and a literal "…". Under `prefers-reduced-motion` the
+// status line — its morphing star glyph (CLAUDE_SPINNER_FRAMES @ 200ms) + a
+// provider-aware shimmer that rotates through the playful 黑话 bank (~3.5s) and
+// a literal "…". Standard Claude stays terracotta; DeepSeek Claude uses the
+// shared DeepSeek blue with a violet family accent. Under reduced motion the
 // glyph freezes on frame 0 ("·") and the verb shimmer collapses to a static
 // muted word (CC freezes the glyph the same way — `reducedMotion ? 0 : …`).
 // Verb rotation is content, not motion, so it stays.
-function ClaudeThinking(): React.JSX.Element {
+function ClaudeThinking({ provider }: { provider: string }): React.JSX.Element {
   const theme = useTheme();
   const muted = theme.palette.text.secondary;
-  // Claude Code's own terracotta — this indicator is Claude's branded "working"
-  // personality (its star glyph + jargon verbs), so it keeps the brand colour.
-  const accent = "#D97757";
+  const visual = providerVisual(provider, theme.palette.mode);
   const reducedMotion = globalThis.matchMedia?.(
     "(prefers-reduced-motion: reduce)",
   ).matches;
@@ -843,7 +843,7 @@ function ClaudeThinking(): React.JSX.Element {
           fontSize: 14,
           lineHeight: 1,
           fontWeight: 700,
-          color: accent,
+          color: visual.primary,
           // Monospace + tabular so the glyph swap doesn't shift the verb.
           fontFamily:
             "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
@@ -857,7 +857,7 @@ function ClaudeThinking(): React.JSX.Element {
           fontWeight: 500,
           letterSpacing: 0.2,
           background:
-            `linear-gradient(90deg, ${muted} 0%, ${muted} 40%, ${accent} 50%, ${muted} 60%, ${muted} 100%)`,
+            `linear-gradient(90deg, ${muted} 0%, ${muted} 34%, ${visual.primary} 46%, ${visual.secondary} 54%, ${muted} 66%, ${muted} 100%)`,
           backgroundSize: "200% 100%",
           WebkitBackgroundClip: "text",
           backgroundClip: "text",
@@ -877,7 +877,7 @@ function ClaudeThinking(): React.JSX.Element {
   );
 }
 
-function CodexThinking(): React.JSX.Element {
+function CodexThinking({ provider }: { provider: string }): React.JSX.Element {
   const theme = useTheme();
   const reducedMotion = globalThis.matchMedia?.(
     "(prefers-reduced-motion: reduce)",
@@ -896,8 +896,7 @@ function CodexThinking(): React.JSX.Element {
     phraseIndex % CLAUDE_VERBS.length
   ] ?? "Thinking";
   const muted = theme.palette.text.secondary;
-  const blue = theme.palette.mode === "dark" ? "#8FA8FF" : "#4F6BED";
-  const mint = theme.palette.mode === "dark" ? "#62D6BC" : "#168B78";
+  const visual = providerVisual(provider, theme.palette.mode);
   return (
     <Stack
       direction="row"
@@ -915,7 +914,7 @@ function CodexThinking(): React.JSX.Element {
           fontWeight: 550,
           letterSpacing: "0.015em",
           background:
-            `linear-gradient(100deg, ${muted} 0%, ${muted} 24%, ${blue} 44%, ${mint} 56%, ${muted} 74%, ${muted} 100%)`,
+            `linear-gradient(100deg, ${muted} 0%, ${muted} 24%, ${visual.primary} 44%, ${visual.secondary} 56%, ${muted} 74%, ${muted} 100%)`,
           backgroundSize: "220% 100%",
           WebkitBackgroundClip: "text",
           backgroundClip: "text",
@@ -962,8 +961,12 @@ function ThinkingIndicator({
 }: {
   provider: string;
 }): React.JSX.Element {
-  if (provider === "claude-code" || provider === "claude-deepseek") return <ClaudeThinking />;
-  if (provider === "codex" || provider === "codex-deepseek") return <CodexThinking />;
+  if (provider === "claude-code" || provider === "claude-deepseek") {
+    return <ClaudeThinking provider={provider} />;
+  }
+  if (provider === "codex" || provider === "codex-deepseek") {
+    return <CodexThinking provider={provider} />;
+  }
   return <DefaultThinking />;
 }
 
@@ -1055,11 +1058,7 @@ function CompactingWidget({
 }): React.JSX.Element {
   const theme = useTheme();
   const muted = theme.palette.text.secondary;
-  const accent = provider === "claude-code"
-    ? "#D97757"
-    : provider === "claude-deepseek"
-    ? "#4D6BFE"
-    : theme.palette.primary.main;
+  const accent = providerVisual(provider, theme.palette.mode).primary;
   const reducedMotion = globalThis.matchMedia?.(
     "(prefers-reduced-motion: reduce)",
   ).matches;
