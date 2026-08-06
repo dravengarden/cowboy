@@ -135,6 +135,7 @@ function UsageProviderSummary(
   { provider }: { provider: UsageWidgetProvider },
 ): React.JSX.Element {
   const deepseek = provider.kind === "deepseek";
+  const width = deepseek ? 164 : 156;
   const primary = deepseek
     ? compactCny(provider.balanceCny)
     : `${String(provider.remaining)}%`;
@@ -143,9 +144,10 @@ function UsageProviderSummary(
     : `Weekly · resets ${shortResetTime(provider.resetsAt)}`;
   return (
     <Box
+      data-usage-provider={provider.kind}
       sx={{
-        width: deepseek ? 208 : 156,
-        minWidth: deepseek ? 208 : 156,
+        width,
+        minWidth: width,
         px: 0.75,
         py: 0.25,
         textAlign: "left",
@@ -153,7 +155,7 @@ function UsageProviderSummary(
         bgcolor: "action.hover",
       }}
     >
-      <Stack direction="row" justifyContent="space-between" spacing={0.75}>
+      <Stack direction="row" spacing={0.55}>
         <Typography variant="caption" color="text.secondary" fontWeight={700} noWrap>
           {provider.label}
         </Typography>
@@ -926,7 +928,7 @@ export function DesktopTopBarControls({
   const usageMinWidth = snapshot === null
     ? 132
     : widgetProviders.reduce(
-      (width, provider) => width + (provider.kind === "deepseek" ? 208 : 156),
+      (width, provider) => width + (provider.kind === "deepseek" ? 164 : 156),
       0,
     ) + Math.max(0, widgetProviders.length - 1) * 4 + 44;
   const controlsMinWidth = 190 + usageMinWidth +
