@@ -1115,3 +1115,12 @@ Desktop Vim + IME checks:
     the primary input and pending-row editor. This is a paint-only alignment: do
     not add focus handlers, editor remounts, controlled values, or custom touch
     handling.
+
+52. **Touch-only pointers must not retain synthetic-hover tooltips.** MUI's
+    `disableTouchListener` prevents its long-press path, but iOS WebKit can still
+    synthesize mouse hover after tapping an icon and leave the tooltip visibly
+    stuck. Keep focus and touch listeners disabled globally, and also disable
+    the hover listener when `(hover: hover)` does not match. Real desktop hover
+    keeps tooltips; touch controls remain named by their `aria-label`. Do not
+    solve this with pointer/touch interception around the composer because that
+    would compete with UIKit's native selection and paste sequence.
