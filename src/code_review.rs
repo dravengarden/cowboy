@@ -378,7 +378,11 @@ impl CodeProvider for LocalCodeProvider {
     }
 
     fn directory(&self, relative: &str, limit: usize) -> Result<CodeTreePage, String> {
-        let relative_path = safe_relative(relative)?;
+        let relative_path = if relative.is_empty() {
+            PathBuf::new()
+        } else {
+            safe_relative(relative)?
+        };
         let local = crate::files::directory(&self.root, relative, limit);
         let (mut entries, mut truncated) = if let Ok(page) = local {
             page
@@ -1259,7 +1263,20 @@ mod tests {
         let dir = scratch("files");
         let provider = LocalCodeProvider::new(&dir);
         assert_eq!(provider.file("tracked.rs").unwrap().text, "fn old() {}\n");
+        assert!(provider.file("").is_err());
         assert!(provider.file("../secret").is_err());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn directory_accepts_empty_path_as_worktree_root() {
+        let dir = scratch("directory-root");
+        let provider = LocalCodeProvider::new(&dir);
+        let root = provider.directory("", 100).unwrap();
+
+        assert!(root.entries.iter().any(|entry| entry.name == "tracked.rs"));
+        assert!(provider.directory(".", 100).is_err());
+        assert!(provider.directory("../", 100).is_err());
         fs::remove_dir_all(dir).unwrap();
     }
 
