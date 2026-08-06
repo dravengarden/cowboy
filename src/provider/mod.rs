@@ -118,8 +118,9 @@ fn builtin_with_env_and_shell(
         &["-y", "@agentclientprotocol/claude-agent-acp"],
         &get_env,
     );
-    // Reuse only the adapter executable. Claude runtime state, model routing,
-    // credentials, history, plugins, and config remain provider-owned.
+    // Reuse the adapter executable, and the non-secret setup linked into the
+    // provider config dir. Model routing, credentials, history, and the rest of
+    // the Claude runtime state remain provider-owned.
     if get_env("COWBOY_ACP_CLAUDE_DEEPSEEK_CMD").is_none()
         && let Some(command) = get_env("COWBOY_ACP_CLAUDE_CODE_CMD")
     {
@@ -396,6 +397,127 @@ pub fn is_claude(id: &str) -> bool {
     matches!(id, "claude-code" | "claude-deepseek")
 }
 
+/// Entries a DeepSeek provider shares with the runtime's ordinary home.
+///
+/// A DeepSeek provider differs from its ordinary counterpart in exactly two
+/// ways: which endpoint it talks to, and whose credential it presents. Anything
+/// else the user set up should behave the same, so machine-wide guidance,
+/// skills, and installed plugins are shared rather than re-created.
+///
+/// This is an allowlist on purpose. A denylist would silently start leaking the
+/// day the runtime adds a new file that holds a secret.
+const CODEX_SHARED_ENTRIES: &[&str] = &["AGENTS.md", "skills", "plugins"];
+const CLAUDE_SHARED_ENTRIES: &[&str] = &["CLAUDE.md", "skills", "plugins"];
+
+/// Codex resolves a configured marketplace against a snapshot under this path.
+/// Only the snapshot directory is shared: the sibling lock and sync files stay
+/// per-home so two Codex processes never contend over one lock.
+const CODEX_SHARED_TMP_ENTRIES: &[&str] = &["marketplaces"];
+
+/// `config.toml` tables that carry setup rather than secrets.
+///
+/// `mcp_servers` is deliberately absent: an MCP entry can hold a token in its
+/// command, arguments, or headers.
+const CODEX_SHARED_CONFIG_TABLES: &[&str] = &["marketplaces", "plugins", "hooks"];
+
+/// `settings.json` keys that decide which plugins Claude Code loads.
+///
+/// The rest of that file stays private: it also carries model selection,
+/// permissions, and MCP entries that the provider must own or must not see.
+const CLAUDE_SHARED_SETTINGS_KEYS: &[&str] = &["enabledPlugins", "extraKnownMarketplaces"];
+
+/// Link one shared entry into an isolated home, leaving real files untouched.
+///
+/// A missing source is not an error: the ordinary home may simply not have that
+/// entry yet. An existing real file or directory at the destination is left
+/// alone, because provider-owned state must never be replaced by shared state.
+fn link_shared_entry(isolated: &Path, ordinary: &Path, name: &str) -> std::io::Result<()> {
+    let source = ordinary.join(name);
+    if !source.exists() {
+        return Ok(());
+    }
+    let destination = isolated.join(name);
+    match std::fs::symlink_metadata(&destination) {
+        Ok(metadata) if metadata.file_type().is_symlink() => std::fs::remove_file(&destination)?,
+        Ok(_) => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    std::os::unix::fs::symlink(&source, &destination)
+}
+
+/// Copy the allowlisted `config.toml` tables from the ordinary Codex home.
+///
+/// Codex needs both the marketplace/plugin tables and the shared snapshot
+/// directory before it reports a plugin as installed; neither alone is enough.
+fn shared_codex_config_tables(ordinary_home: &Path) -> String {
+    let Ok(existing) = std::fs::read_to_string(ordinary_home.join("config.toml")) else {
+        return String::new();
+    };
+    let mut copied = String::new();
+    let mut keeping = false;
+    for line in existing.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('[') {
+            let header = trimmed.trim_start_matches('[');
+            keeping = CODEX_SHARED_CONFIG_TABLES.iter().any(|table| {
+                header
+                    .strip_prefix(table)
+                    .is_some_and(|rest| rest.starts_with(['.', ']']))
+            });
+        }
+        if keeping {
+            copied.push_str(line);
+            copied.push('\n');
+        }
+    }
+    copied
+}
+
+/// Write the provider-owned `settings.json` that enables the shared plugins.
+///
+/// Claude Code keeps plugin enablement in `settings.json`, so linking
+/// `plugins/` alone leaves every plugin installed but unloaded. Only the
+/// enablement keys are copied; the file is regenerated on each launch so the
+/// two runtimes cannot drift apart.
+fn write_claude_shared_settings(isolated: &Path, ordinary: &Path) -> std::io::Result<()> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    let Ok(existing) = std::fs::read_to_string(ordinary.join("settings.json")) else {
+        return Ok(());
+    };
+    let Ok(serde_json::Value::Object(settings)) =
+        serde_json::from_str::<serde_json::Value>(&existing)
+    else {
+        return Ok(());
+    };
+    let shared: serde_json::Map<_, _> = CLAUDE_SHARED_SETTINGS_KEYS
+        .iter()
+        .filter_map(|key| {
+            settings
+                .get(*key)
+                .map(|value| ((*key).to_owned(), value.clone()))
+        })
+        .collect();
+    if shared.is_empty() {
+        return Ok(());
+    }
+    let rendered = serde_json::to_string_pretty(&serde_json::Value::Object(shared))
+        .map_err(std::io::Error::other)?;
+    let temporary = isolated.join(format!(".settings.json.{}", std::process::id()));
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .mode(0o600)
+        .open(&temporary)?;
+    file.write_all(rendered.as_bytes())?;
+    file.write_all(b"\n")?;
+    file.sync_all()?;
+    std::fs::rename(&temporary, isolated.join("settings.json"))
+}
+
 fn prepare_claude_deepseek_config_dir() -> std::io::Result<PathBuf> {
     let user_home = std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -443,6 +565,12 @@ fn prepare_claude_deepseek_config_dir_at(user_home: &Path) -> std::io::Result<Pa
         }
     }
     std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o700))?;
+
+    let ordinary = user_home.join(".claude");
+    for entry in CLAUDE_SHARED_ENTRIES {
+        link_shared_entry(&target, &ordinary, entry)?;
+    }
+    write_claude_shared_settings(&target, &ordinary)?;
     Ok(target)
 }
 
@@ -461,9 +589,27 @@ fn prepare_codex_deepseek_home_at(user_home: &Path) -> std::io::Result<PathBuf> 
     std::fs::create_dir_all(&target)?;
     std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o700))?;
 
+    let ordinary = user_home.join(".codex");
+    for entry in CODEX_SHARED_ENTRIES {
+        link_shared_entry(&target, &ordinary, entry)?;
+    }
+    let shared_tmp = target.join(".tmp");
+    std::fs::create_dir_all(&shared_tmp)?;
+    for entry in CODEX_SHARED_TMP_ENTRIES {
+        link_shared_entry(&shared_tmp, &ordinary.join(".tmp"), entry)?;
+    }
+
     let catalog =
         available_codex_deepseek_catalog().unwrap_or_else(|| PathBuf::from(CODEX_DEEPSEEK_CATALOG));
-    let config = render_codex_deepseek_config(&catalog);
+    let shared_tables = shared_codex_config_tables(&ordinary);
+    let config = if shared_tables.is_empty() {
+        render_codex_deepseek_config(&catalog)
+    } else {
+        format!(
+            "{}\n{shared_tables}",
+            render_codex_deepseek_config(&catalog)
+        )
+    };
     static NEXT_CONFIG_WRITE: AtomicU64 = AtomicU64::new(1);
     let sequence = NEXT_CONFIG_WRITE.fetch_add(1, Ordering::Relaxed);
     let temporary = target.join(format!(".config.toml.{}.{sequence}", std::process::id()));
@@ -731,17 +877,22 @@ mod tests {
         assert!(!rendered.contains("api.openai.com"));
     }
 
-    #[test]
-    fn deepseek_home_never_reads_or_links_openai_codex_state() {
-        use std::os::unix::fs::PermissionsExt as _;
+    fn isolation_test_root(prefix: &str) -> std::path::PathBuf {
         use std::sync::atomic::{AtomicU64, Ordering};
 
         static NEXT_TEST_HOME: AtomicU64 = AtomicU64::new(1);
-        let root = std::env::temp_dir().join(format!(
-            "cowboy-codex-deepseek-isolation-{}-{}",
+        std::env::temp_dir().join(format!(
+            "{prefix}-{}-{}",
             std::process::id(),
             NEXT_TEST_HOME.fetch_add(1, Ordering::Relaxed)
-        ));
+        ))
+    }
+
+    #[test]
+    fn deepseek_home_never_reads_or_links_openai_codex_state() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = isolation_test_root("cowboy-codex-deepseek-isolation");
         let openai_home = root.join(".codex");
         std::fs::create_dir_all(&openai_home).expect("create OpenAI Codex home");
         let sentinel =
@@ -776,11 +927,81 @@ mod tests {
                 & 0o777,
             0o600
         );
-        let entries = std::fs::read_dir(&isolated)
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name())
-            .collect::<Vec<_>>();
-        assert_eq!(entries, [std::ffi::OsString::from("config.toml")]);
+        // Credential-bearing and conversation state is never copied or linked.
+        for leaked in ["auth.json", "history.jsonl", "sessions", "memories"] {
+            assert!(
+                !isolated.join(leaked).exists(),
+                "isolated Codex home must not expose {leaked}"
+            );
+        }
+
+        std::fs::remove_dir_all(&root).expect("remove isolated test home");
+    }
+
+    #[test]
+    fn codex_deepseek_home_shares_guidance_skills_and_plugins() {
+        let root = isolation_test_root("cowboy-codex-deepseek-sharing");
+        let openai_home = root.join(".codex");
+        std::fs::create_dir_all(openai_home.join("skills/omega")).expect("create skills");
+        std::fs::create_dir_all(openai_home.join("plugins/cache")).expect("create plugins");
+        std::fs::create_dir_all(openai_home.join(".tmp/marketplaces/columbus"))
+            .expect("create marketplace snapshot");
+        std::fs::write(openai_home.join("AGENTS.md"), "machine guidance").expect("write guidance");
+        std::fs::write(
+            openai_home.join("config.toml"),
+            "model = \"gpt-secret-sentinel\"\n\
+             [mcp_servers.private]\ncommand = \"secret\"\n\
+             [marketplaces.columbus]\nsource = \"git@example.invalid:c.git\"\n\
+             [plugins.\"columbus-harness@columbus\"]\nenabled = true\n\
+             [hooks.state]\ntrusted = \"sha256:abc\"\n",
+        )
+        .expect("write OpenAI config");
+
+        let isolated = super::prepare_codex_deepseek_home_at(&root).expect("prepare DeepSeek home");
+
+        assert_eq!(
+            std::fs::read_to_string(isolated.join("AGENTS.md")).unwrap(),
+            "machine guidance"
+        );
+        assert!(isolated.join("skills/omega").is_dir());
+        assert!(isolated.join("plugins/cache").is_dir());
+        assert!(isolated.join(".tmp/marketplaces/columbus").is_dir());
+
+        let config = std::fs::read_to_string(isolated.join("config.toml")).expect("read config");
+        assert!(config.contains("[marketplaces.columbus]"));
+        assert!(config.contains("[plugins.\"columbus-harness@columbus\"]"));
+        assert!(config.contains("[hooks.state]"));
+        // The provider still owns model selection, and MCP entries can hold tokens.
+        assert!(config.contains("model = \"deepseek-v4-flash\""));
+        assert!(!config.contains("gpt-secret-sentinel"));
+        assert!(!config.contains("mcp_servers.private"));
+
+        // The lock and sync files beside the snapshot stay per-home.
+        assert!(!isolated.join(".tmp/plugins.sync.lock").exists());
+
+        std::fs::remove_dir_all(&root).expect("remove isolated test home");
+    }
+
+    #[test]
+    fn codex_deepseek_home_preserves_provider_owned_entries() {
+        let root = isolation_test_root("cowboy-codex-deepseek-preserve");
+        let openai_home = root.join(".codex");
+        std::fs::create_dir_all(openai_home.join("skills")).expect("create ordinary skills");
+        let isolated_home =
+            root.join(".local/state/cowboy/providers/codex-deepseek/codex-home/skills");
+        std::fs::create_dir_all(&isolated_home).expect("create provider-owned skills");
+        std::fs::write(isolated_home.join("owned.md"), "provider owned").expect("write owned");
+
+        let isolated = super::prepare_codex_deepseek_home_at(&root).expect("prepare DeepSeek home");
+
+        // A real provider-owned directory is never replaced by a shared link.
+        assert!(isolated.join("skills/owned.md").is_file());
+        assert!(
+            !std::fs::symlink_metadata(isolated.join("skills"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
 
         std::fs::remove_dir_all(&root).expect("remove isolated test home");
     }
@@ -788,14 +1009,8 @@ mod tests {
     #[test]
     fn claude_deepseek_config_never_reads_or_links_standard_claude_state() {
         use std::os::unix::fs::PermissionsExt as _;
-        use std::sync::atomic::{AtomicU64, Ordering};
 
-        static NEXT_TEST_HOME: AtomicU64 = AtomicU64::new(1);
-        let root = std::env::temp_dir().join(format!(
-            "cowboy-claude-deepseek-isolation-{}-{}",
-            std::process::id(),
-            NEXT_TEST_HOME.fetch_add(1, Ordering::Relaxed)
-        ));
+        let root = isolation_test_root("cowboy-claude-deepseek-isolation");
         let standard = root.join(".claude");
         std::fs::create_dir_all(&standard).expect("create standard Claude config");
         std::fs::write(
@@ -814,7 +1029,13 @@ mod tests {
             std::fs::metadata(&isolated).unwrap().permissions().mode() & 0o777,
             0o700
         );
-        assert_eq!(std::fs::read_dir(&isolated).unwrap().count(), 0);
+        // Settings and credentials are never linked; only the allowlist is.
+        for leaked in ["settings.json", ".credentials.json", "projects", "history"] {
+            assert!(
+                !isolated.join(leaked).exists(),
+                "isolated Claude config must not expose {leaked}"
+            );
+        }
         assert_eq!(
             std::fs::read_to_string(standard.join("settings.json")).unwrap(),
             r#"{"model":"claude-secret-sentinel","mcpServers":{"private":{}}}"#
@@ -827,6 +1048,66 @@ mod tests {
             std::fs::read_to_string(root.join(".claude.json")).unwrap(),
             "claude-instance-sentinel"
         );
+
+        std::fs::remove_dir_all(&root).expect("remove isolated test home");
+    }
+
+    #[test]
+    fn claude_deepseek_config_shares_guidance_skills_and_plugins() {
+        let root = isolation_test_root("cowboy-claude-deepseek-sharing");
+        let standard = root.join(".claude");
+        std::fs::create_dir_all(standard.join("skills/omega")).expect("create skills");
+        std::fs::create_dir_all(standard.join("plugins/cache")).expect("create plugins");
+        std::fs::write(standard.join("CLAUDE.md"), "machine guidance").expect("write guidance");
+        std::fs::write(standard.join(".credentials.json"), "claude-auth-sentinel")
+            .expect("write standard auth");
+        std::fs::write(
+            standard.join("settings.json"),
+            r#"{"model":"claude-secret-sentinel",
+                "mcpServers":{"private":{"command":"secret"}},
+                "permissions":{"allow":["WebSearch"]},
+                "enabledPlugins":{"columbus-harness@columbus":true},
+                "extraKnownMarketplaces":{"columbus":{"source":{"repo":"c"}}}}"#,
+        )
+        .expect("write standard settings");
+
+        let isolated = super::prepare_claude_deepseek_config_dir_at(&root)
+            .expect("prepare isolated Claude config");
+
+        assert_eq!(
+            std::fs::read_to_string(isolated.join("CLAUDE.md")).unwrap(),
+            "machine guidance"
+        );
+        assert!(isolated.join("skills/omega").is_dir());
+        assert!(isolated.join("plugins/cache").is_dir());
+        assert!(!isolated.join(".credentials.json").exists());
+
+        // Claude keeps plugin enablement in settings.json, so linking plugins/
+        // alone leaves every plugin installed but unloaded.
+        let settings =
+            std::fs::read_to_string(isolated.join("settings.json")).expect("read shared settings");
+        assert!(settings.contains("columbus-harness@columbus"));
+        assert!(settings.contains("extraKnownMarketplaces"));
+        assert!(!settings.contains("claude-secret-sentinel"));
+        assert!(!settings.contains("mcpServers"));
+        assert!(!settings.contains("permissions"));
+
+        std::fs::remove_dir_all(&root).expect("remove isolated test home");
+    }
+
+    #[test]
+    fn claude_deepseek_settings_are_absent_without_shared_keys() {
+        let root = isolation_test_root("cowboy-claude-deepseek-no-settings");
+        let standard = root.join(".claude");
+        std::fs::create_dir_all(&standard).expect("create standard Claude config");
+        std::fs::write(standard.join("settings.json"), r#"{"theme":"dark"}"#)
+            .expect("write standard settings");
+
+        let isolated = super::prepare_claude_deepseek_config_dir_at(&root)
+            .expect("prepare isolated Claude config");
+
+        // Nothing to share means no provider-owned file is invented.
+        assert!(!isolated.join("settings.json").exists());
 
         std::fs::remove_dir_all(&root).expect("remove isolated test home");
     }

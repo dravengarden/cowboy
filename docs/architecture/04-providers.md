@@ -42,9 +42,22 @@ resident ACP workers.
 
 Its `CODEX_HOME` lives under
 `~/.local/state/cowboy/providers/codex-deepseek/codex-home` and is generated from
-a closed template. It does not inherit the user's normal Codex config and does
-not link `auth.json`, history, memories, rules, plugins, or skills. The worker
-also removes inherited OpenAI, Codex, and DeepSeek credential/config variables;
+a template. It does not inherit the user's normal Codex config and does not link
+`auth.json`, history, sessions, or memories.
+
+Setup that carries no secret is shared rather than re-created, because a DeepSeek
+provider should differ from its ordinary counterpart only in which endpoint it
+uses and whose credential it presents. The isolated home links `AGENTS.md`,
+`skills/`, `plugins/`, and the marketplace snapshot under `.tmp/marketplaces`,
+and the generated config copies the `marketplaces`, `plugins`, and `hooks`
+tables from the ordinary config. Codex reports a plugin as installed only when
+both the tables and the snapshot are present, so neither half is optional.
+`mcp_servers` is deliberately excluded: an MCP entry can carry a token in its
+command, arguments, or headers. The sharing list is an allowlist, so a new
+runtime file that holds a secret stays private until someone adds it
+deliberately. A real provider-owned entry is never replaced by a shared link.
+The worker also removes inherited OpenAI, Codex, and DeepSeek credential/config
+variables;
 the DeepSeek secret exists only in the gateway's systemd credential mount.
 Standard `codex` sessions therefore keep their ordinary account and state, and
 the two runtimes can execute concurrently without influencing one another.
@@ -73,10 +86,17 @@ is `COWBOY_ACP_CLAUDE_DEEPSEEK_SHELL`; it crosses the detached worker boundary
 but is removed before Claude Code starts. A Machine advertises this provider as
 active only when both the gateway and a supported executable shell are ready.
 
-The isolated directory neither reads nor links ordinary `~/.claude`, top-level
-Claude instance metadata, settings, credentials, history, projects, plugins, or
-cache. Normal Claude and DeepSeek Claude may run concurrently; only the npm
-adapter executable and provider-agnostic ACP implementation are shared. The
+The isolated directory neither reads nor links top-level Claude instance
+metadata, credentials, history, projects, or cache. It links the same non-secret
+setup as the Codex variant — `CLAUDE.md`, `skills/`, and `plugins/` — and
+generates a provider-owned `settings.json` holding only `enabledPlugins` and
+`extraKnownMarketplaces`. Claude keeps plugin enablement in that file, so
+linking `plugins/` alone would leave every plugin installed but unloaded; the
+rest of the ordinary settings, including model selection, permissions, and MCP
+entries, stays private.
+Normal Claude and DeepSeek Claude may run concurrently; the npm adapter
+executable, the provider-agnostic ACP implementation, and that shared setup are
+what they have in common. The
 gateway in Columbus has its own process, profile, port, receipt, credential,
 tests, and release transaction. It preserves native Anthropic Messages/SSE and
 contains only current fixture-backed DeepSeek compatibility repairs; it is not
