@@ -6,18 +6,18 @@ const cmds = (...names: string[]): AvailableCommand[] =>
   names.map((name) => ({ name, description: "" }));
 
 // Compact is a slash-command: per-provider default when nothing is advertised.
-Deno.test("compact defaults: claude/codex/reasonix use /compact, gemini /compress", () => {
+Deno.test("compact defaults: claude/codex use /compact, gemini /compress", () => {
   assert.equal(resolveSessionAction("compact", "claude-code", [])?.command, "/compact");
   assert.equal(
     resolveSessionAction("compact", "claude-deepseek", [])?.command,
     "/compact",
   );
   assert.equal(resolveSessionAction("compact", "codex", [])?.command, "/compact");
-  assert.equal(
-    resolveSessionAction("compact", "reasonix-deepseek", [])?.command,
-    "/compact",
-  );
   assert.equal(resolveSessionAction("compact", "gemini", [])?.command, "/compress");
+});
+
+Deno.test("Reasonix hides compact until its ACP server exposes the native action", () => {
+  assert.equal(resolveSessionAction("compact", "reasonix-deepseek", []), null);
 });
 
 // The advertised list overrides the default, matched by alias, agent's own casing.
