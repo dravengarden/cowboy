@@ -18,7 +18,7 @@ export type UsageWidgetProvider =
     kind: "deepseek";
     label: "DeepSeek";
     balanceCny: number;
-    spend24hUsd: number;
+    spend24hCny: number;
     spend24hPriceCoverage: number | undefined;
     cacheHitRate: number;
   };
@@ -60,7 +60,7 @@ function deepseekSpend24h(usage: ProviderUsage):
   const rolling = record(usage.activity?.last24Hours);
   const cost = deepseekCostStats(record(record(rolling?.cost)?.summary));
   return cost && cost.totalTokens > 0
-    ? { amount: cost.estimatedUsd, priceCoverage: cost.priceCoverageRate }
+    ? { amount: cost.estimatedCny, priceCoverage: cost.priceCoverageRate }
     : undefined;
 }
 
@@ -92,7 +92,7 @@ function deepseekWidget(usage: ProviderUsage): UsageWidgetProvider | undefined {
     kind: "deepseek",
     label: "DeepSeek",
     balanceCny,
-    spend24hUsd: spend24h.amount,
+    spend24hCny: spend24h.amount,
     spend24hPriceCoverage: spend24h.priceCoverage,
     cacheHitRate,
   };

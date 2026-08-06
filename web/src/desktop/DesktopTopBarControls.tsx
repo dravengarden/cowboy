@@ -131,10 +131,6 @@ function compactCny(value: number): string {
   return `¥${value < 0.01 ? value.toFixed(3) : value.toFixed(2)}`;
 }
 
-function compactUsd(value: number): string {
-  return `$${value < 0.01 ? value.toFixed(3) : value.toFixed(2)}`;
-}
-
 function UsageProviderSummary(
   { provider }: { provider: UsageWidgetProvider },
 ): React.JSX.Element {
@@ -146,8 +142,8 @@ function UsageProviderSummary(
   const secondary = deepseek
     ? provider.spend24hPriceCoverage !== undefined &&
         provider.spend24hPriceCoverage >= 99.999
-      ? `24h ${compactUsd(provider.spend24hUsd)} · Cache ${provider.cacheHitRate.toFixed(1)}%`
-      : `24h ≥${compactUsd(provider.spend24hUsd)} · ${provider.spend24hPriceCoverage?.toFixed(0) ?? "0"}% priced · Hit ${provider.cacheHitRate.toFixed(1)}%`
+      ? `24h ${compactCny(provider.spend24hCny)} · Cache ${provider.cacheHitRate.toFixed(1)}%`
+      : `24h ≥${compactCny(provider.spend24hCny)} · ${provider.spend24hPriceCoverage?.toFixed(0) ?? "0"}% priced · Hit ${provider.cacheHitRate.toFixed(1)}%`
     : `Weekly · resets ${shortResetTime(provider.resetsAt)}`;
   return (
     <Box

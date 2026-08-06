@@ -182,7 +182,7 @@ and schema-v3 coverage remain visible so missing or ambiguous lineage cannot
 masquerade as an optimization result.
 
 DeepSeek cost is valued only in the backend provider adapter from a pinned
-official USD list-price snapshot, with its source URL, version, and as-of date
+official CNY list-price snapshot, with its source URL, version, and as-of date
 in the response. The resolved billing model wins over the requested alias, and
 Flash and Pro token aggregates are priced separately. Reasoning
 tokens are a diagnostic subset of completion tokens and are never charged a

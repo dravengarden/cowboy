@@ -11,8 +11,8 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 const PRICE_AS_OF: &str = "2026-08-06";
-const PRICE_VERSION: &str = "deepseek-v4-public-2026-08-06";
-const PRICE_SOURCE_URL: &str = "https://api-docs.deepseek.com/quick_start/pricing/";
+const PRICE_VERSION: &str = "deepseek-v4-cny-2026-08-06";
+const PRICE_SOURCE_URL: &str = "https://api-docs.deepseek.com/zh-cn/quick_start/pricing";
 const TOKENS_PER_MILLION: f64 = 1_000_000.0;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -32,14 +32,14 @@ impl ModelFamily {
     const fn price(self) -> Price {
         match self {
             Self::Flash => Price {
-                input_cache_hit_usd_per_million: 0.0028,
-                input_cache_miss_usd_per_million: 0.14,
-                output_usd_per_million: 0.28,
+                input_cache_hit_cny_per_million: 0.02,
+                input_cache_miss_cny_per_million: 1.0,
+                output_cny_per_million: 2.0,
             },
             Self::Pro => Price {
-                input_cache_hit_usd_per_million: 0.003_625,
-                input_cache_miss_usd_per_million: 0.435,
-                output_usd_per_million: 0.87,
+                input_cache_hit_cny_per_million: 0.025,
+                input_cache_miss_cny_per_million: 3.0,
+                output_cny_per_million: 6.0,
             },
         }
     }
@@ -48,19 +48,19 @@ impl ModelFamily {
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Price {
-    input_cache_hit_usd_per_million: f64,
-    input_cache_miss_usd_per_million: f64,
-    output_usd_per_million: f64,
+    input_cache_hit_cny_per_million: f64,
+    input_cache_miss_cny_per_million: f64,
+    output_cny_per_million: f64,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CostEstimate {
-    estimated_usd: f64,
-    no_cache_usd: f64,
-    all_hit_floor_usd: f64,
-    cache_savings_usd: f64,
-    cache_miss_premium_usd: f64,
+    estimated_cny: f64,
+    no_cache_cny: f64,
+    all_hit_floor_cny: f64,
+    cache_savings_cny: f64,
+    cache_miss_premium_cny: f64,
     requests: u64,
     usage_observed_requests: u64,
     unknown_model_requests: u64,
@@ -103,17 +103,17 @@ impl CostEstimate {
         let mut model_families = BTreeSet::new();
         model_families.insert(family.name().to_owned());
         Self {
-            estimated_usd: hit * price.input_cache_hit_usd_per_million
-                + miss * price.input_cache_miss_usd_per_million
-                + output * price.output_usd_per_million,
-            no_cache_usd: (hit + miss) * price.input_cache_miss_usd_per_million
-                + output * price.output_usd_per_million,
-            all_hit_floor_usd: (hit + miss) * price.input_cache_hit_usd_per_million
-                + output * price.output_usd_per_million,
-            cache_savings_usd: hit
-                * (price.input_cache_miss_usd_per_million - price.input_cache_hit_usd_per_million),
-            cache_miss_premium_usd: miss
-                * (price.input_cache_miss_usd_per_million - price.input_cache_hit_usd_per_million),
+            estimated_cny: hit * price.input_cache_hit_cny_per_million
+                + miss * price.input_cache_miss_cny_per_million
+                + output * price.output_cny_per_million,
+            no_cache_cny: (hit + miss) * price.input_cache_miss_cny_per_million
+                + output * price.output_cny_per_million,
+            all_hit_floor_cny: (hit + miss) * price.input_cache_hit_cny_per_million
+                + output * price.output_cny_per_million,
+            cache_savings_cny: hit
+                * (price.input_cache_miss_cny_per_million - price.input_cache_hit_cny_per_million),
+            cache_miss_premium_cny: miss
+                * (price.input_cache_miss_cny_per_million - price.input_cache_hit_cny_per_million),
             requests,
             usage_observed_requests,
             unknown_model_requests: 0,
@@ -128,11 +128,11 @@ impl CostEstimate {
     }
 
     fn add(&mut self, other: &Self) {
-        self.estimated_usd += other.estimated_usd;
-        self.no_cache_usd += other.no_cache_usd;
-        self.all_hit_floor_usd += other.all_hit_floor_usd;
-        self.cache_savings_usd += other.cache_savings_usd;
-        self.cache_miss_premium_usd += other.cache_miss_premium_usd;
+        self.estimated_cny += other.estimated_cny;
+        self.no_cache_cny += other.no_cache_cny;
+        self.all_hit_floor_cny += other.all_hit_floor_cny;
+        self.cache_savings_cny += other.cache_savings_cny;
+        self.cache_miss_premium_cny += other.cache_miss_premium_cny;
         self.requests = self.requests.saturating_add(other.requests);
         self.usage_observed_requests = self
             .usage_observed_requests
@@ -252,7 +252,7 @@ fn cost_map(value: Option<&Value>) -> BTreeMap<String, CostEstimate> {
 fn pricing_view() -> Value {
     json!({
         "provider": "deepseek",
-        "currency": "USD",
+        "currency": "CNY",
         "unit": "per_million_tokens",
         "valuationBasis": "pinned_list_price_snapshot",
         "asOf": PRICE_AS_OF,
@@ -330,11 +330,11 @@ mod tests {
             "cacheMissTokens": 100_000,
         });
         let cost = CostEstimate::for_model("deepseek-v4-flash", &aggregate);
-        assert_close(cost.estimated_usd, 0.9 * 0.0028 + 0.1 * 0.14 + 0.05 * 0.28);
-        assert_close(cost.no_cache_usd, 0.14 + 0.05 * 0.28);
-        assert_close(cost.all_hit_floor_usd, 0.0028 + 0.05 * 0.28);
-        assert_close(cost.cache_savings_usd, 0.9 * (0.14 - 0.0028));
-        assert_close(cost.cache_miss_premium_usd, 0.1 * (0.14 - 0.0028));
+        assert_close(cost.estimated_cny, 0.9 * 0.02 + 0.1 * 1.0 + 0.05 * 2.0);
+        assert_close(cost.no_cache_cny, 1.0 + 0.05 * 2.0);
+        assert_close(cost.all_hit_floor_cny, 0.02 + 0.05 * 2.0);
+        assert_close(cost.cache_savings_cny, 0.9 * (1.0 - 0.02));
+        assert_close(cost.cache_miss_premium_cny, 0.1 * (1.0 - 0.02));
         assert_eq!(cost.output_tokens, 50_000);
         assert_eq!(cost.reasoning_tokens, 10_000);
     }
@@ -349,7 +349,7 @@ mod tests {
         assert_eq!(cost.unknown_model_requests, 2);
         assert_eq!(cost.unpriced_input_tokens, 100);
         assert_eq!(cost.unpriced_output_tokens, 20);
-        assert_close(cost.estimated_usd, 0.0);
+        assert_close(cost.estimated_cny, 0.0);
     }
 
     #[test]
@@ -366,7 +366,7 @@ mod tests {
             "last24Hours": { "byBillingModel": {}, "byAgentBillingModel": {} }
         });
         decorate_activity(&mut activity);
-        assert_eq!(activity["pricing"]["currency"], "USD");
+        assert_eq!(activity["pricing"]["currency"], "CNY");
         assert_eq!(activity["cost"]["summary"]["requests"], 2);
         assert_eq!(
             activity["cost"]["byAgent"]["codex"]["modelFamilies"][0],
@@ -394,10 +394,10 @@ mod tests {
         });
         decorate_activity(&mut activity);
         assert_close(
-            activity["cost"]["summary"]["estimatedUsd"]
+            activity["cost"]["summary"]["estimatedCny"]
                 .as_f64()
                 .unwrap(),
-            0.435,
+            3.0,
         );
         assert_eq!(activity["cost"]["summary"]["modelFamilies"][0], "pro");
     }

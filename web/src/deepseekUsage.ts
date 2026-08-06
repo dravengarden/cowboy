@@ -67,11 +67,11 @@ export function percentLabel(value: number | undefined): string {
 
 /** Backend-valued DeepSeek spend and cache economics for one exact model mix. */
 export interface DeepSeekCostStats {
-  estimatedUsd: number;
-  noCacheUsd: number;
-  allHitFloorUsd: number;
-  cacheSavingsUsd: number;
-  cacheMissPremiumUsd: number;
+  estimatedCny: number;
+  noCacheCny: number;
+  allHitFloorCny: number;
+  cacheSavingsCny: number;
+  cacheMissPremiumCny: number;
   totalTokens: number;
   requests: number;
   usageObservedRequests: number;
@@ -83,8 +83,8 @@ export interface DeepSeekCostStats {
   unpricedOutputTokens: number;
   reasoningTokens: number;
   modelFamilies: string[];
-  costPerRequestUsd: number;
-  costPerMTokensUsd: number;
+  costPerRequestCny: number;
+  costPerMTokensCny: number;
   avgTokensPerRequest: number;
   priceCoverageRate: number | undefined;
 }
@@ -99,7 +99,7 @@ export function deepseekCostStats(
   value: Record<string, unknown> | undefined,
 ): DeepSeekCostStats | undefined {
   if (!value) return undefined;
-  const estimatedUsd = finite(value.estimatedUsd);
+  const estimatedCny = finite(value.estimatedCny);
   const requests = finite(value.requests);
   const inputTokens = finite(value.inputTokens);
   const pricedInputTokens = finite(value.pricedInputTokens);
@@ -110,11 +110,11 @@ export function deepseekCostStats(
   const pricedTokens = pricedInputTokens +
     Math.max(0, outputTokens - unpricedOutputTokens);
   return {
-    estimatedUsd,
-    noCacheUsd: finite(value.noCacheUsd),
-    allHitFloorUsd: finite(value.allHitFloorUsd),
-    cacheSavingsUsd: finite(value.cacheSavingsUsd),
-    cacheMissPremiumUsd: finite(value.cacheMissPremiumUsd),
+    estimatedCny,
+    noCacheCny: finite(value.noCacheCny),
+    allHitFloorCny: finite(value.allHitFloorCny),
+    cacheSavingsCny: finite(value.cacheSavingsCny),
+    cacheMissPremiumCny: finite(value.cacheMissPremiumCny),
     totalTokens,
     requests,
     usageObservedRequests: finite(value.usageObservedRequests),
@@ -130,9 +130,9 @@ export function deepseekCostStats(
         typeof family === "string"
       )
       : [],
-    costPerRequestUsd: requests > 0 ? estimatedUsd / requests : 0,
-    costPerMTokensUsd: totalTokens > 0
-      ? estimatedUsd / totalTokens * 1e6
+    costPerRequestCny: requests > 0 ? estimatedCny / requests : 0,
+    costPerMTokensCny: totalTokens > 0
+      ? estimatedCny / totalTokens * 1e6
       : 0,
     avgTokensPerRequest: requests > 0 ? totalTokens / requests : 0,
     priceCoverageRate: totalTokens > 0 ? pricedTokens * 100 / totalTokens

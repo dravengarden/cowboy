@@ -63,14 +63,14 @@ Deno.test("deepseekCostStats parses backend valuation without double-counting re
     unpricedOutputTokens: 0,
     unknownModelRequests: 0,
     modelFamilies: ["flash"],
-    estimatedUsd: 0.03052,
-    noCacheUsd: 0.154,
-    allHitFloorUsd: 0.0168,
-    cacheSavingsUsd: 0.12348,
-    cacheMissPremiumUsd: 0.01372,
+    estimatedCny: 0.218,
+    noCacheCny: 1.1,
+    allHitFloorCny: 0.12,
+    cacheSavingsCny: 0.882,
+    cacheMissPremiumCny: 0.098,
   });
-  assertEquals(stats?.estimatedUsd, 0.03052);
-  assertEquals(stats?.costPerRequestUsd, 0.03052 / 10);
+  assertEquals(stats?.estimatedCny, 0.218);
+  assertEquals(stats?.costPerRequestCny, 0.218 / 10);
   assertEquals(stats?.totalTokens, 1_050_000);
   assertEquals(stats?.avgTokensPerRequest, 1_050_000 / 10);
   assertEquals(stats?.priceCoverageRate, 950_000 * 100 / 1_050_000);
@@ -78,9 +78,9 @@ Deno.test("deepseekCostStats parses backend valuation without double-counting re
 });
 
 Deno.test("deepseekCostStats degrades to zero without tokens and stays unknown without totals", () => {
-  const empty = deepseekCostStats({ requests: 0, estimatedUsd: 0 });
-  assertEquals(empty?.estimatedUsd, 0);
-  assertEquals(empty?.costPerRequestUsd, 0);
+  const empty = deepseekCostStats({ requests: 0, estimatedCny: 0 });
+  assertEquals(empty?.estimatedCny, 0);
+  assertEquals(empty?.costPerRequestCny, 0);
   assertEquals(empty?.priceCoverageRate, undefined);
   assertEquals(deepseekCostStats(undefined), undefined);
 });

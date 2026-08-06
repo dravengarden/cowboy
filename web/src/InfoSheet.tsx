@@ -93,19 +93,19 @@ function formatTokens(value: number | undefined): string {
   return value === undefined ? "—" : value.toLocaleString();
 }
 
-/** USD with enough decimals that cache-hit-heavy DeepSeek spends stay readable. */
-function formatUsd(value: number): string {
-  return value < 0.01 ? `$${value.toFixed(4)}` : `$${value.toFixed(2)}`;
+/** CNY with enough decimals that cache-hit-heavy DeepSeek spends stay readable. */
+function formatCny(value: number): string {
+  return value < 0.01 ? `CN¥${value.toFixed(4)}` : `CN¥${value.toFixed(2)}`;
 }
 
-function formatEstimatedUsd(
+function formatEstimatedCny(
   cost: DeepSeekCostStats | undefined,
-  value: number | undefined = cost?.estimatedUsd,
+  value: number | undefined = cost?.estimatedCny,
 ): string {
   if (!cost || value === undefined || cost.totalTokens === 0) return "—";
   const partial = cost.priceCoverageRate === undefined ||
     cost.priceCoverageRate < 99.999;
-  return `${partial ? "≥" : ""}${formatUsd(value)}`;
+  return `${partial ? "≥" : ""}${formatCny(value)}`;
 }
 
 function fullyPriced(cost: DeepSeekCostStats | undefined): boolean {
@@ -298,7 +298,7 @@ function DeepSeekDetails(
       }];
     })
     : [];
-  const totalSpendUsd = totalCost?.estimatedUsd ?? 0;
+  const totalSpendCny = totalCost?.estimatedCny ?? 0;
   const pricingAsOf = str(pricing?.asOf);
   const timeline = Array.isArray(activity?.timeline)
     ? activity.timeline.map(record).filter((value): value is JsonRecord => value !== undefined).slice(-7)
@@ -449,9 +449,9 @@ function DeepSeekDetails(
             {agentLanes.length > 0 && (
               <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "repeat(2, minmax(0, 1fr))" }, gap: 1 }}>
                 {agentLanes.map(({ agent, totals, cache, cost, avgGatewayMs }) => {
-                  const spendShare = totalSpendUsd > 0 && cost &&
+                  const spendShare = totalSpendCny > 0 && cost &&
                       fullyPriced(totalCost) && fullyPriced(cost)
-                    ? cost.estimatedUsd * 100 / totalSpendUsd
+                    ? cost.estimatedCny * 100 / totalSpendCny
                     : undefined;
                   return (
                     <Box key={agent} sx={{ borderRadius: 1.5, bgcolor: "action.hover", px: 1.1, py: 0.9 }}>
@@ -462,11 +462,11 @@ function DeepSeekDetails(
                         </Stack>
                         <Box sx={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 1 }}>
                           <Box>
-                            <Tooltip title={`DeepSeek USD list-price snapshot${pricingAsOf ? ` dated ${pricingAsOf}` : ""} × gateway-observed tokens. A ≥ value has incomplete price coverage. Models are valued separately; reasoning is already included in output tokens and is charged once.`}>
+                            <Tooltip title={`DeepSeek official CNY list-price snapshot${pricingAsOf ? ` dated ${pricingAsOf}` : ""} × gateway-observed tokens. A ≥ value has incomplete price coverage. Models are valued separately; reasoning is already included in output tokens and is charged once.`}>
                               <Typography variant="caption" color="text.secondary" sx={{ cursor: "help", textDecoration: "underline dotted" }}>Est. spend</Typography>
                             </Tooltip>
                             <Typography variant="subtitle2" fontWeight={700}>
-                              {formatEstimatedUsd(cost)}
+                              {formatEstimatedCny(cost)}
                             </Typography>
                             {cost && !fullyPriced(cost) && cost.totalTokens > 0 && (
                               <Typography variant="caption" color="warning.main">
@@ -483,7 +483,7 @@ function DeepSeekDetails(
                           <Box>
                             <Typography variant="caption" color="text.secondary">Miss premium</Typography>
                             <Typography variant="subtitle2" fontWeight={700}>
-                              {cost ? formatUsd(cost.cacheMissPremiumUsd) : "—"}
+                              {cost ? formatCny(cost.cacheMissPremiumCny) : "—"}
                             </Typography>
                           </Box>
                           <Box>
@@ -598,25 +598,25 @@ function DeepSeekDetails(
                           />
                           <InfoRow
                             k="Est. spend"
-                            v={formatEstimatedUsd(cost)}
+                            v={formatEstimatedCny(cost)}
                           />
                           <InfoRow
                             k="Cost / request"
-                            v={formatEstimatedUsd(cost, cost?.costPerRequestUsd)}
+                            v={formatEstimatedCny(cost, cost?.costPerRequestCny)}
                           />
                           <InfoRow
                             k="Cost / 1M tokens"
-                            v={formatEstimatedUsd(cost, cost?.costPerMTokensUsd)}
+                            v={formatEstimatedCny(cost, cost?.costPerMTokensCny)}
                           />
                           {cost && (
                             <>
                               <InfoRow
                                 k="Cache savings"
-                                v={formatUsd(cost.cacheSavingsUsd)}
+                                v={formatCny(cost.cacheSavingsCny)}
                               />
                               <InfoRow
                                 k="Cache miss premium"
-                                v={formatUsd(cost.cacheMissPremiumUsd)}
+                                v={formatCny(cost.cacheMissPremiumCny)}
                               />
                               <InfoRow
                                 k="Price coverage"
@@ -746,7 +746,7 @@ function DeepSeekDetails(
                           <InfoRow
                             key={cause}
                             k={lowHitCauseName(cause)}
-                            v={`${formatTokens(num(totals?.requests))} req${cost ? ` · ${formatEstimatedUsd(cost, cost.cacheMissPremiumUsd)} miss premium` : ""}`}
+                            v={`${formatTokens(num(totals?.requests))} req${cost ? ` · ${formatEstimatedCny(cost, cost.cacheMissPremiumCny)} miss premium` : ""}`}
                           />
                         );
                       })}
