@@ -7,6 +7,13 @@ rewrite an existing unbounded table or perform a data backfill: startup has no
 HTTP readiness endpoint until migrations finish, so such work turns a deploy
 into an outage.
 
+Controller component rollback restores an older binary without rolling back
+PostgreSQL. Every controller therefore ignores already-applied migration
+versions newer than its embedded migration set while still verifying every
+known checksum. Before the first release that introduces a new migration, the
+current rollback target must already contain this compatibility behavior. This
+is a deployment bridge, not permission to delete or rewrite migration files.
+
 Large transformations use expand/contract:
 
 1. add the nullable column/table/index needed by both old and new code;

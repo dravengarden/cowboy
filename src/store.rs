@@ -731,7 +731,13 @@ impl Store {
     /// # Errors
     /// If a migration fails to apply.
     pub async fn migrate(&self) -> Result<()> {
-        sqlx::migrate!("./migrations")
+        let mut migrator = sqlx::migrate!("./migrations");
+        // Component rollback restores the previous controller binary but does
+        // not roll back PostgreSQL. A predecessor must therefore tolerate an
+        // already-applied additive migration from a failed candidate release.
+        // Known migration checksums are still verified by SQLx.
+        migrator.set_ignore_missing(true);
+        migrator
             .run(&self.pool)
             .await
             .context("running migrations")?;
