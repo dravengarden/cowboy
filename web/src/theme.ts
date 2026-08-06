@@ -12,6 +12,7 @@ import { useEffect, useMemo } from "react";
 import { alpha, createTheme, type Theme } from "@mui/material";
 
 import { type ThemeChoice, useThemeMode as useSharedThemeMode } from "./_shell";
+import { browserTooltipListenerPolicy } from "./tooltipPolicy";
 
 // cowboy's selection surface (Settings dialog, theme toggle) speaks the same
 // system/light/dark vocabulary as the shared hook.
@@ -150,12 +151,12 @@ export function useThemeMode(): ThemeControls {
           // fires them on tap-focus AND long-press, and they LINGER — tapping any
           // icon button focuses it and pops a bubble that's hard to dismiss (the
           // reported stuck "Rename session" tooltip). Disable the focus + touch
-          // triggers globally so a tooltip shows on hover (desktop) and NEVER on
-          // touch. Every control carries an `aria-label`, so no information is
-          // lost on touch / for assistive tech. (Same trick the auto-scroll toggle
-          // applied per-instance, made the default so every tooltip inherits it.)
+          // triggers globally. iOS also synthesizes mouse hover after a tap, so
+          // disable the hover listener unless the primary pointer can genuinely
+          // hover. Every control carries an `aria-label`, so no information is
+          // lost on touch / for assistive tech. Desktop mouse hover stays intact.
           MuiTooltip: {
-            defaultProps: { disableFocusListener: true, disableTouchListener: true },
+            defaultProps: browserTooltipListenerPolicy(),
           },
           // (No selected-MenuItem override — the solid primary fill read as heavy;
           // a selected item is marked by its ✓ checkmark + MUI's default subtle
