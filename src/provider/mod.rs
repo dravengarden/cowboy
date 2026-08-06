@@ -665,7 +665,14 @@ fn render_codex_deepseek_config(catalog: &Path) -> String {
      requires_openai_auth = false\n\
      request_max_retries = 1\n\
      stream_max_retries = 0\n\
-     stream_idle_timeout_ms = 600000\n",
+     stream_idle_timeout_ms = 600000\n\n\
+     [features]\n\
+     memories = true\n\n\
+     [memories]\n\
+     disable_on_external_context = true\n\
+     extract_model = \"deepseek-v4-flash\"\n\
+     consolidation_model = \"deepseek-v4-flash\"\n\
+     min_rate_limit_remaining_percent = 0\n",
         catalog.display()
     )
 }
@@ -897,6 +904,11 @@ mod tests {
         assert!(rendered.contains("model_auto_compact_token_limit_scope = \"body_after_prefix\""));
         assert!(rendered.contains("[model_providers.deepseek-local]"));
         assert!(rendered.contains("requires_openai_auth = false"));
+        assert!(rendered.contains("[features]\nmemories = true"));
+        assert!(rendered.contains("[memories]\ndisable_on_external_context = true"));
+        assert!(rendered.contains("extract_model = \"deepseek-v4-flash\""));
+        assert!(rendered.contains("consolidation_model = \"deepseek-v4-flash\""));
+        assert!(rendered.contains("min_rate_limit_remaining_percent = 0"));
         assert!(rendered.contains("/nix/var/nix/profiles/columbus-components/codex-deepseek/"));
         assert!(!rendered.contains("api.openai.com"));
     }
