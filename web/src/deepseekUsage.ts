@@ -60,6 +60,22 @@ export function deepseekAvailableAgents(
   ))];
 }
 
+/** Runtime lanes to keep visible even when the active filter has no events. */
+export function deepseekVisibleAgents(
+  available: DeepSeekObservedAgent[],
+  selected: DeepSeekObservedAgent | "all",
+  observed: string[],
+): DeepSeekObservedAgent[] {
+  if (selected !== "all") return [selected];
+  const observedAgents = observed.filter((agent): agent is DeepSeekObservedAgent =>
+    agent === "codex" || agent === "claude" || agent === "reasonix"
+  );
+  const present = new Set([...available, ...observedAgents]);
+  return (["codex", "claude", "reasonix"] as const).filter((agent) =>
+    present.has(agent)
+  );
+}
+
 /** Fixed two-decimal percentage label, e.g. 87.345 → "87.35%". */
 export function percentLabel(value: number | undefined): string {
   return value === undefined ? "—" : `${value.toFixed(2)}%`;

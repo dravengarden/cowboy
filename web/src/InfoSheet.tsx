@@ -30,6 +30,7 @@ import {
   deepseekAvailableAgents,
   deepseekCacheStats,
   deepseekCostStats,
+  deepseekVisibleAgents,
   type DeepSeekCostStats,
   percentLabel,
 } from "./deepseekUsage";
@@ -282,22 +283,25 @@ function DeepSeekDetails(
     ? coverage.producers.map(record).filter((value): value is JsonRecord => value !== undefined)
     : [];
   const machineCount = new Set(producers.map((producer) => str(producer.machine)).filter(Boolean)).size;
-  const agentLanes = byAgent
-    ? Object.entries(byAgent).flatMap(([agent, value]) => {
-      const totals = record(value);
-      if (!totals) return [];
-      const durationObservations = num(totals.durationObservations) ?? 0;
-      return [{
-        agent,
-        totals,
-        cache: deepseekCacheStats(totals),
-        cost: deepseekCostStats(record(costByAgent?.[agent])),
-        avgGatewayMs: durationObservations > 0
-          ? (num(totals.durationMs) ?? 0) / durationObservations
-          : undefined,
-      }];
-    })
-    : [];
+  const availableAgents = deepseekAvailableAgents(usage.activity);
+  const agentLanes = deepseekVisibleAgents(
+    availableAgents,
+    agentFilter,
+    byAgent ? Object.keys(byAgent) : [],
+  ).map((agent) => {
+    const totals = record(byAgent?.[agent]);
+    if (!totals) return { agent };
+    const durationObservations = num(totals.durationObservations) ?? 0;
+    return {
+      agent,
+      totals,
+      cache: deepseekCacheStats(totals),
+      cost: deepseekCostStats(record(costByAgent?.[agent])),
+      avgGatewayMs: durationObservations > 0
+        ? (num(totals.durationMs) ?? 0) / durationObservations
+        : undefined,
+    };
+  });
   const totalSpendCny = totalCost?.estimatedCny ?? 0;
   const pricingAsOf = str(pricing?.asOf);
   const timeline = Array.isArray(activity?.timeline)
@@ -449,6 +453,21 @@ function DeepSeekDetails(
             {agentLanes.length > 0 && (
               <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "repeat(2, minmax(0, 1fr))" }, gap: 1 }}>
                 {agentLanes.map(({ agent, totals, cache, cost, avgGatewayMs }) => {
+                  if (!totals || !cache) {
+                    return (
+                      <Box key={agent} sx={{ borderRadius: 1.5, bgcolor: "action.hover", px: 1.1, py: 0.9 }}>
+                        <Stack spacing={0.35}>
+                          <Typography variant="body2" fontWeight={700}>{agentName(agent)}</Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            No requests in this window
+                          </Typography>
+                          <Typography variant="caption" color="text.disabled">
+                            Try a longer window or another model.
+                          </Typography>
+                        </Stack>
+                      </Box>
+                    );
+                  }
                   const spendShare = totalSpendCny > 0 && cost &&
                       fullyPriced(totalCost) && fullyPriced(cost)
                     ? cost.estimatedCny * 100 / totalSpendCny

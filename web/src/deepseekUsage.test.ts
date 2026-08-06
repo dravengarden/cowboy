@@ -3,6 +3,7 @@ import {
   deepseekAvailableAgents,
   deepseekCacheStats,
   deepseekCostStats,
+  deepseekVisibleAgents,
   percentLabel,
 } from "./deepseekUsage.ts";
 
@@ -15,6 +16,17 @@ Deno.test("DeepSeek agent capability follows the full retained telemetry window"
     ["codex", "reasonix"],
   );
   assertEquals(deepseekAvailableAgents(undefined), []);
+});
+
+Deno.test("DeepSeek runtime lanes remain visible when a bounded window is empty", () => {
+  assertEquals(
+    deepseekVisibleAgents(["claude", "codex", "reasonix"], "all", ["reasonix"]),
+    ["codex", "claude", "reasonix"],
+  );
+  assertEquals(
+    deepseekVisibleAgents(["claude", "codex", "reasonix"], "claude", []),
+    ["claude"],
+  );
 });
 
 Deno.test("DeepSeek cache rate uses only verified token observations", () => {
