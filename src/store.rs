@@ -2020,6 +2020,73 @@ async fn load_provider_usage_breakdown(
     Ok(breakdown)
 }
 
+async fn load_provider_usage_breakdown_hours(
+    pool: &PgPool,
+    provider: &str,
+    hours: i32,
+) -> Result<ProviderUsageBreakdown> {
+    let query = format!(
+        "SELECT agent, machine_id, coalesce(model, '') AS model, operation, protocol, \
+         {PROVIDER_USAGE_AGGREGATE_COLUMNS} FROM provider_usage_events WHERE provider = $1 \
+         AND occurred_at >= now() - make_interval(hours => $2::int) \
+         GROUP BY agent, machine_id, model, operation, protocol"
+    );
+    let rows = sqlx::query(&query)
+        .bind(provider)
+        .bind(hours)
+        .fetch_all(pool)
+        .await
+        .context("aggregate rolling provider usage")?;
+    let mut breakdown = ProviderUsageBreakdown {
+        summary: UsageAggregate::default(),
+        by_agent: std::collections::BTreeMap::new(),
+        by_machine: std::collections::BTreeMap::new(),
+        by_operation: std::collections::BTreeMap::new(),
+        by_model: std::collections::BTreeMap::new(),
+        by_protocol: std::collections::BTreeMap::new(),
+        by_agent_operation: std::collections::BTreeMap::new(),
+    };
+    for row in rows {
+        let aggregate = UsageAggregate::from_row(&row);
+        let agent = row.get::<String, _>("agent");
+        let operation = row.get::<String, _>("operation");
+        breakdown.summary.add(&aggregate);
+        breakdown
+            .by_agent
+            .entry(agent.clone())
+            .or_default()
+            .add(&aggregate);
+        breakdown
+            .by_machine
+            .entry(row.get("machine_id"))
+            .or_default()
+            .add(&aggregate);
+        breakdown
+            .by_operation
+            .entry(operation.clone())
+            .or_default()
+            .add(&aggregate);
+        breakdown
+            .by_model
+            .entry(row.get("model"))
+            .or_default()
+            .add(&aggregate);
+        breakdown
+            .by_protocol
+            .entry(row.get("protocol"))
+            .or_default()
+            .add(&aggregate);
+        breakdown
+            .by_agent_operation
+            .entry(agent)
+            .or_default()
+            .entry(operation)
+            .or_default()
+            .add(&aggregate);
+    }
+    Ok(breakdown)
+}
+
 async fn load_daily_provider_usage(
     pool: &PgPool,
     provider: &str,
@@ -2142,6 +2209,7 @@ impl Store {
         days: i32,
     ) -> Result<serde_json::Value> {
         let breakdown = load_provider_usage_breakdown(&self.pool, provider, days).await?;
+        let last_24_hours = load_provider_usage_breakdown_hours(&self.pool, provider, 24).await?;
         let daily = load_daily_provider_usage(&self.pool, provider, days).await?;
         let producers = load_provider_usage_coverage(&self.pool, provider, days).await?;
         Ok(serde_json::json!({
@@ -2150,6 +2218,10 @@ impl Store {
             "byMachine": breakdown.by_machine, "byOperation": breakdown.by_operation,
             "byModel": breakdown.by_model, "byProtocol": breakdown.by_protocol,
             "byAgentOperation": breakdown.by_agent_operation, "daily": daily,
+            "last24Hours": {
+                "summary": last_24_hours.summary,
+                "byModel": last_24_hours.by_model,
+            },
             "coverage": { "producers": producers },
         }))
     }

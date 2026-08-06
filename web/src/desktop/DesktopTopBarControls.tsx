@@ -54,11 +54,11 @@ import {
   relativeUpdateTime,
   scheduledResetCountdown,
   shortResetTime,
-  topBarUsageLimits,
   usageLimits,
   type UsageSnapshot,
 } from "../usageLimits";
 import { UsageLogs } from "../UsageLogs";
+import { type UsageWidgetProvider, usageWidgetProviders } from "../usageWidget";
 import { DesktopModal } from "./DesktopModal";
 import {
   DESKTOP_INSET_RADIUS,
@@ -125,6 +125,57 @@ function compactOptionName(option: ConfigOption): string {
 
 function textValue(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function compactCny(value: number): string {
+  return `¥${value < 0.01 ? value.toFixed(3) : value.toFixed(2)}`;
+}
+
+function UsageProviderSummary(
+  { provider }: { provider: UsageWidgetProvider },
+): React.JSX.Element {
+  const deepseek = provider.kind === "deepseek";
+  const primary = deepseek
+    ? compactCny(provider.balanceCny)
+    : `${String(provider.remaining)}%`;
+  const secondary = deepseek
+    ? `24h ${compactCny(provider.spend24hCny)} · Cache ${provider.cacheHitRate.toFixed(1)}%`
+    : `Weekly · resets ${shortResetTime(provider.resetsAt)}`;
+  return (
+    <Box
+      sx={{
+        width: deepseek ? 208 : 156,
+        minWidth: deepseek ? 208 : 156,
+        px: 0.75,
+        py: 0.25,
+        textAlign: "left",
+        borderRadius: `${DESKTOP_INSET_RADIUS}px`,
+        bgcolor: "action.hover",
+      }}
+    >
+      <Stack direction="row" justifyContent="space-between" spacing={0.75}>
+        <Typography variant="caption" color="text.secondary" fontWeight={700} noWrap>
+          {provider.label}
+        </Typography>
+        <Typography
+          variant="caption"
+          fontWeight={800}
+          noWrap
+          sx={{ flexShrink: 0, fontVariantNumeric: "tabular-nums" }}
+        >
+          {primary}
+        </Typography>
+      </Stack>
+      <Typography
+        variant="caption"
+        color="text.secondary"
+        noWrap
+        sx={{ display: "block", fontSize: "0.625rem", fontVariantNumeric: "tabular-nums" }}
+      >
+        {secondary}
+      </Typography>
+    </Box>
+  );
 }
 
 function DesktopUsageExtras(
@@ -761,9 +812,12 @@ export function DesktopTopBarControls({
     globalThis.addEventListener("keydown", onKeyDown, true);
     return (): void => globalThis.removeEventListener("keydown", onKeyDown, true);
   }, [loadUsage, refreshing, usageAnchor, usagePanel]);
-  const usage = providerUsage(snapshot, session?.provider);
+  const widgetProviders = useMemo(() => usageWidgetProviders(snapshot), [snapshot]);
+  const sessionUsage = providerUsage(snapshot, session?.provider);
+  const usage = widgetProviders.some((provider) => provider.kind === sessionUsage?.provider)
+    ? sessionUsage
+    : snapshot?.providers.find((provider) => provider.provider === widgetProviders[0]?.kind);
   const limits = useMemo(() => usageLimits(usage), [usage]);
-  const visibleLimits = useMemo(() => topBarUsageLimits(usage), [usage]);
   const updatedAgo = relativeUpdateTime(snapshot?.refreshed_at_ms ?? 0, clock);
   const availableCommands = timelineState.availableCommands;
   const compactAction = useMemo(
@@ -863,16 +917,18 @@ export function DesktopTopBarControls({
   useDesktopCommand(topbarCommands[1] as DesktopCommand);
   useDesktopCommand(topbarCommands[2] as DesktopCommand);
   useDesktopCommand(topbarCommands[3] as DesktopCommand);
-  // Lower bound for the complete session-control strip. Each quota tile owns
-  // 104px, the freshness tile owns 58px, and run configuration / Compact keep
+  // Lower bound for the complete session-control strip. Provider summaries own
+  // their intrinsic compact width, and run configuration / Compact keep
   // their full touch targets. Auto margin restores the spacious, trailing
   // desktop layout whenever the pane can afford it; once the pane is narrower
   // than this strip, the margin collapses and the parent toolbar scrolls instead
   // of compressing controls into one another.
-  const usageMinWidth = visibleLimits.length > 0
-    ? visibleLimits.length * 104 + Math.max(0, visibleLimits.length - 1) * 4 +
-      58 + 12
-    : 132;
+  const usageMinWidth = snapshot === null
+    ? 132
+    : widgetProviders.reduce(
+      (width, provider) => width + (provider.kind === "deepseek" ? 208 : 156),
+      0,
+    ) + Math.max(0, widgetProviders.length - 1) * 4 + 44;
   const controlsMinWidth = 190 + usageMinWidth +
     (compactAction ? 126 : 0) + (compactAction ? 12 : 6);
 
@@ -973,7 +1029,7 @@ export function DesktopTopBarControls({
         </Box>
       </DesktopModal>
 
-      <ButtonBase
+      {(snapshot === null || widgetProviders.length > 0) && <ButtonBase
           data-desktop-item="topbar-usage"
           data-desktop-topbar-action="usage"
           data-desktop-quota
@@ -989,88 +1045,17 @@ export function DesktopTopBarControls({
             flexShrink: 0,
           }}
         >
-          {visibleLimits.length > 0
+          {widgetProviders.length > 0
             ? (
               <Stack direction="row" spacing={0.4} alignItems="stretch">
-                {visibleLimits.map((limit) => (
-                  <Box
-                    key={limit.id}
-                    sx={{
-                      width: 104,
-                      minWidth: 104,
-                      px: 0.65,
-                      py: 0.25,
-                      textAlign: "left",
-                      borderRadius: `${DESKTOP_INSET_RADIUS}px`,
-                      bgcolor: "action.hover",
-                    }}
-                  >
-                    <Stack
-                      direction="row"
-                      justifyContent="space-between"
-                      spacing={0.75}
-                    >
-                      <Typography
-                        variant="caption"
-                        color="text.secondary"
-                        noWrap
-                        sx={{ flex: 1, minWidth: 0 }}
-                      >
-                        {limit.label}
-                      </Typography>
-                      <Typography
-                        variant="caption"
-                        fontWeight={800}
-                        noWrap
-                        sx={{
-                          flexShrink: 0,
-                          fontVariantNumeric: "tabular-nums",
-                        }}
-                      >
-                        {limit.remaining}%
-                      </Typography>
-                    </Stack>
-                    <Typography
-                      variant="caption"
-                      color="text.secondary"
-                      noWrap
-                      sx={{ display: "block", fontSize: "0.625rem" }}
-                    >
-                      {shortResetTime(limit.resetsAt)}
-                    </Typography>
-                  </Box>
+                {widgetProviders.map((provider) => (
+                  <UsageProviderSummary key={provider.kind} provider={provider} />
                 ))}
-                <Box
-                  sx={{
-                    width: 58,
-                    px: 0.5,
-                    py: 0.25,
-                    borderRadius: `${DESKTOP_INSET_RADIUS}px`,
-                    bgcolor: "action.hover",
-                    textAlign: "left",
-                  }}
-                >
-                  <Typography
-                    variant="caption"
-                    color="text.secondary"
-                    sx={{ display: "block", fontSize: "0.5625rem" }}
-                  >
-                    Updated
-                  </Typography>
-                  <Typography
-                    variant="caption"
-                    fontWeight={750}
-                    noWrap
-                    sx={{ display: "block", fontSize: "0.625rem" }}
-                  >
-                    {updatedAgo}
-                  </Typography>
-                </Box>
               </Stack>
             )
             : (
               <Typography variant="caption" color="text.secondary">
-                {snapshot ? "Usage unavailable" : "Loading usage…"}
+                Loading usage…
               </Typography>
             )}
           <ShortcutKeycap
@@ -1080,13 +1065,13 @@ export function DesktopTopBarControls({
             availability={shortcutAvailability(shortcutsActive, usageAnchor !== null)}
             sx={{ flexShrink: 0 }}
           />
-        </ButtonBase>
+        </ButtonBase>}
 
       <DesktopModal
         open={usageAnchor !== null}
         onClose={(): void => setUsageAnchor(null)}
         title="Usage and activity"
-        description={`${session?.provider ?? "Provider"} · ${usage?.source ?? usage?.status ?? "unavailable"} · Updated ${updatedAgo}`}
+        description={`Supported account providers · Updated ${updatedAgo}`}
         width={760}
         shortcutGroups={[{
           label: "Navigate",

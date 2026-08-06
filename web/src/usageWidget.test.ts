@@ -1,0 +1,105 @@
+import { assertEquals } from "jsr:@std/assert";
+import { usageWidgetProviders } from "./usageWidget";
+
+Deno.test("usage widget aggregates supported providers and drops unsupported placeholders", () => {
+  const providers = usageWidgetProviders({
+    refreshed_at_ms: 1,
+    next_refresh_at_ms: 2,
+    refresh_interval_ms: 1,
+    providers: [
+      {
+        provider: "openai",
+        status: "available",
+        source: "test",
+        observed_at_ms: 1,
+        rate_limits: {
+          rateLimitsByLimitId: {
+            spark: {
+              limitName: "GPT-5.3-Codex-Spark",
+              primary: { usedPercent: 1, windowDurationMins: 10080 },
+            },
+            account: {
+              primary: {
+                usedPercent: 6,
+                windowDurationMins: 10080,
+                resetsAt: 123,
+              },
+            },
+          },
+        },
+      },
+      {
+        provider: "deepseek",
+        status: "available",
+        source: "test",
+        observed_at_ms: 1,
+        account: {
+          accounts: [{
+            balanceInfos: [{ currency: "CNY", total_balance: "108.80" }],
+          }],
+        },
+        activity: {
+          summary: {
+            requests: 2,
+            cacheObservations: 2,
+            cacheHitTokens: 900,
+            cacheMissTokens: 100,
+          },
+          last24Hours: {
+            byModel: {
+              "deepseek-v4-flash": {
+                requests: 1,
+                cacheHitTokens: 500_000,
+                cacheMissTokens: 500_000,
+                outputTokens: 1_000_000,
+              },
+            },
+          },
+        },
+      },
+      {
+        provider: "anthropic",
+        status: "session-only",
+        source: "test",
+        observed_at_ms: 1,
+      },
+      {
+        provider: "gemini",
+        status: "unavailable",
+        source: "test",
+        observed_at_ms: 1,
+      },
+    ],
+  });
+  assertEquals(providers, [
+    {
+      kind: "openai",
+      label: "OpenAI",
+      remaining: 94,
+      resetsAt: 123,
+    },
+    {
+      kind: "deepseek",
+      label: "DeepSeek",
+      balanceCny: 108.8,
+      spend24hCny: 2.51,
+      cacheHitRate: 90,
+    },
+  ]);
+});
+
+Deno.test("usage widget removes providers without complete account-level core data", () => {
+  const providers = usageWidgetProviders({
+    refreshed_at_ms: 1,
+    next_refresh_at_ms: 2,
+    refresh_interval_ms: 1,
+    providers: [{
+      provider: "deepseek",
+      status: "available",
+      source: "test",
+      observed_at_ms: 1,
+      account: { balanceInfos: [{ currency: "CNY", total_balance: "12" }] },
+    }],
+  });
+  assertEquals(providers, []);
+});
