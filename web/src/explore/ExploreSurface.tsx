@@ -2090,7 +2090,6 @@ export function MobilePageDock({
   const loadingPrevious = loadingEarlier || pendingPrevious !== null ||
     loadingAdjacentPageId === indexedPrevious?.id;
   const loadingNext = loadingAdjacentPageId === indexedNext?.id;
-  const onlyCompletePage = total <= 1 && !hasEarlierHistory;
   const directoryPages = useMemo(
     () => mergeQuestionPageDirectory(pageIndex.data?.pages ?? [], pages, total),
     [pageIndex.data?.pages, pages, total],
@@ -2292,9 +2291,7 @@ export function MobilePageDock({
             "& > span": { display: "flex" },
           }}
         >
-          {!onlyCompletePage && (
-            <>
-              <Tooltip title={hasEarlierHistory && !indexedPrevious && !previous
+          <Tooltip title={hasEarlierHistory && !indexedPrevious && !previous
                 ? "Load earlier questions"
                 : "Previous page"}
               >
@@ -2358,9 +2355,7 @@ export function MobilePageDock({
                       : <ChevronRight sx={{ fontSize: "1.25em" }} />}
                   </IconButton>
                 </span>
-              </Tooltip>
-            </>
-          )}
+          </Tooltip>
         </Stack>
         <Button
           aria-label="Open question pages"
