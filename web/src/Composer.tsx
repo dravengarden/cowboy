@@ -119,6 +119,7 @@ import {
   mobileComposerKeyboardGap,
   mobileComposerStackGap,
 } from "./mobileComposerPrimitives";
+import { mobileFocusedComposerSurfaceSx } from "./mobileComposerSurface";
 import { TurnStatusOverlay } from "./TurnStatusOverlay";
 import { PermissionOverlay } from "./PermissionOverlay";
 import {
@@ -1837,20 +1838,12 @@ export function ComposerWorkspace({
               flex: "1 1 auto",
               minHeight: 0,
               maxHeight: "100%",
-              borderColor: (t) => alpha(t.palette.primary.main, 0.42),
               // Focus changes hierarchy inside the same card. Keep the outer
               // edge fixed so opening the keyboard does not look like a second
               // component replacing the compact composer.
-              borderRadius: mobileComposerPanelFrameSx.borderRadius,
-              bgcolor: (t) =>
-                alpha(t.palette.background.paper, t.palette.mode === "dark" ? 0.68 : 0.78),
-              backdropFilter: "blur(24px) saturate(140%)",
-              WebkitBackdropFilter: "blur(24px) saturate(140%)",
               // Clip the filtered sample to the same rounded card. Without this,
               // WebKit leaves a sharp readable fringe around the glass edge.
-              overflow: "hidden",
-              boxShadow: (t) =>
-                `0 10px 28px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.24 : 0.09)}`,
+              ...mobileFocusedComposerSurfaceSx,
             },
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area]": {
               flex: "0 1 auto",
@@ -4607,6 +4600,10 @@ function PendingRow({
                 borderRadius: mobileComposerPanelFrameSx.borderRadius,
                 bgcolor: "transparent",
                 borderColor: (theme) => alpha(theme.palette.primary.main, 0.42),
+                transition:
+                  `border-color ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, background-color ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, box-shadow ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}`,
+                "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within)":
+                  mobileFocusedComposerSurfaceSx,
               }),
           }}
           onKeyDownCapture={desktop

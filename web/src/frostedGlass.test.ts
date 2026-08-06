@@ -8,6 +8,9 @@ import { mobileTranscriptTailGap } from "./mobileComposerPrimitives";
 const composerSource = await Deno.readTextFile(
   new URL("./Composer.tsx", import.meta.url),
 );
+const composerSurfaceSource = await Deno.readTextFile(
+  new URL("./mobileComposerSurface.ts", import.meta.url),
+);
 const transcriptSource = await Deno.readTextFile(
   new URL("./Transcript.tsx", import.meta.url),
 );
@@ -104,12 +107,20 @@ Deno.test("judge progress is transcript-owned with a zero-jump pill handoff", ()
 
 Deno.test("focused mobile composer owns a real frosted material", () => {
   assertEquals(
-    composerSource.includes('backdropFilter: "blur(24px) saturate(140%)"'),
+    composerSurfaceSource.includes(
+      'backdropFilter: "blur(24px) saturate(140%)"',
+    ),
     true,
   );
   assertEquals(
-    composerSource.includes('WebkitBackdropFilter: "blur(24px) saturate(140%)"'),
+    composerSurfaceSource.includes(
+      'WebkitBackdropFilter: "blur(24px) saturate(140%)"',
+    ),
     true,
+  );
+  assertEquals(
+    composerSource.match(/mobileFocusedComposerSurfaceSx/g)?.length,
+    3,
   );
 });
 

@@ -1104,3 +1104,14 @@ Desktop Vim + IME checks:
     intercept pointer, touch, `contextmenu`, or
     selection events to implement this guard: UIKit must continue to own the
     long-press sequence end to end.
+
+51. **Focused Queue/Draft editors use the primary input's material, not a
+    transparent pending-panel fill.** The pending row already shares the native
+    textarea and keyboard accessory dock, but its old transparent Paper allowed
+    the transcript to remain legible underneath the floating edit surface. That
+    looked like editor text colliding with the conversation even though DOM
+    geometry was correct. Keep the focused background, border, radius, blur, and
+    shadow in `mobileFocusedComposerSurfaceSx` and apply that primitive to both
+    the primary input and pending-row editor. This is a paint-only alignment: do
+    not add focus handlers, editor remounts, controlled values, or custom touch
+    handling.

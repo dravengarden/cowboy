@@ -323,6 +323,10 @@ Deno.test("mobile keyboard focus presents one floating composer surface", () => 
     ),
     true,
   );
+  assertEquals(
+    composerSource.match(/mobileFocusedComposerSurfaceSx/g)?.length,
+    3,
+  );
 });
 
 Deno.test("mobile keyboard dismissal belongs to the fixed utility rail", () => {
