@@ -60,6 +60,33 @@ The generated Ed25519 private key stays mode 0600 under the
 Machine state root. Remote HTTP is rejected; loopback HTTP exists only for
 hermetic tests.
 
+## Provider usage spool status
+
+The Machine binary has a controller-independent, read-only status command for
+the durable provider-usage outbox. Run it as the Machine service user against
+the same state root:
+
+```bash
+COWBOY_MACHINE_STATE_DIR=/home/draven/.local/state/cowboy-machine \
+  /nix/var/nix/profiles/columbus-components/cowboy-machine/bin/cowboy-machine \
+  --provider-usage-status | jq .
+```
+
+The command opens `provider-usage.sqlite3` read-only and neither starts a
+broker nor contacts Cowboy. Its JSON reports total pending events,
+`pendingV3Events`, `v3Drained`, and every known producer. Each producer has
+explicit schema 1, 2, and 3 rows with pending count, first/last pending
+sequence, and the last controller-acknowledged sequence and timestamp. Future
+schemas are retained as additional rows rather than folded into v3.
+
+This is the downgrade gate for telemetry schema v3. First replace or stop every
+v3-producing gateway on that Machine and verify its running release. Only then
+may `v3Drained: true` and `pendingV3Events: 0` authorize a Machine downgrade.
+Record the full status for each Machine; a null last ACK is valid only when that
+producer never emitted v3. Pending v1/v2 events may be delivered by the older
+Machine, but any pending v3 event forbids the downgrade. Codex, Claude Code, and
+future Reasonix producers are evaluated independently.
+
 ## Linux user service
 
 The installer writes `~/.config/systemd/user/cowboy-machine.service`. The

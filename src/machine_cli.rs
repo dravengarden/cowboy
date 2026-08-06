@@ -89,8 +89,12 @@ pub struct Args {
     #[arg(long, default_value_t = 255)]
     worker_ready_timeout_seconds: u64,
     /// Cowboy controller base URL.
-    #[arg(long, env = "COWBOY_MACHINE_CONTROLLER_URL")]
-    controller_url: String,
+    #[arg(
+        long,
+        env = "COWBOY_MACHINE_CONTROLLER_URL",
+        required_unless_present = "provider_usage_status"
+    )]
+    controller_url: Option<String>,
     #[arg(long, env = "COWBOY_MACHINE_ID", default_value = "local")]
     machine_id: String,
     #[arg(long, env = "COWBOY_MACHINE_DISPLAY_NAME")]
@@ -101,6 +105,10 @@ pub struct Args {
         default_value = ".cowboy-machine"
     )]
     state_dir: PathBuf,
+    /// Print the durable provider-usage outbox status as JSON and exit. This
+    /// opens the SQLite spool read-only and does not contact the controller.
+    #[arg(long, default_value_t = false)]
+    provider_usage_status: bool,
     /// Machine-local ingestion socket for provider gateways.
     #[arg(
         long,
@@ -176,6 +184,13 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
         .init();
     let args =
         Args::parse_from(std::iter::once(command_name.to_owned()).chain(std::env::args().skip(1)));
+    if args.provider_usage_status {
+        let status = crate::provider_usage_spool::ProviderUsageSpool::read_status(
+            &args.state_dir.join("provider-usage.sqlite3"),
+        )?;
+        println!("{}", serde_json::to_string_pretty(&status)?);
+        return Ok(());
+    }
     let runtime_socket = args.socket.clone();
     let bootstrap_acp_generation = if args.desired_generation.is_empty() {
         env!("CARGO_PKG_VERSION").to_owned()
@@ -210,7 +225,9 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
         worker_environment,
         worker_ready_timeout: std::time::Duration::from_secs(args.worker_ready_timeout_seconds),
     };
-    let controller_url = args.controller_url;
+    let controller_url = args
+        .controller_url
+        .context("--controller-url is required unless --provider-usage-status is used")?;
     validate_controller_url(&controller_url)?;
     let identity = MachineIdentity::load_or_create(&args.state_dir)?;
     let display_name = args.display_name.unwrap_or_else(default_display_name);
@@ -2122,8 +2139,10 @@ mod tests {
     use std::path::PathBuf;
     use std::time::Duration;
 
+    use clap::Parser as _;
+
     use super::{
-        bootstrap_acp_inventory, disabled_provider_slots_from, gemini_auth_from_metadata,
+        Args, bootstrap_acp_inventory, disabled_provider_slots_from, gemini_auth_from_metadata,
         gemini_env_value_from, managed_provider_environment, npm_package_for_component,
         parse_workspaces, provider_for_component, reject_untrusted_workspace, selected_zed_pair,
         send_frame_with_timeout, validate_controller_url, workspace_path_allowed,
@@ -2144,6 +2163,18 @@ mod tests {
     fn loopback_controller_allows_plaintext_for_hermetic_tests() {
         assert!(validate_controller_url("http://127.0.0.1:43333").is_ok());
         assert!(validate_controller_url("http://localhost:43333").is_ok());
+    }
+
+    #[test]
+    fn provider_usage_status_does_not_require_a_controller() {
+        let args = Args::try_parse_from([
+            "cowboy-machine",
+            "--provider-usage-status",
+            "--state-dir",
+            "/tmp/cowboy-machine-status-test",
+        ])
+        .expect("parse read-only status command");
+        assert!(args.provider_usage_status);
     }
 
     #[tokio::test]

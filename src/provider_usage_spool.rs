@@ -2,13 +2,15 @@
 
 #![warn(clippy::pedantic)]
 
+use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result};
-use rusqlite::{Connection, OptionalExtension as _, params};
-use serde::Deserialize;
+use rusqlite::{Connection, OpenFlags, OptionalExtension as _, params};
+use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::UnixListener;
 
@@ -118,6 +120,36 @@ pub struct ProviderUsageSpool {
     connection: Arc<parking_lot::Mutex<Connection>>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderUsageSpoolStatus {
+    pub observed_at_ms: i64,
+    pub pending_events: u64,
+    pub pending_v3_events: u64,
+    pub v3_drained: bool,
+    pub producers: Vec<ProviderUsageProducerStatus>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderUsageProducerStatus {
+    pub producer_id: String,
+    pub next_sequence: u64,
+    pub pending_events: u64,
+    pub schemas: Vec<ProviderUsageSchemaStatus>,
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderUsageSchemaStatus {
+    pub schema_version: u16,
+    pub pending_events: u64,
+    pub first_pending_sequence: Option<u64>,
+    pub last_pending_sequence: Option<u64>,
+    pub last_acknowledged_sequence: Option<u64>,
+    pub last_acknowledged_at_ms: Option<i64>,
+}
+
 impl ProviderUsageSpool {
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
@@ -135,6 +167,11 @@ impl ProviderUsageSpool {
                producer_id TEXT NOT NULL, sequence INTEGER NOT NULL,
                event_id TEXT NOT NULL UNIQUE, payload TEXT NOT NULL,
                PRIMARY KEY (producer_id, sequence)
+             );
+             CREATE TABLE IF NOT EXISTS acknowledgements (
+               producer_id TEXT NOT NULL, schema_version INTEGER NOT NULL,
+               last_sequence INTEGER NOT NULL, acknowledged_at_ms INTEGER NOT NULL,
+               PRIMARY KEY (producer_id, schema_version)
              );",
         )?;
         Ok(Self {
@@ -258,12 +295,199 @@ impl ProviderUsageSpool {
     }
 
     pub fn acknowledge(&self, producer_id: &str, sequence: u64) -> Result<()> {
-        self.connection.lock().execute(
+        let sequence = i64::try_from(sequence).unwrap_or(i64::MAX);
+        let acknowledged_at_ms = unix_ms();
+        let mut connection = self.connection.lock();
+        let transaction = connection.transaction()?;
+        let acknowledged = {
+            let mut statement = transaction.prepare(
+                "SELECT coalesce(cast(json_extract(payload, '$.schema_version') AS INTEGER), 1), \
+                 max(sequence) FROM events WHERE producer_id = ?1 AND sequence <= ?2 \
+                 GROUP BY coalesce(cast(json_extract(payload, '$.schema_version') AS INTEGER), 1)",
+            )?;
+            statement
+                .query_map(params![producer_id, sequence], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        transaction.execute(
             "DELETE FROM events WHERE producer_id = ?1 AND sequence <= ?2",
-            params![producer_id, i64::try_from(sequence).unwrap_or(i64::MAX)],
+            params![producer_id, sequence],
         )?;
+        for (schema_version, last_sequence) in acknowledged {
+            transaction.execute(
+                "INSERT INTO acknowledgements (producer_id, schema_version, last_sequence, \
+                 acknowledged_at_ms) VALUES (?1, ?2, ?3, ?4) \
+                 ON CONFLICT (producer_id, schema_version) DO UPDATE SET \
+                 last_sequence = max(acknowledgements.last_sequence, excluded.last_sequence), \
+                 acknowledged_at_ms = CASE WHEN excluded.last_sequence >= acknowledgements.last_sequence \
+                   THEN excluded.acknowledged_at_ms ELSE acknowledgements.acknowledged_at_ms END",
+                params![producer_id, schema_version, last_sequence, acknowledged_at_ms],
+            )?;
+        }
+        transaction.commit()?;
         Ok(())
     }
+
+    pub fn read_status(path: &Path) -> Result<ProviderUsageSpoolStatus> {
+        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .with_context(|| {
+                format!("opening provider usage spool read-only {}", path.display())
+            })?;
+        status_from_connection(&connection)
+    }
+}
+
+fn unix_ms() -> i64 {
+    i64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+    )
+    .unwrap_or(i64::MAX)
+}
+
+fn status_from_connection(connection: &Connection) -> Result<ProviderUsageSpoolStatus> {
+    let mut producers = BTreeMap::<String, ProviderUsageProducerStatus>::new();
+    {
+        let mut statement = connection
+            .prepare("SELECT producer_id, next_sequence FROM producers ORDER BY producer_id")?;
+        for row in statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })? {
+            let (producer_id, next_sequence) = row?;
+            producers.insert(
+                producer_id.clone(),
+                ProviderUsageProducerStatus {
+                    producer_id,
+                    next_sequence: u64::try_from(next_sequence)
+                        .context("negative next sequence")?,
+                    pending_events: 0,
+                    schemas: (1..=3)
+                        .map(|schema_version| ProviderUsageSchemaStatus {
+                            schema_version,
+                            ..ProviderUsageSchemaStatus::default()
+                        })
+                        .collect(),
+                },
+            );
+        }
+    }
+    {
+        let mut statement = connection.prepare(
+            "SELECT producer_id, \
+             coalesce(cast(json_extract(payload, '$.schema_version') AS INTEGER), 1), \
+             count(*), min(sequence), max(sequence) FROM events \
+             GROUP BY producer_id, \
+             coalesce(cast(json_extract(payload, '$.schema_version') AS INTEGER), 1) \
+             ORDER BY producer_id",
+        )?;
+        for row in statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+            ))
+        })? {
+            let (producer_id, schema_version, pending, first, last) = row?;
+            let producer = producers.get_mut(&producer_id).with_context(|| {
+                format!("usage events reference unknown producer {producer_id}")
+            })?;
+            let schema_version =
+                u16::try_from(schema_version).context("invalid pending schema version")?;
+            let pending = u64::try_from(pending).context("negative pending count")?;
+            producer.pending_events = producer.pending_events.saturating_add(pending);
+            let schema = schema_status_mut(producer, schema_version);
+            schema.pending_events = pending;
+            schema.first_pending_sequence =
+                Some(u64::try_from(first).context("negative first pending sequence")?);
+            schema.last_pending_sequence =
+                Some(u64::try_from(last).context("negative last pending sequence")?);
+        }
+    }
+    load_acknowledgements(connection, &mut producers)?;
+    let mut pending_events = 0_u64;
+    let mut pending_v3_events = 0_u64;
+    let mut producers = producers.into_values().collect::<Vec<_>>();
+    for producer in &mut producers {
+        producer.schemas.sort_by_key(|schema| schema.schema_version);
+        pending_events = pending_events.saturating_add(producer.pending_events);
+        pending_v3_events = pending_v3_events.saturating_add(
+            producer
+                .schemas
+                .iter()
+                .find(|schema| schema.schema_version == 3)
+                .map_or(0, |schema| schema.pending_events),
+        );
+    }
+    Ok(ProviderUsageSpoolStatus {
+        observed_at_ms: unix_ms(),
+        pending_events,
+        pending_v3_events,
+        v3_drained: pending_v3_events == 0,
+        producers,
+    })
+}
+
+fn load_acknowledgements(
+    connection: &Connection,
+    producers: &mut BTreeMap<String, ProviderUsageProducerStatus>,
+) -> Result<()> {
+    let has_acknowledgements = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'acknowledgements')",
+        [],
+        |row| row.get::<_, bool>(0),
+    )?;
+    if !has_acknowledgements {
+        return Ok(());
+    }
+
+    let mut statement = connection.prepare(
+        "SELECT producer_id, schema_version, last_sequence, acknowledged_at_ms \
+         FROM acknowledgements ORDER BY producer_id, schema_version",
+    )?;
+    for row in statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, i64>(3)?,
+        ))
+    })? {
+        let (producer_id, schema_version, sequence, acknowledged_at_ms) = row?;
+        let Some(producer) = producers.get_mut(&producer_id) else {
+            continue;
+        };
+        let schema_version =
+            u16::try_from(schema_version).context("invalid acknowledged schema version")?;
+        let schema = schema_status_mut(producer, schema_version);
+        schema.last_acknowledged_sequence =
+            Some(u64::try_from(sequence).context("negative acknowledged sequence")?);
+        schema.last_acknowledged_at_ms = Some(acknowledged_at_ms);
+    }
+    Ok(())
+}
+
+fn schema_status_mut(
+    producer: &mut ProviderUsageProducerStatus,
+    schema_version: u16,
+) -> &mut ProviderUsageSchemaStatus {
+    if let Some(index) = producer
+        .schemas
+        .iter()
+        .position(|schema| schema.schema_version == schema_version)
+    {
+        return &mut producer.schemas[index];
+    }
+    producer.schemas.push(ProviderUsageSchemaStatus {
+        schema_version,
+        ..ProviderUsageSchemaStatus::default()
+    });
+    producer.schemas.last_mut().expect("schema was inserted")
 }
 
 fn metrics_within_bounds(event: &GatewayUsage) -> bool {
@@ -663,6 +887,87 @@ mod tests {
             .expect("acknowledge batch");
         assert!(reopened.pending_batch().expect("empty batch").is_none());
         drop(reopened);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn status_reports_pending_ranges_and_acknowledgements_by_schema() {
+        let (spool, path) = spool();
+        spool.ingest(&event("event-v3")).expect("v3 ingest");
+        let mut version_two: serde_json::Value =
+            serde_json::from_slice(&event("event-v2")).expect("parse v2 event");
+        version_two["schema_version"] = 2.into();
+        spool
+            .ingest(&serde_json::to_vec(&version_two).expect("v2 JSON"))
+            .expect("v2 ingest");
+
+        spool
+            .acknowledge("codex-deepseek", 1)
+            .expect("acknowledge v3");
+        let status = ProviderUsageSpool::read_status(&path).expect("read-only status");
+        assert_eq!(status.pending_events, 1);
+        assert_eq!(status.pending_v3_events, 0);
+        assert!(status.v3_drained);
+        let producer = &status.producers[0];
+        assert_eq!(producer.producer_id, "codex-deepseek");
+        assert_eq!(producer.next_sequence, 3);
+        assert_eq!(producer.pending_events, 1);
+        let version_two = producer
+            .schemas
+            .iter()
+            .find(|schema| schema.schema_version == 2)
+            .expect("v2 status");
+        assert_eq!(version_two.pending_events, 1);
+        assert_eq!(version_two.first_pending_sequence, Some(2));
+        assert_eq!(version_two.last_pending_sequence, Some(2));
+        assert_eq!(version_two.last_acknowledged_sequence, None);
+        let version_three = producer
+            .schemas
+            .iter()
+            .find(|schema| schema.schema_version == 3)
+            .expect("v3 status");
+        assert_eq!(version_three.pending_events, 0);
+        assert_eq!(version_three.first_pending_sequence, None);
+        assert_eq!(version_three.last_acknowledged_sequence, Some(1));
+        assert!(version_three.last_acknowledged_at_ms.is_some());
+
+        spool
+            .acknowledge("codex-deepseek", 2)
+            .expect("acknowledge v2");
+        let drained = ProviderUsageSpool::read_status(&path).expect("drained read-only status");
+        assert_eq!(drained.pending_events, 0);
+        let version_two = drained.producers[0]
+            .schemas
+            .iter()
+            .find(|schema| schema.schema_version == 2)
+            .expect("drained v2 status");
+        assert_eq!(version_two.last_acknowledged_sequence, Some(2));
+        assert!(version_two.last_acknowledged_at_ms.is_some());
+        drop(spool);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn status_reads_legacy_spool_without_acknowledgement_table() {
+        let (spool, path) = spool();
+        spool.ingest(&event("legacy-event")).expect("legacy ingest");
+        spool
+            .connection
+            .lock()
+            .execute("DROP TABLE acknowledgements", [])
+            .expect("remove additive acknowledgement table");
+
+        let status = ProviderUsageSpool::read_status(&path).expect("read legacy spool status");
+        assert_eq!(status.pending_events, 1);
+        assert_eq!(status.pending_v3_events, 1);
+        assert!(!status.v3_drained);
+        assert!(
+            status.producers[0]
+                .schemas
+                .iter()
+                .all(|schema| schema.last_acknowledged_sequence.is_none())
+        );
+        drop(spool);
         let _ = std::fs::remove_file(path);
     }
 

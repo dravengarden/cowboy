@@ -208,22 +208,67 @@ shows attributed-role coverage so role-based cost conclusions cannot be drawn
 from unknown traffic.
 
 Schema v3 rollout is ordered because old Machine collectors reject it before it
-can enter the durable spool. First deploy a migration-compatible controller
-bridge as the active rollback target; it must tolerate already-applied additive
-migrations newer than its embedded set while preserving checksum verification
-for every migration it knows. Then deploy the controller migration/API, the
-Cowboy Machine maintenance release one Machine at a time, and finally each
-gateway component. Web may follow the controller independently. A
-gateway-first release creates an unrecoverable telemetry gap even though
+can enter the durable spool:
+
+1. Build and deploy the migration-compatible controller bridge by itself. Its
+   successful controller receipt must be the active rollback boundary before
+   migration 0025 is applied. The bridge tolerates already-applied additive
+   migrations newer than its embedded set while preserving checksum
+   verification for every migration it knows.
+2. Build and deploy the final controller migration/API. Verify migration 0025,
+   the provider summary, and the filtered activity endpoint before changing a
+   Machine.
+3. Build the final Machine release and use the explicit maintenance activator
+   on one Machine at a time. Verify reconnect, ACP inventory, and
+   `--provider-usage-status` before proceeding to its gateways.
+4. Activate that Machine's Codex and Claude DeepSeek gateway components through
+   the model-gateway release transaction. Confirm new schema-v3 events receive
+   controller ACKs, then repeat steps 3–4 on the peer Machine.
+5. Web may follow the final controller independently; it does not authorize or
+   imply Machine maintenance.
+
+A gateway-first release creates an unrecoverable telemetry gap even though
 inference remains fail-open.
 
-Rollback is intentionally asymmetric. Roll back each gateway first, then prove
-that every v3 producer spool has been acknowledged and drained before rolling
-back its Machine collector. Never run an old Machine while a v3 spool is
-pending. Migration 0025 remains applied: the controller may roll back only to
-the migration-compatible bridge or a descendant release, never to a binary
-that predates the bridge. Controller recovery after that boundary is a forward
-fix or a rollback that retains migration compatibility, not a schema downgrade.
+Successful component activations cannot manually select an ancestor revision:
+the Cowboy and model-gateway activators both require every later candidate to
+descend from the active lane revision. Therefore rollback is a new, clean,
+committed release, never a direct move to an old profile. Before maintenance,
+prepare two isolated worktrees based on the current deployed revisions:
+
+- in Columbus, create one descendant revert commit that removes the gateway-v3
+  change, then build both gateway release outputs;
+- in Cowboy, create one descendant revert commit that restores the
+  bridge-equivalent application state while retaining the bridge's
+  `ignore_missing` migration behavior, then build Web, Machine, and controller
+  release outputs.
+
+For each candidate, prove the active revision is an ancestor with
+`git merge-base --is-ancestor <active-revision> HEAD`; the activator repeats
+this check against fresh remote state. Do not build an ancestor bridge checkout
+and expect the release entrypoint to accept it.
+
+Rollback is intentionally asymmetric and uses those descendant releases:
+
+1. Activate the reverted Codex and Claude gateway releases on every Machine so
+   no process can append another v3 event.
+2. On every Machine, run the active `cowboy-machine
+   --provider-usage-status` command documented in `docs/machine-operations.md`.
+   Record all producers and wait until `pendingV3Events` is zero and
+   `v3Drained` is true. The schema rows expose pending sequence ranges and the
+   latest controller ACK; absence of a queryable record is not drain evidence.
+3. Revert Web if required, then activate the descendant Machine release under
+   the explicit maintenance boundary, one Machine at a time.
+4. After all Machines are compatible with v2, activate the descendant
+   bridge-equivalent controller release last.
+
+Never run an old Machine while a v3 spool is pending. Migration 0025 remains
+applied: the controller may return only to a descendant release that retains
+the migration-compatible bridge behavior, never to the original ancestor
+binary. Controller recovery after that boundary is a forward fix or a
+descendant revert, not a schema downgrade. Automatic predecessor restoration
+inside one failed activation remains valid because it occurs before that
+candidate is recorded as the successful active revision.
 
 DeepSeek credentials and mutable runtime state remain independent per agent
 lane. The provider adapter may collapse duplicate official balances only when
