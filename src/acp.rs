@@ -59,6 +59,8 @@ pub(crate) const STARTUP_PHASE_TIMEOUT: Duration = Duration::from_mins(1);
 const RESUME_PHASE_TIMEOUT: Duration = Duration::from_mins(4);
 const CODEX_FULL_ACCESS_CONFIG_ID: &str = "mode";
 const CODEX_FULL_ACCESS_CONFIG_VALUE: &str = "agent-full-access";
+const REASONIX_TOOL_APPROVAL_CONFIG_ID: &str = "tool_approval";
+const REASONIX_YOLO_CONFIG_VALUE: &str = "yolo";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum StartupPhase {
@@ -116,8 +118,9 @@ fn startup_full_access_mode(provider_id: &str) -> Option<&'static str> {
 mod startup_mode_tests {
     use super::{
         ResumeMethod, StartupPhase, StartupTimeout, codex_full_access_available,
-        codex_full_access_selected, reasonix_yolo_selected, reasonix_yolo_tool_permission,
-        select_resume_method, session_config_value, startup_full_access_mode,
+        codex_full_access_selected, reasonix_yolo_available, reasonix_yolo_selected,
+        reasonix_yolo_tool_permission, select_resume_method, session_config_value,
+        startup_full_access_mode,
     };
     use agent_client_protocol::schema::v1::{
         SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption,
@@ -183,7 +186,9 @@ mod startup_mode_tests {
         )];
 
         assert!(!reasonix_yolo_selected(&ask));
+        assert!(reasonix_yolo_available(&ask));
         assert!(reasonix_yolo_selected(&yolo));
+        assert!(!reasonix_yolo_available(&yolo));
     }
 
     #[test]
@@ -336,8 +341,21 @@ fn codex_full_access_selected(options: &[SessionConfigOption]) -> bool {
 fn reasonix_yolo_selected(options: &[SessionConfigOption]) -> bool {
     options.iter().any(|option| match &option.kind {
         SessionConfigKind::Select(select) => {
-            select.current_value.0.as_ref() == "yolo"
-                && config_select_options_contain(&select.options, "yolo")
+            option.id.0.as_ref() == REASONIX_TOOL_APPROVAL_CONFIG_ID
+                && select.current_value.0.as_ref() == REASONIX_YOLO_CONFIG_VALUE
+                && config_select_options_contain(&select.options, REASONIX_YOLO_CONFIG_VALUE)
+        }
+        #[allow(unreachable_patterns)]
+        _ => false,
+    })
+}
+
+fn reasonix_yolo_available(options: &[SessionConfigOption]) -> bool {
+    options.iter().any(|option| match &option.kind {
+        SessionConfigKind::Select(select) => {
+            option.id.0.as_ref() == REASONIX_TOOL_APPROVAL_CONFIG_ID
+                && select.current_value.0.as_ref() != REASONIX_YOLO_CONFIG_VALUE
+                && config_select_options_contain(&select.options, REASONIX_YOLO_CONFIG_VALUE)
         }
         #[allow(unreachable_patterns)]
         _ => false,
@@ -1077,6 +1095,29 @@ async fn run_session(
     {
         tracing::info!(session = %session_id, "codex approval preset -> full access");
         state.codex_full_access.store(true, Ordering::SeqCst);
+        state.sink.set_config_options(&session_id, updated_options);
+        config_options = None;
+    }
+
+    // Reasonix exposes Tool Approval as a config option, not a session mode.
+    // Select its native Yolo posture at startup so a new Cowboy session is
+    // immediately usable; protected decisions remain permission-gated by
+    // Reasonix and by Cowboy's narrow permission classifier.
+    if provider_id == "reasonix-deepseek"
+        && config_options
+            .as_ref()
+            .is_some_and(|options| reasonix_yolo_available(options))
+        && let Some(updated_options) = set_startup_config_option(
+            &cx,
+            &session_id,
+            &acp_id,
+            REASONIX_TOOL_APPROVAL_CONFIG_ID,
+            REASONIX_YOLO_CONFIG_VALUE,
+        )
+        .await
+    {
+        tracing::info!(session = %session_id, "reasonix tool approval -> yolo");
+        state.reasonix_yolo.store(true, Ordering::SeqCst);
         state.sink.set_config_options(&session_id, updated_options);
         config_options = None;
     }

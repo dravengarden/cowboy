@@ -59,6 +59,7 @@ const COMPACT_DEFAULT: Record<string, string> = {
   "codex": "compact",
   "codex-deepseek": "compact",
   "gemini": "compress",
+  "reasonix-deepseek": "compact",
 };
 
 function resolveCompact(
