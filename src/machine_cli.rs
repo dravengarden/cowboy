@@ -778,7 +778,11 @@ async fn collect_inventory(
         ("codex", "codex", &["--version"][..]),
         ("claude", "claude", &["--version"][..]),
         ("gemini", "gemini", &["--version"][..]),
-        ("reasonix", "reasonix", &["--version"][..]),
+        (
+            "reasonix",
+            "/opt/npm-global/bin/reasonix",
+            &["--version"][..],
+        ),
     ] {
         if disabled.iter().any(|disabled| disabled == slot) {
             continue;

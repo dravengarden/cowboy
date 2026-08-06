@@ -268,7 +268,7 @@ fn builtin_with_env_and_shell(
     m.insert("codex-deepseek", deepseek);
     let mut reasonix_deepseek = spec_with_custom_default_args(
         "reasonix-deepseek",
-        "reasonix",
+        "/opt/npm-global/bin/reasonix",
         &["acp"],
         &["acp"],
         &get_env,
