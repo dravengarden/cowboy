@@ -13,12 +13,15 @@ export function machineProviderAvailable(
     ? "claude"
     : provider === "codex-deepseek"
     ? "codex"
+    : provider === "reasonix-deepseek"
+    ? "reasonix"
     : provider;
   const cliReady = components.some((component) =>
     component.id.kind === "provider_cli" &&
     component.id.slot === slot &&
     component.state === "active" &&
     (provider === "codex-deepseek" || provider === "claude-deepseek" ||
+      provider === "reasonix-deepseek" ||
       component.auth === "signed_in") &&
     (provider !== "gemini" || typeof component.detail === "string")
   );
@@ -26,6 +29,8 @@ export function machineProviderAvailable(
     ? "codex"
     : provider === "claude-deepseek"
     ? "claude"
+    : provider === "reasonix-deepseek"
+    ? "reasonix-deepseek"
     : null;
   if (!cliReady || isolatedBase === null) return cliReady;
   const adapterActive = (adapterSlot: string): boolean => components.some((component) =>
@@ -33,5 +38,7 @@ export function machineProviderAvailable(
       component.id.slot === adapterSlot &&
       component.state === "active"
     );
-  return adapterActive(isolatedBase) && adapterActive(provider);
+  return isolatedBase === provider
+    ? adapterActive(provider)
+    : adapterActive(isolatedBase) && adapterActive(provider);
 }

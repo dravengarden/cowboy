@@ -227,6 +227,8 @@ function TranscriptSkeleton({
 
   const agent = provider === "claude-code" || provider === "claude-deepseek"
     ? "Claude Code"
+    : provider === "reasonix-deepseek"
+    ? "Reasonix"
     : provider === "gemini"
     ? "Gemini"
     : "Codex";

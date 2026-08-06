@@ -15,6 +15,7 @@ needed, hand-coded confirm-detection rules — the core never changes.
 | `claude-deepseek` | the same Claude ACP adapter with an isolated provider-owned `CLAUDE_CONFIG_DIR` | Claude Code over the independent local DeepSeek Anthropic Messages gateway |
 | `codex` | `npx -y @agentclientprotocol/codex-acp` plus full-access defaults | adapter over Codex App Server |
 | `codex-deepseek` | the same Codex ACP adapter with an isolated provider-owned `CODEX_HOME` | Codex over the independent local DeepSeek Responses gateway |
+| `reasonix-deepseek` | `reasonix acp` | Reasonix native ACP over its independent local DeepSeek Chat Completions gateway |
 | `gemini` | `npx -y @google/gemini-cli --acp` | Gemini's native ACP mode |
 
 Each entry is a **`LaunchSpec`**: `id` + `command` + `args` + scoped environment.
@@ -102,13 +103,16 @@ tests, and release transaction. It preserves native Anthropic Messages/SSE and
 contains only current fixture-backed DeepSeek compatibility repairs; it is not
 a shared provider router.
 
-Reasonix is not yet a Cowboy provider. Provider-usage schema v3 reserves a
-separate `reasonix-deepseek` producer and role dimensions so a later native Chat
-Completions integration can report planner/executor/subagent/reviewer economics
-without collapsing them into Codex or Claude. Admission still requires its own
-launch spec, process, config root, credential, gateway port, health check, and
-release lifecycle; telemetry reservation does not advertise or enable the
-runtime.
+`reasonix-deepseek` runs Reasonix's native ACP server directly; there is no
+Cowboy protocol shim. The runtime reads its own `~/.reasonix` configuration and
+shares only the canonical Claude/Reasonix fact store established by the host.
+It reaches the independent `reasonix-deepseek.service` loopback gateway, whose
+systemd credential is never passed to Cowboy, Reasonix, worker arguments, or
+logs. The worker also strips inherited OpenAI, Anthropic, Claude, Codex, and
+DeepSeek credentials before launch. A Machine advertises the provider only when
+both the Reasonix CLI and its gateway health check are active. Provider-usage
+schema v3 keeps planner/executor/subagent/reviewer economics distinct from the
+Codex and Claude lanes.
 
 Gemini CLI stopped accepting Google Login for consumer, Google AI Pro, and AI
 Ultra accounts on 2026-06-18. Its ACP mode remains usable with a Gemini API key

@@ -32,6 +32,13 @@ Deno.test("provider presentation separates the agent from its model provider", (
   assertEquals(providerName("claude-deepseek"), "Claude Code · DeepSeek");
   assertEquals(providerAgentFamily("claude-deepseek"), "claude-code");
   assertEquals(providerAgentFamily("codex-deepseek"), "codex");
+
+  const reasonix = providerPresentation("reasonix-deepseek");
+  assertEquals(reasonix.agent, "Reasonix");
+  assertEquals(reasonix.modelProvider, "DeepSeek");
+  assertEquals(reasonix.isolated, true);
+  assertEquals(providerName("reasonix-deepseek"), "Reasonix · DeepSeek");
+  assertEquals(providerAgentFamily("reasonix-deepseek"), "reasonix");
 });
 
 Deno.test("future provider variants degrade to machine-provided metadata", () => {

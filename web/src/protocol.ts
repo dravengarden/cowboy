@@ -406,5 +406,6 @@ export const PROVIDERS = [
   "codex-deepseek",
   "claude-code",
   "claude-deepseek",
+  "reasonix-deepseek",
   "gemini",
 ] as const;

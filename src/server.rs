@@ -2058,6 +2058,8 @@ async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
                                                                 provider,
                                                                 "claude-code" | "claude-deepseek"
                                                             ))
+                                                        || (slot == "reasonix"
+                                                            && provider == "reasonix-deepseek")
                                                 })
                                                 .count(),
                                         )
@@ -3234,13 +3236,14 @@ fn machine_supports_provider(
     let cli_slot = match provider {
         "claude-code" | "claude-deepseek" => "claude",
         "codex-deepseek" => "codex",
+        "reasonix-deepseek" => "reasonix",
         provider => provider,
     };
     let cli_ready = components.iter().any(|component| {
         component.id.kind == ComponentKind::ProviderCli
             && matches!(component.id.slot.as_str(), candidate if candidate == cli_slot || candidate == provider)
             && component.state == ComponentState::Active
-            && (matches!(provider, "codex-deepseek" | "claude-deepseek")
+            && (matches!(provider, "codex-deepseek" | "claude-deepseek" | "reasonix-deepseek")
                 || component.auth == Some(AuthState::SignedIn))
     });
     if !cli_ready {
@@ -3260,6 +3263,8 @@ fn machine_supports_provider(
         adapter_active("codex") && adapter_active("codex-deepseek")
     } else if provider == "claude-deepseek" {
         adapter_active("claude") && adapter_active("claude-deepseek")
+    } else if provider == "reasonix-deepseek" {
+        adapter_active("reasonix-deepseek")
     } else {
         adapter_active(cli_slot) || adapter_active(provider)
     }
@@ -3399,6 +3404,24 @@ mod machine_provider_tests {
             component(ComponentKind::ProviderAdapter, "claude-deepseek", None),
         ];
         assert!(machine_supports_provider(&components, "claude-deepseek"));
+    }
+
+    #[test]
+    fn reasonix_requires_its_cli_and_isolated_gateway_without_runtime_credentials() {
+        let cli = component(
+            ComponentKind::ProviderCli,
+            "reasonix",
+            Some(AuthState::Unsupported),
+        );
+        assert!(!machine_supports_provider(
+            std::slice::from_ref(&cli),
+            "reasonix-deepseek"
+        ));
+        let gateway = component(ComponentKind::ProviderAdapter, "reasonix-deepseek", None);
+        assert!(machine_supports_provider(
+            &[cli, gateway],
+            "reasonix-deepseek"
+        ));
     }
 
     #[test]

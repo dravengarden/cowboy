@@ -65,6 +65,21 @@ Deno.test("maps Claude DeepSeek to isolated gateway and shared Claude adapter", 
   );
 });
 
+Deno.test("maps Reasonix to its native CLI and isolated gateway", () => {
+  const cli = {
+    id: { kind: "provider_cli", slot: "reasonix" },
+    state: "active",
+    auth: "unsupported",
+  };
+  const gateway = {
+    id: { kind: "provider_adapter", slot: "reasonix-deepseek" },
+    state: "active",
+  };
+  assertEquals(machineProviderAvailable("reasonix-deepseek", [cli]), false);
+  assertEquals(machineProviderAvailable("reasonix-deepseek", [gateway]), false);
+  assertEquals(machineProviderAvailable("reasonix-deepseek", [cli, gateway]), true);
+});
+
 Deno.test("requires an active and confirmed signed-in provider", () => {
   assertEquals(
     machineProviderAvailable("gemini", [{

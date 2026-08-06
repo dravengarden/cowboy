@@ -23,6 +23,9 @@ const OPENAI_PATH =
 const GEMINI_PATH =
   "M12 24A14.304 14.304 0 0 0 0 12 14.304 14.304 0 0 0 12 0a14.304 14.304 0 0 0 12 12 14.304 14.304 0 0 0-12 12";
 
+const REASONIX_PATH =
+  "M11 1h2v7.17l5.07-5.07 1.42 1.41-5.08 5.08H22v2h-7.59l5.08 5.08-1.42 1.41L13 13v7.17l3.24-3.24 1.42 1.41L12 24l-5.66-5.66 1.42-1.41L11 20.17V13l-5.07 5.08-1.42-1.41 5.08-5.08H2v-2h7.59L4.51 4.51 5.93 3.1 11 8.17V1z";
+
 /**
  * The brand logo for a cowboy provider. Renders nothing for an unknown provider
  * (the surrounding label still shows the provider name as plain text), so a new
@@ -81,6 +84,18 @@ export function ProviderIcon({
             </linearGradient>
           </defs>
           <path d={OPENAI_PATH} fill={`url(#${deepSeekGradientId})`} />
+        </SvgIcon>
+      );
+    case "reasonix-deepseek":
+      return (
+        <SvgIcon viewBox="0 0 24 24" {...props}>
+          <defs>
+            <linearGradient id={deepSeekGradientId} x1="2" y1="2" x2="22" y2="22">
+              <stop offset="0" stopColor={deepSeekVisual.primary} />
+              <stop offset="1" stopColor={deepSeekVisual.secondary} />
+            </linearGradient>
+          </defs>
+          <path d={REASONIX_PATH} fill={`url(#${deepSeekGradientId})`} />
         </SvgIcon>
       );
     case "gemini":

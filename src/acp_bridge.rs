@@ -464,6 +464,7 @@ impl Bridge {
             "codex" => "Cowboy · Codex",
             "claude-code" => "Cowboy · Claude Code",
             "claude-deepseek" => "Cowboy · Claude Code · DeepSeek",
+            "reasonix-deepseek" => "Cowboy · Reasonix · DeepSeek",
             "gemini" => "Cowboy · Gemini",
             provider => provider,
         }

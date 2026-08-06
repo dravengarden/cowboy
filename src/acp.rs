@@ -108,6 +108,7 @@ fn startup_full_access_mode(provider_id: &str) -> Option<&'static str> {
     }
     match provider_id {
         "gemini" => Some("yolo"),
+        "reasonix-deepseek" => Some("bypassPermissions"),
         _ => None,
     }
 }
@@ -134,6 +135,10 @@ mod startup_mode_tests {
             Some("bypassPermissions")
         );
         assert_eq!(startup_full_access_mode("gemini"), Some("yolo"));
+        assert_eq!(
+            startup_full_access_mode("reasonix-deepseek"),
+            Some("bypassPermissions")
+        );
         assert_eq!(startup_full_access_mode("codex"), None);
     }
 
