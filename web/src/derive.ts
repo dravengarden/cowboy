@@ -36,6 +36,7 @@ export type RenderItem = { key: string } & (
   | {
       kind: "permission";
       requestId: string;
+      requestKind: "permission" | "question";
       title: string;
       options: PermissionOption[];
       resolved: boolean;
@@ -101,6 +102,7 @@ function sameRenderItem(a: RenderItem, b: RenderItem): boolean {
         Object.is(a.content, b.content);
     case "permission":
       return b.kind === "permission" && a.requestId === b.requestId &&
+        a.requestKind === b.requestKind &&
         a.title === b.title && a.resolved === b.resolved &&
         a.chosen === b.chosen && Object.is(a.options, b.options);
     case "lifecycle":
@@ -348,6 +350,7 @@ export function derive(timeline: Envelope[]): RenderItem[] {
           kind: "permission",
           key: String(env.seq),
           requestId: env.request_id,
+          requestKind: permissionRequestKind(env.tool_call),
           title: titleOfToolCall(env.tool_call),
           options: env.options,
           resolved: false,
@@ -465,6 +468,7 @@ export function latestPlan(timeline: Envelope[]): CurrentPlan | null {
 /// `permission_resolved` removes it.
 export interface PendingPermission {
   requestId: string;
+  requestKind: "permission" | "question";
   title: string;
   options: PermissionOption[];
 }
@@ -474,6 +478,7 @@ export function latestPendingPermission(timeline: Envelope[]): PendingPermission
     if (env.kind === "permission_request") {
       pending.set(env.request_id, {
         requestId: env.request_id,
+        requestKind: permissionRequestKind(env.tool_call),
         title: titleOfToolCall(env.tool_call),
         options: env.options,
       });
@@ -562,4 +567,13 @@ function titleOfToolCall(tc: unknown): string {
     if (typeof t === "string") return t;
   }
   return "Permission requested";
+}
+
+function permissionRequestKind(tc: unknown): "permission" | "question" {
+  if (!tc || typeof tc !== "object" || !("rawInput" in tc)) return "permission";
+  const input = (tc as { rawInput?: unknown }).rawInput;
+  if (!input || typeof input !== "object") return "permission";
+  const question = (input as { question?: unknown }).question;
+  const options = (input as { options?: unknown }).options;
+  return typeof question === "string" && Array.isArray(options) ? "question" : "permission";
 }

@@ -32,6 +32,28 @@ Deno.test("derive coalesces text and memoizes immutable timelines", () => {
   if (message.chunks[0].text !== "hello") throw new Error("chunks were not coalesced");
 });
 
+Deno.test("structured agent questions are not presented as tool approvals", () => {
+  const timeline: Envelope[] = [{
+    session_id: "s1",
+    seq: 1,
+    kind: "permission_request",
+    request_id: "q1",
+    tool_call: {
+      title: "Choose how to continue",
+      rawInput: {
+        question: "How should I continue?",
+        options: [{ Label: "Continue" }],
+      },
+    },
+    options: [],
+  }];
+
+  const item = derive(timeline)[0];
+  if (item?.kind !== "permission" || item.requestKind !== "question") {
+    throw new Error("structured question should render as an answer request");
+  }
+});
+
 Deno.test("derive collapses repeated terminal lifecycle projections", () => {
   const detail = "Gemini personal access retired";
   const items = derive([detail, null, null].map((projectedDetail, index): Envelope => ({

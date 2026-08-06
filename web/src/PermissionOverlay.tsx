@@ -1,6 +1,7 @@
 import { type ReactNode, useMemo } from "react";
 import { alpha, Box, Button, Stack, Typography } from "@mui/material";
 import WarningAmberRounded from "@mui/icons-material/WarningAmberRounded";
+import HelpOutlineRounded from "@mui/icons-material/HelpOutlineRounded";
 import type { PendingPermission } from "./derive";
 import { send } from "./store";
 import { requestStickToBottom, useSticky } from "./stickyStore";
@@ -35,6 +36,9 @@ export function PermissionOverlay({
   // toggled the instant the user wheels/touches away — so it's exactly the
   // auto-collapse trigger (no new scroll listener on the fragile scroll model).
   const expanded = useSticky(sessionId);
+  const isQuestion = item.requestKind === "question";
+  const accent = isQuestion ? "primary.main" : "warning.main";
+  const label = isQuestion ? "Answer needed" : "Permission required";
   const preferredActions = useMemo(() => {
     const find = (prefix: "allow" | "reject"): number => {
       const once = item.options.findIndex((option) =>
@@ -111,9 +115,15 @@ export function PermissionOverlay({
             // A warning tint over the frosted panel (the colour-coded "needs a
             // decision" state, matching the turn-status overlay's amber kinds).
             backgroundImage: `linear-gradient(0deg, ${
-              alpha(t.palette.warning.main, t.palette.mode === "dark" ? 0.16 : 0.12)
+              alpha(
+                isQuestion ? t.palette.primary.main : t.palette.warning.main,
+                t.palette.mode === "dark" ? 0.16 : 0.12,
+              )
             }, ${
-              alpha(t.palette.warning.main, t.palette.mode === "dark" ? 0.16 : 0.12)
+              alpha(
+                isQuestion ? t.palette.primary.main : t.palette.warning.main,
+                t.palette.mode === "dark" ? 0.16 : 0.12,
+              )
             })`,
           })}
         >
@@ -121,11 +131,13 @@ export function PermissionOverlay({
             direction="row"
             spacing={1}
             alignItems="center"
-            sx={{ color: "warning.main", mb: 1 }}
+            sx={{ color: accent, mb: 1 }}
           >
-            <WarningAmberRounded fontSize="small" sx={{ flexShrink: 0 }} />
+            {isQuestion
+              ? <HelpOutlineRounded fontSize="small" sx={{ flexShrink: 0 }} />
+              : <WarningAmberRounded fontSize="small" sx={{ flexShrink: 0 }} />}
             <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-              Permission required
+              {label}
             </Typography>
           </Stack>
           <Box
@@ -197,17 +209,21 @@ export function PermissionOverlay({
             borderRadius: 999,
             userSelect: "none",
             WebkitUserSelect: "none",
-            ...frostedPill(t, t.palette.warning.main),
+            ...frostedPill(t, isQuestion ? t.palette.primary.main : t.palette.warning.main),
           })}
         >
-          <WarningAmberRounded
-            sx={{ fontSize: 18, color: "warning.main", flexShrink: 0 }}
-          />
+          {isQuestion
+            ? <HelpOutlineRounded sx={{ fontSize: 18, color: accent, flexShrink: 0 }} />
+            : (
+              <WarningAmberRounded
+                sx={{ fontSize: 18, color: accent, flexShrink: 0 }}
+              />
+            )}
           <Typography
             variant="body2"
-            sx={{ fontWeight: 600, color: "warning.main", whiteSpace: "nowrap" }}
+            sx={{ fontWeight: 600, color: accent, whiteSpace: "nowrap" }}
           >
-            Permission required
+            {label}
           </Typography>
         </Stack>
       )}
