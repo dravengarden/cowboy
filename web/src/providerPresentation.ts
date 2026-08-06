@@ -71,3 +71,13 @@ export function providerAgentFamily(provider: string): string {
   if (provider === "reasonix-deepseek") return "reasonix";
   return provider;
 }
+
+export type ProviderActivityKind = "claude" | "codex" | "reasonix" | "default";
+
+export function providerActivityKind(provider: string): ProviderActivityKind {
+  const family = providerAgentFamily(provider);
+  if (family === "claude-code") return "claude";
+  if (family === "codex") return "codex";
+  if (family === "reasonix") return "reasonix";
+  return "default";
+}

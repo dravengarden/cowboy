@@ -1,4 +1,5 @@
 import {
+  providerActivityKind,
   providerAgentFamily,
   providerName,
   providerPresentation,
@@ -39,6 +40,10 @@ Deno.test("provider presentation separates the agent from its model provider", (
   assertEquals(reasonix.isolated, true);
   assertEquals(providerName("reasonix-deepseek"), "Reasonix · DeepSeek");
   assertEquals(providerAgentFamily("reasonix-deepseek"), "reasonix");
+  assertEquals(providerActivityKind("reasonix-deepseek"), "reasonix");
+  assertEquals(providerActivityKind("claude-deepseek"), "claude");
+  assertEquals(providerActivityKind("codex-deepseek"), "codex");
+  assertEquals(providerActivityKind("future-agent"), "default");
 });
 
 Deno.test("future provider variants degrade to machine-provided metadata", () => {
