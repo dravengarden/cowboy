@@ -48,139 +48,94 @@ export function deepseekCacheStats(
   };
 }
 
+export type DeepSeekObservedAgent = "codex" | "claude" | "reasonix";
+
+/** Agent lanes with at least one event in the full retained telemetry window. */
+export function deepseekAvailableAgents(
+  activity: Record<string, unknown> | undefined,
+): DeepSeekObservedAgent[] {
+  if (!Array.isArray(activity?.availableAgents)) return [];
+  return [...new Set(activity.availableAgents.filter((agent): agent is DeepSeekObservedAgent =>
+    agent === "codex" || agent === "claude" || agent === "reasonix"
+  ))];
+}
+
 /** Fixed two-decimal percentage label, e.g. 87.345 → "87.35%". */
 export function percentLabel(value: number | undefined): string {
   return value === undefined ? "—" : `${value.toFixed(2)}%`;
 }
 
-/**
- * DeepSeek list prices, CNY per 1M tokens (off-peak), after the V4 price
- * cuts; deepseek-chat / deepseek-reasoner are billing aliases of
- * deepseek-v4-flash. Peak hours (09:00-12:00 and 14:00-18:00 Beijing time)
- * bill at double the off-peak rate; this estimate uses the off-peak list
- * price, so peak-period usage is understated. Prices move; keep the estimate
- * labelled "list price" in the UI.
- */
-export interface DeepSeekPrice {
-  inputMissCnyPerMTokens: number;
-  inputHitCnyPerMTokens: number;
-  outputCnyPerMTokens: number;
-}
-
-const DEEPSEEK_LIST_PRICES: Record<string, DeepSeekPrice> = {
-  "deepseek-v4-flash": {
-    inputMissCnyPerMTokens: 1,
-    inputHitCnyPerMTokens: 0.02,
-    outputCnyPerMTokens: 2,
-  },
-  "deepseek-chat": {
-    inputMissCnyPerMTokens: 1,
-    inputHitCnyPerMTokens: 0.02,
-    outputCnyPerMTokens: 2,
-  },
-  "deepseek-reasoner": {
-    inputMissCnyPerMTokens: 1,
-    inputHitCnyPerMTokens: 0.02,
-    outputCnyPerMTokens: 2,
-  },
-  "deepseek-v4-pro": {
-    inputMissCnyPerMTokens: 3,
-    inputHitCnyPerMTokens: 0.025,
-    outputCnyPerMTokens: 6,
-  },
-};
-
-const DEEPSEEK_DEFAULT_PRICE: DeepSeekPrice = {
-  inputMissCnyPerMTokens: 1,
-  inputHitCnyPerMTokens: 0.02,
-  outputCnyPerMTokens: 2,
-};
-
-/** List price for a model name, tolerating provider prefixes (e.g. "deepseek/deepseek-chat"). */
-export function deepseekListPrice(
-  model: string | undefined,
-): DeepSeekPrice {
-  if (model) {
-    const key = model.toLowerCase().split("/").pop() ?? "";
-    return DEEPSEEK_LIST_PRICES[key] ?? DEEPSEEK_DEFAULT_PRICE;
-  }
-  return DEEPSEEK_DEFAULT_PRICE;
-}
-
-/**
- * The model a lane predominantly used, by total verified tokens. DeepSeek
- * billing differs per model, and cost estimates are keyed off this pick; when
- * a lane mixes models the dominant one is a close approximation.
- */
-export function primaryDeepSeekModel(
-  byModel: Record<string, unknown> | undefined,
-): string | undefined {
-  if (!byModel) return undefined;
-  let best: string | undefined;
-  let bestTokens = -1;
-  for (const [name, value] of Object.entries(byModel)) {
-    const aggregate = value !== null && typeof value === "object" &&
-        !Array.isArray(value)
-      ? value as Record<string, unknown>
-      : undefined;
-    const tokens = finite(aggregate?.inputTokens) +
-      finite(aggregate?.outputTokens) + finite(aggregate?.reasoningTokens);
-    if (tokens > bestTokens) {
-      bestTokens = tokens;
-      best = name;
-    }
-  }
-  return best;
-}
-
-/** Estimated spend + efficiency ratios for one agent lane (CNY, off-peak list price). */
+/** Backend-valued DeepSeek spend and cache economics for one exact model mix. */
 export interface DeepSeekCostStats {
-  model: string | undefined;
-  estimatedCny: number;
+  estimatedUsd: number;
+  noCacheUsd: number;
+  allHitFloorUsd: number;
+  cacheSavingsUsd: number;
+  cacheMissPremiumUsd: number;
   totalTokens: number;
   requests: number;
-  costPerRequestCny: number;
-  costPerMTokensCny: number;
+  usageObservedRequests: number;
+  unknownModelRequests: number;
+  inputTokens: number;
+  pricedInputTokens: number;
+  unpricedInputTokens: number;
+  outputTokens: number;
+  unpricedOutputTokens: number;
+  reasoningTokens: number;
+  modelFamilies: string[];
+  costPerRequestUsd: number;
+  costPerMTokensUsd: number;
   avgTokensPerRequest: number;
-  avgGatewayMs: number | undefined;
-  totalGatewayMinutes: number | undefined;
+  priceCoverageRate: number | undefined;
 }
 
 /**
- * Cost estimate from DeepSeek list prices × verified tokens. Reasoning tokens
- * bill at the output rate; only token fields observed by the gateway count, so
- * unobserved requests are excluded from the estimate.
+ * Parse the provider adapter's valuation. Prices deliberately live on the
+ * backend so old Web bundles cannot silently apply stale or model-approximate
+ * rates. DeepSeek reports reasoning tokens as a subset of completion tokens,
+ * so total and cost include `outputTokens` once.
  */
 export function deepseekCostStats(
-  totals: Record<string, unknown> | undefined,
-  model: string | undefined,
+  value: Record<string, unknown> | undefined,
 ): DeepSeekCostStats | undefined {
-  if (!totals) return undefined;
-  const price = deepseekListPrice(model);
-  const inputMissTokens = finite(totals.cacheMissTokens);
-  const inputHitTokens = finite(totals.cacheHitTokens);
-  const outputTokens = finite(totals.outputTokens);
-  const reasoningTokens = finite(totals.reasoningTokens);
-  const estimatedCny =
-    inputMissTokens / 1e6 * price.inputMissCnyPerMTokens +
-    inputHitTokens / 1e6 * price.inputHitCnyPerMTokens +
-    (outputTokens + reasoningTokens) / 1e6 * price.outputCnyPerMTokens;
-  const requests = finite(totals.requests);
-  const totalTokens = inputMissTokens + inputHitTokens +
-    outputTokens + reasoningTokens;
-  const durationObservations = finite(totals.durationObservations);
-  const durationMs = finite(totals.durationMs);
+  if (!value) return undefined;
+  const estimatedUsd = finite(value.estimatedUsd);
+  const requests = finite(value.requests);
+  const inputTokens = finite(value.inputTokens);
+  const pricedInputTokens = finite(value.pricedInputTokens);
+  const unpricedInputTokens = finite(value.unpricedInputTokens);
+  const outputTokens = finite(value.outputTokens);
+  const unpricedOutputTokens = finite(value.unpricedOutputTokens);
+  const totalTokens = inputTokens + outputTokens;
+  const pricedTokens = pricedInputTokens +
+    Math.max(0, outputTokens - unpricedOutputTokens);
   return {
-    model,
-    estimatedCny,
+    estimatedUsd,
+    noCacheUsd: finite(value.noCacheUsd),
+    allHitFloorUsd: finite(value.allHitFloorUsd),
+    cacheSavingsUsd: finite(value.cacheSavingsUsd),
+    cacheMissPremiumUsd: finite(value.cacheMissPremiumUsd),
     totalTokens,
     requests,
-    costPerRequestCny: requests > 0 ? estimatedCny / requests : 0,
-    costPerMTokensCny: totalTokens > 0 ? estimatedCny / totalTokens * 1e6 : 0,
+    usageObservedRequests: finite(value.usageObservedRequests),
+    unknownModelRequests: finite(value.unknownModelRequests),
+    inputTokens,
+    pricedInputTokens,
+    unpricedInputTokens,
+    outputTokens,
+    unpricedOutputTokens,
+    reasoningTokens: finite(value.reasoningTokens),
+    modelFamilies: Array.isArray(value.modelFamilies)
+      ? value.modelFamilies.filter((family): family is string =>
+        typeof family === "string"
+      )
+      : [],
+    costPerRequestUsd: requests > 0 ? estimatedUsd / requests : 0,
+    costPerMTokensUsd: totalTokens > 0
+      ? estimatedUsd / totalTokens * 1e6
+      : 0,
     avgTokensPerRequest: requests > 0 ? totalTokens / requests : 0,
-    avgGatewayMs: durationObservations > 0 ? durationMs / durationObservations
-      : undefined,
-    totalGatewayMinutes: durationObservations > 0 ? durationMs / 60_000
+    priceCoverageRate: totalTokens > 0 ? pricedTokens * 100 / totalTokens
       : undefined,
   };
 }

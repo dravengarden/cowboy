@@ -11,6 +11,7 @@ use crate::usage::ProviderUsage;
 const DEFAULT_INFO_URL: &str = "http://127.0.0.1:61137/provider-info";
 const DEFAULT_FALLBACK_INFO_URL: &str = "http://127.0.0.1:61138/provider-info";
 const USAGE_DAYS: i32 = 14;
+const USAGE_RETENTION_DAYS: i32 = 30;
 
 #[derive(Debug, Deserialize)]
 struct AccountInfo {
@@ -83,13 +84,17 @@ pub(crate) async fn collect(store: Option<&Store>) -> Result<ProviderUsage> {
     }
     let account_views = group_accounts(accounts);
     let available = account_views.iter().any(|account| account.is_available);
-    let activity = if let Some(store) = store {
-        match store.provider_usage_summary("deepseek", USAGE_DAYS).await {
+    let mut activity = if let Some(store) = store {
+        match store
+            .provider_usage_summary("deepseek", USAGE_DAYS, USAGE_RETENTION_DAYS)
+            .await
+        {
             Ok(activity) => activity,
             Err(error) => {
-                tracing::warn!(%error, "Cowboy-measured DeepSeek usage is unavailable");
+                tracing::warn!(%error, "gateway-measured DeepSeek usage is unavailable");
                 json!({
-                    "source": "cowboy", "retentionDays": USAGE_DAYS,
+                    "source": "cowboy", "windowDays": USAGE_DAYS,
+                    "retentionDays": USAGE_RETENTION_DAYS, "availableAgents": [],
                     "summary": null, "coverage": { "producers": [] },
                     "telemetryError": "Cowboy request telemetry is unavailable",
                 })
@@ -97,11 +102,13 @@ pub(crate) async fn collect(store: Option<&Store>) -> Result<ProviderUsage> {
         }
     } else {
         json!({
-            "source": "cowboy", "retentionDays": USAGE_DAYS,
+            "source": "cowboy", "windowDays": USAGE_DAYS,
+            "retentionDays": USAGE_RETENTION_DAYS, "availableAgents": [],
             "summary": null, "coverage": { "producers": [] },
             "unavailableReason": "Cowboy persistence is disabled",
         })
     };
+    super::deepseek_pricing::decorate_activity(&mut activity);
     let mut account = json!({
         "source": "deepseek",
         "accounts": &account_views,

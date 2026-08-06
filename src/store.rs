@@ -1720,13 +1720,154 @@ fn provider_usage_metrics_within_bounds(
         .any(|value| value > crate::machine_protocol::PROVIDER_USAGE_MAX_SHAPE_COUNT)
 }
 
+fn valid_provider_usage_hex(value: &str, length: usize) -> bool {
+    value.len() == length
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn valid_optional_provider_usage_hex(value: Option<&String>, length: usize) -> bool {
+    value.is_none_or(|value| valid_provider_usage_hex(value, length))
+}
+
+fn provider_usage_model_family(model: &str) -> &'static str {
+    let normalized = model
+        .trim()
+        .to_ascii_lowercase()
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    if normalized.starts_with("deepseek-v4-pro") {
+        "pro"
+    } else if normalized.starts_with("deepseek-v4-flash")
+        || matches!(normalized.as_str(), "deepseek-chat" | "deepseek-reasoner")
+    {
+        "flash"
+    } else {
+        "unknown"
+    }
+}
+
+fn valid_provider_usage_v3_dimensions(event: &crate::machine_protocol::ProviderUsageEvent) -> bool {
+    let model = event.resolved_model.as_deref().unwrap_or(&event.model);
+    let session_valid = match event.session_attribution.as_str() {
+        "response_lineage" | "prefix_root" | "explicit" => event.session_fingerprint.is_some(),
+        "unattributed" => event.session_fingerprint.is_none(),
+        _ => false,
+    };
+    let lane_valid = match (event.producer_id.as_str(), event.agent.as_str()) {
+        ("codex-deepseek", "codex") => {
+            event.client_protocol == "responses"
+                && matches!(event.operation.as_str(), "responses" | "compact")
+                && matches!(
+                    event.upstream_protocol.as_str(),
+                    "responses" | "chat_completions"
+                )
+                && ((event.upstream_protocol == "responses" && event.translation_mode == "native")
+                    || (event.upstream_protocol == "chat_completions"
+                        && event.translation_mode == "responses_to_chat"))
+        }
+        ("claude-deepseek", "claude") => {
+            event.operation == "messages"
+                && event.client_protocol == "anthropic_messages"
+                && event.upstream_protocol == "anthropic_messages"
+                && matches!(
+                    event.translation_mode.as_str(),
+                    "native" | "anthropic_compat"
+                )
+        }
+        ("reasonix-deepseek", "reasonix") => {
+            event.operation == "chat_completions"
+                && event.client_protocol == "chat_completions"
+                && event.upstream_protocol == "chat_completions"
+                && event.translation_mode == "native"
+        }
+        _ => false,
+    };
+    let request_role_valid = matches!(
+        event.request_role.as_str(),
+        "unknown" | "executor" | "planner" | "subagent" | "reviewer"
+    ) && (event.agent != "reasonix" || event.request_role != "unknown");
+    event.protocol == event.upstream_protocol
+        && event.model_family == provider_usage_model_family(model)
+        && request_role_valid
+        && matches!(event.thinking_mode.as_str(), "enabled" | "disabled")
+        && matches!(
+            event.reasoning_effort.as_str(),
+            "default" | "low" | "high" | "max"
+        )
+        && matches!(event.traffic_source.as_str(), "unattributed" | "cowboy")
+        && (event.traffic_source != "cowboy" || event.session_attribution == "explicit")
+        && session_valid
+        && valid_optional_provider_usage_hex(event.session_fingerprint.as_ref(), 32)
+        && valid_optional_provider_usage_hex(event.static_prefix_fingerprint.as_ref(), 32)
+        && valid_optional_provider_usage_hex(event.request_prefix_fingerprint.as_ref(), 32)
+        && valid_optional_provider_usage_hex(event.gateway_build.as_ref(), 16)
+        && valid_optional_provider_usage_hex(event.gateway_boot_id.as_ref(), 16)
+        && event.static_prefix_fingerprint.is_some()
+        && event.request_prefix_fingerprint.is_some()
+        && event.gateway_build.is_some()
+        && event.gateway_boot_id.is_some()
+        && event
+            .resolved_model
+            .as_ref()
+            .is_none_or(|value| !value.is_empty() && value.len() <= 128)
+        && event
+            .model_revision
+            .as_ref()
+            .is_none_or(|value| !value.is_empty() && value.len() <= 128)
+        && lane_valid
+}
+
+fn valid_provider_usage_token_algebra(event: &crate::machine_protocol::ProviderUsageEvent) -> bool {
+    if event.schema_version < 2 {
+        return true;
+    }
+    match event.usage_observed {
+        Some(false) => {
+            event.input_tokens.is_none()
+                && event.output_tokens.is_none()
+                && event.reasoning_tokens.is_none()
+                && event.cache_hit_tokens.is_none()
+                && event.cache_miss_tokens.is_none()
+                && event.cache_observation == "absent"
+        }
+        Some(true) => {
+            let (Some(input), Some(output), Some(reasoning)) = (
+                event.input_tokens,
+                event.output_tokens,
+                event.reasoning_tokens,
+            ) else {
+                return false;
+            };
+            if reasoning > output {
+                return false;
+            }
+            match event.cache_observation.as_str() {
+                "absent" => event.cache_hit_tokens.is_none() && event.cache_miss_tokens.is_none(),
+                "derived" | "explicit" => {
+                    let (Some(hit), Some(miss)) = (event.cache_hit_tokens, event.cache_miss_tokens)
+                    else {
+                        return false;
+                    };
+                    hit.checked_add(miss) == Some(input)
+                }
+                _ => false,
+            }
+        }
+        None => false,
+    }
+}
+
 fn validate_provider_usage_event(
     producer_id: &str,
     event: &crate::machine_protocol::ProviderUsageEvent,
 ) -> Result<()> {
     if event.producer_id != producer_id
         || event.provider != "deepseek"
-        || !matches!(event.agent.as_str(), "codex" | "claude")
+        || !matches!(event.agent.as_str(), "codex" | "claude" | "reasonix")
         || event.account_fingerprint.len() != 16
         || !event
             .account_fingerprint
@@ -1734,10 +1875,11 @@ fn validate_provider_usage_event(
             .all(|byte| byte.is_ascii_hexdigit())
         || event.model.len() > 128
         || !(100..=599).contains(&event.status)
-        || !matches!(event.schema_version, 1 | 2)
+        || !matches!(event.schema_version, 1..=3)
+        || (event.agent == "reasonix" && event.schema_version != 3)
         || !matches!(
             event.operation.as_str(),
-            "legacy" | "responses" | "compact" | "messages"
+            "legacy" | "responses" | "compact" | "messages" | "chat_completions"
         )
         || !matches!(
             event.protocol.as_str(),
@@ -1755,12 +1897,14 @@ fn validate_provider_usage_event(
             ),
             ("codex-deepseek", "codex-deepseek", "codex")
                 | ("claude-deepseek", "claude-deepseek", "claude")
+                | ("reasonix-deepseek", "reasonix-deepseek", "reasonix")
         )
         || !provider_usage_metrics_within_bounds(event)
+        || !valid_provider_usage_token_algebra(event)
     {
         anyhow::bail!("invalid provider usage event");
     }
-    if event.schema_version == 2
+    if event.schema_version >= 2
         && (event.operation == "legacy"
             || event.protocol == "legacy"
             || event.cache_observation == "legacy"
@@ -1775,7 +1919,7 @@ fn validate_provider_usage_event(
             || event.has_previous_response_id.is_none()
             || event.compatibility_fixes.is_none())
     {
-        anyhow::bail!("incomplete version two provider usage event");
+        anyhow::bail!("incomplete provider usage event");
     }
     if event.schema_version == 2
         && !matches!(
@@ -1792,6 +1936,9 @@ fn validate_provider_usage_event(
         )
     {
         anyhow::bail!("inconsistent provider usage dimensions");
+    }
+    if event.schema_version == 3 && !valid_provider_usage_v3_dimensions(event) {
+        anyhow::bail!("invalid version three provider usage dimensions");
     }
     match event.cache_observation.as_str() {
         "absent" if event.cache_hit_tokens.is_some() || event.cache_miss_tokens.is_some() => {
@@ -1816,7 +1963,7 @@ mod provider_usage_validation_tests {
 
     fn event() -> ProviderUsageEvent {
         ProviderUsageEvent {
-            schema_version: 2,
+            schema_version: 3,
             producer_id: "codex-deepseek".to_owned(),
             sequence: 1,
             occurred_at_ms: 1_786_000_000_000,
@@ -1824,6 +1971,10 @@ mod provider_usage_validation_tests {
             provider: "deepseek".to_owned(),
             agent: "codex".to_owned(),
             model: "deepseek-v4-flash".to_owned(),
+            model_family: "flash".to_owned(),
+            resolved_model: Some("deepseek-v4-flash".to_owned()),
+            model_revision: Some("fp-v4".to_owned()),
+            request_role: "executor".to_owned(),
             status: 200,
             input_tokens: Some(10),
             output_tokens: Some(4),
@@ -1832,6 +1983,18 @@ mod provider_usage_validation_tests {
             cache_miss_tokens: Some(3),
             operation: "responses".to_owned(),
             protocol: "responses".to_owned(),
+            client_protocol: "responses".to_owned(),
+            upstream_protocol: "responses".to_owned(),
+            translation_mode: "native".to_owned(),
+            thinking_mode: "enabled".to_owned(),
+            reasoning_effort: "high".to_owned(),
+            session_fingerprint: Some("11111111111111111111111111111111".to_owned()),
+            session_attribution: "response_lineage".to_owned(),
+            traffic_source: "unattributed".to_owned(),
+            static_prefix_fingerprint: Some("22222222222222222222222222222222".to_owned()),
+            request_prefix_fingerprint: Some("33333333333333333333333333333333".to_owned()),
+            gateway_build: Some("4444444444444444".to_owned()),
+            gateway_boot_id: Some("5555555555555555".to_owned()),
             cache_observation: "derived".to_owned(),
             usage_observed: Some(true),
             completed: Some(true),
@@ -1859,6 +2022,52 @@ mod provider_usage_validation_tests {
         candidate.cache_hit_tokens = Some(crate::machine_protocol::PROVIDER_USAGE_MAX_TOKENS + 1);
         assert!(validate_provider_usage_event("codex-deepseek", &candidate).is_err());
     }
+
+    #[test]
+    fn controller_reserves_isolated_reasonix_chat_lane() {
+        let mut candidate = event();
+        candidate.producer_id = "reasonix-deepseek".to_owned();
+        candidate.agent = "reasonix".to_owned();
+        candidate.model = "deepseek-v4-pro".to_owned();
+        candidate.model_family = "pro".to_owned();
+        candidate.resolved_model = Some("deepseek-v4-pro".to_owned());
+        candidate.request_role = "planner".to_owned();
+        candidate.operation = "chat_completions".to_owned();
+        candidate.protocol = "chat_completions".to_owned();
+        candidate.client_protocol = "chat_completions".to_owned();
+        candidate.upstream_protocol = "chat_completions".to_owned();
+        candidate.has_previous_response_id = Some(false);
+        assert!(validate_provider_usage_event("reasonix-deepseek", &candidate).is_ok());
+
+        candidate.request_role = "unknown".to_owned();
+        assert!(validate_provider_usage_event("reasonix-deepseek", &candidate).is_err());
+        candidate.request_role = "planner".to_owned();
+
+        candidate.schema_version = 1;
+        assert!(validate_provider_usage_event("reasonix-deepseek", &candidate).is_err());
+        candidate.schema_version = 3;
+
+        candidate.producer_id = "codex-deepseek".to_owned();
+        assert!(validate_provider_usage_event("codex-deepseek", &candidate).is_err());
+    }
+
+    #[test]
+    fn controller_accepts_unknown_role_for_existing_agent_lanes() {
+        let mut candidate = event();
+        candidate.request_role = "unknown".to_owned();
+        assert!(validate_provider_usage_event("codex-deepseek", &candidate).is_ok());
+    }
+
+    #[test]
+    fn controller_rejects_inconsistent_usage_token_algebra() {
+        let mut candidate = event();
+        candidate.cache_miss_tokens = Some(4);
+        assert!(validate_provider_usage_event("codex-deepseek", &candidate).is_err());
+
+        let mut candidate = event();
+        candidate.reasoning_tokens = Some(5);
+        assert!(validate_provider_usage_event("codex-deepseek", &candidate).is_err());
+    }
 }
 
 fn provider_usage_metric(value: Option<u64>) -> Result<Option<i64>> {
@@ -1876,14 +2085,19 @@ async fn insert_provider_usage_event(
 ) -> Result<()> {
     sqlx::query(
         "INSERT INTO provider_usage_events (machine_id, producer_id, sequence, occurred_at, \
-         account_fingerprint, provider, agent, model, status, input_tokens, output_tokens, \
-         reasoning_tokens, cache_hit_tokens, cache_miss_tokens, schema_version, operation, \
-         protocol, cache_observation, usage_observed, completed, streaming, duration_ms, \
-         request_bytes, input_item_count, tool_count, system_block_count, \
+         account_fingerprint, provider, agent, model, model_family, resolved_model, \
+         model_revision, request_role, status, input_tokens, output_tokens, reasoning_tokens, \
+         cache_hit_tokens, cache_miss_tokens, schema_version, operation, protocol, \
+         client_protocol, upstream_protocol, translation_mode, thinking_mode, \
+         reasoning_effort, session_fingerprint, session_attribution, traffic_source, \
+         static_prefix_fingerprint, request_prefix_fingerprint, gateway_build, \
+         gateway_boot_id, cache_observation, usage_observed, completed, streaming, \
+         duration_ms, request_bytes, input_item_count, tool_count, system_block_count, \
          has_previous_response_id, compatibility_fixes) VALUES ( \
          $1, $2, $3, to_timestamp($4::double precision / 1000), $5, $6, $7, $8, $9, \
          $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, \
-         $24, $25, $26, $27, $28) ON CONFLICT DO NOTHING",
+         $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, \
+         $38, $39, $40, $41, $42, $43, $44) ON CONFLICT DO NOTHING",
     )
     .bind(machine_id)
     .bind(producer_id)
@@ -1893,6 +2107,10 @@ async fn insert_provider_usage_event(
     .bind(&event.provider)
     .bind(&event.agent)
     .bind(&event.model)
+    .bind(&event.model_family)
+    .bind(&event.resolved_model)
+    .bind(&event.model_revision)
+    .bind(&event.request_role)
     .bind(i32::from(event.status))
     .bind(provider_usage_metric(event.input_tokens)?)
     .bind(provider_usage_metric(event.output_tokens)?)
@@ -1902,6 +2120,18 @@ async fn insert_provider_usage_event(
     .bind(i32::from(event.schema_version))
     .bind(&event.operation)
     .bind(&event.protocol)
+    .bind(&event.client_protocol)
+    .bind(&event.upstream_protocol)
+    .bind(&event.translation_mode)
+    .bind(&event.thinking_mode)
+    .bind(&event.reasoning_effort)
+    .bind(&event.session_fingerprint)
+    .bind(&event.session_attribution)
+    .bind(&event.traffic_source)
+    .bind(&event.static_prefix_fingerprint)
+    .bind(&event.request_prefix_fingerprint)
+    .bind(&event.gateway_build)
+    .bind(&event.gateway_boot_id)
     .bind(&event.cache_observation)
     .bind(event.usage_observed)
     .bind(event.completed)
@@ -1946,17 +2176,116 @@ const PROVIDER_USAGE_AGGREGATE_COLUMNS: &str = "count(*)::bigint AS requests, \
      least(coalesce(sum(compatibility_fixes::numeric), 0), 9223372036854775807)::bigint AS compatibility_fixes, \
      count(*) FILTER (WHERE streaming IS TRUE)::bigint AS streaming_requests";
 
-#[derive(serde::Serialize)]
+#[derive(Default, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProviderUsageBreakdown {
     summary: UsageAggregate,
     by_agent: std::collections::BTreeMap<String, UsageAggregate>,
+    by_agent_model:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, UsageAggregate>>,
+    by_agent_model_family:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, UsageAggregate>>,
+    by_agent_request_role:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, UsageAggregate>>,
     by_machine: std::collections::BTreeMap<String, UsageAggregate>,
     by_operation: std::collections::BTreeMap<String, UsageAggregate>,
     by_model: std::collections::BTreeMap<String, UsageAggregate>,
+    by_resolved_model: std::collections::BTreeMap<String, UsageAggregate>,
+    by_billing_model: std::collections::BTreeMap<String, UsageAggregate>,
+    by_model_revision: std::collections::BTreeMap<String, UsageAggregate>,
+    by_model_family: std::collections::BTreeMap<String, UsageAggregate>,
+    by_request_role: std::collections::BTreeMap<String, UsageAggregate>,
     by_protocol: std::collections::BTreeMap<String, UsageAggregate>,
+    by_client_protocol: std::collections::BTreeMap<String, UsageAggregate>,
+    by_upstream_protocol: std::collections::BTreeMap<String, UsageAggregate>,
+    by_translation_mode: std::collections::BTreeMap<String, UsageAggregate>,
+    by_thinking_mode: std::collections::BTreeMap<String, UsageAggregate>,
+    by_reasoning_effort: std::collections::BTreeMap<String, UsageAggregate>,
+    by_session_attribution: std::collections::BTreeMap<String, UsageAggregate>,
+    by_traffic_source: std::collections::BTreeMap<String, UsageAggregate>,
+    by_gateway_build: std::collections::BTreeMap<String, UsageAggregate>,
+    by_schema_version: std::collections::BTreeMap<String, UsageAggregate>,
     by_agent_operation:
         std::collections::BTreeMap<String, std::collections::BTreeMap<String, UsageAggregate>>,
+    by_agent_billing_model:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, UsageAggregate>>,
+}
+
+impl ProviderUsageBreakdown {
+    fn add_row(&mut self, row: &sqlx::postgres::PgRow) {
+        let aggregate = UsageAggregate::from_row(row);
+        let agent = row.get::<String, _>("agent");
+        let model = row.get::<String, _>("model");
+        let resolved_model = row.get::<String, _>("resolved_model");
+        let billing_model = if resolved_model.is_empty() {
+            model.clone()
+        } else {
+            resolved_model.clone()
+        };
+        let model_family = row.get::<String, _>("model_family");
+        let request_role = row.get::<String, _>("request_role");
+        let operation = row.get::<String, _>("operation");
+        self.summary.add(&aggregate);
+        for (map, key) in [
+            (&mut self.by_agent, agent.clone()),
+            (&mut self.by_machine, row.get("machine_id")),
+            (&mut self.by_operation, operation.clone()),
+            (&mut self.by_model, model.clone()),
+            (&mut self.by_resolved_model, resolved_model),
+            (&mut self.by_billing_model, billing_model.clone()),
+            (&mut self.by_model_revision, row.get("model_revision")),
+            (&mut self.by_model_family, model_family.clone()),
+            (&mut self.by_request_role, request_role.clone()),
+            (&mut self.by_protocol, row.get("protocol")),
+            (&mut self.by_client_protocol, row.get("client_protocol")),
+            (&mut self.by_upstream_protocol, row.get("upstream_protocol")),
+            (&mut self.by_translation_mode, row.get("translation_mode")),
+            (&mut self.by_thinking_mode, row.get("thinking_mode")),
+            (&mut self.by_reasoning_effort, row.get("reasoning_effort")),
+            (
+                &mut self.by_session_attribution,
+                row.get("session_attribution"),
+            ),
+            (&mut self.by_traffic_source, row.get("traffic_source")),
+            (&mut self.by_gateway_build, row.get("gateway_build")),
+            (
+                &mut self.by_schema_version,
+                row.get::<i32, _>("schema_version").to_string(),
+            ),
+        ] {
+            map.entry(key).or_default().add(&aggregate);
+        }
+        self.by_agent_model
+            .entry(agent.clone())
+            .or_default()
+            .entry(model)
+            .or_default()
+            .add(&aggregate);
+        self.by_agent_billing_model
+            .entry(agent.clone())
+            .or_default()
+            .entry(billing_model)
+            .or_default()
+            .add(&aggregate);
+        self.by_agent_model_family
+            .entry(agent.clone())
+            .or_default()
+            .entry(model_family)
+            .or_default()
+            .add(&aggregate);
+        self.by_agent_request_role
+            .entry(agent.clone())
+            .or_default()
+            .entry(request_role)
+            .or_default()
+            .add(&aggregate);
+        self.by_agent_operation
+            .entry(agent)
+            .or_default()
+            .entry(operation)
+            .or_default()
+            .add(&aggregate);
+    }
 }
 
 async fn load_provider_usage_breakdown(
@@ -1965,10 +2294,17 @@ async fn load_provider_usage_breakdown(
     days: i32,
 ) -> Result<ProviderUsageBreakdown> {
     let query = format!(
-        "SELECT agent, machine_id, coalesce(model, '') AS model, operation, protocol, \
+        "SELECT agent, machine_id, coalesce(model, '') AS model, \
+         coalesce(resolved_model, '') AS resolved_model, coalesce(model_revision, '') AS model_revision, \
+         coalesce(gateway_build, '') AS gateway_build, model_family, request_role, \
+         operation, protocol, client_protocol, upstream_protocol, translation_mode, \
+         thinking_mode, reasoning_effort, session_attribution, traffic_source, schema_version, \
          {PROVIDER_USAGE_AGGREGATE_COLUMNS} FROM provider_usage_events WHERE provider = $1 \
          AND occurred_at >= now() - make_interval(days => $2::int) \
-         GROUP BY agent, machine_id, model, operation, protocol"
+         GROUP BY agent, machine_id, model, resolved_model, model_revision, gateway_build, \
+         model_family, request_role, operation, protocol, \
+         client_protocol, upstream_protocol, translation_mode, thinking_mode, reasoning_effort, \
+         session_attribution, traffic_source, schema_version"
     );
     let rows = sqlx::query(&query)
         .bind(provider)
@@ -1976,52 +2312,9 @@ async fn load_provider_usage_breakdown(
         .fetch_all(pool)
         .await
         .context("aggregate provider usage")?;
-    let mut breakdown = ProviderUsageBreakdown {
-        summary: UsageAggregate::default(),
-        by_agent: std::collections::BTreeMap::new(),
-        by_machine: std::collections::BTreeMap::new(),
-        by_operation: std::collections::BTreeMap::new(),
-        by_model: std::collections::BTreeMap::new(),
-        by_protocol: std::collections::BTreeMap::new(),
-        by_agent_operation: std::collections::BTreeMap::new(),
-    };
-    for row in rows {
-        let aggregate = UsageAggregate::from_row(&row);
-        let agent = row.get::<String, _>("agent");
-        let operation = row.get::<String, _>("operation");
-        breakdown.summary.add(&aggregate);
-        breakdown
-            .by_agent
-            .entry(agent.clone())
-            .or_default()
-            .add(&aggregate);
-        breakdown
-            .by_machine
-            .entry(row.get("machine_id"))
-            .or_default()
-            .add(&aggregate);
-        breakdown
-            .by_operation
-            .entry(operation.clone())
-            .or_default()
-            .add(&aggregate);
-        breakdown
-            .by_model
-            .entry(row.get("model"))
-            .or_default()
-            .add(&aggregate);
-        breakdown
-            .by_protocol
-            .entry(row.get("protocol"))
-            .or_default()
-            .add(&aggregate);
-        breakdown
-            .by_agent_operation
-            .entry(agent)
-            .or_default()
-            .entry(operation)
-            .or_default()
-            .add(&aggregate);
+    let mut breakdown = ProviderUsageBreakdown::default();
+    for row in &rows {
+        breakdown.add_row(row);
     }
     Ok(breakdown)
 }
@@ -2032,10 +2325,17 @@ async fn load_provider_usage_breakdown_hours(
     hours: i32,
 ) -> Result<ProviderUsageBreakdown> {
     let query = format!(
-        "SELECT agent, machine_id, coalesce(model, '') AS model, operation, protocol, \
+        "SELECT agent, machine_id, coalesce(model, '') AS model, \
+         coalesce(resolved_model, '') AS resolved_model, coalesce(model_revision, '') AS model_revision, \
+         coalesce(gateway_build, '') AS gateway_build, model_family, request_role, \
+         operation, protocol, client_protocol, upstream_protocol, translation_mode, \
+         thinking_mode, reasoning_effort, session_attribution, traffic_source, schema_version, \
          {PROVIDER_USAGE_AGGREGATE_COLUMNS} FROM provider_usage_events WHERE provider = $1 \
          AND occurred_at >= now() - make_interval(hours => $2::int) \
-         GROUP BY agent, machine_id, model, operation, protocol"
+         GROUP BY agent, machine_id, model, resolved_model, model_revision, gateway_build, \
+         model_family, request_role, operation, protocol, \
+         client_protocol, upstream_protocol, translation_mode, thinking_mode, reasoning_effort, \
+         session_attribution, traffic_source, schema_version"
     );
     let rows = sqlx::query(&query)
         .bind(provider)
@@ -2043,52 +2343,9 @@ async fn load_provider_usage_breakdown_hours(
         .fetch_all(pool)
         .await
         .context("aggregate rolling provider usage")?;
-    let mut breakdown = ProviderUsageBreakdown {
-        summary: UsageAggregate::default(),
-        by_agent: std::collections::BTreeMap::new(),
-        by_machine: std::collections::BTreeMap::new(),
-        by_operation: std::collections::BTreeMap::new(),
-        by_model: std::collections::BTreeMap::new(),
-        by_protocol: std::collections::BTreeMap::new(),
-        by_agent_operation: std::collections::BTreeMap::new(),
-    };
-    for row in rows {
-        let aggregate = UsageAggregate::from_row(&row);
-        let agent = row.get::<String, _>("agent");
-        let operation = row.get::<String, _>("operation");
-        breakdown.summary.add(&aggregate);
-        breakdown
-            .by_agent
-            .entry(agent.clone())
-            .or_default()
-            .add(&aggregate);
-        breakdown
-            .by_machine
-            .entry(row.get("machine_id"))
-            .or_default()
-            .add(&aggregate);
-        breakdown
-            .by_operation
-            .entry(operation.clone())
-            .or_default()
-            .add(&aggregate);
-        breakdown
-            .by_model
-            .entry(row.get("model"))
-            .or_default()
-            .add(&aggregate);
-        breakdown
-            .by_protocol
-            .entry(row.get("protocol"))
-            .or_default()
-            .add(&aggregate);
-        breakdown
-            .by_agent_operation
-            .entry(agent)
-            .or_default()
-            .entry(operation)
-            .or_default()
-            .add(&aggregate);
+    let mut breakdown = ProviderUsageBreakdown::default();
+    for row in &rows {
+        breakdown.add_row(row);
     }
     Ok(breakdown)
 }
@@ -2136,6 +2393,250 @@ async fn load_provider_usage_coverage(
     .fetch_all(pool)
     .await
     .context("load provider usage coverage")?
+    .into_iter()
+    .map(|row| {
+        serde_json::json!({
+            "machine": row.get::<String, _>("machine_id"),
+            "agent": row.get::<String, _>("agent"),
+            "lastSequence": row.get::<i64, _>("last_sequence"),
+            "lastReceivedAtMs": row.get::<i64, _>("last_received_at_ms"),
+        })
+    })
+    .collect())
+}
+
+async fn load_provider_usage_available_agents(
+    pool: &PgPool,
+    provider: &str,
+    days: i32,
+) -> Result<Vec<String>> {
+    sqlx::query_scalar(
+        "SELECT DISTINCT agent FROM provider_usage_events WHERE provider = $1 AND occurred_at >= \
+         now() - make_interval(days => $2::int) ORDER BY agent",
+    )
+    .bind(provider)
+    .bind(days)
+    .fetch_all(pool)
+    .await
+    .context("load provider usage available agents")
+}
+
+async fn load_filtered_provider_usage_breakdown(
+    pool: &PgPool,
+    provider: &str,
+    window_seconds: i32,
+    agent: Option<&str>,
+    model_family: Option<&str>,
+) -> Result<ProviderUsageBreakdown> {
+    let query = format!(
+        "SELECT agent, machine_id, coalesce(model, '') AS model, \
+         coalesce(resolved_model, '') AS resolved_model, coalesce(model_revision, '') AS model_revision, \
+         coalesce(gateway_build, '') AS gateway_build, model_family, request_role, \
+         operation, protocol, client_protocol, upstream_protocol, translation_mode, \
+         thinking_mode, reasoning_effort, session_attribution, traffic_source, schema_version, \
+         {PROVIDER_USAGE_AGGREGATE_COLUMNS} FROM provider_usage_events WHERE provider = $1 \
+         AND occurred_at >= now() - make_interval(secs => $2::double precision) \
+         AND ($3::text IS NULL OR agent = $3) AND ($4::text IS NULL OR model_family = $4) \
+         GROUP BY agent, machine_id, model, resolved_model, model_revision, gateway_build, \
+         model_family, request_role, operation, protocol, \
+         client_protocol, upstream_protocol, translation_mode, thinking_mode, reasoning_effort, \
+         session_attribution, traffic_source, schema_version"
+    );
+    let rows = sqlx::query(&query)
+        .bind(provider)
+        .bind(window_seconds)
+        .bind(agent)
+        .bind(model_family)
+        .fetch_all(pool)
+        .await
+        .context("aggregate filtered provider usage")?;
+    let mut breakdown = ProviderUsageBreakdown::default();
+    for row in &rows {
+        breakdown.add_row(row);
+    }
+    Ok(breakdown)
+}
+
+async fn load_provider_usage_timeline(
+    pool: &PgPool,
+    provider: &str,
+    window_seconds: i32,
+    bucket: &str,
+    agent: Option<&str>,
+    model_family: Option<&str>,
+) -> Result<Vec<serde_json::Value>> {
+    let truncation = match bucket {
+        "hour" => "hour",
+        "day" => "day",
+        _ => anyhow::bail!("invalid provider usage timeline bucket"),
+    };
+    let query = format!(
+        "SELECT (extract(epoch FROM date_trunc('{truncation}', occurred_at)) * 1000)::bigint \
+         AS start_ms, {PROVIDER_USAGE_AGGREGATE_COLUMNS} FROM provider_usage_events \
+         WHERE provider = $1 AND occurred_at >= now() - make_interval(secs => $2::double precision) \
+         AND ($3::text IS NULL OR agent = $3) AND ($4::text IS NULL OR model_family = $4) \
+         GROUP BY date_trunc('{truncation}', occurred_at) ORDER BY date_trunc('{truncation}', occurred_at)"
+    );
+    Ok(sqlx::query(&query)
+        .bind(provider)
+        .bind(window_seconds)
+        .bind(agent)
+        .bind(model_family)
+        .fetch_all(pool)
+        .await
+        .context("aggregate provider usage timeline")?
+        .into_iter()
+        .map(|row| {
+            serde_json::json!({
+                "startMs": row.get::<i64, _>("start_ms"),
+                "totals": UsageAggregate::from_row(&row),
+            })
+        })
+        .collect())
+}
+
+#[derive(Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LowHitBreakdown {
+    summary: UsageAggregate,
+    by_cause: std::collections::BTreeMap<String, UsageAggregate>,
+    by_cause_model:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, UsageAggregate>>,
+}
+
+async fn load_provider_usage_low_hit(
+    pool: &PgPool,
+    provider: &str,
+    window_seconds: i32,
+    agent: Option<&str>,
+    model_family: Option<&str>,
+) -> Result<LowHitBreakdown> {
+    let query = format!(
+        "WITH lineage AS ( \
+           SELECT events.*, \
+             lag(model_family) OVER session_window AS previous_model_family, \
+             lag(model_revision) OVER session_window AS previous_model_revision, \
+             lag(request_role) OVER session_window AS previous_request_role, \
+             lag(upstream_protocol) OVER session_window AS previous_upstream_protocol, \
+             lag(translation_mode) OVER session_window AS previous_translation_mode, \
+             lag(thinking_mode) OVER session_window AS previous_thinking_mode, \
+             lag(reasoning_effort) OVER session_window AS previous_reasoning_effort, \
+             lag(static_prefix_fingerprint) OVER session_window AS previous_static_prefix, \
+             lag(request_prefix_fingerprint) OVER session_window AS previous_request_prefix, \
+             lag(input_item_count) OVER session_window AS previous_input_item_count, \
+             lag(gateway_build) OVER session_window AS previous_gateway_build, \
+             lag(gateway_boot_id) OVER session_window AS previous_gateway_boot_id, \
+             lag(cache_hit_tokens) OVER session_window AS previous_cache_hit_tokens, \
+             lag(cache_miss_tokens) OVER session_window AS previous_cache_miss_tokens, \
+             lag(occurred_at) OVER session_window AS previous_occurred_at \
+           FROM provider_usage_events events \
+           WHERE provider = $1 AND occurred_at >= now() - interval '30 days' \
+             AND ($3::text IS NULL OR agent = $3) \
+           WINDOW session_window AS ( \
+             PARTITION BY machine_id, producer_id, account_fingerprint, agent, \
+               coalesce(session_fingerprint, producer_id || ':' || sequence::text) \
+             ORDER BY occurred_at, sequence \
+           ) \
+         ), classified AS ( \
+           SELECT lineage.*, CASE \
+             WHEN schema_version < 3 THEN 'legacy_unattributed' \
+             WHEN session_fingerprint IS NULL AND has_previous_response_id IS TRUE \
+               THEN 'session_lineage_unavailable' \
+             WHEN session_fingerprint IS NULL THEN 'unattributed' \
+             WHEN session_attribution = 'prefix_root' THEN 'prefix_lineage_ambiguous' \
+             WHEN previous_occurred_at IS NULL THEN 'first_session_observation' \
+             WHEN operation = 'compact' THEN 'client_compaction' \
+             WHEN gateway_build IS DISTINCT FROM previous_gateway_build THEN 'gateway_build_changed' \
+             WHEN gateway_boot_id IS DISTINCT FROM previous_gateway_boot_id THEN 'post_gateway_restart' \
+             WHEN model_family IS DISTINCT FROM previous_model_family THEN 'model_changed' \
+             WHEN model_revision IS DISTINCT FROM previous_model_revision THEN 'model_revision_changed' \
+             WHEN request_role IS DISTINCT FROM previous_request_role THEN 'request_role_changed' \
+             WHEN upstream_protocol IS DISTINCT FROM previous_upstream_protocol THEN 'protocol_changed' \
+             WHEN translation_mode IS DISTINCT FROM previous_translation_mode THEN 'translation_changed' \
+             WHEN thinking_mode IS DISTINCT FROM previous_thinking_mode \
+               OR reasoning_effort IS DISTINCT FROM previous_reasoning_effort \
+               THEN 'reasoning_configuration_changed' \
+             WHEN compatibility_fixes > 0 THEN 'compatibility_rewrite' \
+             WHEN static_prefix_fingerprint IS DISTINCT FROM previous_static_prefix THEN 'static_prefix_changed' \
+             WHEN (agent <> 'codex' OR has_previous_response_id IS NOT TRUE) \
+               AND input_item_count < previous_input_item_count THEN 'history_rewrite' \
+             WHEN request_prefix_fingerprint = previous_request_prefix \
+               AND previous_cache_hit_tokens * 10 >= \
+                 9 * (previous_cache_hit_tokens + previous_cache_miss_tokens) \
+               THEN 'unexpected_exact_prefix_miss' \
+             WHEN occurred_at - previous_occurred_at >= interval '6 hours' \
+               AND previous_cache_hit_tokens * 10 >= \
+                 9 * (previous_cache_hit_tokens + previous_cache_miss_tokens) \
+               THEN 'probable_cache_eviction' \
+             ELSE 'unexplained_low_hit' END AS cause \
+           FROM lineage WHERE occurred_at >= now() - make_interval(secs => $2::double precision) \
+             AND ($4::text IS NULL OR model_family = $4) \
+             AND cache_observation IN ('explicit', 'derived') \
+             AND coalesce(input_tokens, 0) >= 8000 \
+             AND cache_hit_tokens + cache_miss_tokens > 0 \
+             AND cache_hit_tokens * 10 < cache_hit_tokens + cache_miss_tokens \
+         ) \
+         SELECT cause, coalesce(resolved_model, model, '') AS model, {PROVIDER_USAGE_AGGREGATE_COLUMNS} \
+         FROM classified GROUP BY cause, coalesce(resolved_model, model, '') \
+         ORDER BY cause, coalesce(resolved_model, model, '')"
+    );
+    let rows = sqlx::query(&query)
+        .bind(provider)
+        .bind(window_seconds)
+        .bind(agent)
+        .bind(model_family)
+        .fetch_all(pool)
+        .await
+        .context("classify low-hit provider usage")?;
+    let mut result = LowHitBreakdown::default();
+    for row in rows {
+        let cause = row.get::<String, _>("cause");
+        let model = row.get::<String, _>("model");
+        let aggregate = UsageAggregate::from_row(&row);
+        result.summary.add(&aggregate);
+        result
+            .by_cause
+            .entry(cause.clone())
+            .or_default()
+            .add(&aggregate);
+        result
+            .by_cause_model
+            .entry(cause)
+            .or_default()
+            .entry(model)
+            .or_default()
+            .add(&aggregate);
+    }
+    Ok(result)
+}
+
+async fn load_filtered_provider_usage_coverage(
+    pool: &PgPool,
+    provider: &str,
+    window_seconds: i32,
+    agent: Option<&str>,
+    model_family: Option<&str>,
+) -> Result<Vec<serde_json::Value>> {
+    Ok(sqlx::query(
+        "SELECT producers.machine_id, producers.agent, producers.last_sequence, \
+         (extract(epoch FROM producers.last_received_at) * 1000)::bigint AS last_received_at_ms \
+         FROM provider_usage_producers producers WHERE producers.provider = $1 \
+         AND producers.last_received_at >= now() - make_interval(secs => $2::double precision) \
+         AND ($3::text IS NULL OR producers.agent = $3) AND EXISTS ( \
+           SELECT 1 FROM provider_usage_events events \
+           WHERE events.machine_id = producers.machine_id \
+             AND events.producer_id = producers.producer_id AND events.provider = $1 \
+             AND events.occurred_at >= now() - make_interval(secs => $2::double precision) \
+             AND ($4::text IS NULL OR events.model_family = $4) \
+         ) ORDER BY producers.machine_id, producers.agent",
+    )
+    .bind(provider)
+    .bind(window_seconds)
+    .bind(agent)
+    .bind(model_family)
+    .fetch_all(pool)
+    .await
+    .context("load filtered provider usage coverage")?
     .into_iter()
     .map(|row| {
         serde_json::json!({
@@ -2208,25 +2709,135 @@ impl Store {
         Ok(last)
     }
 
-    /// Aggregate Cowboy-measured usage separately from provider-owned account facts.
+    /// Aggregate gateway-measured usage separately from provider-owned account facts.
     pub async fn provider_usage_summary(
         &self,
         provider: &str,
         days: i32,
+        retention_days: i32,
     ) -> Result<serde_json::Value> {
         let breakdown = load_provider_usage_breakdown(&self.pool, provider, days).await?;
         let last_24_hours = load_provider_usage_breakdown_hours(&self.pool, provider, 24).await?;
         let daily = load_daily_provider_usage(&self.pool, provider, days).await?;
         let producers = load_provider_usage_coverage(&self.pool, provider, days).await?;
+        let available_agents =
+            load_provider_usage_available_agents(&self.pool, provider, retention_days).await?;
         Ok(serde_json::json!({
-            "source": "cowboy", "windowField": "occurred_at", "retentionDays": days,
+            "source": "cowboy", "windowField": "occurred_at", "windowDays": days,
+            "retentionDays": retention_days, "availableAgents": available_agents,
             "summary": breakdown.summary, "byAgent": breakdown.by_agent,
+            "byAgentModel": breakdown.by_agent_model,
+            "byAgentBillingModel": breakdown.by_agent_billing_model,
+            "byAgentModelFamily": breakdown.by_agent_model_family,
+            "byAgentRequestRole": breakdown.by_agent_request_role,
             "byMachine": breakdown.by_machine, "byOperation": breakdown.by_operation,
-            "byModel": breakdown.by_model, "byProtocol": breakdown.by_protocol,
+            "byModel": breakdown.by_model, "byResolvedModel": breakdown.by_resolved_model,
+            "byBillingModel": breakdown.by_billing_model,
+            "byModelRevision": breakdown.by_model_revision,
+            "byModelFamily": breakdown.by_model_family,
+            "byRequestRole": breakdown.by_request_role, "byProtocol": breakdown.by_protocol,
+            "byClientProtocol": breakdown.by_client_protocol,
+            "byUpstreamProtocol": breakdown.by_upstream_protocol,
+            "byTranslationMode": breakdown.by_translation_mode,
+            "byThinkingMode": breakdown.by_thinking_mode,
+            "byReasoningEffort": breakdown.by_reasoning_effort,
+            "bySessionAttribution": breakdown.by_session_attribution,
+            "byTrafficSource": breakdown.by_traffic_source,
+            "byGatewayBuild": breakdown.by_gateway_build,
+            "bySchemaVersion": breakdown.by_schema_version,
             "byAgentOperation": breakdown.by_agent_operation, "daily": daily,
             "last24Hours": {
                 "summary": last_24_hours.summary,
                 "byModel": last_24_hours.by_model,
+                "byAgentModel": last_24_hours.by_agent_model,
+                "byBillingModel": last_24_hours.by_billing_model,
+                "byAgentBillingModel": last_24_hours.by_agent_billing_model,
+                "byModelFamily": last_24_hours.by_model_family,
+                "byAgentModelFamily": last_24_hours.by_agent_model_family,
+            },
+            "coverage": { "producers": producers },
+        }))
+    }
+
+    /// Query one bounded, provider-owned telemetry view without refreshing
+    /// account balance facts. Filters are closed enums at the HTTP boundary;
+    /// this method repeats validation because persistence is the authority for
+    /// long-lived diagnostic data.
+    pub async fn provider_usage_activity(
+        &self,
+        provider: &str,
+        window_seconds: i32,
+        agent: Option<&str>,
+        model_family: Option<&str>,
+    ) -> Result<serde_json::Value> {
+        if provider != "deepseek"
+            || !(3_600..=30 * 86_400).contains(&window_seconds)
+            || agent.is_some_and(|value| !matches!(value, "codex" | "claude" | "reasonix"))
+            || model_family.is_some_and(|value| !matches!(value, "flash" | "pro"))
+        {
+            anyhow::bail!("invalid provider usage activity filter");
+        }
+        let bucket = if window_seconds <= 86_400 {
+            "hour"
+        } else {
+            "day"
+        };
+        let (breakdown, timeline, low_hit, producers) = tokio::try_join!(
+            load_filtered_provider_usage_breakdown(
+                &self.pool,
+                provider,
+                window_seconds,
+                agent,
+                model_family,
+            ),
+            load_provider_usage_timeline(
+                &self.pool,
+                provider,
+                window_seconds,
+                bucket,
+                agent,
+                model_family,
+            ),
+            load_provider_usage_low_hit(&self.pool, provider, window_seconds, agent, model_family,),
+            load_filtered_provider_usage_coverage(
+                &self.pool,
+                provider,
+                window_seconds,
+                agent,
+                model_family,
+            ),
+        )?;
+        Ok(serde_json::json!({
+            "source": "cowboy", "windowField": "occurred_at", "retentionDays": 30,
+            "windowSeconds": window_seconds, "bucket": bucket,
+            "filters": { "agent": agent.unwrap_or("all"), "modelFamily": model_family.unwrap_or("all") },
+            "summary": breakdown.summary, "byAgent": breakdown.by_agent,
+            "byAgentModel": breakdown.by_agent_model,
+            "byAgentBillingModel": breakdown.by_agent_billing_model,
+            "byAgentModelFamily": breakdown.by_agent_model_family,
+            "byAgentRequestRole": breakdown.by_agent_request_role,
+            "byMachine": breakdown.by_machine, "byOperation": breakdown.by_operation,
+            "byModel": breakdown.by_model, "byResolvedModel": breakdown.by_resolved_model,
+            "byBillingModel": breakdown.by_billing_model,
+            "byModelRevision": breakdown.by_model_revision,
+            "byModelFamily": breakdown.by_model_family,
+            "byRequestRole": breakdown.by_request_role, "byProtocol": breakdown.by_protocol,
+            "byClientProtocol": breakdown.by_client_protocol,
+            "byUpstreamProtocol": breakdown.by_upstream_protocol,
+            "byTranslationMode": breakdown.by_translation_mode,
+            "byThinkingMode": breakdown.by_thinking_mode,
+            "byReasoningEffort": breakdown.by_reasoning_effort,
+            "bySessionAttribution": breakdown.by_session_attribution,
+            "byTrafficSource": breakdown.by_traffic_source,
+            "byGatewayBuild": breakdown.by_gateway_build,
+            "bySchemaVersion": breakdown.by_schema_version,
+            "byAgentOperation": breakdown.by_agent_operation,
+            "timeline": timeline,
+            "lowHit": {
+                "definition": { "minimumInputTokens": 8000, "maximumHitRatePercent": 10 },
+                "summary": low_hit.summary,
+                "byCause": low_hit.by_cause,
+                "byCauseModel": low_hit.by_cause_model,
             },
             "coverage": { "producers": producers },
         }))

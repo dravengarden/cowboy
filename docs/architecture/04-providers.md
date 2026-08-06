@@ -82,6 +82,14 @@ tests, and release transaction. It preserves native Anthropic Messages/SSE and
 contains only current fixture-backed DeepSeek compatibility repairs; it is not
 a shared provider router.
 
+Reasonix is not yet a Cowboy provider. Provider-usage schema v3 reserves a
+separate `reasonix-deepseek` producer and role dimensions so a later native Chat
+Completions integration can report planner/executor/subagent/reviewer economics
+without collapsing them into Codex or Claude. Admission still requires its own
+launch spec, process, config root, credential, gateway port, health check, and
+release lifecycle; telemetry reservation does not advertise or enable the
+runtime.
+
 Gemini CLI stopped accepting Google Login for consumer, Google AI Pro, and AI
 Ultra accounts on 2026-06-18. Its ACP mode remains usable with a Gemini API key
 or Code Assist Standard/Enterprise credentials. Machine authentication therefore

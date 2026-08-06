@@ -6,6 +6,7 @@
 
 mod anthropic;
 mod deepseek;
+mod deepseek_pricing;
 mod gemini;
 mod openai;
 
@@ -15,6 +16,7 @@ use crate::core::SessionMeta;
 use crate::usage::ProviderUsage;
 
 pub(crate) use deepseek::collect as collect_deepseek;
+pub(crate) use deepseek_pricing::decorate_activity as decorate_deepseek_activity;
 pub(crate) use openai::collect as collect_openai;
 
 pub(crate) const PROVIDERS: [&str; 4] = ["deepseek", "openai", "anthropic", "gemini"];

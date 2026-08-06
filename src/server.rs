@@ -1180,6 +1180,10 @@ async fn serve_axum(
             get(api_observability_incidents),
         )
         .route("/api/usage", get(api_usage).post(api_usage_refresh))
+        .route(
+            "/api/usage/deepseek/activity",
+            get(api_deepseek_usage_activity),
+        )
         .route("/api/usage/{provider}", post(api_usage_provider_refresh))
         .route("/api/usage/logs", get(api_usage_logs))
         .route("/api/usage/codex/reset", post(api_codex_reset))
@@ -1510,6 +1514,143 @@ async fn api_usage_provider_refresh(
         ))
         .into_response(),
         Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    }
+}
+
+#[derive(Default, Deserialize)]
+struct DeepSeekActivityQuery {
+    window: Option<String>,
+    model: Option<String>,
+    agent: Option<String>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct DeepSeekActivityFilter {
+    window: String,
+    window_seconds: i32,
+    model: Option<String>,
+    agent: Option<String>,
+}
+
+fn parse_deepseek_activity_filter(
+    query: &DeepSeekActivityQuery,
+) -> Result<DeepSeekActivityFilter, &'static str> {
+    let window = query.window.as_deref().unwrap_or("24h");
+    let window_seconds = match window {
+        "1h" => 3_600,
+        "6h" => 6 * 3_600,
+        "24h" => 24 * 3_600,
+        "7d" => 7 * 86_400,
+        "14d" => 14 * 86_400,
+        "30d" => 30 * 86_400,
+        _ => return Err("invalid activity window"),
+    };
+    let model = match query.model.as_deref().unwrap_or("all") {
+        "all" => None,
+        value @ ("flash" | "pro") => Some(value.to_owned()),
+        _ => return Err("invalid model filter"),
+    };
+    let agent = match query.agent.as_deref().unwrap_or("all") {
+        "all" => None,
+        value @ ("codex" | "claude" | "reasonix") => Some(value.to_owned()),
+        _ => return Err("invalid agent filter"),
+    };
+    Ok(DeepSeekActivityFilter {
+        window: window.to_owned(),
+        window_seconds,
+        model,
+        agent,
+    })
+}
+
+async fn api_deepseek_usage_activity(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<DeepSeekActivityQuery>,
+) -> Response {
+    let Some(store) = state.store.as_ref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "provider usage persistence is unavailable",
+        )
+            .into_response();
+    };
+    let filter = match parse_deepseek_activity_filter(&query) {
+        Ok(filter) => filter,
+        Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
+    };
+    match store
+        .provider_usage_activity(
+            "deepseek",
+            filter.window_seconds,
+            filter.agent.as_deref(),
+            filter.model.as_deref(),
+        )
+        .await
+    {
+        Ok(mut activity) => {
+            if let Some(object) = activity.as_object_mut() {
+                object.insert("window".to_owned(), filter.window.into());
+                object.insert("observedAtMs".to_owned(), crate::usage::now_ms().into());
+            }
+            crate::provider_info::decorate_deepseek_activity(&mut activity);
+            Json(activity).into_response()
+        }
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+#[cfg(test)]
+mod deepseek_activity_filter_tests {
+    use super::{DeepSeekActivityFilter, DeepSeekActivityQuery, parse_deepseek_activity_filter};
+
+    #[test]
+    fn defaults_to_bounded_unfiltered_activity() {
+        assert_eq!(
+            parse_deepseek_activity_filter(&DeepSeekActivityQuery::default()),
+            Ok(DeepSeekActivityFilter {
+                window: "24h".to_owned(),
+                window_seconds: 86_400,
+                model: None,
+                agent: None,
+            })
+        );
+    }
+
+    #[test]
+    fn accepts_reasonix_and_model_family_filters() {
+        assert_eq!(
+            parse_deepseek_activity_filter(&DeepSeekActivityQuery {
+                window: Some("30d".to_owned()),
+                model: Some("pro".to_owned()),
+                agent: Some("reasonix".to_owned()),
+            }),
+            Ok(DeepSeekActivityFilter {
+                window: "30d".to_owned(),
+                window_seconds: 30 * 86_400,
+                model: Some("pro".to_owned()),
+                agent: Some("reasonix".to_owned()),
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_open_ended_dimensions() {
+        for query in [
+            DeepSeekActivityQuery {
+                window: Some("forever".to_owned()),
+                ..DeepSeekActivityQuery::default()
+            },
+            DeepSeekActivityQuery {
+                model: Some("deepseek-v4-pro[1m]".to_owned()),
+                ..DeepSeekActivityQuery::default()
+            },
+            DeepSeekActivityQuery {
+                agent: Some("unknown-runtime".to_owned()),
+                ..DeepSeekActivityQuery::default()
+            },
+        ] {
+            assert!(parse_deepseek_activity_filter(&query).is_err());
+        }
     }
 }
 

@@ -13,6 +13,7 @@ import {
   DialogTitle,
   Divider,
   LinearProgress,
+  MenuItem,
   Stack,
   TextField,
   ToggleButton,
@@ -26,10 +27,11 @@ import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { useSkills } from "./store";
 import { NetworkButton, NetworkIconButton } from "./NetworkActionFeedback";
 import {
+  deepseekAvailableAgents,
   deepseekCacheStats,
   deepseekCostStats,
+  type DeepSeekCostStats,
   percentLabel,
-  primaryDeepSeekModel,
 } from "./deepseekUsage";
 import {
   acceptedScheduleTime,
@@ -91,9 +93,24 @@ function formatTokens(value: number | undefined): string {
   return value === undefined ? "—" : value.toLocaleString();
 }
 
-/** CNY with enough decimals that even tiny DeepSeek spends stay readable. */
-function formatCny(value: number): string {
-  return value < 0.01 ? `¥${value.toFixed(4)}` : `¥${value.toFixed(2)}`;
+/** USD with enough decimals that cache-hit-heavy DeepSeek spends stay readable. */
+function formatUsd(value: number): string {
+  return value < 0.01 ? `$${value.toFixed(4)}` : `$${value.toFixed(2)}`;
+}
+
+function formatEstimatedUsd(
+  cost: DeepSeekCostStats | undefined,
+  value: number | undefined = cost?.estimatedUsd,
+): string {
+  if (!cost || value === undefined || cost.totalTokens === 0) return "—";
+  const partial = cost.priceCoverageRate === undefined ||
+    cost.priceCoverageRate < 99.999;
+  return `${partial ? "≥" : ""}${formatUsd(value)}`;
+}
+
+function fullyPriced(cost: DeepSeekCostStats | undefined): boolean {
+  return cost?.priceCoverageRate !== undefined &&
+    cost.priceCoverageRate >= 99.999;
 }
 
 function formatDurationMs(value: number): string {
@@ -102,9 +119,132 @@ function formatDurationMs(value: number): string {
   return `${(value / 60_000).toFixed(1)} min`;
 }
 
+function agentName(agent: string): string {
+  if (agent === "claude") return "Claude Code";
+  if (agent === "codex") return "Codex";
+  if (agent === "reasonix") return "Reasonix";
+  return agent;
+}
+
+const DEEPSEEK_WINDOWS = ["1h", "6h", "24h", "7d", "14d", "30d"] as const;
+const DEEPSEEK_MODELS = ["all", "flash", "pro"] as const;
+const DEEPSEEK_AGENTS = ["all", "codex", "claude"] as const;
+const DEEPSEEK_AGENTS_WITH_REASONIX = [
+  "all",
+  "codex",
+  "claude",
+  "reasonix",
+] as const;
+type DeepSeekAgentFilter = typeof DEEPSEEK_AGENTS_WITH_REASONIX[number];
+
+function storedDeepSeekFilter<T extends string>(
+  key: string,
+  values: readonly T[],
+  fallback: T,
+): T {
+  try {
+    const stored = window.localStorage.getItem(key);
+    return values.includes(stored as T) ? stored as T : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function persistDeepSeekFilter(key: string, value: string): void {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Private or locked-down WebViews may deny storage; the live filter still works.
+  }
+}
+
+function lowHitCauseName(cause: string): string {
+  const names: Record<string, string> = {
+    first_session_observation: "First observed request",
+    model_changed: "Model changed",
+    model_revision_changed: "Provider model revision changed",
+    request_role_changed: "Request role changed",
+    protocol_changed: "Protocol changed",
+    translation_changed: "Gateway translation changed",
+    reasoning_configuration_changed: "Reasoning configuration changed",
+    static_prefix_changed: "Static prefix changed",
+    client_compaction: "Client compaction",
+    history_rewrite: "History rewritten",
+    compatibility_rewrite: "Compatibility rewrite",
+    unexpected_exact_prefix_miss: "Exact prefix unexpectedly missed",
+    probable_cache_eviction: "Probable provider eviction",
+    post_gateway_restart: "After gateway restart",
+    gateway_build_changed: "Gateway build changed",
+    session_lineage_unavailable: "Codex lineage unavailable",
+    prefix_lineage_ambiguous: "Prefix lineage is ambiguous",
+    unexplained_low_hit: "Unexplained low hit",
+    legacy_unattributed: "Legacy telemetry",
+    unattributed: "Session unattributed",
+  };
+  return names[cause] ?? cause;
+}
+
 function DeepSeekDetails(
   { usage }: { usage: ProviderUsage },
 ): React.JSX.Element {
+  const reasonixObserved = deepseekAvailableAgents(usage.activity).includes("reasonix");
+  const availableAgentFilters: readonly DeepSeekAgentFilter[] = reasonixObserved
+    ? DEEPSEEK_AGENTS_WITH_REASONIX
+    : DEEPSEEK_AGENTS;
+  const [period, setPeriod] = useState(() =>
+    storedDeepSeekFilter("cowboy.deepseek.window", DEEPSEEK_WINDOWS, "24h")
+  );
+  const [modelFilter, setModelFilter] = useState(() =>
+    storedDeepSeekFilter("cowboy.deepseek.model", DEEPSEEK_MODELS, "all")
+  );
+  const [agentFilter, setAgentFilter] = useState<DeepSeekAgentFilter>(() =>
+    storedDeepSeekFilter("cowboy.deepseek.agent", availableAgentFilters, "all")
+  );
+  const [activity, setActivity] = useState<JsonRecord | undefined>();
+  const [activityLoading, setActivityLoading] = useState(true);
+  const [activityError, setActivityError] = useState<string | undefined>();
+  useEffect(() => {
+    const controller = new AbortController();
+    setActivityLoading(true);
+    setActivityError(undefined);
+    setActivity(undefined);
+    const query = new URLSearchParams({
+      window: period,
+      model: modelFilter,
+      agent: agentFilter,
+    });
+    void fetch(`/api/usage/deepseek/activity?${query.toString()}`, {
+      signal: controller.signal,
+    }).then(async (response) => {
+      if (!response.ok) throw new Error(`HTTP ${String(response.status)}`);
+      const next = record(await response.json());
+      if (!next) throw new Error("Invalid activity response");
+      setActivity(next);
+    }).catch((cause: unknown) => {
+      if (controller.signal.aborted) return;
+      setActivityError(cause instanceof Error ? cause.message : "Activity unavailable");
+    }).finally(() => {
+      if (!controller.signal.aborted) setActivityLoading(false);
+    });
+    return (): void => controller.abort();
+  }, [period, modelFilter, agentFilter, usage.observed_at_ms]);
+  useEffect(() => {
+    if (availableAgentFilters.includes(agentFilter)) return;
+    persistDeepSeekFilter("cowboy.deepseek.agent", "all");
+    setAgentFilter("all");
+  }, [agentFilter, reasonixObserved]);
+  const updatePeriod = (value: typeof period): void => {
+    persistDeepSeekFilter("cowboy.deepseek.window", value);
+    setPeriod(value);
+  };
+  const updateModel = (value: typeof modelFilter): void => {
+    persistDeepSeekFilter("cowboy.deepseek.model", value);
+    setModelFilter(value);
+  };
+  const updateAgent = (value: typeof agentFilter): void => {
+    persistDeepSeekFilter("cowboy.deepseek.agent", value);
+    setAgentFilter(value);
+  };
   const accountViews = Array.isArray(usage.account?.accounts)
     ? usage.account.accounts.map(record).filter((
       value,
@@ -129,39 +269,58 @@ function DeepSeekDetails(
     return new Intl.NumberFormat(undefined, { style: "currency", currency })
       .format(amount);
   };
-  const summary = record(usage.activity?.summary);
-  const byAgent = record(usage.activity?.byAgent);
-  const byAgentOperation = record(usage.activity?.byAgentOperation);
-  const byMachine = record(usage.activity?.byMachine);
-  const coverage = record(usage.activity?.coverage);
+  const summary = record(activity?.summary);
+  const byAgent = record(activity?.byAgent);
+  const byAgentOperation = record(activity?.byAgentOperation);
+  const byMachine = record(activity?.byMachine);
+  const pricing = record(activity?.pricing);
+  const costView = record(activity?.cost);
+  const costByAgent = record(costView?.byAgent);
+  const totalCost = deepseekCostStats(record(costView?.summary));
+  const coverage = record(activity?.coverage);
   const producers = Array.isArray(coverage?.producers)
     ? coverage.producers.map(record).filter((value): value is JsonRecord => value !== undefined)
     : [];
   const machineCount = new Set(producers.map((producer) => str(producer.machine)).filter(Boolean)).size;
-  const byModel = record(usage.activity?.byModel);
   const agentLanes = byAgent
-    ? ["claude", "codex"].flatMap((agent) => {
-      const totals = record(byAgent[agent]);
+    ? Object.entries(byAgent).flatMap(([agent, value]) => {
+      const totals = record(value);
       if (!totals) return [];
+      const durationObservations = num(totals.durationObservations) ?? 0;
       return [{
         agent,
         totals,
         cache: deepseekCacheStats(totals),
-        cost: deepseekCostStats(totals, primaryDeepSeekModel(byModel)),
+        cost: deepseekCostStats(record(costByAgent?.[agent])),
+        avgGatewayMs: durationObservations > 0
+          ? (num(totals.durationMs) ?? 0) / durationObservations
+          : undefined,
       }];
     })
     : [];
-  const totalSpendCny = agentLanes.reduce(
-    (sum, lane) => sum + (lane.cost?.estimatedCny ?? 0),
-    0,
-  );
-  const daily = Array.isArray(usage.activity?.daily)
-    ? usage.activity.daily.map(record).filter((value): value is JsonRecord => value !== undefined).slice(-7)
+  const totalSpendUsd = totalCost?.estimatedUsd ?? 0;
+  const pricingAsOf = str(pricing?.asOf);
+  const timeline = Array.isArray(activity?.timeline)
+    ? activity.timeline.map(record).filter((value): value is JsonRecord => value !== undefined).slice(-7)
     : [];
   const requests = num(summary?.requests);
   const errors = num(summary?.errors);
-  const retentionDays = num(usage.activity?.retentionDays) ?? 14;
-  const telemetryError = str(usage.activity?.telemetryError);
+  const telemetryError = activityError ?? str(activity?.telemetryError);
+  const lowHit = record(activity?.lowHit);
+  const lowHitByCause = record(lowHit?.byCause);
+  const lowHitCostByCause = record(costView?.byLowHitCause);
+  const bySchemaVersion = record(activity?.bySchemaVersion);
+  const byResolvedModel = record(activity?.byResolvedModel);
+  const byModelRevision = record(activity?.byModelRevision);
+  const byGatewayBuild = record(activity?.byGatewayBuild);
+  const byRequestRole = record(activity?.byRequestRole);
+  const bySessionAttribution = record(activity?.bySessionAttribution);
+  const v3Requests = num(record(bySchemaVersion?.["3"])?.requests) ?? 0;
+  const attributedRoleRequests = byRequestRole
+    ? Object.entries(byRequestRole)
+      .filter(([role]) => role !== "unknown")
+      .reduce((total, [, value]) => total + (num(record(value)?.requests) ?? 0), 0)
+    : 0;
   return (
     <Stack spacing={1.15}>
       {balanceAccounts.map((account, index) => {
@@ -176,7 +335,7 @@ function DeepSeekDetails(
         const agents = Array.isArray(account.agents)
           ? account.agents.filter((value): value is string => typeof value === "string")
           : [];
-        const lanes = agents.map((agent) => agent === "claude" ? "Claude Code" : agent === "codex" ? "Codex" : agent).join(" + ");
+        const lanes = agents.map(agentName).join(" + ");
         return (
           <Box
             key={str(account.accountFingerprint) ?? index}
@@ -204,16 +363,60 @@ function DeepSeekDetails(
           {String(accountErrors.length)} DeepSeek account lane{accountErrors.length === 1 ? "" : "s"} could not refresh; other available balances are still shown.
         </Typography>
       )}
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+          gap: 0.75,
+        }}
+      >
+        <TextField
+          select
+          size="small"
+          label="Window"
+          value={period}
+          onChange={(event) => updatePeriod(event.target.value as typeof period)}
+        >
+          {DEEPSEEK_WINDOWS.map((value) => (
+            <MenuItem key={value} value={value}>{value}</MenuItem>
+          ))}
+        </TextField>
+        <TextField
+          select
+          size="small"
+          label="Model"
+          value={modelFilter}
+          onChange={(event) => updateModel(event.target.value as typeof modelFilter)}
+        >
+          <MenuItem value="all">All</MenuItem>
+          <MenuItem value="flash">Flash</MenuItem>
+          <MenuItem value="pro">Pro</MenuItem>
+        </TextField>
+        <TextField
+          select
+          size="small"
+          label="Runtime"
+          value={agentFilter}
+          onChange={(event) => updateAgent(event.target.value as typeof agentFilter)}
+        >
+          {availableAgentFilters.map((agent) => (
+            <MenuItem key={agent} value={agent}>
+              {agent === "all" ? "All" : agentName(agent)}
+            </MenuItem>
+          ))}
+        </TextField>
+      </Box>
+      {activityLoading && <LinearProgress aria-label="Loading DeepSeek activity" />}
       {requests !== undefined && requests > 0
         ? (
           <>
             <Stack spacing={0.15}>
               <Typography variant="caption" fontWeight={700}>
-                Cowboy measured · all Machines
+                Cowboy telemetry · all Machines
               </Typography>
               <Typography variant="caption" color="text.secondary">
                 {machineCount > 0 ? `${String(machineCount)} Machines reporting · ` : ""}
-                Does not include calls made outside Cowboy.
+                Measured at Columbus gateways, not by DeepSeek account analytics. Calls bypassing these gateways are excluded.
               </Typography>
             </Stack>
             <Box
@@ -225,7 +428,7 @@ function DeepSeekDetails(
             >
               <Box>
                 <Typography variant="caption" color="text.secondary">
-                  {String(retentionDays)}d requests
+                  {period} requests
                 </Typography>
                 <Typography variant="subtitle2" fontWeight={700}>
                   {requests.toLocaleString()}
@@ -245,25 +448,31 @@ function DeepSeekDetails(
             </Box>
             {agentLanes.length > 0 && (
               <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "repeat(2, minmax(0, 1fr))" }, gap: 1 }}>
-                {agentLanes.map(({ agent, totals, cache, cost }) => {
-                  const spendShare = totalSpendCny > 0 && cost
-                    ? cost.estimatedCny * 100 / totalSpendCny
+                {agentLanes.map(({ agent, totals, cache, cost, avgGatewayMs }) => {
+                  const spendShare = totalSpendUsd > 0 && cost &&
+                      fullyPriced(totalCost) && fullyPriced(cost)
+                    ? cost.estimatedUsd * 100 / totalSpendUsd
                     : undefined;
                   return (
                     <Box key={agent} sx={{ borderRadius: 1.5, bgcolor: "action.hover", px: 1.1, py: 0.9 }}>
                       <Stack spacing={0.5}>
                         <Stack direction="row" justifyContent="space-between">
-                          <Typography variant="body2" fontWeight={700}>{agent === "claude" ? "Claude Code" : "Codex"}</Typography>
+                          <Typography variant="body2" fontWeight={700}>{agentName(agent)}</Typography>
                           <Typography variant="caption" color="text.secondary">{formatTokens(num(totals.requests))} requests</Typography>
                         </Stack>
                         <Box sx={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 1 }}>
                           <Box>
-                            <Tooltip title="DeepSeek off-peak list prices (CNY) × verified tokens; peak hours 09:00–12:00 / 14:00–18:00 CST bill double. Unobserved requests are excluded.">
+                            <Tooltip title={`DeepSeek USD list-price snapshot${pricingAsOf ? ` dated ${pricingAsOf}` : ""} × gateway-observed tokens. A ≥ value has incomplete price coverage. Models are valued separately; reasoning is already included in output tokens and is charged once.`}>
                               <Typography variant="caption" color="text.secondary" sx={{ cursor: "help", textDecoration: "underline dotted" }}>Est. spend</Typography>
                             </Tooltip>
                             <Typography variant="subtitle2" fontWeight={700}>
-                              {cost ? formatCny(cost.estimatedCny) : "—"}
+                              {formatEstimatedUsd(cost)}
                             </Typography>
+                            {cost && !fullyPriced(cost) && cost.totalTokens > 0 && (
+                              <Typography variant="caption" color="warning.main">
+                                {percentLabel(cost.priceCoverageRate)} priced
+                              </Typography>
+                            )}
                           </Box>
                           <Box>
                             <Typography variant="caption" color="text.secondary">Spend share</Typography>
@@ -272,9 +481,9 @@ function DeepSeekDetails(
                             </Typography>
                           </Box>
                           <Box>
-                            <Typography variant="caption" color="text.secondary">Avg gateway</Typography>
+                            <Typography variant="caption" color="text.secondary">Miss premium</Typography>
                             <Typography variant="subtitle2" fontWeight={700}>
-                              {cost?.avgGatewayMs === undefined ? "—" : formatDurationMs(cost.avgGatewayMs)}
+                              {cost ? formatUsd(cost.cacheMissPremiumUsd) : "—"}
                             </Typography>
                           </Box>
                           <Box>
@@ -298,7 +507,12 @@ function DeepSeekDetails(
                         </Typography>
                         {cache.measuredRequests > 0 && (
                           <Typography variant="caption" color="text.secondary">
-                            {formatTokens(cache.hotRequests)} hot (≥90%) · {formatTokens(cache.coldRequests)} cold (&lt;10%) requests
+                            {formatTokens(cache.hotRequests)} hot (≥90%) · {formatTokens(cache.coldRequests)} low-hit (&lt;10%) requests
+                          </Typography>
+                        )}
+                        {avgGatewayMs !== undefined && (
+                          <Typography variant="caption" color="text.secondary">
+                            Average gateway time {formatDurationMs(avgGatewayMs)}
                           </Typography>
                         )}
                       </Stack>
@@ -341,7 +555,7 @@ function DeepSeekDetails(
                   {byAgent && Object.entries(byAgent).map(([agent, value]) => {
                     const totals = record(value);
                     const cache = deepseekCacheStats(totals);
-                    const cost = deepseekCostStats(totals, primaryDeepSeekModel(byModel));
+                    const cost = deepseekCostStats(record(costByAgent?.[agent]));
                     const durationObservations = num(totals?.durationObservations) ?? 0;
                     const requestShapeObservations = num(totals?.requestShapeObservations) ?? 0;
                     const operations = record(byAgentOperation?.[agent]);
@@ -364,11 +578,7 @@ function DeepSeekDetails(
                         <Stack spacing={0.55}>
                           <Stack direction="row" justifyContent="space-between">
                             <Typography variant="body2" fontWeight={700}>
-                              {agent === "codex"
-                                ? "Codex"
-                                : agent === "claude"
-                                ? "Claude Code"
-                                : agent}
+                              {agentName(agent)}
                             </Typography>
                             <Typography variant="caption" color="text.secondary">
                               {formatTokens(num(totals?.requests))} requests
@@ -388,16 +598,38 @@ function DeepSeekDetails(
                           />
                           <InfoRow
                             k="Est. spend"
-                            v={cost ? formatCny(cost.estimatedCny) : "—"}
+                            v={formatEstimatedUsd(cost)}
                           />
                           <InfoRow
                             k="Cost / request"
-                            v={cost ? formatCny(cost.costPerRequestCny) : "—"}
+                            v={formatEstimatedUsd(cost, cost?.costPerRequestUsd)}
                           />
                           <InfoRow
                             k="Cost / 1M tokens"
-                            v={cost ? formatCny(cost.costPerMTokensCny) : "—"}
+                            v={formatEstimatedUsd(cost, cost?.costPerMTokensUsd)}
                           />
+                          {cost && (
+                            <>
+                              <InfoRow
+                                k="Cache savings"
+                                v={formatUsd(cost.cacheSavingsUsd)}
+                              />
+                              <InfoRow
+                                k="Cache miss premium"
+                                v={formatUsd(cost.cacheMissPremiumUsd)}
+                              />
+                              <InfoRow
+                                k="Price coverage"
+                                v={percentLabel(cost.priceCoverageRate)}
+                              />
+                              <InfoRow
+                                k="Model family"
+                                v={cost.modelFamilies.length > 0
+                                  ? cost.modelFamilies.map((family) => family === "flash" ? "Flash" : family === "pro" ? "Pro" : family).join(" + ")
+                                  : "Unknown"}
+                              />
+                            </>
+                          )}
                           <Typography variant="caption" color="text.secondary">
                             {formatTokens(cache.explicitRequests)} explicit · {formatTokens(cache.derivedRequests)} exact-derived · {formatTokens(cache.absentRequests)} missing cache observations
                           </Typography>
@@ -444,21 +676,103 @@ function DeepSeekDetails(
                       ))}
                     </Box>
                   )}
-                  {daily.length > 0 && (
+                  {requests !== undefined && requests > 0 && (
                     <Stack spacing={0.35} sx={{ pt: 0.25 }}>
                       <Typography variant="caption" color="text.secondary">
-                        Recent daily activity
+                        Telemetry quality
                       </Typography>
-                      {daily.map((entry) => {
-                        const totals = record(entry.totals);
-                        const dailyCache = deepseekCacheStats(totals);
-                        const cacheLabel = dailyCache.hitRate === undefined
-                          ? ""
-                          : ` · ${percentLabel(dailyCache.hitRate)} cache`;
+                      <InfoRow
+                        k="Schema v3"
+                        v={`${formatTokens(v3Requests)} / ${formatTokens(requests)} · ${percentLabel(requests > 0 ? v3Requests * 100 / requests : undefined)}`}
+                      />
+                      {bySessionAttribution && (
+                        <InfoRow
+                          k="Lineage attribution"
+                          v={Object.entries(bySessionAttribution)
+                            .map(([name, value]) => `${name} ${formatTokens(num(record(value)?.requests))}`)
+                            .join(" · ")}
+                        />
+                      )}
+                      {v3Requests > 0 && (
+                        <InfoRow
+                          k="Request role attribution"
+                          v={`${formatTokens(attributedRoleRequests)} / ${formatTokens(v3Requests)} · ${percentLabel(attributedRoleRequests * 100 / v3Requests)}`}
+                        />
+                      )}
+                      {byRequestRole && attributedRoleRequests > 0 && (
+                        <InfoRow
+                          k="Attributed roles"
+                          v={Object.entries(byRequestRole)
+                            .filter(([role]) => role !== "unknown")
+                            .map(([role, value]) => `${role} ${formatTokens(num(record(value)?.requests))}`)
+                            .join(" · ")}
+                          />
+                        )}
+                      {byResolvedModel && Object.keys(byResolvedModel).some(Boolean) && (
+                        <InfoRow
+                          k="Resolved models"
+                          v={Object.entries(byResolvedModel)
+                            .filter(([model]) => model !== "")
+                            .map(([model, value]) => `${model} ${formatTokens(num(record(value)?.requests))}`)
+                            .join(" · ")}
+                        />
+                      )}
+                      {byModelRevision && Object.keys(byModelRevision).some(Boolean) && (
+                        <InfoRow
+                          k="Provider revisions"
+                          v={Object.entries(byModelRevision)
+                            .filter(([revision]) => revision !== "")
+                            .map(([revision, value]) => `${revision} ${formatTokens(num(record(value)?.requests))}`)
+                            .join(" · ")}
+                        />
+                      )}
+                      {byGatewayBuild && Object.keys(byGatewayBuild).filter(Boolean).length > 0 && (
+                        <InfoRow
+                          k="Gateway builds"
+                          v={String(Object.keys(byGatewayBuild).filter(Boolean).length)}
+                        />
+                      )}
+                    </Stack>
+                  )}
+                  {lowHitByCause && Object.keys(lowHitByCause).length > 0 && (
+                    <Stack spacing={0.35} sx={{ pt: 0.25 }}>
+                      <Typography variant="caption" color="text.secondary">
+                        Low-hit diagnosis · ≥8K input and &lt;10% hit
+                      </Typography>
+                      {Object.entries(lowHitByCause).map(([cause, value]) => {
+                        const totals = record(value);
+                        const cost = deepseekCostStats(record(lowHitCostByCause?.[cause]));
                         return (
                           <InfoRow
-                            key={str(entry.day)}
-                            k={str(entry.day) ?? "Unknown day"}
+                            key={cause}
+                            k={lowHitCauseName(cause)}
+                            v={`${formatTokens(num(totals?.requests))} req${cost ? ` · ${formatEstimatedUsd(cost, cost.cacheMissPremiumUsd)} miss premium` : ""}`}
+                          />
+                        );
+                      })}
+                    </Stack>
+                  )}
+                  {timeline.length > 0 && (
+                    <Stack spacing={0.35} sx={{ pt: 0.25 }}>
+                      <Typography variant="caption" color="text.secondary">
+                        Recent activity
+                      </Typography>
+                      {timeline.map((entry) => {
+                        const totals = record(entry.totals);
+                        const bucketCache = deepseekCacheStats(totals);
+                        const cacheLabel = bucketCache.hitRate === undefined
+                          ? ""
+                          : ` · ${percentLabel(bucketCache.hitRate)} cache`;
+                        const startMs = num(entry.startMs);
+                        const label = startMs === undefined
+                          ? "Unknown time"
+                          : new Intl.DateTimeFormat(undefined, str(activity?.bucket) === "hour"
+                            ? { month: "short", day: "numeric", hour: "2-digit" }
+                            : { month: "short", day: "numeric" }).format(new Date(startMs));
+                        return (
+                          <InfoRow
+                            key={String(startMs ?? label)}
+                            k={label}
                             v={`${formatTokens(num(totals?.requests))} req · ${formatTokens(num(totals?.inputTokens))} in${cacheLabel}`}
                           />
                         );
@@ -471,12 +785,12 @@ function DeepSeekDetails(
           </>
         )
         : null}
-      {(requests === undefined || requests === 0) && !telemetryError && (
+      {!activityLoading && (requests === undefined || requests === 0) && !telemetryError && (
         <Stack spacing={0.15}>
           <Typography variant="body2">No Cowboy usage recorded yet.</Typography>
           <Typography variant="caption" color="text.secondary">
             {machineCount > 0 ? `${String(machineCount)} Machines reporting. ` : ""}
-            Cowboy-measured activity excludes calls made outside Cowboy.
+            Cowboy has not received request telemetry from a Columbus DeepSeek gateway in this window.
           </Typography>
         </Stack>
       )}

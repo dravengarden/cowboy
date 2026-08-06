@@ -299,6 +299,14 @@ pub struct ProviderUsageEvent {
     pub provider: String,
     pub agent: String,
     pub model: String,
+    #[serde(default = "unknown_provider_usage_dimension")]
+    pub model_family: String,
+    #[serde(default)]
+    pub resolved_model: Option<String>,
+    #[serde(default)]
+    pub model_revision: Option<String>,
+    #[serde(default = "unknown_provider_usage_dimension")]
+    pub request_role: String,
     pub status: u16,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
@@ -309,6 +317,30 @@ pub struct ProviderUsageEvent {
     pub operation: String,
     #[serde(default = "legacy_provider_usage_dimension")]
     pub protocol: String,
+    #[serde(default = "legacy_provider_usage_dimension")]
+    pub client_protocol: String,
+    #[serde(default = "legacy_provider_usage_dimension")]
+    pub upstream_protocol: String,
+    #[serde(default = "legacy_provider_usage_dimension")]
+    pub translation_mode: String,
+    #[serde(default = "unknown_provider_usage_dimension")]
+    pub thinking_mode: String,
+    #[serde(default = "unknown_provider_usage_dimension")]
+    pub reasoning_effort: String,
+    #[serde(default)]
+    pub session_fingerprint: Option<String>,
+    #[serde(default = "unattributed_provider_usage_dimension")]
+    pub session_attribution: String,
+    #[serde(default = "unattributed_provider_usage_dimension")]
+    pub traffic_source: String,
+    #[serde(default)]
+    pub static_prefix_fingerprint: Option<String>,
+    #[serde(default)]
+    pub request_prefix_fingerprint: Option<String>,
+    #[serde(default)]
+    pub gateway_build: Option<String>,
+    #[serde(default)]
+    pub gateway_boot_id: Option<String>,
     #[serde(default = "legacy_provider_usage_dimension")]
     pub cache_observation: String,
     #[serde(default)]
@@ -347,6 +379,14 @@ const fn default_provider_usage_schema_version() -> u16 {
 
 fn legacy_provider_usage_dimension() -> String {
     "legacy".to_owned()
+}
+
+fn unknown_provider_usage_dimension() -> String {
+    "unknown".to_owned()
+}
+
+fn unattributed_provider_usage_dimension() -> String {
+    "unattributed".to_owned()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

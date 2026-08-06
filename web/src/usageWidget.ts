@@ -18,7 +18,8 @@ export type UsageWidgetProvider =
     kind: "deepseek";
     label: "DeepSeek";
     balanceCny: number;
-    spend24hCny: number;
+    spend24hUsd: number;
+    spend24hPriceCoverage: number | undefined;
     cacheHitRate: number;
   };
 
@@ -53,14 +54,14 @@ function deepseekBalanceCny(usage: ProviderUsage): number | undefined {
     : amounts.reduce((sum, amount) => sum + amount, 0);
 }
 
-function deepseekSpend24hCny(usage: ProviderUsage): number | undefined {
+function deepseekSpend24h(usage: ProviderUsage):
+  | { amount: number; priceCoverage: number | undefined }
+  | undefined {
   const rolling = record(usage.activity?.last24Hours);
-  const byModel = record(rolling?.byModel);
-  if (!byModel) return undefined;
-  return Object.entries(byModel).reduce((sum, [model, value]) => {
-    const cost = deepseekCostStats(record(value), model);
-    return sum + (cost?.estimatedCny ?? 0);
-  }, 0);
+  const cost = deepseekCostStats(record(record(rolling?.cost)?.summary));
+  return cost && cost.totalTokens > 0
+    ? { amount: cost.estimatedUsd, priceCoverage: cost.priceCoverageRate }
+    : undefined;
 }
 
 function openAiWidget(usage: ProviderUsage): UsageWidgetProvider | undefined {
@@ -78,19 +79,21 @@ function openAiWidget(usage: ProviderUsage): UsageWidgetProvider | undefined {
 
 function deepseekWidget(usage: ProviderUsage): UsageWidgetProvider | undefined {
   const balanceCny = deepseekBalanceCny(usage);
-  const spend24hCny = deepseekSpend24hCny(usage);
+  const spend24h = deepseekSpend24h(usage);
+  const rolling = record(usage.activity?.last24Hours);
   const cacheHitRate =
-    deepseekCacheStats(record(usage.activity?.summary)).hitRate;
+    deepseekCacheStats(record(rolling?.summary)).hitRate;
   if (
     balanceCny === undefined ||
-    spend24hCny === undefined ||
+    spend24h === undefined ||
     cacheHitRate === undefined
   ) return undefined;
   return {
     kind: "deepseek",
     label: "DeepSeek",
     balanceCny,
-    spend24hCny,
+    spend24hUsd: spend24h.amount,
+    spend24hPriceCoverage: spend24h.priceCoverage,
     cacheHitRate,
   };
 }

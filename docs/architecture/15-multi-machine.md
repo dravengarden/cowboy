@@ -138,27 +138,92 @@ producer, and sequence makes reconnect replay idempotent.
 The UI labels these aggregates `Cowboy measured`; they cover only requests
 observed by reporting Cowboy Machines and never imply provider-wide billing
 usage. VictoriaLogs remains operational observability and is not a product data
-source. Protocol v1 Machines remain compatible but do not contribute usage.
-The UI window is 14 days; the internal ledger is pruned after 30 days by the
-existing Cowboy database sweeper.
+source. Protocol v1 Machines remain compatible but do not contribute usage. The
+UI offers bounded 1-hour through 30-day windows; the internal ledger is pruned
+after 30 days by the existing Cowboy database sweeper.
 
-Usage event schema v2 adds only content-free request shape and delivery facts:
-agent lane, model, wire protocol, ordinary/compact operation, byte and item
-counts, tool and system-block counts, previous-response presence, compatibility
-repair count, streaming, duration, status, completion, and provider token
-counters. It never carries prompt text, tool arguments, reasoning content,
-session identity, response bodies, or credentials. Gateway delivery remains
-fail-open, so telemetry cannot change an inference result.
+Usage event schema v3 adds only content-free request shape and delivery facts:
+runtime lane, requested and resolved model family/revision, client and upstream
+protocol, translation mode, ordinary/compact operation, request role, thinking
+configuration, byte and item counts, tool and system-block counts,
+previous-response presence, compatibility repair count, gateway build/boot,
+streaming, duration, status, completion, and provider token counters. It never
+carries prompt text, tool arguments, reasoning content, response bodies, raw
+session/response ids, or credentials. Lineage and stable-prefix correlation use
+runtime-namespaced, credential-keyed truncated HMACs generated independently
+inside each gateway; raw values cannot be recovered or joined across runtimes
+even when two lanes intentionally use the same provider credential. Gateway
+delivery remains fail-open, so telemetry cannot change an inference result.
 
-Cache rates use only v2 rows marked `explicit` (the provider returned hit and
+Cache rates use only rows marked `explicit` (the provider returned hit and
 miss counters) or `derived` (the provider returned cached tokens plus total
 input, making miss tokens an exact subtraction). Rows marked `absent` contribute
 to coverage but not the rate. Version-one rows are `legacy` and excluded rather
-than silently treated as misses. The 14-day window uses provider occurrence
-time; receipt time is retained only for pipeline freshness. The card keeps
-Codex and Claude Code rates separate, shows hot and cold request counts, and
-breaks ordinary Responses, compaction, Messages, model, protocol, and Machine
-coverage apart so a token-weighted average cannot hide a bimodal workload.
+than silently treated as misses. UI queries choose a bounded 1-hour through
+30-day occurrence window and can filter Flash, Pro, Codex, or Claude Code
+without refreshing account balance. Reasonix appears only after its own
+producer has reported real data. The card keeps
+runtime rates separate, shows hot and low-hit request counts, and breaks model,
+role, protocol, translation, revision, operation, and Machine coverage apart so
+a token-weighted average cannot hide a bimodal workload.
+
+Low-hit diagnosis is deliberately observational: it classifies only requests
+with at least 8,000 input tokens and a measured hit rate below 10%. Ordered
+lineage is scoped to one Machine and producer. An explicit Cowboy session HMAC
+or Codex response lineage can distinguish first observations, compaction, model
+or provider-revision changes, explicit request-role changes,
+protocol/translation/reasoning changes, compatibility rewrites, static-prefix
+changes, history rewrites, probable provider eviction, gateway build/restart,
+and unexplained exact-prefix misses. Claude's stable first-message HMAC is only
+a shared prefix root, not a unique session identity; it is reported as
+`prefix_lineage_ambiguous` and excluded from ordered causal claims. These labels
+are hypotheses for experiments, not provider billing facts. Lineage attribution
+and schema-v3 coverage remain visible so missing or ambiguous lineage cannot
+masquerade as an optimization result.
+
+DeepSeek cost is valued only in the backend provider adapter from a pinned
+official USD list-price snapshot, with its source URL, version, and as-of date
+in the response. The resolved billing model wins over the requested alias, and
+Flash and Pro token aggregates are priced separately. Reasoning
+tokens are a diagnostic subset of completion tokens and are never charged a
+second time. Unknown models and cache-absent input remain explicitly unpriced,
+and the UI displays price coverage, cache savings, and miss premium. Incomplete
+valuations use an explicit lower-bound marker rather than appearing as an
+invoice.
+
+Reasonix is reserved as a future independent producer, not implemented by this
+schema change. Its contract is `producer_id=reasonix-deepseek`, `agent=reasonix`,
+native Chat Completions, and one of `executor`, `planner`, `subagent`, or
+`reviewer` for `request_role`. A future Reasonix process must own a separate
+config directory, credential, port, service, spool producer, and HMAC namespace;
+it must not reuse either Codex/OpenAI or Claude/Anthropic state. This separation
+lets Cowboy compare role-specific cold-start and cache economics without turning
+telemetry into a shared runtime configuration plane. Reasonix events require
+schema v3, and planner, executor, and each subagent/reviewer must report their
+own cache lineage rather than borrowing the parent Cowboy session.
+Codex and Claude gateway traffic records `request_role=unknown` unless the
+loopback caller supplies an explicit role header; telemetry must never infer
+`executor` from absence. Reasonix must always report an explicit role. The UI
+shows attributed-role coverage so role-based cost conclusions cannot be drawn
+from unknown traffic.
+
+Schema v3 rollout is ordered because old Machine collectors reject it before it
+can enter the durable spool. First deploy a migration-compatible controller
+bridge as the active rollback target; it must tolerate already-applied additive
+migrations newer than its embedded set while preserving checksum verification
+for every migration it knows. Then deploy the controller migration/API, the
+Cowboy Machine maintenance release one Machine at a time, and finally each
+gateway component. Web may follow the controller independently. A
+gateway-first release creates an unrecoverable telemetry gap even though
+inference remains fail-open.
+
+Rollback is intentionally asymmetric. Roll back each gateway first, then prove
+that every v3 producer spool has been acknowledged and drained before rolling
+back its Machine collector. Never run an old Machine while a v3 spool is
+pending. Migration 0025 remains applied: the controller may roll back only to
+the migration-compatible bridge or a descendant release, never to a binary
+that predates the bridge. Controller recovery after that boundary is a forward
+fix or a rollback that retains migration compatibility, not a schema downgrade.
 
 DeepSeek credentials and mutable runtime state remain independent per agent
 lane. The provider adapter may collapse duplicate official balances only when

@@ -59,6 +59,7 @@ Built incrementally by the `migrations/*.sql` files (sqlx applies them on boot):
 | `0016_mobile_review_state` | Mobile-only tabs, active source, review mode, and reviewed revisions per session |
 | `0017_machines` | Stable machine registry plus immutable per-session machine placement |
 | `0018_machine_enrollment` | Single-use enrollment tokens and per-machine public-key identity |
+| `0025_provider_usage_telemetry_v3` | Provider-neutral model, role, protocol, HMAC lineage, and gateway-build dimensions for DeepSeek cache/cost diagnosis |
 
 The writer UPSERTs consecutive message/thought chunks into their first sequence
 row, folds tool updates into the initial call, and stores only the sequence

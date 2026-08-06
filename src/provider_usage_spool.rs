@@ -31,6 +31,14 @@ struct GatewayUsage {
     provider: String,
     agent: String,
     model: String,
+    #[serde(default = "unknown_dimension")]
+    model_family: String,
+    #[serde(default)]
+    resolved_model: Option<String>,
+    #[serde(default)]
+    model_revision: Option<String>,
+    #[serde(default = "unknown_dimension")]
+    request_role: String,
     status: u16,
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
@@ -41,6 +49,30 @@ struct GatewayUsage {
     operation: String,
     #[serde(default = "legacy_dimension")]
     protocol: String,
+    #[serde(default = "legacy_dimension")]
+    client_protocol: String,
+    #[serde(default = "legacy_dimension")]
+    upstream_protocol: String,
+    #[serde(default = "legacy_dimension")]
+    translation_mode: String,
+    #[serde(default = "unknown_dimension")]
+    thinking_mode: String,
+    #[serde(default = "unknown_dimension")]
+    reasoning_effort: String,
+    #[serde(default)]
+    session_fingerprint: Option<String>,
+    #[serde(default = "unattributed_dimension")]
+    session_attribution: String,
+    #[serde(default = "unattributed_dimension")]
+    traffic_source: String,
+    #[serde(default)]
+    static_prefix_fingerprint: Option<String>,
+    #[serde(default)]
+    request_prefix_fingerprint: Option<String>,
+    #[serde(default)]
+    gateway_build: Option<String>,
+    #[serde(default)]
+    gateway_boot_id: Option<String>,
     #[serde(default = "legacy_dimension")]
     cache_observation: String,
     #[serde(default)]
@@ -71,6 +103,14 @@ const fn default_schema_version() -> u16 {
 
 fn legacy_dimension() -> String {
     "legacy".to_owned()
+}
+
+fn unknown_dimension() -> String {
+    "unknown".to_owned()
+}
+
+fn unattributed_dimension() -> String {
+    "unattributed".to_owned()
 }
 
 #[derive(Clone)]
@@ -136,6 +176,10 @@ impl ProviderUsageSpool {
             provider: std::mem::take(&mut event.provider),
             agent: std::mem::take(&mut event.agent),
             model: std::mem::take(&mut event.model),
+            model_family: std::mem::take(&mut event.model_family),
+            resolved_model: event.resolved_model.take(),
+            model_revision: event.model_revision.take(),
+            request_role: std::mem::take(&mut event.request_role),
             status: event.status,
             input_tokens: event.input_tokens,
             output_tokens: event.output_tokens,
@@ -144,6 +188,18 @@ impl ProviderUsageSpool {
             cache_miss_tokens: event.cache_miss_tokens,
             operation: std::mem::take(&mut event.operation),
             protocol: std::mem::take(&mut event.protocol),
+            client_protocol: std::mem::take(&mut event.client_protocol),
+            upstream_protocol: std::mem::take(&mut event.upstream_protocol),
+            translation_mode: std::mem::take(&mut event.translation_mode),
+            thinking_mode: std::mem::take(&mut event.thinking_mode),
+            reasoning_effort: std::mem::take(&mut event.reasoning_effort),
+            session_fingerprint: event.session_fingerprint.take(),
+            session_attribution: std::mem::take(&mut event.session_attribution),
+            traffic_source: std::mem::take(&mut event.traffic_source),
+            static_prefix_fingerprint: event.static_prefix_fingerprint.take(),
+            request_prefix_fingerprint: event.request_prefix_fingerprint.take(),
+            gateway_build: event.gateway_build.take(),
+            gateway_boot_id: event.gateway_boot_id.take(),
             cache_observation: std::mem::take(&mut event.cache_observation),
             usage_observed: event.usage_observed,
             completed: event.completed,
@@ -238,13 +294,154 @@ fn metrics_within_bounds(event: &GatewayUsage) -> bool {
         .any(|value| value > PROVIDER_USAGE_MAX_SHAPE_COUNT)
 }
 
+fn valid_hex(value: &str, length: usize) -> bool {
+    value.len() == length
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn valid_optional_hex(value: Option<&String>, length: usize) -> bool {
+    value.is_none_or(|value| valid_hex(value, length))
+}
+
+fn expected_model_family(model: &str) -> &'static str {
+    let normalized = model
+        .trim()
+        .to_ascii_lowercase()
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    if normalized.starts_with("deepseek-v4-pro") {
+        "pro"
+    } else if normalized.starts_with("deepseek-v4-flash")
+        || matches!(normalized.as_str(), "deepseek-chat" | "deepseek-reasoner")
+    {
+        "flash"
+    } else {
+        "unknown"
+    }
+}
+
+fn valid_v3_dimensions(event: &GatewayUsage) -> bool {
+    let model = event.resolved_model.as_deref().unwrap_or(&event.model);
+    let session_valid = match event.session_attribution.as_str() {
+        "response_lineage" | "prefix_root" | "explicit" => event.session_fingerprint.is_some(),
+        "unattributed" => event.session_fingerprint.is_none(),
+        _ => false,
+    };
+    let lane_valid = match (event.producer_id.as_str(), event.agent.as_str()) {
+        ("codex-deepseek", "codex") => {
+            event.client_protocol == "responses"
+                && matches!(event.operation.as_str(), "responses" | "compact")
+                && matches!(
+                    event.upstream_protocol.as_str(),
+                    "responses" | "chat_completions"
+                )
+                && ((event.upstream_protocol == "responses" && event.translation_mode == "native")
+                    || (event.upstream_protocol == "chat_completions"
+                        && event.translation_mode == "responses_to_chat"))
+        }
+        ("claude-deepseek", "claude") => {
+            event.operation == "messages"
+                && event.client_protocol == "anthropic_messages"
+                && event.upstream_protocol == "anthropic_messages"
+                && matches!(
+                    event.translation_mode.as_str(),
+                    "native" | "anthropic_compat"
+                )
+        }
+        ("reasonix-deepseek", "reasonix") => {
+            event.operation == "chat_completions"
+                && event.client_protocol == "chat_completions"
+                && event.upstream_protocol == "chat_completions"
+                && event.translation_mode == "native"
+        }
+        _ => false,
+    };
+    let request_role_valid = matches!(
+        event.request_role.as_str(),
+        "unknown" | "executor" | "planner" | "subagent" | "reviewer"
+    ) && (event.agent != "reasonix" || event.request_role != "unknown");
+    event.protocol == event.upstream_protocol
+        && event.model_family == expected_model_family(model)
+        && request_role_valid
+        && matches!(event.thinking_mode.as_str(), "enabled" | "disabled")
+        && matches!(
+            event.reasoning_effort.as_str(),
+            "default" | "low" | "high" | "max"
+        )
+        && matches!(event.traffic_source.as_str(), "unattributed" | "cowboy")
+        && (event.traffic_source != "cowboy" || event.session_attribution == "explicit")
+        && session_valid
+        && valid_optional_hex(event.session_fingerprint.as_ref(), 32)
+        && valid_optional_hex(event.static_prefix_fingerprint.as_ref(), 32)
+        && valid_optional_hex(event.request_prefix_fingerprint.as_ref(), 32)
+        && valid_optional_hex(event.gateway_build.as_ref(), 16)
+        && valid_optional_hex(event.gateway_boot_id.as_ref(), 16)
+        && event.static_prefix_fingerprint.is_some()
+        && event.request_prefix_fingerprint.is_some()
+        && event.gateway_build.is_some()
+        && event.gateway_boot_id.is_some()
+        && event
+            .resolved_model
+            .as_ref()
+            .is_none_or(|value| !value.is_empty() && value.len() <= 128)
+        && event
+            .model_revision
+            .as_ref()
+            .is_none_or(|value| !value.is_empty() && value.len() <= 128)
+        && lane_valid
+}
+
+fn valid_usage_token_algebra(event: &GatewayUsage) -> bool {
+    if event.schema_version < 2 {
+        return true;
+    }
+    match event.usage_observed {
+        Some(false) => {
+            event.input_tokens.is_none()
+                && event.output_tokens.is_none()
+                && event.reasoning_tokens.is_none()
+                && event.cache_hit_tokens.is_none()
+                && event.cache_miss_tokens.is_none()
+                && event.cache_observation == "absent"
+        }
+        Some(true) => {
+            let (Some(input), Some(output), Some(reasoning)) = (
+                event.input_tokens,
+                event.output_tokens,
+                event.reasoning_tokens,
+            ) else {
+                return false;
+            };
+            if reasoning > output {
+                return false;
+            }
+            match event.cache_observation.as_str() {
+                "absent" => event.cache_hit_tokens.is_none() && event.cache_miss_tokens.is_none(),
+                "derived" | "explicit" => {
+                    let (Some(hit), Some(miss)) = (event.cache_hit_tokens, event.cache_miss_tokens)
+                    else {
+                        return false;
+                    };
+                    hit.checked_add(miss) == Some(input)
+                }
+                _ => false,
+            }
+        }
+        None => false,
+    }
+}
+
 fn validate(event: &GatewayUsage) -> Result<()> {
     if event.event_id.is_empty()
         || event.event_id.len() > 128
         || event.producer_id.is_empty()
         || event.producer_id.len() > 128
         || event.provider != "deepseek"
-        || !matches!(event.agent.as_str(), "codex" | "claude")
+        || !matches!(event.agent.as_str(), "codex" | "claude" | "reasonix")
         || event.account_fingerprint.len() != 16
         || !event
             .account_fingerprint
@@ -252,10 +449,11 @@ fn validate(event: &GatewayUsage) -> Result<()> {
             .all(|byte| byte.is_ascii_hexdigit())
         || event.model.len() > 128
         || !(100..=599).contains(&event.status)
-        || !matches!(event.schema_version, 1 | 2)
+        || !matches!(event.schema_version, 1..=3)
+        || (event.agent == "reasonix" && event.schema_version != 3)
         || !matches!(
             event.operation.as_str(),
-            "legacy" | "responses" | "compact" | "messages"
+            "legacy" | "responses" | "compact" | "messages" | "chat_completions"
         )
         || !matches!(
             event.protocol.as_str(),
@@ -267,13 +465,16 @@ fn validate(event: &GatewayUsage) -> Result<()> {
         )
         || !matches!(
             (event.producer_id.as_str(), event.agent.as_str()),
-            ("codex-deepseek", "codex") | ("claude-deepseek", "claude")
+            ("codex-deepseek", "codex")
+                | ("claude-deepseek", "claude")
+                | ("reasonix-deepseek", "reasonix")
         )
         || !metrics_within_bounds(event)
+        || !valid_usage_token_algebra(event)
     {
         anyhow::bail!("invalid gateway usage event");
     }
-    if event.schema_version == 2
+    if event.schema_version >= 2
         && (event.operation == "legacy"
             || event.protocol == "legacy"
             || event.cache_observation == "legacy"
@@ -288,7 +489,7 @@ fn validate(event: &GatewayUsage) -> Result<()> {
             || event.has_previous_response_id.is_none()
             || event.compatibility_fixes.is_none())
     {
-        anyhow::bail!("incomplete version two gateway usage event");
+        anyhow::bail!("incomplete gateway usage event");
     }
     if event.schema_version == 2
         && !matches!(
@@ -305,6 +506,9 @@ fn validate(event: &GatewayUsage) -> Result<()> {
         )
     {
         anyhow::bail!("inconsistent gateway usage dimensions");
+    }
+    if event.schema_version == 3 && !valid_v3_dimensions(event) {
+        anyhow::bail!("invalid version three gateway usage dimensions");
     }
     match event.cache_observation.as_str() {
         "absent" if event.cache_hit_tokens.is_some() || event.cache_miss_tokens.is_some() => {
@@ -371,8 +575,8 @@ mod tests {
     }
 
     fn event(id: &str) -> Vec<u8> {
-        serde_json::to_vec(&serde_json::json!({
-            "schema_version": 2,
+        let mut event = serde_json::json!({
+            "schema_version": 3,
             "event_id": id,
             "producer_id": "codex-deepseek",
             "occurred_at_ms": 1_786_000_000_000_i64,
@@ -380,6 +584,10 @@ mod tests {
             "provider": "deepseek",
             "agent": "codex",
             "model": "deepseek-chat",
+            "model_family": "flash",
+            "resolved_model": "deepseek-v4-flash",
+            "model_revision": "fp-v4",
+            "request_role": "executor",
             "status": 200,
             "input_tokens": 10,
             "output_tokens": 4,
@@ -387,7 +595,22 @@ mod tests {
             "cache_hit_tokens": 7,
             "cache_miss_tokens": 3,
             "operation": "responses",
+        });
+        event.as_object_mut().expect("event object").extend(
+            serde_json::json!({
             "protocol": "responses",
+            "client_protocol": "responses",
+            "upstream_protocol": "responses",
+            "translation_mode": "native",
+            "thinking_mode": "enabled",
+            "reasoning_effort": "high",
+            "session_fingerprint": "11111111111111111111111111111111",
+            "session_attribution": "response_lineage",
+            "traffic_source": "unattributed",
+            "static_prefix_fingerprint": "22222222222222222222222222222222",
+            "request_prefix_fingerprint": "33333333333333333333333333333333",
+            "gateway_build": "4444444444444444",
+            "gateway_boot_id": "5555555555555555",
             "cache_observation": "derived",
             "usage_observed": true,
             "completed": true,
@@ -399,8 +622,12 @@ mod tests {
             "system_block_count": 1,
             "has_previous_response_id": true,
             "compatibility_fixes": 0
-        }))
-        .expect("serialize event")
+                })
+            .as_object()
+            .expect("event metadata object")
+            .clone(),
+        );
+        serde_json::to_vec(&event).expect("serialize event")
     }
 
     #[test]
@@ -425,6 +652,8 @@ mod tests {
         assert_eq!(events[0].operation, "responses");
         assert_eq!(events[0].cache_observation, "derived");
         assert_eq!(events[0].request_bytes, Some(123));
+        assert_eq!(events[0].model_family, "flash");
+        assert_eq!(events[0].request_role, "executor");
         drop(spool);
 
         let reopened = ProviderUsageSpool::open(&path).expect("reopen spool");
@@ -486,6 +715,22 @@ mod tests {
             "schema_version",
             "operation",
             "protocol",
+            "model_family",
+            "resolved_model",
+            "model_revision",
+            "request_role",
+            "client_protocol",
+            "upstream_protocol",
+            "translation_mode",
+            "thinking_mode",
+            "reasoning_effort",
+            "session_fingerprint",
+            "session_attribution",
+            "traffic_source",
+            "static_prefix_fingerprint",
+            "request_prefix_fingerprint",
+            "gateway_build",
+            "gateway_boot_id",
             "cache_observation",
             "usage_observed",
             "completed",
@@ -512,6 +757,7 @@ mod tests {
         };
         assert_eq!(events[0].schema_version, 1);
         assert_eq!(events[0].operation, "legacy");
+        assert_eq!(events[0].model_family, "unknown");
         assert_eq!(events[0].completed, None);
         drop(spool);
         let _ = std::fs::remove_file(path);
@@ -524,6 +770,75 @@ mod tests {
             serde_json::from_slice(&event("invalid-cache")).expect("parse event");
         value["cache_observation"] = "absent".into();
         assert!(spool.ingest(&serde_json::to_vec(&value).unwrap()).is_err());
+        drop(spool);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn accepts_reserved_reasonix_runtime_and_rejects_cross_lane_protocols() {
+        let (spool, path) = spool();
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&event("reasonix-event")).expect("parse event");
+        value["producer_id"] = "reasonix-deepseek".into();
+        value["agent"] = "reasonix".into();
+        value["operation"] = "chat_completions".into();
+        value["protocol"] = "chat_completions".into();
+        value["client_protocol"] = "chat_completions".into();
+        value["upstream_protocol"] = "chat_completions".into();
+        spool
+            .ingest(&serde_json::to_vec(&value).expect("Reasonix JSON"))
+            .expect("reserved Reasonix runtime accepted");
+
+        let mut unknown_role = value.clone();
+        unknown_role["event_id"] = "reasonix-unknown-role".into();
+        unknown_role["request_role"] = "unknown".into();
+        assert!(
+            spool
+                .ingest(&serde_json::to_vec(&unknown_role).unwrap())
+                .is_err()
+        );
+
+        let mut legacy = value.clone();
+        legacy["event_id"] = "reasonix-legacy".into();
+        legacy["schema_version"] = 1.into();
+        assert!(spool.ingest(&serde_json::to_vec(&legacy).unwrap()).is_err());
+
+        value["event_id"] = "reasonix-invalid".into();
+        value["client_protocol"] = "responses".into();
+        assert!(spool.ingest(&serde_json::to_vec(&value).unwrap()).is_err());
+        drop(spool);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn accepts_unknown_role_for_existing_agent_lanes() {
+        let (spool, path) = spool();
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&event("unknown-codex-role")).expect("parse event");
+        value["request_role"] = "unknown".into();
+        spool
+            .ingest(&serde_json::to_vec(&value).unwrap())
+            .expect("unknown Codex role remains honest");
+        drop(spool);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn rejects_inconsistent_usage_token_algebra() {
+        let (spool, path) = spool();
+        let mut cache: serde_json::Value =
+            serde_json::from_slice(&event("bad-cache-algebra")).expect("parse event");
+        cache["cache_miss_tokens"] = 4.into();
+        assert!(spool.ingest(&serde_json::to_vec(&cache).unwrap()).is_err());
+
+        let mut reasoning: serde_json::Value =
+            serde_json::from_slice(&event("bad-reasoning-algebra")).expect("parse event");
+        reasoning["reasoning_tokens"] = 5.into();
+        assert!(
+            spool
+                .ingest(&serde_json::to_vec(&reasoning).unwrap())
+                .is_err()
+        );
         drop(spool);
         let _ = std::fs::remove_file(path);
     }

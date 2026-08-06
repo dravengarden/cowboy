@@ -105,6 +105,10 @@ const PUBLISHED_MIGRATIONS: &[(&str, &str)] = &[
         "0024_provider_usage_telemetry_v2.sql",
         "ea29fe4759ab4b77534a021eb22447c56be580d63f66822d527f44c5476448df",
     ),
+    (
+        "0025_provider_usage_telemetry_v3.sql",
+        "d0011492f29a1159fa2dda5e8a052d0c3a4b8516b5e40290be8681b9bf6f426d",
+    ),
 ];
 
 #[test]

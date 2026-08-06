@@ -46,12 +46,18 @@ Deno.test("usage widget aggregates supported providers and drops unsupported pla
             cacheMissTokens: 100,
           },
           last24Hours: {
-            byModel: {
-              "deepseek-v4-flash": {
+            summary: {
+              cacheObservations: 2,
+              cacheHitTokens: 900,
+              cacheMissTokens: 100,
+            },
+            cost: {
+              summary: {
                 requests: 1,
-                cacheHitTokens: 500_000,
-                cacheMissTokens: 500_000,
+                inputTokens: 1_000_000,
+                pricedInputTokens: 1_000_000,
                 outputTokens: 1_000_000,
+                estimatedUsd: 0.3514,
               },
             },
           },
@@ -82,10 +88,48 @@ Deno.test("usage widget aggregates supported providers and drops unsupported pla
       kind: "deepseek",
       label: "DeepSeek",
       balanceCny: 108.8,
-      spend24hCny: 2.51,
+      spend24hUsd: 0.3514,
+      spend24hPriceCoverage: 100,
       cacheHitRate: 90,
     },
   ]);
+});
+
+Deno.test("usage widget marks partial 24h valuation and keeps the same cache window", () => {
+  const providers = usageWidgetProviders({
+    refreshed_at_ms: 1,
+    next_refresh_at_ms: 2,
+    refresh_interval_ms: 1,
+    providers: [{
+      provider: "deepseek",
+      status: "available",
+      source: "test",
+      observed_at_ms: 1,
+      account: { balanceInfos: [{ currency: "CNY", total_balance: "12" }] },
+      activity: {
+        summary: { cacheObservations: 1, cacheHitTokens: 1, cacheMissTokens: 9 },
+        last24Hours: {
+          summary: { cacheObservations: 1, cacheHitTokens: 8, cacheMissTokens: 2 },
+          cost: { summary: {
+            requests: 1,
+            inputTokens: 100,
+            pricedInputTokens: 50,
+            unpricedInputTokens: 50,
+            outputTokens: 20,
+            estimatedUsd: 0.01,
+          } },
+        },
+      },
+    }],
+  });
+  assertEquals(providers, [{
+    kind: "deepseek",
+    label: "DeepSeek",
+    balanceCny: 12,
+    spend24hUsd: 0.01,
+    spend24hPriceCoverage: 70 / 120 * 100,
+    cacheHitRate: 80,
+  }]);
 });
 
 Deno.test("usage widget removes providers without complete account-level core data", () => {
