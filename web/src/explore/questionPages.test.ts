@@ -12,6 +12,19 @@ import {
   questionTitle,
 } from "./questionPages";
 
+const exploreSurfaceSource = await Deno.readTextFile(
+  new URL("./ExploreSurface.tsx", import.meta.url),
+);
+
+Deno.test("mobile Page Dock retains disabled previous and next slots", () => {
+  assertEquals(exploreSurfaceSource.includes("onlyCompletePage"), false);
+  assertEquals(exploreSurfaceSource.includes('aria-label="Next page"'), true);
+  assertEquals(
+    exploreSurfaceSource.includes('? "Load earlier questions"\n                      : "Previous page"'),
+    true,
+  );
+});
+
 Deno.test("question directory merges live pages and sorts oldest to newest", () => {
   assertEquals(
     mergeQuestionPageDirectory(
