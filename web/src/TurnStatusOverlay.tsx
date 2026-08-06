@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { alpha, Box, CircularProgress, IconButton, Stack, Typography } from "@mui/material";
+import { alpha, Box, IconButton, Stack, Typography } from "@mui/material";
 import type { PaletteColor, Theme } from "@mui/material";
 import ArrowUpwardRounded from "@mui/icons-material/ArrowUpwardRounded";
 import ExpandMoreRounded from "@mui/icons-material/ExpandMoreRounded";
@@ -9,7 +9,6 @@ import {
   resumeTurn,
   retryTurn,
   setPaused,
-  useConnected,
   useJudgeResult,
 } from "./store";
 import { openJudgeInspector } from "./JudgeInspector";
@@ -28,7 +27,6 @@ type PaletteKey = "primary" | "success" | "warning" | "error" | "info";
 // verdict or session state leaves the user something persistent to understand
 // or act on.
 const KIND_META: Record<TurnStatusKind, { color: PaletteKey; label: string }> = {
-  offline: { color: "warning", label: "Reconnecting…" },
   awaiting: { color: "primary", label: "Waiting for your reply" },
   done: { color: "success", label: "Task complete" },
   interrupted: { color: "warning", label: "Turn interrupted" },
@@ -60,22 +58,7 @@ export function TurnStatusOverlay({
   queue: { id: string }[];
   onFocusComposer: () => void;
 }): React.JSX.Element | null {
-  // Connection loss → a debounced "Reconnecting…" pill. The 600ms debounce keeps a
-  // sub-second blip (the common case on flaky cellular) from flashing the pill; a
-  // real outage still escalates to the shared red ConnectionBanner up top.
-  const connected = useConnected();
-  const [offline, setOffline] = useState(false);
-  useEffect(() => {
-    if (connected) {
-      setOffline(false);
-      return undefined;
-    }
-    const t = globalThis.setTimeout(() => setOffline(true), 600);
-    return () => globalThis.clearTimeout(t);
-  }, [connected]);
-
   const kind = deriveTurnStatusKind({
-    offline,
     status,
     working,
     judging,
@@ -287,13 +270,6 @@ export function TurnStatusOverlay({
             ...frostedPill(t, tone(t).main),
           })}
         >
-          {kind === "offline" && (
-            <CircularProgress
-              size={14}
-              thickness={5}
-              sx={{ color: (t) => tone(t).main, flexShrink: 0 }}
-            />
-          )}
           <Typography
             variant="body2"
             sx={{

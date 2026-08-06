@@ -78,12 +78,14 @@ Deno.test("a context reset becomes a full conversation start until new content",
   assertEquals(transcriptSource.includes("Conversation cleared\n"), false);
 });
 
-Deno.test("judge progress is transcript-owned with a zero-jump pill handoff", () => {
+Deno.test("transient activity is transcript-owned with a zero-jump pill handoff", () => {
   assertEquals(TURN_STATUS_PILL_MIN_HEIGHT, 36);
   assertEquals(
-    transcriptActivitySource.includes(
-      'data-transcript-turn-activity="judging"',
-    ),
+    transcriptActivitySource.includes("data-transcript-turn-activity={kind}"),
+    true,
+  );
+  assertEquals(
+    transcriptActivitySource.includes("TranscriptReconnectingActivity"),
     true,
   );
   assertEquals(
@@ -99,6 +101,11 @@ Deno.test("judge progress is transcript-owned with a zero-jump pill handoff", ()
     false,
   );
   assertEquals(transcriptSource.includes('data-transcript-tail-row="judging"'), true);
+  assertEquals(
+    transcriptSource.includes('data-transcript-tail-row="reconnecting"'),
+    true,
+  );
+  assertEquals(turnStatusSource.includes('label: "Reconnecting…"'), false);
   assertEquals(transcriptSource.includes("showJudging && ("), true);
   assertEquals(transcriptSource.includes("<TranscriptJudgingActivity />"), true);
   assertEquals(transcriptSource.includes("data-transcript-tail-clearance"), true);

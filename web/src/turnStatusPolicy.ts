@@ -1,7 +1,6 @@
 import type { Status } from "./protocol";
 
 export type TurnStatusKind =
-  | "offline"
   | "awaiting"
   | "paused"
   | "done"
@@ -9,7 +8,6 @@ export type TurnStatusKind =
   | "error";
 
 export interface TurnStatusSignals {
-  offline: boolean;
   status: Status;
   working: boolean;
   judging: boolean;
@@ -26,7 +24,6 @@ export interface TurnStatusSignals {
  * suppresses the provisional awaiting flag until the verdict arrives.
  */
 export function deriveTurnStatusKind({
-  offline,
   status,
   working,
   judging,
@@ -34,7 +31,6 @@ export function deriveTurnStatusKind({
   done,
   paused,
 }: TurnStatusSignals): TurnStatusKind | null {
-  if (offline) return "offline";
   if (status === "busy" || status === "starting") return null;
   if (working) return null;
   if (status === "crashed") return "error";

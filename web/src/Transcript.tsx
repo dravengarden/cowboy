@@ -84,7 +84,10 @@ import {
   type RenderItem,
 } from "./derive";
 import type { Envelope, Status } from "./protocol";
-import { TranscriptJudgingActivity } from "./TranscriptTurnActivity";
+import {
+  TranscriptJudgingActivity,
+  TranscriptReconnectingActivity,
+} from "./TranscriptTurnActivity";
 import {
   canonicalTimeline,
   discardMessage,
@@ -3388,6 +3391,18 @@ export function Transcript({
   // interruption, reconnect, or immediately-started next turn as a false live
   // activity row.
   const showJudging = judging && connected && liveTail && status === "running";
+  // Reconnection is transient transport activity, not Composer state. Keep its
+  // debounced indication at the live Transcript tail so Plan/Pending/Input do
+  // not move when the socket reconnects.
+  const [showReconnecting, setShowReconnecting] = useState(false);
+  useEffect(() => {
+    if (connected || !liveTail) {
+      setShowReconnecting(false);
+      return undefined;
+    }
+    const timer = globalThis.setTimeout(() => setShowReconnecting(true), 600);
+    return () => globalThis.clearTimeout(timer);
+  }, [connected, liveTail]);
   // No messages yet + a LIVE session (a freshly created session is Running-idle,
   // waiting for the first prompt) → show the "send a message to start" empty state
   // instead of a blank wall. Non-live empties (exited/interrupted/crashed) are
@@ -4805,6 +4820,11 @@ export function Transcript({
               {showJudging && (
                 <Box data-transcript-tail-row="judging" sx={{ py: 0.625 }}>
                   <TranscriptJudgingActivity />
+                </Box>
+              )}
+              {showReconnecting && (
+                <Box data-transcript-tail-row="reconnecting" sx={{ py: 0.625 }}>
+                  <TranscriptReconnectingActivity />
                 </Box>
               )}
               {

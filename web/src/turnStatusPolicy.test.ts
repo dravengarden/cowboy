@@ -5,7 +5,6 @@ import {
 } from "./turnStatusPolicy.ts";
 
 const settled: TurnStatusSignals = {
-  offline: false,
   status: "running",
   working: false,
   judging: false,
@@ -23,13 +22,6 @@ Deno.test("judge progress stays out of the Composer status stack", () => {
       done: true,
     }),
     null,
-  );
-});
-
-Deno.test("connection loss still outranks stale judge progress", () => {
-  assertEquals(
-    deriveTurnStatusKind({ ...settled, offline: true, judging: true }),
-    "offline",
   );
 });
 
