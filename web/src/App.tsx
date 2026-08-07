@@ -67,7 +67,11 @@ import {
 import { SessionControls } from "./Composer";
 import { MobileComposer } from "./mobile/MobileComposer";
 import { claimKeyboard } from "./keyboardClaim";
-import { machineProviderAvailable } from "./machineProvider";
+import {
+    machineProviderAuthLabel,
+    machineProviderAvailable,
+    machineProviderNeedsLogin,
+} from "./machineProvider";
 import { machineVersionPresentation, type MachineComponentUpdate } from "./machineVersions";
 import { DelayedNetworkProgress, NetworkIconButton } from "./NetworkActionFeedback";
 import { setObservabilityContext } from "./observability";
@@ -4041,6 +4045,7 @@ function MachinesContent(): React.JSX.Element {
                                                 const loginBusyKey = `${machine.id}:login:${provider ?? ""}`;
                                                 const loginBusy = busy[loginBusyKey] || loginPending;
                                                 const legacyGeminiAuth = provider === "gemini" && component.detail == null;
+                                                const authLabel = machineProviderAuthLabel(provider ?? "", component.auth);
                                                 const npmUpdateKey = `${machine.id}:npm:${component.id.kind}:${component.id.slot ?? ""}`;
                                                 const npmUpdating = busy[npmUpdateKey];
                                                 const npmInstallable = update?.available === true && update.installable;
@@ -4073,8 +4078,8 @@ function MachinesContent(): React.JSX.Element {
                                                                 {release.version}
                                                                 {legacyGeminiAuth
                                                                     ? " · authentication status unavailable"
-                                                                    : component.auth
-                                                                    ? ` · ${component.auth.replaceAll("_", " ")}`
+                                                                    : authLabel
+                                                                    ? ` · ${authLabel}`
                                                                     : ""}
                                                                 {component.generation ? ` · generation ${component.generation}` : ""}
                                                             </Typography>
@@ -4120,7 +4125,7 @@ function MachinesContent(): React.JSX.Element {
                                                                 >Standard / Enterprise</Button>
                                                             </Stack>
                                                         )}
-                                                        {provider && component.auth !== "signed_in" && provider !== "gemini" && (
+                                                        {provider && machineProviderNeedsLogin(component.auth) && provider !== "gemini" && (
                                                             <Button
                                                                 size="small"
                                                                 variant={loginBusy ? "outlined" : "contained"}

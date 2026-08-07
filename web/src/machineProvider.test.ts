@@ -1,5 +1,24 @@
 import { assertEquals } from "jsr:@std/assert";
-import { machineProviderAvailable } from "./machineProvider.ts";
+import {
+  machineProviderAuthLabel,
+  machineProviderAvailable,
+  machineProviderNeedsLogin,
+} from "./machineProvider.ts";
+
+Deno.test("only signed-out provider CLIs offer an interactive login", () => {
+  assertEquals(machineProviderNeedsLogin("signed_out"), true);
+  assertEquals(machineProviderNeedsLogin("signed_in"), false);
+  assertEquals(machineProviderNeedsLogin("unsupported"), false);
+  assertEquals(machineProviderNeedsLogin("expired"), false);
+  assertEquals(machineProviderNeedsLogin("error"), false);
+  assertEquals(machineProviderNeedsLogin(undefined), false);
+});
+
+Deno.test("presents isolated Reasonix authentication as gateway managed", () => {
+  assertEquals(machineProviderAuthLabel("reasonix", "unsupported"), "gateway managed");
+  assertEquals(machineProviderAuthLabel("codex", "signed_out"), "signed out");
+  assertEquals(machineProviderAuthLabel("reasonix", undefined), null);
+});
 
 Deno.test("maps the claude-code session provider to the claude CLI slot", () => {
   assertEquals(

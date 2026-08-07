@@ -5,6 +5,16 @@ export type MachineProviderComponent = {
   detail?: string;
 };
 
+export function machineProviderNeedsLogin(auth?: string): boolean {
+  return auth === "signed_out";
+}
+
+export function machineProviderAuthLabel(provider: string, auth?: string): string | null {
+  if (!auth) return null;
+  if (provider === "reasonix" && auth === "unsupported") return "gateway managed";
+  return auth.replaceAll("_", " ");
+}
+
 export function machineProviderAvailable(
   provider: string,
   components: readonly MachineProviderComponent[],
