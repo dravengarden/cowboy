@@ -269,7 +269,12 @@ impl Supervisor {
                 option_id,
             } => runtime.permission(session_id, request_id, option_id),
             AgentCommand::SetConfigOption { config_id, value } => {
-                runtime.set_config_option(session_id, config_id, value);
+                // A config change may arrive from a second device while this
+                // session is dormant after a restart. Ensure the worker exists
+                // before routing the command; the runtime will coalesce this
+                // with the persisted session preference replay.
+                runtime.ensure(self.start_session(session_id)?);
+                runtime.set_config_option(session_id, &config_id, value);
             }
         }
         Ok(())
