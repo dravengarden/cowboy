@@ -18,6 +18,14 @@ An upgrade changes both values together and must pass the adapter protocol
 fixtures before deployment. Cowboy never discovers or executes the mutable
 server under `~/.zed_server`; Nix supplies the exact adapter/server pair.
 
+The browser's read-only Code syntax fallback carries a snapshot of the pinned
+Zed `first_line_pattern` matchers, identified by the same revision. It applies
+those matchers only after path-based detection, so a shebang can identify an
+extensionless file without overriding a known filename. Updating the Zed pin
+must update this snapshot and its routing fixtures together. Project-specific
+`file_types` settings remain a Zed-side capability and are not guessed by the
+browser.
+
 ## Process and state isolation
 
 There is one adapter instance for Cowboy, shared by Code sessions. It has its
