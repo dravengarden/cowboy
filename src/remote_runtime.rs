@@ -672,15 +672,26 @@ async fn send_pending<W: tokio::io::AsyncWrite + Unpin>(
     Ok(())
 }
 
-fn command_priority(command: &CoreCommand) -> u8 {
+fn command_priority(command: &CoreCommand) -> (u8, u8, &str) {
     match command {
-        CoreCommand::EnsureSession { .. } => 0,
-        CoreCommand::StopSession { command_id, .. } if command_id.starts_with("reset-") => 1,
-        CoreCommand::SetConfigOption { .. } => 2,
+        CoreCommand::EnsureSession { .. } => (0, 0, ""),
+        CoreCommand::StopSession { command_id, .. } if command_id.starts_with("reset-") => {
+            (1, 0, "")
+        }
+        CoreCommand::SetConfigOption { config_id, .. } => {
+            let config_rank = match config_id.as_str() {
+                // Changing the model can reset the provider's reasoning
+                // choice, so replay it before reasoning_effort.
+                "model" => 0,
+                "reasoning_effort" => 1,
+                _ => 2,
+            };
+            (2, config_rank, config_id.as_str())
+        }
         // Machine broker handles a reset stop synchronously. Prompts sent after it are
         // queued for the replacement worker instead of reaching the old worker
         // and being cleared by reset_session.
-        _ => 3,
+        _ => (3, 0, ""),
     }
 }
 
@@ -1498,6 +1509,8 @@ mod tests {
 
         assert!(ensure_index < prompt_index);
         assert_eq!(config_commands.len(), 2);
+        assert_eq!(config_commands[0].0, "model");
+        assert_eq!(config_commands[1].0, "reasoning_effort");
         assert!(
             config_commands
                 .iter()
