@@ -85,10 +85,12 @@ import {
 import { desktopScrollbarSx } from "./desktop/desktopScrollbar";
 import {
     PROVIDERS,
+    type ConfigOption,
     type Envelope,
     type SessionMeta,
     type Status,
 } from "./protocol";
+import { currentConfigOptionName, providerConfigOptions } from "./providerConfigOptions";
 import {
     AUTO_RESUME_DEFAULT_KEY,
     AUTO_RESUME_TEMPLATE_KEY,
@@ -229,6 +231,7 @@ const DesktopContextShortcut = lazy(async () => {
 const SIDEBAR_MIN = 240;
 const SIDEBAR_MAX = 480;
 const SIDEBAR_DEFAULT = 288;
+const EMPTY_CONFIG_OPTIONS: ConfigOption[] = [];
 
 function clampSidebarWidth(px: number): number {
     return Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, px));
@@ -1567,15 +1570,20 @@ const StoreTranscript = memo(function StoreTranscript({
     const session = useStoreSelector((snapshot) =>
         snapshot.sessions.find((candidate) => candidate.id === sessionId)
     );
-    const model = useStoreSelector((snapshot) =>
-        snapshot.configOptions.get(sessionId)?.find((option) => option.id === "model")
-            ?.currentValue
+    const rawConfigOptions = useStoreSelector((snapshot) =>
+        snapshot.configOptions.get(sessionId) ?? EMPTY_CONFIG_OPTIONS
+    );
+    const configOptions = providerConfigOptions(provider, rawConfigOptions);
+    const model = configOptions.find((option) => option.id === "model");
+    const reasoning = configOptions.find((option) =>
+        option.id === "effort" || option.id === "reasoning_effort"
     );
     const emptyContext = {
         provider,
         project: session ? sessionProjectLabel(session) : null,
         machine: session?.machine_id ?? null,
-        model: typeof model === "string" ? model : null,
+        model: currentConfigOptionName(model),
+        reasoning: currentConfigOptionName(reasoning),
     };
     const { projection, transitionAnchorKey } = useExploreSessionState(sessionId);
 
@@ -3024,6 +3032,15 @@ export function App({
                                     maxHeight: "100%",
                                     display: "flex",
                                     flexDirection: "column",
+                                    // Explore's Page Dock is an editor launcher and
+                                    // navigation aid, not part of the writing
+                                    // surface. Remove it from the floating stack
+                                    // while the primary editor owns the keyboard;
+                                    // it returns after blur so the close-editor
+                                    // action remains available.
+                                    "&:has([data-mobile-primary-composer='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within) > [data-mobile-page-dock='true']": {
+                                        display: "none",
+                                    },
                                 }),
                                 // Lift the composer content above the frosted slab behind
                                 // it (zIndex 1) in BOTH modes — the composer is transparent,

@@ -1,5 +1,12 @@
 import type { ConfigOption } from "./protocol";
 
+export function currentConfigOptionName(option: ConfigOption | undefined): string | null {
+  if (!option) return null;
+  return option.options.find((candidate) =>
+    String(candidate.value) === String(option.currentValue)
+  )?.name ?? String(option.currentValue);
+}
+
 // Claude Code exposes tier aliases and a custom model as separate ACP rows,
 // even when a gateway maps several rows to the same upstream model. Present
 // the provider contract: one row per real model and distinct effort behavior.

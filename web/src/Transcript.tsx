@@ -531,6 +531,7 @@ interface ConversationEmptyContext {
   project: string | null;
   machine: string | null;
   model: string | null;
+  reasoning: string | null;
 }
 
 function focusPrimaryComposer(): void {
@@ -564,7 +565,12 @@ function ConversationEmptyState({
     : location
     ? `${agent} is ready in ${location}.`
     : `${agent} is ready for your first message.`;
-  const facts = [context.model, context.project, context.machine]
+  const facts = [
+    context.model,
+    context.reasoning ? `Reasoning · ${context.reasoning}` : null,
+    context.project,
+    context.machine,
+  ]
     .filter((value, index, values): value is string =>
       Boolean(value) && values.indexOf(value) === index
     );
@@ -3612,6 +3618,7 @@ export function Transcript({
     project: cwd ? cwd.replace(/\/+$/, "").split("/").at(-1) ?? null : null,
     machine: null,
     model: null,
+    reasoning: null,
   };
 
   // Tool details deliberately browses only the retained history window. Never
