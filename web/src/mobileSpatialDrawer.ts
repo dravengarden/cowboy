@@ -75,14 +75,19 @@ export function bindMobileSpatialDrawer({
     return phone ? Math.min(360, width * 0.84) : Math.min(440, width * 0.52);
   };
   const applyOpenDepth = (): void => {
-    surface.style.borderRadius = `${String(phone ? 36 : 30)}px`;
-    surface.style.boxShadow = `${
+    // Never clip or shadow the full session surface. On iPhone, WebKit then
+    // re-composites the Transcript/CodeMirror viewport while its transform is
+    // changing, which turns a compositor-only drag into visible frame drops.
+    // The mask is an opaque, content-free layer that follows the same offset,
+    // so its narrow shadow preserves the depth cue without touching the heavy
+    // foreground raster. iPad usually has enough GPU headroom to hide the
+    // mistake, but keeping both sizes on the cheap path is more predictable.
+    drawerMask.style.boxShadow = `${
       side === "left" ? "-" : ""
     }18px 0 42px rgba(0,0,0,0.16)`;
   };
   const clearOpenDepth = (): void => {
-    surface.style.removeProperty("border-radius");
-    surface.style.removeProperty("box-shadow");
+    drawerMask.style.removeProperty("box-shadow");
   };
   const render = (offset: number): void => {
     currentOffset = offset;
@@ -91,9 +96,10 @@ export function bindMobileSpatialDrawer({
       (1 - progress);
     // Keep the heavy foreground (Transcript or CodeMirror) on a translation-
     // only compositor path. Scaling or fading this layer makes iPhone WebKit
-    // blend/raster the full viewport for every touch frame. The static radius
-    // and edge shadow plus the lightweight drawer parallax still provide the
-    // same spatial depth without spending the phone's frame budget.
+    // blend/raster the full viewport for every touch frame. The mask-owned
+    // edge shadow plus the lightweight drawer parallax still provide spatial
+    // depth without spending the phone's frame budget. Rounded clipping and
+    // the edge shadow must both stay off this content layer.
     surface.style.transform = `translate3d(${
       String(openingSign * offset)
     }px, 0, 0)`;
