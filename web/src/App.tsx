@@ -5,6 +5,7 @@ import {
     Suspense,
     useCallback,
     useEffect,
+    useImperativeHandle,
     useLayoutEffect,
     useRef,
     useState,
@@ -154,7 +155,6 @@ import {
     MobileSheetDismiss,
     NativeReleaseUpdatePrompt,
     ThemeModeControl,
-    useAnyDetentSheetOpen,
 } from "./_shell";
 import { Sheet } from "./Sheet";
 import { Kbd, useConfirmEnter } from "./Kbd";
@@ -1621,6 +1621,12 @@ const StoreTranscript = memo(function StoreTranscript({
     );
 });
 
+type SettingsTab = "settings" | "info";
+
+type SettingsControllerHandle = {
+    open: (tab: SettingsTab) => void;
+};
+
 export function App({
     themeMode,
     onSetThemeMode,
@@ -1669,11 +1675,6 @@ export function App({
     const prefersNavbarAtBottom = useNavbarAtBottom();
     const navbarAtBottom = mobile && prefersNavbarAtBottom;
     const floatingPanelHeight = "var(--floating-stack-h, 0px)";
-    // A full-screen frosted COVER sheet (compose/edit/settings) bleeds the app's
-    // own frosted navbar/composer chrome through it as a bright blob (double
-    // frosting). Fade that chrome out while ANY sheet is open so the cover shows
-    // only the uniformly-dimmed transcript — consistent top color, like Settings.
-    const anySheetOpen = useAnyDetentSheetOpen();
     // One geometry owner measures the complete floating bottom stack. The live
     // frosted material and the settled Transcript inset consume its two outputs;
     // no child panel publishes an independent reservation.
@@ -1722,7 +1723,7 @@ export function App({
         ) => void
     ) | null>(null);
     const [dialogOpen, setDialogOpen] = useState(false);
-    const [settingsOpen, setSettingsOpen] = useState(false);
+    const settingsControllerRef = useRef<SettingsControllerHandle>(null);
     const [exploreComposeIntent, setExploreComposeIntent] = useState<{
         kind: "follow_up" | "new_page";
         targetPageId: string | null;
@@ -1734,7 +1735,7 @@ export function App({
     // prediction, magnetic thresholds, haptics, rubber-band, depth, settle timing,
     // and idle release stay identical on both surfaces.
     useEffect(() => {
-        if (!mobile || anySheetOpen) return undefined;
+        if (!mobile) return undefined;
         const surface = columnRef.current;
         const gestureTarget = mobileShellRef.current;
         const drawer = mobileDrawerRef.current;
@@ -1759,7 +1760,7 @@ export function App({
             settleMobileDrawerRef.current = null;
             binding.dispose();
         };
-    }, [anySheetOpen, mobile, phone]);
+    }, [mobile, phone]);
 
     // The native viewport owns full-screen device corners. While the keyboard
     // is present, temporarily square the drawer surface's bottom edge; on
@@ -1804,17 +1805,12 @@ export function App({
         };
     }, [mobile]);
 
-    // Settings + Info are one merged sheet; this picks which tab it opens on.
-    const [settingsTab, setSettingsTab] = useState<"settings" | "info">("settings");
-    const openSettings = (tab: "settings" | "info"): void => {
-        // A full-cover Mobile sheet ends the current Composer focus session.
-        // Pointer-operated entry points also release on pointerdown (before
-        // WebKit transfers focus to the button); this is the keyboard/hardware
-        // fallback and keeps every non-pointer caller on the same boundary.
-        if (mobile) releaseMobileComposerFocus();
-        setSettingsTab(tab);
-        setSettingsOpen(true);
-    };
+    // Settings + Info are one merged sheet. Its open state lives in an isolated
+    // controller so mounting a cover sheet does not re-render the transcript,
+    // CodeMirror composer, session rail, and all of their layout effects.
+    const openSettings = useCallback((tab: SettingsTab): void => {
+        settingsControllerRef.current?.open(tab);
+    }, []);
     // (The no-judge-key warning now lives in the unified TurnStatusOverlay — the
     // blue "no key" pill — so it's no longer a separate top-of-content Notice.)
     // Desktop sidebar width + live-drag flag. Width is a pixel value (not the
@@ -2122,6 +2118,14 @@ export function App({
                 flexDirection: "column",
                 height: "100%",
                 width: "100%",
+                // DetentSheet is an inline overlay. Let the browser's style
+                // engine hide the underlying floating chrome from the sheet's
+                // own data marker, instead of subscribing App to the global
+                // sheet-open store and forcing a full App render on every open.
+                "&:has([data-detent-sheet='true']) [data-detent-sheet-chrome='true']": {
+                    opacity: 0,
+                    pointerEvents: "none",
+                },
                 ...(surface === "desktop" && {
                     "& [data-desktop-region]": {
                         position: "relative",
@@ -2504,6 +2508,7 @@ export function App({
                 {!splitActive && (
                 <Box
                     aria-hidden
+                    data-detent-sheet-chrome="true"
                     sx={{
                         position: "absolute",
                         top: 0,
@@ -2516,7 +2521,6 @@ export function App({
                         pointerEvents: "none",
                         // Hide under an open cover sheet — else this frosted strip
                         // bleeds through as a bright band under the status bar.
-                        opacity: anySheetOpen ? 0 : 1,
                         transition: "opacity 200ms ease",
                         // Frosted / matte glass (磨砂): a milkier tint diffuses the content
                         // rather than showing it clearly; the heavy blur + `saturate` add
@@ -2571,6 +2575,7 @@ export function App({
                 <Box
                     aria-hidden
                     data-mobile-composer-shell-material="true"
+                    data-detent-sheet-chrome="true"
                     sx={{
                             position: "absolute",
                             left: 0,
@@ -2581,7 +2586,6 @@ export function App({
                             pointerEvents: "none",
                             // Hide under an open cover sheet — its own frosted surface
                             // replaces this chrome; leaving it on double-frosts.
-                            opacity: anySheetOpen ? 0 : 1,
                             transition: "opacity 200ms ease",
                             // Milkier than a clear pane + heavy blur + saturate → thick
                             // iOS frosted material; content scrolling under it diffuses
@@ -2612,6 +2616,7 @@ export function App({
                 <Box
                     aria-hidden
                     data-mobile-composer-shell-material="true"
+                    data-detent-sheet-chrome="true"
                     sx={{
                         position: "absolute",
                         left: 0,
@@ -2620,7 +2625,6 @@ export function App({
                         height: "1px",
                         zIndex: 1,
                         pointerEvents: "none",
-                        opacity: anySheetOpen ? 0 : 1,
                         transition: "opacity 200ms ease",
                         bgcolor: "divider",
                         transform: "translateZ(0)",
@@ -2634,6 +2638,7 @@ export function App({
                 )}
                 <AppBar
                     data-mobile-session-nav={navbarAtBottom ? "true" : undefined}
+                    data-detent-sheet-chrome="true"
                     ref={appBarRef}
                     position="static"
                     // `color="transparent"` + an explicit theme surface, NOT
@@ -2659,6 +2664,9 @@ export function App({
                         bgcolor: "transparent",
                         position: "relative",
                         zIndex: 2,
+                        // DetentSheet is intentionally inline, so this AppBar's
+                        // stacking context can otherwise sit above a sheet's
+                        // bottom action island and receive the tap instead.
                         color: "text.primary",
                         maxHeight: navbarAtBottom ? 96 : undefined,
                         transition:
@@ -2872,7 +2880,6 @@ export function App({
                                             shortcut={`${MOD_LABEL}, · Settings`}
                                             placement="inline"
                                             alwaysVisible
-                                            active={settingsOpen}
                                         >
                                             <IconButton
                                                 data-desktop-item="topbar-settings"
@@ -3177,10 +3184,9 @@ export function App({
             <SessionInfoShell session={pendingInfo} onClose={(): void => setPendingInfo(null)} />
             <ResourceLightbox />
             <JudgeInspectorHost forceSheet={navbarAtBottom} />
-            <SettingsShell
-                open={settingsOpen}
-                onClose={(): void => setSettingsOpen(false)}
-                initialTab={settingsTab}
+            <SettingsController
+                ref={settingsControllerRef}
+                mobile={mobile}
                 themeMode={themeMode}
                 onSetThemeMode={onSetThemeMode}
             />
@@ -4329,6 +4335,36 @@ function isSettingsEditableTarget(target: EventTarget | null): target is HTMLEle
     );
 }
 
+const SettingsController = memo(forwardRef<
+    SettingsControllerHandle,
+    {
+        mobile: boolean;
+        themeMode: ThemeMode;
+        onSetThemeMode: (m: ThemeMode) => void;
+    }
+>(function SettingsController({ mobile, themeMode, onSetThemeMode }, ref) {
+    const [open, setOpen] = useState(false);
+    const [initialTab, setInitialTab] = useState<SettingsTab>("settings");
+    const openSettings = useCallback((tab: SettingsTab): void => {
+        // A full-cover Mobile sheet ends the current Composer focus session.
+        // This stays inside the isolated controller so the focus boundary does
+        // not also schedule a render of the transcript/composer owner.
+        if (mobile) releaseMobileComposerFocus();
+        setInitialTab(tab);
+        setOpen(true);
+    }, [mobile]);
+    useImperativeHandle(ref, () => ({ open: openSettings }), [openSettings]);
+    return (
+        <SettingsShell
+            open={open}
+            onClose={(): void => setOpen(false)}
+            initialTab={initialTab}
+            themeMode={themeMode}
+            onSetThemeMode={onSetThemeMode}
+        />
+    );
+}));
+
 function SettingsShell({
     open,
     onClose,
@@ -4338,16 +4374,38 @@ function SettingsShell({
 }: {
     open: boolean;
     onClose: () => void;
-    initialTab: "settings" | "info";
+    initialTab: SettingsTab;
     themeMode: ThemeMode;
     onSetThemeMode: (m: ThemeMode) => void;
 }): React.JSX.Element {
     // Merged sheet: a Settings / Info segmented switch in the header. Each open
     // lands on the tab whose button was tapped (gear → settings, ℹ️ → info).
     const [tab, setTab] = useState<"settings" | "machines" | "info" | "logs">(initialTab);
+    const [tabContentReady, setTabContentReady] = useState(true);
+    const changeTab = useCallback((next: "settings" | "machines" | "info" | "logs"): void => {
+        if (next === tab) return;
+        // Remove the old panel synchronously, then mount the selected heavy
+        // panel after two frames. The segmented control remains responsive
+        // while Machines/Info/Logs construct their large DOM trees.
+        setTabContentReady(false);
+        setTab(next);
+    }, [tab]);
     useEffect(() => {
         if (open) setTab(initialTab);
     }, [open, initialTab]);
+    useEffect(() => {
+        if (!open || tabContentReady) return undefined;
+        let secondFrame = 0;
+        const firstFrame = globalThis.requestAnimationFrame(() => {
+            secondFrame = globalThis.requestAnimationFrame(() => setTabContentReady(true));
+        });
+        return () => {
+            globalThis.cancelAnimationFrame(firstFrame);
+            if (secondFrame !== 0) {
+                globalThis.cancelAnimationFrame(secondFrame);
+            }
+        };
+    }, [open, tabContentReady]);
     const vim = useVimSetting();
     const notify = useNotifySetting();
     const vibrate = useVibrateSetting();
@@ -4470,7 +4528,7 @@ function SettingsShell({
             if (!desktop && (key === "[" || key === "]")) {
                 event.preventDefault();
                 const index = tabs.indexOf(tab);
-                setTab(tabs[(index + (key === "]" ? 1 : tabs.length - 1)) % tabs.length] ?? "settings");
+                changeTab(tabs[(index + (key === "]" ? 1 : tabs.length - 1)) % tabs.length] ?? "settings");
                 return;
             }
             if (desktop && ["n", "i", "o"].includes(key)) {
@@ -4546,7 +4604,7 @@ function SettingsShell({
             setSettingsGoPrefix(false);
             setSettingsEditableFocus(false);
         };
-    }, [desktop, open, tab]);
+    }, [changeTab, desktop, open, tab]);
     const settingsShortcutsAvailable = !settingsGoPrefix && !settingsEditableFocus;
     return (
         <Sheet
@@ -4586,7 +4644,7 @@ function SettingsShell({
                 ) : null}
                 {!desktop && <SegmentedPill
                     value={tab}
-                    onChange={setTab}
+                    onChange={changeTab}
                     options={[{ value: "settings", label: "Settings" }, { value: "machines", label: "Machines" }, { value: "info", label: "Info" }, { value: "logs", label: "Logs" }]}
                     sx={{
                         width: "100%",
@@ -4620,7 +4678,8 @@ function SettingsShell({
                 </Box>}
             </Box>
             </Box>
-            {desktop ? (
+            {tabContentReady && (
+            desktop ? (
                 <Box
                     ref={settingsPanelRef}
                     data-desktop-settings-workbench
@@ -4964,7 +5023,7 @@ function SettingsShell({
                 {/* Daemon system info (Storage metrics + About) lives in the Info
                     tab — Settings holds user preferences only. */}
             </Stack>
-            )}
+            ))}
             {desktop && (
                 <Box sx={{ flex: "0 0 auto", mx: -3 }}>
                     <DesktopShortcutBar
