@@ -1838,6 +1838,13 @@ export function App({
     const openSettings = useCallback((tab: SettingsTab): void => {
         settingsControllerRef.current?.open(tab);
     }, []);
+    // Mobile Safari can deliver the touch pointerup while dropping the later
+    // synthetic click when the tap first dismisses keyboard/composer focus.
+    // Commit the settings action from pointerup as well; mouse and keyboard
+    // activation continue through the hook's normal click path.
+    const settingsTap = useReliableTouchTap<HTMLButtonElement>(() =>
+        openSettings("settings")
+    );
     // (The no-judge-key warning now lives in the unified TurnStatusOverlay — the
     // blue "no key" pill — so it's no longer a separate top-of-content Notice.)
     // Desktop sidebar width + live-drag flag. Width is a pixel value (not the
@@ -2943,7 +2950,7 @@ export function App({
                                     />
                                 )}
                                 <IconButton
-                                    onPointerDown={(): void => {
+                                    onPointerDown={(event): void => {
                                         // By click time iOS may already have moved
                                         // document.activeElement to this navbar
                                         // button. Release the Composer while the
@@ -2951,8 +2958,12 @@ export function App({
                                         // its :focus-within height cannot outlive
                                         // the software keyboard.
                                         releaseMobileComposerFocus();
+                                        settingsTap.onPointerDown(event);
                                     }}
-                                    onClick={(): void => openSettings("settings")}
+                                    onPointerMove={settingsTap.onPointerMove}
+                                    onPointerUp={settingsTap.onPointerUp}
+                                    onPointerCancel={settingsTap.onPointerCancel}
+                                    onClick={settingsTap.onClick}
                                     aria-label="settings"
                                     title="Settings"
                                 >
