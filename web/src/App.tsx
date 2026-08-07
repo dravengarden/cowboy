@@ -184,6 +184,7 @@ import {
     useActiveSessionId,
 } from "./controlPlane";
 import { defaultNewSessionWorkspace } from "./newSessionWorkspace";
+import { resolveActiveSession } from "./sessionSelection";
 import { DesktopShortcutBar } from "./desktop/DesktopShortcutBar";
 import { DesktopModal as DesktopModalShell } from "./desktop/DesktopModal";
 
@@ -1215,8 +1216,8 @@ function NewSessionDialog({
 }: {
     open: boolean;
     onClose: () => void;
-    /** Called with the new session's id so the UI can focus it immediately. */
-    onCreated: (sessionId: string) => void;
+    /** Called with a local projection so the UI can focus it before the WS list catches up. */
+    onCreated: (session: SessionMeta) => void;
 }): React.JSX.Element {
     const [provider, setProvider] = useState<string>("codex");
     const [machineId, setMachineId] = useState<string>("");
@@ -1347,7 +1348,24 @@ function NewSessionDialog({
                 // no-ops on empty, so a cleared title falls back to the
                 // daemon default + first-prompt auto-title.
                 renameSession(data.session_id, title);
-                onCreated(data.session_id);
+                const sourcePath = selectedWorkspace?.help ?? cwd;
+                const trimmedTitle = title.trim();
+                onCreated({
+                    id: data.session_id,
+                    provider,
+                    machine_id: machineId || "local",
+                    cwd: sourcePath,
+                    title: trimmedTitle || `${provider} · ${sourcePath}`,
+                    status: "starting",
+                    origin: "web",
+                    ...(selectedWorkspace
+                        ? {
+                            workspace_id: selectedWorkspace.value,
+                            workspace_name: selectedWorkspace.label,
+                            workspace_source_path: selectedWorkspace.help,
+                        }
+                        : {}),
+                });
                 onClose();
             } catch (error) {
                 setCreateError(error instanceof Error ? error.message : "Session creation failed");
@@ -1731,6 +1749,7 @@ export function App({
         ) => void
     ) | null>(null);
     const [dialogOpen, setDialogOpen] = useState(false);
+    const [pendingCreatedSession, setPendingCreatedSession] = useState<SessionMeta | null>(null);
     const settingsControllerRef = useRef<SettingsControllerHandle>(null);
     const [exploreComposeIntent, setExploreComposeIntent] = useState<{
         kind: "follow_up" | "new_page";
@@ -1883,9 +1902,19 @@ export function App({
     );
     // Per-session info dialog target (kebab → Info).
     const [pendingInfo, setPendingInfo] = useState<SessionMeta | null>(null);
-    // Default to the first session once one exists.
-    const active =
-        sessions.find((s) => s.id === activeId) ?? sessions[0] ?? null;
+    // The POST response can beat the independent WS `sessions` broadcast. Keep
+    // the created session visible and selected during that gap; once the
+    // authoritative row arrives, the projection naturally stops being used.
+    const sessionsForView = pendingCreatedSession &&
+            !sessions.some((session) => session.id === pendingCreatedSession.id)
+        ? [pendingCreatedSession, ...sessions]
+        : sessions;
+    const active = resolveActiveSession(sessions, activeId, pendingCreatedSession);
+    useEffect(() => {
+        if (pendingCreatedSession && sessions.some((session) => session.id === pendingCreatedSession.id)) {
+            setPendingCreatedSession(null);
+        }
+    }, [pendingCreatedSession, sessions]);
     const exploreState = useExploreSessionState(active?.id ?? "__none__");
     const changeTranscriptProjection = useCallback((
         sessionId: string,
@@ -2039,7 +2068,7 @@ export function App({
 
     const list = (
         <SessionList
-            sessions={sessions}
+            sessions={sessionsForView}
             activeId={active?.id ?? null}
             onPick={pick}
             onNew={(): void => setDialogOpen(true)}
@@ -3159,13 +3188,14 @@ export function App({
             <NewSessionDialog
                 open={dialogOpen}
                 onClose={(): void => setDialogOpen(false)}
-                onCreated={(id): void => {
+                onCreated={(session): void => {
                     // The daemon returns a durable Starting session before its
                     // Machine workspace and worker are ready. Select it now so
                     // preparation belongs to the destination page, not to the
                     // creation sheet. Do not defer this state behind drawer
                     // animation: the id already names a real persisted session.
-                    setActiveId(id);
+                    setPendingCreatedSession(session);
+                    setActiveId(session.id);
                     if (mobile && settleMobileDrawerRef.current) {
                         settleMobileDrawerRef.current(false, 0);
                     } else {
