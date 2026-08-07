@@ -368,6 +368,32 @@ Deno.test("mobile keyboard dismissal belongs to the fixed utility rail", () => {
   );
 });
 
+Deno.test("mobile delivery taps preserve native editor focus until click", () => {
+  const actionStart = composerSource.indexOf("data-mobile-action-row");
+  const actionEnd = composerSource.indexOf(
+    "<ComposerToolbarSettings",
+    actionStart,
+  );
+  const actionRow = composerSource.slice(actionStart, actionEnd);
+  const sendStart = actionRow.indexOf('aria-label="send"');
+  const sendEnd = actionRow.indexOf("</IconButton>", sendStart);
+  const sendButton = actionRow.slice(sendStart, sendEnd);
+
+  assertEquals(sendStart >= 0 && sendEnd > sendStart, true);
+  assertEquals(
+    sendButton.includes(
+      "onPointerDown={(event): void => event.preventDefault()}",
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "// Keep the native textarea as iOS's first responder until the tap/hold is",
+    ),
+    true,
+  );
+});
+
 Deno.test("mobile composer releases stale focus only after a visible keyboard closes", () => {
   assertEquals(didMobileSoftwareKeyboardClose(false, false), false);
   assertEquals(didMobileSoftwareKeyboardClose(false, true), false);

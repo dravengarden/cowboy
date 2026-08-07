@@ -1334,6 +1334,10 @@ export function ComposerWorkspace({
     setHolding(false);
   }
   function onForcePointerDown(e: ReactPointerEvent<HTMLButtonElement>): void {
+    // Keep the native textarea as iOS's first responder until the tap/hold is
+    // resolved. Blurring it here starts keyboard dismissal and can delay or
+    // swallow the trailing click after the Composer reflows.
+    e.preventDefault();
     if (!sendable) return;
     const el = e.currentTarget;
     lpFired.current = false;
@@ -2653,6 +2657,10 @@ export function ComposerWorkspace({
                   disabled={!sendable || submitFeedback.pending}
                   aria-busy={submitFeedback.pending || undefined}
                   sx={TOOLBAR_ICON_BTN}
+                  // Do not let the tap blur the native textarea before the
+                  // delivery click runs; iOS would begin keyboard dismissal and
+                  // reflow this action row first.
+                  onPointerDown={(event): void => event.preventDefault()}
                   onClick={(): void => submitWithFeedback()}
                 >
                   {submitFeedback.progress
