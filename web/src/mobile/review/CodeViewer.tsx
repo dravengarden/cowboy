@@ -376,13 +376,13 @@ export default function CodeViewer({
   useEffect(() => {
     let current = true;
     setLanguage(null);
-    void loadCodeLanguage(path).then((support) => {
+    void loadCodeLanguage(path, text).then((support) => {
       if (current) setLanguage(support);
     });
     return () => {
       current = false;
     };
-  }, [kind, path]);
+  }, [kind, path, text]);
 
   const extensions = useMemo(() => {
     const syntax = codeSyntaxPalette(theme.palette.mode);

@@ -157,6 +157,8 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                     queue: ls.queue,
                     drafts: ls.drafts,
                     judge_runs: ls.judge_runs,
+                    config_options: ls.config_options,
+                    config_preferences: ls.config_preferences,
                     mobile_review_state: ls.mobile_review_state,
                 })
                 .collect();
@@ -876,6 +878,18 @@ async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyhow::Result<
                 .update_agent_session_id(session_id, agent_session_id.as_deref())
                 .await
         }
+        StoreWrite::UpdateConfigOptions {
+            session_id,
+            options,
+        } => store.update_config_options(session_id, options).await,
+        StoreWrite::UpdateConfigPreferences {
+            session_id,
+            preferences,
+        } => {
+            store
+                .update_config_preferences(session_id, preferences)
+                .await
+        }
         StoreWrite::ClearEvents { session_id } => store.clear_events(session_id).await,
         StoreWrite::DeleteSession(id) => store.delete_session(id).await,
         StoreWrite::UpdatePending {
@@ -1538,7 +1552,11 @@ fn parse_deepseek_activity_filter(
     let window = query.window.as_deref().unwrap_or("24h");
     let window_seconds = match window {
         "1h" => 3_600,
+        "2h" => 2 * 3_600,
+        "4h" => 4 * 3_600,
         "6h" => 6 * 3_600,
+        "8h" => 8 * 3_600,
+        "12h" => 12 * 3_600,
         "24h" => 24 * 3_600,
         "7d" => 7 * 86_400,
         "14d" => 14 * 86_400,
@@ -1631,6 +1649,29 @@ mod deepseek_activity_filter_tests {
                 agent: Some("reasonix".to_owned()),
             })
         );
+    }
+
+    #[test]
+    fn accepts_short_rolling_windows() {
+        for (window, window_seconds) in [
+            ("2h", 2 * 3_600),
+            ("4h", 4 * 3_600),
+            ("8h", 8 * 3_600),
+            ("12h", 12 * 3_600),
+        ] {
+            assert_eq!(
+                parse_deepseek_activity_filter(&DeepSeekActivityQuery {
+                    window: Some(window.to_owned()),
+                    ..DeepSeekActivityQuery::default()
+                }),
+                Ok(DeepSeekActivityFilter {
+                    window: window.to_owned(),
+                    window_seconds,
+                    model: None,
+                    agent: None,
+                })
+            );
+        }
     }
 
     #[test]
@@ -5747,10 +5788,17 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
             session_id,
             config_id,
             value,
-        } => state.supervisor.send(
-            &session_id,
-            AgentCommand::SetConfigOption { config_id, value },
-        ),
+        } => {
+            state
+                .hub
+                .set_config_preference(&session_id, config_id.clone(), value.clone())
+                .and_then(|()| {
+                    state.supervisor.send(
+                        &session_id,
+                        AgentCommand::SetConfigOption { config_id, value },
+                    )
+                })
+        }
         // Revive on open (design §7): warm the agent when the client selects
         // the session, not only on the first prompt. No-op if already alive.
         Inbound::OpenSession { session_id } => {

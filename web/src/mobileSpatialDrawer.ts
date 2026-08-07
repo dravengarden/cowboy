@@ -5,6 +5,7 @@ import {
   hasHorizontalScroller,
   horizontalSwipe,
   inputOverlayOwnsDrawerGesture,
+  isDominantVerticalPan,
   MOBILE_DRAWER_DIRECTION_LOCK_PX,
 } from "./touchGestures";
 
@@ -268,11 +269,11 @@ export function bindMobileSpatialDrawer({
     }
     const deltaX = touch.clientX - gesture.x;
     const deltaY = touch.clientY - gesture.y;
-    if (
-      !gesture.locked && Math.abs(deltaY) >= 10 &&
-      Math.abs(deltaY) > Math.abs(deltaX) * 1.15
-    ) {
+    if (!gesture.locked && isDominantVerticalPan(deltaX, deltaY)) {
       gesture = null;
+      // Preserve the transcript's native vertical scroll while preventing a
+      // parent horizontal recognizer from seeing the same touch stream.
+      event.stopPropagation();
       return;
     }
     const normalizedDelta = deltaX * openingSign;

@@ -3,7 +3,7 @@ import {
   type LanguageSupport,
 } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
-import { languageFromPath } from "../../syntaxLanguages";
+import { languageFromFirstLine, languageFromPath } from "../../syntaxLanguages";
 
 const loadedLanguages = new Map<string, Promise<LanguageSupport>>();
 const CODEMIRROR_LANGUAGE_ALIASES: Record<string, string> = {
@@ -15,20 +15,30 @@ const CODEMIRROR_LANGUAGE_ALIASES: Record<string, string> = {
 
 export function languageDescriptionForPath(
   path: string,
+  content = "",
 ): LanguageDescription | null {
-  return LanguageDescription.matchFilename(languages, path) ??
+  const pathLanguage = languageFromPath(path);
+  const pathDescription = LanguageDescription.matchFilename(languages, path) ??
     LanguageDescription.matchLanguageName(
       languages,
-      CODEMIRROR_LANGUAGE_ALIASES[languageFromPath(path)] ??
-        languageFromPath(path),
+      CODEMIRROR_LANGUAGE_ALIASES[pathLanguage] ?? pathLanguage,
       false,
     );
+  if (pathDescription) return pathDescription;
+
+  const firstLineLanguage = languageFromFirstLine(content);
+  return LanguageDescription.matchLanguageName(
+    languages,
+    CODEMIRROR_LANGUAGE_ALIASES[firstLineLanguage] ?? firstLineLanguage,
+    false,
+  );
 }
 
 export function loadCodeLanguage(
   path: string,
+  content = "",
 ): Promise<LanguageSupport | null> {
-  const description = languageDescriptionForPath(path);
+  const description = languageDescriptionForPath(path, content);
   if (!description) return Promise.resolve(null);
   let loaded = loadedLanguages.get(description.name);
   if (!loaded) {

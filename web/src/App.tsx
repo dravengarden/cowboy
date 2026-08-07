@@ -85,10 +85,12 @@ import {
 import { desktopScrollbarSx } from "./desktop/desktopScrollbar";
 import {
     PROVIDERS,
+    type ConfigOption,
     type Envelope,
     type SessionMeta,
     type Status,
 } from "./protocol";
+import { currentConfigOptionName, providerConfigOptions } from "./providerConfigOptions";
 import {
     AUTO_RESUME_DEFAULT_KEY,
     AUTO_RESUME_TEMPLATE_KEY,
@@ -182,6 +184,7 @@ import {
     useActiveSessionId,
 } from "./controlPlane";
 import { defaultNewSessionWorkspace } from "./newSessionWorkspace";
+import { resolveActiveSession } from "./sessionSelection";
 import { DesktopShortcutBar } from "./desktop/DesktopShortcutBar";
 import { DesktopModal as DesktopModalShell } from "./desktop/DesktopModal";
 
@@ -229,6 +232,7 @@ const DesktopContextShortcut = lazy(async () => {
 const SIDEBAR_MIN = 240;
 const SIDEBAR_MAX = 480;
 const SIDEBAR_DEFAULT = 288;
+const EMPTY_CONFIG_OPTIONS: ConfigOption[] = [];
 
 function clampSidebarWidth(px: number): number {
     return Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, px));
@@ -1212,8 +1216,8 @@ function NewSessionDialog({
 }: {
     open: boolean;
     onClose: () => void;
-    /** Called with the new session's id so the UI can focus it immediately. */
-    onCreated: (sessionId: string) => void;
+    /** Called with a local projection so the UI can focus it before the WS list catches up. */
+    onCreated: (session: SessionMeta) => void;
 }): React.JSX.Element {
     const [provider, setProvider] = useState<string>("codex");
     const [machineId, setMachineId] = useState<string>("");
@@ -1344,7 +1348,24 @@ function NewSessionDialog({
                 // no-ops on empty, so a cleared title falls back to the
                 // daemon default + first-prompt auto-title.
                 renameSession(data.session_id, title);
-                onCreated(data.session_id);
+                const sourcePath = selectedWorkspace?.help ?? cwd;
+                const trimmedTitle = title.trim();
+                onCreated({
+                    id: data.session_id,
+                    provider,
+                    machine_id: machineId || "local",
+                    cwd: sourcePath,
+                    title: trimmedTitle || `${provider} · ${sourcePath}`,
+                    status: "starting",
+                    origin: "web",
+                    ...(selectedWorkspace
+                        ? {
+                            workspace_id: selectedWorkspace.value,
+                            workspace_name: selectedWorkspace.label,
+                            workspace_source_path: selectedWorkspace.help,
+                        }
+                        : {}),
+                });
                 onClose();
             } catch (error) {
                 setCreateError(error instanceof Error ? error.message : "Session creation failed");
@@ -1567,15 +1588,20 @@ const StoreTranscript = memo(function StoreTranscript({
     const session = useStoreSelector((snapshot) =>
         snapshot.sessions.find((candidate) => candidate.id === sessionId)
     );
-    const model = useStoreSelector((snapshot) =>
-        snapshot.configOptions.get(sessionId)?.find((option) => option.id === "model")
-            ?.currentValue
+    const rawConfigOptions = useStoreSelector((snapshot) =>
+        snapshot.configOptions.get(sessionId) ?? EMPTY_CONFIG_OPTIONS
+    );
+    const configOptions = providerConfigOptions(provider, rawConfigOptions);
+    const model = configOptions.find((option) => option.id === "model");
+    const reasoning = configOptions.find((option) =>
+        option.id === "effort" || option.id === "reasoning_effort"
     );
     const emptyContext = {
         provider,
         project: session ? sessionProjectLabel(session) : null,
         machine: session?.machine_id ?? null,
-        model: typeof model === "string" ? model : null,
+        model: currentConfigOptionName(model),
+        reasoning: currentConfigOptionName(reasoning),
     };
     const { projection, transitionAnchorKey } = useExploreSessionState(sessionId);
 
@@ -1723,6 +1749,7 @@ export function App({
         ) => void
     ) | null>(null);
     const [dialogOpen, setDialogOpen] = useState(false);
+    const [pendingCreatedSession, setPendingCreatedSession] = useState<SessionMeta | null>(null);
     const settingsControllerRef = useRef<SettingsControllerHandle>(null);
     const [exploreComposeIntent, setExploreComposeIntent] = useState<{
         kind: "follow_up" | "new_page";
@@ -1811,6 +1838,13 @@ export function App({
     const openSettings = useCallback((tab: SettingsTab): void => {
         settingsControllerRef.current?.open(tab);
     }, []);
+    // Mobile Safari can deliver the touch pointerup while dropping the later
+    // synthetic click when the tap first dismisses keyboard/composer focus.
+    // Commit the settings action from pointerup as well; mouse and keyboard
+    // activation continue through the hook's normal click path.
+    const settingsTap = useReliableTouchTap<HTMLButtonElement>(() =>
+        openSettings("settings")
+    );
     // (The no-judge-key warning now lives in the unified TurnStatusOverlay — the
     // blue "no key" pill — so it's no longer a separate top-of-content Notice.)
     // Desktop sidebar width + live-drag flag. Width is a pixel value (not the
@@ -1875,9 +1909,19 @@ export function App({
     );
     // Per-session info dialog target (kebab → Info).
     const [pendingInfo, setPendingInfo] = useState<SessionMeta | null>(null);
-    // Default to the first session once one exists.
-    const active =
-        sessions.find((s) => s.id === activeId) ?? sessions[0] ?? null;
+    // The POST response can beat the independent WS `sessions` broadcast. Keep
+    // the created session visible and selected during that gap; once the
+    // authoritative row arrives, the projection naturally stops being used.
+    const sessionsForView = pendingCreatedSession &&
+            !sessions.some((session) => session.id === pendingCreatedSession.id)
+        ? [pendingCreatedSession, ...sessions]
+        : sessions;
+    const active = resolveActiveSession(sessions, activeId, pendingCreatedSession);
+    useEffect(() => {
+        if (pendingCreatedSession && sessions.some((session) => session.id === pendingCreatedSession.id)) {
+            setPendingCreatedSession(null);
+        }
+    }, [pendingCreatedSession, sessions]);
     const exploreState = useExploreSessionState(active?.id ?? "__none__");
     const changeTranscriptProjection = useCallback((
         sessionId: string,
@@ -2031,7 +2075,7 @@ export function App({
 
     const list = (
         <SessionList
-            sessions={sessions}
+            sessions={sessionsForView}
             activeId={active?.id ?? null}
             onPick={pick}
             onNew={(): void => setDialogOpen(true)}
@@ -2437,7 +2481,7 @@ export function App({
                     // persistent composer grows its formatting track while this
                     // session nav yields the scarce keyboard-adjacent space. CSS
                     // :has keeps editor focus/IME state out of React render state.
-                    "&:has([data-mobile-focus-composer='true']:focus-within) [data-mobile-session-nav='true']": {
+                    "&:has([data-mobile-focus-composer='true'][data-mobile-keyboard-open='true']:focus-within) [data-mobile-session-nav='true']": {
                         minHeight: 0,
                         maxHeight: 0,
                         opacity: 0,
@@ -2906,7 +2950,7 @@ export function App({
                                     />
                                 )}
                                 <IconButton
-                                    onPointerDown={(): void => {
+                                    onPointerDown={(event): void => {
                                         // By click time iOS may already have moved
                                         // document.activeElement to this navbar
                                         // button. Release the Composer while the
@@ -2914,8 +2958,12 @@ export function App({
                                         // its :focus-within height cannot outlive
                                         // the software keyboard.
                                         releaseMobileComposerFocus();
+                                        settingsTap.onPointerDown(event);
                                     }}
-                                    onClick={(): void => openSettings("settings")}
+                                    onPointerMove={settingsTap.onPointerMove}
+                                    onPointerUp={settingsTap.onPointerUp}
+                                    onPointerCancel={settingsTap.onPointerCancel}
+                                    onClick={settingsTap.onClick}
                                     aria-label="settings"
                                     title="Settings"
                                 >
@@ -3024,6 +3072,15 @@ export function App({
                                     maxHeight: "100%",
                                     display: "flex",
                                     flexDirection: "column",
+                                    // Explore's Page Dock is an editor launcher and
+                                    // navigation aid, not part of the writing
+                                    // surface. Remove it from the floating stack
+                                    // while the primary editor owns the keyboard;
+                                    // it returns after blur so the close-editor
+                                    // action remains available.
+                                    "&:has([data-mobile-primary-composer='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within) > [data-mobile-page-dock='true']": {
+                                        display: "none",
+                                    },
                                 }),
                                 // Lift the composer content above the frosted slab behind
                                 // it (zIndex 1) in BOTH modes — the composer is transparent,
@@ -3142,13 +3199,14 @@ export function App({
             <NewSessionDialog
                 open={dialogOpen}
                 onClose={(): void => setDialogOpen(false)}
-                onCreated={(id): void => {
+                onCreated={(session): void => {
                     // The daemon returns a durable Starting session before its
                     // Machine workspace and worker are ready. Select it now so
                     // preparation belongs to the destination page, not to the
                     // creation sheet. Do not defer this state behind drawer
                     // animation: the id already names a real persisted session.
-                    setActiveId(id);
+                    setPendingCreatedSession(session);
+                    setActiveId(session.id);
                     if (mobile && settleMobileDrawerRef.current) {
                         settleMobileDrawerRef.current(false, 0);
                     } else {
@@ -4069,9 +4127,23 @@ function MachinesContent(): React.JSX.Element {
                                                             px: 1,
                                                             borderRadius: 1.5,
                                                             bgcolor: "action.hover",
+                                                            "@media (pointer: coarse), (max-width: 600px)": {
+                                                                flexDirection: "column",
+                                                                alignItems: "stretch",
+                                                                flexWrap: "nowrap",
+                                                            },
                                                         }}
                                                     >
-                                                        <Box sx={{ minWidth: 0, flex: 1 }}>
+                                                        <Box
+                                                            sx={{
+                                                                minWidth: 0,
+                                                                flex: 1,
+                                                                "@media (pointer: coarse), (max-width: 600px)": {
+                                                                    width: "100%",
+                                                                    flex: "none",
+                                                                },
+                                                            }}
+                                                        >
                                                             <Typography variant="body2" fontWeight={650}>
                                                                 {machineComponentName(component)}
                                                             </Typography>
@@ -4091,9 +4163,15 @@ function MachinesContent(): React.JSX.Element {
                                                             </Typography>
                                                             {provider === "gemini" && component.detail && (
                                                                 <Typography
-                                                                    variant="caption"
+                                                                    variant="body2"
                                                                     color={component.auth === "signed_in" ? "success.main" : "text.secondary"}
-                                                                    sx={{ display: "block", mt: 0.25, maxWidth: 720 }}
+                                                                    sx={{
+                                                                        display: "block",
+                                                                        mt: 0.5,
+                                                                        maxWidth: 720,
+                                                                        lineHeight: 1.45,
+                                                                        overflowWrap: "anywhere",
+                                                                    }}
                                                                 >
                                                                     {component.detail}
                                                                 </Typography>
@@ -4109,13 +4187,43 @@ function MachinesContent(): React.JSX.Element {
                                                             )}
                                                         </Box>
                                                         {provider && component.auth === "signed_in" && !legacyGeminiAuth && (
-                                                            <Chip size="small" color="success" variant="outlined" label="Signed in" />
+                                                            <Chip
+                                                                size="small"
+                                                                color="success"
+                                                                variant="outlined"
+                                                                label="Signed in"
+                                                                sx={{ alignSelf: "flex-start" }}
+                                                            />
                                                         )}
                                                         {provider === "gemini" && legacyGeminiAuth && (
-                                                            <Chip size="small" variant="outlined" color="warning" label="Legacy Machine" />
+                                                            <Chip
+                                                                size="small"
+                                                                variant="outlined"
+                                                                color="warning"
+                                                                label="Legacy Machine"
+                                                                sx={{ alignSelf: "flex-start" }}
+                                                            />
                                                         )}
                                                         {provider && component.auth !== "signed_in" && provider === "gemini" && !legacyGeminiAuth && (
-                                                            <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                                                            <Stack
+                                                                direction="row"
+                                                                spacing={0.75}
+                                                                flexWrap="wrap"
+                                                                useFlexGap
+                                                                sx={{
+                                                                    "@media (pointer: coarse), (max-width: 600px)": {
+                                                                        width: "100%",
+                                                                        display: "grid",
+                                                                        gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                                                                        "& .MuiButton-root": {
+                                                                            width: "100%",
+                                                                            minWidth: 0,
+                                                                            whiteSpace: "normal",
+                                                                            lineHeight: 1.2,
+                                                                        },
+                                                                    },
+                                                                }}
+                                                            >
                                                                 <Button
                                                                     size="small"
                                                                     variant={loginBusy ? "outlined" : "contained"}
@@ -4148,6 +4256,11 @@ function MachinesContent(): React.JSX.Element {
                                                                 disabled={npmUpdating}
                                                                 startIcon={npmUpdating ? <DelayedNetworkProgress size={14} /> : <SystemUpdateAlt />}
                                                                 onClick={() => requestNpmUpdate(machine.id, component)}
+                                                                sx={{
+                                                                    "@media (pointer: coarse), (max-width: 600px)": {
+                                                                        width: "100%",
+                                                                    },
+                                                                }}
                                                             >{npmUpdating ? "Updating" : "Update"}</Button>
                                                         )}
                                                         {!provider && componentPending && (

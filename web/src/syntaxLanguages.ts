@@ -4,6 +4,45 @@
 // file type therefore means one entry here; unknown names deliberately return
 // "" and stay readable plaintext.
 
+// This is a data snapshot of Zed 1.13.0's built-in `first_line_pattern`
+// matchers. Keep the revision tied to zed-adapter/src/main.rs and update this
+// table whenever the pinned Zed revision changes. The entries are in Zed's
+// built-in registration order; Zed evaluates the registry in reverse order,
+// so languageFromFirstLine does the same below.
+export const ZED_LANGUAGE_DETECTION_REVISION =
+  "aaf5f57dd36c41cf2ed49b13bcb091d52d5aef45";
+
+const ZED_FIRST_LINE_MAX_COLUMNS = 256;
+const ZED_FIRST_LINE_MATCHERS: readonly {
+  language: string;
+  pattern: RegExp;
+}[] = [
+  {
+    language: "bash",
+    pattern: /^#!.*\b(?:ash|bash|bats|dash|sh|zsh)\b/u,
+  },
+  {
+    language: "cpp",
+    pattern: /^\/\/.*-\*-\s*C\+\+\s*-\*-/u,
+  },
+  {
+    language: "go",
+    pattern: /^\/\/.*\bgo run\b/u,
+  },
+  {
+    language: "python",
+    pattern: /^#!.*((\bpython[0-9.]*\b)|(\buv run\b))/u,
+  },
+  {
+    language: "typescript",
+    pattern: /^#!.*\b(?:deno run|ts-node|bun|tsx|[/ ]node)\b/u,
+  },
+  {
+    language: "javascript",
+    pattern: /^#!.*\b(?:[/ ]node|deno run.*--ext[= ]js)\b/u,
+  },
+];
+
 const LANGUAGE_ALIASES: Record<string, string> = {
   bash: "bash",
   sh: "bash",
@@ -182,6 +221,18 @@ export function normalizeSyntaxLanguage(hint: string): string {
   return LANGUAGE_ALIASES[normalized] ?? normalized;
 }
 
+export function languageFromFirstLine(content: string): string {
+  const firstLine = content.split(/\r\n?|\n/u, 1)[0]?.slice(
+    0,
+    ZED_FIRST_LINE_MAX_COLUMNS,
+  ) ?? "";
+  for (let index = ZED_FIRST_LINE_MATCHERS.length - 1; index >= 0; index--) {
+    const matcher = ZED_FIRST_LINE_MATCHERS[index];
+    if (matcher?.pattern.test(firstLine)) return matcher.language;
+  }
+  return "";
+}
+
 export function languageFromPath(path: string): string {
   const clean = path.split(/[?#]/u, 1)[0]?.replaceAll("\\", "/") ?? "";
   const basename = clean.split("/").pop()?.toLowerCase() ?? "";
@@ -190,6 +241,8 @@ export function languageFromPath(path: string): string {
   if (exact) return exact;
   if (basename.startsWith("dockerfile.")) return "docker";
   if (/^\.env(?:\..+)?$/u.test(basename)) return "bash";
-  const extension = basename.includes(".") ? basename.split(".").pop() ?? "" : "";
+  const extension = basename.includes(".")
+    ? basename.split(".").pop() ?? ""
+    : "";
   return LANGUAGE_BY_EXTENSION[extension] ?? "";
 }

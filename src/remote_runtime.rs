@@ -53,6 +53,10 @@ struct Shared {
     /// to spawn while surviving workers are still converging.
     declarations: Mutex<HashMap<String, StartSession>>,
     workers: Mutex<HashMap<String, WorkerSnapshot>>,
+    /// Worker epochs whose initial config snapshot has already triggered
+    /// preference reconciliation. This prevents an agent that rejects a value
+    /// from causing a config-option event/retry loop.
+    config_sync_epochs: Mutex<HashMap<String, String>>,
     /// Sessions being atomically recycled. Old-worker events and snapshots are
     /// acknowledged but ignored until the reset-flavoured stop is accepted, so
     /// a late `Running` edge cannot drain a force-pushed prompt into the worker
@@ -117,6 +121,7 @@ impl RemoteRuntime {
                         .map(|worker| (worker.session_id.clone(), worker))
                         .collect(),
                 ),
+                config_sync_epochs: Mutex::new(HashMap::new()),
                 resetting: Mutex::new(HashSet::new()),
                 highwaters: Mutex::new(HashMap::new()),
                 notify,
@@ -164,7 +169,7 @@ impl RemoteRuntime {
         let shared = Arc::clone(&self.shared);
         tokio::spawn(async move {
             for worker in &bootstrap.workers {
-                apply_snapshot(&shared.hub, worker);
+                apply_snapshot(&shared, worker);
             }
             connection_manager(
                 shared,
@@ -223,8 +228,14 @@ impl RemoteRuntime {
                 .generation
                 .clone_from(&self.shared.desired_generation);
         }
-        let key = format!("ensure:{}", session.session_id);
+        let session_id = session.session_id.clone();
+        let key = format!("ensure:{session_id}");
         self.queue(key, CoreCommand::EnsureSession { session });
+        // Queue session-owned preferences before any prompt. The worker may not
+        // have advertised its options yet, so this intentionally queues the
+        // scalar values without validation; the ACP response remains the
+        // authority and will refresh the display snapshot.
+        queue_persisted_config_for_session(&self.shared, &session_id, false);
     }
 
     pub fn prompt(
@@ -272,21 +283,13 @@ impl RemoteRuntime {
         );
     }
 
-    pub fn set_config_option(&self, session_id: &str, config_id: String, value: serde_json::Value) {
-        let command_id = self.next_id("config");
-        self.queue(
-            command_id.clone(),
-            CoreCommand::SetConfigOption {
-                session_id: session_id.to_owned(),
-                command_id,
-                config_id,
-                value,
-            },
-        );
+    pub fn set_config_option(&self, session_id: &str, config_id: &str, value: serde_json::Value) {
+        queue_config_value(&self.shared, session_id, config_id, value);
     }
 
     pub fn stop(&self, session_id: &str) {
         self.shared.declarations.lock().remove(session_id);
+        self.shared.config_sync_epochs.lock().remove(session_id);
         let command_id = self.next_id("stop");
         self.queue(
             command_id.clone(),
@@ -311,6 +314,7 @@ impl RemoteRuntime {
         }
         let session_id = session.session_id.clone();
         self.shared.resetting.lock().insert(session_id.clone());
+        self.shared.config_sync_epochs.lock().remove(&session_id);
         self.shared
             .declarations
             .lock()
@@ -321,6 +325,9 @@ impl RemoteRuntime {
         // preserving the existing v1 wire contract.
         let ensure_key = format!("ensure:{session_id}");
         self.queue(ensure_key, CoreCommand::EnsureSession { session });
+        // A reset creates a fresh ACP process, so do not use the old worker's
+        // advertised values to decide whether these preferences are needed.
+        queue_persisted_config_for_session(&self.shared, &session_id, true);
         let command_id = self.next_id("reset");
         self.queue(
             command_id.clone(),
@@ -665,14 +672,26 @@ async fn send_pending<W: tokio::io::AsyncWrite + Unpin>(
     Ok(())
 }
 
-fn command_priority(command: &CoreCommand) -> u8 {
+fn command_priority(command: &CoreCommand) -> (u8, u8, String) {
     match command {
-        CoreCommand::EnsureSession { .. } => 0,
-        CoreCommand::StopSession { command_id, .. } if command_id.starts_with("reset-") => 1,
+        CoreCommand::EnsureSession { .. } => (0, 0, String::new()),
+        CoreCommand::StopSession { command_id, .. } if command_id.starts_with("reset-") => {
+            (1, 0, String::new())
+        }
+        CoreCommand::SetConfigOption { config_id, .. } => {
+            let config_rank = match config_id.as_str() {
+                // Changing the model can reset the provider's reasoning
+                // choice, so replay it before reasoning_effort.
+                "model" => 0,
+                "reasoning_effort" => 1,
+                _ => 2,
+            };
+            (2, config_rank, config_id.clone())
+        }
         // Machine broker handles a reset stop synchronously. Prompts sent after it are
         // queued for the replacement worker instead of reaching the old worker
         // and being cleared by reset_session.
-        _ => 2,
+        _ => (3, 0, String::new()),
     }
 }
 
@@ -741,7 +760,13 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                     );
                 } else if !resetting {
                     let auto_permission = codex_full_access_permission(shared, &session_id, &event);
+                    let is_config_options = matches!(&event, RuntimeEvent::ConfigOptions { .. });
                     update_snapshot_from_event(shared, &session_id, runtime_seq, &event);
+                    if is_config_options
+                        && let Some(worker) = shared.workers.lock().get(&session_id).cloned()
+                    {
+                        sync_config_for_worker(shared, &worker);
+                    }
                     if let Some((request_id, option_id)) = auto_permission {
                         tracing::info!(
                             session = %session_id,
@@ -821,7 +846,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                 .lock()
                 .remove(&format!("ensure:{session_id}"));
             shared.sent.lock().remove(&format!("ensure:{session_id}"));
-            if apply_snapshot(&shared.hub, &worker) {
+            if apply_snapshot(shared, &worker) {
                 reconcile_idle_snapshot(shared, &worker);
             }
         }
@@ -901,7 +926,7 @@ fn update_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) {
             continue;
         }
         update_declaration(shared, &worker);
-        if apply_snapshot(&shared.hub, &worker) {
+        if apply_snapshot(shared, &worker) {
             reconcile_idle_snapshot(shared, &worker);
         }
         shared
@@ -924,7 +949,7 @@ fn merge_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) {
             continue;
         }
         update_declaration(shared, &worker);
-        if apply_snapshot(&shared.hub, &worker) {
+        if apply_snapshot(shared, &worker) {
             reconcile_idle_snapshot(shared, &worker);
         }
         shared
@@ -960,18 +985,171 @@ fn worker_status(state: WorkerState) -> Status {
     }
 }
 
-fn apply_snapshot(hub: &Hub, worker: &WorkerSnapshot) -> bool {
-    if !hub.accept_runtime_snapshot(worker) {
+fn queue_persisted_config_for_session(shared: &Shared, session_id: &str, force: bool) {
+    let options = if force {
+        None
+    } else {
+        shared
+            .workers
+            .lock()
+            .get(session_id)
+            .and_then(|worker| worker.config_options.clone())
+    };
+    queue_persisted_config(shared, session_id, options.as_ref());
+}
+
+fn queue_persisted_config(shared: &Shared, session_id: &str, options: Option<&serde_json::Value>) {
+    let Some(preferences) = shared.hub.config_preferences(session_id) else {
+        return;
+    };
+    let Some(preferences) = preferences.as_object() else {
+        return;
+    };
+    let Some(options) = options else {
+        for (config_id, value) in preferences {
+            queue_config_value(shared, session_id, config_id, value.clone());
+        }
+        return;
+    };
+    let Some(options) = options.as_array() else {
+        return;
+    };
+    for (config_id, value) in preferences {
+        let Some(option) = options
+            .iter()
+            .find(|option| option.get("id").and_then(serde_json::Value::as_str) == Some(config_id))
+        else {
+            continue;
+        };
+        if config_current_value(option) == Some(value) || !config_option_accepts(option, value) {
+            continue;
+        }
+        queue_config_value(shared, session_id, config_id, value.clone());
+    }
+}
+
+fn sync_config_for_worker(shared: &Shared, worker: &WorkerSnapshot) {
+    if !worker.has_connected_owner() || worker.config_options.is_none() {
+        return;
+    }
+    let already_synced = {
+        let mut epochs = shared.config_sync_epochs.lock();
+        if epochs
+            .get(&worker.session_id)
+            .is_some_and(|epoch| epoch == &worker.worker_epoch)
+        {
+            true
+        } else {
+            epochs.insert(worker.session_id.clone(), worker.worker_epoch.clone());
+            false
+        }
+    };
+    if already_synced {
+        return;
+    }
+    queue_persisted_config(shared, &worker.session_id, worker.config_options.as_ref());
+}
+
+fn queue_config_value(
+    shared: &Shared,
+    session_id: &str,
+    config_id: &str,
+    value: serde_json::Value,
+) {
+    let same_pending = shared.pending.lock().iter().any(|(_, command)| {
+        matches!(
+            command,
+            CoreCommand::SetConfigOption {
+                session_id: pending_session,
+                config_id: pending_id,
+                value: pending_value,
+                ..
+            } if pending_session == session_id
+                && pending_id == config_id
+                && pending_value == &value
+        )
+    });
+    if same_pending {
+        return;
+    }
+    let stale_keys: Vec<String> = shared
+        .pending
+        .lock()
+        .iter()
+        .filter_map(|(key, command)| {
+            matches!(
+                command,
+                CoreCommand::SetConfigOption {
+                    session_id: pending_session,
+                    config_id: pending_id,
+                    ..
+                } if pending_session == session_id && pending_id == config_id
+            )
+            .then_some(key.clone())
+        })
+        .collect();
+    for key in stale_keys {
+        shared.pending.lock().remove(&key);
+        shared.sent.lock().remove(&key);
+    }
+    let counter = shared.command_counter.fetch_add(1, Ordering::Relaxed);
+    let command_id = format!("config-{}-{counter}", std::process::id());
+    shared.pending.lock().insert(
+        command_id.clone(),
+        CoreCommand::SetConfigOption {
+            session_id: session_id.to_owned(),
+            command_id,
+            config_id: config_id.to_owned(),
+            value,
+        },
+    );
+    let _ = shared.notify.send(());
+}
+
+fn config_current_value(option: &serde_json::Value) -> Option<&serde_json::Value> {
+    option
+        .get("currentValue")
+        .or_else(|| option.get("current_value"))
+}
+
+fn config_option_accepts(option: &serde_json::Value, value: &serde_json::Value) -> bool {
+    option
+        .get("options")
+        .is_none_or(|choices| config_value_list_contains(choices, value))
+}
+
+fn config_value_list_contains(options: &serde_json::Value, value: &serde_json::Value) -> bool {
+    match options {
+        serde_json::Value::Array(options) => options
+            .iter()
+            .any(|option| config_value_list_contains(option, value)),
+        serde_json::Value::Object(option) => {
+            option.get("value") == Some(value)
+                || option
+                    .get("options")
+                    .is_some_and(|nested| config_value_list_contains(nested, value))
+        }
+        _ => options == value,
+    }
+}
+
+fn apply_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
+    if !shared.hub.accept_runtime_snapshot(worker) {
         return false;
     }
     if let Some(agent_session_id) = &worker.agent_session_id {
-        hub.set_agent_session_id(&worker.session_id, agent_session_id.clone());
+        shared
+            .hub
+            .set_agent_session_id(&worker.session_id, agent_session_id.clone());
     }
     if let Some(options) = &worker.config_options {
-        hub.set_config_options(&worker.session_id, options.clone());
+        shared
+            .hub
+            .set_config_options(&worker.session_id, options.clone());
+        sync_config_for_worker(shared, worker);
     }
     if let (Some(used), Some(size)) = (worker.context_used, worker.context_size) {
-        hub.set_session_usage(
+        shared.hub.set_session_usage(
             &worker.session_id,
             crate::agent_model::SessionUsage {
                 used,
@@ -988,7 +1166,7 @@ fn apply_snapshot(hub: &Hub, worker: &WorkerSnapshot) -> bool {
     } else {
         worker_status(worker.state)
     };
-    hub.set_status(&worker.session_id, status, None);
+    shared.hub.set_status(&worker.session_id, status, None);
     true
 }
 
@@ -1193,6 +1371,7 @@ fn reset_after_workspace_replacement(shared: &Shared, session_id: &str) {
         session.generation.clone_from(&shared.desired_generation);
     }
     shared.resetting.lock().insert(session_id.to_owned());
+    shared.config_sync_epochs.lock().remove(session_id);
     shared
         .declarations
         .lock()
@@ -1203,6 +1382,7 @@ fn reset_after_workspace_replacement(shared: &Shared, session_id: &str) {
         .pending
         .lock()
         .insert(ensure_key, CoreCommand::EnsureSession { session });
+    queue_persisted_config_for_session(shared, session_id, true);
     let value = shared.command_counter.fetch_add(1, Ordering::Relaxed);
     let command_id = format!("reset-{}-{value}", std::process::id());
     shared.pending.lock().insert(
@@ -1286,6 +1466,66 @@ mod tests {
                     if command_id.starts_with("reset-")
             ));
         }
+    }
+
+    #[tokio::test]
+    async fn session_preferences_are_queued_before_the_first_prompt() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        let runtime = RemoteRuntime::for_test(hub, Vec::new());
+        runtime.ensure(snapshot("s").launch.expect("launch metadata"));
+        runtime.prompt(
+            "s",
+            vec![serde_json::json!({"type": "text", "text": "hello"})],
+            None,
+        );
+
+        let mut commands = runtime.pending_for_test();
+        commands.sort_by_key(command_priority);
+        let ensure_index = commands
+            .iter()
+            .position(|command| matches!(command, CoreCommand::EnsureSession { .. }))
+            .expect("ensure command");
+        let prompt_index = commands
+            .iter()
+            .position(|command| matches!(command, CoreCommand::Prompt { .. }))
+            .expect("prompt command");
+        let config_commands: Vec<_> = commands
+            .iter()
+            .filter_map(|command| match command {
+                CoreCommand::SetConfigOption {
+                    config_id, value, ..
+                } => Some((config_id.as_str(), value)),
+                _ => None,
+            })
+            .collect();
+
+        assert!(ensure_index < prompt_index);
+        assert_eq!(config_commands.len(), 2);
+        assert_eq!(config_commands[0].0, "model");
+        assert_eq!(config_commands[1].0, "reasoning_effort");
+        assert!(
+            config_commands
+                .iter()
+                .any(|(id, value)| *id == "model" && **value == serde_json::json!("gpt-5.6-luna"))
+        );
+        assert!(
+            config_commands
+                .iter()
+                .any(|(id, value)| *id == "reasoning_effort" && **value == serde_json::json!("max"))
+        );
+        assert!(
+            commands[..prompt_index]
+                .iter()
+                .any(|command| matches!(command, CoreCommand::SetConfigOption { .. }))
+        );
     }
 
     #[tokio::test]

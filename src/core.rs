@@ -524,6 +524,17 @@ fn local_machine_id() -> String {
     "local".to_owned()
 }
 
+fn default_config_preferences(provider: &str) -> serde_json::Value {
+    if provider == "codex" {
+        serde_json::json!({
+            "model": "gpt-5.6-luna",
+            "reasoning_effort": "max",
+        })
+    } else {
+        serde_json::json!({})
+    }
+}
+
 /// Immutable attributes assigned when a Cowboy session is registered.
 pub struct SessionRegistration {
     pub id: String,
@@ -637,6 +648,12 @@ pub struct RestoredSession {
     pub drafts: Vec<QueuedMessage>,
     /// Persisted confirm-detect judge-run history (newest first), capped.
     pub judge_runs: Vec<JudgeRun>,
+    /// Latest agent-advertised config options, retained so a new device can
+    /// render the session controls before its worker is warm.
+    pub config_options: Option<serde_json::Value>,
+    /// User-selected values that the service must re-apply when the worker is
+    /// recreated. Defaults are seeded for newly-created OpenAI sessions.
+    pub config_preferences: serde_json::Value,
     pub mobile_review_state: serde_json::Value,
 }
 
@@ -710,6 +727,10 @@ struct Session {
     /// new client on connect so the composer dropdowns populate from a fresh
     /// reload.
     config_options: Option<serde_json::Value>,
+    /// Session-owned config values. This is deliberately separate from the
+    /// latest agent snapshot: an agent's startup defaults must not erase a
+    /// user's choice before the service has re-applied it.
+    config_preferences: serde_json::Value,
     /// Prompts waiting for the current turn to finish, in send order. Drained
     /// one-at-a-time on each turn-end (see `Hub::try_drain`).
     queue: Vec<QueuedMessage>,
@@ -1261,6 +1282,18 @@ pub enum StoreWrite {
         session_id: String,
         agent_session_id: Option<String>,
     },
+    /// Persist the latest agent-advertised config option snapshot so a fresh
+    /// device can render session controls before the worker is warm.
+    UpdateConfigOptions {
+        session_id: String,
+        options: serde_json::Value,
+    },
+    /// Persist user-selected session config values independently from the
+    /// provider's current capability snapshot.
+    UpdateConfigPreferences {
+        session_id: String,
+        preferences: serde_json::Value,
+    },
     ClearEvents {
         session_id: String,
     },
@@ -1509,6 +1542,31 @@ struct HubInner {
     /// template), mirrored from the `settings` table on restore. Authoritative
     /// in-memory; every edit also write-behinds via `StoreWrite::PutSetting`.
     settings: Mutex<HashMap<String, serde_json::Value>>,
+}
+
+fn set_config_option_current_value(
+    options: &mut serde_json::Value,
+    config_id: &str,
+    value: &serde_json::Value,
+) -> bool {
+    let Some(options) = options.as_array_mut() else {
+        return false;
+    };
+    let Some(option) = options.iter_mut().find_map(|option| {
+        (option.get("id").and_then(serde_json::Value::as_str) == Some(config_id)).then_some(option)
+    }) else {
+        return false;
+    };
+    let Some(option) = option.as_object_mut() else {
+        return false;
+    };
+    let key = if option.contains_key("current_value") && !option.contains_key("currentValue") {
+        "current_value"
+    } else {
+        "currentValue"
+    };
+    option.insert(key.to_owned(), value.clone());
+    true
 }
 
 impl Hub {
@@ -1765,6 +1823,8 @@ impl Hub {
                     mut queue,
                     mut drafts,
                     judge_runs,
+                    config_options,
+                    config_preferences,
                     mobile_review_state,
                 } = r;
                 let mut healed = false;
@@ -1834,7 +1894,8 @@ impl Hub {
                         event_count,
                         reached_start,
                         next_seq,
-                        config_options: None,
+                        config_options,
+                        config_preferences,
                         queue,
                         drafts,
                         editing: None,
@@ -2201,6 +2262,7 @@ impl Hub {
             origin,
             system,
         } = registration;
+        let config_preferences = default_config_preferences(&provider);
         let meta = SessionMeta {
             id: id.clone(),
             provider,
@@ -2237,6 +2299,7 @@ impl Hub {
                     reached_start: true,
                     next_seq: 0,
                     config_options: None,
+                    config_preferences: config_preferences.clone(),
                     queue: Vec::new(),
                     drafts: Vec::new(),
                     editing: None,
@@ -2247,10 +2310,19 @@ impl Hub {
                     mobile_review: MobileReviewState::default(),
                 },
             );
-            order.push(id);
+            order.push(id.clone());
         }
         if let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::InsertSession(meta));
+            if config_preferences
+                .as_object()
+                .is_some_and(|preferences| !preferences.is_empty())
+            {
+                let _ = tx.send(StoreWrite::UpdateConfigPreferences {
+                    session_id: id,
+                    preferences: config_preferences,
+                });
+            }
         }
         self.broadcast_sessions();
     }
@@ -3611,6 +3683,75 @@ impl Hub {
             .and_then(|s| s.config_options.clone())
     }
 
+    /// Return the durable values selected for a session. The returned object is
+    /// safe to pass across the Machine boundary because it contains only ACP
+    /// option ids and scalar values, never provider credentials.
+    #[must_use]
+    pub fn config_preferences(&self, session_id: &str) -> Option<serde_json::Value> {
+        let sessions = self.inner.sessions.lock();
+        sessions
+            .get(session_id)
+            .map(|session| session.config_preferences.clone())
+    }
+
+    /// Record one user-selected config value and immediately fan out the
+    /// optimistic selection. The agent's later authoritative option snapshot
+    /// will correct it if the provider normalizes or rejects the value.
+    pub fn set_config_preference(
+        &self,
+        session_id: &str,
+        config_id: String,
+        value: serde_json::Value,
+    ) -> Result<(), String> {
+        if config_id.is_empty() || config_id.len() > 128 {
+            return Err("configuration id is invalid".to_owned());
+        }
+        if !matches!(
+            &value,
+            serde_json::Value::String(_) | serde_json::Value::Bool(_)
+        ) {
+            return Err("configuration values must be a string id or boolean".to_owned());
+        }
+        let (preferences, options) = {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(session) = sessions.get_mut(session_id) else {
+                return Err(format!("unknown session {session_id:?}"));
+            };
+            if !session.config_preferences.is_object() {
+                session.config_preferences = serde_json::json!({});
+            }
+            session
+                .config_preferences
+                .as_object_mut()
+                .expect("config preferences are an object")
+                .insert(config_id.clone(), value.clone());
+            let options = session.config_options.as_mut().and_then(|options| {
+                set_config_option_current_value(options, &config_id, &value)
+                    .then(|| options.clone())
+            });
+            (session.config_preferences.clone(), options)
+        };
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::UpdateConfigPreferences {
+                session_id: session_id.to_owned(),
+                preferences,
+            });
+        }
+        if let Some(options) = options {
+            if let Some(tx) = self.inner.store_tx.as_ref() {
+                let _ = tx.send(StoreWrite::UpdateConfigOptions {
+                    session_id: session_id.to_owned(),
+                    options: options.clone(),
+                });
+            }
+            let _ = self.inner.tx.send(Outbound::ConfigOptions {
+                session_id: session_id.to_owned(),
+                options,
+            });
+        }
+        Ok(())
+    }
+
     /// Store the latest agent-advertised config options for a session and
     /// fan them out to every client. Called from acp.rs when the upstream
     /// emits a `config_option_update` notification, and from the
@@ -3623,6 +3764,12 @@ impl Hub {
                 return;
             };
             s.config_options = Some(options.clone());
+        }
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::UpdateConfigOptions {
+                session_id: session_id.to_owned(),
+                options: options.clone(),
+            });
         }
         let _ = self.inner.tx.send(Outbound::ConfigOptions {
             session_id: session_id.to_owned(),
@@ -4711,6 +4858,71 @@ impl Default for Hub {
     }
 }
 
+#[cfg(test)]
+mod config_preference_tests {
+    use super::*;
+
+    #[test]
+    fn new_codex_sessions_start_with_luna_max_preferences() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "codex-session".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            SessionOrigin::Web,
+            false,
+        );
+
+        assert_eq!(
+            hub.config_preferences("codex-session"),
+            Some(serde_json::json!({
+                "model": "gpt-5.6-luna",
+                "reasoning_effort": "max",
+            }))
+        );
+    }
+
+    #[test]
+    fn selecting_a_config_value_updates_the_shared_snapshot() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "codex-session".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            SessionOrigin::Web,
+            false,
+        );
+        hub.set_config_options(
+            "codex-session",
+            serde_json::json!([{
+                "id": "model",
+                "currentValue": "gpt-5.6-sol",
+                "options": [{"value": "gpt-5.6-sol"}, {"value": "gpt-5.6-luna"}],
+            }]),
+        );
+
+        hub.set_config_preference(
+            "codex-session",
+            "model".to_owned(),
+            serde_json::json!("gpt-5.6-luna"),
+        )
+        .expect("valid config preference");
+
+        assert_eq!(
+            hub.config_preferences("codex-session")
+                .and_then(|value| value.get("model").cloned()),
+            Some(serde_json::json!("gpt-5.6-luna"))
+        );
+        assert_eq!(
+            hub.config_options("codex-session")
+                .and_then(|value| value[0].get("currentValue").cloned()),
+            Some(serde_json::json!("gpt-5.6-luna"))
+        );
+    }
+}
+
 /// Run the single shared Luna classifier worker. The app-server process stays
 /// warm, while each judgment gets an isolated ephemeral thread with an identical
 /// static prefix. A failed or timed-out request discards the process; the next
@@ -4849,6 +5061,8 @@ mod runtime_reconciliation_tests {
             queue: Vec::new(),
             drafts: Vec::new(),
             judge_runs: Vec::new(),
+            config_options: None,
+            config_preferences: serde_json::json!({}),
             mobile_review_state: serde_json::Value::Null,
         }
     }

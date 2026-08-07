@@ -927,6 +927,18 @@ here says otherwise.
     expanded state. This makes the keyboard collapse predictably while leaving
     the draft exactly where the user stopped typing.
 
+53. **Page View's conditional Composer must not unmount on delivery intent.** The
+    mobile Page Dock mounts the new-question Composer only while its local
+    compose intent is present. Calling the parent's `onSubmitted` callback as
+    soon as the prompt command is created tears that Composer down during the
+    originating iOS send gesture, while the keyboard and Page Dock are still
+    reflowing; the first tap can then look like it only closed the editor. Keep
+    the Composer mounted until the queue/chat acknowledgement succeeds, then
+    release the keyboard and clear the Page intent. The send accessory may use a
+    stationary touch `pointerup` fallback when WebKit drops the compatibility
+    click after scroll momentum, but must retain native textarea focus on
+    `pointerdown` and keep ordinary click/keyboard activation intact.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the
