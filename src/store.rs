@@ -116,6 +116,10 @@ pub struct LoadedSession {
     pub drafts: Vec<QueuedMessage>,
     /// Persisted confirm-detect judge-run history (newest first), capped.
     pub judge_runs: Vec<JudgeRun>,
+    /// Latest agent-advertised config options, retained for a fresh device.
+    pub config_options: Option<serde_json::Value>,
+    /// User-selected config values that must survive worker recreation.
+    pub config_preferences: serde_json::Value,
     /// Mobile-only code-review workspace state, shared across iPhone/iPad clients.
     pub mobile_review_state: serde_json::Value,
 }
@@ -773,7 +777,7 @@ impl Store {
             "SELECT id, provider, machine_id, workspace_id, workspace_name, workspace_source_path, \
              cwd, title, origin, status, agent_session_id, auto_resume, \
              awaiting_user, done, system, next_seq, queue, drafts, judge_runs, \
-             mobile_review_state, created_at \
+             config_options, config_preferences, mobile_review_state, created_at \
              FROM sessions WHERE deleted_at IS NULL ORDER BY position ASC NULLS LAST, created_at ASC",
         )
         .fetch_all(&self.pool)
@@ -837,6 +841,12 @@ impl Store {
                 serde_json::from_value(row.drafts.clone()).unwrap_or_default();
             let judge_runs: Vec<JudgeRun> =
                 serde_json::from_value(row.judge_runs.clone()).unwrap_or_default();
+            let config_options = row.config_options.clone();
+            let config_preferences = if row.config_preferences.is_object() {
+                row.config_preferences.clone()
+            } else {
+                serde_json::json!({})
+            };
             let mobile_review_state = row.mobile_review_state.clone();
             out.push(LoadedSession {
                 meta: row.into_meta(),
@@ -847,6 +857,8 @@ impl Store {
                 queue,
                 drafts,
                 judge_runs,
+                config_options,
+                config_preferences,
                 mobile_review_state,
             });
         }
@@ -1235,6 +1247,45 @@ impl Store {
             .execute(&self.pool)
             .await
             .with_context(|| format!("UPDATE session agent_session_id {session_id}"))?;
+        Ok(())
+    }
+
+    /// Persist the latest agent-advertised config options. This is a display
+    /// snapshot, not the source of the user's selected values.
+    pub async fn update_config_options(
+        &self,
+        session_id: &str,
+        options: &serde_json::Value,
+    ) -> Result<()> {
+        let mut options = options.clone();
+        strip_nul(&mut options);
+        sqlx::query("UPDATE sessions SET config_options = $1, updated_at = now() WHERE id = $2")
+            .bind(options)
+            .bind(session_id)
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("UPDATE session config_options {session_id}"))?;
+        Ok(())
+    }
+
+    /// Persist the values selected by the user for this session. Keeping this
+    /// separate from the agent snapshot prevents startup defaults from erasing
+    /// a choice before it can be re-applied.
+    pub async fn update_config_preferences(
+        &self,
+        session_id: &str,
+        preferences: &serde_json::Value,
+    ) -> Result<()> {
+        let mut preferences = preferences.clone();
+        strip_nul(&mut preferences);
+        sqlx::query(
+            "UPDATE sessions SET config_preferences = $1, updated_at = now() WHERE id = $2",
+        )
+        .bind(preferences)
+        .bind(session_id)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPDATE session config_preferences {session_id}"))?;
         Ok(())
     }
 
@@ -3005,6 +3056,8 @@ struct SessionRow {
     queue: serde_json::Value,
     drafts: serde_json::Value,
     judge_runs: serde_json::Value,
+    config_options: Option<serde_json::Value>,
+    config_preferences: serde_json::Value,
     mobile_review_state: serde_json::Value,
     #[allow(dead_code)]
     created_at: DateTime<Utc>,
