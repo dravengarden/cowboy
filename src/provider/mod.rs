@@ -158,6 +158,10 @@ fn builtin_with_env_and_shell(
             "CLAUDE_CODE_SUBAGENT_MODEL".to_owned(),
             "deepseek-v4-flash".to_owned(),
         ),
+        // DeepSeek's strongest reasoning posture is the default for this
+        // isolated lane. The ACP effort picker remains available, so users
+        // can still choose `default` or `high` for a particular session.
+        ("CLAUDE_CODE_EFFORT_LEVEL".to_owned(), "max".to_owned()),
         (
             "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST".to_owned(),
             "cowboy-claude-deepseek".to_owned(),
@@ -663,7 +667,7 @@ fn render_codex_deepseek_config(catalog: &Path) -> String {
     format!(
         "model = \"deepseek-v4-flash\"\n\
      model_provider = \"deepseek-local\"\n\
-     model_reasoning_effort = \"high\"\n\
+     model_reasoning_effort = \"max\"\n\
      model_catalog_json = \"{}\"\n\
      approval_policy = \"never\"\n\
      sandbox_mode = \"danger-full-access\"\n\n\
@@ -838,7 +842,13 @@ mod tests {
                 .map(String::as_str),
             Some("deepseek-v4-flash")
         );
-        assert!(!claude_deepseek.env.contains_key("CLAUDE_CODE_EFFORT_LEVEL"));
+        assert_eq!(
+            claude_deepseek
+                .env
+                .get("CLAUDE_CODE_EFFORT_LEVEL")
+                .map(String::as_str),
+            Some("max")
+        );
         assert_eq!(
             claude_deepseek
                 .env
@@ -924,6 +934,7 @@ mod tests {
             super::CODEX_DEEPSEEK_CATALOG,
         ));
         assert!(rendered.starts_with("model = \"deepseek-v4-flash\""));
+        assert!(rendered.contains("model_reasoning_effort = \"max\""));
         assert!(rendered.contains("approval_policy = \"never\""));
         assert!(rendered.contains("model_auto_compact_token_limit_scope = \"body_after_prefix\""));
         assert!(rendered.contains("[model_providers.deepseek-local]"));
