@@ -127,7 +127,18 @@ function agentName(agent: string): string {
   return agent;
 }
 
-const DEEPSEEK_WINDOWS = ["1h", "6h", "24h", "7d", "14d", "30d"] as const;
+const DEEPSEEK_WINDOWS = [
+  "1h",
+  "2h",
+  "4h",
+  "6h",
+  "8h",
+  "12h",
+  "24h",
+  "7d",
+  "14d",
+  "30d",
+] as const;
 const DEEPSEEK_MODELS = ["all", "flash", "pro"] as const;
 const DEEPSEEK_AGENTS = ["all", "codex", "claude"] as const;
 const DEEPSEEK_AGENTS_WITH_REASONIX = [

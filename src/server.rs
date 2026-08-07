@@ -1538,7 +1538,11 @@ fn parse_deepseek_activity_filter(
     let window = query.window.as_deref().unwrap_or("24h");
     let window_seconds = match window {
         "1h" => 3_600,
+        "2h" => 2 * 3_600,
+        "4h" => 4 * 3_600,
         "6h" => 6 * 3_600,
+        "8h" => 8 * 3_600,
+        "12h" => 12 * 3_600,
         "24h" => 24 * 3_600,
         "7d" => 7 * 86_400,
         "14d" => 14 * 86_400,
@@ -1631,6 +1635,29 @@ mod deepseek_activity_filter_tests {
                 agent: Some("reasonix".to_owned()),
             })
         );
+    }
+
+    #[test]
+    fn accepts_short_rolling_windows() {
+        for (window, window_seconds) in [
+            ("2h", 2 * 3_600),
+            ("4h", 4 * 3_600),
+            ("8h", 8 * 3_600),
+            ("12h", 12 * 3_600),
+        ] {
+            assert_eq!(
+                parse_deepseek_activity_filter(&DeepSeekActivityQuery {
+                    window: Some(window.to_owned()),
+                    ..DeepSeekActivityQuery::default()
+                }),
+                Ok(DeepSeekActivityFilter {
+                    window: window.to_owned(),
+                    window_seconds,
+                    model: None,
+                    agent: None,
+                })
+            );
+        }
     }
 
     #[test]
