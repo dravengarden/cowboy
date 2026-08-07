@@ -382,8 +382,12 @@ Deno.test("mobile delivery taps preserve native editor focus until click", () =>
   assertEquals(sendStart >= 0 && sendEnd > sendStart, true);
   assertEquals(
     sendButton.includes(
-      "onPointerDown={(event): void => event.preventDefault()}",
+      "event.preventDefault();\n                    sendTap.onPointerDown(event);",
     ),
+    true,
+  );
+  assertEquals(
+    sendButton.includes("onPointerUp={sendTap.onPointerUp}"),
     true,
   );
   assertEquals(
@@ -392,6 +396,21 @@ Deno.test("mobile delivery taps preserve native editor focus until click", () =>
     ),
     true,
   );
+});
+
+Deno.test("Page delivery closes only after the authoritative acknowledgement", () => {
+  const submitStart = composerSource.indexOf("const submitWithFeedback");
+  const submitEnd = composerSource.indexOf("const sendTap", submitStart);
+  const submit = composerSource.slice(submitStart, submitEnd);
+  const actionStart = submit.indexOf("submitFeedback.run(() => {");
+  const actionEnd = submit.indexOf("if (submitted && succeeded)", actionStart);
+  assertEquals(actionStart >= 0 && actionEnd > actionStart, true);
+  assertEquals(submit.slice(actionStart, actionEnd).includes("onSubmitted?.()"), false);
+  assertEquals(
+    submit.slice(actionEnd).includes("dismissAfterMobileDelivery();\n        // Explore/Page"),
+    true,
+  );
+  assertEquals(submit.slice(actionEnd).includes("onSubmitted?.();"), true);
 });
 
 Deno.test("mobile composer releases stale focus only after a visible keyboard closes", () => {

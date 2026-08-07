@@ -900,15 +900,21 @@ export function ComposerWorkspace({
         const confirmation = submitTracked();
         if (confirmation === null) return Promise.resolve();
         submitted = true;
-        onSubmitted?.();
         return confirmation;
       });
       if (submitted && succeeded) {
         dismissAfterMobileDelivery();
+        // Explore/Page conditionally mounts this Composer. Keep it mounted
+        // through the authoritative acknowledgement so the first tap does not
+        // combine delivery with a Page Dock layout teardown.
+        onSubmitted?.();
         onSucceeded?.();
       }
     })();
   }, [dismissAfterMobileDelivery, onSubmitted, preparing, submitFeedback, submitTracked]);
+  const sendTap = useReliableTouchTap<HTMLButtonElement>(() =>
+    submitWithFeedback()
+  );
   const fileInputRef = useRef<HTMLInputElement>(null);
   const draftList = useStoreSelector((snapshot) =>
     snapshot.drafts.get(sessionId) ?? EMPTY_QUEUED_MESSAGES
@@ -2657,11 +2663,17 @@ export function ComposerWorkspace({
                   disabled={!sendable || submitFeedback.pending}
                   aria-busy={submitFeedback.pending || undefined}
                   sx={TOOLBAR_ICON_BTN}
-                  // Do not let the tap blur the native textarea before the
-                  // delivery click runs; iOS would begin keyboard dismissal and
-                  // reflow this action row first.
-                  onPointerDown={(event): void => event.preventDefault()}
-                  onClick={(): void => submitWithFeedback()}
+                  // Keep the native textarea as UIKit's first responder, and
+                  // commit stationary touch on pointerup when iOS omits the
+                  // trailing synthetic click after stopping scroll momentum.
+                  onPointerDown={(event): void => {
+                    event.preventDefault();
+                    sendTap.onPointerDown(event);
+                  }}
+                  onPointerMove={sendTap.onPointerMove}
+                  onPointerUp={sendTap.onPointerUp}
+                  onPointerCancel={sendTap.onPointerCancel}
+                  onClick={sendTap.onClick}
                 >
                   {submitFeedback.progress
                     ? <CircularProgress size={18} color="inherit" />
