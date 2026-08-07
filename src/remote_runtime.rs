@@ -672,11 +672,11 @@ async fn send_pending<W: tokio::io::AsyncWrite + Unpin>(
     Ok(())
 }
 
-fn command_priority(command: &CoreCommand) -> (u8, u8, &str) {
+fn command_priority(command: &CoreCommand) -> (u8, u8, String) {
     match command {
-        CoreCommand::EnsureSession { .. } => (0, 0, ""),
+        CoreCommand::EnsureSession { .. } => (0, 0, String::new()),
         CoreCommand::StopSession { command_id, .. } if command_id.starts_with("reset-") => {
-            (1, 0, "")
+            (1, 0, String::new())
         }
         CoreCommand::SetConfigOption { config_id, .. } => {
             let config_rank = match config_id.as_str() {
@@ -686,12 +686,12 @@ fn command_priority(command: &CoreCommand) -> (u8, u8, &str) {
                 "reasoning_effort" => 1,
                 _ => 2,
             };
-            (2, config_rank, config_id.as_str())
+            (2, config_rank, config_id.clone())
         }
         // Machine broker handles a reset stop synchronously. Prompts sent after it are
         // queued for the replacement worker instead of reaching the old worker
         // and being cleared by reset_session.
-        _ => (3, 0, ""),
+        _ => (3, 0, String::new()),
     }
 }
 
