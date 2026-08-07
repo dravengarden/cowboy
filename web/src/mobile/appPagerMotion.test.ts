@@ -7,6 +7,7 @@ import {
   predictPagerOffset,
   shouldReservePagerStart,
 } from "./appPagerMotion.ts";
+import { isDominantVerticalPan } from "../touchGestures.ts";
 
 Deno.test("pager prediction removes one-frame lag without escaping the rail", () => {
   assertEquals(predictPagerOffset(-120, -0.5, 16, 390), -128);
@@ -43,4 +44,10 @@ Deno.test("interactive content and open spatial drawers keep their gesture", () 
 Deno.test("product transitions are symmetric", () => {
   assertEquals(nextMobileProduct("agent"), "review");
   assertEquals(nextMobileProduct("review"), "agent");
+});
+
+Deno.test("vertical transcript pans release horizontal recognizers", () => {
+  assertEquals(isDominantVerticalPan(10, 11), false);
+  assertEquals(isDominantVerticalPan(7, 13), true);
+  assertEquals(isDominantVerticalPan(30, 8), false);
 });
