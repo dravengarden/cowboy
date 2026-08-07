@@ -2474,7 +2474,7 @@ export function App({
                     // persistent composer grows its formatting track while this
                     // session nav yields the scarce keyboard-adjacent space. CSS
                     // :has keeps editor focus/IME state out of React render state.
-                    "&:has([data-mobile-focus-composer='true']:focus-within) [data-mobile-session-nav='true']": {
+                    "&:has([data-mobile-focus-composer='true'][data-mobile-keyboard-open='true']:focus-within) [data-mobile-session-nav='true']": {
                         minHeight: 0,
                         maxHeight: 0,
                         opacity: 0,

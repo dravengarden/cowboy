@@ -32,6 +32,21 @@ Deno.test("mobile composer promotion requires a visible keyboard and real editor
   );
 });
 
+Deno.test("mobile session navigation stays tappable after keyboard dismissal", () => {
+  assertEquals(
+    appSource.includes(
+      "[data-mobile-focus-composer='true'][data-mobile-keyboard-open='true']:focus-within) [data-mobile-session-nav='true']",
+    ),
+    true,
+  );
+  assertEquals(
+    appSource.includes(
+      "[data-mobile-focus-composer='true']:focus-within) [data-mobile-session-nav='true']",
+    ),
+    false,
+  );
+});
+
 Deno.test("mobile column and pending ownership cannot fill the viewport without a keyboard", () => {
   assertEquals(
     composerSource.includes(
