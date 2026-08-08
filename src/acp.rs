@@ -32,12 +32,13 @@ use std::time::Duration;
 // version-agnostic schema root and the `Agent`/`Client` traits at the crate root.
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ContentBlock, InitializeRequest, LoadSessionRequest, NewSessionRequest,
-    PermissionOptionId, PermissionOptionKind, PromptRequest, RequestPermissionOutcome,
-    RequestPermissionRequest, RequestPermissionResponse, ResumeSessionRequest,
-    SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption, SessionConfigOptionValue,
-    SessionConfigSelectOption, SessionConfigSelectOptions, SessionId, SessionModeId,
-    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, SetSessionModeRequest,
+    CancelNotification, ContentBlock, InitializeRequest, LoadSessionRequest, Meta,
+    NewSessionRequest, PermissionOptionId, PermissionOptionKind, PromptRequest,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption,
+    SessionConfigOptionValue, SessionConfigSelectOption, SessionConfigSelectOptions, SessionId,
+    SessionModeId, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
+    SetSessionModeRequest,
 };
 use agent_client_protocol::{Agent, ByteStreams, Client, ConnectionTo, Error};
 use anyhow::{Context, Result};
@@ -115,17 +116,60 @@ fn startup_full_access_mode(provider_id: &str) -> Option<&'static str> {
     }
 }
 
+/// Keep Claude's cacheable system-prefix stable across new and resumed ACP
+/// processes. The Agent SDK re-injects the excluded cwd, auto-memory, and Git
+/// sections in the first user message, so the model retains the context while
+/// the system prompt no longer changes when the process is reconstructed.
+fn stable_claude_session_meta(provider_id: &str) -> Option<Meta> {
+    if !crate::provider::is_claude(provider_id) {
+        return None;
+    }
+
+    let mut meta = Meta::new();
+    meta.insert(
+        "systemPrompt".to_owned(),
+        serde_json::json!({
+            "type": "preset",
+            "preset": "claude_code",
+            "excludeDynamicSections": true,
+        }),
+    );
+    Some(meta)
+}
+
+fn new_session_request(provider_id: &str, cwd: PathBuf) -> NewSessionRequest {
+    NewSessionRequest::new(cwd).meta(stable_claude_session_meta(provider_id))
+}
+
+fn resume_session_request(
+    provider_id: &str,
+    session_id: SessionId,
+    cwd: PathBuf,
+) -> ResumeSessionRequest {
+    ResumeSessionRequest::new(session_id, cwd).meta(stable_claude_session_meta(provider_id))
+}
+
+fn load_session_request(
+    provider_id: &str,
+    session_id: SessionId,
+    cwd: PathBuf,
+) -> LoadSessionRequest {
+    LoadSessionRequest::new(session_id, cwd).meta(stable_claude_session_meta(provider_id))
+}
+
 #[cfg(test)]
 mod startup_mode_tests {
     use super::{
         ActivePrompt, ResumeMethod, StartupPhase, StartupTimeout, codex_full_access_available,
-        codex_full_access_selected, is_empty_stream_message_update, reasonix_yolo_available,
-        reasonix_yolo_selected, reasonix_yolo_tool_permission, select_resume_method,
+        codex_full_access_selected, is_empty_stream_message_update, load_session_request,
+        new_session_request, reasonix_yolo_available, reasonix_yolo_selected,
+        reasonix_yolo_tool_permission, resume_session_request, select_resume_method,
         session_config_value, startup_full_access_mode,
     };
     use agent_client_protocol::schema::v1::{
-        SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption,
+        SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption, SessionId,
     };
+    use std::path::PathBuf;
 
     #[test]
     fn providers_use_their_native_full_access_mode() {
@@ -140,6 +184,45 @@ mod startup_mode_tests {
         assert_eq!(startup_full_access_mode("gemini"), Some("yolo"));
         assert_eq!(startup_full_access_mode("reasonix-deepseek"), Some("yolo"));
         assert_eq!(startup_full_access_mode("codex"), None);
+    }
+
+    #[test]
+    fn every_claude_session_setup_path_requests_a_stable_system_prefix() {
+        let cwd = PathBuf::from("/tmp/workspace");
+        for provider in ["claude-code", "claude-deepseek"] {
+            let requests = [
+                serde_json::to_value(new_session_request(provider, cwd.clone()))
+                    .expect("new request"),
+                serde_json::to_value(resume_session_request(
+                    provider,
+                    SessionId::new("session"),
+                    cwd.clone(),
+                ))
+                .expect("resume request"),
+                serde_json::to_value(load_session_request(
+                    provider,
+                    SessionId::new("session"),
+                    cwd.clone(),
+                ))
+                .expect("load request"),
+            ];
+            for request in requests {
+                assert_eq!(
+                    request.pointer("/_meta/systemPrompt"),
+                    Some(&serde_json::json!({
+                        "type": "preset",
+                        "preset": "claude_code",
+                        "excludeDynamicSections": true,
+                    }))
+                );
+            }
+        }
+
+        for provider in ["codex", "reasonix-deepseek"] {
+            let request = serde_json::to_value(new_session_request(provider, cwd.clone()))
+                .expect("non-Claude request");
+            assert!(request.get("_meta").is_none());
+        }
     }
 
     #[test]
@@ -1180,7 +1263,11 @@ async fn run_session(
             ResumeMethod::Resume => {
                 startup_phase.send_replace(StartupPhase::Resume);
                 match cx
-                    .send_request(ResumeSessionRequest::new(resume_id.clone(), cwd.clone()))
+                    .send_request(resume_session_request(
+                        provider_id,
+                        resume_id.clone(),
+                        cwd.clone(),
+                    ))
                     .block_task()
                     .await
                 {
@@ -1200,7 +1287,11 @@ async fn run_session(
                 startup_phase.send_replace(StartupPhase::Load);
                 state.suppress_updates.store(true, Ordering::SeqCst);
                 let loaded = cx
-                    .send_request(LoadSessionRequest::new(resume_id.clone(), cwd.clone()))
+                    .send_request(load_session_request(
+                        provider_id,
+                        resume_id.clone(),
+                        cwd.clone(),
+                    ))
                     .block_task()
                     .await;
                 state.suppress_updates.store(false, Ordering::SeqCst);
@@ -1224,7 +1315,7 @@ async fn run_session(
     } else {
         startup_phase.send_replace(StartupPhase::New);
         let session = cx
-            .send_request(NewSessionRequest::new(cwd.clone()))
+            .send_request(new_session_request(provider_id, cwd.clone()))
             .block_task()
             .await?;
         // Persist the agent's own id so a future revive can resume this exact
@@ -1766,6 +1857,7 @@ pub async fn run_oneshot(spec: &LaunchSpec, cwd: PathBuf, prompt: String) -> Res
     let child_stdin = child.stdin.take().context("child stdin")?;
     let child_stdout = child.stdout.take().context("child stdout")?;
     let transport = ByteStreams::new(child_stdin.compat_write(), child_stdout.compat());
+    let provider_id = spec.id;
 
     let result = Client
         .builder()
@@ -1820,7 +1912,7 @@ pub async fn run_oneshot(spec: &LaunchSpec, cwd: PathBuf, prompt: String) -> Res
                 .await?;
 
             let session = cx
-                .send_request(NewSessionRequest::new(cwd.clone()))
+                .send_request(new_session_request(provider_id, cwd.clone()))
                 .block_task()
                 .await?;
             tracing::info!(session_id = %session.session_id.0, "session created");

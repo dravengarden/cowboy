@@ -712,32 +712,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn context_rejection_reuses_live_worker_without_resume() {
-        let root = TestDir::new();
-        let cwd = root.path().join("checkout");
-        std::fs::create_dir_all(&cwd).expect("checkout");
-        let hub = Hub::new();
-        hub.create_local_session(
-            "s".to_owned(),
-            "claude-deepseek".to_owned(),
-            cwd.display().to_string(),
-            "test".to_owned(),
-            SessionOrigin::Web,
-            false,
-        );
-        let detail = "API Error: 400 This model's maximum context length is 1048576 tokens. However, you requested 1048875 tokens";
-        hub.set_status("s", Status::Crashed, Some(detail.to_owned()));
-        let mut worker = worker_snapshot(cwd.to_string_lossy().as_ref());
-        worker.state = WorkerState::Running;
-        worker.launch.as_mut().expect("launch").provider = "claude-deepseek".to_owned();
-        let runtime = RemoteRuntime::for_test(hub.clone(), vec![worker]);
-        let supervisor = Supervisor::new_remote(hub.clone(), root.0.clone(), 0, runtime.clone());
+    async fn context_rejection_reuses_live_claude_workers_without_resume() {
+        for provider in ["claude-code", "claude-deepseek"] {
+            let root = TestDir::new();
+            let cwd = root.path().join("checkout");
+            std::fs::create_dir_all(&cwd).expect("checkout");
+            let hub = Hub::new();
+            hub.create_local_session(
+                "s".to_owned(),
+                provider.to_owned(),
+                cwd.display().to_string(),
+                "test".to_owned(),
+                SessionOrigin::Web,
+                false,
+            );
+            let detail = "API Error: 400 This model's maximum context length is 1048576 tokens. However, you requested 1048875 tokens";
+            hub.set_status("s", Status::Crashed, Some(detail.to_owned()));
+            let mut worker = worker_snapshot(cwd.to_string_lossy().as_ref());
+            worker.state = WorkerState::Running;
+            worker.launch.as_mut().expect("launch").provider = provider.to_owned();
+            let runtime = RemoteRuntime::for_test(hub.clone(), vec![worker]);
+            let supervisor =
+                Supervisor::new_remote(hub.clone(), root.0.clone(), 0, runtime.clone());
 
-        assert!(!supervisor.prepare_session("s").expect("prepare"));
-        assert!(runtime.has_worker("s"));
-        assert!(runtime.pending_for_test().is_empty());
-        assert_eq!(hub.status("s"), Some(Status::Crashed));
-        assert_eq!(hub.latest_crash_detail("s").as_deref(), Some(detail));
+            assert!(!supervisor.prepare_session("s").expect("prepare"));
+            assert!(runtime.has_worker("s"));
+            assert!(runtime.pending_for_test().is_empty());
+            assert_eq!(hub.status("s"), Some(Status::Crashed));
+            assert_eq!(hub.latest_crash_detail("s").as_deref(), Some(detail));
+        }
     }
 
     #[tokio::test]

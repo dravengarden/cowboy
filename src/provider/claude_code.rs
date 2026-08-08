@@ -33,13 +33,13 @@ pub fn is_empty_stream_failure(detail: &str) -> bool {
 }
 
 /// Turn failures after which the connected Claude ACP worker is still usable.
-/// Context rejection is currently specific to the isolated DeepSeek lane;
-/// empty-stream failures are emitted by both ordinary Claude and DeepSeek.
+/// Context rejection and empty-stream failures are request-scoped for both
+/// ordinary Claude and the isolated DeepSeek lane; recycling the live worker
+/// would unnecessarily rebuild the native session and its prompt cache.
 #[must_use]
 pub fn keeps_worker_alive(provider_id: &str, detail: &str) -> bool {
-    (provider_id == "claude-deepseek" && is_context_window_rejection(detail))
-        || (matches!(provider_id, "claude-code" | "claude-deepseek")
-            && is_empty_stream_failure(detail))
+    matches!(provider_id, "claude-code" | "claude-deepseek")
+        && (is_context_window_rejection(detail) || is_empty_stream_failure(detail))
 }
 
 /// Retry one empty-stream turn only while Cowboy has observed no visible ACP
@@ -116,8 +116,9 @@ mod tests {
         let context = "API Error: 400 This model's maximum context length is 1048576 tokens";
         assert!(keeps_worker_alive("claude-code", empty));
         assert!(keeps_worker_alive("claude-deepseek", empty));
+        assert!(keeps_worker_alive("claude-code", context));
         assert!(keeps_worker_alive("claude-deepseek", context));
-        assert!(!keeps_worker_alive("claude-code", context));
+        assert!(!keeps_worker_alive("codex", context));
         assert!(!keeps_worker_alive(
             "claude-code",
             "agent subprocess exited mid-session"

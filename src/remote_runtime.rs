@@ -1494,7 +1494,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn context_rejection_keeps_worker_live_but_session_actionably_errored() {
+    async fn context_rejection_keeps_all_claude_workers_live_but_sessions_errored() {
         let hub = Hub::new();
         hub.create_local_session(
             "s".to_owned(),
@@ -1534,7 +1534,8 @@ mod tests {
                 detail: Some(detail.to_owned()),
             },
         );
-        assert_eq!(hub.status("ordinary"), Some(Status::Running));
+        assert_eq!(hub.status("ordinary"), Some(Status::Crashed));
+        assert_eq!(hub.latest_crash_detail("ordinary").as_deref(), Some(detail));
 
         let empty_stream =
             "API Error: Stream ended without receiving any events {\"errorKind\":\"unknown\"}";
