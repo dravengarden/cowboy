@@ -66,10 +66,12 @@ export function deepseekAvailableAgents(
 /** Runtime lanes to keep visible even when the active filter has no events. */
 export function deepseekVisibleAgents(
   available: DeepSeekObservedAgent[],
-  selected: DeepSeekObservedAgent | "all",
+  selected: DeepSeekObservedAgent[],
   observed: string[],
 ): DeepSeekObservedAgent[] {
-  if (selected !== "all") return [selected];
+  if (selected.length > 0) {
+    return (["codex", "claude"] as const).filter((agent) => selected.includes(agent));
+  }
   const observedAgents = observed.filter((agent): agent is DeepSeekObservedAgent =>
     agent === "codex" || agent === "claude"
   );

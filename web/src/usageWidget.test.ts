@@ -48,7 +48,7 @@ Deno.test("usage widget aggregates supported providers and drops unsupported pla
           last24Hours: {
             summary: {
               requests: 2,
-              errors: 1,
+              blockingErrors: 1,
               cacheObservations: 2,
               cacheHitTokens: 900,
               cacheMissTokens: 100,
@@ -94,7 +94,7 @@ Deno.test("usage widget aggregates supported providers and drops unsupported pla
       spend24hPriceCoverage: 100,
       cacheHitRate: 90,
       cacheMissRate: 10,
-      errorRate: 50,
+      blockingErrors: 1,
     },
   ]);
 });
@@ -115,7 +115,7 @@ Deno.test("usage widget marks partial 24h valuation and keeps the same cache win
         last24Hours: {
           summary: {
             requests: 4,
-            errors: 1,
+            blockingErrors: 1,
             cacheObservations: 1,
             cacheHitTokens: 8,
             cacheMissTokens: 2,
@@ -140,7 +140,7 @@ Deno.test("usage widget marks partial 24h valuation and keeps the same cache win
     spend24hPriceCoverage: 70 / 120 * 100,
     cacheHitRate: 80,
     cacheMissRate: 20,
-    errorRate: 25,
+    blockingErrors: 1,
   }]);
 });
 

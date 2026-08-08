@@ -26,6 +26,7 @@ import { pruneDrafts } from "./draftStore";
 import { linkTimeline } from "./derive";
 import { notifyHaptic } from "./haptic";
 import { reportClientLog, reportClientMetric } from "./observability";
+import { newUuid } from "./uuid";
 import { fireAlert, vibrateAlertOn } from "./turnNotify";
 import {
   type ConfigOption,
@@ -1369,9 +1370,7 @@ const SHIMMER_DELAY_MS = 200;
 const SEND_TIMEOUT_MS = 10_000;
 
 function newCmid(): string {
-  const c = globalThis.crypto;
-  if (c?.randomUUID) return c.randomUUID();
-  return `c-${String(Date.now())}-${Math.random().toString(36).slice(2)}`;
+  return `c-${newUuid()}`;
 }
 
 // --- Optimistic sync (state-sync engine: @shared-utils/sync) -----------------

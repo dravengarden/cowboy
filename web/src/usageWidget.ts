@@ -22,7 +22,7 @@ export type UsageWidgetProvider =
     spend24hPriceCoverage: number | undefined;
     cacheHitRate: number;
     cacheMissRate: number;
-    errorRate: number;
+    blockingErrors: number;
   };
 
 function deepseekBalanceCny(usage: ProviderUsage): number | undefined {
@@ -86,16 +86,13 @@ function deepseekWidget(usage: ProviderUsage): UsageWidgetProvider | undefined {
   const rollingSummary = record(rolling?.summary);
   const cache = deepseekCacheStats(rollingSummary);
   const requests = num(rollingSummary?.requests);
-  const errors = num(rollingSummary?.errors) ?? 0;
-  const errorRate = requests !== undefined && requests > 0
-    ? errors * 100 / requests
-    : undefined;
+  const blockingErrors = num(rollingSummary?.blockingErrors) ?? 0;
   if (
     balanceCny === undefined ||
     spend24h === undefined ||
     cache.hitRate === undefined ||
     cache.missRate === undefined ||
-    errorRate === undefined
+    requests === undefined
   ) return undefined;
   return {
     kind: "deepseek",
@@ -105,7 +102,7 @@ function deepseekWidget(usage: ProviderUsage): UsageWidgetProvider | undefined {
     spend24hPriceCoverage: spend24h.priceCoverage,
     cacheHitRate: cache.hitRate,
     cacheMissRate: cache.missRate,
-    errorRate,
+    blockingErrors,
   };
 }
 

@@ -1,3 +1,5 @@
+import { newUuid } from "./uuid";
+
 type LogLevel = "debug" | "info" | "warn" | "error";
 type Scalar = string | number | boolean | null;
 
@@ -34,10 +36,7 @@ let context: { session_id?: string; machine_id?: string; trace_id?: string } = {
 const RELOAD_INTENT_KEY = "cowboy:observability-reload-intent";
 
 function newId(): string {
-  if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
-  const random = globalThis.crypto?.getRandomValues?.(new Uint32Array(4));
-  if (random) return Array.from(random, (value) => value.toString(16).padStart(8, "0")).join("-");
-  return `fallback-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return newUuid();
 }
 
 function stableClientId(): string {

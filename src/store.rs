@@ -199,10 +199,11 @@ pub struct RuntimeIncident {
 #[derive(Debug, Clone)]
 pub struct DiagnosticLogFilter {
     pub since_ms: i64,
-    pub kind: Option<String>,
-    pub severity: Option<String>,
-    pub state: Option<String>,
-    pub agent: Option<String>,
+    pub until_ms: i64,
+    pub kinds: Vec<String>,
+    pub severities: Vec<String>,
+    pub states: Vec<String>,
+    pub agents: Vec<String>,
     pub session_ref: Option<String>,
     pub cursor_ms: Option<i64>,
     pub cursor_id: Option<String>,
@@ -383,6 +384,16 @@ fn cache_transition_title(cause: &str) -> &'static str {
         "compatibility_rewrite" => "Cache lost after compatibility rewrite",
         "post_provider_error" => "Cache lost after provider error",
         _ => "Unexplained active-session cache drop",
+    }
+}
+
+fn provider_status_impact(status: i64) -> (&'static str, bool) {
+    if matches!(status, 401..=403) {
+        ("Critical blocker", true)
+    } else if (400..=499).contains(&status) && !matches!(status, 408 | 425 | 429 | 499) {
+        ("Blocking request failure", true)
+    } else {
+        ("Retryable provider attempt", false)
     }
 }
 
@@ -1959,20 +1970,39 @@ impl Store {
               FROM runtime_incidents incident
               LEFT JOIN sessions session ON session.id = incident.session_id
               WHERE incident.occurred_at >= to_timestamp($1::double precision / 1000)
+                AND incident.occurred_at <= to_timestamp($2::double precision / 1000)
             ), provider_error_logs AS (
               SELECT 'provider:' || event.machine_id || ':' || event.producer_id || ':' ||
                   event.sequence::text AS id,
                 (extract(epoch FROM event.occurred_at) * 1000)::bigint AS occurred_at_ms,
-                'provider_error'::text AS kind, 'error'::text AS severity,
+                'provider_error'::text AS kind,
+                CASE
+                  WHEN event.status IN (401, 402, 403) THEN 'critical'
+                  WHEN event.status BETWEEN 400 AND 499
+                    AND event.status NOT IN (408, 425, 429, 499) THEN 'error'
+                  ELSE 'warning'
+                END::text AS severity,
                 'failed'::text AS state,
                 'DeepSeek HTTP ' || event.status::text AS title,
-                initcap(event.agent) || ' request failed with HTTP status ' ||
-                  event.status::text AS summary,
+                initcap(event.agent) || ' request ' || CASE
+                  WHEN event.status BETWEEN 400 AND 499
+                    AND event.status NOT IN (408, 425, 429, 499)
+                    THEN 'was blocked with HTTP status '
+                  ELSE 'attempt received retryable HTTP status '
+                END || event.status::text AS summary,
                 event.session_fingerprint AS session_ref, event.provider,
                 event.agent, nullif(coalesce(event.resolved_model, event.model), '') AS model,
-                'provider_http_error'::text AS classification
+                CASE
+                  WHEN event.status IN (401, 403) THEN 'provider_authentication_failure'
+                  WHEN event.status = 402 THEN 'provider_balance_exhausted'
+                  WHEN event.status BETWEEN 400 AND 499
+                    AND event.status NOT IN (408, 425, 429, 499)
+                    THEN 'provider_request_blocked'
+                  ELSE 'provider_retryable_failure'
+                END::text AS classification
               FROM provider_usage_events event
               WHERE event.occurred_at >= to_timestamp($1::double precision / 1000)
+                AND event.occurred_at <= to_timestamp($2::double precision / 1000)
                 AND event.status >= 400
             ), lineage AS (
               SELECT event.*,
@@ -1997,6 +2027,7 @@ impl Store {
               FROM provider_usage_events event
               WHERE event.occurred_at >=
                   to_timestamp($1::double precision / 1000) - interval '30 minutes'
+                AND event.occurred_at <= to_timestamp($2::double precision / 1000)
                 AND event.schema_version >= 3
                 AND event.session_fingerprint IS NOT NULL
                 AND event.session_attribution <> 'prefix_root'
@@ -2054,6 +2085,7 @@ impl Store {
                 END AS cause
               FROM lineage
               WHERE occurred_at >= to_timestamp($1::double precision / 1000)
+                AND occurred_at <= to_timestamp($2::double precision / 1000)
                 AND schema_version >= 3
                 AND session_fingerprint IS NOT NULL
                 AND session_attribution <> 'prefix_root'
@@ -2116,7 +2148,7 @@ impl Store {
                 'codex'::text AS agent, NULL::text AS model,
                 'provider_automation'::text AS classification
               FROM provider_action_logs log
-              WHERE log.created_at_ms >= $1
+              WHERE log.created_at_ms >= $1 AND log.created_at_ms <= $2
             ), logs AS (
               SELECT * FROM runtime_logs
               UNION ALL SELECT * FROM provider_error_logs
@@ -2126,22 +2158,23 @@ impl Store {
             SELECT id, occurred_at_ms, kind, severity, state, title, summary,
               session_ref, provider, agent, model, classification
             FROM logs
-            WHERE ($2::text IS NULL OR kind = $2)
-              AND ($3::text IS NULL OR severity = $3)
-              AND ($4::text IS NULL OR state = $4)
-              AND ($5::text IS NULL OR agent = $5)
-              AND ($6::text IS NULL OR session_ref = $6)
-              AND ($7::bigint IS NULL OR occurred_at_ms < $7 OR
-                (occurred_at_ms = $7 AND id < $8))
+            WHERE (cardinality($3::text[]) = 0 OR kind = ANY($3))
+              AND (cardinality($4::text[]) = 0 OR severity = ANY($4))
+              AND (cardinality($5::text[]) = 0 OR state = ANY($5))
+              AND (cardinality($6::text[]) = 0 OR agent = ANY($6))
+              AND ($7::text IS NULL OR session_ref = $7)
+              AND ($8::bigint IS NULL OR occurred_at_ms < $8 OR
+                (occurred_at_ms = $8 AND id < $9))
             ORDER BY occurred_at_ms DESC, id DESC
-            LIMIT $9
+            LIMIT $10
         ";
         sqlx::query_as(query)
             .bind(filter.since_ms)
-            .bind(filter.kind.as_deref())
-            .bind(filter.severity.as_deref())
-            .bind(filter.state.as_deref())
-            .bind(filter.agent.as_deref())
+            .bind(filter.until_ms)
+            .bind(&filter.kinds)
+            .bind(&filter.severities)
+            .bind(&filter.states)
+            .bind(&filter.agents)
             .bind(filter.session_ref.as_deref())
             .bind(filter.cursor_ms)
             .bind(filter.cursor_id.as_deref())
@@ -2378,6 +2411,7 @@ impl Store {
         if !provider_detail_matches_kind(kind, &current, &previous, gap_ms) {
             return Ok(None);
         }
+        let status_code = json_i64(&current, "status");
         let status = json_scalar(&current, "status").unwrap_or_else(|| "unknown".to_owned());
         let agent = json_scalar(&current, "agent").unwrap_or_else(|| "unknown".to_owned());
         let intervening_provider_errors =
@@ -2395,9 +2429,14 @@ impl Store {
                 }
                 _ => "Active-session cache hit rate fell below 10%".to_owned(),
             }
+        } else if status_code.is_some_and(|status| provider_status_impact(status).1) {
+            format!(
+                "{} request was blocked with HTTP status {status}",
+                diagnostic_title(&agent)
+            )
         } else {
             format!(
-                "{} request failed with HTTP status {status}",
+                "{} request attempt received retryable HTTP status {status}",
                 diagnostic_title(&agent)
             )
         };
@@ -2422,6 +2461,12 @@ impl Store {
         let mut request = Vec::new();
         if let Some(cause) = cause {
             request.push(diagnostic_field("Cache classification", cause, false));
+        } else if let Some(status) = status_code {
+            request.push(diagnostic_field(
+                "Observed impact",
+                provider_status_impact(status).0,
+                false,
+            ));
         }
         for (label, key) in [
             ("HTTP status", "status"),
@@ -2995,6 +3040,19 @@ mod provider_usage_validation_tests {
     }
 
     #[test]
+    fn provider_status_impact_separates_blockers_from_retryable_attempts() {
+        for status in [400, 401, 402, 403, 404, 422] {
+            assert!(provider_status_impact(status).1, "{status} should block");
+        }
+        for status in [408, 425, 429, 499, 500, 502, 503] {
+            assert!(
+                !provider_status_impact(status).1,
+                "{status} should be retryable"
+            );
+        }
+    }
+
+    #[test]
     fn provider_diagnostic_ids_preserve_colons_inside_producer_ids() {
         assert_eq!(
             parse_provider_diagnostic_id("cache:hawk:gateway:boot:42", "cache:"),
@@ -3084,6 +3142,8 @@ async fn insert_provider_usage_event(
 
 const PROVIDER_USAGE_AGGREGATE_COLUMNS: &str = "count(*)::bigint AS requests, \
      count(*) FILTER (WHERE status >= 400)::bigint AS errors, \
+     count(*) FILTER (WHERE status BETWEEN 400 AND 499 AND status NOT IN (408, 425, 429, 499))::bigint AS blocking_errors, \
+     count(*) FILTER (WHERE status IN (408, 425, 429, 499) OR status >= 500)::bigint AS transient_errors, \
      count(*) FILTER (WHERE completed IS TRUE)::bigint AS completed_requests, \
      count(completed)::bigint AS completion_observations, \
      count(*) FILTER (WHERE usage_observed IS TRUE)::bigint AS usage_observations, \
@@ -3357,7 +3417,8 @@ async fn load_provider_usage_available_agents(
 async fn load_filtered_provider_usage_breakdown(
     pool: &PgPool,
     provider: &str,
-    window_seconds: i32,
+    from_ms: i64,
+    to_ms: i64,
     agent: Option<&str>,
     model_family: Option<&str>,
 ) -> Result<ProviderUsageBreakdown> {
@@ -3368,8 +3429,9 @@ async fn load_filtered_provider_usage_breakdown(
          operation, protocol, client_protocol, upstream_protocol, translation_mode, \
          thinking_mode, reasoning_effort, session_attribution, traffic_source, schema_version, \
          {PROVIDER_USAGE_AGGREGATE_COLUMNS} FROM provider_usage_events WHERE provider = $1 \
-         AND occurred_at >= now() - make_interval(secs => $2::double precision) \
-         AND ($3::text IS NULL OR agent = $3) AND ($4::text IS NULL OR model_family = $4) \
+         AND occurred_at >= to_timestamp($2::double precision / 1000) \
+         AND occurred_at <= to_timestamp($3::double precision / 1000) \
+         AND ($4::text IS NULL OR agent = $4) AND ($5::text IS NULL OR model_family = $5) \
          GROUP BY agent, machine_id, model, resolved_model, model_revision, gateway_build, \
          model_family, request_role, operation, protocol, \
          client_protocol, upstream_protocol, translation_mode, thinking_mode, reasoning_effort, \
@@ -3377,7 +3439,8 @@ async fn load_filtered_provider_usage_breakdown(
     );
     let rows = sqlx::query(&query)
         .bind(provider)
-        .bind(window_seconds)
+        .bind(from_ms)
+        .bind(to_ms)
         .bind(agent)
         .bind(model_family)
         .fetch_all(pool)
@@ -3393,7 +3456,8 @@ async fn load_filtered_provider_usage_breakdown(
 async fn load_provider_usage_timeline(
     pool: &PgPool,
     provider: &str,
-    window_seconds: i32,
+    from_ms: i64,
+    to_ms: i64,
     bucket: &str,
     agent: Option<&str>,
     model_family: Option<&str>,
@@ -3406,13 +3470,15 @@ async fn load_provider_usage_timeline(
     let query = format!(
         "SELECT (extract(epoch FROM date_trunc('{truncation}', occurred_at)) * 1000)::bigint \
          AS start_ms, {PROVIDER_USAGE_AGGREGATE_COLUMNS} FROM provider_usage_events \
-         WHERE provider = $1 AND occurred_at >= now() - make_interval(secs => $2::double precision) \
-         AND ($3::text IS NULL OR agent = $3) AND ($4::text IS NULL OR model_family = $4) \
+         WHERE provider = $1 AND occurred_at >= to_timestamp($2::double precision / 1000) \
+         AND occurred_at <= to_timestamp($3::double precision / 1000) \
+         AND ($4::text IS NULL OR agent = $4) AND ($5::text IS NULL OR model_family = $5) \
          GROUP BY date_trunc('{truncation}', occurred_at) ORDER BY date_trunc('{truncation}', occurred_at)"
     );
     Ok(sqlx::query(&query)
         .bind(provider)
-        .bind(window_seconds)
+        .bind(from_ms)
+        .bind(to_ms)
         .bind(agent)
         .bind(model_family)
         .fetch_all(pool)
@@ -3437,10 +3503,12 @@ struct LowHitBreakdown {
         std::collections::BTreeMap<String, std::collections::BTreeMap<String, UsageAggregate>>,
 }
 
+#[allow(clippy::too_many_lines)] // SQL lineage classification is clearest as one bounded query
 async fn load_provider_usage_low_hit(
     pool: &PgPool,
     provider: &str,
-    window_seconds: i32,
+    from_ms: i64,
+    to_ms: i64,
     agent: Option<&str>,
     model_family: Option<&str>,
 ) -> Result<LowHitBreakdown> {
@@ -3463,8 +3531,10 @@ async fn load_provider_usage_low_hit(
              lag(cache_miss_tokens) OVER session_window AS previous_cache_miss_tokens, \
              lag(occurred_at) OVER session_window AS previous_occurred_at \
            FROM provider_usage_events events \
-           WHERE provider = $1 AND occurred_at >= now() - interval '30 days' \
-             AND ($3::text IS NULL OR agent = $3) \
+           WHERE provider = $1 AND occurred_at >= \
+             to_timestamp($2::double precision / 1000) - interval '6 hours' \
+             AND occurred_at <= to_timestamp($3::double precision / 1000) \
+             AND ($4::text IS NULL OR agent = $4) \
            WINDOW session_window AS ( \
              PARTITION BY machine_id, producer_id, account_fingerprint, agent, \
                coalesce(session_fingerprint, producer_id || ':' || sequence::text) \
@@ -3502,8 +3572,9 @@ async fn load_provider_usage_low_hit(
                  9 * (previous_cache_hit_tokens + previous_cache_miss_tokens) \
                THEN 'unexpected_exact_prefix_miss' \
              ELSE 'unexplained_low_hit' END AS cause \
-           FROM lineage WHERE occurred_at >= now() - make_interval(secs => $2::double precision) \
-             AND ($4::text IS NULL OR model_family = $4) \
+           FROM lineage WHERE occurred_at >= to_timestamp($2::double precision / 1000) \
+             AND occurred_at <= to_timestamp($3::double precision / 1000) \
+             AND ($5::text IS NULL OR model_family = $5) \
              AND cache_observation IN ('explicit', 'derived') \
              AND coalesce(input_tokens, 0) >= 8000 \
              AND cache_hit_tokens + cache_miss_tokens > 0 \
@@ -3515,7 +3586,8 @@ async fn load_provider_usage_low_hit(
     );
     let rows = sqlx::query(&query)
         .bind(provider)
-        .bind(window_seconds)
+        .bind(from_ms)
+        .bind(to_ms)
         .bind(agent)
         .bind(model_family)
         .fetch_all(pool)
@@ -3546,7 +3618,8 @@ async fn load_provider_usage_low_hit(
 async fn load_filtered_provider_usage_coverage(
     pool: &PgPool,
     provider: &str,
-    window_seconds: i32,
+    from_ms: i64,
+    to_ms: i64,
     agent: Option<&str>,
     model_family: Option<&str>,
 ) -> Result<Vec<serde_json::Value>> {
@@ -3554,17 +3627,18 @@ async fn load_filtered_provider_usage_coverage(
         "SELECT producers.machine_id, producers.agent, producers.last_sequence, \
          (extract(epoch FROM producers.last_received_at) * 1000)::bigint AS last_received_at_ms \
          FROM provider_usage_producers producers WHERE producers.provider = $1 \
-         AND producers.last_received_at >= now() - make_interval(secs => $2::double precision) \
-         AND ($3::text IS NULL OR producers.agent = $3) AND EXISTS ( \
+         AND ($4::text IS NULL OR producers.agent = $4) AND EXISTS ( \
            SELECT 1 FROM provider_usage_events events \
            WHERE events.machine_id = producers.machine_id \
              AND events.producer_id = producers.producer_id AND events.provider = $1 \
-             AND events.occurred_at >= now() - make_interval(secs => $2::double precision) \
-             AND ($4::text IS NULL OR events.model_family = $4) \
+             AND events.occurred_at >= to_timestamp($2::double precision / 1000) \
+             AND events.occurred_at <= to_timestamp($3::double precision / 1000) \
+             AND ($5::text IS NULL OR events.model_family = $5) \
          ) ORDER BY producers.machine_id, producers.agent",
     )
     .bind(provider)
-    .bind(window_seconds)
+    .bind(from_ms)
+    .bind(to_ms)
     .bind(agent)
     .bind(model_family)
     .fetch_all(pool)
@@ -3699,17 +3773,38 @@ impl Store {
     pub async fn provider_usage_activity(
         &self,
         provider: &str,
-        window_seconds: i32,
-        agent: Option<&str>,
-        model_family: Option<&str>,
+        from_ms: i64,
+        to_ms: i64,
+        agents: &[String],
+        model_families: &[String],
     ) -> Result<serde_json::Value> {
+        let window_ms = to_ms.saturating_sub(from_ms);
         if provider != "deepseek"
-            || !(3_600..=30 * 86_400).contains(&window_seconds)
-            || agent.is_some_and(|value| !matches!(value, "codex" | "claude"))
-            || model_family.is_some_and(|value| !matches!(value, "flash" | "pro"))
+            || !(60_000..=i64::from(30 * 86_400) * 1_000).contains(&window_ms)
+            || agents.len() > 2
+            || model_families.len() > 2
+            || agents
+                .iter()
+                .any(|value| !matches!(value.as_str(), "codex" | "claude"))
+            || model_families
+                .iter()
+                .any(|value| !matches!(value.as_str(), "flash" | "pro"))
+            || agents
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != agents.len()
+            || model_families
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != model_families.len()
         {
             anyhow::bail!("invalid provider usage activity filter");
         }
+        let agent = (agents.len() == 1).then(|| agents[0].as_str());
+        let model_family = (model_families.len() == 1).then(|| model_families[0].as_str());
+        let window_seconds = window_ms / 1_000;
         let bucket = if window_seconds <= 86_400 {
             "hour"
         } else {
@@ -3719,31 +3814,34 @@ impl Store {
             load_filtered_provider_usage_breakdown(
                 &self.pool,
                 provider,
-                window_seconds,
+                from_ms,
+                to_ms,
                 agent,
                 model_family,
             ),
             load_provider_usage_timeline(
                 &self.pool,
                 provider,
-                window_seconds,
+                from_ms,
+                to_ms,
                 bucket,
                 agent,
                 model_family,
             ),
-            load_provider_usage_low_hit(&self.pool, provider, window_seconds, agent, model_family,),
+            load_provider_usage_low_hit(&self.pool, provider, from_ms, to_ms, agent, model_family,),
             load_filtered_provider_usage_coverage(
                 &self.pool,
                 provider,
-                window_seconds,
+                from_ms,
+                to_ms,
                 agent,
                 model_family,
             ),
         )?;
         Ok(serde_json::json!({
             "source": "cowboy", "windowField": "occurred_at", "retentionDays": 30,
-            "windowSeconds": window_seconds, "bucket": bucket,
-            "filters": { "agent": agent.unwrap_or("all"), "modelFamily": model_family.unwrap_or("all") },
+            "windowSeconds": window_seconds, "fromMs": from_ms, "toMs": to_ms, "bucket": bucket,
+            "filters": { "agents": agents, "modelFamilies": model_families },
             "summary": breakdown.summary, "byAgent": breakdown.by_agent,
             "byAgentModel": breakdown.by_agent_model,
             "byAgentBillingModel": breakdown.by_agent_billing_model,
@@ -3795,6 +3893,8 @@ impl Store {
 struct UsageAggregate {
     requests: i64,
     errors: i64,
+    blocking_errors: i64,
+    transient_errors: i64,
     completed_requests: i64,
     completion_observations: i64,
     usage_observations: i64,
@@ -3826,6 +3926,8 @@ impl UsageAggregate {
         Self {
             requests: row.get("requests"),
             errors: row.get("errors"),
+            blocking_errors: row.get("blocking_errors"),
+            transient_errors: row.get("transient_errors"),
             completed_requests: row.get("completed_requests"),
             completion_observations: row.get("completion_observations"),
             usage_observations: row.get("usage_observations"),
@@ -3856,6 +3958,8 @@ impl UsageAggregate {
     fn add(&mut self, other: &Self) {
         self.requests = self.requests.saturating_add(other.requests);
         self.errors = self.errors.saturating_add(other.errors);
+        self.blocking_errors = self.blocking_errors.saturating_add(other.blocking_errors);
+        self.transient_errors = self.transient_errors.saturating_add(other.transient_errors);
         self.completed_requests = self
             .completed_requests
             .saturating_add(other.completed_requests);

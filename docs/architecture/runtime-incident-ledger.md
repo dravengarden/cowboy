@@ -24,6 +24,11 @@ database:
 List endpoints return only compact summaries and an opaque, stable log id.
 Details and structured evidence load only when a user expands one row. Raw
 Victoria evidence is not copied into PostgreSQL or eagerly shipped to clients.
+The Logs UI defaults to `critical` and `error`; `warning` and `info` remain
+available as explicit multi-select chips. Type, severity, lifecycle state, and
+runtime are independent multi-select dimensions. Relative `Last N` and exact
+start/end ranges share one bounded time-range contract; list pagination keeps
+the chosen upper boundary stable.
 
 The ledger does not enforce a duplicate retention period. An incident remains
 useful after raw evidence expires because its summary, classification, and
@@ -52,6 +57,16 @@ VictoriaLogs even when they recover before reaching the controller. The Logs UI
 must distinguish this raw-evidence coverage from the durable user-visible
 incident index rather than claiming that Cowboy can observe provider-internal
 retries that a native CLI never emits.
+
+Severity follows observed impact rather than the presence of an error-shaped
+payload. A session-ending lifecycle or failed turn is an error. Provider 400,
+401, 402, 403, and other non-retryable request rejections are errors (credential
+or balance failures are critical). Rate limits, client cancellation, upstream
+network failures, and provider 5xx responses are warnings until a session-level
+failure proves that the agent was interrupted. Tool-call failures inside an
+otherwise live turn are not provider errors and do not contribute to the
+DeepSeek blocking-error rate. The DeepSeek card exposes blocking and retryable
+counts separately while retaining all failed requests in its expanded detail.
 
 ## Cache diagnostics
 

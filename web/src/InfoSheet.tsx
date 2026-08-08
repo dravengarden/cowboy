@@ -13,7 +13,6 @@ import {
   DialogTitle,
   Divider,
   LinearProgress,
-  MenuItem,
   Stack,
   TextField,
   ToggleButton,
@@ -47,6 +46,20 @@ import {
   usageLimits,
   type UsageSnapshot,
 } from "./usageLimits";
+import {
+  ActiveFilterChips,
+  type FilterChipOption,
+  FilterButton,
+  MultiSelectChipGroup,
+  TimeRangeButton,
+} from "./ObservabilityFilters";
+import {
+  type ObservabilityTimeRange,
+  timeRangeLabel,
+  timeRangeQuery,
+  validTimeRange,
+} from "./observabilityTimeRange";
+import { Sheet } from "./Sheet";
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${String(n)} B`;
@@ -126,38 +139,71 @@ function agentName(agent: string): string {
   return agent;
 }
 
-const DEEPSEEK_WINDOWS = [
-  "1h",
-  "2h",
-  "4h",
-  "6h",
-  "8h",
-  "12h",
-  "24h",
-  "7d",
-  "14d",
-  "30d",
-] as const;
-const DEEPSEEK_MODELS = ["all", "flash", "pro"] as const;
-const DEEPSEEK_AGENTS = ["all", "codex", "claude"] as const;
+const DEEPSEEK_MODELS = ["flash", "pro"] as const;
+const DEEPSEEK_AGENTS = ["codex", "claude"] as const;
+type DeepSeekModelFilter = typeof DEEPSEEK_MODELS[number];
 type DeepSeekAgentFilter = typeof DEEPSEEK_AGENTS[number];
+const DEFAULT_DEEPSEEK_TIME_RANGE: ObservabilityTimeRange = {
+  mode: "relative",
+  amount: 24,
+  unit: "hour",
+};
 
-function storedDeepSeekFilter<T extends string>(
+const DEEPSEEK_MODEL_OPTIONS: readonly FilterChipOption<DeepSeekModelFilter>[] = [
+  { value: "flash", label: "Flash", color: "secondary" },
+  { value: "pro", label: "Pro", color: "primary" },
+];
+const DEEPSEEK_AGENT_OPTIONS: readonly FilterChipOption<DeepSeekAgentFilter>[] = [
+  { value: "claude", label: "Claude Code", color: "secondary" },
+  { value: "codex", label: "Codex", color: "info" },
+];
+
+function storedDeepSeekMultiFilter<T extends string>(
   key: string,
   values: readonly T[],
-  fallback: T,
-): T {
+): T[] {
   try {
     const stored = window.localStorage.getItem(key);
-    return values.includes(stored as T) ? stored as T : fallback;
+    if (!stored || stored === "all") return [];
+    const parsed: unknown = stored.startsWith("[") ? JSON.parse(stored) : [stored];
+    return Array.isArray(parsed)
+      ? [...new Set(parsed.filter((value): value is T => typeof value === "string" && values.includes(value as T)))]
+      : [];
   } catch {
-    return fallback;
+    return [];
   }
 }
 
-function persistDeepSeekFilter(key: string, value: string): void {
+function storedDeepSeekTimeRange(): ObservabilityTimeRange {
   try {
-    window.localStorage.setItem(key, value);
+    const stored = window.localStorage.getItem("cowboy.deepseek.window");
+    if (!stored) return { ...DEFAULT_DEEPSEEK_TIME_RANGE };
+    if (stored.startsWith("{")) {
+      const parsed = JSON.parse(stored) as Partial<ObservabilityTimeRange>;
+      if (parsed.mode === "relative" && typeof parsed.amount === "number" &&
+        (parsed.unit === "minute" || parsed.unit === "hour" || parsed.unit === "day")) {
+        const candidate = { mode: parsed.mode, amount: parsed.amount, unit: parsed.unit } as const;
+        if (validTimeRange(candidate, 30 * 86_400_000)) return candidate;
+      }
+      if (parsed.mode === "absolute" && typeof parsed.fromMs === "number" && typeof parsed.toMs === "number") {
+        const candidate = { mode: parsed.mode, fromMs: parsed.fromMs, toMs: parsed.toMs } as const;
+        if (validTimeRange(candidate, 30 * 86_400_000)) return candidate;
+      }
+    }
+    const match = /^(\d+)(h|d)$/.exec(stored);
+    if (match) {
+      const candidate = { mode: "relative", amount: Number(match[1]), unit: match[2] === "h" ? "hour" : "day" } as const;
+      if (validTimeRange(candidate, 30 * 86_400_000)) return candidate;
+    }
+  } catch {
+    // Fall through to the bounded default.
+  }
+  return { ...DEFAULT_DEEPSEEK_TIME_RANGE };
+}
+
+function persistDeepSeekFilter(key: string, value: unknown): void {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
   } catch {
     // Private or locked-down WebViews may deny storage; the live filter still works.
   }
@@ -192,16 +238,16 @@ function lowHitCauseName(cause: string): string {
 function DeepSeekDetails(
   { usage }: { usage: ProviderUsage },
 ): React.JSX.Element {
-  const availableAgentFilters: readonly DeepSeekAgentFilter[] = DEEPSEEK_AGENTS;
-  const [period, setPeriod] = useState(() =>
-    storedDeepSeekFilter("cowboy.deepseek.window", DEEPSEEK_WINDOWS, "24h")
+  const [timeRange, setTimeRange] = useState<ObservabilityTimeRange>(storedDeepSeekTimeRange);
+  const [modelFilters, setModelFilters] = useState<DeepSeekModelFilter[]>(() =>
+    storedDeepSeekMultiFilter("cowboy.deepseek.model", DEEPSEEK_MODELS)
   );
-  const [modelFilter, setModelFilter] = useState(() =>
-    storedDeepSeekFilter("cowboy.deepseek.model", DEEPSEEK_MODELS, "all")
+  const [agentFilters, setAgentFilters] = useState<DeepSeekAgentFilter[]>(() =>
+    storedDeepSeekMultiFilter("cowboy.deepseek.agent", DEEPSEEK_AGENTS)
   );
-  const [agentFilter, setAgentFilter] = useState<DeepSeekAgentFilter>(() =>
-    storedDeepSeekFilter("cowboy.deepseek.agent", availableAgentFilters, "all")
-  );
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [draftModels, setDraftModels] = useState<DeepSeekModelFilter[]>([]);
+  const [draftAgents, setDraftAgents] = useState<DeepSeekAgentFilter[]>([]);
   const [activity, setActivity] = useState<JsonRecord | undefined>();
   const [activityLoading, setActivityLoading] = useState(true);
   const [activityError, setActivityError] = useState<string | undefined>();
@@ -210,11 +256,10 @@ function DeepSeekDetails(
     setActivityLoading(true);
     setActivityError(undefined);
     setActivity(undefined);
-    const query = new URLSearchParams({
-      window: period,
-      model: modelFilter,
-      agent: agentFilter,
-    });
+    const range = timeRangeQuery(timeRange);
+    const query = new URLSearchParams(range);
+    if (modelFilters.length > 0) query.set("model", modelFilters.join(","));
+    if (agentFilters.length > 0) query.set("agent", agentFilters.join(","));
     void fetch(`/api/usage/deepseek/activity?${query.toString()}`, {
       signal: controller.signal,
     }).then(async (response) => {
@@ -229,18 +274,31 @@ function DeepSeekDetails(
       if (!controller.signal.aborted) setActivityLoading(false);
     });
     return (): void => controller.abort();
-  }, [period, modelFilter, agentFilter, usage.observed_at_ms]);
-  const updatePeriod = (value: typeof period): void => {
+  }, [timeRange, modelFilters, agentFilters, usage.observed_at_ms]);
+  const updateTimeRange = (value: ObservabilityTimeRange): void => {
     persistDeepSeekFilter("cowboy.deepseek.window", value);
-    setPeriod(value);
+    setTimeRange(value);
   };
-  const updateModel = (value: typeof modelFilter): void => {
+  const updateModels = (value: DeepSeekModelFilter[]): void => {
     persistDeepSeekFilter("cowboy.deepseek.model", value);
-    setModelFilter(value);
+    setModelFilters(value);
   };
-  const updateAgent = (value: typeof agentFilter): void => {
+  const updateAgents = (value: DeepSeekAgentFilter[]): void => {
     persistDeepSeekFilter("cowboy.deepseek.agent", value);
-    setAgentFilter(value);
+    setAgentFilters(value);
+  };
+  const openFilters = (): void => {
+    setDraftModels([...modelFilters]);
+    setDraftAgents([...agentFilters]);
+    setFilterOpen(true);
+  };
+  const resetFilters = (): void => {
+    updateTimeRange({ ...DEFAULT_DEEPSEEK_TIME_RANGE });
+    updateModels([]);
+    updateAgents([]);
+    setDraftModels([]);
+    setDraftAgents([]);
+    setFilterOpen(false);
   };
   const accountViews = Array.isArray(usage.account?.accounts)
     ? usage.account.accounts.map(record).filter((
@@ -282,7 +340,7 @@ function DeepSeekDetails(
   const availableAgents = deepseekAvailableAgents(usage.activity);
   const agentLanes = deepseekVisibleAgents(
     availableAgents,
-    agentFilter,
+    agentFilters,
     byAgent ? Object.keys(byAgent) : [],
   ).map((agent) => {
     const totals = record(byAgent?.[agent]);
@@ -305,9 +363,11 @@ function DeepSeekDetails(
     : [];
   const requests = num(summary?.requests);
   const errors = num(summary?.errors);
+  const blockingErrors = num(summary?.blockingErrors);
+  const transientErrors = num(summary?.transientErrors);
   const cache = deepseekCacheStats(summary);
-  const errorRate = requests !== undefined && requests > 0
-    ? (errors ?? 0) * 100 / requests
+  const blockingErrorRate = requests !== undefined && requests > 0
+    ? (blockingErrors ?? 0) * 100 / requests
     : undefined;
   const telemetryError = activityError ?? str(activity?.telemetryError);
   const lowHit = record(activity?.lowHit);
@@ -367,49 +427,65 @@ function DeepSeekDetails(
           {String(accountErrors.length)} DeepSeek account lane{accountErrors.length === 1 ? "" : "s"} could not refresh; other available balances are still shown.
         </Typography>
       )}
-      <Box
-        sx={{
-          display: "grid",
-          gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-          gap: 0.75,
-        }}
+      <Stack spacing={0.75}>
+        <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
+          <TimeRangeButton
+            value={timeRange}
+            onChange={updateTimeRange}
+            defaultValue={DEFAULT_DEEPSEEK_TIME_RANGE}
+            maxDurationMs={30 * 86_400_000}
+          />
+          <FilterButton count={modelFilters.length + agentFilters.length} onClick={openFilters} />
+        </Stack>
+        <ActiveFilterChips
+          items={[
+            ...modelFilters.map((value) => ({
+              key: `model:${value}`,
+              label: DEEPSEEK_MODEL_OPTIONS.find((option) => option.value === value)?.label ?? value,
+              color: DEEPSEEK_MODEL_OPTIONS.find((option) => option.value === value)?.color,
+              onDelete: () => updateModels(modelFilters.filter((item) => item !== value)),
+            })),
+            ...agentFilters.map((value) => ({
+              key: `agent:${value}`,
+              label: DEEPSEEK_AGENT_OPTIONS.find((option) => option.value === value)?.label ?? value,
+              color: DEEPSEEK_AGENT_OPTIONS.find((option) => option.value === value)?.color,
+              onDelete: () => updateAgents(agentFilters.filter((item) => item !== value)),
+            })),
+          ]}
+        />
+      </Stack>
+      <Sheet
+        open={filterOpen}
+        onClose={() => setFilterOpen(false)}
+        title="Filter DeepSeek usage"
+        desktopMaxWidth={520}
+        mobileDismiss="none"
+        floatingActions={false}
       >
-        <TextField
-          select
-          size="small"
-          label="Window"
-          value={period}
-          onChange={(event) => updatePeriod(event.target.value as typeof period)}
-        >
-          {DEEPSEEK_WINDOWS.map((value) => (
-            <MenuItem key={value} value={value}>{value}</MenuItem>
-          ))}
-        </TextField>
-        <TextField
-          select
-          size="small"
-          label="Model"
-          value={modelFilter}
-          onChange={(event) => updateModel(event.target.value as typeof modelFilter)}
-        >
-          <MenuItem value="all">All</MenuItem>
-          <MenuItem value="flash">Flash</MenuItem>
-          <MenuItem value="pro">Pro</MenuItem>
-        </TextField>
-        <TextField
-          select
-          size="small"
-          label="Runtime"
-          value={agentFilter}
-          onChange={(event) => updateAgent(event.target.value as typeof agentFilter)}
-        >
-          {availableAgentFilters.map((agent) => (
-            <MenuItem key={agent} value={agent}>
-              {agent === "all" ? "All" : agentName(agent)}
-            </MenuItem>
-          ))}
-        </TextField>
-      </Box>
+        <Stack spacing={2} sx={{ pt: 0.5, pb: 1 }}>
+          <MultiSelectChipGroup label="Model" options={DEEPSEEK_MODEL_OPTIONS} value={draftModels} onChange={setDraftModels} />
+          <MultiSelectChipGroup label="Runtime" options={DEEPSEEK_AGENT_OPTIONS} value={draftAgents} onChange={setDraftAgents} />
+          <Stack direction="row" spacing={1} justifyContent="space-between">
+            <Stack direction="row" spacing={0.5}>
+              <Button onClick={() => { setDraftModels([]); setDraftAgents([]); }}>Clear selections</Button>
+              <Button onClick={resetFilters}>Reset</Button>
+            </Stack>
+            <Stack direction="row" spacing={1}>
+              <Button onClick={() => setFilterOpen(false)}>Cancel</Button>
+              <Button
+                variant="contained"
+                onClick={() => {
+                  updateModels(draftModels);
+                  updateAgents(draftAgents);
+                  setFilterOpen(false);
+                }}
+              >
+                Apply
+              </Button>
+            </Stack>
+          </Stack>
+        </Stack>
+      </Sheet>
       {activityLoading && <LinearProgress aria-label="Loading DeepSeek activity" />}
       {requests !== undefined && requests > 0
         ? (
@@ -432,21 +508,23 @@ function DeepSeekDetails(
             >
               <Box>
                 <Typography variant="caption" color="text.secondary">
-                  {period} requests
+                  {timeRangeLabel(timeRange)} requests
                 </Typography>
                 <Typography variant="subtitle2" fontWeight={700}>
                   {requests.toLocaleString()}
                 </Typography>
               </Box>
               <Box>
-                <Typography variant="caption" color="text.secondary">
-                  Error rate
+                <Tooltip title="Non-retryable provider request, authentication, balance, or parameter failures. Retryable network, rate-limit, cancellation, and 5xx attempts are shown separately; tool-call failures are excluded.">
+                  <Typography variant="caption" color="text.secondary" sx={{ cursor: "help", textDecoration: "underline dotted" }}>
+                    Blocking errors
+                  </Typography>
+                </Tooltip>
+                <Typography variant="subtitle2" fontWeight={700} color={(blockingErrors ?? 0) > 0 ? "error.main" : undefined}>
+                  {formatTokens(blockingErrors)}
                 </Typography>
-                <Typography variant="subtitle2" fontWeight={700} color={(errors ?? 0) > 0 ? "error.main" : undefined}>
-                  {percentLabel(errorRate)}
-                </Typography>
                 <Typography variant="caption" color="text.secondary">
-                  {formatTokens(errors)} errors
+                  {percentLabel(blockingErrorRate)} of requests · {formatTokens(transientErrors)} retryable
                 </Typography>
               </Box>
               <Box>
@@ -592,7 +670,9 @@ function DeepSeekDetails(
                     k="Reasoning tokens"
                     v={formatTokens(num(summary?.reasoningTokens))}
                   />
-                  <InfoRow k="Errors" v={(errors ?? 0).toLocaleString()} />
+                  <InfoRow k="Blocking provider errors" v={(blockingErrors ?? 0).toLocaleString()} />
+                  <InfoRow k="Retryable provider failures" v={(transientErrors ?? 0).toLocaleString()} />
+                  <InfoRow k="All failed requests" v={(errors ?? 0).toLocaleString()} />
                   {byAgent && Object.entries(byAgent).map(([agent, value]) => {
                     const totals = record(value);
                     const cache = deepseekCacheStats(totals);
