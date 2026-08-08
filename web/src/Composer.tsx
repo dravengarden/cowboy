@@ -4418,42 +4418,57 @@ function PendingRow({
   });
   const forcePushConfirmation = kind === "queued"
     ? (
-      <Popover
+      <Popper
         open={confirmAnchor !== null}
         anchorEl={confirmAnchor}
-        onClose={(): void => setConfirmAnchor(null)}
-        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
-        transformOrigin={{ vertical: "top", horizontal: "right" }}
+        placement="bottom-end"
+        modifiers={[
+          { name: "offset", options: { offset: [0, 8] } },
+          { name: "flip", options: { fallbackPlacements: ["top-end", "left"] } },
+          { name: "preventOverflow", options: { padding: 8 } },
+        ]}
+        sx={{ zIndex: (theme) => theme.zIndex.modal }}
       >
-        <Box sx={{ p: 1.5, maxWidth: 240 }}>
-          <Typography variant="body2" sx={{ mb: 1 }}>
-            Stop the current turn and send this message now? The agent's
-            in-progress work is discarded.
-          </Typography>
-          <Stack direction="row" spacing={1} justifyContent="flex-end">
-            <Button
-              size="small"
-              color="inherit"
-              onClick={(): void => setConfirmAnchor(null)}
-              sx={{ textTransform: "none" }}
-            >
-              Cancel
-              <Kbd keys="Esc" />
-            </Button>
-            <NetworkButton
-              size="small"
-              variant="contained"
-              color="warning"
-              startIcon={<Bolt />}
-              networkAction={confirmForcePush}
-              sx={{ textTransform: "none" }}
-            >
-              Force push
-              <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-            </NetworkButton>
-          </Stack>
-        </Box>
-      </Popover>
+        <ClickAwayListener onClickAway={(): void => setConfirmAnchor(null)}>
+          <Paper
+            role="dialog"
+            aria-modal="false"
+            aria-label="Force push confirmation"
+            sx={{ maxWidth: 240, borderRadius: 2, boxShadow: 8 }}
+          >
+            <Box sx={{ p: 1.5 }}>
+              <Typography variant="body2" sx={{ mb: 1 }}>
+                Stop the current turn and send this message now? The agent's
+                in-progress work is discarded.
+              </Typography>
+              <Stack direction="row" spacing={1} justifyContent="flex-end">
+                <Button
+                  size="small"
+                  color="inherit"
+                  onPointerDown={(event): void => event.preventDefault()}
+                  onClick={(): void => setConfirmAnchor(null)}
+                  sx={{ textTransform: "none" }}
+                >
+                  Cancel
+                  <Kbd keys="Esc" />
+                </Button>
+                <NetworkButton
+                  size="small"
+                  variant="contained"
+                  color="warning"
+                  startIcon={<Bolt />}
+                  onPointerDown={(event): void => event.preventDefault()}
+                  networkAction={confirmForcePush}
+                  sx={{ textTransform: "none" }}
+                >
+                  Force push
+                  <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+                </NetworkButton>
+              </Stack>
+            </Box>
+          </Paper>
+        </ClickAwayListener>
+      </Popper>
     )
     : null;
   // Mobile Queue/Draft edits are continuously buffered in this row. Dismissing
