@@ -19,6 +19,7 @@
 // it works from any device with no server-side upload endpoint or scratch dir.
 
 import type { ContentBlock } from "./protocol";
+import { newUuid } from "./uuid";
 
 /// A staged attachment: the ACP block to send plus the metadata the composer
 /// needs to render a removable preview chip / thumbnail before sending.
@@ -83,9 +84,9 @@ export function nextAttachmentId(): string {
   // reload minted `att1` — colliding with a restored `att1` and overwriting its
   // bytes in the inline-image registry (which is keyed by id): the first image
   // silently became the newly-pasted one ("末尾粘贴图片覆盖第一张"). A UUID can never
-  // collide with a restored id. (crypto.randomUUID is available in every secure
-  // context cowboy runs in — https + the WKWebView shell + localhost dev.)
-  return `att-${globalThis.crypto.randomUUID()}`;
+  // collide with a restored id. The helper also covers older WKWebView and HTTP
+  // development origins where randomUUID is unavailable.
+  return `att-${newUuid()}`;
 }
 
 /** Create an immediately renderable image placeholder during the native paste

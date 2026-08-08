@@ -143,6 +143,11 @@ const DEEPSEEK_MODELS = ["flash", "pro"] as const;
 const DEEPSEEK_AGENTS = ["codex", "claude"] as const;
 type DeepSeekModelFilter = typeof DEEPSEEK_MODELS[number];
 type DeepSeekAgentFilter = typeof DEEPSEEK_AGENTS[number];
+const DEFAULT_DEEPSEEK_TIME_RANGE: ObservabilityTimeRange = {
+  mode: "relative",
+  amount: 24,
+  unit: "hour",
+};
 
 const DEEPSEEK_MODEL_OPTIONS: readonly FilterChipOption<DeepSeekModelFilter>[] = [
   { value: "flash", label: "Flash", color: "secondary" },
@@ -172,7 +177,7 @@ function storedDeepSeekMultiFilter<T extends string>(
 function storedDeepSeekTimeRange(): ObservabilityTimeRange {
   try {
     const stored = window.localStorage.getItem("cowboy.deepseek.window");
-    if (!stored) return { mode: "relative", amount: 24, unit: "hour" };
+    if (!stored) return { ...DEFAULT_DEEPSEEK_TIME_RANGE };
     if (stored.startsWith("{")) {
       const parsed = JSON.parse(stored) as Partial<ObservabilityTimeRange>;
       if (parsed.mode === "relative" && typeof parsed.amount === "number" &&
@@ -193,7 +198,7 @@ function storedDeepSeekTimeRange(): ObservabilityTimeRange {
   } catch {
     // Fall through to the bounded default.
   }
-  return { mode: "relative", amount: 24, unit: "hour" };
+  return { ...DEFAULT_DEEPSEEK_TIME_RANGE };
 }
 
 function persistDeepSeekFilter(key: string, value: unknown): void {
@@ -286,6 +291,14 @@ function DeepSeekDetails(
     setDraftModels([...modelFilters]);
     setDraftAgents([...agentFilters]);
     setFilterOpen(true);
+  };
+  const resetFilters = (): void => {
+    updateTimeRange({ ...DEFAULT_DEEPSEEK_TIME_RANGE });
+    updateModels([]);
+    updateAgents([]);
+    setDraftModels([]);
+    setDraftAgents([]);
+    setFilterOpen(false);
   };
   const accountViews = Array.isArray(usage.account?.accounts)
     ? usage.account.accounts.map(record).filter((
@@ -416,7 +429,12 @@ function DeepSeekDetails(
       )}
       <Stack spacing={0.75}>
         <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
-          <TimeRangeButton value={timeRange} onChange={updateTimeRange} maxDurationMs={30 * 86_400_000} />
+          <TimeRangeButton
+            value={timeRange}
+            onChange={updateTimeRange}
+            defaultValue={DEFAULT_DEEPSEEK_TIME_RANGE}
+            maxDurationMs={30 * 86_400_000}
+          />
           <FilterButton count={modelFilters.length + agentFilters.length} onClick={openFilters} />
         </Stack>
         <ActiveFilterChips
@@ -436,12 +454,22 @@ function DeepSeekDetails(
           ]}
         />
       </Stack>
-      <Sheet open={filterOpen} onClose={() => setFilterOpen(false)} title="Filter DeepSeek usage" desktopMaxWidth={520}>
+      <Sheet
+        open={filterOpen}
+        onClose={() => setFilterOpen(false)}
+        title="Filter DeepSeek usage"
+        desktopMaxWidth={520}
+        mobileDismiss="none"
+        floatingActions={false}
+      >
         <Stack spacing={2} sx={{ pt: 0.5, pb: 1 }}>
           <MultiSelectChipGroup label="Model" options={DEEPSEEK_MODEL_OPTIONS} value={draftModels} onChange={setDraftModels} />
           <MultiSelectChipGroup label="Runtime" options={DEEPSEEK_AGENT_OPTIONS} value={draftAgents} onChange={setDraftAgents} />
           <Stack direction="row" spacing={1} justifyContent="space-between">
-            <Button onClick={() => { setDraftModels([]); setDraftAgents([]); }}>Clear</Button>
+            <Stack direction="row" spacing={0.5}>
+              <Button onClick={() => { setDraftModels([]); setDraftAgents([]); }}>Clear selections</Button>
+              <Button onClick={resetFilters}>Reset</Button>
+            </Stack>
             <Stack direction="row" spacing={1}>
               <Button onClick={() => setFilterOpen(false)}>Cancel</Button>
               <Button

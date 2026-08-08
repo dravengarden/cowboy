@@ -57,6 +57,7 @@ import {
 import type { SessionMeta } from "../../protocol";
 import { sessionProjectLabel } from "../../sessionProject";
 import { useSurfaceProfile } from "../../surface/SurfaceProfile";
+import { newUuid } from "../../uuid";
 import {
   closeCodeBuffer,
   CodeApiError,
@@ -1262,7 +1263,7 @@ export function ReviewApp({
     }
     const sessionId = workspace.sessionId;
     const path = leasedPath;
-    const leaseId = crypto.randomUUID();
+    const leaseId = newUuid();
     let released = false;
     let opened = false;
     let openAttempt = 0;

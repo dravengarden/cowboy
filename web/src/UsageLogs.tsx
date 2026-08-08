@@ -22,6 +22,9 @@ import {
 import { copyText } from "./clipboard";
 import {
   DEFAULT_DIAGNOSTIC_LOG_FILTERS,
+  cloneDiagnosticLogFilters,
+  loadDiagnosticLogFilters,
+  persistDiagnosticLogFilters,
   type DiagnosticLogAgent,
   type DiagnosticLogDetail,
   type DiagnosticLogFilters,
@@ -190,8 +193,8 @@ function LogDetail({
 }
 
 export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Element {
-  const [filters, setFilters] = useState<DiagnosticLogFilters>(DEFAULT_DIAGNOSTIC_LOG_FILTERS);
-  const [draftFilters, setDraftFilters] = useState<DiagnosticLogFilters>(DEFAULT_DIAGNOSTIC_LOG_FILTERS);
+  const [filters, setFilters] = useState<DiagnosticLogFilters>(() => loadDiagnosticLogFilters());
+  const [draftFilters, setDraftFilters] = useState<DiagnosticLogFilters>(() => loadDiagnosticLogFilters());
   const [filterOpen, setFilterOpen] = useState(false);
   const [logs, setLogs] = useState<DiagnosticLogSummary[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -202,6 +205,10 @@ export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Ele
   const [details, setDetails] = useState<Record<string, { loading: boolean; value?: DiagnosticLogDetail; error?: string }>>({});
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const rangeAnchorMs = useRef(Date.now());
+
+  useEffect(() => {
+    persistDiagnosticLogFilters(filters);
+  }, [filters]);
 
   const loadPage = useCallback(async (
     cursor: string | undefined,
@@ -249,14 +256,14 @@ export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Ele
   }, [loadPage]);
 
   const openFilters = (): void => {
-    setDraftFilters({
-      ...filters,
-      kinds: [...filters.kinds],
-      severities: [...filters.severities],
-      states: [...filters.states],
-      agents: [...filters.agents],
-    });
+    setDraftFilters(cloneDiagnosticLogFilters(filters));
     setFilterOpen(true);
+  };
+  const resetFilters = (): void => {
+    const next = cloneDiagnosticLogFilters(DEFAULT_DIAGNOSTIC_LOG_FILTERS);
+    setFilters(next);
+    setDraftFilters(cloneDiagnosticLogFilters(next));
+    setFilterOpen(false);
   };
   const activeFilterCount = filters.kinds.length + filters.severities.length +
     filters.states.length + filters.agents.length;
@@ -314,6 +321,7 @@ export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Ele
           <TimeRangeButton
             value={filters.timeRange}
             onChange={(timeRange) => setFilters((current) => ({ ...current, timeRange }))}
+            defaultValue={DEFAULT_DIAGNOSTIC_LOG_FILTERS.timeRange}
             maxDurationMs={365 * 86_400_000}
           />
           <FilterButton count={activeFilterCount} onClick={openFilters} />
@@ -347,7 +355,14 @@ export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Ele
           ]}
         />
       </Stack>
-      <Sheet open={filterOpen} onClose={() => setFilterOpen(false)} title="Filter diagnostic logs" desktopMaxWidth={560}>
+      <Sheet
+        open={filterOpen}
+        onClose={() => setFilterOpen(false)}
+        title="Filter diagnostic logs"
+        desktopMaxWidth={560}
+        mobileDismiss="none"
+        floatingActions={false}
+      >
         <Stack spacing={2} sx={{ pt: 0.5, pb: 1 }}>
           <MultiSelectChipGroup label="Type" options={KIND_OPTIONS} value={draftFilters.kinds} onChange={(kinds) => setDraftFilters((current) => ({ ...current, kinds }))} />
           <MultiSelectChipGroup label="Severity" options={SEVERITY_OPTIONS} value={draftFilters.severities} onChange={(severities) => setDraftFilters((current) => ({ ...current, severities }))} />
@@ -357,7 +372,10 @@ export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Ele
           <MultiSelectChipGroup label="State" options={STATE_OPTIONS} value={draftFilters.states} onChange={(states) => setDraftFilters((current) => ({ ...current, states }))} />
           <MultiSelectChipGroup label="Runtime" options={AGENT_OPTIONS} value={draftFilters.agents} onChange={(agents) => setDraftFilters((current) => ({ ...current, agents }))} />
           <Stack direction="row" spacing={1} justifyContent="space-between">
-            <Button onClick={() => setDraftFilters((current) => ({ ...current, kinds: [], severities: [], states: [], agents: [] }))}>Clear</Button>
+            <Stack direction="row" spacing={0.5}>
+              <Button onClick={() => setDraftFilters((current) => ({ ...current, kinds: [], severities: [], states: [], agents: [] }))}>Clear selections</Button>
+              <Button onClick={resetFilters}>Reset</Button>
+            </Stack>
             <Stack direction="row" spacing={1}>
               <Button onClick={() => setFilterOpen(false)}>Cancel</Button>
               <Button variant="contained" onClick={() => { setFilters(draftFilters); setFilterOpen(false); }}>Apply</Button>

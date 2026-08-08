@@ -3,6 +3,7 @@ import {
   DEFAULT_DIAGNOSTIC_LOG_FILTERS,
   diagnosticKindLabel,
   diagnosticLogUrl,
+  parseDiagnosticLogFilters,
 } from "./diagnosticLogs";
 
 Deno.test("diagnostic logs use bounded server-side filters and cursor pagination", () => {
@@ -29,4 +30,30 @@ Deno.test("diagnostic log kinds have concise user-facing labels", () => {
   assertEquals(diagnosticKindLabel("provider_error"), "Provider");
   assertEquals(diagnosticKindLabel("cache_anomaly"), "Cache");
   assertEquals(diagnosticKindLabel("automation"), "Automation");
+});
+
+Deno.test("diagnostic log filters round-trip persisted multi-select and reject unknown values", () => {
+  assertEquals(parseDiagnosticLogFilters({
+    kinds: ["provider_error", "not-a-kind", "provider_error"],
+    severities: ["warning"],
+    states: ["failed"],
+    agents: ["claude"],
+    timeRange: { mode: "relative", amount: 2, unit: "hour" },
+  }), {
+    kinds: ["provider_error"],
+    severities: ["warning"],
+    states: ["failed"],
+    agents: ["claude"],
+    timeRange: { mode: "relative", amount: 2, unit: "hour" },
+  });
+});
+
+Deno.test("malformed persisted diagnostic filters return safe defaults", () => {
+  assertEquals(parseDiagnosticLogFilters({
+    kinds: ["provider_error"],
+    timeRange: { mode: "absolute", fromMs: 9, toMs: 2 },
+  }), {
+    ...DEFAULT_DIAGNOSTIC_LOG_FILTERS,
+    kinds: ["provider_error"],
+  });
 });

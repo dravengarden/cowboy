@@ -129,10 +129,12 @@ function sameRange(a: ObservabilityTimeRange, b: ObservabilityTimeRange): boolea
 export function TimeRangeButton({
   value,
   onChange,
+  defaultValue,
   maxDurationMs,
 }: {
   value: ObservabilityTimeRange;
   onChange: (value: ObservabilityTimeRange) => void;
+  defaultValue: ObservabilityTimeRange;
   maxDurationMs: number;
 }): React.JSX.Element {
   const [open, setOpen] = useState(false);
@@ -165,6 +167,18 @@ export function TimeRangeButton({
   }, [amount, fromValue, mode, toValue, unit]);
   const valid = validTimeRange(candidate, maxDurationMs);
   const tooLong = timeRangeDuration(candidate) > maxDurationMs;
+  const resetDraft = (): void => {
+    setMode(defaultValue.mode);
+    if (defaultValue.mode === "relative") {
+      setAmount(defaultValue.amount);
+      setUnit(defaultValue.unit);
+      setFromValue("");
+      setToValue("");
+    } else {
+      setFromValue(toDtLocal(defaultValue.fromMs));
+      setToValue(toDtLocal(defaultValue.toMs));
+    }
+  };
 
   return (
     <>
@@ -180,7 +194,14 @@ export function TimeRangeButton({
           {timeRangeLabel(value)}
         </Box>
       </Button>
-      <Sheet open={open} onClose={() => setOpen(false)} title="Time range" desktopMaxWidth={520}>
+      <Sheet
+        open={open}
+        onClose={() => setOpen(false)}
+        title="Time range"
+        desktopMaxWidth={520}
+        mobileDismiss="none"
+        floatingActions={false}
+      >
         <Stack spacing={2} sx={{ pt: 0.5, pb: 1 }}>
           <Stack spacing={0.75}>
             <Typography variant="caption" color="text.secondary" fontWeight={700}>Quick ranges</Typography>
@@ -261,18 +282,21 @@ export function TimeRangeButton({
               {tooLong ? `Range must be ${String(Math.round(maxDurationMs / 86_400_000))} days or less.` : "Choose a valid range ending no later than now."}
             </Typography>
           )}
-          <Stack direction="row" spacing={1} justifyContent="flex-end">
-            <Button onClick={() => setOpen(false)}>Cancel</Button>
-            <Button
-              variant="contained"
-              disabled={!valid}
-              onClick={() => {
-                onChange(candidate);
-                setOpen(false);
-              }}
-            >
-              Apply
-            </Button>
+          <Stack direction="row" spacing={1} justifyContent="space-between">
+            <Button onClick={resetDraft}>Reset</Button>
+            <Stack direction="row" spacing={1}>
+              <Button onClick={() => setOpen(false)}>Cancel</Button>
+              <Button
+                variant="contained"
+                disabled={!valid}
+                onClick={() => {
+                  onChange(candidate);
+                  setOpen(false);
+                }}
+              >
+                Apply
+              </Button>
+            </Stack>
           </Stack>
         </Stack>
       </Sheet>
