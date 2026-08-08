@@ -61,6 +61,14 @@ const CODEX_RUNTIME_ARGS: &[&str] = &[
     "model_auto_compact_token_limit_scope=\"body_after_prefix\"",
 ];
 
+// DeepSeek's Anthropic-compatible 1M lane counts the requested completion
+// against the same context budget as the prompt. Its official agent guidance
+// therefore caps prompts at 840K and output at 128K. Claude Code otherwise
+// waits until roughly the end of the advertised 1M window before compacting,
+// after DeepSeek has already rejected the request.
+const CLAUDE_DEEPSEEK_AUTO_COMPACT_WINDOW: &str = "840000";
+const CLAUDE_DEEPSEEK_MAX_OUTPUT_TOKENS: &str = "128000";
+
 // Note: whether an agent can resume via `session/load` (design §7) is read at
 // runtime from its `initialize` response (`agent_capabilities.load_session` —
 // see `crate::acp::agent_main`), which is authoritative, so it isn't duplicated
@@ -158,6 +166,14 @@ fn builtin_with_env_and_shell(
             "CLAUDE_CODE_SUBAGENT_MODEL".to_owned(),
             "deepseek-v4-flash".to_owned(),
         ),
+        (
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW".to_owned(),
+            CLAUDE_DEEPSEEK_AUTO_COMPACT_WINDOW.to_owned(),
+        ),
+        (
+            "CLAUDE_CODE_MAX_OUTPUT_TOKENS".to_owned(),
+            CLAUDE_DEEPSEEK_MAX_OUTPUT_TOKENS.to_owned(),
+        ),
         // DeepSeek's strongest reasoning posture is the default for this
         // isolated lane. The ACP effort picker remains available, so users
         // can still choose `default` or `high` for a particular session.
@@ -203,6 +219,8 @@ fn builtin_with_env_and_shell(
     claude_deepseek.remove_env = vec![
         "API_TIMEOUT_MS",
         "COWBOY_ACP_CLAUDE_DEEPSEEK_SHELL",
+        "DISABLE_AUTO_COMPACT",
+        "DISABLE_COMPACT",
         "DISABLE_PROMPT_CACHING",
         "DISABLE_PROMPT_CACHING_HAIKU",
         "DISABLE_PROMPT_CACHING_OPUS",
@@ -512,38 +530,38 @@ fn shared_codex_config_tables(ordinary_home: &Path) -> String {
     copied
 }
 
-/// Write the provider-owned `settings.json` that enables the shared plugins.
+/// Write the provider-owned `settings.json` with its context safety invariant
+/// and the shared plugin enablement keys.
 ///
 /// Claude Code keeps plugin enablement in `settings.json`, so linking
-/// `plugins/` alone leaves every plugin installed but unloaded. Only the
-/// enablement keys are copied; the file is regenerated on each launch so the
-/// two runtimes cannot drift apart.
-fn write_claude_shared_settings(isolated: &Path, ordinary: &Path) -> std::io::Result<()> {
+/// `plugins/` alone leaves every plugin installed but unloaded. Auto-compaction
+/// is provider-owned: disabling it lets DeepSeek reject a long thread before
+/// Claude's default 1M threshold. The file is regenerated on each launch so
+/// ordinary Claude settings cannot weaken the isolated lane.
+fn write_claude_deepseek_settings(isolated: &Path, ordinary: &Path) -> std::io::Result<()> {
     use std::io::Write as _;
     use std::os::unix::fs::OpenOptionsExt as _;
 
-    let Ok(existing) = std::fs::read_to_string(ordinary.join("settings.json")) else {
-        return Ok(());
-    };
-    let Ok(serde_json::Value::Object(settings)) =
-        serde_json::from_str::<serde_json::Value>(&existing)
-    else {
-        return Ok(());
-    };
-    let shared: serde_json::Map<_, _> = CLAUDE_SHARED_SETTINGS_KEYS
-        .iter()
-        .filter_map(|key| {
+    let mut provider_settings = serde_json::Map::new();
+    provider_settings.insert(
+        "autoCompactEnabled".to_owned(),
+        serde_json::Value::Bool(true),
+    );
+    if let Ok(existing) = std::fs::read_to_string(ordinary.join("settings.json"))
+        && let Ok(serde_json::Value::Object(settings)) =
+            serde_json::from_str::<serde_json::Value>(&existing)
+    {
+        provider_settings.extend(CLAUDE_SHARED_SETTINGS_KEYS.iter().filter_map(|key| {
             settings
                 .get(*key)
                 .map(|value| ((*key).to_owned(), value.clone()))
-        })
-        .collect();
-    if shared.is_empty() {
-        return Ok(());
+        }));
     }
-    let rendered = serde_json::to_string_pretty(&serde_json::Value::Object(shared))
+    let rendered = serde_json::to_string_pretty(&serde_json::Value::Object(provider_settings))
         .map_err(std::io::Error::other)?;
-    let temporary = isolated.join(format!(".settings.json.{}", std::process::id()));
+    static NEXT_SETTINGS_WRITE: AtomicU64 = AtomicU64::new(1);
+    let sequence = NEXT_SETTINGS_WRITE.fetch_add(1, Ordering::Relaxed);
+    let temporary = isolated.join(format!(".settings.json.{}.{sequence}", std::process::id()));
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .truncate(true)
@@ -608,7 +626,7 @@ fn prepare_claude_deepseek_config_dir_at(user_home: &Path) -> std::io::Result<Pa
     for entry in CLAUDE_SHARED_ENTRIES {
         link_shared_entry(&target, &ordinary, entry)?;
     }
-    write_claude_shared_settings(&target, &ordinary)?;
+    write_claude_deepseek_settings(&target, &ordinary)?;
     Ok(target)
 }
 
@@ -710,6 +728,24 @@ mod tests {
         let claude = lookup_with(&[], "claude-code").expect("claude-code registered");
         assert_eq!(claude.command, "npx");
         assert_eq!(claude.args, ["-y", "@agentclientprotocol/claude-agent-acp"]);
+        let claude_deepseek =
+            lookup_with(&[], "claude-deepseek").expect("claude-deepseek registered");
+        assert_eq!(
+            claude_deepseek
+                .env
+                .get("CLAUDE_CODE_AUTO_COMPACT_WINDOW")
+                .map(String::as_str),
+            Some("840000")
+        );
+        assert_eq!(
+            claude_deepseek
+                .env
+                .get("CLAUDE_CODE_MAX_OUTPUT_TOKENS")
+                .map(String::as_str),
+            Some("128000")
+        );
+        assert!(claude_deepseek.remove_env.contains(&"DISABLE_AUTO_COMPACT"));
+        assert!(claude_deepseek.remove_env.contains(&"DISABLE_COMPACT"));
         let codex = lookup_with(&[], "codex").expect("codex registered");
         assert_eq!(codex.command, "npx");
         assert_eq!(
@@ -1139,13 +1175,21 @@ mod tests {
             std::fs::metadata(&isolated).unwrap().permissions().mode() & 0o777,
             0o700
         );
-        // Settings and credentials are never linked; only the allowlist is.
-        for leaked in ["settings.json", ".credentials.json", "projects", "history"] {
+        // Credentials and mutable state are never linked; provider-owned
+        // settings contain only the enforced safety key and allowlisted shared
+        // entries.
+        for leaked in [".credentials.json", "projects", "history"] {
             assert!(
                 !isolated.join(leaked).exists(),
                 "isolated Claude config must not expose {leaked}"
             );
         }
+        let settings: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(isolated.join("settings.json"))
+                .expect("read provider settings"),
+        )
+        .expect("parse provider settings");
+        assert_eq!(settings, serde_json::json!({"autoCompactEnabled": true}));
         assert_eq!(
             std::fs::read_to_string(standard.join("settings.json")).unwrap(),
             r#"{"model":"claude-secret-sentinel","mcpServers":{"private":{}}}"#
@@ -1194,19 +1238,26 @@ mod tests {
 
         // Claude keeps plugin enablement in settings.json, so linking plugins/
         // alone leaves every plugin installed but unloaded.
-        let settings =
-            std::fs::read_to_string(isolated.join("settings.json")).expect("read shared settings");
-        assert!(settings.contains("columbus-harness@columbus"));
-        assert!(settings.contains("extraKnownMarketplaces"));
-        assert!(!settings.contains("claude-secret-sentinel"));
-        assert!(!settings.contains("mcpServers"));
-        assert!(!settings.contains("permissions"));
+        let settings: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(isolated.join("settings.json")).expect("read shared settings"),
+        )
+        .expect("parse shared settings");
+        assert_eq!(settings["autoCompactEnabled"], true);
+        assert!(
+            settings["enabledPlugins"]
+                .get("columbus-harness@columbus")
+                .is_some()
+        );
+        assert!(settings.get("extraKnownMarketplaces").is_some());
+        assert!(settings.get("model").is_none());
+        assert!(settings.get("mcpServers").is_none());
+        assert!(settings.get("permissions").is_none());
 
         std::fs::remove_dir_all(&root).expect("remove isolated test home");
     }
 
     #[test]
-    fn claude_deepseek_settings_are_absent_without_shared_keys() {
+    fn claude_deepseek_settings_keep_context_safety_without_shared_keys() {
         let root = isolation_test_root("cowboy-claude-deepseek-no-settings");
         let standard = root.join(".claude");
         std::fs::create_dir_all(&standard).expect("create standard Claude config");
@@ -1216,8 +1267,12 @@ mod tests {
         let isolated = super::prepare_claude_deepseek_config_dir_at(&root)
             .expect("prepare isolated Claude config");
 
-        // Nothing to share means no provider-owned file is invented.
-        assert!(!isolated.join("settings.json").exists());
+        let settings: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(isolated.join("settings.json"))
+                .expect("read provider settings"),
+        )
+        .expect("parse provider settings");
+        assert_eq!(settings, serde_json::json!({"autoCompactEnabled": true}));
 
         std::fs::remove_dir_all(&root).expect("remove isolated test home");
     }
