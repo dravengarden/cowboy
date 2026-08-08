@@ -530,6 +530,12 @@ fn default_config_preferences(provider: &str) -> serde_json::Value {
             "model": "gpt-5.6-luna",
             "reasoning_effort": "max",
         })
+    } else if provider == "claude-deepseek" {
+        serde_json::json!({
+            "model": "deepseek-v4-flash[1m]",
+            "effort": "max",
+            "agent": "default",
+        })
     } else {
         serde_json::json!({})
     }
@@ -4879,6 +4885,28 @@ mod config_preference_tests {
             Some(serde_json::json!({
                 "model": "gpt-5.6-luna",
                 "reasoning_effort": "max",
+            }))
+        );
+    }
+
+    #[test]
+    fn new_claude_deepseek_sessions_start_with_flash_max_default_agent_preferences() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "claude-deepseek-session".to_owned(),
+            "claude-deepseek".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            SessionOrigin::Web,
+            false,
+        );
+
+        assert_eq!(
+            hub.config_preferences("claude-deepseek-session"),
+            Some(serde_json::json!({
+                "model": "deepseek-v4-flash[1m]",
+                "effort": "max",
+                "agent": "default",
             }))
         );
     }
