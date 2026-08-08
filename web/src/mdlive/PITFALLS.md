@@ -1124,7 +1124,9 @@ Desktop Vim + IME checks:
     looked like editor text colliding with the conversation even though DOM
     geometry was correct. Keep the focused background, border, radius, blur, and
     shadow in `mobileFocusedComposerSurfaceSx` and apply that primitive to both
-    the primary input and pending-row editor. This is a paint-only alignment: do
+    the primary input and pending-row editor. Its base is deliberately near-opaque
+    (light 0.94, dark 0.96) so dense transcript glyphs cannot remain readable
+    through the writing surface. This is a paint-only alignment: do
     not add focus handlers, editor remounts, controlled values, or custom touch
     handling.
 
@@ -1136,3 +1138,14 @@ Desktop Vim + IME checks:
     keeps tooltips; touch controls remain named by their `aria-label`. Do not
     solve this with pointer/touch interception around the composer because that
     would compete with UIKit's native selection and paste sequence.
+
+54. **Mobile Queue/Draft inline edits expose context actions in the first
+    accessory track.** Keep `Expand editor` beside Attach so the action lives in
+    the same keyboard-adjacent surface shown by the screenshot, not as an
+    absolute button over the writing canvas. Draft editing exposes Send and
+    Schedule; Queue editing exposes confirmation-gated Force push. Persist the
+    latest editor buffer before any of these operations, close only after an
+    authoritative delivery acknowledgement, and retain the editor on rejection.
+    Scheduling may release the editor before opening its sheet because it commits
+    the durable draft first. Keep every control's pointer-down focus protection;
+    do not add custom touch, selection, or IME handling.

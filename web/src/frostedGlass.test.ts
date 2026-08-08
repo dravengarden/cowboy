@@ -137,6 +137,12 @@ Deno.test("transient activity is transcript-owned with a zero-jump pill handoff"
 Deno.test("focused mobile composer owns a real frosted material", () => {
   assertEquals(
     composerSurfaceSource.includes(
+      'theme.palette.mode === "dark" ? 0.96 : 0.94',
+    ),
+    true,
+  );
+  assertEquals(
+    composerSurfaceSource.includes(
       'backdropFilter: "blur(24px) saturate(140%)"',
     ),
     true,
