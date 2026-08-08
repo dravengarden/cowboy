@@ -11,9 +11,18 @@ remote default branch and creates a worktree on the task-owned
 Repeating preparation for the same session reuses that path without discarding
 edits; if the directory disappeared, the task branch restores it. Legacy
 detached worktrees are anchored on that branch only when doing so cannot
-overwrite a divergent branch. Cowboy does not automatically prune worktrees:
-unpublished changes and resumable session state must survive client,
-controller, and Machine restarts.
+overwrite a divergent branch. Cowboy never automatically removes the worktree
+or its task branch: unpublished changes and resumable session state must survive
+client, controller, and Machine restarts. Permanent session deletion does
+attempt to reclaim directories named `target` in production only after the
+session's transient user-systemd worker unit has stopped and been collected; a
+broker-socket disconnect alone is not sufficient. Failed checks retry while the
+Machine remains running; an unfinished in-memory retry is not replayed after a
+Machine restart, so that target remains for a later inventory cleanup. Direct
+development mode preserves the artifacts because it has no durable process-exit
+proof. Cleanup is further confined to the session's Machine-owned worktree and
+requires Cargo's cache markers. Source files and unmarked same-name directories
+are preserved.
 
 ## Bootstrap
 

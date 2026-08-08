@@ -74,21 +74,34 @@ test:
 
 check: toolchain-check fmt lint dependencies typecheck feature-check test build
 
+# Run the complete quality gate without growing workspace incremental caches.
+# sccache stays opt-in until cross-worktree Rust cache hits are proven locally.
+check-compact:
+    CARGO_INCREMENTAL=0 just check
+
 test-fast:
     cargo nextest run --all-features --locked
 
-# Opt in only for clean rebuilds that demonstrate useful cache reuse.
+# Opt into the shared compiler cache for clean or batch builds. Interactive
+# Cargo commands intentionally keep rustc incremental state for the edit loop.
 build-cached:
     RUSTC_WRAPPER=sccache CARGO_INCREMENTAL=0 cargo build --all-targets --all-features --locked
+    cd zed-adapter && RUSTC_WRAPPER=sccache CARGO_INCREMENTAL=0 cargo build --all-targets --locked
 
 # Show sccache cache stats.
 cache-stats:
     sccache --show-stats
 
-# Preview or remove the oldest compiler artifacts without discarding the
-# incremental state that serves the active edit loop.
-cache-prune-dry max-size="20GB":
-    cargo sweep --dry-run --maxsize {{max-size}} .
+# Whole-target cleanup is reserved for an inactive checkout. The independent
+# Zed adapter workspace is always inspected and cleaned explicitly.
+cache-usage:
+    @if test -d target; then du -sh target; else echo "target: absent"; fi
+    @if test -d zed-adapter/target; then du -sh zed-adapter/target; else echo "zed-adapter/target: absent"; fi
 
-cache-prune max-size="20GB":
-    cargo sweep --maxsize {{max-size}} .
+cache-clean-dry:
+    cargo clean --dry-run
+    cargo clean --dry-run --manifest-path zed-adapter/Cargo.toml
+
+cache-clean:
+    cargo clean
+    cargo clean --manifest-path zed-adapter/Cargo.toml

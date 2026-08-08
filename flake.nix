@@ -435,7 +435,6 @@
           cargo-nextest
           cargo-deny
           cargo-machete
-          cargo-sweep
           just
           jq
           go
