@@ -213,6 +213,7 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
     let worker_command =
         active_acp.map_or_else(|| args.worker_command.clone(), |(_, executable)| executable);
     let worker_environment = managed_provider_environment(&components, &worker_command)?;
+    let worktree_root = args.state_dir.join("worktrees");
     let broker = MachineBrokerArgs {
         socket: args.socket,
         compatibility_sockets: args.compatibility_sockets,
@@ -223,6 +224,7 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
             CliSpawnMode::SystemdUser => SpawnMode::SystemdUser,
         },
         worker_environment,
+        worktree_root: worktree_root.clone(),
         worker_ready_timeout: std::time::Duration::from_secs(args.worker_ready_timeout_seconds),
     };
     let controller_url = args
@@ -251,7 +253,6 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
     }
     let code_adapter_socket = args.code_adapter_socket.clone();
     let zed_adapter_socket = args.zed_adapter_socket.clone();
-    let worktree_root = args.state_dir.join("worktrees");
     let provider_usage = crate::provider_usage_spool::ProviderUsageSpool::open(
         &args.state_dir.join("provider-usage.sqlite3"),
     )?;

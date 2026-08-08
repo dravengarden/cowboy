@@ -8,9 +8,12 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
 ## Toolchain
 
 - Run Rust, Deno, build, lint, and test commands from the repository root in
-  the pinned shell, for example `nix develop -c just check`. Do not use host
-  `cargo` or `deno` as a preliminary check; a missing tool or stale Rustup
-  linker wrapper is an environment failure, not a product-code failure.
+  the pinned shell, for example `nix develop -c just check-compact`. Ordinary
+  interactive Cargo commands retain incremental state; the complete gate avoids
+  growing another incremental generation. Keep sccache opt-in until its
+  cross-worktree Rust hit rate is proven on the active host. Do not use host
+  `cargo` or `deno` as a preliminary check; a missing tool or stale Rustup linker
+  wrapper is an environment failure, not a product-code failure.
 
 ## Deploy (read before deploying)
 - Cowboy application releases use project-owned Nix artifacts rather than a

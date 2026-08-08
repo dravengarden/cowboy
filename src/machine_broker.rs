@@ -11,11 +11,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
+use std::sync::atomic::AtomicBool;
+
 use anyhow::{Context as _, Result};
 use parking_lot::Mutex;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::process::Command;
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex as AsyncMutex, mpsc};
 
 use crate::runtime_wire::{
     CoreCommand, Frame, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION, PeerRole, RuntimeEvent,
@@ -47,6 +50,9 @@ pub struct MachineBrokerArgs {
     /// Environment owned by the Machine component resolver and injected into
     /// every worker.
     pub worker_environment: BTreeMap<String, String>,
+    /// Root containing Machine-owned session worktrees. Permanent session
+    /// deletion may reclaim marked Cargo targets below this exact boundary.
+    pub worktree_root: PathBuf,
     pub worker_ready_timeout: Duration,
 }
 
@@ -75,6 +81,12 @@ struct WorkerRegistration {
     tx: mpsc::UnboundedSender<Frame>,
 }
 
+#[derive(Clone)]
+struct DeletedWorkspace {
+    cwd: String,
+    command_id: String,
+}
+
 struct Broker {
     args: MachineBrokerArgs,
     controller: Mutex<Option<Controller>>,
@@ -85,6 +97,14 @@ struct Broker {
     launching: Mutex<HashSet<String>>,
     awaiting_reconnect: Mutex<HashSet<String>>,
     cancelled_sessions: Mutex<HashSet<String>>,
+    /// Session workspaces awaiting generated-artifact cleanup after their
+    /// process owner has been stopped and collected. Source worktrees and
+    /// branches are retained.
+    deleted_session_workspaces: Mutex<HashMap<String, DeletedWorkspace>>,
+    /// Serializes reset/relaunch with generated-artifact deletion per session.
+    /// Cleanup may hold a gate across filesystem I/O so a replacement cannot
+    /// start midway without blocking unrelated sessions.
+    deleted_session_cleanup_gates: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
     /// In-flight explicit context resets, keyed by their controller command id.
     /// A permanent stop removes the token so a late reset task cannot revive a
     /// session that was genuinely deleted while the old worker was stopping.
@@ -101,6 +121,8 @@ struct Broker {
     desired_generation: Mutex<String>,
     previous_generation: Mutex<Option<String>>,
     generation_commands: Mutex<HashMap<String, PathBuf>>,
+    #[cfg(test)]
+    deleted_session_owner_collected: AtomicBool,
     next_connection: AtomicU64,
     next_lease: AtomicU64,
 }
@@ -123,6 +145,8 @@ impl Broker {
             launching: Mutex::new(HashSet::new()),
             awaiting_reconnect: Mutex::new(HashSet::new()),
             cancelled_sessions: Mutex::new(HashSet::new()),
+            deleted_session_workspaces: Mutex::new(HashMap::new()),
+            deleted_session_cleanup_gates: Mutex::new(HashMap::new()),
             resetting_sessions: Mutex::new(HashMap::new()),
             replacing: Mutex::new(HashMap::new()),
             fallback_pins: Mutex::new(HashMap::new()),
@@ -131,6 +155,8 @@ impl Broker {
             healthy_generations: Mutex::new(HashSet::new()),
             previous_generation: Mutex::new(None),
             generation_commands: Mutex::new(generation_commands),
+            #[cfg(test)]
+            deleted_session_owner_collected: AtomicBool::new(false),
             next_connection: AtomicU64::new(1),
             next_lease: AtomicU64::new(1),
         }
@@ -468,6 +494,15 @@ impl Broker {
             connection_id,
             tx,
         } = registration;
+        if self.cancelled_sessions.lock().contains(&session_id) {
+            let _ = tx.send(Frame::WorkerCommand {
+                session_id: session_id.clone(),
+                command: WorkerCommand::Stop {
+                    command_id: format!("deleted-session-stop-{session_id}"),
+                },
+            });
+            anyhow::bail!("session {session_id} was deleted");
+        }
         self.awaiting_reconnect.lock().remove(&session_id);
         let desired = self.desired_generation.lock().clone();
         let fallback_provider = self
@@ -612,6 +647,138 @@ impl Broker {
         });
     }
 
+    fn deleted_session_cleanup_gate(&self, session_id: &str) -> Arc<AsyncMutex<()>> {
+        self.deleted_session_cleanup_gates
+            .lock()
+            .entry(session_id.to_owned())
+            .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+            .clone()
+    }
+
+    fn has_deleted_session_owner_exit_proof(&self) -> bool {
+        #[cfg(test)]
+        if self.deleted_session_owner_collected.load(Ordering::Acquire) {
+            return true;
+        }
+        false
+    }
+
+    async fn confirm_deleted_session_owner_exit(&self, session_id: &str) -> Result<()> {
+        if self.has_deleted_session_owner_exit_proof() {
+            return Ok(());
+        }
+        if self.args.spawn_mode != SpawnMode::SystemdUser {
+            anyhow::bail!("direct mode has no process-exit proof");
+        }
+        prepare_transient_unit(&worker_unit_name(session_id)).await
+    }
+
+    fn cleanup_deleted_session(self: &Arc<Self>, session_id: &str, command_id: &str) {
+        let broker = Arc::clone(self);
+        let session_id = session_id.to_owned();
+        let command_id = command_id.to_owned();
+        tokio::spawn(async move {
+            let mut retry_delay = Duration::from_secs(1);
+            loop {
+                let gate = broker.deleted_session_cleanup_gate(&session_id);
+                let _guard = gate.lock().await;
+                let outcome: Result<Option<Vec<PathBuf>>> = async {
+                    let Some(workspace) = broker
+                        .deleted_session_workspaces
+                        .lock()
+                        .get(&session_id)
+                        .cloned()
+                    else {
+                        return Ok(None);
+                    };
+                    if workspace.command_id != command_id {
+                        return Ok(None);
+                    }
+                    if broker.args.spawn_mode != SpawnMode::SystemdUser
+                        && !broker.has_deleted_session_owner_exit_proof()
+                    {
+                        broker.deleted_session_workspaces.lock().remove(&session_id);
+                        tracing::warn!(
+                            session = %session_id,
+                            "preserving deleted session build artifacts because direct mode has no process-exit proof"
+                        );
+                        return Ok(None);
+                    }
+                    if !broker.cancelled_sessions.lock().contains(&session_id)
+                        || broker.sessions.lock().contains_key(&session_id)
+                    {
+                        broker.deleted_session_workspaces.lock().remove(&session_id);
+                        tracing::debug!(
+                            session = %session_id,
+                            "cancelled session became live; preserving build artifacts"
+                        );
+                        return Ok(None);
+                    }
+
+                    let deadline =
+                        tokio::time::Instant::now() + broker.args.worker_ready_timeout;
+                    while broker.launching.lock().contains(&session_id) {
+                        if tokio::time::Instant::now() >= deadline {
+                            anyhow::bail!("worker launch did not settle before cleanup");
+                        }
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+
+                    // Production workers are transient user-systemd units. The
+                    // unit disappearing is the owner-exit proof; a broker socket
+                    // disconnect alone is deliberately insufficient.
+                    broker
+                        .confirm_deleted_session_owner_exit(&session_id)
+                        .await?;
+                    broker.workers.lock().remove(&session_id);
+                    let removed = crate::session_workspace::cleanup_build_artifacts(
+                        &broker.args.worktree_root,
+                        &session_id,
+                        Path::new(&workspace.cwd),
+                    )
+                    .await?;
+                    if broker
+                        .deleted_session_workspaces
+                        .lock()
+                        .get(&session_id)
+                        .is_some_and(|current| current.command_id == command_id)
+                    {
+                        broker.deleted_session_workspaces.lock().remove(&session_id);
+                    }
+                    Ok(Some(removed))
+                }
+                .await;
+
+                match outcome {
+                    Ok(None) => return,
+                    Ok(Some(removed)) if removed.is_empty() => {
+                        tracing::debug!(session = %session_id, "deleted session had no marked Cargo targets");
+                        return;
+                    }
+                    Ok(Some(removed)) => {
+                        tracing::info!(
+                            session = %session_id,
+                            targets = removed.len(),
+                            "reclaimed deleted session Cargo targets"
+                        );
+                        return;
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            session = %session_id,
+                            %error,
+                            delay_seconds = retry_delay.as_secs(),
+                            "deleted session build-artifact cleanup failed closed; retrying"
+                        );
+                    }
+                }
+                drop(_guard);
+                tokio::time::sleep(retry_delay).await;
+                retry_delay = (retry_delay * 2).min(Duration::from_secs(60));
+            }
+        });
+    }
+
     async fn ensure_session(self: &Arc<Self>, session: StartSession) {
         let adopt_only = session.adopt_only;
         let mut session = session;
@@ -686,6 +853,9 @@ impl Broker {
     async fn reset_session(self: &Arc<Self>, mut session: StartSession, command_id: String) {
         let session_id = session.session_id.clone();
         session.adopt_only = false;
+        let cleanup_gate = self.deleted_session_cleanup_gate(&session_id);
+        let _cleanup_guard = cleanup_gate.lock().await;
+        self.deleted_session_workspaces.lock().remove(&session_id);
         self.resetting_sessions
             .lock()
             .insert(session_id.clone(), command_id.clone());
@@ -1378,7 +1548,7 @@ async fn prepare_transient_unit(unit: &str) -> Result<()> {
         let fields = String::from_utf8_lossy(&output.stdout);
         let load_state = systemd_show_value(&fields, "LoadState").unwrap_or_default();
         let active_state = systemd_show_value(&fields, "ActiveState").unwrap_or_default();
-        if transient_unit_collected(output.status.success(), &load_state) {
+        if transient_unit_collected(&load_state) {
             return Ok(());
         }
         // Reaching spawn_worker means this broker has no attached peer and no
@@ -1408,7 +1578,7 @@ async fn prepare_transient_unit(unit: &str) -> Result<()> {
                     })?;
                 let fields = String::from_utf8_lossy(&output.stdout);
                 let load_state = systemd_show_value(&fields, "LoadState").unwrap_or_default();
-                if transient_unit_collected(output.status.success(), &load_state) {
+                if transient_unit_collected(&load_state) {
                     return Ok(());
                 }
                 anyhow::bail!("systemctl stop {unit} exited {status} (LoadState={load_state})");
@@ -1425,8 +1595,11 @@ async fn prepare_transient_unit(unit: &str) -> Result<()> {
     }
 }
 
-fn transient_unit_collected(status_success: bool, load_state: &str) -> bool {
-    !status_success || load_state.is_empty() || load_state == "not-found"
+fn transient_unit_collected(load_state: &str) -> bool {
+    // A failed `systemctl show` may mean the user bus itself is unavailable,
+    // not that this unit has been collected. Deletion callers need an
+    // affirmative systemd state instead of inferring owner exit from an error.
+    load_state == "not-found"
 }
 
 fn systemd_show_value(output: &str, key: &str) -> Option<String> {
@@ -1849,6 +2022,17 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
             session_id,
             command_id,
         } => {
+            // Serialize permanent deletion with reset and asynchronous target
+            // cleanup. Whichever controller command acquires this fence last
+            // owns the session lifecycle decision.
+            let cleanup_gate = broker.deleted_session_cleanup_gate(&session_id);
+            let _cleanup_guard = cleanup_gate.lock().await;
+            let cleanup_command_id = command_id.clone();
+            let cleanup_cwd = broker
+                .sessions
+                .lock()
+                .get(&session_id)
+                .map(|session| session.cwd.clone());
             broker.resetting_sessions.lock().remove(&session_id);
             let mut cancelled = broker.cancelled_sessions.lock();
             cancelled.insert(session_id.clone());
@@ -1859,16 +2043,26 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
             broker.pending_commands.lock().remove(&session_id);
             broker.unpin_fallback(&session_id);
             drop(cancelled);
+            if let Some(cwd) = cleanup_cwd {
+                broker.deleted_session_workspaces.lock().insert(
+                    session_id.clone(),
+                    DeletedWorkspace {
+                        cwd,
+                        command_id: cleanup_command_id.clone(),
+                    },
+                );
+            }
             if broker.workers.lock().contains_key(&session_id) {
                 broker.route_worker(&session_id, WorkerCommand::Stop { command_id });
             } else {
                 broker.send_controller(Frame::CommandAck {
-                    session_id,
+                    session_id: session_id.clone(),
                     command_id,
                     accepted: true,
                     reason: None,
                 });
             }
+            broker.cleanup_deleted_session(&session_id, &cleanup_command_id);
         }
         CoreCommand::SetDesiredGeneration {
             generation,
@@ -1984,10 +2178,10 @@ mod tests {
     }
 
     #[test]
-    fn collected_unit_wins_the_show_stop_race() {
-        assert!(transient_unit_collected(false, ""));
-        assert!(transient_unit_collected(true, "not-found"));
-        assert!(!transient_unit_collected(true, "loaded"));
+    fn collection_requires_authoritative_not_found_state() {
+        assert!(!transient_unit_collected(""));
+        assert!(transient_unit_collected("not-found"));
+        assert!(!transient_unit_collected("loaded"));
     }
 
     #[test]
@@ -2089,6 +2283,7 @@ mod tests {
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
         });
         let (tx, mut rx) = mpsc::unbounded_channel();
@@ -2182,6 +2377,7 @@ mod tests {
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
         });
         broker.sessions.lock().insert(
@@ -2250,6 +2446,7 @@ mod tests {
             desired_generation: String::new(),
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
         });
         let (tx, _rx) = mpsc::unbounded_channel();
@@ -2308,6 +2505,7 @@ mod tests {
             desired_generation: String::new(),
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
         });
         let (tx, mut rx) = mpsc::unbounded_channel();
@@ -2347,6 +2545,7 @@ mod tests {
             desired_generation: "gen-2".to_owned(),
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
         });
         for (session_id, provider) in [("sess-codex", "codex"), ("sess-claude", "claude-code")] {
@@ -2466,6 +2665,7 @@ mod tests {
             desired_generation: "gen-2".to_owned(),
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
         });
         broker.sessions.lock().insert(
@@ -2546,6 +2746,7 @@ mod tests {
             desired_generation: "gen-2".to_owned(),
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
         });
         broker
@@ -2576,6 +2777,7 @@ mod tests {
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
         });
         let launch = StartSession {
@@ -2623,6 +2825,7 @@ mod tests {
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
         }));
         broker
@@ -2656,12 +2859,20 @@ mod tests {
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(100),
         }));
         broker
             .cancelled_sessions
             .lock()
             .insert("sess-reset".to_owned());
+        broker.deleted_session_workspaces.lock().insert(
+            "sess-reset".to_owned(),
+            DeletedWorkspace {
+                cwd: "/work".to_owned(),
+                command_id: "delete-before-reset".to_owned(),
+            },
+        );
         broker.sessions.lock().insert(
             "sess-reset".to_owned(),
             StartSession {
@@ -2690,6 +2901,295 @@ mod tests {
         assert!(!broker.cancelled_sessions.lock().contains("sess-reset"));
         assert!(broker.sessions.lock().contains_key("sess-reset"));
         assert!(!broker.resetting_sessions.lock().contains_key("sess-reset"));
+        assert!(broker.deleted_session_workspaces.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn reset_cancels_cleanup_before_the_old_worker_disconnects() {
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-reset-cleanup-race-{}-{}",
+            std::process::id(),
+            broker_nonce()
+        ));
+        let worktree_root = root.join("worktrees");
+        let workspace = worktree_root.join("sess-reset-race");
+        let target = workspace.join("target");
+        std::fs::create_dir_all(target.join("debug/deps")).expect("target");
+        std::fs::write(target.join(".rustc_info.json"), "{}\n").expect("rustc marker");
+        std::fs::write(
+            target.join("CACHEDIR.TAG"),
+            "Signature: 8a477f597d28d172789f06886806bc55\n",
+        )
+        .expect("cache tag");
+        let broker = Arc::new(Broker::new(MachineBrokerArgs {
+            socket: root.join("unused.sock"),
+            compatibility_sockets: Vec::new(),
+            worker_command: PathBuf::from("/bin/false"),
+            desired_generation: "gen-1".to_owned(),
+            spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
+            worktree_root: worktree_root.clone(),
+            worker_ready_timeout: Duration::from_millis(100),
+        }));
+        broker.sessions.lock().insert(
+            "sess-reset-race".to_owned(),
+            StartSession {
+                session_id: "sess-reset-race".to_owned(),
+                provider: "codex".to_owned(),
+                cwd: workspace.display().to_string(),
+                agent_session_id: None,
+                system: false,
+                context_window: None,
+                auto_compact_token_limit: None,
+                generation: "gen-1".to_owned(),
+                fallback_for: None,
+                adopt_only: false,
+            },
+        );
+        let (worker_tx, _worker_rx) = mpsc::unbounded_channel();
+        broker
+            .register_worker(WorkerRegistration {
+                session_id: "sess-reset-race".to_owned(),
+                epoch: "epoch-reset-race".to_owned(),
+                generation: "gen-1".to_owned(),
+                executable: Some("/bin/false".to_owned()),
+                fallback_for: None,
+                connection_id: 11,
+                tx: worker_tx,
+            })
+            .expect("register old worker");
+        let old_peer = broker
+            .workers
+            .lock()
+            .get("sess-reset-race")
+            .expect("old worker")
+            .clone();
+        broker
+            .cancelled_sessions
+            .lock()
+            .insert("sess-reset-race".to_owned());
+        broker.deleted_session_workspaces.lock().insert(
+            "sess-reset-race".to_owned(),
+            DeletedWorkspace {
+                cwd: workspace.display().to_string(),
+                command_id: "delete-before-reset".to_owned(),
+            },
+        );
+
+        handle_core_command(
+            &broker,
+            CoreCommand::StopSession {
+                session_id: "sess-reset-race".to_owned(),
+                command_id: "reset-race".to_owned(),
+            },
+        )
+        .await;
+        broker
+            .worker_disconnected("sess-reset-race".to_owned(), old_peer)
+            .await;
+
+        assert!(broker.deleted_session_workspaces.lock().is_empty());
+        assert!(target.is_dir());
+        assert!(broker.sessions.lock().contains_key("sess-reset-race"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cancelled_worker_reconnect_is_rejected_and_stopped() {
+        let broker = Broker::new(MachineBrokerArgs {
+            socket: PathBuf::from("/tmp/unused.sock"),
+            compatibility_sockets: Vec::new(),
+            worker_command: PathBuf::from("/bin/false"),
+            desired_generation: "gen-1".to_owned(),
+            spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worker_ready_timeout: Duration::from_millis(100),
+        });
+        broker
+            .cancelled_sessions
+            .lock()
+            .insert("sess-deleted-reconnect".to_owned());
+        let (worker_tx, mut worker_rx) = mpsc::unbounded_channel();
+
+        let error = broker
+            .register_worker(WorkerRegistration {
+                session_id: "sess-deleted-reconnect".to_owned(),
+                epoch: "epoch-deleted-reconnect".to_owned(),
+                generation: "gen-1".to_owned(),
+                executable: Some("/bin/false".to_owned()),
+                fallback_for: None,
+                connection_id: 9,
+                tx: worker_tx,
+            })
+            .expect_err("deleted worker must not reconnect");
+
+        assert!(error.to_string().contains("was deleted"));
+        assert!(broker.workers.lock().is_empty());
+        assert!(matches!(
+            worker_rx.try_recv(),
+            Ok(Frame::WorkerCommand {
+                command: WorkerCommand::Stop { .. },
+                ..
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn confirmed_process_exit_reclaims_targets_and_preserves_the_worktree() {
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-deleted-session-cleanup-{}-{}",
+            std::process::id(),
+            broker_nonce()
+        ));
+        let worktree_root = root.join("worktrees");
+        let workspace = worktree_root.join("sess-delete");
+        let target = workspace.join("target");
+        std::fs::create_dir_all(target.join("debug/deps")).expect("target");
+        std::fs::write(workspace.join("source.rs"), "fn main() {}\n").expect("source");
+        std::fs::write(target.join(".rustc_info.json"), "{}\n").expect("rustc marker");
+        std::fs::write(
+            target.join("CACHEDIR.TAG"),
+            "Signature: 8a477f597d28d172789f06886806bc55\n",
+        )
+        .expect("cache tag");
+        std::fs::write(target.join("debug/deps/libtest.rlib"), "generated\n").expect("artifact");
+        let broker = Arc::new(Broker::new(MachineBrokerArgs {
+            socket: root.join("unused.sock"),
+            compatibility_sockets: Vec::new(),
+            worker_command: PathBuf::from("/bin/false"),
+            desired_generation: "gen-1".to_owned(),
+            spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
+            worktree_root: worktree_root.clone(),
+            worker_ready_timeout: Duration::from_secs(1),
+        }));
+        broker
+            .deleted_session_owner_collected
+            .store(true, Ordering::Release);
+        broker.sessions.lock().insert(
+            "sess-delete".to_owned(),
+            StartSession {
+                session_id: "sess-delete".to_owned(),
+                provider: "codex".to_owned(),
+                cwd: workspace.display().to_string(),
+                agent_session_id: None,
+                system: false,
+                context_window: None,
+                auto_compact_token_limit: None,
+                generation: "gen-1".to_owned(),
+                fallback_for: None,
+                adopt_only: false,
+            },
+        );
+
+        handle_core_command(
+            &broker,
+            CoreCommand::StopSession {
+                session_id: "sess-delete".to_owned(),
+                command_id: "stop-delete".to_owned(),
+            },
+        )
+        .await;
+        for _ in 0..100 {
+            if !target.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        assert!(broker.deleted_session_workspaces.lock().is_empty());
+        assert!(!target.exists());
+        assert!(workspace.join("source.rs").is_file());
+        assert!(workspace.is_dir());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn broker_disconnect_without_process_exit_proof_preserves_targets() {
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-connected-session-cleanup-{}-{}",
+            std::process::id(),
+            broker_nonce()
+        ));
+        let worktree_root = root.join("worktrees");
+        let workspace = worktree_root.join("sess-connected-delete");
+        let target = workspace.join("target");
+        std::fs::create_dir_all(target.join("debug/deps")).expect("target");
+        std::fs::write(workspace.join("source.rs"), "fn main() {}\n").expect("source");
+        std::fs::write(target.join(".rustc_info.json"), "{}\n").expect("rustc marker");
+        std::fs::write(
+            target.join("CACHEDIR.TAG"),
+            "Signature: 8a477f597d28d172789f06886806bc55\n",
+        )
+        .expect("cache tag");
+        std::fs::write(target.join("debug/deps/libtest.rlib"), "generated\n").expect("artifact");
+        let broker = Arc::new(Broker::new(MachineBrokerArgs {
+            socket: root.join("unused.sock"),
+            compatibility_sockets: Vec::new(),
+            worker_command: PathBuf::from("/bin/false"),
+            desired_generation: "gen-1".to_owned(),
+            spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
+            worktree_root: worktree_root.clone(),
+            worker_ready_timeout: Duration::from_secs(1),
+        }));
+        broker.sessions.lock().insert(
+            "sess-connected-delete".to_owned(),
+            StartSession {
+                session_id: "sess-connected-delete".to_owned(),
+                provider: "codex".to_owned(),
+                cwd: workspace.display().to_string(),
+                agent_session_id: None,
+                system: false,
+                context_window: None,
+                auto_compact_token_limit: None,
+                generation: "gen-1".to_owned(),
+                fallback_for: None,
+                adopt_only: false,
+            },
+        );
+        let (worker_tx, _worker_rx) = mpsc::unbounded_channel();
+        broker
+            .register_worker(WorkerRegistration {
+                session_id: "sess-connected-delete".to_owned(),
+                epoch: "epoch-connected-delete".to_owned(),
+                generation: "gen-1".to_owned(),
+                executable: Some("/bin/false".to_owned()),
+                fallback_for: None,
+                connection_id: 7,
+                tx: worker_tx,
+            })
+            .expect("register worker");
+
+        handle_core_command(
+            &broker,
+            CoreCommand::StopSession {
+                session_id: "sess-connected-delete".to_owned(),
+                command_id: "stop-connected-delete".to_owned(),
+            },
+        )
+        .await;
+
+        assert!(target.is_dir(), "connected worker still owns its target");
+        let peer = broker
+            .remove_worker("sess-connected-delete", 7)
+            .expect("registered worker");
+        broker
+            .worker_disconnected("sess-connected-delete".to_owned(), peer)
+            .await;
+        for _ in 0..100 {
+            if broker.deleted_session_workspaces.lock().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        assert!(broker.deleted_session_workspaces.lock().is_empty());
+        assert!(target.is_dir());
+        assert!(workspace.join("source.rs").is_file());
+        assert!(workspace.is_dir());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]
@@ -2701,6 +3201,7 @@ mod tests {
             desired_generation: "gen-2".to_owned(),
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
         });
         broker
@@ -2742,6 +3243,7 @@ mod tests {
             desired_generation: "gen-2".to_owned(),
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
         }));
         broker.unhealthy_generations.lock().insert(
@@ -2778,6 +3280,7 @@ mod tests {
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(100),
         })
         .await
@@ -2802,6 +3305,7 @@ mod tests {
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(100),
         }));
         for _ in 0..100 {
