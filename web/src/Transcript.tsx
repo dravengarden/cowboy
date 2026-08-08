@@ -82,6 +82,7 @@ import {
   isCompactionCommandText,
   isCompactionCompletionTail,
   isCompactionCompletionText,
+  isCompactionRequestTail,
   type RenderItem,
 } from "./derive";
 import type { Envelope, Status } from "./protocol";
@@ -3431,6 +3432,8 @@ export function Transcript({
     ((lastItem.kind === "message" && lastItem.role === "assistant") ||
       lastItem.kind === "thought");
   const compacting = working && isCompactingTail(timeline);
+  const showLiveCompactionRequest = working &&
+    isCompactionRequestTail(timeline);
   const compactedAtTail = isCompactionCompletionTail(timeline);
   // Show the trailing "dots" row when working AND we're NOT already showing
   // a caret-tipped streaming assistant bubble at the bottom (i.e. between
@@ -4876,7 +4879,7 @@ export function Transcript({
                   <ThinkingIndicator provider={provider} />
                 </Box>
               )}
-              {compacting && (
+              {showLiveCompactionRequest && (
                 <Box
                   sx={{ py: 0.625, display: "flex", flexDirection: "column" }}
                 >
