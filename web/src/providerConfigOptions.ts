@@ -1,6 +1,60 @@
 import type { ConfigOption } from "./protocol";
 
-export function currentConfigOptionName(option: ConfigOption | undefined): string | null {
+const DEEPSEEK_CONTEXT_WINDOWS: Record<string, string> = {
+  "128k": "128K",
+  "256k": "256K",
+  "512k": "512K",
+  "680k": "680K",
+  "830k": "830K",
+};
+
+const DEEPSEEK_COMPACTION_POINTS: Record<string, Record<string, string>> = {
+  "claude-deepseek": {
+    "128k": "128K",
+    "256k": "256K",
+    "512k": "512K",
+    "680k": "680K",
+    "830k": "819.2K",
+  },
+  "codex-deepseek": {
+    "128k": "121.6K",
+    "256k": "243.2K",
+    "512k": "486.4K",
+    "680k": "646K",
+    "830k": "788.5K",
+  },
+};
+
+function deepseekContextOption(
+  provider: string,
+  option: ConfigOption,
+): ConfigOption {
+  const compactionPoints = DEEPSEEK_COMPACTION_POINTS[provider];
+  return {
+    ...option,
+    name: "Working context",
+    options: option.options.map((candidate) => {
+      const value = String(candidate.value);
+      const window = DEEPSEEK_CONTEXT_WINDOWS[value];
+      const compaction = compactionPoints?.[value];
+      if (!window || !compaction) return candidate;
+      const suffix = provider === "claude-deepseek" && value === "830k" ||
+          provider === "codex-deepseek" && value === "680k"
+        ? " · recommended"
+        : provider === "codex-deepseek" && value === "830k"
+        ? " · large"
+        : "";
+      return {
+        ...candidate,
+        name: `${window} window · compacts at ${compaction}${suffix}`,
+      };
+    }),
+  };
+}
+
+export function currentConfigOptionName(
+  option: ConfigOption | undefined,
+): string | null {
   if (!option) return null;
   return option.options.find((candidate) =>
     String(candidate.value) === String(option.currentValue)
@@ -14,8 +68,14 @@ export function providerConfigOptions(
   provider: string | undefined,
   options: readonly ConfigOption[],
 ): ConfigOption[] {
-  if (provider !== "claude-deepseek") return [...options];
+  if (provider !== "claude-deepseek" && provider !== "codex-deepseek") {
+    return [...options];
+  }
   return options.map((option) => {
+    if (option.id === "deepseek_context") {
+      return deepseekContextOption(provider, option);
+    }
+    if (provider !== "claude-deepseek") return option;
     if (option.id === "model") {
       const modelFor = new Map(
         option.options.map((candidate) => [

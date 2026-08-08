@@ -38,6 +38,39 @@ Deno.test("Claude DeepSeek exposes real models and distinct effort behavior", ()
   assertEquals(normalized[1]?.options[0]?.name, "Automatic (recommended)");
 });
 
+Deno.test("DeepSeek context options show working windows and compaction points", () => {
+  const context: ConfigOption = {
+    id: "deepseek_context",
+    name: "Context budget",
+    currentValue: "680k",
+    options: ["128k", "256k", "512k", "680k", "830k", "future"].map(
+      (value) => ({ value, name: value.toUpperCase() }),
+    ),
+  };
+
+  const claude = providerConfigOptions("claude-deepseek", [context])[0];
+  assertEquals(claude?.name, "Working context");
+  assertEquals(claude?.options.map((option) => option.name), [
+    "128K window · compacts at 128K",
+    "256K window · compacts at 256K",
+    "512K window · compacts at 512K",
+    "680K window · compacts at 680K",
+    "830K window · compacts at 819.2K · recommended",
+    "FUTURE",
+  ]);
+
+  const codex = providerConfigOptions("codex-deepseek", [context])[0];
+  assertEquals(codex?.name, "Working context");
+  assertEquals(codex?.options.map((option) => option.name), [
+    "128K window · compacts at 121.6K",
+    "256K window · compacts at 243.2K",
+    "512K window · compacts at 486.4K",
+    "680K window · compacts at 646K · recommended",
+    "830K window · compacts at 788.5K · large",
+    "FUTURE",
+  ]);
+});
+
 Deno.test("ordinary providers keep their advertised ACP options", () => {
   const options: ConfigOption[] = [{
     id: "effort",

@@ -105,12 +105,14 @@ a shared provider router.
 
 ### DeepSeek session context budgets
 
-Cowboy projects a host-owned `Context budget` option only for a model whose
-current DeepSeek capability is known. V4 Flash and V4 Pro both expose the same
-1M provider context today, so both `claude-deepseek` and `codex-deepseek` offer
-the same `128K`, `256K`, `512K`, `680K`, and `830K` choices. The option is
-model-gated rather than a global gateway setting; future models do not inherit
-this matrix until their capability is classified.
+Cowboy projects a host-owned context option only for a model whose current
+DeepSeek capability is known. The Web UI presents it as `Working context` and
+shows both the selected window and the runtime's actual compaction point. V4
+Flash and V4 Pro both expose the same 1M provider context today, so both
+`claude-deepseek` and `codex-deepseek` offer the same `128K`, `256K`, `512K`,
+`680K`, and `830K` choices. The option is model-gated rather than a global
+gateway setting; future models do not inherit this matrix until their
+capability is classified.
 
 The two agent runtimes consume a selected budget differently:
 
