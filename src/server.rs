@@ -1414,6 +1414,10 @@ async fn serve_axum(
             put(api_code_buffer_open).delete(api_code_buffer_close),
         )
         .route("/api/sessions/{id}/info", get(api_session_info))
+        .route(
+            "/api/sessions/{id}/cache-protection",
+            get(api_session_cache_protection),
+        )
         .route("/api/sessions/{id}/question-pages", get(api_question_pages))
         .route(
             "/api/sessions/{id}/question-pages/{page_id}",
@@ -3368,6 +3372,69 @@ async fn api_session_info(
     match state.hub.session_info(&session_id) {
         Some(info) => Json(info).into_response(),
         None => (StatusCode::NOT_FOUND, "unknown session").into_response(),
+    }
+}
+
+async fn api_session_cache_protection(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+) -> Response {
+    let Some(session) = state
+        .hub
+        .session_list()
+        .into_iter()
+        .find(|session| session.id == session_id)
+    else {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    };
+    if !crate::deepseek_cache::supported_provider(&session.provider) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "cache protection is available only for DeepSeek sessions",
+        )
+            .into_response();
+    }
+    let enabled = state
+        .hub
+        .config_preferences(&session.id)
+        .and_then(|preferences| crate::deepseek_cache::selected(&preferences, &session.provider))
+        .unwrap_or(true);
+    if !enabled {
+        return Json(serde_json::json!({
+            "state": "disabled",
+            "algorithm": "adaptive-replay-v1",
+            "minimumHitTokens": 96_000,
+            "contextUsed": session.context_used,
+        }))
+        .into_response();
+    }
+    match state
+        .machine_control
+        .adapter_request(
+            &session.machine_id,
+            "deepseek-cache-status",
+            serde_json::json!({
+                "provider": session.provider,
+                "sessionId": session.id,
+            }),
+        )
+        .await
+    {
+        Ok(mut status) => {
+            if let Some(object) = status.as_object_mut() {
+                object.insert("minimumHitTokens".to_owned(), 96_000.into());
+                object.insert("contextUsed".to_owned(), session.context_used.into());
+            }
+            Json(status).into_response()
+        }
+        Err(error) => {
+            tracing::warn!(session = %session.id, machine = %session.machine_id, %error, "DeepSeek cache-protection status unavailable");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "cache-protection status is temporarily unavailable",
+            )
+                .into_response()
+        }
     }
 }
 
@@ -6235,6 +6302,10 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
                 state
                     .supervisor
                     .set_deepseek_context_profile(&session_id, value)
+            } else if config_id == crate::deepseek_cache::CONFIG_ID {
+                state
+                    .supervisor
+                    .set_deepseek_cache_protection(&session_id, value)
             } else {
                 state
                     .hub

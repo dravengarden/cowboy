@@ -82,18 +82,20 @@ COWBOY_MACHINE_STATE_DIR=/home/draven/.local/state/cowboy-machine \
 ```
 
 The command opens `provider-usage.sqlite3` read-only and neither starts a
-broker nor contacts Cowboy. Its JSON reports total pending events,
-`pendingV3Events`, `v3Drained`, and every known producer. Each producer has
-explicit schema 1, 2, and 3 rows with pending count, first/last pending
-sequence, and the last controller-acknowledged sequence and timestamp. Future
-schemas are retained as additional rows rather than folded into v3.
+broker nor contacts Cowboy. Its JSON reports total pending events, explicit
+`pendingV3Events` / `v3Drained` and `pendingV4Events` / `v4Drained` downgrade
+gates, and every known producer. Each producer has explicit schema 1 through 4
+rows with pending count, first/last pending sequence, and the last
+controller-acknowledged sequence and timestamp. Future schemas are retained as
+additional rows rather than folded into an older version.
 
-This is the downgrade gate for telemetry schema v3. First replace or stop every
-v3-producing gateway on that Machine and verify its running release. Only then
-may `v3Drained: true` and `pendingV3Events: 0` authorize a Machine downgrade.
-Record the full status for each Machine; a null last ACK is valid only when that
-producer never emitted v3. Pending v1/v2 events may be delivered by the older
-Machine, but any pending v3 event forbids the downgrade. Codex and Claude Code
+These are downgrade gates for telemetry schemas v3 and v4. First replace or
+stop every gateway producing a schema unsupported by the candidate Machine and
+verify its running release. Only then may that schema's `drained: true` and
+pending count of zero authorize the downgrade. Record the full status for each
+Machine; a null last ACK is valid only when that producer never emitted the
+schema. Older supported events may be delivered by the candidate Machine, but
+any pending unsupported event forbids the downgrade. Codex and Claude Code
 producers are evaluated independently.
 
 ## Linux user service

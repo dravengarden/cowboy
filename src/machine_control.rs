@@ -14,10 +14,13 @@ const DEFAULT_ADAPTER_TIMEOUT: std::time::Duration = std::time::Duration::from_s
 // 30 seconds on the Machine. Keep the controller alive beyond that complete
 // Machine-side envelope so it never abandons a still-running preparation.
 const WORKSPACE_ADAPTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(330);
+const CACHE_STATUS_ADAPTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
 fn adapter_timeout(adapter: &str) -> std::time::Duration {
     if adapter == "workspace" {
         WORKSPACE_ADAPTER_TIMEOUT
+    } else if adapter == "deepseek-cache-status" {
+        CACHE_STATUS_ADAPTER_TIMEOUT
     } else {
         DEFAULT_ADAPTER_TIMEOUT
     }
@@ -172,6 +175,10 @@ mod tests {
             std::time::Duration::from_secs(330)
         );
         assert_eq!(adapter_timeout("zed"), std::time::Duration::from_secs(40));
+        assert_eq!(
+            adapter_timeout("deepseek-cache-status"),
+            std::time::Duration::from_secs(3)
+        );
     }
 
     #[tokio::test]

@@ -332,6 +332,10 @@ function DeepSeekDetails(
   const costView = record(activity?.cost);
   const costByAgent = record(costView?.byAgent);
   const totalCost = deepseekCostStats(record(costView?.summary));
+  const cacheProtectionCostView = record(costView?.cacheProtection);
+  const cacheProtectionCost = deepseekCostStats(
+    record(cacheProtectionCostView?.summary),
+  );
   const coverage = record(activity?.coverage);
   const producers = Array.isArray(coverage?.producers)
     ? coverage.producers.map(record).filter((value): value is JsonRecord => value !== undefined)
@@ -365,6 +369,28 @@ function DeepSeekDetails(
   const errors = num(summary?.errors);
   const blockingErrors = num(summary?.blockingErrors);
   const transientErrors = num(summary?.transientErrors);
+  const cacheKeepaliveRequests = num(summary?.cacheKeepaliveRequests) ?? 0;
+  const cacheKeepaliveHits = num(summary?.cacheKeepaliveHits) ?? 0;
+  const cacheKeepaliveMisses = num(summary?.cacheKeepaliveMisses) ?? 0;
+  const cacheKeepalivePartials = num(summary?.cacheKeepalivePartials) ?? 0;
+  const cacheKeepaliveRetryableErrors =
+    num(summary?.cacheKeepaliveRetryableErrors) ?? 0;
+  const cacheKeepaliveTerminalErrors =
+    num(summary?.cacheKeepaliveTerminalErrors) ?? 0;
+  const cacheKeepalivePreemptions = num(summary?.cacheKeepalivePreemptions) ?? 0;
+  const cacheKeepaliveIntervalObservations =
+    num(summary?.cacheKeepaliveIntervalObservations) ?? 0;
+  const cacheKeepaliveSourceAgeObservations =
+    num(summary?.cacheKeepaliveSourceAgeObservations) ?? 0;
+  const averageKeepaliveIntervalMs = cacheKeepaliveIntervalObservations > 0
+    ? (num(summary?.cacheKeepaliveIntervalMs) ?? 0) /
+      cacheKeepaliveIntervalObservations
+    : undefined;
+  const averageKeepaliveSourceAgeMs = cacheKeepaliveSourceAgeObservations > 0
+    ? (num(summary?.cacheKeepaliveSourceAgeMs) ?? 0) /
+      cacheKeepaliveSourceAgeObservations
+    : undefined;
+  const hasTelemetryActivity = (requests ?? 0) > 0 || cacheKeepaliveRequests > 0;
   const cache = deepseekCacheStats(summary);
   const blockingErrorRate = requests !== undefined && requests > 0
     ? (blockingErrors ?? 0) * 100 / requests
@@ -380,6 +406,8 @@ function DeepSeekDetails(
   const byRequestRole = record(activity?.byRequestRole);
   const bySessionAttribution = record(activity?.bySessionAttribution);
   const v3Requests = num(record(bySchemaVersion?.["3"])?.requests) ?? 0;
+  const v4Requests = num(record(bySchemaVersion?.["4"])?.requests) ?? 0;
+  const lineageRequests = v3Requests + v4Requests;
   const attributedRoleRequests = byRequestRole
     ? Object.entries(byRequestRole)
       .filter(([role]) => role !== "unknown")
@@ -488,7 +516,7 @@ function DeepSeekDetails(
         </Stack>
       </Sheet>
       {activityLoading && <LinearProgress aria-label="Loading DeepSeek activity" />}
-      {requests !== undefined && requests > 0
+      {hasTelemetryActivity
         ? (
           <>
             <Stack spacing={0.15}>
@@ -512,7 +540,7 @@ function DeepSeekDetails(
                   {timeRangeLabel(timeRange)} requests
                 </Typography>
                 <Typography variant="subtitle2" fontWeight={700}>
-                  {requests.toLocaleString()}
+                  {(requests ?? 0).toLocaleString()}
                 </Typography>
               </Box>
               <Box>
@@ -551,10 +579,75 @@ function DeepSeekDetails(
                 </Typography>
               </Box>
             </Box>
+            <Box
+              sx={{
+                borderRadius: 1.5,
+                bgcolor: "action.hover",
+                px: 1.1,
+                py: 0.9,
+              }}
+            >
+              <Stack spacing={0.55}>
+                <Stack direction="row" justifyContent="space-between" alignItems="baseline" spacing={1}>
+                  <Typography variant="body2" fontWeight={700}>
+                    Cache protection
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    Auto · verified ≥96K
+                  </Typography>
+                </Stack>
+                {cacheKeepaliveRequests > 0
+                  ? (
+                    <>
+                      <Box
+                        sx={{
+                          display: "grid",
+                          gridTemplateColumns: { xs: "repeat(2, minmax(0, 1fr))", sm: "repeat(4, minmax(0, 1fr))" },
+                          gap: 1,
+                        }}
+                      >
+                        <InfoRow k="Attempts" v={formatTokens(cacheKeepaliveRequests)} />
+                        <InfoRow k="Verified hits" v={formatTokens(cacheKeepaliveHits)} />
+                        <InfoRow
+                          k="Miss / partial"
+                          v={`${formatTokens(cacheKeepaliveMisses)} / ${formatTokens(cacheKeepalivePartials)}`}
+                        />
+                        <InfoRow
+                          k="Retryable / stopped"
+                          v={`${formatTokens(cacheKeepaliveRetryableErrors)} / ${formatTokens(cacheKeepaliveTerminalErrors)}`}
+                        />
+                        <InfoRow k="Preempted by agents" v={formatTokens(cacheKeepalivePreemptions)} />
+                        <InfoRow
+                          k="Protected hit tokens"
+                          v={formatTokens(num(summary?.cacheKeepaliveHitTokens))}
+                        />
+                        <InfoRow k="Keepalive spend" v={formatEstimatedCny(cacheProtectionCost)} />
+                        <InfoRow
+                          k="Average source age"
+                          v={averageKeepaliveSourceAgeMs === undefined
+                            ? "—"
+                            : formatDurationMs(averageKeepaliveSourceAgeMs)}
+                        />
+                      </Box>
+                      <Typography variant="caption" color="text.secondary">
+                        {averageKeepaliveIntervalMs === undefined
+                          ? "Adaptive interval is still learning."
+                          : `Average scheduled interval ${formatDurationMs(averageKeepaliveIntervalMs)}.`}{" "}
+                        Real agent requests always preempt background keepalives.
+                      </Typography>
+                    </>
+                  )
+                  : (
+                    <Typography variant="caption" color="text.secondary">
+                      No keepalive attempts in this window. Eligible snapshots start after a verified ≥90% cache hit with at least 96K hit tokens.
+                    </Typography>
+                  )}
+              </Stack>
+            </Box>
             {agentLanes.length > 0 && (
               <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "repeat(2, minmax(0, 1fr))" }, gap: 1 }}>
                 {agentLanes.map(({ agent, totals, cache, cost, avgGatewayMs }) => {
-                  if (!totals || !cache) {
+                  if (!totals || !cache || (num(totals.requests) ?? 0) === 0) {
                     return (
                       <Box key={agent} sx={{ borderRadius: 1.5, bgcolor: "action.hover", px: 1.1, py: 0.9 }}>
                         <Stack spacing={0.35}>
@@ -804,8 +897,8 @@ function DeepSeekDetails(
                         Telemetry quality
                       </Typography>
                       <InfoRow
-                        k="Schema v3"
-                        v={`${formatTokens(v3Requests)} / ${formatTokens(requests)} · ${percentLabel(requests > 0 ? v3Requests * 100 / requests : undefined)}`}
+                        k="Schema v3+"
+                        v={`${formatTokens(lineageRequests)} / ${formatTokens(requests)} · ${percentLabel(requests > 0 ? lineageRequests * 100 / requests : undefined)}`}
                       />
                       {bySessionAttribution && (
                         <InfoRow
@@ -815,10 +908,10 @@ function DeepSeekDetails(
                             .join(" · ")}
                         />
                       )}
-                      {v3Requests > 0 && (
+                      {lineageRequests > 0 && (
                         <InfoRow
                           k="Request role attribution"
-                          v={`${formatTokens(attributedRoleRequests)} / ${formatTokens(v3Requests)} · ${percentLabel(attributedRoleRequests * 100 / v3Requests)}`}
+                          v={`${formatTokens(attributedRoleRequests)} / ${formatTokens(lineageRequests)} · ${percentLabel(attributedRoleRequests * 100 / lineageRequests)}`}
                         />
                       )}
                       {byRequestRole && attributedRoleRequests > 0 && (

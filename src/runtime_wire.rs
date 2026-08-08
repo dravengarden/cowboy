@@ -106,6 +106,10 @@ pub struct StartSession {
     pub context_window: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_compact_token_limit: Option<u64>,
+    /// Cowboy-owned `DeepSeek` cache policy. Older Machine generations ignore
+    /// this additive field and therefore never schedule background replays.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_protection: Option<bool>,
     pub generation: String,
     /// Desired generation this session is temporarily falling back from.
     #[serde(default)]

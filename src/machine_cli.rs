@@ -1582,6 +1582,13 @@ struct AdapterRequestContext {
     events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DeepseekCacheStatusRequest {
+    provider: String,
+    session_id: String,
+}
+
 async fn run_adapter_request(
     request_id: String,
     adapter: String,
@@ -1596,6 +1603,25 @@ async fn run_adapter_request(
         events,
     } = context;
     let result = async {
+        if adapter == "deepseek-cache-status" {
+            let request: DeepseekCacheStatusRequest = serde_json::from_value(payload)
+                .context("decoding DeepSeek cache status request")?;
+            if !crate::deepseek_cache::supported_provider(&request.provider)
+                || request.session_id.is_empty()
+                || request.session_id.len() > 256
+                || !request
+                    .session_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            {
+                bail!("invalid DeepSeek cache status request");
+            }
+            return crate::deepseek_cache::local_snapshot_status(
+                &request.provider,
+                &request.session_id,
+            )
+            .await;
+        }
         if adapter == "workspace" {
             let request: crate::session_workspace::PrepareWorkspaceRequest =
                 serde_json::from_value(payload)
@@ -2539,6 +2565,7 @@ mod tests {
                     system: false,
                     context_window: None,
                     auto_compact_token_limit: None,
+                    cache_protection: None,
                     generation: "test".to_owned(),
                     fallback_for: None,
                     adopt_only: false,

@@ -1007,7 +1007,9 @@ fn queue_persisted_config(shared: &Shared, session_id: &str, options: Option<&se
     };
     let Some(options) = options else {
         for (config_id, value) in preferences {
-            if config_id == crate::deepseek_context::CONFIG_ID {
+            if config_id == crate::deepseek_context::CONFIG_ID
+                || config_id == crate::deepseek_cache::CONFIG_ID
+            {
                 continue;
             }
             queue_config_value(shared, session_id, config_id, value.clone());
@@ -1018,7 +1020,9 @@ fn queue_persisted_config(shared: &Shared, session_id: &str, options: Option<&se
         return;
     };
     for (config_id, value) in preferences {
-        if config_id == crate::deepseek_context::CONFIG_ID {
+        if config_id == crate::deepseek_context::CONFIG_ID
+            || config_id == crate::deepseek_cache::CONFIG_ID
+        {
             continue;
         }
         let Some(option) = options
@@ -1463,6 +1467,7 @@ mod tests {
                 system: false,
                 context_window: None,
                 auto_compact_token_limit: None,
+                cache_protection: None,
                 generation: "gen-1".to_owned(),
                 fallback_for: None,
                 adopt_only: false,
@@ -1654,7 +1659,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn host_owned_deepseek_context_is_never_forwarded_as_an_acp_option() {
+    async fn host_owned_deepseek_settings_are_never_forwarded_as_acp_options() {
         let hub = Hub::new();
         hub.create_local_session(
             "s".to_owned(),
@@ -1681,6 +1686,11 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(config_ids.len(), 3);
         assert!(!config_ids.iter().any(|id| id == "deepseek_context"));
+        assert!(
+            !config_ids
+                .iter()
+                .any(|id| id == "deepseek_cache_protection")
+        );
     }
 
     #[tokio::test]

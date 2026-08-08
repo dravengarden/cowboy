@@ -15,8 +15,9 @@ use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::UnixListener;
 
 use crate::machine_protocol::{
-    MachineEvent, PROVIDER_USAGE_MAX_DURATION_MS, PROVIDER_USAGE_MAX_REQUEST_BYTES,
-    PROVIDER_USAGE_MAX_SHAPE_COUNT, PROVIDER_USAGE_MAX_TOKENS, ProviderUsageEvent,
+    MachineEvent, PROVIDER_USAGE_MAX_DURATION_MS, PROVIDER_USAGE_MAX_KEEPALIVE_MS,
+    PROVIDER_USAGE_MAX_REQUEST_BYTES, PROVIDER_USAGE_MAX_SHAPE_COUNT, PROVIDER_USAGE_MAX_TOKENS,
+    ProviderUsageEvent,
 };
 
 const MAX_EVENT_BYTES: usize = 16 * 1024;
@@ -97,6 +98,20 @@ struct GatewayUsage {
     has_previous_response_id: Option<bool>,
     #[serde(default)]
     compatibility_fixes: Option<u64>,
+    #[serde(default = "interactive_dimension")]
+    request_purpose: String,
+    #[serde(default = "not_applicable_dimension")]
+    cache_keepalive_outcome: String,
+    #[serde(default)]
+    cache_keepalive_algorithm: Option<String>,
+    #[serde(default)]
+    cache_keepalive_attempt: Option<u64>,
+    #[serde(default)]
+    cache_keepalive_interval_ms: Option<u64>,
+    #[serde(default)]
+    cache_keepalive_source_age_ms: Option<u64>,
+    #[serde(default)]
+    source_request_prefix_fingerprint: Option<String>,
 }
 
 const fn default_schema_version() -> u16 {
@@ -115,6 +130,14 @@ fn unattributed_dimension() -> String {
     "unattributed".to_owned()
 }
 
+fn interactive_dimension() -> String {
+    "interactive".to_owned()
+}
+
+fn not_applicable_dimension() -> String {
+    "not_applicable".to_owned()
+}
+
 #[derive(Clone)]
 pub struct ProviderUsageSpool {
     connection: Arc<parking_lot::Mutex<Connection>>,
@@ -127,6 +150,8 @@ pub struct ProviderUsageSpoolStatus {
     pub pending_events: u64,
     pub pending_v3_events: u64,
     pub v3_drained: bool,
+    pub pending_v4_events: u64,
+    pub v4_drained: bool,
     pub producers: Vec<ProviderUsageProducerStatus>,
 }
 
@@ -248,6 +273,13 @@ impl ProviderUsageSpool {
             system_block_count: event.system_block_count,
             has_previous_response_id: event.has_previous_response_id,
             compatibility_fixes: event.compatibility_fixes,
+            request_purpose: std::mem::take(&mut event.request_purpose),
+            cache_keepalive_outcome: std::mem::take(&mut event.cache_keepalive_outcome),
+            cache_keepalive_algorithm: event.cache_keepalive_algorithm.take(),
+            cache_keepalive_attempt: event.cache_keepalive_attempt,
+            cache_keepalive_interval_ms: event.cache_keepalive_interval_ms,
+            cache_keepalive_source_age_ms: event.cache_keepalive_source_age_ms,
+            source_request_prefix_fingerprint: event.source_request_prefix_fingerprint.take(),
         };
         transaction.execute(
             "INSERT INTO events (producer_id, sequence, event_id, payload) VALUES (?1, ?2, ?3, ?4)",
@@ -365,7 +397,7 @@ fn status_from_connection(connection: &Connection) -> Result<ProviderUsageSpoolS
                     next_sequence: u64::try_from(next_sequence)
                         .context("negative next sequence")?,
                     pending_events: 0,
-                    schemas: (1..=3)
+                    schemas: (1..=4)
                         .map(|schema_version| ProviderUsageSchemaStatus {
                             schema_version,
                             ..ProviderUsageSchemaStatus::default()
@@ -412,6 +444,7 @@ fn status_from_connection(connection: &Connection) -> Result<ProviderUsageSpoolS
     load_acknowledgements(connection, &mut producers)?;
     let mut pending_events = 0_u64;
     let mut pending_v3_events = 0_u64;
+    let mut pending_v4_events = 0_u64;
     let mut producers = producers.into_values().collect::<Vec<_>>();
     for producer in &mut producers {
         producer.schemas.sort_by_key(|schema| schema.schema_version);
@@ -423,12 +456,21 @@ fn status_from_connection(connection: &Connection) -> Result<ProviderUsageSpoolS
                 .find(|schema| schema.schema_version == 3)
                 .map_or(0, |schema| schema.pending_events),
         );
+        pending_v4_events = pending_v4_events.saturating_add(
+            producer
+                .schemas
+                .iter()
+                .find(|schema| schema.schema_version == 4)
+                .map_or(0, |schema| schema.pending_events),
+        );
     }
     Ok(ProviderUsageSpoolStatus {
         observed_at_ms: unix_ms(),
         pending_events,
         pending_v3_events,
         v3_drained: pending_v3_events == 0,
+        pending_v4_events,
+        v4_drained: pending_v4_events == 0,
         producers,
     })
 }
@@ -516,6 +558,13 @@ fn metrics_within_bounds(event: &GatewayUsage) -> bool {
         .into_iter()
         .flatten()
         .any(|value| value > PROVIDER_USAGE_MAX_SHAPE_COUNT)
+        && ![
+            event.cache_keepalive_interval_ms,
+            event.cache_keepalive_source_age_ms,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|value| value > PROVIDER_USAGE_MAX_KEEPALIVE_MS)
 }
 
 fn valid_hex(value: &str, length: usize) -> bool {
@@ -527,6 +576,15 @@ fn valid_hex(value: &str, length: usize) -> bool {
 
 fn valid_optional_hex(value: Option<&String>, length: usize) -> bool {
     value.is_none_or(|value| valid_hex(value, length))
+}
+
+fn valid_keepalive_algorithm(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value.as_bytes()[0].is_ascii_lowercase()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+        })
 }
 
 fn expected_model_family(model: &str) -> &'static str {
@@ -613,6 +671,48 @@ fn valid_v3_dimensions(event: &GatewayUsage) -> bool {
         && lane_valid
 }
 
+fn valid_v4_dimensions(event: &GatewayUsage) -> bool {
+    if !valid_v3_dimensions(event) {
+        return false;
+    }
+    match event.request_purpose.as_str() {
+        "interactive" => {
+            event.cache_keepalive_outcome == "not_applicable"
+                && event.cache_keepalive_algorithm.is_none()
+                && event.cache_keepalive_attempt.is_none_or(|value| value == 0)
+                && event
+                    .cache_keepalive_interval_ms
+                    .is_none_or(|value| value == 0)
+                && event
+                    .cache_keepalive_source_age_ms
+                    .is_none_or(|value| value == 0)
+                && event.source_request_prefix_fingerprint.is_none()
+        }
+        "cache_keepalive" => {
+            event.session_attribution == "explicit"
+                && event.traffic_source == "cowboy"
+                && matches!(
+                    event.cache_keepalive_outcome.as_str(),
+                    "hit" | "miss" | "partial" | "retryable_error" | "terminal_error" | "preempted"
+                )
+                && event
+                    .cache_keepalive_algorithm
+                    .as_deref()
+                    .is_some_and(valid_keepalive_algorithm)
+                && event
+                    .cache_keepalive_attempt
+                    .is_some_and(|value| (1..=1_000).contains(&value))
+                && event
+                    .cache_keepalive_interval_ms
+                    .is_some_and(|value| value > 0)
+                && event.cache_keepalive_source_age_ms.is_some()
+                && valid_optional_hex(event.source_request_prefix_fingerprint.as_ref(), 32)
+                && event.source_request_prefix_fingerprint.is_some()
+        }
+        _ => false,
+    }
+}
+
 fn valid_usage_token_algebra(event: &GatewayUsage) -> bool {
     if event.schema_version < 2 {
         return true;
@@ -667,7 +767,7 @@ fn validate(event: &GatewayUsage) -> Result<()> {
             .all(|byte| byte.is_ascii_hexdigit())
         || event.model.len() > 128
         || !(100..=599).contains(&event.status)
-        || !matches!(event.schema_version, 1..=3)
+        || !matches!(event.schema_version, 1..=4)
         || !matches!(
             event.operation.as_str(),
             "legacy" | "responses" | "compact" | "messages" | "chat_completions"
@@ -722,8 +822,11 @@ fn validate(event: &GatewayUsage) -> Result<()> {
     {
         anyhow::bail!("inconsistent gateway usage dimensions");
     }
-    if event.schema_version == 3 && !valid_v3_dimensions(event) {
+    if event.schema_version >= 3 && !valid_v3_dimensions(event) {
         anyhow::bail!("invalid version three gateway usage dimensions");
+    }
+    if event.schema_version == 4 && !valid_v4_dimensions(event) {
+        anyhow::bail!("invalid version four gateway usage dimensions");
     }
     match event.cache_observation.as_str() {
         "absent" if event.cache_hit_tokens.is_some() || event.cache_miss_tokens.is_some() => {
@@ -899,6 +1002,8 @@ mod tests {
         assert_eq!(status.pending_events, 1);
         assert_eq!(status.pending_v3_events, 0);
         assert!(status.v3_drained);
+        assert_eq!(status.pending_v4_events, 0);
+        assert!(status.v4_drained);
         let producer = &status.producers[0];
         assert_eq!(producer.producer_id, "codex-deepseek");
         assert_eq!(producer.next_sequence, 3);
@@ -952,6 +1057,8 @@ mod tests {
         assert_eq!(status.pending_events, 1);
         assert_eq!(status.pending_v3_events, 1);
         assert!(!status.v3_drained);
+        assert_eq!(status.pending_v4_events, 0);
+        assert!(status.v4_drained);
         assert!(
             status.producers[0]
                 .schemas
@@ -998,6 +1105,53 @@ mod tests {
         value["cache_hit_tokens"] = (PROVIDER_USAGE_MAX_TOKENS + 1).into();
         assert!(spool.ingest(&serde_json::to_vec(&value).unwrap()).is_err());
         assert!(spool.pending_batch().expect("empty batch").is_none());
+        drop(spool);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn accepts_schema_four_cache_keepalive_and_rejects_incomplete_lineage() {
+        let (spool, path) = spool();
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&event("keepalive-hit")).expect("parse event");
+        value["schema_version"] = 4.into();
+        value["request_purpose"] = "cache_keepalive".into();
+        value["cache_keepalive_outcome"] = "hit".into();
+        value["cache_keepalive_algorithm"] = "adaptive-replay-v1".into();
+        value["cache_keepalive_attempt"] = 1.into();
+        value["cache_keepalive_interval_ms"] = 19_800_000.into();
+        value["cache_keepalive_source_age_ms"] = 19_801_000.into();
+        value["source_request_prefix_fingerprint"] = "66666666666666666666666666666666".into();
+        value["session_attribution"] = "explicit".into();
+        value["traffic_source"] = "cowboy".into();
+        spool
+            .ingest(&serde_json::to_vec(&value).expect("keepalive JSON"))
+            .expect("valid keepalive accepted");
+        let MachineEvent::ProviderUsageBatch { events, .. } = spool
+            .pending_batch()
+            .expect("read batch")
+            .expect("batch exists")
+        else {
+            panic!("unexpected event")
+        };
+        assert_eq!(events[0].request_purpose, "cache_keepalive");
+        assert_eq!(events[0].cache_keepalive_outcome, "hit");
+        assert_eq!(events[0].cache_keepalive_attempt, Some(1));
+        let status = ProviderUsageSpool::read_status(&path).expect("read keepalive status");
+        assert_eq!(status.pending_v4_events, 1);
+        assert!(!status.v4_drained);
+
+        let mut invalid = value;
+        invalid["event_id"] = "keepalive-invalid".into();
+        invalid
+            .as_object_mut()
+            .expect("event object")
+            .remove("source_request_prefix_fingerprint");
+        assert!(
+            spool
+                .ingest(&serde_json::to_vec(&invalid).expect("invalid JSON"))
+                .is_err()
+        );
         drop(spool);
         let _ = std::fs::remove_file(path);
     }
