@@ -428,19 +428,21 @@ impl Supervisor {
         if !migrated && !crashed {
             return Ok(false);
         }
-        let live_context_rejection = crashed
+        let live_recoverable_turn_failure = crashed
             && !migrated
-            && session.is_some_and(|meta| meta.provider == "claude-deepseek")
-            && self
-                .hub
-                .latest_crash_detail(session_id)
-                .as_deref()
-                .is_some_and(crate::provider::claude_code::is_context_window_rejection)
+            && session.is_some_and(|meta| {
+                self.hub
+                    .latest_crash_detail(session_id)
+                    .as_deref()
+                    .is_some_and(|detail| {
+                        crate::provider::claude_code::keeps_worker_alive(&meta.provider, detail)
+                    })
+            })
             && self.runtime_for_session(session_id)?.has_worker(session_id);
-        if live_context_rejection {
+        if live_recoverable_turn_failure {
             tracing::info!(
                 session = session_id,
-                "reusing live ACP worker after provider context rejection"
+                "reusing live ACP worker after recoverable provider turn failure"
             );
             return Ok(false);
         }
@@ -659,6 +661,36 @@ mod tests {
         let mut worker = worker_snapshot(cwd.to_string_lossy().as_ref());
         worker.state = WorkerState::Running;
         worker.launch.as_mut().expect("launch").provider = "claude-deepseek".to_owned();
+        let runtime = RemoteRuntime::for_test(hub.clone(), vec![worker]);
+        let supervisor = Supervisor::new_remote(hub.clone(), root.0.clone(), 0, runtime.clone());
+
+        assert!(!supervisor.prepare_session("s").expect("prepare"));
+        assert!(runtime.has_worker("s"));
+        assert!(runtime.pending_for_test().is_empty());
+        assert_eq!(hub.status("s"), Some(Status::Crashed));
+        assert_eq!(hub.latest_crash_detail("s").as_deref(), Some(detail));
+    }
+
+    #[tokio::test]
+    async fn empty_claude_stream_reuses_live_worker_without_resume() {
+        let root = TestDir::new();
+        let cwd = root.path().join("checkout");
+        std::fs::create_dir_all(&cwd).expect("checkout");
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "claude-code".to_owned(),
+            cwd.display().to_string(),
+            "test".to_owned(),
+            SessionOrigin::Web,
+            false,
+        );
+        let detail =
+            "API Error: Stream ended without receiving any events {\"errorKind\":\"unknown\"}";
+        hub.set_status("s", Status::Crashed, Some(detail.to_owned()));
+        let mut worker = worker_snapshot(cwd.to_string_lossy().as_ref());
+        worker.state = WorkerState::Running;
+        worker.launch.as_mut().expect("launch").provider = "claude-code".to_owned();
         let runtime = RemoteRuntime::for_test(hub.clone(), vec![worker]);
         let supervisor = Supervisor::new_remote(hub.clone(), root.0.clone(), 0, runtime.clone());
 

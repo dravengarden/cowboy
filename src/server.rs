@@ -761,6 +761,9 @@ fn classify_crash_detail(detail: Option<&str>) -> &'static str {
     if detail.is_some_and(crate::provider::claude_code::is_context_window_rejection) {
         return "provider_context_limit";
     }
+    if detail.is_some_and(crate::provider::claude_code::is_empty_stream_failure) {
+        return "provider_empty_stream";
+    }
     let detail = detail.unwrap_or_default().to_ascii_lowercase();
     if detail.contains("oom") || detail.contains("out of memory") || detail.contains("signal: 9") {
         "resource_exhaustion"
@@ -821,6 +824,10 @@ mod incident_classification_tests {
                 "API Error: 400 This model's maximum context length is 1048576 tokens"
             )),
             "provider_context_limit"
+        );
+        assert_eq!(
+            classify_crash_detail(Some("API Error: Stream ended without receiving any events")),
+            "provider_empty_stream"
         );
         assert_eq!(classify_crash_detail(None), "runtime_failure");
     }

@@ -1159,15 +1159,47 @@ fn apply_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
             },
         );
     }
-    let status = if worker.current_turn_id.is_some()
-        && matches!(worker.state, WorkerState::Running | WorkerState::Draining)
-    {
+    let busy = worker.current_turn_id.is_some()
+        && matches!(worker.state, WorkerState::Running | WorkerState::Draining);
+    let recoverable_detail = (!busy)
+        .then(|| shared.hub.latest_crash_detail(&worker.session_id))
+        .flatten()
+        .filter(|detail| {
+            recoverable_live_worker_error(
+                &shared.hub,
+                &worker.session_id,
+                worker.state,
+                Some(detail.as_str()),
+            )
+        });
+    let status = if busy {
         Status::Busy
+    } else if recoverable_detail.is_some() {
+        // A status-only worker snapshot cannot replay an already-acked detail.
+        // Preserve the controller's durable recoverable-turn hold while the
+        // same live worker correctly reports itself idle and reusable.
+        Status::Crashed
     } else {
         worker_status(worker.state)
     };
-    shared.hub.set_status(&worker.session_id, status, None);
+    shared
+        .hub
+        .set_status(&worker.session_id, status, recoverable_detail);
     true
+}
+
+fn recoverable_live_worker_error(
+    hub: &Hub,
+    session_id: &str,
+    state: WorkerState,
+    detail: Option<&str>,
+) -> bool {
+    matches!(state, WorkerState::Running | WorkerState::Draining)
+        && hub.session_info(session_id).is_some_and(|session| {
+            detail.is_some_and(|detail| {
+                crate::provider::claude_code::keeps_worker_alive(&session.meta.provider, detail)
+            })
+        })
 }
 
 fn pending_prompt_for(shared: &Shared, session_id: &str) -> bool {
@@ -1254,18 +1286,12 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
             hub.set_status(session_id, Status::Running, None);
         }
         RuntimeEvent::Status { state, detail } => {
-            // claude-agent-acp survives a provider context-limit response and
+            // claude-agent-acp survives turn-scoped provider failures and
             // reports Running so Machine retains the live worker. Keep the
             // controller session errored to hold queued prompts and expose Retry;
             // Supervisor recognizes the same detail and reuses this worker for
             // /compact or the next explicit prompt instead of recycling it.
-            let status = if state == WorkerState::Running
-                && hub
-                    .session_info(session_id)
-                    .is_some_and(|session| session.meta.provider == "claude-deepseek")
-                && detail
-                    .as_deref()
-                    .is_some_and(crate::provider::claude_code::is_context_window_rejection)
+            let status = if recoverable_live_worker_error(hub, session_id, state, detail.as_deref())
             {
                 Status::Crashed
             } else {
@@ -1459,8 +1485,8 @@ mod tests {
         assert!(!codex_config_is_full_access(&serde_json::json!([])));
     }
 
-    #[test]
-    fn context_rejection_keeps_worker_live_but_session_actionably_errored() {
+    #[tokio::test]
+    async fn context_rejection_keeps_worker_live_but_session_actionably_errored() {
         let hub = Hub::new();
         hub.create_local_session(
             "s".to_owned(),
@@ -1501,6 +1527,35 @@ mod tests {
             },
         );
         assert_eq!(hub.status("ordinary"), Some(Status::Running));
+
+        let empty_stream =
+            "API Error: Stream ended without receiving any events {\"errorKind\":\"unknown\"}";
+        apply_event(
+            &hub,
+            "ordinary",
+            RuntimeEvent::Status {
+                state: WorkerState::Running,
+                detail: Some(empty_stream.to_owned()),
+            },
+        );
+        assert_eq!(hub.status("ordinary"), Some(Status::Crashed));
+        assert_eq!(
+            hub.latest_crash_detail("ordinary").as_deref(),
+            Some(empty_stream)
+        );
+
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        let mut reconnected = snapshot("ordinary");
+        reconnected.state = WorkerState::Running;
+        reconnected.current_turn_id = None;
+        reconnected.launch.as_mut().expect("launch").provider = "claude-code".to_owned();
+        assert!(apply_snapshot(&runtime.shared, &reconnected));
+        reconcile_idle_snapshot(&runtime.shared, &reconnected);
+        assert_eq!(hub.status("ordinary"), Some(Status::Crashed));
+        assert_eq!(
+            hub.latest_crash_detail("ordinary").as_deref(),
+            Some(empty_stream)
+        );
     }
 
     #[test]
