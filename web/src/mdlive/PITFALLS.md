@@ -1124,7 +1124,9 @@ Desktop Vim + IME checks:
     looked like editor text colliding with the conversation even though DOM
     geometry was correct. Keep the focused background, border, radius, blur, and
     shadow in `mobileFocusedComposerSurfaceSx` and apply that primitive to both
-    the primary input and pending-row editor. This is a paint-only alignment: do
+    the primary input and pending-row editor. Its base is deliberately near-opaque
+    (light 0.94, dark 0.96) so dense transcript glyphs cannot remain readable
+    through the writing surface. This is a paint-only alignment: do
     not add focus handlers, editor remounts, controlled values, or custom touch
     handling.
 
