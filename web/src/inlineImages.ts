@@ -21,6 +21,10 @@ import {
 import { EditorState, RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
 import type { Attachment } from "./attachments";
 import { openLightbox } from "./ResourceLightbox";
+import {
+  imageDeletionRange,
+  mapImageDeletionPosition,
+} from "./inlineImageSelection";
 
 const registry = new Map<string, Attachment>();
 
@@ -296,8 +300,8 @@ export function insertImageToken(view: EditorView, a: Attachment): void {
 }
 
 /// Remove a specific image (by id) from the doc — the popover's Delete action.
-/// Finds the lone-token line, deletes it plus its trailing newline, and forgets
-/// the bytes. No-op if the token isn't present.
+/// Finds the lone-token line, deletes it plus its surrounding line breaks, and
+/// forgets the bytes. No-op if the token isn't present.
 export function removeImageTokenById(view: EditorView, id: string): void {
   const { doc } = view.state;
   for (let i = 1; i <= doc.lines; i++) {
@@ -305,11 +309,17 @@ export function removeImageTokenById(view: EditorView, id: string): void {
     const m = LONE_TOKEN_RE.exec(line.text);
     if (m?.[2] === id) {
       forgetInlineAttachment(id);
-      const from = line.from;
-      const to = Math.min(doc.length, line.to + 1);
+      const { from, to } = imageDeletionRange(line.from, line.to, doc.length);
+      const current = view.state.selection.main;
       view.dispatch({
         changes: { from, to },
-        selection: { anchor: Math.min(from, view.state.doc.length) },
+        // Preserve the active logical caret through the removed block. The old
+        // code always forced the image line's start and left the leading layout
+        // newline behind, turning deletion into a jump across a stale line.
+        selection: {
+          anchor: mapImageDeletionPosition(current.anchor, from, to),
+          head: mapImageDeletionPosition(current.head, from, to),
+        },
       });
       return;
     }

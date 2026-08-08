@@ -15,6 +15,52 @@ function orderedSelection(
   return a <= b ? [a, b] : [b, a];
 }
 
+/**
+ * Map a native textarea selection through an external value replacement.
+ *
+ * Normal typing never calls this: the DOM value and selection stay owned by the
+ * browser. It is for genuine outside changes such as clearing a draft or loading
+ * another one. Treat the smallest differing span as the replacement and keep the
+ * caret after that span, so a newline or prefix inserted by a toolbar does not
+ * strand it at the old coordinate.
+ */
+export function mapNativeSelectionThroughValueChange(
+  previousValue: string,
+  nextValue: string,
+  from: number,
+  to: number,
+): { from: number; to: number } {
+  const [oldFrom, oldTo] = orderedSelection(previousValue, from, to);
+  let prefix = 0;
+  while (
+    prefix < previousValue.length && prefix < nextValue.length &&
+    previousValue[prefix] === nextValue[prefix]
+  ) {
+    prefix += 1;
+  }
+  let suffix = 0;
+  while (
+    suffix < previousValue.length - prefix &&
+    suffix < nextValue.length - prefix &&
+    previousValue[previousValue.length - suffix - 1] ===
+      nextValue[nextValue.length - suffix - 1]
+  ) {
+    suffix += 1;
+  }
+  const oldChangeEnd = previousValue.length - suffix;
+  const newChangeEnd = nextValue.length - suffix;
+  const delta = newChangeEnd - oldChangeEnd;
+  const mapPosition = (position: number): number => {
+    if (position < prefix) return position;
+    if (position >= oldChangeEnd) return position + delta;
+    return newChangeEnd;
+  };
+  return {
+    from: Math.max(0, Math.min(mapPosition(oldFrom), nextValue.length)),
+    to: Math.max(0, Math.min(mapPosition(oldTo), nextValue.length)),
+  };
+}
+
 function lineStart(value: string, position: number): number {
   return value.lastIndexOf("\n", Math.max(0, position) - 1) + 1;
 }

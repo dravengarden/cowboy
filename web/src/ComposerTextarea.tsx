@@ -6,12 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
-import {
-  Box,
-  Paper,
-  TextField,
-  Typography,
-} from "@mui/material";
+import { Box, Paper, TextField, Typography } from "@mui/material";
 import type { ComposerEditorHandle } from "./ComposerEditor";
 import { type Attachment, clipboardFiles } from "./attachments";
 import { hasDraftMod, hasSendMod } from "./platform";
@@ -22,6 +17,7 @@ import {
   indentNativeLines,
   insertNativeCodeBlock,
   insertNativeLink,
+  mapNativeSelectionThroughValueChange,
   type NativeTextEdit,
   outdentNativeLines,
   setNativeHeading,
@@ -180,6 +176,13 @@ export const ComposerTextarea = forwardRef<
 ): React.JSX.Element {
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // Keep the live textarea value out of React's controlled reconciliation. On
+  // iOS, a long-press changes the native selection first and `onSelect` may
+  // re-render the parent before UIKit presents Paste/Select. Rebinding `value`
+  // during that render can replace the native selection and dismiss the menu.
+  // This ref also protects a just-accepted keystroke while its React mirror is
+  // one render behind.
+  const lastNativeValueRef = useRef<string | null>(null);
   const selectedSlashCommandRef = useRef<string | null>(null);
   const [trigger, setTrigger] = useState<Trigger | null>(null);
   const [options, setOptions] = useState<PickerOption[]>([]);
@@ -226,20 +229,51 @@ export const ComposerTextarea = forwardRef<
     return { value: current, from, to };
   };
 
+  // React mirrors the draft for submit/persistence, but must not overwrite a
+  // native value that was already accepted by the textarea. External changes
+  // (clear, loading another draft, or a non-editor state transition) still get
+  // applied here, with the old caret preserved as far as the new value allows.
+  useLayoutEffect(() => {
+    const ta = inputRef.current;
+    if (!ta || ta.value === value) {
+      if (ta?.value === value) lastNativeValueRef.current = null;
+      return;
+    }
+    if (lastNativeValueRef.current === ta.value) return;
+    const previous = ta.value;
+    const from = ta.selectionStart ?? previous.length;
+    const to = ta.selectionEnd ?? from;
+    const selection = mapNativeSelectionThroughValueChange(
+      previous,
+      value,
+      from,
+      to,
+    );
+    ta.value = value;
+    ta.setSelectionRange(selection.from, selection.to);
+    lastNativeValueRef.current = null;
+  }, [value]);
+
+  const writeNativeEdit = (
+    ta: HTMLTextAreaElement,
+    edit: NativeTextEdit,
+  ): void => {
+    ta.value = edit.value;
+    ta.setSelectionRange(edit.from, edit.to);
+    lastNativeValueRef.current = edit.value;
+  };
+
   // Accessory buttons prevent pointer-down default, so the native textarea is
-  // still UIKit's first responder when this runs. Commit literal Markdown to the
-  // controlled value, then restore the transformed selection after React paints;
-  // there is no delayed focus handoff and therefore no keyboard/menu reset.
+  // still UIKit's first responder when this runs. Commit literal Markdown and
+  // its selection synchronously; a delayed selection write after React paints
+  // is enough to reset an iPad keyboard/selection transaction.
   const applyTextEdit = (edit: NativeTextEdit): void => {
-    inputRef.current?.focus();
+    const ta = inputRef.current;
+    ta?.focus();
+    if (ta) writeNativeEdit(ta, edit);
     onChange(edit.value);
     setTrigger(null);
-    requestAnimationFrame(() => {
-      const ta = inputRef.current;
-      if (!ta) return;
-      ta.setSelectionRange(edit.from, edit.to);
-      publishSelection(ta);
-    });
+    if (ta) publishSelection(ta);
   };
 
   const sync = (v: string, caret: number): void =>
@@ -266,20 +300,23 @@ export const ComposerTextarea = forwardRef<
     };
   }, [trigger?.type, trigger?.query, sessionId]);
 
-  // Splice the chosen token in. NO .focus() here: the option row's mousedown
-  // preventDefault kept the textarea focused (keyboard never dropped), so we only
-  // move the caret (in a rAF, after the controlled value re-renders). Calling
-  // focus() — especially deferred — is what caused the iOS phantom-keyboard gap.
+  // Splice the chosen token in. The option row's mousedown preventDefault keeps
+  // the textarea focused, so move the live native caret synchronously and do not
+  // schedule a post-render selection write.
   const applyOption = (option: PickerOption): void => {
     if (!trigger) return;
     const { apply } = option;
+    const current = currentTextSelection();
     const end = trigger.from + 1 + trigger.query.length;
-    const next = value.slice(0, trigger.from) + apply + value.slice(end);
+    const next = current.value.slice(0, trigger.from) + apply +
+      current.value.slice(end);
+    const pos = trigger.from + apply.length;
+    const ta = inputRef.current;
+    if (ta) writeNativeEdit(ta, { value: next, from: pos, to: pos });
     onChange(next);
     selectedSlashCommandRef.current = option.slashCommand ?? null;
     setTrigger(null);
-    const pos = trigger.from + apply.length;
-    requestAnimationFrame(() => inputRef.current?.setSelectionRange(pos, pos));
+    if (ta) publishSelection(ta);
   };
 
   useImperativeHandle(ref, () => ({
@@ -295,16 +332,16 @@ export const ComposerTextarea = forwardRef<
     },
     insertTrigger: (ch: string): void => {
       const ta = inputRef.current;
-      const at = ta?.selectionStart ?? value.length;
-      const to = ta?.selectionEnd ?? at;
-      const next = value.slice(0, at) + ch + value.slice(to);
-      onChange(next);
-      ta?.focus(); // synchronous, inside the toolbar-button tap gesture — safe
+      const current = currentTextSelection();
+      const at = current.from;
+      const next = current.value.slice(0, at) + ch +
+        current.value.slice(current.to);
       const pos = at + ch.length;
-      requestAnimationFrame(() => {
-        inputRef.current?.setSelectionRange(pos, pos);
-        sync(next, pos);
-      });
+      ta?.focus(); // synchronous, inside the toolbar-button tap gesture — safe
+      if (ta) writeNativeEdit(ta, { value: next, from: pos, to: pos });
+      onChange(next);
+      sync(next, pos);
+      if (ta) publishSelection(ta);
     },
     clear: (): void => {
       selectedSlashCommandRef.current = null;
@@ -327,6 +364,13 @@ export const ComposerTextarea = forwardRef<
       const edit = insertNativeInlineImages(current, at, to, [attachment]);
       // Record before onChange schedules the render that replaces this textarea.
       onInlineImageInsertion?.(edit.caret);
+      if (ta) {
+        writeNativeEdit(ta, {
+          value: edit.value,
+          from: edit.caret,
+          to: edit.caret,
+        });
+      }
       onChange(edit.value);
     },
     insertImages: (attachments: Attachment[]): void => {
@@ -341,6 +385,13 @@ export const ComposerTextarea = forwardRef<
       // CM6's initial EditorState consumes this exact selection in the same
       // promotion commit. Defaulting to 0 strands the caret before the image.
       onInlineImageInsertion?.(edit.caret);
+      if (ta) {
+        writeNativeEdit(ta, {
+          value: edit.value,
+          from: edit.caret,
+          to: edit.caret,
+        });
+      }
       onChange(edit.value);
     },
     refreshImages: (): void => undefined,
@@ -422,20 +473,18 @@ export const ComposerTextarea = forwardRef<
       if (!ta) return;
       ta.focus();
       document.execCommand("undo");
-      requestAnimationFrame(() => {
-        onChange(ta.value);
-        publishSelection(ta);
-      });
+      lastNativeValueRef.current = ta.value;
+      onChange(ta.value);
+      publishSelection(ta);
     },
     redo: (): void => {
       const ta = inputRef.current;
       if (!ta) return;
       ta.focus();
       document.execCommand("redo");
-      requestAnimationFrame(() => {
-        onChange(ta.value);
-        publishSelection(ta);
-      });
+      lastNativeValueRef.current = ta.value;
+      onChange(ta.value);
+      publishSelection(ta);
     },
   }));
 
@@ -530,7 +579,10 @@ export const ComposerTextarea = forwardRef<
       {popup}
       <TextField
         inputRef={inputRef}
-        value={value}
+        // The native textarea owns its live value/selection on touch surfaces.
+        // React still receives every change through onChange, while the layout
+        // effect above handles only genuine external value transitions.
+        defaultValue={value}
         onChange={(e): void => {
           const command = selectedSlashCommandRef.current;
           if (command) {
@@ -543,6 +595,7 @@ export const ComposerTextarea = forwardRef<
               selectedSlashCommandRef.current = null;
             }
           }
+          lastNativeValueRef.current = e.target.value;
           onChange(e.target.value);
           sync(
             e.target.value,

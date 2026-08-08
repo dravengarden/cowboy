@@ -1149,3 +1149,20 @@ Desktop Vim + IME checks:
     Scheduling may release the editor before opening its sheet because it commits
     the durable draft first. Keep every control's pointer-down focus protection;
     do not add custom touch, selection, or IME handling.
+
+55. **Touch textarea value ownership must stay native across selection changes.**
+    A React-controlled `value` can replace WebKit's live selection when iPad
+    long-press publishes `select` and the parent re-renders before UIKit presents
+    Paste/Select. Use `defaultValue` for the native textarea, mirror input to
+    React without writing it back on every render, and synchronously apply only
+    genuine external replacements with a mapped selection. Toolbar edits,
+    undo/redo, and native-to-CM6 image promotion must write their value and caret
+    in the same gesture; never restore them in a later animation frame. This
+    preserves native paste/IME ownership and prevents repeated newline input from
+    appearing to jump until the next character is typed.
+
+56. **Popover image deletion must remove the same block that insertion created.**
+    Image placement adds a line break before and after the token when it is
+    inserted in the middle of text. Delete actions must consume that surrounding
+    one-line range and map the old selection through it; removing only the token
+    line leaves a stale separator and makes the caret appear on the wrong line.

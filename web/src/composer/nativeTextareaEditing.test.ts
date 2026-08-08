@@ -4,6 +4,7 @@ import {
   indentNativeLines,
   insertNativeCodeBlock,
   insertNativeLink,
+  mapNativeSelectionThroughValueChange,
   outdentNativeLines,
   setNativeHeading,
   toggleNativeCheckbox,
@@ -78,4 +79,19 @@ Deno.test("native toolbar toggles task state and inserts link and code block", (
     from: 9,
     to: 9,
   });
+});
+
+Deno.test("native external value sync maps the caret through newline edits", () => {
+  assertEquals(
+    mapNativeSelectionThroughValueChange("one\ntwo", "one\n\ntwo", 7, 7),
+    { from: 8, to: 8 },
+  );
+  assertEquals(
+    mapNativeSelectionThroughValueChange("one\n\ntwo", "one\ntwo", 8, 8),
+    { from: 7, to: 7 },
+  );
+  assertEquals(
+    mapNativeSelectionThroughValueChange("before", "", 3, 3),
+    { from: 0, to: 0 },
+  );
 });
