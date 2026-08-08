@@ -64,7 +64,7 @@ const CODEX_FULL_ACCESS_CONFIG_VALUE: &str = "agent-full-access";
 const CLAUDE_EMPTY_STREAM_MESSAGE: &str = "API Error: Stream ended without receiving any events";
 
 /// Attach a stable, content-free session identity to requests sent through the
-/// local DeepSeek gateways. The gateways HMAC this opaque value for telemetry
+/// local `DeepSeek` gateways. The gateways HMAC this opaque value for telemetry
 /// and deliberately do not forward the Cowboy-only header upstream.
 fn deepseek_session_environment(
     provider_id: &str,
