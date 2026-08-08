@@ -461,7 +461,7 @@ function DeepSeekDetails(
         desktopMaxWidth={520}
         mobileDismiss="none"
         floatingActions={false}
-        animateOnOpen={false}
+        animateOnOpen
       >
         <Stack spacing={2} sx={{ pt: 0.5, pb: 1 }}>
           <MultiSelectChipGroup label="Model" options={DEEPSEEK_MODEL_OPTIONS} value={draftModels} onChange={setDraftModels} />
