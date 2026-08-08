@@ -2499,6 +2499,8 @@ mod tests {
                     cwd,
                     agent_session_id: None,
                     system: false,
+                    context_window: None,
+                    auto_compact_token_limit: None,
                     generation: "test".to_owned(),
                     fallback_for: None,
                     adopt_only: false,

@@ -1007,6 +1007,9 @@ fn queue_persisted_config(shared: &Shared, session_id: &str, options: Option<&se
     };
     let Some(options) = options else {
         for (config_id, value) in preferences {
+            if config_id == crate::deepseek_context::CONFIG_ID {
+                continue;
+            }
             queue_config_value(shared, session_id, config_id, value.clone());
         }
         return;
@@ -1015,6 +1018,9 @@ fn queue_persisted_config(shared: &Shared, session_id: &str, options: Option<&se
         return;
     };
     for (config_id, value) in preferences {
+        if config_id == crate::deepseek_context::CONFIG_ID {
+            continue;
+        }
         let Some(option) = options
             .iter()
             .find(|option| option.get("id").and_then(serde_json::Value::as_str) == Some(config_id))
@@ -1455,6 +1461,8 @@ mod tests {
                 cwd: "/tmp".to_owned(),
                 agent_session_id: Some("agent-1".to_owned()),
                 system: false,
+                context_window: None,
+                auto_compact_token_limit: None,
                 generation: "gen-1".to_owned(),
                 fallback_for: None,
                 adopt_only: false,
@@ -1642,6 +1650,36 @@ mod tests {
                 .iter()
                 .any(|command| matches!(command, CoreCommand::SetConfigOption { .. }))
         );
+    }
+
+    #[tokio::test]
+    async fn host_owned_deepseek_context_is_never_forwarded_as_an_acp_option() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "codex-deepseek".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        let runtime = RemoteRuntime::for_test(hub, Vec::new());
+        let mut launch = snapshot("s").launch.expect("launch metadata");
+        launch.provider = "codex-deepseek".to_owned();
+        launch.context_window = Some(680_000);
+        launch.auto_compact_token_limit = Some(646_000);
+        runtime.ensure(launch);
+
+        let config_ids = runtime
+            .pending_for_test()
+            .into_iter()
+            .filter_map(|command| match command {
+                CoreCommand::SetConfigOption { config_id, .. } => Some(config_id),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(config_ids.len(), 3);
+        assert!(!config_ids.iter().any(|id| id == "deepseek_context"));
     }
 
     #[tokio::test]

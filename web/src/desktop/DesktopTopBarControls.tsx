@@ -79,10 +79,11 @@ import {
 const OPTION_RANK: Record<string, number> = {
   mode: 0,
   model: 1,
-  effort: 2,
-  reasoning_effort: 2,
-  fast: 3,
-  fast_mode: 3,
+  deepseek_context: 2,
+  effort: 3,
+  reasoning_effort: 3,
+  fast: 4,
+  fast_mode: 4,
 };
 
 const EMPTY_CONFIG_OPTIONS: ConfigOption[] = [];
@@ -482,9 +483,11 @@ function DesktopUsageExtras(
 function ConfigOptionControl({
   option,
   sessionId,
+  disabled,
 }: {
   option: ConfigOption;
   sessionId: string;
+  disabled: boolean;
 }): React.JSX.Element {
   const label = optionLabel(option);
   const shortcut = optionShortcut(option);
@@ -510,7 +513,9 @@ function ConfigOptionControl({
         gridTemplateColumns: "108px minmax(0, 1fr)",
         alignItems: "center",
         gap: 1.25,
-        gridColumn: label === "Reasoning effort" ? "1 / -1" : undefined,
+        gridColumn: label === "Reasoning effort" || option.id === "deepseek_context"
+          ? "1 / -1"
+          : undefined,
       }}
     >
       <Tooltip title={option.description ?? ""} placement="right">
@@ -533,6 +538,7 @@ function ConfigOptionControl({
         ? (
           <FormControl fullWidth size="small">
             <Select
+              disabled={disabled}
               value={String(option.currentValue)}
               SelectDisplayProps={{
                 "data-config-choice": "true",
@@ -574,6 +580,7 @@ function ConfigOptionControl({
         )
         : (
           <ToggleButtonGroup
+            disabled={disabled}
             exclusive
             size="small"
             value={String(option.currentValue)}
@@ -1028,6 +1035,11 @@ export function DesktopTopBarControls({
                 key={option.id}
                 option={option}
                 sessionId={sessionId}
+                disabled={
+                  dead ||
+                  (option.id === "deepseek_context" &&
+                    (status === "busy" || status === "starting"))
+                }
               />
             ))}
           </Box>

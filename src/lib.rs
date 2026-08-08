@@ -29,6 +29,9 @@ mod code_cache;
 pub mod code_review;
 #[cfg(feature = "full")]
 mod core;
+#[cfg(any(feature = "full", feature = "machine-host"))]
+#[path = "provider/deepseek_context.rs"]
+mod deepseek_context;
 #[cfg(feature = "full")]
 mod diff_snapshot;
 #[cfg(any(feature = "full", feature = "code-adapter"))]

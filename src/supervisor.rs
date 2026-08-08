@@ -209,12 +209,15 @@ impl Supervisor {
         resume: Option<String>,
     ) -> Result<(), String> {
         let runtime = self.runtime_for_session(session_id)?;
+        let budget = self.deepseek_context_budget(session_id, spec.id);
         runtime.ensure(StartSession {
             session_id: session_id.to_owned(),
             provider: spec.id.to_owned(),
             cwd: cwd.display().to_string(),
             agent_session_id: resume,
             system: self.hub.session_is_system(session_id),
+            context_window: budget.map(|value| value.context_window),
+            auto_compact_token_limit: budget.map(|value| value.auto_compact_token_limit),
             generation: String::new(),
             fallback_for: None,
             adopt_only: false,
@@ -307,16 +310,32 @@ impl Supervisor {
             .into_iter()
             .find(|meta| meta.id == session_id)
             .ok_or_else(|| format!("unknown session {session_id:?}"))?;
+        let budget = self.deepseek_context_budget(session_id, &meta.provider);
         Ok(StartSession {
             session_id: meta.id,
             provider: meta.provider,
             cwd: meta.cwd,
             agent_session_id: self.hub.agent_session_id_for_resume(session_id),
             system: meta.system,
+            context_window: budget.map(|value| value.context_window),
+            auto_compact_token_limit: budget.map(|value| value.auto_compact_token_limit),
             generation: String::new(),
             fallback_for: None,
             adopt_only: false,
         })
+    }
+
+    fn deepseek_context_budget(
+        &self,
+        session_id: &str,
+        provider: &str,
+    ) -> Option<crate::deepseek_context::ContextBudget> {
+        let preferences = self.hub.config_preferences(session_id)?;
+        let model = preferences.get("model").and_then(serde_json::Value::as_str);
+        let requested = preferences
+            .get(crate::deepseek_context::CONFIG_ID)
+            .and_then(serde_json::Value::as_str);
+        crate::deepseek_context::launch_budget(provider, model, requested)
     }
 
     /// Tear down a session's detached worker. Hub state is the caller's
@@ -349,6 +368,54 @@ impl Supervisor {
     /// session is touched.
     pub fn recycle_session(&self, session_id: &str) -> Result<(), String> {
         let _lifecycle = self.lifecycle.lock();
+        self.resolve_and_persist_cwd(session_id)?;
+        self.recycle_session_inner(session_id)
+    }
+
+    /// Apply one Cowboy-owned DeepSeek context profile. This setting changes
+    /// process startup rather than an ACP option, so recycle only this idle
+    /// worker while preserving both the Cowboy and native agent session ids.
+    pub fn set_deepseek_context_profile(
+        &self,
+        session_id: &str,
+        value: serde_json::Value,
+    ) -> Result<(), String> {
+        let _lifecycle = self.lifecycle.lock();
+        let profile = value
+            .as_str()
+            .ok_or_else(|| "DeepSeek context profile must be a string id".to_owned())?;
+        let meta = self
+            .hub
+            .session_list()
+            .into_iter()
+            .find(|meta| meta.id == session_id)
+            .ok_or_else(|| format!("unknown session {session_id:?}"))?;
+        if matches!(meta.status, Status::Busy | Status::Starting)
+            || self.hub.session_has_in_flight_prompt(session_id)
+        {
+            return Err(
+                "wait for the current turn to finish before changing the context budget".to_owned(),
+            );
+        }
+        let preferences = self
+            .hub
+            .config_preferences(session_id)
+            .unwrap_or_else(|| serde_json::json!({}));
+        let model = preferences.get("model").and_then(serde_json::Value::as_str);
+        crate::deepseek_context::resolve(&meta.provider, model, profile)?;
+        self.runtime_for_session(session_id)?;
+        let unchanged = preferences
+            .get(crate::deepseek_context::CONFIG_ID)
+            .and_then(serde_json::Value::as_str)
+            == Some(profile);
+        self.hub.set_config_preference(
+            session_id,
+            crate::deepseek_context::CONFIG_ID.to_owned(),
+            value,
+        )?;
+        if unchanged {
+            return Ok(());
+        }
         self.resolve_and_persist_cwd(session_id)?;
         self.recycle_session_inner(session_id)
     }
@@ -553,6 +620,8 @@ mod tests {
                 cwd: cwd.to_owned(),
                 agent_session_id: Some("codex-thread-1".to_owned()),
                 system: false,
+                context_window: None,
+                auto_compact_token_limit: None,
                 generation: "test-generation".to_owned(),
                 fallback_for: None,
                 adopt_only: false,
@@ -734,6 +803,69 @@ mod tests {
                     if session.cwd == cwd.to_string_lossy()
                         && session.agent_session_id.is_none()
             )
+        }));
+    }
+
+    #[tokio::test]
+    async fn changing_deepseek_context_recycles_only_the_idle_session() {
+        let root = TestDir::new();
+        let cwd = root.path().join("checkout");
+        std::fs::create_dir_all(&cwd).expect("checkout");
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "codex-deepseek".to_owned(),
+            cwd.display().to_string(),
+            "test".to_owned(),
+            SessionOrigin::Web,
+            false,
+        );
+        hub.push(
+            "s",
+            crate::core::Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "user_message_chunk",
+                    "content": {"type": "text", "text": "durable prompt"},
+                }),
+            },
+        );
+        hub.set_agent_session_id("s", "deepseek-thread-1".to_owned());
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        let supervisor = Supervisor::new_remote(hub.clone(), root.0.clone(), 0, runtime.clone());
+
+        hub.set_status("s", Status::Busy, None);
+        assert!(
+            supervisor
+                .set_deepseek_context_profile("s", serde_json::json!("830k"))
+                .expect_err("busy session must reject a process-level config change")
+                .contains("current turn")
+        );
+        assert_eq!(
+            hub.config_preferences("s").unwrap()["deepseek_context"],
+            "680k"
+        );
+
+        hub.set_status("s", Status::Running, None);
+        supervisor
+            .set_deepseek_context_profile("s", serde_json::json!("830k"))
+            .expect("idle context change");
+
+        assert_eq!(hub.status("s"), Some(Status::Starting));
+        assert_eq!(
+            hub.config_preferences("s").unwrap()["deepseek_context"],
+            "830k"
+        );
+        assert!(runtime.pending_for_test().iter().any(|command| {
+            matches!(
+                command,
+                CoreCommand::EnsureSession { session }
+                    if session.agent_session_id.as_deref() == Some("deepseek-thread-1")
+                        && session.context_window == Some(830_000)
+                        && session.auto_compact_token_limit == Some(788_500)
+            )
+        }));
+        assert!(runtime.pending_for_test().iter().any(|command| {
+            matches!(command, CoreCommand::StopSession { command_id, .. } if command_id.starts_with("reset-"))
         }));
     }
 

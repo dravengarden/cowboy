@@ -103,6 +103,29 @@ tests, and release transaction. It preserves native Anthropic Messages/SSE and
 contains only current fixture-backed DeepSeek compatibility repairs; it is not
 a shared provider router.
 
+### DeepSeek session context budgets
+
+Cowboy projects a host-owned `Context budget` option only for a model whose
+current DeepSeek capability is known. V4 Flash and V4 Pro both expose the same
+1M provider context today, so both `claude-deepseek` and `codex-deepseek` offer
+the same `128K`, `256K`, `512K`, `680K`, and `830K` choices. The option is
+model-gated rather than a global gateway setting; future models do not inherit
+this matrix until their capability is classified.
+
+The two agent runtimes consume a selected budget differently:
+
+| Agent lane | Default | Runtime projection |
+|---|---:|---|
+| `claude-deepseek` | `830K` | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` equals the selected budget, except `830K` compacts at the safer `819,200` token line; output remains capped at `128K` |
+| `codex-deepseek` | `680K` | `model_context_window` equals the selected budget and `model_auto_compact_token_limit` is 95% of it (`646K` at the default); `830K` remains an explicit large-context choice |
+
+The selection belongs to one Cowboy session. Changing it while the session is
+idle persists the preference, recycles only that worker, and resumes the same
+native agent session id with the new process-level configuration. Cowboy rejects
+the change during a live or dispatching turn. The synthetic option never crosses
+ACP, and neither gateway receives invented model aliases or routing parameters.
+Older sessions without a stored choice use the lane default above.
+
 `reasonix-deepseek` runs Reasonix's native ACP server directly; there is no
 Cowboy protocol shim. The runtime reads its own `~/.reasonix` configuration and
 shares only the canonical Claude/Reasonix fact store established by the host.

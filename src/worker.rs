@@ -243,9 +243,16 @@ impl AgentSink for RemoteSink {
     }
 
     fn set_session_usage(&self, _session_id: &str, usage: crate::agent_model::SessionUsage) {
+        let configured_size = self
+            .shared
+            .snapshot
+            .lock()
+            .launch
+            .as_ref()
+            .and_then(|launch| launch.context_window);
         self.shared.emit(RuntimeEvent::ContextUsage {
             used: usage.used,
-            size: usage.size,
+            size: configured_size.map_or(usage.size, |size| size.min(usage.size)),
             raw: usage.raw,
             observed_at_ms: usage.observed_at_ms,
         });
@@ -299,6 +306,17 @@ fn generated_epoch() -> String {
 pub async fn run(args: WorkerArgs) -> Result<()> {
     let spec = provider::lookup(&args.provider)
         .ok_or_else(|| anyhow::anyhow!("unknown provider {:?}", args.provider))?;
+    let context_budget = std::env::var(crate::deepseek_context::SESSION_CONTEXT_WINDOW_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .zip(
+            std::env::var(crate::deepseek_context::SESSION_AUTO_COMPACT_TOKEN_LIMIT_ENV)
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok()),
+        )
+        .and_then(|(window, compact)| {
+            crate::deepseek_context::from_launch_values(&args.provider, window, compact)
+        });
     let epoch = args.worker_epoch.unwrap_or_else(generated_epoch);
     let executable = std::env::current_exe()
         .ok()
@@ -309,6 +327,8 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
         cwd: args.cwd.display().to_string(),
         agent_session_id: args.resume.clone(),
         system: args.system,
+        context_window: context_budget.map(|value| value.context_window),
+        auto_compact_token_limit: context_budget.map(|value| value.auto_compact_token_limit),
         generation: args.generation.clone(),
         fallback_for: args.fallback_for.clone(),
         adopt_only: false,
@@ -812,6 +832,46 @@ mod tests {
         let snapshot = shared.snapshot();
         assert_eq!(snapshot.current_turn_id.as_deref(), Some("turn-1"));
         assert_eq!(snapshot.state, WorkerState::Running);
+    }
+
+    #[test]
+    fn reported_context_size_is_bounded_by_the_selected_session_budget() {
+        let (shared, _rx) = shared();
+        shared.snapshot.lock().launch = Some(crate::runtime_wire::StartSession {
+            session_id: "sess-1".to_owned(),
+            provider: "codex-deepseek".to_owned(),
+            cwd: "/work".to_owned(),
+            agent_session_id: None,
+            system: false,
+            context_window: Some(680_000),
+            auto_compact_token_limit: Some(646_000),
+            generation: "gen-1".to_owned(),
+            fallback_for: None,
+            adopt_only: false,
+        });
+        let sink = RemoteSink {
+            shared: Arc::clone(&shared),
+        };
+        sink.set_session_usage(
+            "sess-1",
+            crate::agent_model::SessionUsage {
+                used: 320_000,
+                size: 1_048_576,
+                raw: serde_json::json!({"providerSize": 1_048_576}),
+                observed_at_ms: 42,
+            },
+        );
+
+        assert!(matches!(
+            shared.outbox.lock().get(&1),
+            Some(RuntimeEvent::ContextUsage {
+                used: 320_000,
+                size: 680_000,
+                observed_at_ms: 42,
+                ..
+            })
+        ));
+        assert_eq!(shared.snapshot().context_size, Some(680_000));
     }
 
     #[test]

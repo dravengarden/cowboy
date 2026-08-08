@@ -5416,7 +5416,13 @@ export function SessionControls({
   // Same fixed display order as the old inline chip row, so the sheet's selectors
   // never reshuffle between config_option_update notifications.
   const options = useMemo(() => {
-    const order = ["mode", "model", "effort"];
+    const order = [
+      "mode",
+      "model",
+      "deepseek_context",
+      "effort",
+      "reasoning_effort",
+    ];
     return providerConfigOptions(session?.provider, configOptions).sort((a, b) => {
       const ai = order.indexOf(a.id);
       const bi = order.indexOf(b.id);
@@ -5689,7 +5695,11 @@ function ComposerSheet({
                     <ConfigSheetDropdown
                       key={opt.id}
                       option={opt}
-                      disabled={dead}
+                      disabled={
+                        dead ||
+                        (opt.id === "deepseek_context" &&
+                          (status === "busy" || status === "starting"))
+                      }
                       onSelect={(value): void => onSelectOption(opt.id, value)}
                     />
                   ))}

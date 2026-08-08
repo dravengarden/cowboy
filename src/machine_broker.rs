@@ -1218,6 +1218,7 @@ impl Broker {
     }
 
     async fn spawn_worker(&self, session: &StartSession) -> Result<()> {
+        let session_environment = session_context_environment(session)?;
         let worker_command = self
             .generation_commands
             .lock()
@@ -1233,6 +1234,9 @@ impl Broker {
             SpawnMode::Direct => {
                 let mut command = Command::new(&worker_command);
                 command.envs(&self.args.worker_environment);
+                for (name, value) in &session_environment {
+                    command.env(name, value);
+                }
                 command
             }
             SpawnMode::SystemdUser => {
@@ -1260,6 +1264,9 @@ impl Broker {
                     command.arg(format!("--setenv={name}"));
                 }
                 for (name, value) in &self.args.worker_environment {
+                    command.arg(format!("--setenv={name}={value}"));
+                }
+                for (name, value) in &session_environment {
                     command.arg(format!("--setenv={name}={value}"));
                 }
                 if let Some(fallback_for) = &session.fallback_for {
@@ -1317,6 +1324,33 @@ impl Broker {
             }
         }
         Ok(())
+    }
+}
+
+fn session_context_environment(session: &StartSession) -> Result<Vec<(&'static str, String)>> {
+    match (session.context_window, session.auto_compact_token_limit) {
+        (None, None) => Ok(Vec::new()),
+        (Some(window), Some(compact))
+            if crate::deepseek_context::from_launch_values(&session.provider, window, compact)
+                .is_some() =>
+        {
+            Ok(vec![
+                (
+                    crate::deepseek_context::SESSION_CONTEXT_WINDOW_ENV,
+                    window.to_string(),
+                ),
+                (
+                    crate::deepseek_context::SESSION_AUTO_COMPACT_TOKEN_LIMIT_ENV,
+                    compact.to_string(),
+                ),
+            ])
+        }
+        _ => anyhow::bail!(
+            "invalid context budget for provider {}: window={:?}, compact={:?}",
+            session.provider,
+            session.context_window,
+            session.auto_compact_token_limit
+        ),
     }
 }
 
@@ -1955,6 +1989,40 @@ mod tests {
         assert!(transient_unit_collected(true, "not-found"));
         assert!(!transient_unit_collected(true, "loaded"));
     }
+
+    #[test]
+    fn session_context_environment_accepts_only_known_provider_budgets() {
+        let mut session = StartSession {
+            session_id: "s".to_owned(),
+            provider: "claude-deepseek".to_owned(),
+            cwd: "/work".to_owned(),
+            agent_session_id: None,
+            system: false,
+            context_window: Some(830_000),
+            auto_compact_token_limit: Some(819_200),
+            generation: "gen-1".to_owned(),
+            fallback_for: None,
+            adopt_only: false,
+        };
+        assert_eq!(
+            session_context_environment(&session).expect("known Claude budget"),
+            vec![
+                (
+                    crate::deepseek_context::SESSION_CONTEXT_WINDOW_ENV,
+                    "830000".to_owned(),
+                ),
+                (
+                    crate::deepseek_context::SESSION_AUTO_COMPACT_TOKEN_LIMIT_ENV,
+                    "819200".to_owned(),
+                ),
+            ]
+        );
+
+        session.auto_compact_token_limit = Some(830_000);
+        assert!(session_context_environment(&session).is_err());
+        session.provider = "claude-code".to_owned();
+        assert!(session_context_environment(&session).is_err());
+    }
     use crate::runtime_wire::{RuntimeEvent, WorkerState};
 
     fn test_socket() -> PathBuf {
@@ -2124,6 +2192,8 @@ mod tests {
                 cwd: "/work".to_owned(),
                 agent_session_id: Some("agent-1".to_owned()),
                 system: false,
+                context_window: None,
+                auto_compact_token_limit: None,
                 generation: "gen-1".to_owned(),
                 fallback_for: None,
                 adopt_only: false,
@@ -2200,6 +2270,8 @@ mod tests {
             cwd: "/work".to_owned(),
             agent_session_id: Some("agent-1".to_owned()),
             system: false,
+            context_window: None,
+            auto_compact_token_limit: None,
             generation: "gen-1".to_owned(),
             fallback_for: None,
             adopt_only: false,
@@ -2286,6 +2358,8 @@ mod tests {
                     cwd: "/work".to_owned(),
                     agent_session_id: None,
                     system: false,
+                    context_window: None,
+                    auto_compact_token_limit: None,
                     generation: "gen-1".to_owned(),
                     fallback_for: Some("gen-2".to_owned()),
                     adopt_only: false,
@@ -2342,6 +2416,8 @@ mod tests {
                 cwd: "/work".to_owned(),
                 agent_session_id: None,
                 system: false,
+                context_window: None,
+                auto_compact_token_limit: None,
                 generation: "gen-1".to_owned(),
                 fallback_for: Some("gen-2".to_owned()),
                 adopt_only: false,
@@ -2400,6 +2476,8 @@ mod tests {
                 cwd: "/work".to_owned(),
                 agent_session_id: None,
                 system: false,
+                context_window: None,
+                auto_compact_token_limit: None,
                 generation: "gen-2".to_owned(),
                 fallback_for: None,
                 adopt_only: false,
@@ -2413,6 +2491,8 @@ mod tests {
                 cwd: "/work".to_owned(),
                 agent_session_id: None,
                 system: false,
+                context_window: None,
+                auto_compact_token_limit: None,
                 generation: "gen-1".to_owned(),
                 fallback_for: Some("gen-2".to_owned()),
                 adopt_only: false,
@@ -2504,6 +2584,8 @@ mod tests {
             cwd: "/work".to_owned(),
             agent_session_id: None,
             system: false,
+            context_window: None,
+            auto_compact_token_limit: None,
             generation: "gen-1".to_owned(),
             fallback_for: None,
             adopt_only: false,
@@ -2550,6 +2632,8 @@ mod tests {
                 cwd: "/work".to_owned(),
                 agent_session_id: Some("agent-1".to_owned()),
                 system: false,
+                context_window: None,
+                auto_compact_token_limit: None,
                 generation: "gen-1".to_owned(),
                 fallback_for: None,
                 adopt_only: true,
@@ -2586,6 +2670,8 @@ mod tests {
                 cwd: "/work".to_owned(),
                 agent_session_id: None,
                 system: false,
+                context_window: None,
+                auto_compact_token_limit: None,
                 generation: "gen-1".to_owned(),
                 fallback_for: None,
                 adopt_only: false,
@@ -2630,6 +2716,8 @@ mod tests {
                     cwd: "/work".to_owned(),
                     agent_session_id: None,
                     system: false,
+                    context_window: None,
+                    auto_compact_token_limit: None,
                     generation: "gen-2".to_owned(),
                     fallback_for: None,
                     adopt_only: false,

@@ -100,6 +100,12 @@ pub struct StartSession {
     pub agent_session_id: Option<String>,
     #[serde(default)]
     pub system: bool,
+    /// Worker-local context budget selected for this provider/model. Older
+    /// Machine generations ignore these optional fields during rolling deploys.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_compact_token_limit: Option<u64>,
     pub generation: String,
     /// Desired generation this session is temporarily falling back from.
     #[serde(default)]
@@ -613,5 +619,7 @@ mod tests {
             panic!("ensure command")
         };
         assert!(!session.adopt_only);
+        assert_eq!(session.context_window, None);
+        assert_eq!(session.auto_compact_token_limit, None);
     }
 }

@@ -62,12 +62,14 @@ const CODEX_RUNTIME_ARGS: &[&str] = &[
 ];
 
 // DeepSeek's Anthropic-compatible 1M lane counts the requested completion
-// against the same context budget as the prompt. Its official agent guidance
-// therefore caps prompts at 840K and output at 128K. Claude Code otherwise
-// waits until roughly the end of the advertised 1M window before compacting,
-// after DeepSeek has already rejected the request.
-const CLAUDE_DEEPSEEK_AUTO_COMPACT_WINDOW: &str = "840000";
+// against the same context budget as the prompt. Claude Code otherwise waits
+// until roughly the end of the advertised window before compacting, after
+// DeepSeek has already rejected the request. The default user-visible 830K
+// budget therefore compacts at the explicitly safer 819.2K boundary.
+const CLAUDE_DEEPSEEK_AUTO_COMPACT_WINDOW: &str = "819200";
 const CLAUDE_DEEPSEEK_MAX_OUTPUT_TOKENS: &str = "128000";
+const CODEX_DEEPSEEK_CONTEXT_WINDOW: &str = "680000";
+const CODEX_DEEPSEEK_AUTO_COMPACT_TOKEN_LIMIT: &str = "646000";
 
 // Note: whether an agent can resume via `session/load` (design §7) is read at
 // runtime from its `initialize` response (`agent_capabilities.load_session` —
@@ -111,6 +113,20 @@ fn builtin_with_env_and_shell(
     claude_deepseek_shell: Option<String>,
 ) -> HashMap<&'static str, LaunchSpec> {
     let mut m = HashMap::new();
+    let session_context_window = get_env(crate::deepseek_context::SESSION_CONTEXT_WINDOW_ENV)
+        .and_then(|value| value.parse::<u64>().ok());
+    let session_auto_compact_token_limit =
+        get_env(crate::deepseek_context::SESSION_AUTO_COMPACT_TOKEN_LIMIT_ENV)
+            .and_then(|value| value.parse::<u64>().ok());
+    let session_budget_values = session_context_window
+        .zip(session_auto_compact_token_limit)
+        .filter(|(window, compact)| *window > 0 && *compact > 0 && *compact <= *window);
+    let claude_session_budget = session_budget_values.and_then(|(window, compact)| {
+        crate::deepseek_context::from_launch_values("claude-deepseek", window, compact)
+    });
+    let codex_session_budget = session_budget_values.and_then(|(window, compact)| {
+        crate::deepseek_context::from_launch_values("codex-deepseek", window, compact)
+    });
     let claude_executable =
         get_env("COWBOY_ACP_CLAUDE_CODE_EXECUTABLE").filter(|value| !value.trim().is_empty());
     let mut claude = spec(
@@ -173,7 +189,10 @@ fn builtin_with_env_and_shell(
         ),
         (
             "CLAUDE_CODE_AUTO_COMPACT_WINDOW".to_owned(),
-            CLAUDE_DEEPSEEK_AUTO_COMPACT_WINDOW.to_owned(),
+            claude_session_budget.map_or_else(
+                || CLAUDE_DEEPSEEK_AUTO_COMPACT_WINDOW.to_owned(),
+                |budget| budget.auto_compact_token_limit.to_string(),
+            ),
         ),
         (
             "CLAUDE_CODE_MAX_OUTPUT_TOKENS".to_owned(),
@@ -230,6 +249,8 @@ fn builtin_with_env_and_shell(
     claude_deepseek.remove_env = vec![
         "API_TIMEOUT_MS",
         "COWBOY_ACP_CLAUDE_DEEPSEEK_SHELL",
+        crate::deepseek_context::SESSION_CONTEXT_WINDOW_ENV,
+        crate::deepseek_context::SESSION_AUTO_COMPACT_TOKEN_LIMIT_ENV,
         "DISABLE_AUTO_COMPACT",
         "DISABLE_COMPACT",
         "DISABLE_PROMPT_CACHING",
@@ -263,6 +284,17 @@ fn builtin_with_env_and_shell(
         &[],
         &get_env,
     );
+    if let Some(budget) = codex_session_budget {
+        deepseek.args.extend([
+            "-c".to_owned(),
+            format!("model_context_window={}", budget.context_window),
+            "-c".to_owned(),
+            format!(
+                "model_auto_compact_token_limit={}",
+                budget.auto_compact_token_limit
+            ),
+        ]);
+    }
     // Reuse the installed Codex ACP adapter when the host already supplies it.
     // The inference endpoint itself remains a separate, independently deployed
     // process; only this worker-local configuration points Codex at it.
@@ -297,6 +329,8 @@ fn builtin_with_env_and_shell(
         "CHATGPT_BASE_URL",
         "DEEPSEEK_API_KEY",
         "DEEPSEEK_API_KEY_FILE",
+        crate::deepseek_context::SESSION_CONTEXT_WINDOW_ENV,
+        crate::deepseek_context::SESSION_AUTO_COMPACT_TOKEN_LIMIT_ENV,
     ];
     m.insert("codex-deepseek", deepseek);
     let mut reasonix_deepseek = spec_with_custom_default_args(
@@ -700,6 +734,8 @@ fn render_codex_deepseek_config(catalog: &Path) -> String {
      model_catalog_json = \"{}\"\n\
      approval_policy = \"never\"\n\
      sandbox_mode = \"danger-full-access\"\n\n\
+     model_context_window = {CODEX_DEEPSEEK_CONTEXT_WINDOW}\n\
+     model_auto_compact_token_limit = {CODEX_DEEPSEEK_AUTO_COMPACT_TOKEN_LIMIT}\n\
      model_auto_compact_token_limit_scope = \"body_after_prefix\"\n\n\
      [model_providers.deepseek-local]\n\
      name = \"Isolated DeepSeek Responses gateway\"\n\
@@ -722,6 +758,7 @@ fn render_codex_deepseek_config(catalog: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    use crate::deepseek_context;
     use std::collections::HashMap;
 
     fn lookup_with(overrides: &[(&str, &str)], id: &str) -> Option<super::LaunchSpec> {
@@ -746,7 +783,7 @@ mod tests {
                 .env
                 .get("CLAUDE_CODE_AUTO_COMPACT_WINDOW")
                 .map(String::as_str),
-            Some("840000")
+            Some("819200")
         );
         assert_eq!(
             claude_deepseek
@@ -796,6 +833,58 @@ mod tests {
         assert!(deepseek.remove_env.contains(&"OPENAI_ORGANIZATION"));
         assert!(deepseek.remove_env.contains(&"CODEX_CONFIG"));
         assert!(deepseek.remove_env.contains(&"DEEPSEEK_API_KEY"));
+
+        let claude_budget = lookup_with(
+            &[
+                (deepseek_context::SESSION_CONTEXT_WINDOW_ENV, "256000"),
+                (
+                    deepseek_context::SESSION_AUTO_COMPACT_TOKEN_LIMIT_ENV,
+                    "256000",
+                ),
+            ],
+            "claude-deepseek",
+        )
+        .expect("claude-deepseek registered");
+        assert_eq!(
+            claude_budget
+                .env
+                .get("CLAUDE_CODE_AUTO_COMPACT_WINDOW")
+                .map(String::as_str),
+            Some("256000")
+        );
+        assert!(
+            claude_budget
+                .remove_env
+                .contains(&deepseek_context::SESSION_CONTEXT_WINDOW_ENV)
+        );
+
+        let codex_budget = lookup_with(
+            &[
+                (deepseek_context::SESSION_CONTEXT_WINDOW_ENV, "830000"),
+                (
+                    deepseek_context::SESSION_AUTO_COMPACT_TOKEN_LIMIT_ENV,
+                    "788500",
+                ),
+            ],
+            "codex-deepseek",
+        )
+        .expect("codex-deepseek registered");
+        assert_eq!(
+            codex_budget.args,
+            [
+                "-y",
+                "@agentclientprotocol/codex-acp",
+                "-c",
+                "model_context_window=830000",
+                "-c",
+                "model_auto_compact_token_limit=788500",
+            ]
+        );
+        assert!(
+            codex_budget
+                .remove_env
+                .contains(&deepseek_context::SESSION_AUTO_COMPACT_TOKEN_LIMIT_ENV)
+        );
 
         let reasonix = lookup_with(
             &[(
@@ -1004,6 +1093,8 @@ mod tests {
         assert!(rendered.starts_with("model = \"deepseek-v4-flash\""));
         assert!(rendered.contains("model_reasoning_effort = \"max\""));
         assert!(rendered.contains("approval_policy = \"never\""));
+        assert!(rendered.contains("model_context_window = 680000"));
+        assert!(rendered.contains("model_auto_compact_token_limit = 646000"));
         assert!(rendered.contains("model_auto_compact_token_limit_scope = \"body_after_prefix\""));
         assert!(rendered.contains("[model_providers.deepseek-local]"));
         assert!(rendered.contains("requires_openai_auth = false"));

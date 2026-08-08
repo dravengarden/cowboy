@@ -5805,15 +5805,21 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
             config_id,
             value,
         } => {
-            state
-                .hub
-                .set_config_preference(&session_id, config_id.clone(), value.clone())
-                .and_then(|()| {
-                    state.supervisor.send(
-                        &session_id,
-                        AgentCommand::SetConfigOption { config_id, value },
-                    )
-                })
+            if config_id == crate::deepseek_context::CONFIG_ID {
+                state
+                    .supervisor
+                    .set_deepseek_context_profile(&session_id, value)
+            } else {
+                state
+                    .hub
+                    .set_config_preference(&session_id, config_id.clone(), value.clone())
+                    .and_then(|()| {
+                        state.supervisor.send(
+                            &session_id,
+                            AgentCommand::SetConfigOption { config_id, value },
+                        )
+                    })
+            }
         }
         // Revive on open (design §7): warm the agent when the client selects
         // the session, not only on the first prompt. No-op if already alive.

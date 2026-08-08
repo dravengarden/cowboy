@@ -533,17 +533,53 @@ fn default_config_preferences(provider: &str) -> serde_json::Value {
     } else if provider == "codex-deepseek" {
         serde_json::json!({
             "model": "deepseek-v4-flash",
+            "deepseek_context": "680k",
             "collaboration_mode": "default",
             "reasoning_effort": "max",
         })
     } else if provider == "claude-deepseek" {
         serde_json::json!({
             "model": "deepseek-v4-flash[1m]",
+            "deepseek_context": "830k",
             "effort": "max",
             "agent": "default",
         })
     } else {
         serde_json::json!({})
+    }
+}
+
+fn projected_config_options(
+    provider: &str,
+    preferences: &serde_json::Value,
+    options: Option<serde_json::Value>,
+) -> Option<serde_json::Value> {
+    let had_options = options.is_some();
+    let mut options = options.unwrap_or_else(|| serde_json::json!([]));
+    let Some(array) = options.as_array_mut() else {
+        return Some(options);
+    };
+    array.retain(|option| {
+        option.get("id").and_then(serde_json::Value::as_str)
+            != Some(crate::deepseek_context::CONFIG_ID)
+    });
+    let model = preferences.get("model").and_then(serde_json::Value::as_str);
+    let requested = preferences
+        .get(crate::deepseek_context::CONFIG_ID)
+        .and_then(serde_json::Value::as_str);
+    if let Some(option) = crate::deepseek_context::config_option(provider, model, requested) {
+        let insert_at = array
+            .iter()
+            .position(|candidate| {
+                candidate.get("id").and_then(serde_json::Value::as_str) == Some("model")
+            })
+            .map_or(array.len(), |index| index.saturating_add(1));
+        array.insert(insert_at, option);
+        Some(options)
+    } else if had_options {
+        Some(options)
+    } else {
+        None
     }
 }
 
@@ -3690,9 +3726,13 @@ impl Hub {
     #[must_use]
     pub fn config_options(&self, session_id: &str) -> Option<serde_json::Value> {
         let sessions = self.inner.sessions.lock();
-        sessions
-            .get(session_id)
-            .and_then(|s| s.config_options.clone())
+        sessions.get(session_id).and_then(|session| {
+            projected_config_options(
+                &session.meta.provider,
+                &session.config_preferences,
+                session.config_options.clone(),
+            )
+        })
     }
 
     /// Return the durable values selected for a session. The returned object is
@@ -3737,10 +3777,18 @@ impl Hub {
                 .as_object_mut()
                 .expect("config preferences are an object")
                 .insert(config_id.clone(), value.clone());
-            let options = session.config_options.as_mut().and_then(|options| {
+            let mut options = projected_config_options(
+                &session.meta.provider,
+                &session.config_preferences,
+                session.config_options.clone(),
+            );
+            let options = options.as_mut().and_then(|options| {
                 set_config_option_current_value(options, &config_id, &value)
                     .then(|| options.clone())
             });
+            if let Some(options) = &options {
+                session.config_options = Some(options.clone());
+            }
             (session.config_preferences.clone(), options)
         };
         if let Some(tx) = self.inner.store_tx.as_ref() {
@@ -3770,13 +3818,17 @@ impl Hub {
     /// `SetConfigOption` reply path (the agent's authoritative response
     /// refreshes the same array).
     pub fn set_config_options(&self, session_id: &str, options: serde_json::Value) {
-        {
+        let options = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            let options =
+                projected_config_options(&s.meta.provider, &s.config_preferences, Some(options))
+                    .expect("agent config options remain present after projection");
             s.config_options = Some(options.clone());
-        }
+            options
+        };
         if let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::UpdateConfigOptions {
                 session_id: session_id.to_owned(),
@@ -4911,6 +4963,7 @@ mod config_preference_tests {
             hub.config_preferences("claude-deepseek-session"),
             Some(serde_json::json!({
                 "model": "deepseek-v4-flash[1m]",
+                "deepseek_context": "830k",
                 "effort": "max",
                 "agent": "default",
             }))
@@ -4933,6 +4986,7 @@ mod config_preference_tests {
             hub.config_preferences("codex-deepseek-session"),
             Some(serde_json::json!({
                 "model": "deepseek-v4-flash",
+                "deepseek_context": "680k",
                 "collaboration_mode": "default",
                 "reasoning_effort": "max",
             }))
@@ -4976,6 +5030,32 @@ mod config_preference_tests {
                 .and_then(|value| value[0].get("currentValue").cloned()),
             Some(serde_json::json!("gpt-5.6-luna"))
         );
+    }
+
+    #[test]
+    fn deepseek_context_option_is_projected_after_the_model() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "deepseek-session".to_owned(),
+            "codex-deepseek".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            SessionOrigin::Web,
+            false,
+        );
+        hub.set_config_options(
+            "deepseek-session",
+            serde_json::json!([
+                {"id": "model", "currentValue": "deepseek-v4-flash", "options": []},
+                {"id": "reasoning_effort", "currentValue": "max", "options": []},
+            ]),
+        );
+
+        let options = hub.config_options("deepseek-session").unwrap();
+        assert_eq!(options[0]["id"], "model");
+        assert_eq!(options[1]["id"], "deepseek_context");
+        assert_eq!(options[1]["currentValue"], "680k");
+        assert_eq!(options[2]["id"], "reasoning_effort");
     }
 }
 
