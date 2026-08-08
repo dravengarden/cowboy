@@ -758,6 +758,9 @@ async fn record_lifecycle_incidents(store: &Store, rows: &[Envelope]) -> anyhow:
 }
 
 fn classify_crash_detail(detail: Option<&str>) -> &'static str {
+    if detail.is_some_and(crate::provider::claude_code::is_context_window_rejection) {
+        return "provider_context_limit";
+    }
     let detail = detail.unwrap_or_default().to_ascii_lowercase();
     if detail.contains("oom") || detail.contains("out of memory") || detail.contains("signal: 9") {
         "resource_exhaustion"
@@ -812,6 +815,12 @@ mod incident_classification_tests {
         assert_eq!(
             classify_crash_detail(Some("exit status 217")),
             "process_exit"
+        );
+        assert_eq!(
+            classify_crash_detail(Some(
+                "API Error: 400 This model's maximum context length is 1048576 tokens"
+            )),
+            "provider_context_limit"
         );
         assert_eq!(classify_crash_detail(None), "runtime_failure");
     }

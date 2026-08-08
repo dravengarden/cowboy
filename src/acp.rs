@@ -1258,6 +1258,7 @@ async fn run_session(
                 let sid = session_id.clone();
                 let acp = acp_id.clone();
                 let state = Arc::clone(state);
+                let context_rejection_keeps_worker = provider_id == "claude-deepseek";
                 cx.clone().spawn(async move {
                     match cx
                         .send_request(PromptRequest::new(acp, blocks))
@@ -1281,14 +1282,31 @@ async fn run_session(
                             sink.set_status(&sid, Status::Running, None);
                         }
                         Err(e) => {
+                            let detail = e.to_string();
                             if let Some(tx) = completion {
                                 state.capture.lock().take();
-                                let _ = tx.send(Err(e.to_string()));
+                                let _ = tx.send(Err(detail.clone()));
                             }
-                            // The prompt FAILED — agent/connection error, INCLUDING the agent
-                            // subprocess dying mid-turn (surfaced by agent_main's `child.wait()`
-                            // race, the one auto-recovery we keep: process death is unambiguous).
-                            // Mark Crashed so the queue holds; a resend/open revives.
+                            // A DeepSeek context rejection is a failed TURN, not a failed
+                            // worker: claude-agent-acp remains connected and can still run
+                            // /compact. Report its worker state as Running while the
+                            // controller keeps the session in an actionable error state;
+                            // this prevents recycle → resume from reattaching edited files
+                            // to the same oversized native thread.
+                            let context_rejection = context_rejection_keeps_worker
+                                && crate::provider::claude_code::is_context_window_rejection(
+                                    &detail,
+                                );
+                            if context_rejection {
+                                tracing::warn!(
+                                    session = %sid,
+                                    "provider rejected prompt at context limit; keeping ACP worker alive"
+                                );
+                            }
+                            // Every other prompt failure can include an agent/connection
+                            // failure, including the subprocess dying mid-turn (surfaced by
+                            // agent_main's child.wait() race). Mark those Crashed so a
+                            // resend/open replaces the dead worker.
                             //
                             // We deliberately do NOT auto-detect a live-but-silent wedge: idle
                             // time can't tell a slow turn from a stuck one (Zed, the ACP author,
@@ -1298,10 +1316,18 @@ async fn run_session(
                             sink.push(
                                 &sid,
                                 Event::TurnEnd {
-                                    stop_reason: format!("error: {e}"),
+                                    stop_reason: format!("error: {detail}"),
                                 },
                             );
-                            sink.set_status(&sid, Status::Crashed, Some(e.to_string()));
+                            sink.set_status(
+                                &sid,
+                                if context_rejection {
+                                    Status::Running
+                                } else {
+                                    Status::Crashed
+                                },
+                                Some(detail),
+                            );
                         }
                     }
                     Ok(())

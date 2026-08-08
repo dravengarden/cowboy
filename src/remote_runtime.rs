@@ -1254,7 +1254,24 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
             hub.set_status(session_id, Status::Running, None);
         }
         RuntimeEvent::Status { state, detail } => {
-            hub.set_status(session_id, worker_status(state), detail);
+            // claude-agent-acp survives a provider context-limit response and
+            // reports Running so Machine retains the live worker. Keep the
+            // controller session errored to hold queued prompts and expose Retry;
+            // Supervisor recognizes the same detail and reuses this worker for
+            // /compact or the next explicit prompt instead of recycling it.
+            let status = if state == WorkerState::Running
+                && hub
+                    .session_info(session_id)
+                    .is_some_and(|session| session.meta.provider == "claude-deepseek")
+                && detail
+                    .as_deref()
+                    .is_some_and(crate::provider::claude_code::is_context_window_rejection)
+            {
+                Status::Crashed
+            } else {
+                worker_status(state)
+            };
+            hub.set_status(session_id, status, detail);
         }
         RuntimeEvent::Update { update, cmid } => {
             hub.push_tagged(session_id, Event::Update { update }, cmid);
@@ -1440,6 +1457,50 @@ mod tests {
             "currentValue": "agent"
         }])));
         assert!(!codex_config_is_full_access(&serde_json::json!([])));
+    }
+
+    #[test]
+    fn context_rejection_keeps_worker_live_but_session_actionably_errored() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "claude-deepseek".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        let detail = "API Error: 400 This model's maximum context length is 1048576 tokens. However, you requested 1048875 tokens";
+
+        apply_event(
+            &hub,
+            "s",
+            RuntimeEvent::Status {
+                state: WorkerState::Running,
+                detail: Some(detail.to_owned()),
+            },
+        );
+
+        assert_eq!(hub.status("s"), Some(Status::Crashed));
+        assert_eq!(hub.latest_crash_detail("s").as_deref(), Some(detail));
+
+        hub.create_local_session(
+            "ordinary".to_owned(),
+            "claude-code".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        apply_event(
+            &hub,
+            "ordinary",
+            RuntimeEvent::Status {
+                state: WorkerState::Running,
+                detail: Some(detail.to_owned()),
+            },
+        );
+        assert_eq!(hub.status("ordinary"), Some(Status::Running));
     }
 
     #[test]

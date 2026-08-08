@@ -417,13 +417,31 @@ impl Supervisor {
 
     fn prepare_session_inner(&self, session_id: &str) -> Result<bool, String> {
         let migrated = self.resolve_and_persist_cwd(session_id)?;
-        let crashed = self
+        let session = self
             .hub
             .session_list()
             .into_iter()
-            .find(|meta| meta.id == session_id)
+            .find(|meta| meta.id == session_id);
+        let crashed = session
+            .as_ref()
             .is_some_and(|meta| meta.status == Status::Crashed);
         if !migrated && !crashed {
+            return Ok(false);
+        }
+        let live_context_rejection = crashed
+            && !migrated
+            && session.is_some_and(|meta| meta.provider == "claude-deepseek")
+            && self
+                .hub
+                .latest_crash_detail(session_id)
+                .as_deref()
+                .is_some_and(crate::provider::claude_code::is_context_window_rejection)
+            && self.runtime_for_session(session_id)?.has_worker(session_id);
+        if live_context_rejection {
+            tracing::info!(
+                session = session_id,
+                "reusing live ACP worker after provider context rejection"
+            );
             return Ok(false);
         }
         if crashed && !migrated {
@@ -620,6 +638,35 @@ mod tests {
         assert_eq!(meta.id, "s");
         assert_eq!(meta.agent_session_id.as_deref(), Some("codex-thread-1"));
         assert_eq!(meta.status, Status::Starting);
+    }
+
+    #[tokio::test]
+    async fn context_rejection_reuses_live_worker_without_resume() {
+        let root = TestDir::new();
+        let cwd = root.path().join("checkout");
+        std::fs::create_dir_all(&cwd).expect("checkout");
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "claude-deepseek".to_owned(),
+            cwd.display().to_string(),
+            "test".to_owned(),
+            SessionOrigin::Web,
+            false,
+        );
+        let detail = "API Error: 400 This model's maximum context length is 1048576 tokens. However, you requested 1048875 tokens";
+        hub.set_status("s", Status::Crashed, Some(detail.to_owned()));
+        let mut worker = worker_snapshot(cwd.to_string_lossy().as_ref());
+        worker.state = WorkerState::Running;
+        worker.launch.as_mut().expect("launch").provider = "claude-deepseek".to_owned();
+        let runtime = RemoteRuntime::for_test(hub.clone(), vec![worker]);
+        let supervisor = Supervisor::new_remote(hub.clone(), root.0.clone(), 0, runtime.clone());
+
+        assert!(!supervisor.prepare_session("s").expect("prepare"));
+        assert!(runtime.has_worker("s"));
+        assert!(runtime.pending_for_test().is_empty());
+        assert_eq!(hub.status("s"), Some(Status::Crashed));
+        assert_eq!(hub.latest_crash_detail("s").as_deref(), Some(detail));
     }
 
     #[tokio::test]
