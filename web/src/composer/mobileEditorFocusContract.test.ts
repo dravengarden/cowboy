@@ -47,6 +47,13 @@ Deno.test("mobile session navigation stays tappable after keyboard dismissal", (
   );
 });
 
+Deno.test("mobile settings commits touch taps when Safari drops synthetic click", () => {
+  const mobileSettings = appSource.slice(appSource.lastIndexOf("settingsTap.onPointerDown"));
+  assertEquals(mobileSettings.includes("settingsTap.onPointerUp"), true);
+  assertEquals(mobileSettings.includes("settingsTap.onPointerCancel"), true);
+  assertEquals(mobileSettings.includes("settingsTap.onClick"), true);
+});
+
 Deno.test("mobile column and pending ownership cannot fill the viewport without a keyboard", () => {
   assertEquals(
     composerSource.includes(

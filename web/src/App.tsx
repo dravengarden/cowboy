@@ -1838,6 +1838,13 @@ export function App({
     const openSettings = useCallback((tab: SettingsTab): void => {
         settingsControllerRef.current?.open(tab);
     }, []);
+    // Mobile Safari can deliver the touch pointerup while dropping the later
+    // synthetic click when the tap first dismisses keyboard/composer focus.
+    // Commit the settings action from pointerup as well; mouse and keyboard
+    // activation continue through the hook's normal click path.
+    const settingsTap = useReliableTouchTap<HTMLButtonElement>(() =>
+        openSettings("settings")
+    );
     // (The no-judge-key warning now lives in the unified TurnStatusOverlay — the
     // blue "no key" pill — so it's no longer a separate top-of-content Notice.)
     // Desktop sidebar width + live-drag flag. Width is a pixel value (not the
@@ -2943,7 +2950,7 @@ export function App({
                                     />
                                 )}
                                 <IconButton
-                                    onPointerDown={(): void => {
+                                    onPointerDown={(event): void => {
                                         // By click time iOS may already have moved
                                         // document.activeElement to this navbar
                                         // button. Release the Composer while the
@@ -2951,8 +2958,12 @@ export function App({
                                         // its :focus-within height cannot outlive
                                         // the software keyboard.
                                         releaseMobileComposerFocus();
+                                        settingsTap.onPointerDown(event);
                                     }}
-                                    onClick={(): void => openSettings("settings")}
+                                    onPointerMove={settingsTap.onPointerMove}
+                                    onPointerUp={settingsTap.onPointerUp}
+                                    onPointerCancel={settingsTap.onPointerCancel}
+                                    onClick={settingsTap.onClick}
                                     aria-label="settings"
                                     title="Settings"
                                 >
@@ -4116,9 +4127,23 @@ function MachinesContent(): React.JSX.Element {
                                                             px: 1,
                                                             borderRadius: 1.5,
                                                             bgcolor: "action.hover",
+                                                            "@media (pointer: coarse), (max-width: 600px)": {
+                                                                flexDirection: "column",
+                                                                alignItems: "stretch",
+                                                                flexWrap: "nowrap",
+                                                            },
                                                         }}
                                                     >
-                                                        <Box sx={{ minWidth: 0, flex: 1 }}>
+                                                        <Box
+                                                            sx={{
+                                                                minWidth: 0,
+                                                                flex: 1,
+                                                                "@media (pointer: coarse), (max-width: 600px)": {
+                                                                    width: "100%",
+                                                                    flex: "none",
+                                                                },
+                                                            }}
+                                                        >
                                                             <Typography variant="body2" fontWeight={650}>
                                                                 {machineComponentName(component)}
                                                             </Typography>
@@ -4138,9 +4163,15 @@ function MachinesContent(): React.JSX.Element {
                                                             </Typography>
                                                             {provider === "gemini" && component.detail && (
                                                                 <Typography
-                                                                    variant="caption"
+                                                                    variant="body2"
                                                                     color={component.auth === "signed_in" ? "success.main" : "text.secondary"}
-                                                                    sx={{ display: "block", mt: 0.25, maxWidth: 720 }}
+                                                                    sx={{
+                                                                        display: "block",
+                                                                        mt: 0.5,
+                                                                        maxWidth: 720,
+                                                                        lineHeight: 1.45,
+                                                                        overflowWrap: "anywhere",
+                                                                    }}
                                                                 >
                                                                     {component.detail}
                                                                 </Typography>
@@ -4156,13 +4187,43 @@ function MachinesContent(): React.JSX.Element {
                                                             )}
                                                         </Box>
                                                         {provider && component.auth === "signed_in" && !legacyGeminiAuth && (
-                                                            <Chip size="small" color="success" variant="outlined" label="Signed in" />
+                                                            <Chip
+                                                                size="small"
+                                                                color="success"
+                                                                variant="outlined"
+                                                                label="Signed in"
+                                                                sx={{ alignSelf: "flex-start" }}
+                                                            />
                                                         )}
                                                         {provider === "gemini" && legacyGeminiAuth && (
-                                                            <Chip size="small" variant="outlined" color="warning" label="Legacy Machine" />
+                                                            <Chip
+                                                                size="small"
+                                                                variant="outlined"
+                                                                color="warning"
+                                                                label="Legacy Machine"
+                                                                sx={{ alignSelf: "flex-start" }}
+                                                            />
                                                         )}
                                                         {provider && component.auth !== "signed_in" && provider === "gemini" && !legacyGeminiAuth && (
-                                                            <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                                                            <Stack
+                                                                direction="row"
+                                                                spacing={0.75}
+                                                                flexWrap="wrap"
+                                                                useFlexGap
+                                                                sx={{
+                                                                    "@media (pointer: coarse), (max-width: 600px)": {
+                                                                        width: "100%",
+                                                                        display: "grid",
+                                                                        gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                                                                        "& .MuiButton-root": {
+                                                                            width: "100%",
+                                                                            minWidth: 0,
+                                                                            whiteSpace: "normal",
+                                                                            lineHeight: 1.2,
+                                                                        },
+                                                                    },
+                                                                }}
+                                                            >
                                                                 <Button
                                                                     size="small"
                                                                     variant={loginBusy ? "outlined" : "contained"}
@@ -4195,6 +4256,11 @@ function MachinesContent(): React.JSX.Element {
                                                                 disabled={npmUpdating}
                                                                 startIcon={npmUpdating ? <DelayedNetworkProgress size={14} /> : <SystemUpdateAlt />}
                                                                 onClick={() => requestNpmUpdate(machine.id, component)}
+                                                                sx={{
+                                                                    "@media (pointer: coarse), (max-width: 600px)": {
+                                                                        width: "100%",
+                                                                    },
+                                                                }}
                                                             >{npmUpdating ? "Updating" : "Update"}</Button>
                                                         )}
                                                         {!provider && componentPending && (
