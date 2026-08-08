@@ -1,5 +1,9 @@
 import { assertEquals } from "jsr:@std/assert";
-import { languageFromPath, normalizeSyntaxLanguage } from "./syntaxLanguages";
+import {
+  languageFromFirstLine,
+  languageFromPath,
+  normalizeSyntaxLanguage,
+} from "./syntaxLanguages";
 
 Deno.test("file language routing covers mainstream and extensionless files", () => {
   assertEquals(languageFromPath("/repo/src/main.go"), "go");
@@ -20,4 +24,19 @@ Deno.test("language routing normalizes aliases and safely leaves unknown files p
   assertEquals(normalizeSyntaxLanguage("shell"), "bash");
   assertEquals(languageFromPath("/repo/LICENSE"), "");
   assertEquals(languageFromPath("/repo/archive.unknown"), "");
+});
+
+Deno.test("Zed first-line routing recognizes its built-in matchers", () => {
+  assertEquals(
+    languageFromFirstLine("#!/usr/bin/env bash\nprintf '%s\\n' ok\n"),
+    "bash",
+  );
+  assertEquals(languageFromFirstLine("#!/usr/bin/env python3\n"), "python");
+  assertEquals(languageFromFirstLine("//go:build linux // go run\n"), "go");
+  assertEquals(languageFromFirstLine("#!/usr/bin/env node\n"), "javascript");
+  assertEquals(
+    languageFromFirstLine("#!/usr/bin/env deno run --ext=ts\n"),
+    "typescript",
+  );
+  assertEquals(languageFromFirstLine("#!/usr/bin/env perl\n"), "");
 });

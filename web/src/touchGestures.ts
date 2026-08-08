@@ -24,6 +24,17 @@ export function horizontalSwipe(
   return { direction: deltaX < 0 ? "left" : "right", distance };
 }
 
+/** Release an ancestor horizontal recognizer once vertical intent is clear. */
+export function isDominantVerticalPan(
+  deltaX: number,
+  deltaY: number,
+  lockDistance = 10,
+  dominance = 1.15,
+): boolean {
+  return Math.abs(deltaY) >= lockDistance &&
+    Math.abs(deltaY) > Math.abs(deltaX) * dominance;
+}
+
 export function shouldFreezePreviewPointer(
   pointerType: string,
   button: number,

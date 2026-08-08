@@ -2261,7 +2261,7 @@ export function MobilePageDock({
   ]);
 
   return (
-    <>
+    <Box data-mobile-page-dock="true">
       <Paper
         component="nav"
         aria-label="Question pages"
@@ -2564,6 +2564,6 @@ export function MobilePageDock({
           </Box>
         </Box>
       </DetentSheet>
-    </>
+    </Box>
   );
 }

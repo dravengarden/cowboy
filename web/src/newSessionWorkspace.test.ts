@@ -1,5 +1,7 @@
 import { assertEquals } from "jsr:@std/assert";
 import { defaultNewSessionWorkspace } from "./newSessionWorkspace.ts";
+import { resolveActiveSession } from "./sessionSelection.ts";
+import type { SessionMeta } from "./protocol.ts";
 
 const appSource = await Deno.readTextFile(
   new URL("./App.tsx", import.meta.url),
@@ -12,8 +14,8 @@ const composerSource = await Deno.readTextFile(
 );
 
 Deno.test("new session navigation precedes Machine preparation completion", () => {
-  const created = appSource.indexOf("onCreated={(id): void => {");
-  const active = appSource.indexOf("setActiveId(id);", created);
+  const created = appSource.indexOf("onCreated={(session): void => {");
+  const active = appSource.indexOf("setActiveId(session.id);", created);
   const settle = appSource.indexOf("settleMobileDrawerRef.current(false, 0);", created);
   assertEquals(created >= 0 && active > created && settle > active, true);
   assertEquals(
@@ -37,6 +39,26 @@ Deno.test("new session navigation precedes Machine preparation completion", () =
     appSource.includes("snapshot.configOptions.get(sessionId) ?? []"),
     false,
   );
+});
+
+Deno.test("new session stays selected before the sessions broadcast arrives", () => {
+  const existing: SessionMeta = {
+    id: "existing",
+    provider: "codex",
+    cwd: "/workspace/existing",
+    title: "Existing",
+    status: "running",
+  };
+  const pending: SessionMeta = {
+    ...existing,
+    id: "created",
+    cwd: "/workspace/created",
+    title: "New session",
+    status: "starting",
+  };
+
+  assertEquals(resolveActiveSession([existing], pending.id, pending), pending);
+  assertEquals(resolveActiveSession([pending, existing], pending.id, pending), pending);
 });
 
 Deno.test("new sessions prefer Columbus regardless of workspace ordering", () => {

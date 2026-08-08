@@ -14,6 +14,9 @@ const composerSurfaceSource = await Deno.readTextFile(
 const transcriptSource = await Deno.readTextFile(
   new URL("./Transcript.tsx", import.meta.url),
 );
+const exploreSurfaceSource = await Deno.readTextFile(
+  new URL("./explore/ExploreSurface.tsx", import.meta.url),
+);
 const appSource = await Deno.readTextFile(
   new URL("./App.tsx", import.meta.url),
 );
@@ -82,6 +85,19 @@ Deno.test("a context reset becomes a full conversation start until new content",
   );
   assertEquals(transcriptSource.includes("New conversation"), true);
   assertEquals(transcriptSource.includes("Conversation cleared\n"), false);
+});
+
+Deno.test("the Explore page dock yields to the focused mobile composer", () => {
+  assertEquals(exploreSurfaceSource.includes('data-mobile-page-dock="true"'), true);
+  assertEquals(appSource.includes("data-mobile-page-dock='true'"), true);
+  assertEquals(
+    appSource.includes(
+      "[data-mobile-primary-composer='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within",
+    ),
+    true,
+  );
+  assertEquals(transcriptSource.includes("context.reasoning"), true);
+  assertEquals(transcriptSource.includes("Reasoning ·"), true);
 });
 
 Deno.test("transient activity is transcript-owned with a zero-jump pill handoff", () => {

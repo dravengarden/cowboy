@@ -32,6 +32,21 @@ Deno.test("mobile composer promotion requires a visible keyboard and real editor
   );
 });
 
+Deno.test("mobile session navigation stays tappable after keyboard dismissal", () => {
+  assertEquals(
+    appSource.includes(
+      "[data-mobile-focus-composer='true'][data-mobile-keyboard-open='true']:focus-within) [data-mobile-session-nav='true']",
+    ),
+    true,
+  );
+  assertEquals(
+    appSource.includes(
+      "[data-mobile-focus-composer='true']:focus-within) [data-mobile-session-nav='true']",
+    ),
+    false,
+  );
+});
+
 Deno.test("mobile column and pending ownership cannot fill the viewport without a keyboard", () => {
   assertEquals(
     composerSource.includes(
@@ -366,6 +381,51 @@ Deno.test("mobile keyboard dismissal belongs to the fixed utility rail", () => {
       actionRow.indexOf("data-mobile-composer-clear"),
     true,
   );
+});
+
+Deno.test("mobile delivery taps preserve native editor focus until click", () => {
+  const actionStart = composerSource.indexOf("data-mobile-action-row");
+  const actionEnd = composerSource.indexOf(
+    "<ComposerToolbarSettings",
+    actionStart,
+  );
+  const actionRow = composerSource.slice(actionStart, actionEnd);
+  const sendStart = actionRow.indexOf('aria-label="send"');
+  const sendEnd = actionRow.indexOf("</IconButton>", sendStart);
+  const sendButton = actionRow.slice(sendStart, sendEnd);
+
+  assertEquals(sendStart >= 0 && sendEnd > sendStart, true);
+  assertEquals(
+    sendButton.includes(
+      "event.preventDefault();\n                    sendTap.onPointerDown(event);",
+    ),
+    true,
+  );
+  assertEquals(
+    sendButton.includes("onPointerUp={sendTap.onPointerUp}"),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "// Keep the native textarea as iOS's first responder until the tap/hold is",
+    ),
+    true,
+  );
+});
+
+Deno.test("Page delivery closes only after the authoritative acknowledgement", () => {
+  const submitStart = composerSource.indexOf("const submitWithFeedback");
+  const submitEnd = composerSource.indexOf("const sendTap", submitStart);
+  const submit = composerSource.slice(submitStart, submitEnd);
+  const actionStart = submit.indexOf("submitFeedback.run(() => {");
+  const actionEnd = submit.indexOf("if (submitted && succeeded)", actionStart);
+  assertEquals(actionStart >= 0 && actionEnd > actionStart, true);
+  assertEquals(submit.slice(actionStart, actionEnd).includes("onSubmitted?.()"), false);
+  assertEquals(
+    submit.slice(actionEnd).includes("dismissAfterMobileDelivery();\n        // Explore/Page"),
+    true,
+  );
+  assertEquals(submit.slice(actionEnd).includes("onSubmitted?.();"), true);
 });
 
 Deno.test("mobile composer releases stale focus only after a visible keyboard closes", () => {

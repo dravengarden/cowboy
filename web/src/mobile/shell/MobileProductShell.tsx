@@ -12,6 +12,7 @@ import {
   expandedSelection,
   hasHorizontalScroller,
   horizontalSwipe,
+  isDominantVerticalPan,
   swipeCommits,
 } from "../../touchGestures";
 import type { Mode as ThemeMode } from "../../theme";
@@ -260,11 +261,13 @@ export function MobileProductShell({
       }
       const deltaX = touch.clientX - gesture.startX;
       const deltaY = touch.clientY - gesture.startY;
-      if (
-        !gesture.locked && Math.abs(deltaY) >= 10 &&
-        Math.abs(deltaY) > Math.abs(deltaX) * 1.15
-      ) {
+      if (!gesture.locked && isDominantVerticalPan(deltaX, deltaY)) {
         gesture = null;
+        // The spatial drawer is a descendant and has its own non-passive
+        // horizontal recognizer. Keep this stream's native vertical scroll
+        // default, but do not let the drawer reinterpret a diagonal sample as
+        // a horizontal swipe and call preventDefault().
+        event.stopPropagation();
         return;
       }
       const swipe = gesture.locked
