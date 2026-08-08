@@ -320,6 +320,7 @@ fn json_i64(value: &serde_json::Value, key: &str) -> Option<i64> {
 fn cache_transition_cause(
     current: &serde_json::Value,
     previous: &serde_json::Value,
+    intervening_provider_error: bool,
 ) -> &'static str {
     let changed = |key: &str| current.get(key) != previous.get(key);
     if json_scalar(current, "operation").as_deref() == Some("compact") {
@@ -354,6 +355,8 @@ fn cache_transition_cause(
             .is_some_and(|(current, previous)| current < previous)
     {
         "history_rewrite"
+    } else if intervening_provider_error {
+        "post_provider_error"
     } else if json_scalar(current, "request_prefix_fingerprint").is_some()
         && current.get("request_prefix_fingerprint") == previous.get("request_prefix_fingerprint")
     {
@@ -378,6 +381,7 @@ fn cache_transition_title(cause: &str) -> &'static str {
         "translation_changed" => "Cache lost after translation change",
         "reasoning_configuration_changed" => "Cache lost after reasoning change",
         "compatibility_rewrite" => "Cache lost after compatibility rewrite",
+        "post_provider_error" => "Cache lost after provider error",
         _ => "Unexplained active-session cache drop",
     }
 }
@@ -1988,10 +1992,19 @@ impl Store {
                 lag(event.gateway_boot_id) OVER session_window AS previous_gateway_boot_id,
                 lag(event.cache_hit_tokens) OVER session_window AS previous_cache_hit_tokens,
                 lag(event.cache_miss_tokens) OVER session_window AS previous_cache_miss_tokens,
+                lag(event.sequence) OVER session_window AS previous_sequence,
                 lag(event.occurred_at) OVER session_window AS previous_occurred_at
               FROM provider_usage_events event
               WHERE event.occurred_at >=
                   to_timestamp($1::double precision / 1000) - interval '30 minutes'
+                AND event.schema_version >= 3
+                AND event.session_fingerprint IS NOT NULL
+                AND event.session_attribution <> 'prefix_root'
+                AND event.status < 400
+                AND event.cache_observation IN ('explicit', 'derived')
+                AND coalesce(event.input_tokens, 0) >= 8000
+                AND event.cache_hit_tokens + event.cache_miss_tokens > 0
+                AND event.static_prefix_fingerprint IS NOT NULL
               WINDOW session_window AS (
                 PARTITION BY event.machine_id, event.producer_id, event.account_fingerprint,
                   event.agent, event.session_fingerprint
@@ -2022,6 +2035,19 @@ impl Store {
                     THEN 'static_prefix_changed'
                   WHEN (agent <> 'codex' OR has_previous_response_id IS NOT TRUE)
                     AND input_item_count < previous_input_item_count THEN 'history_rewrite'
+                  WHEN EXISTS (
+                    SELECT 1 FROM provider_usage_events failed
+                    WHERE failed.machine_id = lineage.machine_id
+                      AND failed.producer_id = lineage.producer_id
+                      AND failed.account_fingerprint = lineage.account_fingerprint
+                      AND failed.agent = lineage.agent
+                      AND failed.session_fingerprint IS NOT DISTINCT FROM lineage.session_fingerprint
+                      AND (failed.occurred_at, failed.sequence) >
+                        (lineage.previous_occurred_at, lineage.previous_sequence)
+                      AND (failed.occurred_at, failed.sequence) <
+                        (lineage.occurred_at, lineage.sequence)
+                      AND failed.status >= 400
+                  ) THEN 'post_provider_error'
                   WHEN request_prefix_fingerprint = previous_request_prefix
                     THEN 'unexpected_exact_prefix_miss'
                   ELSE 'unexpected_active_cache_drop'
@@ -2065,6 +2091,7 @@ impl Store {
                   WHEN 'translation_changed' THEN 'Cache lost after translation change'
                   WHEN 'reasoning_configuration_changed' THEN 'Cache lost after reasoning change'
                   WHEN 'compatibility_rewrite' THEN 'Cache lost after compatibility rewrite'
+                  WHEN 'post_provider_error' THEN 'Cache lost after provider error'
                   ELSE 'Unexplained active-session cache drop'
                 END AS title,
                 format('Cache hit rate fell from %s%% to %s%% within 30 minutes',
@@ -2301,6 +2328,13 @@ impl Store {
                     AND candidate.account_fingerprint = target.account_fingerprint
                     AND candidate.agent = target.agent
                     AND candidate.session_fingerprint IS NOT DISTINCT FROM target.session_fingerprint
+                    AND candidate.schema_version >= 3
+                    AND candidate.session_attribution <> 'prefix_root'
+                    AND candidate.status < 400
+                    AND candidate.cache_observation IN ('explicit', 'derived')
+                    AND coalesce(candidate.input_tokens, 0) >= 8000
+                    AND candidate.cache_hit_tokens + candidate.cache_miss_tokens > 0
+                    AND candidate.static_prefix_fingerprint IS NOT NULL
                     AND (candidate.occurred_at, candidate.sequence) <
                       (target.occurred_at, target.sequence)
                   ORDER BY candidate.occurred_at DESC, candidate.sequence DESC
@@ -2312,7 +2346,19 @@ impl Store {
                     'previous', CASE WHEN previous.sequence IS NULL THEN '{}'::jsonb
                       ELSE to_jsonb(previous) END,
                     'gap_ms', CASE WHEN previous.sequence IS NULL THEN NULL
-                      ELSE (extract(epoch FROM target.occurred_at - previous.occurred_at) * 1000)::bigint END
+                      ELSE (extract(epoch FROM target.occurred_at - previous.occurred_at) * 1000)::bigint END,
+                    'intervening_provider_errors', CASE WHEN previous.sequence IS NULL THEN 0
+                      ELSE (SELECT count(*) FROM provider_usage_events failed
+                        WHERE failed.machine_id = target.machine_id
+                          AND failed.producer_id = target.producer_id
+                          AND failed.account_fingerprint = target.account_fingerprint
+                          AND failed.agent = target.agent
+                          AND failed.session_fingerprint IS NOT DISTINCT FROM target.session_fingerprint
+                          AND (failed.occurred_at, failed.sequence) >
+                            (previous.occurred_at, previous.sequence)
+                          AND (failed.occurred_at, failed.sequence) <
+                            (target.occurred_at, target.sequence)
+                          AND failed.status >= 400) END
                   )
                 FROM target LEFT JOIN previous ON true
             ",
@@ -2334,7 +2380,10 @@ impl Store {
         }
         let status = json_scalar(&current, "status").unwrap_or_else(|| "unknown".to_owned());
         let agent = json_scalar(&current, "agent").unwrap_or_else(|| "unknown".to_owned());
-        let cause = (kind == "cache_anomaly").then(|| cache_transition_cause(&current, &previous));
+        let intervening_provider_errors =
+            json_i64(&evidence, "intervening_provider_errors").unwrap_or_default();
+        let cause = (kind == "cache_anomaly")
+            .then(|| cache_transition_cause(&current, &previous, intervening_provider_errors > 0));
         let title = cause.map_or_else(
             || format!("DeepSeek HTTP {status}"),
             |cause| cache_transition_title(cause).to_owned(),
@@ -2430,6 +2479,12 @@ impl Store {
             &mut cache_identity,
             "Gap ms",
             gap_ms.map(|value| value.to_string()),
+            false,
+        );
+        optional_diagnostic_field(
+            &mut cache_identity,
+            "Intervening provider errors",
+            (intervening_provider_errors > 0).then(|| intervening_provider_errors.to_string()),
             false,
         );
         let mut sections = vec![
@@ -2884,14 +2939,18 @@ mod provider_usage_validation_tests {
         let mut current = previous.clone();
         current["static_prefix_fingerprint"] = serde_json::json!("prefix-2");
         assert_eq!(
-            cache_transition_cause(&current, &previous),
+            cache_transition_cause(&current, &previous, false),
             "static_prefix_changed"
         );
 
         current = previous.clone();
         assert_eq!(
-            cache_transition_cause(&current, &previous),
+            cache_transition_cause(&current, &previous, false),
             "unexpected_exact_prefix_miss"
+        );
+        assert_eq!(
+            cache_transition_cause(&current, &previous, true),
+            "post_provider_error"
         );
     }
 

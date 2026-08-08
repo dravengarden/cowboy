@@ -59,14 +59,24 @@ A cache miss is not itself an incident. DeepSeek caching is best effort and a
 normal first request, inactive session, provider eviction, model/configuration
 change, compaction, or gateway restart can all produce low hit rates.
 
-Cowboy emits a cache-disruption log only when one attributed session moves from
-at least 90% cache hit to below 10% within 30 minutes, both observations contain
-at least 8K input tokens, and content-free static-prefix fingerprints exist on
-both sides. The event records the strongest observed cause: compaction,
-gateway build/boot change, model/role/protocol/reasoning change, compatibility
-rewrite, static-prefix change, history rewrite, an exact-prefix miss, or an
-otherwise unexplained active-session drop. It never stores prompt, response,
-tool, or reasoning content.
+Cowboy emits a cache-disruption log only when one attributed session moves
+between two successful, measurable requests from at least 90% cache hit to
+below 10% within 30 minutes, both observations contain at least 8K input
+tokens, and content-free static-prefix fingerprints exist on both sides. Failed
+provider calls between those observations do not hide the transition; they are
+recorded as an explicit cause. The event records the strongest observed cause:
+compaction, gateway build/boot change, model/role/protocol/reasoning change,
+compatibility rewrite, static-prefix change, history rewrite, an intervening
+provider error, an exact-prefix miss, or an otherwise unexplained active-session
+drop. It never stores prompt, response, tool, or reasoning content.
+
+DeepSeek workers attach a stable SHA-256 session token through a local-only
+request header. Claude Code uses `ANTHROPIC_CUSTOM_HEADERS`; Codex resolves the
+same header from its provider `env_http_headers` configuration. Each gateway
+HMACs the token before emitting telemetry and excludes the Cowboy header from
+the upstream allowlist. This gives new, resumed, retried, and compacted requests
+one explicit attribution key without adding anything to the cacheable prompt
+prefix or persisting the Cowboy session identifier.
 
 Longer idle gaps are excluded from anomaly logs. In aggregate low-hit analysis,
 a gap of at least six hours is classified as probable eviction before an exact

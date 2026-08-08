@@ -20,6 +20,7 @@
 #![warn(clippy::pedantic)]
 
 use parking_lot::Mutex;
+use sha2::{Digest as _, Sha256};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -61,6 +62,33 @@ const RESUME_PHASE_TIMEOUT: Duration = Duration::from_mins(4);
 const CODEX_FULL_ACCESS_CONFIG_ID: &str = "mode";
 const CODEX_FULL_ACCESS_CONFIG_VALUE: &str = "agent-full-access";
 const CLAUDE_EMPTY_STREAM_MESSAGE: &str = "API Error: Stream ended without receiving any events";
+
+/// Attach a stable, content-free session identity to requests sent through the
+/// local DeepSeek gateways. The gateways HMAC this opaque value for telemetry
+/// and deliberately do not forward the Cowboy-only header upstream.
+fn deepseek_session_environment(
+    provider_id: &str,
+    session_id: &str,
+    existing_claude_headers: Option<&str>,
+) -> Option<(&'static str, String)> {
+    let opaque_session_id = format!("{:x}", Sha256::digest(session_id.as_bytes()));
+    match provider_id {
+        "claude-deepseek" => {
+            let mut headers = existing_claude_headers
+                .unwrap_or_default()
+                .trim()
+                .to_owned();
+            if !headers.is_empty() {
+                headers.push('\n');
+            }
+            headers.push_str("X-Cowboy-Session-Id: ");
+            headers.push_str(&opaque_session_id);
+            Some(("ANTHROPIC_CUSTOM_HEADERS", headers))
+        }
+        "codex-deepseek" => Some((crate::provider::DEEPSEEK_SESSION_ID_ENV, opaque_session_id)),
+        _ => None,
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum StartupPhase {
@@ -159,9 +187,9 @@ fn load_session_request(
 mod startup_mode_tests {
     use super::{
         ActivePrompt, ResumeMethod, StartupPhase, StartupTimeout, codex_full_access_available,
-        codex_full_access_selected, is_empty_stream_message_update, load_session_request,
-        new_session_request, resume_session_request, select_resume_method, session_config_value,
-        startup_full_access_mode,
+        codex_full_access_selected, deepseek_session_environment, is_empty_stream_message_update,
+        load_session_request, new_session_request, resume_session_request, select_resume_method,
+        session_config_value, startup_full_access_mode,
     };
     use agent_client_protocol::schema::v1::{
         SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption, SessionId,
@@ -217,6 +245,31 @@ mod startup_mode_tests {
         let request =
             serde_json::to_value(new_session_request("codex", cwd)).expect("non-Claude request");
         assert!(request.get("_meta").is_none());
+    }
+
+    #[test]
+    fn deepseek_sessions_receive_stable_content_free_attribution() {
+        let (claude_key, claude_value) = deepseek_session_environment(
+            "claude-deepseek",
+            "sess-private-value",
+            Some("X-Existing: retained"),
+        )
+        .expect("Claude DeepSeek attribution");
+        let (codex_key, codex_value) =
+            deepseek_session_environment("codex-deepseek", "sess-private-value", None)
+                .expect("Codex DeepSeek attribution");
+
+        assert_eq!(claude_key, "ANTHROPIC_CUSTOM_HEADERS");
+        assert_eq!(codex_key, "COWBOY_DEEPSEEK_SESSION_ID");
+        assert_eq!(
+            claude_value,
+            format!("X-Existing: retained\nX-Cowboy-Session-Id: {codex_value}")
+        );
+        assert_eq!(codex_value.len(), 64);
+        assert!(codex_value.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert!(!claude_value.contains("sess-private-value"));
+        assert!(deepseek_session_environment("claude-code", "session", None).is_none());
+        assert!(deepseek_session_environment("codex", "session", None).is_none());
     }
 
     #[test]
@@ -754,6 +807,13 @@ async fn agent_main(
         }
     }
     command.envs(&spec.env);
+    if let Some((key, value)) = deepseek_session_environment(
+        spec.id,
+        session_id,
+        spec.env.get("ANTHROPIC_CUSTOM_HEADERS").map(String::as_str),
+    ) {
+        command.env(key, value);
+    }
     let mut child = command
         .current_dir(&cwd)
         .stdin(Stdio::piped())
