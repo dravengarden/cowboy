@@ -20,12 +20,16 @@ Deno.test("DeepSeek agent capability follows the full retained telemetry window"
 
 Deno.test("DeepSeek runtime lanes remain visible when a bounded window is empty", () => {
   assertEquals(
-    deepseekVisibleAgents(["claude", "codex"], "all", ["claude"]),
+    deepseekVisibleAgents(["claude", "codex"], [], ["claude"]),
     ["codex", "claude"],
   );
   assertEquals(
-    deepseekVisibleAgents(["claude", "codex"], "claude", []),
+    deepseekVisibleAgents(["claude", "codex"], ["claude"], []),
     ["claude"],
+  );
+  assertEquals(
+    deepseekVisibleAgents(["claude", "codex"], ["claude", "codex"], []),
+    ["codex", "claude"],
   );
 });
 

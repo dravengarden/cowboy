@@ -1,19 +1,18 @@
+import { timeRangeQuery, type ObservabilityTimeRange } from "./observabilityTimeRange";
+
 export type DiagnosticLogKind =
-  | "all"
   | "session_error"
   | "provider_error"
   | "cache_anomaly"
   | "automation";
 
 export type DiagnosticLogSeverity =
-  | "all"
   | "info"
   | "warning"
   | "error"
   | "critical";
 
 export type DiagnosticLogState =
-  | "all"
   | "active"
   | "recovered"
   | "failed"
@@ -25,22 +24,21 @@ export type DiagnosticLogState =
   | "unknown"
   | "cancelled";
 
-export type DiagnosticLogAgent = "all" | "codex" | "claude";
-export type DiagnosticLogWindow = "1h" | "24h" | "7d" | "30d";
+export type DiagnosticLogAgent = "codex" | "claude";
 
 export interface DiagnosticLogFilters {
-  kind: DiagnosticLogKind;
-  severity: DiagnosticLogSeverity;
-  state: DiagnosticLogState;
-  agent: DiagnosticLogAgent;
-  window: DiagnosticLogWindow;
+  kinds: DiagnosticLogKind[];
+  severities: DiagnosticLogSeverity[];
+  states: DiagnosticLogState[];
+  agents: DiagnosticLogAgent[];
+  timeRange: ObservabilityTimeRange;
 }
 
 export interface DiagnosticLogSummary {
   id: string;
   occurred_at_ms: number;
-  kind: Exclude<DiagnosticLogKind, "all">;
-  severity: Exclude<DiagnosticLogSeverity, "all">;
+  kind: DiagnosticLogKind;
+  severity: DiagnosticLogSeverity;
   state: string;
   title: string;
   summary: string;
@@ -76,25 +74,26 @@ export interface DiagnosticLogPage {
 }
 
 export const DEFAULT_DIAGNOSTIC_LOG_FILTERS: DiagnosticLogFilters = {
-  kind: "all",
-  severity: "all",
-  state: "all",
-  agent: "all",
-  window: "7d",
+  kinds: [],
+  severities: ["critical", "error"],
+  states: [],
+  agents: [],
+  timeRange: { mode: "relative", amount: 7, unit: "day" },
 };
 
 export function diagnosticLogUrl(
   filters: DiagnosticLogFilters,
   cursor?: string,
+  now: number = Date.now(),
 ): string {
-  const params = new URLSearchParams({
-    kind: filters.kind,
-    severity: filters.severity,
-    state: filters.state,
-    agent: filters.agent,
-    window: filters.window,
-    limit: "25",
-  });
+  const params = new URLSearchParams({ limit: "25" });
+  if (filters.kinds.length > 0) params.set("kind", filters.kinds.join(","));
+  if (filters.severities.length > 0) params.set("severity", filters.severities.join(","));
+  if (filters.states.length > 0) params.set("state", filters.states.join(","));
+  if (filters.agents.length > 0) params.set("agent", filters.agents.join(","));
+  const range = timeRangeQuery(filters.timeRange, now);
+  params.set("from_ms", range.from_ms);
+  params.set("to_ms", range.to_ms);
   if (cursor) params.set("cursor", cursor);
   return `/api/logs?${params.toString()}`;
 }

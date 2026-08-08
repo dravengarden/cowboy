@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   alpha,
   Box,
@@ -8,9 +8,7 @@ import {
   CircularProgress,
   Divider,
   IconButton,
-  MenuItem,
   Stack,
-  TextField,
   Tooltip,
   Typography,
 } from "@mui/material";
@@ -24,14 +22,26 @@ import {
 import { copyText } from "./clipboard";
 import {
   DEFAULT_DIAGNOSTIC_LOG_FILTERS,
+  type DiagnosticLogAgent,
   type DiagnosticLogDetail,
   type DiagnosticLogFilters,
+  type DiagnosticLogKind,
   type DiagnosticLogPage,
+  type DiagnosticLogSeverity,
+  type DiagnosticLogState,
   type DiagnosticLogSummary,
   diagnosticKindLabel,
   diagnosticLogUrl,
 } from "./diagnosticLogs";
 import { NetworkButton } from "./NetworkActionFeedback";
+import {
+  ActiveFilterChips,
+  type FilterChipOption,
+  FilterButton,
+  MultiSelectChipGroup,
+  TimeRangeButton,
+} from "./ObservabilityFilters";
+import { Sheet } from "./Sheet";
 
 const SEVERITY_COLOR: Record<DiagnosticLogSummary["severity"], string> = {
   info: "primary.main",
@@ -39,6 +49,39 @@ const SEVERITY_COLOR: Record<DiagnosticLogSummary["severity"], string> = {
   error: "error.main",
   critical: "error.dark",
 };
+
+const KIND_OPTIONS: readonly FilterChipOption<DiagnosticLogKind>[] = [
+  { value: "session_error", label: "Session", color: "error" },
+  { value: "provider_error", label: "Provider", color: "warning" },
+  { value: "cache_anomaly", label: "Cache", color: "secondary" },
+  { value: "automation", label: "Automation", color: "info" },
+];
+const SEVERITY_OPTIONS: readonly FilterChipOption<DiagnosticLogSeverity>[] = [
+  { value: "critical", label: "Critical", color: "error" },
+  { value: "error", label: "Error", color: "error" },
+  { value: "warning", label: "Warning", color: "warning" },
+  { value: "info", label: "Info", color: "info" },
+];
+const STATE_OPTIONS: readonly FilterChipOption<DiagnosticLogState>[] = [
+  { value: "active", label: "Active", color: "error" },
+  { value: "failed", label: "Failed", color: "error" },
+  { value: "recovered", label: "Recovered", color: "success" },
+  { value: "succeeded", label: "Succeeded", color: "success" },
+  { value: "observed", label: "Observed", color: "secondary" },
+  { value: "retrying", label: "Retrying", color: "warning" },
+  { value: "scheduled", label: "Scheduled", color: "info" },
+  { value: "started", label: "Started", color: "info" },
+  { value: "unknown", label: "Unknown", color: "warning" },
+  { value: "cancelled", label: "Cancelled" },
+];
+const AGENT_OPTIONS: readonly FilterChipOption<DiagnosticLogAgent>[] = [
+  { value: "claude", label: "Claude Code", color: "secondary" },
+  { value: "codex", label: "Codex", color: "info" },
+];
+
+function optionLabel<T extends string>(options: readonly FilterChipOption<T>[], value: T): string {
+  return options.find((option) => option.value === value)?.label ?? value;
+}
 
 function time(value: number): string {
   return new Intl.DateTimeFormat(undefined, {
@@ -148,6 +191,8 @@ function LogDetail({
 
 export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Element {
   const [filters, setFilters] = useState<DiagnosticLogFilters>(DEFAULT_DIAGNOSTIC_LOG_FILTERS);
+  const [draftFilters, setDraftFilters] = useState<DiagnosticLogFilters>(DEFAULT_DIAGNOSTIC_LOG_FILTERS);
+  const [filterOpen, setFilterOpen] = useState(false);
   const [logs, setLogs] = useState<DiagnosticLogSummary[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -156,6 +201,7 @@ export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Ele
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [details, setDetails] = useState<Record<string, { loading: boolean; value?: DiagnosticLogDetail; error?: string }>>({});
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const rangeAnchorMs = useRef(Date.now());
 
   const loadPage = useCallback(async (
     cursor: string | undefined,
@@ -165,8 +211,9 @@ export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Ele
     if (append) setLoadingMore(true);
     else setLoading(true);
     try {
+      if (!append) rangeAnchorMs.current = Date.now();
       const response = await fetch(
-        diagnosticLogUrl(filters, cursor),
+        diagnosticLogUrl(filters, cursor, rangeAnchorMs.current),
         signal ? { signal } : {},
       );
       if (!response.ok) throw new Error(await response.text() || `HTTP ${String(response.status)}`);
@@ -201,10 +248,18 @@ export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Ele
     };
   }, [loadPage]);
 
-  const updateFilter = <K extends keyof DiagnosticLogFilters>(
-    key: K,
-    value: DiagnosticLogFilters[K],
-  ): void => setFilters((current) => ({ ...current, [key]: value }));
+  const openFilters = (): void => {
+    setDraftFilters({
+      ...filters,
+      kinds: [...filters.kinds],
+      severities: [...filters.severities],
+      states: [...filters.states],
+      agents: [...filters.agents],
+    });
+    setFilterOpen(true);
+  };
+  const activeFilterCount = filters.kinds.length + filters.severities.length +
+    filters.states.length + filters.agents.length;
 
   const copy = (key: string, value: string): void => {
     void copyText(value).then((copied) => {
@@ -242,7 +297,7 @@ export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Ele
         <Box>
           <Typography variant={dense ? "subtitle2" : "overline"} fontWeight={750}>Diagnostic logs</Typography>
           <Typography variant="caption" color="text.secondary" display="block">
-            Session failures, provider errors, cache disruptions, and automation audit
+            Serious failures by default; include retryable and audit events from Filters
           </Typography>
         </Box>
         <NetworkButton
@@ -254,52 +309,62 @@ export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Ele
           Refresh
         </NetworkButton>
       </Stack>
-      <Box
-        sx={{
-          display: "grid",
-          gridTemplateColumns: dense ? "repeat(2, minmax(0, 1fr))" : { xs: "repeat(2, minmax(0, 1fr))", sm: "repeat(5, minmax(0, 1fr))" },
-          gap: 0.75,
-        }}
-      >
-        <TextField select size="small" label="Type" value={filters.kind} onChange={(event) => updateFilter("kind", event.target.value as DiagnosticLogFilters["kind"])}>
-          <MenuItem value="all">All</MenuItem>
-          <MenuItem value="session_error">Session</MenuItem>
-          <MenuItem value="provider_error">Provider</MenuItem>
-          <MenuItem value="cache_anomaly">Cache</MenuItem>
-          <MenuItem value="automation">Automation</MenuItem>
-        </TextField>
-        <TextField select size="small" label="Severity" value={filters.severity} onChange={(event) => updateFilter("severity", event.target.value as DiagnosticLogFilters["severity"])}>
-          <MenuItem value="all">All</MenuItem>
-          <MenuItem value="error">Error</MenuItem>
-          <MenuItem value="critical">Critical</MenuItem>
-          <MenuItem value="warning">Warning</MenuItem>
-          <MenuItem value="info">Info</MenuItem>
-        </TextField>
-        <TextField select size="small" label="State" value={filters.state} onChange={(event) => updateFilter("state", event.target.value as DiagnosticLogFilters["state"])}>
-          <MenuItem value="all">All</MenuItem>
-          <MenuItem value="active">Active</MenuItem>
-          <MenuItem value="recovered">Recovered</MenuItem>
-          <MenuItem value="failed">Failed</MenuItem>
-          <MenuItem value="succeeded">Succeeded</MenuItem>
-          <MenuItem value="observed">Observed</MenuItem>
-          <MenuItem value="scheduled">Scheduled</MenuItem>
-          <MenuItem value="started">Started</MenuItem>
-          <MenuItem value="retrying">Retrying</MenuItem>
-          <MenuItem value="unknown">Unknown</MenuItem>
-          <MenuItem value="cancelled">Cancelled</MenuItem>
-        </TextField>
-        <TextField select size="small" label="Runtime" value={filters.agent} onChange={(event) => updateFilter("agent", event.target.value as DiagnosticLogFilters["agent"])}>
-          <MenuItem value="all">All</MenuItem>
-          <MenuItem value="codex">Codex</MenuItem>
-          <MenuItem value="claude">Claude Code</MenuItem>
-        </TextField>
-        <TextField select size="small" label="Window" value={filters.window} onChange={(event) => updateFilter("window", event.target.value as DiagnosticLogFilters["window"])}>
-          <MenuItem value="1h">1 hour</MenuItem>
-          <MenuItem value="24h">24 hours</MenuItem>
-          <MenuItem value="7d">7 days</MenuItem>
-          <MenuItem value="30d">30 days</MenuItem>
-        </TextField>
-      </Box>
+      <Stack spacing={0.75}>
+        <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
+          <TimeRangeButton
+            value={filters.timeRange}
+            onChange={(timeRange) => setFilters((current) => ({ ...current, timeRange }))}
+            maxDurationMs={365 * 86_400_000}
+          />
+          <FilterButton count={activeFilterCount} onClick={openFilters} />
+        </Stack>
+        <ActiveFilterChips
+          items={[
+            ...filters.kinds.map((value) => ({
+              key: `kind:${value}`,
+              label: optionLabel(KIND_OPTIONS, value),
+              color: KIND_OPTIONS.find((option) => option.value === value)?.color,
+              onDelete: () => setFilters((current) => ({ ...current, kinds: current.kinds.filter((item) => item !== value) })),
+            })),
+            ...filters.severities.map((value) => ({
+              key: `severity:${value}`,
+              label: optionLabel(SEVERITY_OPTIONS, value),
+              color: SEVERITY_OPTIONS.find((option) => option.value === value)?.color,
+              onDelete: () => setFilters((current) => ({ ...current, severities: current.severities.filter((item) => item !== value) })),
+            })),
+            ...filters.states.map((value) => ({
+              key: `state:${value}`,
+              label: optionLabel(STATE_OPTIONS, value),
+              color: STATE_OPTIONS.find((option) => option.value === value)?.color,
+              onDelete: () => setFilters((current) => ({ ...current, states: current.states.filter((item) => item !== value) })),
+            })),
+            ...filters.agents.map((value) => ({
+              key: `agent:${value}`,
+              label: optionLabel(AGENT_OPTIONS, value),
+              color: AGENT_OPTIONS.find((option) => option.value === value)?.color,
+              onDelete: () => setFilters((current) => ({ ...current, agents: current.agents.filter((item) => item !== value) })),
+            })),
+          ]}
+        />
+      </Stack>
+      <Sheet open={filterOpen} onClose={() => setFilterOpen(false)} title="Filter diagnostic logs" desktopMaxWidth={560}>
+        <Stack spacing={2} sx={{ pt: 0.5, pb: 1 }}>
+          <MultiSelectChipGroup label="Type" options={KIND_OPTIONS} value={draftFilters.kinds} onChange={(kinds) => setDraftFilters((current) => ({ ...current, kinds }))} />
+          <MultiSelectChipGroup label="Severity" options={SEVERITY_OPTIONS} value={draftFilters.severities} onChange={(severities) => setDraftFilters((current) => ({ ...current, severities }))} />
+          <Typography variant="caption" color="text.secondary" sx={{ mt: -1.25 }}>
+            Critical and Error are blocking or session-ending. Warning includes retryable provider attempts and cache disruption.
+          </Typography>
+          <MultiSelectChipGroup label="State" options={STATE_OPTIONS} value={draftFilters.states} onChange={(states) => setDraftFilters((current) => ({ ...current, states }))} />
+          <MultiSelectChipGroup label="Runtime" options={AGENT_OPTIONS} value={draftFilters.agents} onChange={(agents) => setDraftFilters((current) => ({ ...current, agents }))} />
+          <Stack direction="row" spacing={1} justifyContent="space-between">
+            <Button onClick={() => setDraftFilters((current) => ({ ...current, kinds: [], severities: [], states: [], agents: [] }))}>Clear</Button>
+            <Stack direction="row" spacing={1}>
+              <Button onClick={() => setFilterOpen(false)}>Cancel</Button>
+              <Button variant="contained" onClick={() => { setFilters(draftFilters); setFilterOpen(false); }}>Apply</Button>
+            </Stack>
+          </Stack>
+        </Stack>
+      </Sheet>
       <Divider />
       {error && <Typography variant="caption" color="error.main">{error}</Typography>}
       {!loading && logs.length === 0 && (

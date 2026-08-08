@@ -1676,48 +1676,81 @@ struct DeepSeekActivityQuery {
     window: Option<String>,
     model: Option<String>,
     agent: Option<String>,
+    from_ms: Option<i64>,
+    to_ms: Option<i64>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
 struct DeepSeekActivityFilter {
     window: String,
-    window_seconds: i32,
-    model: Option<String>,
-    agent: Option<String>,
+    from_ms: i64,
+    to_ms: i64,
+    models: Vec<String>,
+    agents: Vec<String>,
+}
+
+fn selected_activity_filters(
+    value: Option<&str>,
+    allowed: &[&str],
+) -> Result<Vec<String>, &'static str> {
+    let Some(value) = value.filter(|value| !value.is_empty() && *value != "all") else {
+        return Ok(Vec::new());
+    };
+    let mut selected = Vec::new();
+    for item in value.split(',') {
+        if item == "all" || !allowed.contains(&item) {
+            return Err("invalid activity filter");
+        }
+        if !selected.iter().any(|existing| existing == item) {
+            selected.push(item.to_owned());
+        }
+    }
+    Ok(selected)
 }
 
 fn parse_deepseek_activity_filter(
     query: &DeepSeekActivityQuery,
 ) -> Result<DeepSeekActivityFilter, &'static str> {
-    let window = query.window.as_deref().unwrap_or("24h");
-    let window_seconds = match window {
-        "1h" => 3_600,
-        "2h" => 2 * 3_600,
-        "4h" => 4 * 3_600,
-        "6h" => 6 * 3_600,
-        "8h" => 8 * 3_600,
-        "12h" => 12 * 3_600,
-        "24h" => 24 * 3_600,
-        "7d" => 7 * 86_400,
-        "14d" => 14 * 86_400,
-        "30d" => 30 * 86_400,
-        _ => return Err("invalid activity window"),
-    };
-    let model = match query.model.as_deref().unwrap_or("all") {
-        "all" => None,
-        value @ ("flash" | "pro") => Some(value.to_owned()),
-        _ => return Err("invalid model filter"),
-    };
-    let agent = match query.agent.as_deref().unwrap_or("all") {
-        "all" => None,
-        value @ ("codex" | "claude") => Some(value.to_owned()),
-        _ => return Err("invalid agent filter"),
+    let now = now_ms();
+    let (window, from_ms, to_ms) = match (query.from_ms, query.to_ms) {
+        (Some(from_ms), Some(to_ms))
+            if from_ms > 0
+                && to_ms > from_ms
+                && to_ms <= now.saturating_add(5 * 60_000)
+                && to_ms.saturating_sub(from_ms) <= 30 * 86_400_000 =>
+        {
+            ("custom".to_owned(), from_ms, to_ms)
+        }
+        (Some(_), Some(_)) => return Err("invalid activity time range"),
+        (None, None) => {
+            let window = query.window.as_deref().unwrap_or("24h");
+            let window_seconds = match window {
+                "1h" => 3_600,
+                "2h" => 2 * 3_600,
+                "4h" => 4 * 3_600,
+                "6h" => 6 * 3_600,
+                "8h" => 8 * 3_600,
+                "12h" => 12 * 3_600,
+                "24h" => 24 * 3_600,
+                "7d" => 7 * 86_400,
+                "14d" => 14 * 86_400,
+                "30d" => 30 * 86_400,
+                _ => return Err("invalid activity window"),
+            };
+            (
+                window.to_owned(),
+                now.saturating_sub(i64::from(window_seconds) * 1_000),
+                now,
+            )
+        }
+        _ => return Err("activity time range requires both boundaries"),
     };
     Ok(DeepSeekActivityFilter {
-        window: window.to_owned(),
-        window_seconds,
-        model,
-        agent,
+        window,
+        from_ms,
+        to_ms,
+        models: selected_activity_filters(query.model.as_deref(), &["flash", "pro"])?,
+        agents: selected_activity_filters(query.agent.as_deref(), &["codex", "claude"])?,
     })
 }
 
@@ -1739,9 +1772,10 @@ async fn api_deepseek_usage_activity(
     match store
         .provider_usage_activity(
             "deepseek",
-            filter.window_seconds,
-            filter.agent.as_deref(),
-            filter.model.as_deref(),
+            filter.from_ms,
+            filter.to_ms,
+            &filter.agents,
+            &filter.models,
         )
         .await
     {
@@ -1759,36 +1793,30 @@ async fn api_deepseek_usage_activity(
 
 #[cfg(test)]
 mod deepseek_activity_filter_tests {
-    use super::{DeepSeekActivityFilter, DeepSeekActivityQuery, parse_deepseek_activity_filter};
+    use super::{DeepSeekActivityQuery, parse_deepseek_activity_filter};
 
     #[test]
     fn defaults_to_bounded_unfiltered_activity() {
-        assert_eq!(
-            parse_deepseek_activity_filter(&DeepSeekActivityQuery::default()),
-            Ok(DeepSeekActivityFilter {
-                window: "24h".to_owned(),
-                window_seconds: 86_400,
-                model: None,
-                agent: None,
-            })
-        );
+        let filter = parse_deepseek_activity_filter(&DeepSeekActivityQuery::default())
+            .expect("default filter");
+        assert_eq!(filter.window, "24h");
+        assert_eq!(filter.to_ms - filter.from_ms, 86_400_000);
+        assert!(filter.models.is_empty());
+        assert!(filter.agents.is_empty());
     }
 
     #[test]
     fn accepts_agent_and_model_family_filters() {
-        assert_eq!(
-            parse_deepseek_activity_filter(&DeepSeekActivityQuery {
-                window: Some("30d".to_owned()),
-                model: Some("pro".to_owned()),
-                agent: Some("codex".to_owned()),
-            }),
-            Ok(DeepSeekActivityFilter {
-                window: "30d".to_owned(),
-                window_seconds: 30 * 86_400,
-                model: Some("pro".to_owned()),
-                agent: Some("codex".to_owned()),
-            })
-        );
+        let filter = parse_deepseek_activity_filter(&DeepSeekActivityQuery {
+            window: Some("30d".to_owned()),
+            model: Some("pro,flash".to_owned()),
+            agent: Some("codex,claude".to_owned()),
+            ..DeepSeekActivityQuery::default()
+        })
+        .expect("multi filter");
+        assert_eq!(filter.to_ms - filter.from_ms, 30 * 86_400_000);
+        assert_eq!(filter.models, ["pro", "flash"]);
+        assert_eq!(filter.agents, ["codex", "claude"]);
     }
 
     #[test]
@@ -1799,19 +1827,31 @@ mod deepseek_activity_filter_tests {
             ("8h", 8 * 3_600),
             ("12h", 12 * 3_600),
         ] {
+            let filter = parse_deepseek_activity_filter(&DeepSeekActivityQuery {
+                window: Some(window.to_owned()),
+                ..DeepSeekActivityQuery::default()
+            })
+            .expect("rolling window");
+            assert_eq!(filter.window, window);
             assert_eq!(
-                parse_deepseek_activity_filter(&DeepSeekActivityQuery {
-                    window: Some(window.to_owned()),
-                    ..DeepSeekActivityQuery::default()
-                }),
-                Ok(DeepSeekActivityFilter {
-                    window: window.to_owned(),
-                    window_seconds,
-                    model: None,
-                    agent: None,
-                })
+                filter.to_ms - filter.from_ms,
+                i64::from(window_seconds) * 1_000
             );
         }
+    }
+
+    #[test]
+    fn accepts_an_exact_bounded_time_range() {
+        let to_ms = super::now_ms();
+        let filter = parse_deepseek_activity_filter(&DeepSeekActivityQuery {
+            from_ms: Some(to_ms - 2 * 3_600_000),
+            to_ms: Some(to_ms),
+            ..DeepSeekActivityQuery::default()
+        })
+        .expect("custom range");
+        assert_eq!(filter.window, "custom");
+        assert_eq!(filter.from_ms, to_ms - 2 * 3_600_000);
+        assert_eq!(filter.to_ms, to_ms);
     }
 
     #[test]
@@ -2016,6 +2056,8 @@ struct DiagnosticLogsQuery {
     state: Option<String>,
     agent: Option<String>,
     window: Option<String>,
+    from_ms: Option<i64>,
+    to_ms: Option<i64>,
     session: Option<String>,
     cursor: Option<String>,
     limit: Option<i64>,
@@ -2033,14 +2075,24 @@ struct DiagnosticLogPage {
     next_cursor: Option<String>,
 }
 
-fn selected_log_filter(
+fn selected_log_filters(
     value: Option<&str>,
     allowed: &[&str],
-) -> Result<Option<String>, &'static str> {
+) -> Result<Vec<String>, &'static str> {
     match value {
-        None | Some("all") => Ok(None),
-        Some(value) if allowed.contains(&value) => Ok(Some(value.to_owned())),
-        Some(_) => Err("invalid diagnostic log filter"),
+        None | Some("") | Some("all") => Ok(Vec::new()),
+        Some(value) => {
+            let mut selected = Vec::new();
+            for item in value.split(',') {
+                if item == "all" || !allowed.contains(&item) {
+                    return Err("invalid diagnostic log filter");
+                }
+                if !selected.iter().any(|existing| existing == item) {
+                    selected.push(item.to_owned());
+                }
+            }
+            Ok(selected)
+        }
     }
 }
 
@@ -2071,12 +2123,28 @@ fn encode_log_cursor(item: &crate::store::DiagnosticLogSummary) -> Option<String
 fn parse_diagnostic_log_filter(
     query: &DiagnosticLogsQuery,
 ) -> Result<crate::store::DiagnosticLogFilter, &'static str> {
-    let window_seconds = match query.window.as_deref().unwrap_or("7d") {
-        "1h" => 3_600,
-        "24h" => 86_400,
-        "7d" => 7 * 86_400,
-        "30d" => 30 * 86_400,
-        _ => return Err("invalid diagnostic log window"),
+    let now = now_ms();
+    let (since_ms, until_ms) = match (query.from_ms, query.to_ms) {
+        (Some(from_ms), Some(to_ms))
+            if from_ms > 0
+                && to_ms > from_ms
+                && to_ms <= now.saturating_add(5 * 60_000)
+                && to_ms.saturating_sub(from_ms) <= 365 * 86_400_000 =>
+        {
+            (from_ms, to_ms)
+        }
+        (Some(_), Some(_)) => return Err("invalid diagnostic log time range"),
+        (None, None) => {
+            let window_seconds = match query.window.as_deref().unwrap_or("7d") {
+                "1h" => 3_600,
+                "24h" => 86_400,
+                "7d" => 7 * 86_400,
+                "30d" => 30 * 86_400,
+                _ => return Err("invalid diagnostic log window"),
+            };
+            (now.saturating_sub(i64::from(window_seconds) * 1_000), now)
+        }
+        _ => return Err("diagnostic log time range requires both boundaries"),
     };
     let session_ref = query
         .session
@@ -2093,8 +2161,9 @@ fn parse_diagnostic_log_filter(
     }
     let cursor = decode_log_cursor(query.cursor.as_deref())?;
     Ok(crate::store::DiagnosticLogFilter {
-        since_ms: now_ms().saturating_sub(i64::from(window_seconds) * 1_000),
-        kind: selected_log_filter(
+        since_ms,
+        until_ms,
+        kinds: selected_log_filters(
             query.kind.as_deref(),
             &[
                 "session_error",
@@ -2103,11 +2172,11 @@ fn parse_diagnostic_log_filter(
                 "automation",
             ],
         )?,
-        severity: selected_log_filter(
+        severities: selected_log_filters(
             query.severity.as_deref(),
             &["info", "warning", "error", "critical"],
         )?,
-        state: selected_log_filter(
+        states: selected_log_filters(
             query.state.as_deref(),
             &[
                 "active",
@@ -2122,7 +2191,7 @@ fn parse_diagnostic_log_filter(
                 "cancelled",
             ],
         )?,
-        agent: selected_log_filter(query.agent.as_deref(), &["codex", "claude"])?,
+        agents: selected_log_filters(query.agent.as_deref(), &["codex", "claude"])?,
         session_ref,
         cursor_ms: cursor.as_ref().map(|value| value.occurred_at_ms),
         cursor_id: cursor.map(|value| value.id),
@@ -2186,31 +2255,54 @@ async fn api_diagnostic_log_detail(
 #[cfg(test)]
 mod diagnostic_log_query_tests {
     use super::{
-        DiagnosticLogsQuery, decode_log_cursor, encode_log_cursor, parse_diagnostic_log_filter,
+        DiagnosticLogsQuery, decode_log_cursor, encode_log_cursor, now_ms,
+        parse_diagnostic_log_filter,
     };
 
     #[test]
     fn diagnostic_log_filters_are_closed_and_bounded() {
         let filter = parse_diagnostic_log_filter(&DiagnosticLogsQuery {
-            kind: Some("cache_anomaly".to_owned()),
-            severity: Some("warning".to_owned()),
-            state: Some("observed".to_owned()),
-            agent: Some("claude".to_owned()),
+            kind: Some("cache_anomaly,provider_error".to_owned()),
+            severity: Some("warning,error".to_owned()),
+            state: Some("observed,failed".to_owned()),
+            agent: Some("claude,codex".to_owned()),
             window: Some("30d".to_owned()),
+            from_ms: None,
+            to_ms: None,
             session: Some("0123456789abcdef0123456789abcdef".to_owned()),
             limit: Some(5_000),
             cursor: None,
         })
         .expect("valid diagnostic filters");
-        assert_eq!(filter.kind.as_deref(), Some("cache_anomaly"));
-        assert_eq!(filter.severity.as_deref(), Some("warning"));
-        assert_eq!(filter.state.as_deref(), Some("observed"));
-        assert_eq!(filter.agent.as_deref(), Some("claude"));
+        assert_eq!(filter.kinds, ["cache_anomaly", "provider_error"]);
+        assert_eq!(filter.severities, ["warning", "error"]);
+        assert_eq!(filter.states, ["observed", "failed"]);
+        assert_eq!(filter.agents, ["claude", "codex"]);
         assert_eq!(filter.limit, 100);
 
         assert!(
             parse_diagnostic_log_filter(&DiagnosticLogsQuery {
                 kind: Some("raw_prompt".to_owned()),
+                ..DiagnosticLogsQuery::default()
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn diagnostic_log_time_ranges_require_two_bounded_boundaries() {
+        let until_ms = now_ms();
+        let filter = parse_diagnostic_log_filter(&DiagnosticLogsQuery {
+            from_ms: Some(until_ms - 6 * 3_600_000),
+            to_ms: Some(until_ms),
+            ..DiagnosticLogsQuery::default()
+        })
+        .expect("valid explicit range");
+        assert_eq!(filter.since_ms, until_ms - 6 * 3_600_000);
+        assert_eq!(filter.until_ms, until_ms);
+        assert!(
+            parse_diagnostic_log_filter(&DiagnosticLogsQuery {
+                from_ms: Some(until_ms - 3_600_000),
                 ..DiagnosticLogsQuery::default()
             })
             .is_err()

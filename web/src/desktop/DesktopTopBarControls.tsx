@@ -143,8 +143,8 @@ function UsageProviderSummary(
   const secondary = deepseek
     ? provider.spend24hPriceCoverage !== undefined &&
         provider.spend24hPriceCoverage >= 99.999
-      ? `24h ${compactCny(provider.spend24hCny)} · Miss ${provider.cacheMissRate.toFixed(1)}% · Err ${provider.errorRate.toFixed(1)}%`
-      : `24h ≥${compactCny(provider.spend24hCny)} · ${provider.spend24hPriceCoverage?.toFixed(0) ?? "0"}% priced · Miss ${provider.cacheMissRate.toFixed(1)}% · Err ${provider.errorRate.toFixed(1)}%`
+      ? `24h ${compactCny(provider.spend24hCny)} · Miss ${provider.cacheMissRate.toFixed(1)}% · Block ${provider.blockingErrorRate.toFixed(1)}%`
+      : `24h ≥${compactCny(provider.spend24hCny)} · ${provider.spend24hPriceCoverage?.toFixed(0) ?? "0"}% priced · Miss ${provider.cacheMissRate.toFixed(1)}% · Block ${provider.blockingErrorRate.toFixed(1)}%`
     : `Weekly · resets ${shortResetTime(provider.resetsAt)}`;
   return (
     <Box
