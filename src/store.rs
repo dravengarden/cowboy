@@ -1829,18 +1829,12 @@ fn valid_provider_usage_v3_dimensions(event: &crate::machine_protocol::ProviderU
                     "native" | "anthropic_compat"
                 )
         }
-        ("reasonix-deepseek", "reasonix") => {
-            event.operation == "chat_completions"
-                && event.client_protocol == "chat_completions"
-                && event.upstream_protocol == "chat_completions"
-                && event.translation_mode == "native"
-        }
         _ => false,
     };
     let request_role_valid = matches!(
         event.request_role.as_str(),
         "unknown" | "executor" | "planner" | "subagent" | "reviewer"
-    ) && (event.agent != "reasonix" || event.request_role != "unknown");
+    );
     event.protocol == event.upstream_protocol
         && event.model_family == provider_usage_model_family(model)
         && request_role_valid
@@ -1918,7 +1912,7 @@ fn validate_provider_usage_event(
 ) -> Result<()> {
     if event.producer_id != producer_id
         || event.provider != "deepseek"
-        || !matches!(event.agent.as_str(), "codex" | "claude" | "reasonix")
+        || !matches!(event.agent.as_str(), "codex" | "claude")
         || event.account_fingerprint.len() != 16
         || !event
             .account_fingerprint
@@ -1927,7 +1921,6 @@ fn validate_provider_usage_event(
         || event.model.len() > 128
         || !(100..=599).contains(&event.status)
         || !matches!(event.schema_version, 1..=3)
-        || (event.agent == "reasonix" && event.schema_version != 3)
         || !matches!(
             event.operation.as_str(),
             "legacy" | "responses" | "compact" | "messages" | "chat_completions"
@@ -1948,7 +1941,6 @@ fn validate_provider_usage_event(
             ),
             ("codex-deepseek", "codex-deepseek", "codex")
                 | ("claude-deepseek", "claude-deepseek", "claude")
-                | ("reasonix-deepseek", "reasonix-deepseek", "reasonix")
         )
         || !provider_usage_metrics_within_bounds(event)
         || !valid_provider_usage_token_algebra(event)
@@ -2071,34 +2063,6 @@ mod provider_usage_validation_tests {
     fn controller_rejects_oversized_usage_metric() {
         let mut candidate = event();
         candidate.cache_hit_tokens = Some(crate::machine_protocol::PROVIDER_USAGE_MAX_TOKENS + 1);
-        assert!(validate_provider_usage_event("codex-deepseek", &candidate).is_err());
-    }
-
-    #[test]
-    fn controller_reserves_isolated_reasonix_chat_lane() {
-        let mut candidate = event();
-        candidate.producer_id = "reasonix-deepseek".to_owned();
-        candidate.agent = "reasonix".to_owned();
-        candidate.model = "deepseek-v4-pro".to_owned();
-        candidate.model_family = "pro".to_owned();
-        candidate.resolved_model = Some("deepseek-v4-pro".to_owned());
-        candidate.request_role = "planner".to_owned();
-        candidate.operation = "chat_completions".to_owned();
-        candidate.protocol = "chat_completions".to_owned();
-        candidate.client_protocol = "chat_completions".to_owned();
-        candidate.upstream_protocol = "chat_completions".to_owned();
-        candidate.has_previous_response_id = Some(false);
-        assert!(validate_provider_usage_event("reasonix-deepseek", &candidate).is_ok());
-
-        candidate.request_role = "unknown".to_owned();
-        assert!(validate_provider_usage_event("reasonix-deepseek", &candidate).is_err());
-        candidate.request_role = "planner".to_owned();
-
-        candidate.schema_version = 1;
-        assert!(validate_provider_usage_event("reasonix-deepseek", &candidate).is_err());
-        candidate.schema_version = 3;
-
-        candidate.producer_id = "codex-deepseek".to_owned();
         assert!(validate_provider_usage_event("codex-deepseek", &candidate).is_err());
     }
 
@@ -2823,7 +2787,7 @@ impl Store {
     ) -> Result<serde_json::Value> {
         if provider != "deepseek"
             || !(3_600..=30 * 86_400).contains(&window_seconds)
-            || agent.is_some_and(|value| !matches!(value, "codex" | "claude" | "reasonix"))
+            || agent.is_some_and(|value| !matches!(value, "codex" | "claude"))
             || model_family.is_some_and(|value| !matches!(value, "flash" | "pro"))
         {
             anyhow::bail!("invalid provider usage activity filter");

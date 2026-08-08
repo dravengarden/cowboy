@@ -84,8 +84,8 @@ v3-producing gateway on that Machine and verify its running release. Only then
 may `v3Drained: true` and `pendingV3Events: 0` authorize a Machine downgrade.
 Record the full status for each Machine; a null last ACK is valid only when that
 producer never emitted v3. Pending v1/v2 events may be delivered by the older
-Machine, but any pending v3 event forbids the downgrade. Codex, Claude Code, and
-future Reasonix producers are evaluated independently.
+Machine, but any pending v3 event forbids the downgrade. Codex and Claude Code
+producers are evaluated independently.
 
 ## Linux user service
 

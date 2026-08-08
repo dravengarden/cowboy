@@ -30,12 +30,6 @@ const PRESENTATIONS: Readonly<Record<string, ProviderPresentation>> = {
     detail: "Isolated instance configuration · V4 Pro 1M + V4 Flash subagents",
     isolated: true,
   },
-  "reasonix-deepseek": {
-    agent: "Reasonix",
-    modelProvider: "DeepSeek",
-    detail: "Native ACP · isolated gateway · V4 Flash",
-    isolated: true,
-  },
   gemini: {
     agent: "Gemini",
     modelProvider: "Google",
@@ -68,16 +62,14 @@ export function providerSelectionName(provider: string): string {
 export function providerAgentFamily(provider: string): string {
   if (provider === "claude-deepseek") return "claude-code";
   if (provider === "codex-deepseek") return "codex";
-  if (provider === "reasonix-deepseek") return "reasonix";
   return provider;
 }
 
-export type ProviderActivityKind = "claude" | "codex" | "reasonix" | "default";
+export type ProviderActivityKind = "claude" | "codex" | "default";
 
 export function providerActivityKind(provider: string): ProviderActivityKind {
   const family = providerAgentFamily(provider);
   if (family === "claude-code") return "claude";
   if (family === "codex") return "codex";
-  if (family === "reasonix") return "reasonix";
   return "default";
 }

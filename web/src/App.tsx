@@ -3695,7 +3695,6 @@ function machineProviderName(slot?: string): string {
     if (slot === "codex") return "Codex";
     if (slot === "claude" || slot === "claude-code") return "Claude Code";
     if (slot === "claude-deepseek") return "Claude Code · DeepSeek";
-    if (slot === "reasonix" || slot === "reasonix-deepseek") return "Reasonix · DeepSeek";
     if (slot === "gemini") return "Gemini";
     return slot || "Agent";
 }

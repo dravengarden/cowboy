@@ -161,8 +161,7 @@ input, making miss tokens an exact subtraction). Rows marked `absent` contribute
 to coverage but not the rate. Version-one rows are `legacy` and excluded rather
 than silently treated as misses. UI queries choose a bounded 1-hour through
 30-day occurrence window and can filter Flash, Pro, Codex, or Claude Code
-without refreshing account balance. Reasonix appears only after its own
-producer has reported real data. The card keeps
+without refreshing account balance. The card keeps
 runtime rates separate, shows hot and low-hit request counts, and breaks model,
 role, protocol, translation, revision, operation, and Machine coverage apart so
 a token-weighted average cannot hide a bimodal workload.
@@ -191,21 +190,10 @@ and the UI displays price coverage, cache savings, and miss premium. Incomplete
 valuations use an explicit lower-bound marker rather than appearing as an
 invoice.
 
-Reasonix is reserved as a future independent producer, not implemented by this
-schema change. Its contract is `producer_id=reasonix-deepseek`, `agent=reasonix`,
-native Chat Completions, and one of `executor`, `planner`, `subagent`, or
-`reviewer` for `request_role`. A future Reasonix process must own a separate
-config directory, credential, port, service, spool producer, and HMAC namespace;
-it must not reuse either Codex/OpenAI or Claude/Anthropic state. This separation
-lets Cowboy compare role-specific cold-start and cache economics without turning
-telemetry into a shared runtime configuration plane. Reasonix events require
-schema v3, and planner, executor, and each subagent/reviewer must report their
-own cache lineage rather than borrowing the parent Cowboy session.
 Codex and Claude gateway traffic records `request_role=unknown` unless the
 loopback caller supplies an explicit role header; telemetry must never infer
-`executor` from absence. Reasonix must always report an explicit role. The UI
-shows attributed-role coverage so role-based cost conclusions cannot be drawn
-from unknown traffic.
+`executor` from absence. The UI shows attributed-role coverage so role-based
+cost conclusions cannot be drawn from unknown traffic.
 
 Schema v3 rollout is ordered because old Machine collectors reject it before it
 can enter the durable spool:

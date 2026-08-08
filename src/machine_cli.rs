@@ -321,12 +321,10 @@ fn managed_provider_environment(
         "COWBOY_ACP_CLAUDE_CODE_EXECUTABLE",
         "COWBOY_ACP_GEMINI_CMD",
         "COWBOY_ACP_GEMINI_ARGS",
-        "COWBOY_ACP_REASONIX_DEEPSEEK_CMD",
     ] {
         let slot = match key {
             "COWBOY_ACP_CLAUDE_CODE_CMD" | "COWBOY_ACP_CLAUDE_CODE_EXECUTABLE" => "claude",
             "COWBOY_ACP_GEMINI_CMD" | "COWBOY_ACP_GEMINI_ARGS" => "gemini",
-            "COWBOY_ACP_REASONIX_DEEPSEEK_CMD" => "reasonix",
             _ => "codex",
         };
         if if slot == "claude" {
@@ -827,11 +825,6 @@ async fn collect_inventory(
         ("codex", "codex", &["--version"][..]),
         ("claude", "claude", &["--version"][..]),
         ("gemini", "gemini", &["--version"][..]),
-        (
-            "reasonix",
-            "/opt/npm-global/bin/reasonix",
-            &["--version"][..],
-        ),
     ] {
         if disabled.iter().any(|disabled| disabled == slot) {
             continue;
@@ -880,7 +873,6 @@ async fn collect_inventory(
                 let probe = probe_gemini_auth();
                 (probe.state, probe.detail)
             }
-            "reasonix" => (AuthState::Unsupported, None),
             _ => (AuthState::Unsupported, None),
         };
         if let Some(existing) = inventory
@@ -1027,35 +1019,6 @@ async fn collect_inventory(
             } else {
                 "Claude Code requires an executable absolute bash or zsh path".to_owned()
             }),
-            update: None,
-        });
-    }
-    if !disabled.iter().any(|slot| slot == "reasonix-deepseek") {
-        let gateway_ready = tokio::time::timeout(
-            Duration::from_millis(500),
-            reqwest::Client::new()
-                .get("http://127.0.0.1:61139/healthz")
-                .send(),
-        )
-        .await
-        .is_ok_and(|result| result.is_ok_and(|response| response.status().is_success()));
-        inventory.push(ComponentInventory {
-            id: ComponentId {
-                kind: ComponentKind::ProviderAdapter,
-                slot: "reasonix-deepseek".to_owned(),
-            },
-            state: if gateway_ready {
-                ComponentState::Active
-            } else {
-                ComponentState::Missing
-            },
-            version: String::new(),
-            generation: String::new(),
-            digest: String::new(),
-            rollback_generation: None,
-            active_leases: 0,
-            auth: None,
-            detail: Some("isolated loopback Chat Completions gateway".to_owned()),
             update: None,
         });
     }
@@ -1595,7 +1558,6 @@ fn provider_for_component(id: &ComponentId) -> Option<&'static str> {
         "codex" => Some("codex"),
         "claude" => Some("claude-code"),
         "gemini" => Some("gemini"),
-        "reasonix" | "reasonix-deepseek" => Some("reasonix-deepseek"),
         _ => None,
     }
 }

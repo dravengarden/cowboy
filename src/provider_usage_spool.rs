@@ -576,18 +576,12 @@ fn valid_v3_dimensions(event: &GatewayUsage) -> bool {
                     "native" | "anthropic_compat"
                 )
         }
-        ("reasonix-deepseek", "reasonix") => {
-            event.operation == "chat_completions"
-                && event.client_protocol == "chat_completions"
-                && event.upstream_protocol == "chat_completions"
-                && event.translation_mode == "native"
-        }
         _ => false,
     };
     let request_role_valid = matches!(
         event.request_role.as_str(),
         "unknown" | "executor" | "planner" | "subagent" | "reviewer"
-    ) && (event.agent != "reasonix" || event.request_role != "unknown");
+    );
     event.protocol == event.upstream_protocol
         && event.model_family == expected_model_family(model)
         && request_role_valid
@@ -665,7 +659,7 @@ fn validate(event: &GatewayUsage) -> Result<()> {
         || event.producer_id.is_empty()
         || event.producer_id.len() > 128
         || event.provider != "deepseek"
-        || !matches!(event.agent.as_str(), "codex" | "claude" | "reasonix")
+        || !matches!(event.agent.as_str(), "codex" | "claude")
         || event.account_fingerprint.len() != 16
         || !event
             .account_fingerprint
@@ -674,7 +668,6 @@ fn validate(event: &GatewayUsage) -> Result<()> {
         || event.model.len() > 128
         || !(100..=599).contains(&event.status)
         || !matches!(event.schema_version, 1..=3)
-        || (event.agent == "reasonix" && event.schema_version != 3)
         || !matches!(
             event.operation.as_str(),
             "legacy" | "responses" | "compact" | "messages" | "chat_completions"
@@ -689,9 +682,7 @@ fn validate(event: &GatewayUsage) -> Result<()> {
         )
         || !matches!(
             (event.producer_id.as_str(), event.agent.as_str()),
-            ("codex-deepseek", "codex")
-                | ("claude-deepseek", "claude")
-                | ("reasonix-deepseek", "reasonix")
+            ("codex-deepseek", "codex") | ("claude-deepseek", "claude")
         )
         || !metrics_within_bounds(event)
         || !valid_usage_token_algebra(event)
@@ -1074,42 +1065,6 @@ mod tests {
         let mut value: serde_json::Value =
             serde_json::from_slice(&event("invalid-cache")).expect("parse event");
         value["cache_observation"] = "absent".into();
-        assert!(spool.ingest(&serde_json::to_vec(&value).unwrap()).is_err());
-        drop(spool);
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[test]
-    fn accepts_reserved_reasonix_runtime_and_rejects_cross_lane_protocols() {
-        let (spool, path) = spool();
-        let mut value: serde_json::Value =
-            serde_json::from_slice(&event("reasonix-event")).expect("parse event");
-        value["producer_id"] = "reasonix-deepseek".into();
-        value["agent"] = "reasonix".into();
-        value["operation"] = "chat_completions".into();
-        value["protocol"] = "chat_completions".into();
-        value["client_protocol"] = "chat_completions".into();
-        value["upstream_protocol"] = "chat_completions".into();
-        spool
-            .ingest(&serde_json::to_vec(&value).expect("Reasonix JSON"))
-            .expect("reserved Reasonix runtime accepted");
-
-        let mut unknown_role = value.clone();
-        unknown_role["event_id"] = "reasonix-unknown-role".into();
-        unknown_role["request_role"] = "unknown".into();
-        assert!(
-            spool
-                .ingest(&serde_json::to_vec(&unknown_role).unwrap())
-                .is_err()
-        );
-
-        let mut legacy = value.clone();
-        legacy["event_id"] = "reasonix-legacy".into();
-        legacy["schema_version"] = 1.into();
-        assert!(spool.ingest(&serde_json::to_vec(&legacy).unwrap()).is_err());
-
-        value["event_id"] = "reasonix-invalid".into();
-        value["client_protocol"] = "responses".into();
         assert!(spool.ingest(&serde_json::to_vec(&value).unwrap()).is_err());
         drop(spool);
         let _ = std::fs::remove_file(path);

@@ -25,7 +25,7 @@ pub(crate) fn account_provider(agent: &str) -> Option<&'static str> {
     match agent {
         "codex" => Some("openai"),
         "claude" | "claude-code" => Some("anthropic"),
-        "codex-deepseek" | "claude-deepseek" | "reasonix-deepseek" => Some("deepseek"),
+        "codex-deepseek" | "claude-deepseek" => Some("deepseek"),
         "gemini" => Some("gemini"),
         _ => None,
     }

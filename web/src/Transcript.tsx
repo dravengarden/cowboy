@@ -66,7 +66,6 @@ import {
 } from "@mui/icons-material";
 import { providerActivityKind, providerPresentation } from "./providerPresentation";
 import { providerVisual } from "./providerVisual";
-import { ProviderIcon } from "./ProviderIcon";
 import { CLAUDE_VERBS } from "./claudeVerbs";
 import { Markdown } from "./Markdown";
 import { attachmentDisplayParts } from "./attachments";
@@ -228,8 +227,6 @@ function TranscriptSkeleton({
 
   const agent = provider === "claude-code" || provider === "claude-deepseek"
     ? "Claude Code"
-    : provider === "reasonix-deepseek"
-    ? "Reasonix"
     : provider === "gemini"
     ? "Gemini"
     : "Codex";
@@ -947,94 +944,6 @@ function CodexThinking({ provider }: { provider: string }): React.JSX.Element {
   );
 }
 
-const REASONIX_PHRASES = [
-  "Reasoning",
-  "Exploring",
-  "Tracing",
-  "Synthesizing",
-  "Working",
-] as const;
-const REASONIX_PHRASE_MS = 4200;
-const reasonixBreathe = keyframes`
-  0%, 100% { opacity: 0.62; transform: rotate(-3deg) scale(0.92); }
-  50%      { opacity: 1; transform: rotate(3deg) scale(1.04); }
-`;
-
-// Reasonix gets the same calm two-part activity grammar as Codex and Claude:
-// its own mark carries motion while the verb carries progress. The restrained
-// blue/cyan treatment preserves the DeepSeek account identity without falling
-// back to a generic Material spinner.
-function ReasonixThinking({ provider }: { provider: string }): React.JSX.Element {
-  const theme = useTheme();
-  const reducedMotion = globalThis.matchMedia?.(
-    "(prefers-reduced-motion: reduce)",
-  ).matches;
-  const [phraseIndex, setPhraseIndex] = useState(() =>
-    Math.floor(Date.now() / REASONIX_PHRASE_MS) % REASONIX_PHRASES.length
-  );
-  useEffect(() => {
-    const id = globalThis.setInterval(
-      () => setPhraseIndex((index) => index + 1),
-      REASONIX_PHRASE_MS,
-    );
-    return () => globalThis.clearInterval(id);
-  }, []);
-  const phrase = REASONIX_PHRASES[phraseIndex % REASONIX_PHRASES.length] ??
-    "Reasoning";
-  const muted = theme.palette.text.secondary;
-  const visual = providerVisual(provider, theme.palette.mode);
-
-  return (
-    <Stack
-      direction="row"
-      spacing={0.8}
-      alignItems="center"
-      aria-label="Reasonix is working"
-      sx={{ py: 0.5, alignSelf: "flex-start", color: "text.secondary" }}
-    >
-      <ProviderIcon
-        provider={provider}
-        aria-hidden
-        sx={{
-          width: 17,
-          height: 17,
-          flexShrink: 0,
-          transformOrigin: "center",
-          animation: reducedMotion
-            ? "none"
-            : `${reasonixBreathe} 2.4s ease-in-out infinite`,
-        }}
-      />
-      <Typography
-        key={phraseIndex}
-        aria-hidden
-        variant="caption"
-        sx={{
-          fontWeight: 550,
-          letterSpacing: "0.015em",
-          background:
-            `linear-gradient(100deg, ${muted} 0%, ${muted} 24%, ${visual.primary} 44%, ${visual.secondary} 56%, ${muted} 74%, ${muted} 100%)`,
-          backgroundSize: "220% 100%",
-          WebkitBackgroundClip: "text",
-          backgroundClip: "text",
-          color: "transparent",
-          animation: reducedMotion
-            ? "none"
-            : `${codexPhraseFade} ${REASONIX_PHRASE_MS}ms ease-in-out, ${shimmer} 3.2s linear infinite`,
-          "@media (prefers-reduced-motion: reduce)": {
-            animation: "none",
-            background: "none",
-            color: muted,
-            WebkitTextFillColor: muted,
-          },
-        }}
-      >
-        {phrase}…
-      </Typography>
-    </Stack>
-  );
-}
-
 function DefaultThinking(): React.JSX.Element {
   return (
     <Stack
@@ -1052,8 +961,7 @@ function DefaultThinking(): React.JSX.Element {
 }
 
 // Each provider keeps its own activity language: Claude's morphing spark, the
-// Codex workcell, Reasonix's breathing mark, and a neutral Material fallback
-// for providers without one.
+// Codex workcell and a neutral Material fallback for providers without one.
 function ThinkingIndicator({
   provider,
 }: {
@@ -1064,8 +972,6 @@ function ThinkingIndicator({
       return <ClaudeThinking provider={provider} />;
     case "codex":
       return <CodexThinking provider={provider} />;
-    case "reasonix":
-      return <ReasonixThinking provider={provider} />;
     default:
       return <DefaultThinking />;
   }

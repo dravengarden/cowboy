@@ -14,10 +14,10 @@ Deno.test("only signed-out provider CLIs offer an interactive login", () => {
   assertEquals(machineProviderNeedsLogin(undefined), false);
 });
 
-Deno.test("presents isolated Reasonix authentication as gateway managed", () => {
-  assertEquals(machineProviderAuthLabel("reasonix", "unsupported"), "gateway managed");
+Deno.test("presents provider authentication states", () => {
+  assertEquals(machineProviderAuthLabel("gemini", "unsupported"), "unsupported");
   assertEquals(machineProviderAuthLabel("codex", "signed_out"), "signed out");
-  assertEquals(machineProviderAuthLabel("reasonix", undefined), null);
+  assertEquals(machineProviderAuthLabel("codex", undefined), null);
 });
 
 Deno.test("maps the claude-code session provider to the claude CLI slot", () => {
@@ -82,21 +82,6 @@ Deno.test("maps Claude DeepSeek to isolated gateway and shared Claude adapter", 
     }]),
     true,
   );
-});
-
-Deno.test("maps Reasonix to its native CLI and isolated gateway", () => {
-  const cli = {
-    id: { kind: "provider_cli", slot: "reasonix" },
-    state: "active",
-    auth: "unsupported",
-  };
-  const gateway = {
-    id: { kind: "provider_adapter", slot: "reasonix-deepseek" },
-    state: "active",
-  };
-  assertEquals(machineProviderAvailable("reasonix-deepseek", [cli]), false);
-  assertEquals(machineProviderAvailable("reasonix-deepseek", [gateway]), false);
-  assertEquals(machineProviderAvailable("reasonix-deepseek", [cli, gateway]), true);
 });
 
 Deno.test("requires an active and confirmed signed-in provider", () => {

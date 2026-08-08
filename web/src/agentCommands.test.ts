@@ -16,10 +16,6 @@ Deno.test("compact defaults: claude/codex use /compact, gemini /compress", () =>
   assert.equal(resolveSessionAction("compact", "gemini", [])?.command, "/compress");
 });
 
-Deno.test("Reasonix hides compact until its ACP server exposes the native action", () => {
-  assert.equal(resolveSessionAction("compact", "reasonix-deepseek", []), null);
-});
-
 // The advertised list overrides the default, matched by alias, agent's own casing.
 Deno.test("compact prefers the advertised command (alias, case-insensitive)", () => {
   assert.equal(

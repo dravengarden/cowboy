@@ -26,11 +26,6 @@ export function providerVisual(
         primary: dark ? "#8EA2FF" : "#4D6BFE",
         secondary: dark ? "#62D6BC" : "#168B78",
       };
-    case "reasonix-deepseek":
-      return {
-        primary: dark ? "#8EA2FF" : "#4D6BFE",
-        secondary: dark ? "#55D6FF" : "#1687B8",
-      };
     case "codex":
       return {
         primary: dark ? "#8FA8FF" : "#4F6BED",

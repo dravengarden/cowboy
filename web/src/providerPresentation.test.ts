@@ -34,13 +34,6 @@ Deno.test("provider presentation separates the agent from its model provider", (
   assertEquals(providerAgentFamily("claude-deepseek"), "claude-code");
   assertEquals(providerAgentFamily("codex-deepseek"), "codex");
 
-  const reasonix = providerPresentation("reasonix-deepseek");
-  assertEquals(reasonix.agent, "Reasonix");
-  assertEquals(reasonix.modelProvider, "DeepSeek");
-  assertEquals(reasonix.isolated, true);
-  assertEquals(providerName("reasonix-deepseek"), "Reasonix · DeepSeek");
-  assertEquals(providerAgentFamily("reasonix-deepseek"), "reasonix");
-  assertEquals(providerActivityKind("reasonix-deepseek"), "reasonix");
   assertEquals(providerActivityKind("claude-deepseek"), "claude");
   assertEquals(providerActivityKind("codex-deepseek"), "codex");
   assertEquals(providerActivityKind("future-agent"), "default");

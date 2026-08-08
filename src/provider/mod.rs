@@ -333,16 +333,6 @@ fn builtin_with_env_and_shell(
         crate::deepseek_context::SESSION_AUTO_COMPACT_TOKEN_LIMIT_ENV,
     ];
     m.insert("codex-deepseek", deepseek);
-    let mut reasonix_deepseek = spec_with_custom_default_args(
-        "reasonix-deepseek",
-        "/opt/npm-global/bin/reasonix",
-        &["acp"],
-        &["acp"],
-        &get_env,
-    );
-    reasonix_deepseek.remove_env_prefixes = vec!["ANTHROPIC_", "CLAUDE_", "DEEPSEEK_", "OPENAI_"];
-    reasonix_deepseek.remove_env = vec!["CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "CODEX_AUTH"];
-    m.insert("reasonix-deepseek", reasonix_deepseek);
     m.insert(
         "gemini",
         // The Gemini CLI IS the ACP adapter (`--acp` starts ACP mode); there's no
@@ -885,20 +875,6 @@ mod tests {
                 .remove_env
                 .contains(&deepseek_context::SESSION_AUTO_COMPACT_TOKEN_LIMIT_ENV)
         );
-
-        let reasonix = lookup_with(
-            &[(
-                "COWBOY_ACP_REASONIX_DEEPSEEK_CMD",
-                "/run/current-system/sw/bin/reasonix",
-            )],
-            "reasonix-deepseek",
-        )
-        .expect("reasonix-deepseek registered");
-        assert_eq!(reasonix.command, "/run/current-system/sw/bin/reasonix");
-        assert_eq!(reasonix.args, ["acp"]);
-        for secret in ["DEEPSEEK_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"] {
-            assert!(reasonix.removes_inherited_env(secret));
-        }
 
         let deepseek_with_args = lookup_with(
             &[

@@ -229,7 +229,6 @@ export function providerUsage(
     "claude-code": "anthropic",
     "codex-deepseek": "deepseek",
     "claude-deepseek": "deepseek",
-    "reasonix-deepseek": "deepseek",
     gemini: "gemini",
   };
   return snapshot?.providers.find((candidate) =>

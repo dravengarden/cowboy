@@ -123,7 +123,6 @@ function formatDurationMs(value: number): string {
 function agentName(agent: string): string {
   if (agent === "claude") return "Claude Code";
   if (agent === "codex") return "Codex";
-  if (agent === "reasonix") return "Reasonix";
   return agent;
 }
 
@@ -141,13 +140,7 @@ const DEEPSEEK_WINDOWS = [
 ] as const;
 const DEEPSEEK_MODELS = ["all", "flash", "pro"] as const;
 const DEEPSEEK_AGENTS = ["all", "codex", "claude"] as const;
-const DEEPSEEK_AGENTS_WITH_REASONIX = [
-  "all",
-  "codex",
-  "claude",
-  "reasonix",
-] as const;
-type DeepSeekAgentFilter = typeof DEEPSEEK_AGENTS_WITH_REASONIX[number];
+type DeepSeekAgentFilter = typeof DEEPSEEK_AGENTS[number];
 
 function storedDeepSeekFilter<T extends string>(
   key: string,
@@ -199,10 +192,7 @@ function lowHitCauseName(cause: string): string {
 function DeepSeekDetails(
   { usage }: { usage: ProviderUsage },
 ): React.JSX.Element {
-  const reasonixObserved = deepseekAvailableAgents(usage.activity).includes("reasonix");
-  const availableAgentFilters: readonly DeepSeekAgentFilter[] = reasonixObserved
-    ? DEEPSEEK_AGENTS_WITH_REASONIX
-    : DEEPSEEK_AGENTS;
+  const availableAgentFilters: readonly DeepSeekAgentFilter[] = DEEPSEEK_AGENTS;
   const [period, setPeriod] = useState(() =>
     storedDeepSeekFilter("cowboy.deepseek.window", DEEPSEEK_WINDOWS, "24h")
   );
@@ -240,11 +230,6 @@ function DeepSeekDetails(
     });
     return (): void => controller.abort();
   }, [period, modelFilter, agentFilter, usage.observed_at_ms]);
-  useEffect(() => {
-    if (availableAgentFilters.includes(agentFilter)) return;
-    persistDeepSeekFilter("cowboy.deepseek.agent", "all");
-    setAgentFilter("all");
-  }, [agentFilter, reasonixObserved]);
   const updatePeriod = (value: typeof period): void => {
     persistDeepSeekFilter("cowboy.deepseek.window", value);
     setPeriod(value);

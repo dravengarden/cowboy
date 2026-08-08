@@ -48,7 +48,7 @@ export function deepseekCacheStats(
   };
 }
 
-export type DeepSeekObservedAgent = "codex" | "claude" | "reasonix";
+export type DeepSeekObservedAgent = "codex" | "claude";
 
 /** Agent lanes with at least one event in the full retained telemetry window. */
 export function deepseekAvailableAgents(
@@ -56,7 +56,7 @@ export function deepseekAvailableAgents(
 ): DeepSeekObservedAgent[] {
   if (!Array.isArray(activity?.availableAgents)) return [];
   return [...new Set(activity.availableAgents.filter((agent): agent is DeepSeekObservedAgent =>
-    agent === "codex" || agent === "claude" || agent === "reasonix"
+    agent === "codex" || agent === "claude"
   ))];
 }
 
@@ -68,10 +68,10 @@ export function deepseekVisibleAgents(
 ): DeepSeekObservedAgent[] {
   if (selected !== "all") return [selected];
   const observedAgents = observed.filter((agent): agent is DeepSeekObservedAgent =>
-    agent === "codex" || agent === "claude" || agent === "reasonix"
+    agent === "codex" || agent === "claude"
   );
   const present = new Set([...available, ...observedAgents]);
-  return (["codex", "claude", "reasonix"] as const).filter((agent) =>
+  return (["codex", "claude"] as const).filter((agent) =>
     present.has(agent)
   );
 }
