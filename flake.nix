@@ -66,6 +66,7 @@
           ./src/machine_components.rs
           ./src/machine_install.rs
           ./src/machine_protocol.rs
+          ./src/provider/deepseek_context.rs
           ./src/provider_usage_spool.rs
           ./src/provider_catalog.rs
           ./src/runtime_wire.rs
@@ -105,6 +106,7 @@
         ./src/bin/cowboy-codex-app-server.rs
         ./src/cgroup.rs
         ./src/claude_shell.rs
+        ./src/provider/deepseek_context.rs
         ./src/provider/mod.rs
         ./src/provider_catalog.rs
         ./src/runtime_wire.rs
@@ -343,6 +345,7 @@
         test ! -e ${cowboy-src}/docs
         test ! -e ${cowboy-src}/web/public
         test -e ${cowboy-src}/web/src/protocol.ts
+        test -e ${machine-src}/src/provider/deepseek_context.rs
         test -e ${machine-src}/src/provider_catalog.rs
         test -e ${machine-src}/src/provider_usage_spool.rs
         test -e ${machine-src}/src/session_workspace.rs
