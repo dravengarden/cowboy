@@ -111,15 +111,20 @@ fn builtin_with_env_and_shell(
     claude_deepseek_shell: Option<String>,
 ) -> HashMap<&'static str, LaunchSpec> {
     let mut m = HashMap::new();
-    m.insert(
+    let claude_executable =
+        get_env("COWBOY_ACP_CLAUDE_CODE_EXECUTABLE").filter(|value| !value.trim().is_empty());
+    let mut claude = spec(
         "claude-code",
-        spec(
-            "claude-code",
-            "npx",
-            &["-y", "@agentclientprotocol/claude-agent-acp"],
-            &get_env,
-        ),
+        "npx",
+        &["-y", "@agentclientprotocol/claude-agent-acp"],
+        &get_env,
     );
+    if let Some(executable) = &claude_executable {
+        claude
+            .env
+            .insert("CLAUDE_CODE_EXECUTABLE".to_owned(), executable.clone());
+    }
+    m.insert("claude-code", claude);
     let mut claude_deepseek = spec(
         "claude-deepseek",
         "npx",
@@ -191,10 +196,6 @@ fn builtin_with_env_and_shell(
             "1".to_owned(),
         ),
         (
-            "CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK".to_owned(),
-            "1".to_owned(),
-        ),
-        (
             "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL".to_owned(),
             "1".to_owned(),
         ),
@@ -207,6 +208,9 @@ fn builtin_with_env_and_shell(
         ("DISABLE_UPGRADE_COMMAND".to_owned(), "1".to_owned()),
         ("ENABLE_CLAUDEAI_MCP_SERVERS".to_owned(), "false".to_owned()),
     ]);
+    // Keep Claude Code's native non-streaming fallback enabled. DeepSeek can
+    // occasionally return HTTP 200 and then close SSE before a content block;
+    // the CLI's fallback repairs that empty attempt within the same native turn.
     if let Some(shell) = claude_deepseek_shell {
         // `CLAUDE_CODE_SHELL` is the authoritative override. Also set `SHELL`
         // for subprocesses and older Claude Code releases that consult it.
@@ -214,6 +218,13 @@ fn builtin_with_env_and_shell(
             .env
             .insert("CLAUDE_CODE_SHELL".to_owned(), shell.clone());
         claude_deepseek.env.insert("SHELL".to_owned(), shell);
+    }
+    if let Some(executable) = claude_executable {
+        // Applied after the inherited CLAUDE_* scrub, so the isolated provider
+        // uses the host-selected CLI without inheriting ordinary Claude state.
+        claude_deepseek
+            .env
+            .insert("CLAUDE_CODE_EXECUTABLE".to_owned(), executable);
     }
     claude_deepseek.remove_env_prefixes = vec!["ANTHROPIC_", "CLAUDE_", "DEEPSEEK_"];
     claude_deepseek.remove_env = vec![
@@ -831,10 +842,16 @@ mod tests {
         );
         // Other custom commands still drop the npx-specific default args.
         let o = lookup_with(
-            &[(
-                "COWBOY_ACP_CLAUDE_CODE_CMD",
-                "/opt/npm-global/bin/claude-agent-acp",
-            )],
+            &[
+                (
+                    "COWBOY_ACP_CLAUDE_CODE_CMD",
+                    "/opt/npm-global/bin/claude-agent-acp",
+                ),
+                (
+                    "COWBOY_ACP_CLAUDE_CODE_EXECUTABLE",
+                    "/opt/npm-global/bin/claude",
+                ),
+            ],
             "claude-code",
         )
         .unwrap();
@@ -843,12 +860,22 @@ mod tests {
             o.args.is_empty(),
             "custom command drops the npx default args"
         );
+        assert_eq!(
+            o.env.get("CLAUDE_CODE_EXECUTABLE").map(String::as_str),
+            Some("/opt/npm-global/bin/claude")
+        );
 
         let claude_deepseek = lookup_with(
-            &[(
-                "COWBOY_ACP_CLAUDE_CODE_CMD",
-                "/opt/npm-global/bin/claude-agent-acp",
-            )],
+            &[
+                (
+                    "COWBOY_ACP_CLAUDE_CODE_CMD",
+                    "/opt/npm-global/bin/claude-agent-acp",
+                ),
+                (
+                    "COWBOY_ACP_CLAUDE_CODE_EXECUTABLE",
+                    "/opt/npm-global/bin/claude",
+                ),
+            ],
             "claude-deepseek",
         )
         .expect("claude-deepseek registered");
@@ -857,6 +884,13 @@ mod tests {
             "/opt/npm-global/bin/claude-agent-acp"
         );
         assert!(claude_deepseek.args.is_empty());
+        assert_eq!(
+            claude_deepseek
+                .env
+                .get("CLAUDE_CODE_EXECUTABLE")
+                .map(String::as_str),
+            Some("/opt/npm-global/bin/claude")
+        );
         assert_eq!(
             claude_deepseek
                 .env
@@ -892,12 +926,10 @@ mod tests {
                 .map(String::as_str),
             Some("cowboy-local-credential-boundary")
         );
-        assert_eq!(
-            claude_deepseek
+        assert!(
+            !claude_deepseek
                 .env
-                .get("CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK")
-                .map(String::as_str),
-            Some("1")
+                .contains_key("CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK")
         );
         assert_eq!(
             claude_deepseek

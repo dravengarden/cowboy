@@ -308,21 +308,32 @@ fn managed_provider_environment(
                 && !disabled.iter().any(|slot| slot == &component.id.slot)
         })
     };
+    let installed = |kind, slots: &[&str]| {
+        active.iter().any(|(component, _)| {
+            component.id.kind == kind && slots.contains(&component.id.slot.as_str())
+        })
+    };
+    let claude_enabled = claude_runtime_enabled(&disabled);
     let mut environment = BTreeMap::new();
     for key in [
         "COWBOY_ACP_CODEX_CMD",
         "COWBOY_ACP_CLAUDE_CODE_CMD",
+        "COWBOY_ACP_CLAUDE_CODE_EXECUTABLE",
         "COWBOY_ACP_GEMINI_CMD",
         "COWBOY_ACP_GEMINI_ARGS",
         "COWBOY_ACP_REASONIX_DEEPSEEK_CMD",
     ] {
         let slot = match key {
-            "COWBOY_ACP_CLAUDE_CODE_CMD" => "claude",
+            "COWBOY_ACP_CLAUDE_CODE_CMD" | "COWBOY_ACP_CLAUDE_CODE_EXECUTABLE" => "claude",
             "COWBOY_ACP_GEMINI_CMD" | "COWBOY_ACP_GEMINI_ARGS" => "gemini",
             "COWBOY_ACP_REASONIX_DEEPSEEK_CMD" => "reasonix",
             _ => "codex",
         };
-        if disabled.iter().any(|disabled| disabled == slot) {
+        if if slot == "claude" {
+            !claude_enabled
+        } else {
+            disabled.iter().any(|disabled| disabled == slot)
+        } {
             continue;
         }
         if let Ok(value) = std::env::var(key)
@@ -353,7 +364,7 @@ fn managed_provider_environment(
     if !disabled.iter().any(|slot| slot == "codex") && codex_proxy.is_file() {
         environment.insert("CODEX_PATH".to_owned(), codex_proxy.display().to_string());
     }
-    if has(ComponentKind::ProviderAdapter, &["claude", "claude-code"]) {
+    if claude_enabled && installed(ComponentKind::ProviderAdapter, &["claude", "claude-code"]) {
         environment.insert(
             "COWBOY_ACP_CLAUDE_CODE_CMD".to_owned(),
             components
@@ -361,6 +372,31 @@ fn managed_provider_environment(
                 .display()
                 .to_string(),
         );
+    }
+    if claude_enabled {
+        let managed_cli = installed(ComponentKind::ProviderCli, &["claude"])
+            .then(|| components.command_path("claude"));
+        let configured = environment
+            .get("COWBOY_ACP_CLAUDE_CODE_EXECUTABLE")
+            .map(PathBuf::from);
+        let adapter_sibling = environment
+            .get("COWBOY_ACP_CLAUDE_CODE_CMD")
+            .map(PathBuf::from)
+            .and_then(|path| path.parent().map(|parent| parent.join("claude")))
+            .filter(|path| path.is_file());
+        let path_command = command_on_path("claude");
+        if let Some(executable) = managed_cli
+            .or(configured)
+            .or(adapter_sibling)
+            .or(path_command)
+        {
+            // claude-agent-acp otherwise prefers the SDK's pinned optional
+            // binary, which can lag the Machine's updated provider CLI.
+            environment.insert(
+                "COWBOY_ACP_CLAUDE_CODE_EXECUTABLE".to_owned(),
+                executable.display().to_string(),
+            );
+        }
     }
     if has(ComponentKind::ProviderCli, &["gemini"]) {
         environment.insert(
@@ -370,6 +406,13 @@ fn managed_provider_environment(
         environment.insert("COWBOY_ACP_GEMINI_ARGS".to_owned(), "--acp".to_owned());
     }
     Ok(environment)
+}
+
+fn command_on_path(command: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|directory| directory.join(command))
+        .find(|candidate| candidate.is_file())
 }
 
 fn disabled_provider_slots() -> Vec<String> {
@@ -388,6 +431,12 @@ fn disabled_provider_slots_from(value: &str) -> Vec<String> {
             other => other.to_owned(),
         })
         .collect()
+}
+
+fn claude_runtime_enabled(disabled: &[String]) -> bool {
+    ["claude", "claude-deepseek"]
+        .iter()
+        .any(|slot| !disabled.iter().any(|disabled| disabled == slot))
 }
 
 async fn supervise_zed_adapter(
@@ -2180,10 +2229,11 @@ mod tests {
     use clap::Parser as _;
 
     use super::{
-        Args, bootstrap_acp_inventory, disabled_provider_slots_from, gemini_auth_from_metadata,
-        gemini_env_value_from, managed_provider_environment, npm_package_for_component,
-        parse_workspaces, provider_for_component, reject_untrusted_workspace, selected_zed_pair,
-        send_frame_with_timeout, validate_controller_url, workspace_path_allowed,
+        Args, bootstrap_acp_inventory, claude_runtime_enabled, disabled_provider_slots_from,
+        gemini_auth_from_metadata, gemini_env_value_from, managed_provider_environment,
+        npm_package_for_component, parse_workspaces, provider_for_component,
+        reject_untrusted_workspace, selected_zed_pair, send_frame_with_timeout,
+        validate_controller_url, workspace_path_allowed,
     };
     use crate::machine_components::ComponentStore;
     use crate::machine_protocol::{
@@ -2270,6 +2320,16 @@ mod tests {
             disabled_provider_slots_from("claude-code, claude-deepseek, gemini, codex-deepseek"),
             ["claude", "claude-deepseek", "gemini", "codex-deepseek"]
         );
+    }
+
+    #[test]
+    fn either_claude_lane_keeps_the_shared_runtime_enabled() {
+        assert!(claude_runtime_enabled(&["claude".to_owned()]));
+        assert!(claude_runtime_enabled(&["claude-deepseek".to_owned()]));
+        assert!(!claude_runtime_enabled(&[
+            "claude".to_owned(),
+            "claude-deepseek".to_owned(),
+        ]));
     }
 
     #[test]
@@ -2381,6 +2441,10 @@ mod tests {
                 component(ComponentKind::ProviderAdapter, "claude"),
             ),
             (
+                "provider_cli-claude",
+                component(ComponentKind::ProviderCli, "claude"),
+            ),
+            (
                 "provider_cli-gemini",
                 component(ComponentKind::ProviderCli, "gemini"),
             ),
@@ -2404,6 +2468,7 @@ mod tests {
             managed_provider_environment(&store, &worker).expect("provider environment");
         assert!(environment["COWBOY_ACP_CODEX_CMD"].ends_with("commands/codex-acp"));
         assert!(environment["COWBOY_ACP_CLAUDE_CODE_CMD"].ends_with("commands/claude-agent-acp"));
+        assert!(environment["COWBOY_ACP_CLAUDE_CODE_EXECUTABLE"].ends_with("commands/claude"));
         assert!(matches!(
             std::path::Path::new(&environment["COWBOY_ACP_CLAUDE_DEEPSEEK_SHELL"])
                 .file_name()

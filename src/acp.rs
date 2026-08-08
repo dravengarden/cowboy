@@ -61,6 +61,7 @@ const CODEX_FULL_ACCESS_CONFIG_ID: &str = "mode";
 const CODEX_FULL_ACCESS_CONFIG_VALUE: &str = "agent-full-access";
 const REASONIX_TOOL_APPROVAL_CONFIG_ID: &str = "tool_approval";
 const REASONIX_YOLO_CONFIG_VALUE: &str = "yolo";
+const CLAUDE_EMPTY_STREAM_MESSAGE: &str = "API Error: Stream ended without receiving any events";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum StartupPhase {
@@ -117,10 +118,10 @@ fn startup_full_access_mode(provider_id: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod startup_mode_tests {
     use super::{
-        ResumeMethod, StartupPhase, StartupTimeout, codex_full_access_available,
-        codex_full_access_selected, reasonix_yolo_available, reasonix_yolo_selected,
-        reasonix_yolo_tool_permission, select_resume_method, session_config_value,
-        startup_full_access_mode,
+        ActivePrompt, ResumeMethod, StartupPhase, StartupTimeout, codex_full_access_available,
+        codex_full_access_selected, is_empty_stream_message_update, reasonix_yolo_available,
+        reasonix_yolo_selected, reasonix_yolo_tool_permission, select_resume_method,
+        session_config_value, startup_full_access_mode,
     };
     use agent_client_protocol::schema::v1::{
         SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption,
@@ -239,6 +240,77 @@ mod startup_mode_tests {
             resume.to_string(),
             "agent did not complete ACP session/resume within 240s"
         );
+    }
+
+    #[test]
+    fn only_the_adapter_synthetic_empty_stream_message_is_bufferable() {
+        let synthetic = serde_json::json!({
+            "sessionUpdate": "agent_message_chunk",
+            "messageId": "adapter-error",
+            "content": {
+                "type": "text",
+                "text": "API Error: Stream ended without receiving any events"
+            }
+        });
+        assert!(is_empty_stream_message_update(&synthetic));
+        assert!(!is_empty_stream_message_update(&serde_json::json!({
+            "sessionUpdate": "agent_thought_chunk",
+            "content": {
+                "type": "text",
+                "text": "API Error: Stream ended without receiving any events"
+            }
+        })));
+        assert!(!is_empty_stream_message_update(&serde_json::json!({
+            "sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": "real model output"}
+        })));
+        assert!(!is_empty_stream_message_update(&serde_json::json!({
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+                "type": "text",
+                "text": "The error API Error: Stream ended without receiving any events means the provider closed early."
+            }
+        })));
+    }
+
+    #[test]
+    fn prompt_retry_observation_is_isolated_per_turn() {
+        let first = ActivePrompt::new(true);
+        let second = ActivePrompt::new(true);
+
+        first
+            .visible_update
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        first
+            .capture
+            .lock()
+            .as_mut()
+            .expect("first capture")
+            .push_str("first");
+        *first.pending_empty_stream_update.lock() = Some(serde_json::json!({"first": true}));
+
+        assert!(
+            !second
+                .visible_update
+                .load(std::sync::atomic::Ordering::SeqCst)
+        );
+        assert_eq!(second.capture.lock().as_deref(), Some(""));
+        assert!(second.pending_empty_stream_update.lock().is_none());
+        assert_eq!(first.capture.lock().as_deref(), Some("first"));
+    }
+
+    #[test]
+    fn cancel_generation_invalidates_only_already_accepted_prompts() {
+        let (cancellation, _) = tokio::sync::watch::channel(0_u64);
+        let mut accepted_before_stop = cancellation.subscribe();
+        let before = *accepted_before_stop.borrow_and_update();
+
+        cancellation.send_modify(|generation| *generation = generation.wrapping_add(1));
+
+        assert_ne!(*accepted_before_stop.borrow_and_update(), before);
+        let mut accepted_after_stop = cancellation.subscribe();
+        let after = *accepted_after_stop.borrow_and_update();
+        assert_eq!(*cancellation.borrow(), after);
     }
 }
 
@@ -484,13 +556,21 @@ pub enum AgentCommand {
 struct ClientState {
     sink: Arc<dyn AgentSink>,
     session_id: String,
+    provider_id: String,
     /// Pending permission requests awaiting a client answer, keyed by request
     /// id. The connection's permission handler inserts a sender; the command
     /// loop resolves exactly one (first-response-wins).
     pending: Mutex<HashMap<String, oneshot::Sender<Option<String>>>>,
-    /// Assistant text captured for an internal prompt that requested a direct
-    /// completion result. Ordinary UI prompts leave it off.
-    capture: Mutex<Option<String>>,
+    /// Serialize `session/prompt` RPCs while leaving the outer command loop
+    /// responsive to Cancel, permission answers, and config changes.
+    prompt_lock: tokio::sync::Mutex<()>,
+    /// Notification handlers attach progress only to the prompt that currently
+    /// owns `prompt_lock`. Queued prompts cannot reset or consume its state.
+    active_prompt: Mutex<Option<Arc<ActivePrompt>>>,
+    /// Every Cancel advances this generation. A prompt captures the current
+    /// value when accepted, so Stop also cancels a retry waiting in backoff (or
+    /// a prompt queued before Stop but not yet started).
+    prompt_cancellation: watch::Sender<u64>,
     /// The Codex adapter's authoritative session mode is Full Access. Codex has
     /// occasionally emitted permission requests after `session/load` despite
     /// that mode (`approval_policy=never`); keep those upstream regressions
@@ -509,6 +589,51 @@ struct ClientState {
     /// re-pushing it would duplicate every message. `load_session` is used
     /// purely to re-warm the agent's internal context, not to rebuild ours.
     suppress_updates: AtomicBool,
+}
+
+/// Retry and completion state belongs to one serialized prompt. Keeping it
+/// outside [`ClientState`] prevents a later Prompt command from erasing the
+/// progress that makes replaying the current prompt unsafe.
+struct ActivePrompt {
+    /// Assistant text captured for an internal prompt that requested a direct
+    /// completion result. Ordinary UI prompts leave it off.
+    capture: Mutex<Option<String>>,
+    /// Set by any timeline-visible ACP update during the current prompt. A
+    /// Claude empty-stream error is safe to retry only while this remains
+    /// false: once text, thinking, or a tool update escaped the adapter, a
+    /// replay could duplicate output or side effects.
+    visible_update: AtomicBool,
+    /// Claude's ACP adapter emits its empty-stream error as an agent message
+    /// immediately before returning the same RPC error; buffer that synthetic
+    /// message so a successful transparent retry does not leave a false error
+    /// in history.
+    pending_empty_stream_update: Mutex<Option<serde_json::Value>>,
+}
+
+impl ActivePrompt {
+    fn new(capture_completion: bool) -> Self {
+        Self {
+            capture: Mutex::new(capture_completion.then(String::new)),
+            visible_update: AtomicBool::new(false),
+            pending_empty_stream_update: Mutex::new(None),
+        }
+    }
+}
+
+impl ClientState {
+    fn current_prompt(&self) -> Option<Arc<ActivePrompt>> {
+        self.active_prompt.lock().clone()
+    }
+
+    fn clear_prompt(&self, prompt: &Arc<ActivePrompt>) {
+        let mut active = self.active_prompt.lock();
+        if active
+            .as_ref()
+            .is_some_and(|candidate| Arc::ptr_eq(candidate, prompt))
+        {
+            active.take();
+        }
+    }
 }
 
 /// Detached-worker entry point. The ACP connection and all pending request
@@ -686,11 +811,15 @@ async fn agent_main(
     // nothing left to rewrite on either stream.
     let transport = ByteStreams::new(child_stdin.compat_write(), child_stdout.compat());
 
+    let (prompt_cancellation, _) = watch::channel(0_u64);
     let state = Arc::new(ClientState {
         sink,
         session_id: session_id.to_owned(),
+        provider_id: spec.id.to_owned(),
         pending: Mutex::new(HashMap::new()),
-        capture: Mutex::new(None),
+        prompt_lock: tokio::sync::Mutex::new(()),
+        active_prompt: Mutex::new(None),
+        prompt_cancellation,
         codex_full_access: AtomicBool::new(false),
         reasonix_yolo: AtomicBool::new(false),
         suppress_updates: AtomicBool::new(false),
@@ -731,6 +860,12 @@ async fn agent_main(
                 let codex_full_access = perm_state.codex_full_access.load(Ordering::SeqCst);
                 let tool_call =
                     serde_json::to_value(&req.tool_call).unwrap_or(serde_json::Value::Null);
+                // A permission request proves the turn reached a tool boundary,
+                // even when Full Access auto-answers it without a UI event.
+                // Never replay that prompt as an empty-stream recovery.
+                if let Some(prompt) = perm_state.current_prompt() {
+                    prompt.visible_update.store(true, Ordering::SeqCst);
+                }
                 let reasonix_yolo = perm_state.reasonix_yolo.load(Ordering::SeqCst)
                     && reasonix_yolo_tool_permission(&tool_call);
                 if system_session || codex_full_access || reasonix_yolo {
@@ -885,9 +1020,25 @@ fn handle_session_notification(state: &ClientState, notif: &SessionNotification)
         }
         return;
     }
-    if let SessionUpdate::AgentMessageChunk(ref chunk) = notif.update
+    let active_prompt = state.current_prompt();
+    let synthetic_empty_stream = active_prompt.as_ref().is_some_and(|prompt| {
+        crate::provider::is_claude(&state.provider_id)
+            && !prompt.visible_update.load(Ordering::SeqCst)
+            && matches!(
+                &notif.update,
+                SessionUpdate::AgentMessageChunk(chunk)
+                    if matches!(
+                    &chunk.content,
+                    ContentBlock::Text(text)
+                            if is_adapter_empty_stream_message(&text.text)
+                    )
+            )
+    });
+    if !synthetic_empty_stream
+        && let SessionUpdate::AgentMessageChunk(ref chunk) = notif.update
         && let ContentBlock::Text(text) = &chunk.content
-        && let Some(capture) = state.capture.lock().as_mut()
+        && let Some(prompt) = &active_prompt
+        && let Some(capture) = prompt.capture.lock().as_mut()
     {
         capture.push_str(&text.text);
     }
@@ -906,16 +1057,46 @@ fn handle_session_notification(state: &ClientState, notif: &SessionNotification)
         );
         return;
     }
-    match serde_json::to_value(&notif.update) {
-        Ok(update) => {
-            // Honor a ScheduleWakeup BEFORE pushing — the event is still stored
-            // verbatim (timeline/UI unchanged); this just adds the side effect of
-            // actually firing the wakeup, which the ACP runtime otherwise drops.
-            maybe_arm_wakeup(state, &update);
-            state.sink.push(&state.session_id, Event::Update { update });
+    let update = match serde_json::to_value(&notif.update) {
+        Ok(update) => update,
+        Err(e) => {
+            tracing::warn!(error = %e, "serializing session update");
+            return;
         }
-        Err(e) => tracing::warn!(error = %e, "serializing session update"),
+    };
+    if synthetic_empty_stream && is_empty_stream_message_update(&update) {
+        if let Some(prompt) = active_prompt {
+            *prompt.pending_empty_stream_update.lock() = Some(update);
+        }
+        return;
     }
+    if let Some(prompt) = active_prompt {
+        prompt.visible_update.store(true, Ordering::SeqCst);
+    }
+    // Honor a ScheduleWakeup BEFORE pushing — the event is still stored
+    // verbatim (timeline/UI unchanged); this just adds the side effect of
+    // actually firing the wakeup, which the ACP runtime otherwise drops.
+    maybe_arm_wakeup(state, &update);
+    state.sink.push(&state.session_id, Event::Update { update });
+}
+
+fn is_empty_stream_message_update(update: &serde_json::Value) -> bool {
+    update
+        .get("sessionUpdate")
+        .and_then(serde_json::Value::as_str)
+        == Some("agent_message_chunk")
+        && update
+            .pointer("/content/type")
+            .and_then(serde_json::Value::as_str)
+            == Some("text")
+        && update
+            .pointer("/content/text")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(is_adapter_empty_stream_message)
+}
+
+fn is_adapter_empty_stream_message(text: &str) -> bool {
+    text.trim() == CLAUDE_EMPTY_STREAM_MESSAGE
 }
 
 /// If `update` is a `ScheduleWakeup` tool call carrying `rawInput.{prompt,
@@ -1212,15 +1393,12 @@ async fn run_session(
         }
     }
 
-    // Command loop. Prompts and config changes run as concurrent tasks
-    // (`cx.spawn`) so Cancel and Permission answers are still processed while a
-    // turn is in flight.
+    // Command loop. Prompt work runs in spawned tasks so Cancel and Permission
+    // answers remain responsive; `prompt_lock` serializes the actual prompt
+    // RPCs. Config changes may still run concurrently with a turn.
     while let Some(cmd) = cmd_rx.recv().await {
         match cmd {
             AgentCommand::Prompt(blocks, cmid, completion) => {
-                if completion.is_some() {
-                    *state.capture.lock() = Some(String::new());
-                }
                 state.sink.set_status(&session_id, Status::Busy, None);
                 // Echo each user content block into the timeline so every
                 // client (Web UI, phone, native shell) sees it — the upstream
@@ -1258,16 +1436,119 @@ async fn run_session(
                 let sid = session_id.clone();
                 let acp = acp_id.clone();
                 let state = Arc::clone(state);
-                let context_rejection_keeps_worker = provider_id == "claude-deepseek";
+                let provider = provider_id.to_owned();
+                let capture_completion = completion.is_some();
+                let mut cancellation = state.prompt_cancellation.subscribe();
+                let cancellation_generation = *cancellation.borrow_and_update();
                 cx.clone().spawn(async move {
-                    match cx
-                        .send_request(PromptRequest::new(acp, blocks))
-                        .block_task()
-                        .await
-                    {
+                    let _prompt_guard = state.prompt_lock.lock().await;
+                    if *cancellation.borrow_and_update() != cancellation_generation {
+                        if let Some(tx) = completion {
+                            let _ = tx.send(Err("prompt cancelled before it started".to_owned()));
+                        }
+                        sink.push(
+                            &sid,
+                            Event::TurnEnd {
+                                stop_reason: "Cancelled".to_owned(),
+                            },
+                        );
+                        sink.set_status(&sid, Status::Running, None);
+                        return Ok(());
+                    }
+                    // A queued prompt may acquire the lock just after the prior
+                    // turn reported Running. Reassert Busy before its RPC.
+                    sink.set_status(&sid, Status::Busy, None);
+                    let prompt = Arc::new(ActivePrompt::new(capture_completion));
+                    *state.active_prompt.lock() = Some(Arc::clone(&prompt));
+                    let mut retries = 0;
+                    let mut cancelled_during_retry = false;
+                    let response = loop {
+                        let request =
+                            cx.send_request(PromptRequest::new(acp.clone(), blocks.clone()));
+                        // `send_request` synchronously queues the JSON-RPC
+                        // request. Recheck immediately afterwards: if Stop won
+                        // the tiny check/send race, queue both cancellations
+                        // behind this exact request instead of letting an idle
+                        // session/cancel get consumed before the retry exists.
+                        if *cancellation.borrow_and_update() != cancellation_generation {
+                            cancelled_during_retry = true;
+                            let _ = request.cancel();
+                            let _ = cx.send_notification(CancelNotification::new(acp.clone()));
+                        }
+                        let response = request.block_task().await;
+                        if *cancellation.borrow_and_update() != cancellation_generation {
+                            cancelled_during_retry = true;
+                            break response;
+                        }
+                        let Err(error) = &response else {
+                            break response;
+                        };
+                        let detail = error.to_string();
+                        let visible_update = prompt.visible_update.load(Ordering::SeqCst);
+                        if !crate::provider::claude_code::should_retry_empty_stream(
+                            &provider,
+                            &detail,
+                            visible_update,
+                            retries,
+                        ) {
+                            break response;
+                        }
+                        retries += 1;
+                        tracing::warn!(
+                            session = %sid,
+                            provider = %provider,
+                            attempt = retries + 1,
+                            "Claude stream ended before its first event; retrying prompt once"
+                        );
+                        tokio::select! {
+                            () = tokio::time::sleep(Duration::from_millis(400)) => {}
+                            changed = cancellation.changed() => {
+                                if changed.is_ok() {
+                                    cancelled_during_retry = true;
+                                }
+                            }
+                        }
+                        if cancelled_during_retry
+                            || *cancellation.borrow_and_update() != cancellation_generation
+                        {
+                            cancelled_during_retry = true;
+                            break response;
+                        }
+                        // A notification queued just before the failed response
+                        // may be dispatched during the backoff. Abort the replay
+                        // if it made any user-visible progress in that window.
+                        if prompt.visible_update.load(Ordering::SeqCst) {
+                            break response;
+                        }
+                    };
+                    state.clear_prompt(&prompt);
+                    if cancelled_during_retry {
+                        prompt.pending_empty_stream_update.lock().take();
+                        if let Some(tx) = completion {
+                            let _ = tx.send(Err("prompt cancelled".to_owned()));
+                        }
+                        sink.push(
+                            &sid,
+                            Event::TurnEnd {
+                                stop_reason: "Cancelled".to_owned(),
+                            },
+                        );
+                        sink.set_status(&sid, Status::Running, None);
+                        return Ok(());
+                    }
+                    match response {
                         Ok(r) => {
+                            let pending_update = prompt.pending_empty_stream_update.lock().take();
+                            if retries == 0
+                                && let Some(update) = pending_update
+                            {
+                                // A successful first attempt means this was
+                                // genuine model text that happened to match the
+                                // diagnostic, not the adapter's error prelude.
+                                sink.push(&sid, Event::Update { update });
+                            }
                             if let Some(tx) = completion {
-                                let text = state.capture.lock().take().unwrap_or_default();
+                                let text = prompt.capture.lock().take().unwrap_or_default();
                                 let _ = tx.send(Ok(text));
                             }
                             // Turn completed — including a `Cancelled` from the user's manual
@@ -1283,24 +1564,26 @@ async fn run_session(
                         }
                         Err(e) => {
                             let detail = e.to_string();
+                            let pending_update = prompt.pending_empty_stream_update.lock().take();
+                            if let Some(update) = pending_update {
+                                sink.push(&sid, Event::Update { update });
+                            }
                             if let Some(tx) = completion {
-                                state.capture.lock().take();
+                                prompt.capture.lock().take();
                                 let _ = tx.send(Err(detail.clone()));
                             }
-                            // A DeepSeek context rejection is a failed TURN, not a failed
-                            // worker: claude-agent-acp remains connected and can still run
-                            // /compact. Report its worker state as Running while the
-                            // controller keeps the session in an actionable error state;
-                            // this prevents recycle → resume from reattaching edited files
-                            // to the same oversized native thread.
-                            let context_rejection = context_rejection_keeps_worker
-                                && crate::provider::claude_code::is_context_window_rejection(
-                                    &detail,
-                                );
-                            if context_rejection {
+                            // Context rejection and a zero-event stream failure
+                            // are failed TURNS, not failed workers. The adapter
+                            // remains connected, so retain it while the controller
+                            // keeps the session in an actionable error state.
+                            let worker_alive = crate::provider::claude_code::keeps_worker_alive(
+                                &provider, &detail,
+                            );
+                            if worker_alive {
                                 tracing::warn!(
                                     session = %sid,
-                                    "provider rejected prompt at context limit; keeping ACP worker alive"
+                                    provider = %provider,
+                                    "provider rejected a recoverable turn; keeping ACP worker alive"
                                 );
                             }
                             // Every other prompt failure can include an agent/connection
@@ -1321,7 +1604,7 @@ async fn run_session(
                             );
                             sink.set_status(
                                 &sid,
-                                if context_rejection {
+                                if worker_alive {
                                     Status::Running
                                 } else {
                                     Status::Crashed
@@ -1334,6 +1617,9 @@ async fn run_session(
                 })?;
             }
             AgentCommand::Cancel => {
+                state
+                    .prompt_cancellation
+                    .send_modify(|generation| *generation = generation.wrapping_add(1));
                 let _ = cx.send_notification(CancelNotification::new(acp_id.clone()));
             }
             AgentCommand::Permission {
