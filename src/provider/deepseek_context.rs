@@ -1,6 +1,6 @@
-//! Per-session working-context budgets for the DeepSeek agent lanes.
+//! Per-session working-context budgets for the `DeepSeek` agent lanes.
 //!
-//! DeepSeek V4 Flash and Pro both expose a 1M provider window, but the agent
+//! `DeepSeek` V4 Flash and Pro both expose a 1M provider window, but the agent
 //! runtimes reserve and compact that space differently. Keep the public model
 //! ids unchanged and project a separate Cowboy-owned config option instead of
 //! inventing provider model aliases.
@@ -77,7 +77,10 @@ fn supported_model(provider: &str, model: Option<&str>) -> bool {
 #[must_use]
 #[cfg(feature = "full")]
 pub fn default_profile(provider: &str, model: Option<&str>) -> Option<&'static str> {
-    supported_model(provider, model).then_some(match provider {
+    if !supported_model(provider, model) {
+        return None;
+    }
+    Some(match provider {
         "claude-deepseek" => CLAUDE_DEFAULT_PROFILE,
         "codex-deepseek" => CODEX_DEFAULT_PROFILE,
         _ => unreachable!("supported_model rejected non-DeepSeek provider"),
@@ -89,9 +92,9 @@ pub fn default_profile(provider: &str, model: Option<&str>) -> Option<&'static s
 ///
 /// Claude reserves 128K output and uses the user's threshold directly, except
 /// for the largest profile where the explicit 819.2K safety line leaves extra
-/// room below DeepSeek's 1M request ceiling. Codex advertises the selected
+/// room below `DeepSeek`'s 1M request ceiling. Codex advertises the selected
 /// window to App Server and follows its model catalog's 95% compaction policy;
-/// the 680K default therefore compacts at 646K and leaves room for DeepSeek's
+/// the 680K default therefore compacts at 646K and leaves room for `DeepSeek`'s
 /// documented 384K maximum output.
 pub fn resolve(
     provider: &str,
@@ -231,6 +234,8 @@ mod tests {
         assert_eq!(codex["currentValue"], "680k");
         assert_eq!(codex["options"][3]["name"], "680K · recommended");
         assert_eq!(codex["options"][4]["name"], "830K · large");
+        assert!(config_option("codex", None, None).is_none());
+        assert!(config_option("claude-code", None, None).is_none());
     }
 
     #[test]

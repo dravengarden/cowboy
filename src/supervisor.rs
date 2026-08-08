@@ -372,7 +372,7 @@ impl Supervisor {
         self.recycle_session_inner(session_id)
     }
 
-    /// Apply one Cowboy-owned DeepSeek context profile. This setting changes
+    /// Apply one Cowboy-owned `DeepSeek` context profile. This setting changes
     /// process startup rather than an ACP option, so recycle only this idle
     /// worker while preserving both the Cowboy and native agent session ids.
     pub fn set_deepseek_context_profile(
