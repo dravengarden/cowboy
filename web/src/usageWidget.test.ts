@@ -94,7 +94,7 @@ Deno.test("usage widget aggregates supported providers and drops unsupported pla
       spend24hPriceCoverage: 100,
       cacheHitRate: 90,
       cacheMissRate: 10,
-      blockingErrorRate: 50,
+      blockingErrors: 1,
     },
   ]);
 });
@@ -140,7 +140,7 @@ Deno.test("usage widget marks partial 24h valuation and keeps the same cache win
     spend24hPriceCoverage: 70 / 120 * 100,
     cacheHitRate: 80,
     cacheMissRate: 20,
-    blockingErrorRate: 25,
+    blockingErrors: 1,
   }]);
 });
 

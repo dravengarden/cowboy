@@ -489,14 +489,14 @@ function DeepSeekDetails(
               <Box>
                 <Tooltip title="Non-retryable provider request, authentication, balance, or parameter failures. Retryable network, rate-limit, cancellation, and 5xx attempts are shown separately; tool-call failures are excluded.">
                   <Typography variant="caption" color="text.secondary" sx={{ cursor: "help", textDecoration: "underline dotted" }}>
-                    Blocking error rate
+                    Blocking errors
                   </Typography>
                 </Tooltip>
                 <Typography variant="subtitle2" fontWeight={700} color={(blockingErrors ?? 0) > 0 ? "error.main" : undefined}>
-                  {percentLabel(blockingErrorRate)}
+                  {formatTokens(blockingErrors)}
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
-                  {formatTokens(blockingErrors)} blocking · {formatTokens(transientErrors)} retryable
+                  {percentLabel(blockingErrorRate)} of requests · {formatTokens(transientErrors)} retryable
                 </Typography>
               </Box>
               <Box>

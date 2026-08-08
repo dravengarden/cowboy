@@ -7,7 +7,8 @@ const infoSheetSource = await Deno.readTextFile(
 Deno.test("DeepSeek usage exposes diagnostic time and error controls", () => {
   assertEquals(infoSheetSource.includes("TimeRangeButton"), true);
   assertEquals(infoSheetSource.includes("MultiSelectChipGroup"), true);
-  assertEquals(infoSheetSource.includes("Blocking error rate"), true);
+  assertEquals(infoSheetSource.includes("Blocking errors"), true);
+  assertEquals(infoSheetSource.includes("of requests"), true);
   assertEquals(infoSheetSource.includes("Retryable provider failures"), true);
   assertEquals(infoSheetSource.includes("Cache miss rate"), true);
 });
