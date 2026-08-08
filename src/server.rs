@@ -682,6 +682,50 @@ async fn flush_event_batch(
 
 async fn record_lifecycle_incidents(store: &Store, rows: &[Envelope]) -> anyhow::Result<()> {
     for envelope in rows {
+        if let Event::TurnEnd { stop_reason } = &envelope.event
+            && let Some(raw_summary) = stop_reason.strip_prefix("error: ")
+        {
+            let occurred_at_ms = now_ms();
+            let classification = classify_session_error(raw_summary);
+            let (summary, truncated) = bounded_incident_summary(raw_summary);
+            let fingerprint = format!(
+                "{:x}",
+                Sha256::digest(format!("{classification}:{raw_summary}").as_bytes())
+            );
+            let incident_id = format!("turn-error:{}:{}", envelope.session_id, envelope.seq);
+            store
+                .upsert_runtime_incident(&crate::store::RuntimeIncidentWrite {
+                    id: incident_id.clone(),
+                    occurred_at_ms,
+                    source: "controller".to_owned(),
+                    classification: classification.to_owned(),
+                    severity: "error".to_owned(),
+                    state: "failed".to_owned(),
+                    summary: summary.clone(),
+                    fingerprint,
+                    session_id: Some(envelope.session_id.clone()),
+                    client_id: None,
+                    machine_id: None,
+                    trace_id: None,
+                    build: Some(env!("CARGO_PKG_VERSION").to_owned()),
+                    evidence_start_ms: occurred_at_ms.saturating_sub(30_000),
+                    evidence_end_ms: occurred_at_ms.saturating_add(30_000),
+                    detail: serde_json::json!({
+                        "source": "turn_failure",
+                        "turn_end_seq": envelope.seq,
+                        "stop_reason": summary,
+                        "truncated": truncated,
+                    }),
+                })
+                .await?;
+            tracing::error!(
+                incident_id,
+                session_id = %envelope.session_id,
+                classification,
+                error = %raw_summary,
+                "agent turn failed"
+            );
+        }
         let Event::Lifecycle { status, detail } = &envelope.event else {
             continue;
         };
@@ -707,14 +751,15 @@ async fn record_lifecycle_incidents(store: &Store, rows: &[Envelope]) -> anyhow:
         } else {
             classify_crash_detail(detail.as_deref())
         };
-        let summary = detail.as_deref().unwrap_or(if *status == Status::Crashed {
+        let raw_summary = detail.as_deref().unwrap_or(if *status == Status::Crashed {
             "Runtime crashed without a diagnostic detail"
         } else {
             "Runtime was interrupted"
         });
+        let (summary, truncated) = bounded_incident_summary(raw_summary);
         let fingerprint = format!(
             "{:x}",
-            Sha256::digest(format!("{classification}:{summary}").as_bytes())
+            Sha256::digest(format!("{classification}:{raw_summary}").as_bytes())
         );
         let incident_id = format!("lifecycle:{}:{}", envelope.session_id, envelope.seq);
         store
@@ -729,7 +774,7 @@ async fn record_lifecycle_incidents(store: &Store, rows: &[Envelope]) -> anyhow:
                     "warning".to_owned()
                 },
                 state: "active".to_owned(),
-                summary: summary.to_owned(),
+                summary: summary.clone(),
                 fingerprint,
                 session_id: Some(envelope.session_id.clone()),
                 client_id: None,
@@ -741,7 +786,8 @@ async fn record_lifecycle_incidents(store: &Store, rows: &[Envelope]) -> anyhow:
                 detail: serde_json::json!({
                     "status": status,
                     "lifecycle_seq": envelope.seq,
-                    "detail": detail,
+                    "detail": summary,
+                    "truncated": truncated,
                 }),
             })
             .await?;
@@ -785,6 +831,21 @@ fn classify_crash_detail(detail: Option<&str>) -> &'static str {
     }
 }
 
+fn bounded_incident_summary(value: &str) -> (String, bool) {
+    let mut end = value.len().min(4 * 1024);
+    while !value.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    (value[..end].to_owned(), end < value.len())
+}
+
+fn classify_session_error(detail: &str) -> &'static str {
+    match classify_crash_detail(Some(detail)) {
+        "runtime_failure" => "session_command_error",
+        classification => classification,
+    }
+}
+
 fn classify_interruption_detail(detail: Option<&str>) -> &'static str {
     let detail = detail.unwrap_or_default().to_ascii_lowercase();
     if detail.contains("deploy")
@@ -799,7 +860,10 @@ fn classify_interruption_detail(detail: Option<&str>) -> &'static str {
 
 #[cfg(test)]
 mod incident_classification_tests {
-    use super::{classify_crash_detail, classify_interruption_detail};
+    use super::{
+        bounded_incident_summary, classify_crash_detail, classify_interruption_detail,
+        classify_session_error,
+    };
 
     #[test]
     fn crash_details_map_to_stable_incident_classes() {
@@ -843,6 +907,32 @@ mod incident_classification_tests {
             "runtime_interruption"
         );
     }
+
+    #[test]
+    fn session_errors_retain_provider_and_transport_classifications() {
+        assert_eq!(
+            classify_session_error(
+                "API Error: 400 This model's maximum context length is 1048576 tokens"
+            ),
+            "provider_context_limit"
+        );
+        assert_eq!(
+            classify_session_error("socket connection timed out"),
+            "transport_failure"
+        );
+        assert_eq!(
+            classify_session_error("runtime rejected command"),
+            "session_command_error"
+        );
+    }
+
+    #[test]
+    fn incident_summaries_are_bounded_on_utf8_boundaries() {
+        let (summary, truncated) = bounded_incident_summary(&"你".repeat(2_000));
+        assert!(truncated);
+        assert!(summary.len() <= 4 * 1024);
+        assert_eq!(summary, "你".repeat(summary.chars().count()));
+    }
 }
 
 async fn retry_store_write(store: &Store, write: &StoreWrite) -> bool {
@@ -868,6 +958,38 @@ async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyhow::Result<
         StoreWrite::AppendEvent(_) => Ok(()),
         StoreWrite::UpdateStatus { session_id, status } => {
             store.update_status(session_id, *status).await
+        }
+        StoreWrite::RecordSessionError {
+            id,
+            session_id,
+            occurred_at_ms,
+            message,
+        } => {
+            let classification = classify_session_error(message);
+            let fingerprint = format!(
+                "{:x}",
+                Sha256::digest(format!("{classification}:{message}").as_bytes())
+            );
+            store
+                .upsert_runtime_incident(&crate::store::RuntimeIncidentWrite {
+                    id: id.clone(),
+                    occurred_at_ms: *occurred_at_ms,
+                    source: "controller".to_owned(),
+                    classification: classification.to_owned(),
+                    severity: "error".to_owned(),
+                    state: "failed".to_owned(),
+                    summary: message.clone(),
+                    fingerprint,
+                    session_id: Some(session_id.clone()),
+                    client_id: None,
+                    machine_id: None,
+                    trace_id: None,
+                    build: Some(env!("CARGO_PKG_VERSION").to_owned()),
+                    evidence_start_ms: occurred_at_ms.saturating_sub(30_000),
+                    evidence_end_ms: occurred_at_ms.saturating_add(30_000),
+                    detail: serde_json::json!({ "source": "outbound_error" }),
+                })
+                .await
         }
         StoreWrite::UpdateVerdict {
             session_id,
@@ -1209,6 +1331,8 @@ async fn serve_axum(
             "/api/observability/incidents",
             get(api_observability_incidents),
         )
+        .route("/api/logs", get(api_diagnostic_logs))
+        .route("/api/logs/{id}", get(api_diagnostic_log_detail))
         .route("/api/usage", get(api_usage).post(api_usage_refresh))
         .route(
             "/api/usage/deepseek/activity",
@@ -1883,6 +2007,239 @@ async fn api_codex_reset_cancel(State(state): State<Arc<AppState>>) -> Response 
         .await;
     state.usage.set_reset_schedule(None).await;
     StatusCode::NO_CONTENT.into_response()
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct DiagnosticLogsQuery {
+    kind: Option<String>,
+    severity: Option<String>,
+    state: Option<String>,
+    agent: Option<String>,
+    window: Option<String>,
+    session: Option<String>,
+    cursor: Option<String>,
+    limit: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct DiagnosticLogCursor {
+    occurred_at_ms: i64,
+    id: String,
+}
+
+#[derive(Debug, Serialize)]
+struct DiagnosticLogPage {
+    items: Vec<crate::store::DiagnosticLogSummary>,
+    next_cursor: Option<String>,
+}
+
+fn selected_log_filter(
+    value: Option<&str>,
+    allowed: &[&str],
+) -> Result<Option<String>, &'static str> {
+    match value {
+        None | Some("all") => Ok(None),
+        Some(value) if allowed.contains(&value) => Ok(Some(value.to_owned())),
+        Some(_) => Err("invalid diagnostic log filter"),
+    }
+}
+
+fn decode_log_cursor(value: Option<&str>) -> Result<Option<DiagnosticLogCursor>, &'static str> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(value)
+        .map_err(|_| "invalid diagnostic log cursor")?;
+    let cursor: DiagnosticLogCursor =
+        serde_json::from_slice(&bytes).map_err(|_| "invalid diagnostic log cursor")?;
+    if cursor.occurred_at_ms <= 0 || cursor.id.is_empty() || cursor.id.len() > 512 {
+        return Err("invalid diagnostic log cursor");
+    }
+    Ok(Some(cursor))
+}
+
+fn encode_log_cursor(item: &crate::store::DiagnosticLogSummary) -> Option<String> {
+    serde_json::to_vec(&DiagnosticLogCursor {
+        occurred_at_ms: item.occurred_at_ms,
+        id: item.id.clone(),
+    })
+    .ok()
+    .map(|value| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value))
+}
+
+fn parse_diagnostic_log_filter(
+    query: &DiagnosticLogsQuery,
+) -> Result<crate::store::DiagnosticLogFilter, &'static str> {
+    let window_seconds = match query.window.as_deref().unwrap_or("7d") {
+        "1h" => 3_600,
+        "24h" => 86_400,
+        "7d" => 7 * 86_400,
+        "30d" => 30 * 86_400,
+        _ => return Err("invalid diagnostic log window"),
+    };
+    let session_ref = query
+        .session
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    if session_ref.as_ref().is_some_and(|value| {
+        value.len() > 128
+            || !value.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b':' | b'.')
+            })
+    }) {
+        return Err("invalid diagnostic log session");
+    }
+    let cursor = decode_log_cursor(query.cursor.as_deref())?;
+    Ok(crate::store::DiagnosticLogFilter {
+        since_ms: now_ms().saturating_sub(i64::from(window_seconds) * 1_000),
+        kind: selected_log_filter(
+            query.kind.as_deref(),
+            &[
+                "session_error",
+                "provider_error",
+                "cache_anomaly",
+                "automation",
+            ],
+        )?,
+        severity: selected_log_filter(
+            query.severity.as_deref(),
+            &["info", "warning", "error", "critical"],
+        )?,
+        state: selected_log_filter(
+            query.state.as_deref(),
+            &[
+                "active",
+                "recovered",
+                "failed",
+                "succeeded",
+                "observed",
+                "scheduled",
+                "started",
+                "retrying",
+                "unknown",
+                "cancelled",
+            ],
+        )?,
+        agent: selected_log_filter(query.agent.as_deref(), &["codex", "claude"])?,
+        session_ref,
+        cursor_ms: cursor.as_ref().map(|value| value.occurred_at_ms),
+        cursor_id: cursor.map(|value| value.id),
+        limit: query.limit.unwrap_or(25).clamp(1, 100),
+    })
+}
+
+async fn api_diagnostic_logs(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<DiagnosticLogsQuery>,
+) -> Response {
+    let Some(store) = state.store.as_ref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "diagnostic logs unavailable",
+        )
+            .into_response();
+    };
+    let filter = match parse_diagnostic_log_filter(&query) {
+        Ok(filter) => filter,
+        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+    };
+    match store.diagnostic_logs(&filter).await {
+        Ok(mut items) => {
+            let has_more = items.len() > usize::try_from(filter.limit).unwrap_or(100);
+            items.truncate(usize::try_from(filter.limit).unwrap_or(100));
+            let next_cursor = has_more && !items.is_empty();
+            Json(DiagnosticLogPage {
+                next_cursor: next_cursor
+                    .then(|| items.last().and_then(encode_log_cursor))
+                    .flatten(),
+                items,
+            })
+            .into_response()
+        }
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+async fn api_diagnostic_log_detail(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
+    let Some(store) = state.store.as_ref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "diagnostic logs unavailable",
+        )
+            .into_response();
+    };
+    if id.is_empty() || id.len() > 512 {
+        return (StatusCode::BAD_REQUEST, "invalid diagnostic log id").into_response();
+    }
+    match store.diagnostic_log_detail(&id).await {
+        Ok(Some(detail)) => Json(detail).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_log_query_tests {
+    use super::{
+        DiagnosticLogsQuery, decode_log_cursor, encode_log_cursor, parse_diagnostic_log_filter,
+    };
+
+    #[test]
+    fn diagnostic_log_filters_are_closed_and_bounded() {
+        let filter = parse_diagnostic_log_filter(&DiagnosticLogsQuery {
+            kind: Some("cache_anomaly".to_owned()),
+            severity: Some("warning".to_owned()),
+            state: Some("observed".to_owned()),
+            agent: Some("claude".to_owned()),
+            window: Some("30d".to_owned()),
+            session: Some("0123456789abcdef0123456789abcdef".to_owned()),
+            limit: Some(5_000),
+            cursor: None,
+        })
+        .expect("valid diagnostic filters");
+        assert_eq!(filter.kind.as_deref(), Some("cache_anomaly"));
+        assert_eq!(filter.severity.as_deref(), Some("warning"));
+        assert_eq!(filter.state.as_deref(), Some("observed"));
+        assert_eq!(filter.agent.as_deref(), Some("claude"));
+        assert_eq!(filter.limit, 100);
+
+        assert!(
+            parse_diagnostic_log_filter(&DiagnosticLogsQuery {
+                kind: Some("raw_prompt".to_owned()),
+                ..DiagnosticLogsQuery::default()
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn diagnostic_log_cursor_round_trips_the_stable_sort_key() {
+        let item = crate::store::DiagnosticLogSummary {
+            id: "provider:hawk:producer-1:42".to_owned(),
+            occurred_at_ms: 1_786_035_044_709,
+            kind: "provider_error".to_owned(),
+            severity: "error".to_owned(),
+            state: "failed".to_owned(),
+            title: "DeepSeek HTTP 400".to_owned(),
+            summary: "request failed".to_owned(),
+            session_ref: None,
+            provider: Some("deepseek".to_owned()),
+            agent: Some("claude".to_owned()),
+            model: Some("deepseek-v4-flash".to_owned()),
+            classification: Some("provider_http_error".to_owned()),
+        };
+        let encoded = encode_log_cursor(&item).expect("encode cursor");
+        let decoded = decode_log_cursor(Some(&encoded))
+            .expect("decode cursor")
+            .expect("cursor present");
+        assert_eq!(decoded.occurred_at_ms, item.occurred_at_ms);
+        assert_eq!(decoded.id, item.id);
+    }
 }
 
 async fn api_usage_logs(State(state): State<Arc<AppState>>) -> Response {

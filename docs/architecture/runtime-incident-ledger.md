@@ -11,6 +11,20 @@ Cowboy separates durable incident identity from high-volume evidence.
 - Session `events` remain transcript facts. Observability payloads must not be
   inserted into the transcript log.
 
+The Logs surface is a read model over existing owners, not a fourth logging
+database:
+
+- runtime and client failures come from `runtime_incidents`;
+- every managed DeepSeek gateway response with HTTP status 400 or higher comes
+  from `provider_usage_events`;
+- active-session cache disruptions are derived from adjacent, content-free
+  provider usage rows;
+- provider automation audit comes from `provider_action_logs`.
+
+List endpoints return only compact summaries and an opaque, stable log id.
+Details and structured evidence load only when a user expands one row. Raw
+Victoria evidence is not copied into PostgreSQL or eagerly shipped to clients.
+
 The ledger does not enforce a duplicate retention period. An incident remains
 useful after raw evidence expires because its summary, classification, and
 recovery outcome are durable; the UI must represent expired evidence honestly.
@@ -23,9 +37,51 @@ the source stay absent; clients must not infer Machine identity from paths or
 hostnames.
 
 Lifecycle crashes and unexpected interruptions create ledger entries at the
-controller persistence boundary. A later Running lifecycle closes the newest
-open incident for that session as recovered. Client-originated render,
-network, and performance incidents enter through the observability batch API.
+controller persistence boundary. A later Running lifecycle closes every active
+controller runtime incident for that session as recovered. Failed turn and
+command records remain immutable evidence. Client-originated render, network,
+and performance incidents enter through the observability batch API.
+
+Every session-scoped `Outbound::Error` also creates a bounded incident entry.
+This covers rejected runtime commands, dispatch failures, and other errors that
+are user-visible but do not produce a lifecycle transition. A `TurnEnd` stop
+reason beginning with `error:` creates a separate failed-turn entry, including
+provider errors after which the ACP process remains usable. Internal retries and
+process diagnostics remain in the worker's journald stream and therefore in
+VictoriaLogs even when they recover before reaching the controller. The Logs UI
+must distinguish this raw-evidence coverage from the durable user-visible
+incident index rather than claiming that Cowboy can observe provider-internal
+retries that a native CLI never emits.
+
+## Cache diagnostics
+
+A cache miss is not itself an incident. DeepSeek caching is best effort and a
+normal first request, inactive session, provider eviction, model/configuration
+change, compaction, or gateway restart can all produce low hit rates.
+
+Cowboy emits a cache-disruption log only when one attributed session moves from
+at least 90% cache hit to below 10% within 30 minutes, both observations contain
+at least 8K input tokens, and content-free static-prefix fingerprints exist on
+both sides. The event records the strongest observed cause: compaction,
+gateway build/boot change, model/role/protocol/reasoning change, compatibility
+rewrite, static-prefix change, history rewrite, an exact-prefix miss, or an
+otherwise unexplained active-session drop. It never stores prompt, response,
+tool, or reasoning content.
+
+Longer idle gaps are excluded from anomaly logs. In aggregate low-hit analysis,
+a gap of at least six hours is classified as probable eviction before an exact
+prefix match is considered; this prevents expected expiration from being
+reported as a prefix-stability bug. The 30-minute active threshold is
+deliberately conservative relative to provider documentation:
+
+- <https://api-docs.deepseek.com/guides/kv_cache/>
+- <https://developers.openai.com/api/docs/guides/prompt-caching>
+
+Cache-prefix stability is a compatibility requirement for every Claude and
+Codex session lifecycle path. Resume, load, retry, compaction, hooks, dynamic
+system-prompt sections, and future provider adaptations must preserve the
+largest possible byte-identical prefix. A deliberate prefix change needs a
+documented reason, content-free telemetry attribution, and regression coverage.
 
 ## Client ingestion
 

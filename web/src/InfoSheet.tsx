@@ -305,6 +305,10 @@ function DeepSeekDetails(
     : [];
   const requests = num(summary?.requests);
   const errors = num(summary?.errors);
+  const cache = deepseekCacheStats(summary);
+  const errorRate = requests !== undefined && requests > 0
+    ? (errors ?? 0) * 100 / requests
+    : undefined;
   const telemetryError = activityError ?? str(activity?.telemetryError);
   const lowHit = record(activity?.lowHit);
   const lowHitByCause = record(lowHit?.byCause);
@@ -422,7 +426,7 @@ function DeepSeekDetails(
             <Box
               sx={{
                 display: "grid",
-                gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                gridTemplateColumns: { xs: "repeat(2, minmax(0, 1fr))", sm: "repeat(4, minmax(0, 1fr))" },
                 gap: 1,
               }}
             >
@@ -432,6 +436,28 @@ function DeepSeekDetails(
                 </Typography>
                 <Typography variant="subtitle2" fontWeight={700}>
                   {requests.toLocaleString()}
+                </Typography>
+              </Box>
+              <Box>
+                <Typography variant="caption" color="text.secondary">
+                  Error rate
+                </Typography>
+                <Typography variant="subtitle2" fontWeight={700} color={(errors ?? 0) > 0 ? "error.main" : undefined}>
+                  {percentLabel(errorRate)}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {formatTokens(errors)} errors
+                </Typography>
+              </Box>
+              <Box>
+                <Typography variant="caption" color="text.secondary">
+                  Cache miss rate
+                </Typography>
+                <Typography variant="subtitle2" fontWeight={700}>
+                  {percentLabel(cache.missRate)}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {formatTokens(cache.missTokens)} miss tokens
                 </Typography>
               </Box>
               <Box>
@@ -829,17 +855,6 @@ interface MetricsData {
   observability_dropped_batches: number;
   observability_failed_log_batches: number;
   observability_failed_metric_batches: number;
-}
-
-interface RuntimeIncident {
-  id: string;
-  occurred_at_ms: number;
-  classification: string;
-  severity: string;
-  state: string;
-  summary: string;
-  session_id?: string;
-  recovery_outcome?: string;
 }
 
 function str(value: unknown): string | undefined {
@@ -1479,64 +1494,6 @@ function StorageInfoSection(): React.JSX.Element {
   );
 }
 
-function RuntimeIncidentsSection(): React.JSX.Element {
-  const [incidents, setIncidents] = useState<RuntimeIncident[] | null>(null);
-  useEffect(() => {
-    const controller = new AbortController();
-    void fetch("/api/observability/incidents", { signal: controller.signal })
-      .then((response) =>
-        response.ok ? response.json() as Promise<RuntimeIncident[]> : []
-      )
-      .then(setIncidents)
-      .catch(() => setIncidents([]));
-    return (): void => controller.abort();
-  }, []);
-  return (
-    <Stack spacing={1}>
-      <Typography variant="overline" color="text.secondary">
-        Runtime incidents
-      </Typography>
-      {incidents === null && (
-        <Typography variant="caption" color="text.secondary">
-          Loading…
-        </Typography>
-      )}
-      {incidents?.length === 0 && (
-        <Typography variant="caption" color="text.secondary">
-          No incidents recorded.
-        </Typography>
-      )}
-      {incidents?.slice(0, 5).map((incident) => (
-        <Box
-          key={incident.id}
-          sx={{ py: 0.75, borderTop: 1, borderColor: "divider" }}
-        >
-          <Stack direction="row" justifyContent="space-between" spacing={1}>
-            <Typography variant="caption" sx={{ fontWeight: 700 }}>
-              {incident.classification.replaceAll("_", " ")}
-            </Typography>
-            <Typography
-              variant="caption"
-              color={incident.state === "recovered"
-                ? "success.main"
-                : "error.main"}
-            >
-              {incident.state}
-            </Typography>
-          </Stack>
-          <Typography variant="body2" sx={{ mt: 0.35 }}>
-            {incident.summary}
-          </Typography>
-          <Typography variant="caption" color="text.secondary">
-            {relativeUpdateTime(incident.occurred_at_ms, Date.now())}
-            {incident.session_id ? ` · ${incident.session_id}` : ""}
-          </Typography>
-        </Box>
-      ))}
-    </Stack>
-  );
-}
-
 // The Info tab's body — rendered inside the merged Settings sheet (no own Sheet
 // wrapper). Holds the classifier/skills viewer and daemon system info.
 export function InfoContent({
@@ -1678,15 +1635,6 @@ export function InfoContent({
         </Typography>
         <StorageInfoSection />
       </Stack>
-
-      {!desktop && <Divider />}
-      <Box
-        sx={desktop
-          ? { p: 1.5, border: 1, borderColor: "divider", borderRadius: 2 }
-          : undefined}
-      >
-        <RuntimeIncidentsSection />
-      </Box>
 
       {!desktop && <Divider />}
       <Stack

@@ -1310,6 +1310,15 @@ pub enum StoreWrite {
         session_id: String,
         status: Status,
     },
+    /// Persist one session-scoped error that is surfaced outside the lifecycle
+    /// stream (for example, a rejected runtime command or a dispatch failure).
+    /// The transcript remains reserved for conversation facts.
+    RecordSessionError {
+        id: String,
+        session_id: String,
+        occurred_at_ms: i64,
+        message: String,
+    },
     /// Persist the confirm-detect turn-end verdict (so a done/awaiting session
     /// survives a daemon restart — migration 0008).
     UpdateVerdict {
@@ -1586,6 +1595,10 @@ struct HubInner {
     /// that's required (ids are list-local keys, not persisted-across-restart
     /// identities — restored lists keep whatever ids they were saved with).
     next_qid: AtomicU64,
+    /// Monotonic suffix for durable session-error ids created outside the
+    /// transcript sequence. Wall-clock milliseconds make ids restart-safe;
+    /// this counter disambiguates multiple errors in the same millisecond.
+    next_error_id: AtomicU64,
     /// Global key-value settings (auto-resume default flag + continuation
     /// template), mirrored from the `settings` table on restore. Authoritative
     /// in-memory; every edit also write-behinds via `StoreWrite::PutSetting`.
@@ -1651,6 +1664,7 @@ impl Hub {
                 scheduler_tx: Mutex::new(None),
                 sync: Mutex::new(HashMap::new()),
                 next_qid: AtomicU64::new(1),
+                next_error_id: AtomicU64::new(1),
                 settings: Mutex::new(HashMap::new()),
             }),
         }
@@ -3846,6 +3860,25 @@ impl Hub {
     /// `tracing::warn` — that left the user staring at an unchanged page
     /// wondering why nothing happened.
     pub fn broadcast_error(&self, session_id: Option<String>, message: String) {
+        if let Some(session_id) = session_id.as_ref() {
+            let occurred_at_ms = now_ms();
+            let suffix = self.inner.next_error_id.fetch_add(1, Ordering::Relaxed);
+            let incident_id = format!("session-error:{session_id}:{occurred_at_ms}:{suffix}");
+            let mut message_end = message.len().min(4 * 1024);
+            while !message.is_char_boundary(message_end) {
+                message_end = message_end.saturating_sub(1);
+            }
+            let persisted_message = message[..message_end].to_owned();
+            if let Some(tx) = self.inner.store_tx.as_ref() {
+                let _ = tx.send(StoreWrite::RecordSessionError {
+                    id: incident_id.clone(),
+                    session_id: session_id.clone(),
+                    occurred_at_ms,
+                    message: persisted_message,
+                });
+            }
+            tracing::error!(incident_id, session = %session_id, error = %message, "session error surfaced");
+        }
         let _ = self.inner.tx.send(Outbound::Error {
             session_id,
             message,
@@ -6177,5 +6210,46 @@ mod confirm_hold_tests {
         health.consumed(2);
         assert_eq!(health.dropped(), 0);
         assert_eq!(health.pending(), 0);
+    }
+
+    #[tokio::test]
+    async fn session_broadcast_errors_are_persisted_outside_the_transcript() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let health = Arc::new(PersistenceHealth::default());
+        let hub = Hub::with_store(Some(StoreSink::new(tx, health)));
+        let mut live = hub.subscribe();
+
+        hub.broadcast_error(
+            Some("session-1".to_owned()),
+            "runtime rejected command".to_owned(),
+        );
+
+        let Some(StoreWrite::RecordSessionError {
+            id,
+            session_id,
+            message,
+            ..
+        }) = rx.recv().await
+        else {
+            panic!("expected a durable session error");
+        };
+        assert!(id.starts_with("session-error:session-1:"));
+        assert_eq!(session_id, "session-1");
+        assert_eq!(message, "runtime rejected command");
+        assert!(matches!(
+            live.recv().await,
+            Ok(Outbound::Error {
+                session_id: Some(session_id),
+                message,
+            }) if session_id == "session-1" && message == "runtime rejected command"
+        ));
+        assert!(hub.snapshot("session-1").is_none());
+
+        hub.broadcast_error(Some("session-1".to_owned()), "你".repeat(2_000));
+        let Some(StoreWrite::RecordSessionError { message, .. }) = rx.recv().await else {
+            panic!("expected a bounded unicode error");
+        };
+        assert!(message.len() <= 4 * 1024);
+        assert_eq!(message, "你".repeat(message.chars().count()));
     }
 }

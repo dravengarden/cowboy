@@ -136,15 +136,15 @@ function UsageProviderSummary(
   { provider }: { provider: UsageWidgetProvider },
 ): React.JSX.Element {
   const deepseek = provider.kind === "deepseek";
-  const width = deepseek ? 210 : 156;
+  const width = deepseek ? 286 : 156;
   const primary = deepseek
     ? compactCny(provider.balanceCny)
     : `${String(provider.remaining)}%`;
   const secondary = deepseek
     ? provider.spend24hPriceCoverage !== undefined &&
         provider.spend24hPriceCoverage >= 99.999
-      ? `24h ${compactCny(provider.spend24hCny)} · Cache ${provider.cacheHitRate.toFixed(1)}%`
-      : `24h ≥${compactCny(provider.spend24hCny)} · ${provider.spend24hPriceCoverage?.toFixed(0) ?? "0"}% priced · Hit ${provider.cacheHitRate.toFixed(1)}%`
+      ? `24h ${compactCny(provider.spend24hCny)} · Miss ${provider.cacheMissRate.toFixed(1)}% · Err ${provider.errorRate.toFixed(1)}%`
+      : `24h ≥${compactCny(provider.spend24hCny)} · ${provider.spend24hPriceCoverage?.toFixed(0) ?? "0"}% priced · Miss ${provider.cacheMissRate.toFixed(1)}% · Err ${provider.errorRate.toFixed(1)}%`
     : `Weekly · resets ${shortResetTime(provider.resetsAt)}`;
   return (
     <Box

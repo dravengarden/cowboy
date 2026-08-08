@@ -195,6 +195,256 @@ pub struct RuntimeIncident {
     pub recovery_outcome: Option<String>,
 }
 
+/// Closed, bounded query accepted by the unified diagnostic log read model.
+#[derive(Debug, Clone)]
+pub struct DiagnosticLogFilter {
+    pub since_ms: i64,
+    pub kind: Option<String>,
+    pub severity: Option<String>,
+    pub state: Option<String>,
+    pub agent: Option<String>,
+    pub session_ref: Option<String>,
+    pub cursor_ms: Option<i64>,
+    pub cursor_id: Option<String>,
+    pub limit: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct DiagnosticLogSummary {
+    pub id: String,
+    pub occurred_at_ms: i64,
+    pub kind: String,
+    pub severity: String,
+    pub state: String,
+    pub title: String,
+    pub summary: String,
+    pub session_ref: Option<String>,
+    pub provider: Option<String>,
+    pub agent: Option<String>,
+    pub model: Option<String>,
+    pub classification: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DiagnosticLogDetail {
+    pub id: String,
+    pub kind: String,
+    pub occurred_at_ms: i64,
+    pub title: String,
+    pub summary: String,
+    pub sections: Vec<DiagnosticLogSection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DiagnosticLogSection {
+    pub title: String,
+    pub fields: Vec<DiagnosticLogField>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DiagnosticLogField {
+    pub label: String,
+    pub value: String,
+    pub copyable: bool,
+}
+
+fn diagnostic_field(
+    label: impl Into<String>,
+    value: impl Into<String>,
+    copyable: bool,
+) -> DiagnosticLogField {
+    DiagnosticLogField {
+        label: label.into(),
+        value: value.into(),
+        copyable,
+    }
+}
+
+fn optional_diagnostic_field(
+    fields: &mut Vec<DiagnosticLogField>,
+    label: &str,
+    value: Option<impl Into<String>>,
+    copyable: bool,
+) {
+    if let Some(value) = value {
+        let value = value.into();
+        if !value.is_empty() {
+            fields.push(diagnostic_field(label, value, copyable));
+        }
+    }
+}
+
+fn diagnostic_title(value: &str) -> String {
+    let mut words = value.split('_').filter(|word| !word.is_empty());
+    let Some(first) = words.next() else {
+        return "Diagnostic event".to_owned();
+    };
+    let mut title = first.to_owned();
+    if let Some(initial) = title.get_mut(0..1) {
+        initial.make_ascii_uppercase();
+    }
+    for word in words {
+        title.push(' ');
+        title.push_str(word);
+    }
+    title
+}
+
+fn parse_provider_diagnostic_id<'a>(id: &'a str, prefix: &str) -> Option<(&'a str, &'a str, i64)> {
+    let rest = id.strip_prefix(prefix)?;
+    let (identity, sequence) = rest.rsplit_once(':')?;
+    let (machine_id, producer_id) = identity.split_once(':')?;
+    let sequence = sequence.parse().ok()?;
+    (!machine_id.is_empty() && !producer_id.is_empty()).then_some((
+        machine_id,
+        producer_id,
+        sequence,
+    ))
+}
+
+fn json_scalar(value: &serde_json::Value, key: &str) -> Option<String> {
+    match value.get(key)? {
+        serde_json::Value::String(value) => Some(value.clone()),
+        serde_json::Value::Number(value) => Some(value.to_string()),
+        serde_json::Value::Bool(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn json_i64(value: &serde_json::Value, key: &str) -> Option<i64> {
+    value.get(key)?.as_i64()
+}
+
+fn cache_transition_cause(
+    current: &serde_json::Value,
+    previous: &serde_json::Value,
+) -> &'static str {
+    let changed = |key: &str| current.get(key) != previous.get(key);
+    if json_scalar(current, "operation").as_deref() == Some("compact") {
+        "client_compaction"
+    } else if changed("gateway_build") {
+        "gateway_build_changed"
+    } else if changed("gateway_boot_id") {
+        "post_gateway_restart"
+    } else if changed("model_family") {
+        "model_changed"
+    } else if changed("model_revision") {
+        "model_revision_changed"
+    } else if changed("request_role") {
+        "request_role_changed"
+    } else if changed("upstream_protocol") {
+        "protocol_changed"
+    } else if changed("translation_mode") {
+        "translation_changed"
+    } else if changed("thinking_mode") || changed("reasoning_effort") {
+        "reasoning_configuration_changed"
+    } else if json_i64(current, "compatibility_fixes").is_some_and(|value| value > 0) {
+        "compatibility_rewrite"
+    } else if changed("static_prefix_fingerprint") {
+        "static_prefix_changed"
+    } else if (json_scalar(current, "agent").as_deref() != Some("codex")
+        || current
+            .get("has_previous_response_id")
+            .and_then(serde_json::Value::as_bool)
+            != Some(true))
+        && json_i64(current, "input_item_count")
+            .zip(json_i64(previous, "input_item_count"))
+            .is_some_and(|(current, previous)| current < previous)
+    {
+        "history_rewrite"
+    } else if json_scalar(current, "request_prefix_fingerprint").is_some()
+        && current.get("request_prefix_fingerprint") == previous.get("request_prefix_fingerprint")
+    {
+        "unexpected_exact_prefix_miss"
+    } else {
+        "unexpected_active_cache_drop"
+    }
+}
+
+fn cache_transition_title(cause: &str) -> &'static str {
+    match cause {
+        "static_prefix_changed" => "Cache prefix changed",
+        "unexpected_exact_prefix_miss" => "Exact-prefix cache miss",
+        "history_rewrite" => "Cached history rewritten",
+        "post_gateway_restart" => "Cache lost after gateway restart",
+        "gateway_build_changed" => "Cache lost after gateway update",
+        "client_compaction" => "Cache changed after compaction",
+        "model_changed" => "Cache lost after model change",
+        "model_revision_changed" => "Cache lost after model revision",
+        "request_role_changed" => "Cache lost after role change",
+        "protocol_changed" => "Cache lost after protocol change",
+        "translation_changed" => "Cache lost after translation change",
+        "reasoning_configuration_changed" => "Cache lost after reasoning change",
+        "compatibility_rewrite" => "Cache lost after compatibility rewrite",
+        _ => "Unexplained active-session cache drop",
+    }
+}
+
+fn cache_rate_label(value: &serde_json::Value) -> Option<String> {
+    let hit = json_i64(value, "cache_hit_tokens")?;
+    let miss = json_i64(value, "cache_miss_tokens")?;
+    let total = hit.checked_add(miss)?;
+    if total <= 0 {
+        return None;
+    }
+    let tenths = hit.checked_mul(1_000)?.checked_div(total)?;
+    Some(format!("{}.{:01}", tenths / 10, tenths % 10))
+}
+
+fn provider_detail_matches_kind(
+    kind: &str,
+    current: &serde_json::Value,
+    previous: &serde_json::Value,
+    gap_ms: Option<i64>,
+) -> bool {
+    if kind == "provider_error" {
+        return json_i64(current, "status").is_some_and(|status| status >= 400);
+    }
+    if kind != "cache_anomaly"
+        || json_i64(current, "schema_version").is_none_or(|version| version < 3)
+        || json_scalar(current, "session_fingerprint").is_none()
+        || !matches!(
+            json_scalar(current, "session_attribution").as_deref(),
+            Some("response_lineage" | "explicit")
+        )
+        || !matches!(
+            json_scalar(current, "cache_observation").as_deref(),
+            Some("explicit" | "derived")
+        )
+        || json_scalar(current, "static_prefix_fingerprint").is_none()
+        || json_scalar(previous, "static_prefix_fingerprint").is_none()
+        || !gap_ms.is_some_and(|gap| (0..=30 * 60 * 1_000).contains(&gap))
+        || json_i64(current, "status").is_none_or(|status| status >= 400)
+        || json_i64(previous, "status").is_none_or(|status| status >= 400)
+        || json_i64(current, "input_tokens").is_none_or(|tokens| tokens < 8_000)
+        || json_i64(previous, "input_tokens").is_none_or(|tokens| tokens < 8_000)
+    {
+        return false;
+    }
+    let Some((current_hit, current_miss, previous_hit, previous_miss)) =
+        json_i64(current, "cache_hit_tokens")
+            .zip(json_i64(current, "cache_miss_tokens"))
+            .zip(
+                json_i64(previous, "cache_hit_tokens").zip(json_i64(previous, "cache_miss_tokens")),
+            )
+            .map(
+                |((current_hit, current_miss), (previous_hit, previous_miss))| {
+                    (current_hit, current_miss, previous_hit, previous_miss)
+                },
+            )
+    else {
+        return false;
+    };
+    let current_total = i128::from(current_hit) + i128::from(current_miss);
+    let previous_total = i128::from(previous_hit) + i128::from(previous_miss);
+    current_total > 0
+        && previous_total > 0
+        && i128::from(current_hit) * 10 < current_total
+        && i128::from(previous_hit) * 10 >= previous_total * 9
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct MachineRecord {
     pub id: String,
@@ -1639,7 +1889,8 @@ impl Store {
         Ok(())
     }
 
-    /// Mark the newest unresolved incident for a session as recovered.
+    /// Mark every active controller runtime incident for a session as recovered.
+    /// Terminal failed-turn and command-error records remain immutable evidence.
     pub async fn recover_runtime_incident(
         &self,
         session_id: &str,
@@ -1649,10 +1900,8 @@ impl Store {
         let done = sqlx::query(
             "UPDATE runtime_incidents SET state = 'recovered', \
              recovered_at = to_timestamp($2::double precision / 1000), \
-             recovery_outcome = $3, updated_at = now() WHERE id = ( \
-               SELECT id FROM runtime_incidents WHERE session_id = $1 \
-               AND source = 'controller' AND state <> 'recovered' \
-               ORDER BY occurred_at DESC LIMIT 1)",
+             recovery_outcome = $3, updated_at = now() WHERE session_id = $1 \
+               AND source = 'controller' AND state = 'active'",
         )
         .bind(session_id)
         .bind(recovered_at_ms)
@@ -1679,6 +1928,535 @@ impl Store {
         .fetch_all(&self.pool)
         .await
         .context("SELECT runtime incidents")
+    }
+
+    /// Query the unified diagnostic-log index without loading heavy incident
+    /// detail. `PostgreSQL` remains the durable correlation layer; raw service
+    /// evidence stays in `VictoriaLogs`.
+    #[allow(clippy::too_many_lines)] // one SQL read model spanning four existing owners
+    pub async fn diagnostic_logs(
+        &self,
+        filter: &DiagnosticLogFilter,
+    ) -> Result<Vec<DiagnosticLogSummary>> {
+        let query = r"
+            WITH runtime_logs AS (
+              SELECT 'runtime:' || incident.id AS id,
+                (extract(epoch FROM incident.occurred_at) * 1000)::bigint AS occurred_at_ms,
+                'session_error'::text AS kind, incident.severity, incident.state,
+                initcap(replace(incident.classification, '_', ' ')) AS title,
+                incident.summary, incident.session_id AS session_ref,
+                session.provider,
+                CASE
+                  WHEN session.provider IN ('codex', 'codex-deepseek') THEN 'codex'
+                  WHEN session.provider IN ('claude-code', 'claude-deepseek') THEN 'claude'
+                  ELSE NULL
+                END AS agent,
+                NULL::text AS model, incident.classification
+              FROM runtime_incidents incident
+              LEFT JOIN sessions session ON session.id = incident.session_id
+              WHERE incident.occurred_at >= to_timestamp($1::double precision / 1000)
+            ), provider_error_logs AS (
+              SELECT 'provider:' || event.machine_id || ':' || event.producer_id || ':' ||
+                  event.sequence::text AS id,
+                (extract(epoch FROM event.occurred_at) * 1000)::bigint AS occurred_at_ms,
+                'provider_error'::text AS kind, 'error'::text AS severity,
+                'failed'::text AS state,
+                'DeepSeek HTTP ' || event.status::text AS title,
+                initcap(event.agent) || ' request failed with HTTP status ' ||
+                  event.status::text AS summary,
+                event.session_fingerprint AS session_ref, event.provider,
+                event.agent, nullif(coalesce(event.resolved_model, event.model), '') AS model,
+                'provider_http_error'::text AS classification
+              FROM provider_usage_events event
+              WHERE event.occurred_at >= to_timestamp($1::double precision / 1000)
+                AND event.status >= 400
+            ), lineage AS (
+              SELECT event.*,
+                lag(event.status) OVER session_window AS previous_status,
+                lag(event.model_family) OVER session_window AS previous_model_family,
+                lag(event.model_revision) OVER session_window AS previous_model_revision,
+                lag(event.request_role) OVER session_window AS previous_request_role,
+                lag(event.upstream_protocol) OVER session_window AS previous_upstream_protocol,
+                lag(event.translation_mode) OVER session_window AS previous_translation_mode,
+                lag(event.thinking_mode) OVER session_window AS previous_thinking_mode,
+                lag(event.reasoning_effort) OVER session_window AS previous_reasoning_effort,
+                lag(event.static_prefix_fingerprint) OVER session_window AS previous_static_prefix,
+                lag(event.request_prefix_fingerprint) OVER session_window AS previous_request_prefix,
+                lag(event.input_tokens) OVER session_window AS previous_input_tokens,
+                lag(event.input_item_count) OVER session_window AS previous_input_item_count,
+                lag(event.gateway_build) OVER session_window AS previous_gateway_build,
+                lag(event.gateway_boot_id) OVER session_window AS previous_gateway_boot_id,
+                lag(event.cache_hit_tokens) OVER session_window AS previous_cache_hit_tokens,
+                lag(event.cache_miss_tokens) OVER session_window AS previous_cache_miss_tokens,
+                lag(event.occurred_at) OVER session_window AS previous_occurred_at
+              FROM provider_usage_events event
+              WHERE event.occurred_at >=
+                  to_timestamp($1::double precision / 1000) - interval '30 minutes'
+              WINDOW session_window AS (
+                PARTITION BY event.machine_id, event.producer_id, event.account_fingerprint,
+                  event.agent, event.session_fingerprint
+                ORDER BY event.occurred_at, event.sequence
+              )
+            ), cache_transitions AS (
+              SELECT lineage.*,
+                CASE
+                  WHEN operation = 'compact' THEN 'client_compaction'
+                  WHEN gateway_build IS DISTINCT FROM previous_gateway_build
+                    THEN 'gateway_build_changed'
+                  WHEN gateway_boot_id IS DISTINCT FROM previous_gateway_boot_id
+                    THEN 'post_gateway_restart'
+                  WHEN model_family IS DISTINCT FROM previous_model_family THEN 'model_changed'
+                  WHEN model_revision IS DISTINCT FROM previous_model_revision
+                    THEN 'model_revision_changed'
+                  WHEN request_role IS DISTINCT FROM previous_request_role
+                    THEN 'request_role_changed'
+                  WHEN upstream_protocol IS DISTINCT FROM previous_upstream_protocol
+                    THEN 'protocol_changed'
+                  WHEN translation_mode IS DISTINCT FROM previous_translation_mode
+                    THEN 'translation_changed'
+                  WHEN thinking_mode IS DISTINCT FROM previous_thinking_mode
+                    OR reasoning_effort IS DISTINCT FROM previous_reasoning_effort
+                    THEN 'reasoning_configuration_changed'
+                  WHEN compatibility_fixes > 0 THEN 'compatibility_rewrite'
+                  WHEN static_prefix_fingerprint IS DISTINCT FROM previous_static_prefix
+                    THEN 'static_prefix_changed'
+                  WHEN (agent <> 'codex' OR has_previous_response_id IS NOT TRUE)
+                    AND input_item_count < previous_input_item_count THEN 'history_rewrite'
+                  WHEN request_prefix_fingerprint = previous_request_prefix
+                    THEN 'unexpected_exact_prefix_miss'
+                  ELSE 'unexpected_active_cache_drop'
+                END AS cause
+              FROM lineage
+              WHERE occurred_at >= to_timestamp($1::double precision / 1000)
+                AND schema_version >= 3
+                AND session_fingerprint IS NOT NULL
+                AND session_attribution <> 'prefix_root'
+                AND previous_occurred_at IS NOT NULL
+                AND occurred_at >= previous_occurred_at
+                AND occurred_at - previous_occurred_at <= interval '30 minutes'
+                AND status < 400
+                AND previous_status < 400
+                AND cache_observation IN ('explicit', 'derived')
+                AND coalesce(input_tokens, 0) >= 8000
+                AND cache_hit_tokens + cache_miss_tokens > 0
+                AND cache_hit_tokens * 10 < cache_hit_tokens + cache_miss_tokens
+                AND coalesce(previous_input_tokens, 0) >= 8000
+                AND previous_cache_hit_tokens + previous_cache_miss_tokens > 0
+                AND previous_cache_hit_tokens * 10 >=
+                  9 * (previous_cache_hit_tokens + previous_cache_miss_tokens)
+                AND static_prefix_fingerprint IS NOT NULL
+                AND previous_static_prefix IS NOT NULL
+            ), cache_logs AS (
+              SELECT 'cache:' || machine_id || ':' || producer_id || ':' || sequence::text AS id,
+                (extract(epoch FROM occurred_at) * 1000)::bigint AS occurred_at_ms,
+                'cache_anomaly'::text AS kind, 'warning'::text AS severity,
+                'observed'::text AS state,
+                CASE cause
+                  WHEN 'static_prefix_changed' THEN 'Cache prefix changed'
+                  WHEN 'unexpected_exact_prefix_miss' THEN 'Exact-prefix cache miss'
+                  WHEN 'history_rewrite' THEN 'Cached history rewritten'
+                  WHEN 'post_gateway_restart' THEN 'Cache lost after gateway restart'
+                  WHEN 'gateway_build_changed' THEN 'Cache lost after gateway update'
+                  WHEN 'client_compaction' THEN 'Cache changed after compaction'
+                  WHEN 'model_changed' THEN 'Cache lost after model change'
+                  WHEN 'model_revision_changed' THEN 'Cache lost after model revision'
+                  WHEN 'request_role_changed' THEN 'Cache lost after role change'
+                  WHEN 'protocol_changed' THEN 'Cache lost after protocol change'
+                  WHEN 'translation_changed' THEN 'Cache lost after translation change'
+                  WHEN 'reasoning_configuration_changed' THEN 'Cache lost after reasoning change'
+                  WHEN 'compatibility_rewrite' THEN 'Cache lost after compatibility rewrite'
+                  ELSE 'Unexplained active-session cache drop'
+                END AS title,
+                format('Cache hit rate fell from %s%% to %s%% within 30 minutes',
+                  round(previous_cache_hit_tokens * 100.0 /
+                    (previous_cache_hit_tokens + previous_cache_miss_tokens), 1),
+                  round(cache_hit_tokens * 100.0 / (cache_hit_tokens + cache_miss_tokens), 1)
+                ) AS summary,
+                session_fingerprint AS session_ref, provider, agent,
+                nullif(coalesce(resolved_model, model), '') AS model, cause AS classification
+              FROM cache_transitions
+            ), automation_logs AS (
+              SELECT 'automation:' || log.id::text AS id, log.created_at_ms AS occurred_at_ms,
+                'automation'::text AS kind,
+                CASE
+                  WHEN log.status = 'failed' THEN 'error'
+                  WHEN log.status IN ('retrying', 'unknown') THEN 'warning'
+                  ELSE 'info'
+                END AS severity,
+                log.status AS state,
+                initcap(log.provider) || ' ' || replace(log.action, '_', ' ') AS title,
+                log.message AS summary, NULL::text AS session_ref, log.provider,
+                'codex'::text AS agent, NULL::text AS model,
+                'provider_automation'::text AS classification
+              FROM provider_action_logs log
+              WHERE log.created_at_ms >= $1
+            ), logs AS (
+              SELECT * FROM runtime_logs
+              UNION ALL SELECT * FROM provider_error_logs
+              UNION ALL SELECT * FROM cache_logs
+              UNION ALL SELECT * FROM automation_logs
+            )
+            SELECT id, occurred_at_ms, kind, severity, state, title, summary,
+              session_ref, provider, agent, model, classification
+            FROM logs
+            WHERE ($2::text IS NULL OR kind = $2)
+              AND ($3::text IS NULL OR severity = $3)
+              AND ($4::text IS NULL OR state = $4)
+              AND ($5::text IS NULL OR agent = $5)
+              AND ($6::text IS NULL OR session_ref = $6)
+              AND ($7::bigint IS NULL OR occurred_at_ms < $7 OR
+                (occurred_at_ms = $7 AND id < $8))
+            ORDER BY occurred_at_ms DESC, id DESC
+            LIMIT $9
+        ";
+        sqlx::query_as(query)
+            .bind(filter.since_ms)
+            .bind(filter.kind.as_deref())
+            .bind(filter.severity.as_deref())
+            .bind(filter.state.as_deref())
+            .bind(filter.agent.as_deref())
+            .bind(filter.session_ref.as_deref())
+            .bind(filter.cursor_ms)
+            .bind(filter.cursor_id.as_deref())
+            .bind(filter.limit.clamp(1, 100).saturating_add(1))
+            .fetch_all(&self.pool)
+            .await
+            .context("query diagnostic logs")
+    }
+
+    /// Load one diagnostic event after the user expands it. List requests never
+    /// pay for incident JSON or provider lineage evidence.
+    #[allow(clippy::too_many_lines)] // type-specific lazy detail stays at this storage boundary
+    pub async fn diagnostic_log_detail(&self, id: &str) -> Result<Option<DiagnosticLogDetail>> {
+        if let Some(incident_id) = id.strip_prefix("runtime:") {
+            let incident = sqlx::query_as::<_, RuntimeIncident>(
+                "SELECT id, (extract(epoch FROM occurred_at) * 1000)::bigint AS occurred_at_ms, \
+                 (extract(epoch FROM updated_at) * 1000)::bigint AS updated_at_ms, source, \
+                 classification, severity, state, summary, fingerprint, session_id, client_id, \
+                 machine_id, trace_id, build, \
+                 (extract(epoch FROM evidence_start) * 1000)::bigint AS evidence_start_ms, \
+                 (extract(epoch FROM evidence_end) * 1000)::bigint AS evidence_end_ms, detail, \
+                 (extract(epoch FROM recovered_at) * 1000)::bigint AS recovered_at_ms, \
+                 recovery_outcome FROM runtime_incidents WHERE id = $1",
+            )
+            .bind(incident_id)
+            .fetch_optional(&self.pool)
+            .await
+            .context("load runtime diagnostic detail")?;
+            let Some(incident) = incident else {
+                return Ok(None);
+            };
+            let mut identity = vec![diagnostic_field("Log ID", id, true)];
+            optional_diagnostic_field(
+                &mut identity,
+                "Session ID",
+                incident.session_id.clone(),
+                true,
+            );
+            optional_diagnostic_field(
+                &mut identity,
+                "Machine ID",
+                incident.machine_id.clone(),
+                true,
+            );
+            optional_diagnostic_field(&mut identity, "Client ID", incident.client_id.clone(), true);
+            optional_diagnostic_field(&mut identity, "Trace ID", incident.trace_id.clone(), true);
+            let mut lifecycle = vec![
+                diagnostic_field("Source", incident.source.clone(), false),
+                diagnostic_field("Classification", incident.classification.clone(), false),
+                diagnostic_field("Severity", incident.severity.clone(), false),
+                diagnostic_field("State", incident.state.clone(), false),
+                diagnostic_field("Fingerprint", incident.fingerprint.clone(), true),
+                diagnostic_field(
+                    "Evidence start",
+                    incident.evidence_start_ms.to_string(),
+                    false,
+                ),
+                diagnostic_field("Evidence end", incident.evidence_end_ms.to_string(), false),
+            ];
+            optional_diagnostic_field(&mut lifecycle, "Build", incident.build.clone(), true);
+            optional_diagnostic_field(
+                &mut lifecycle,
+                "Recovered at",
+                incident.recovered_at_ms.map(|value| value.to_string()),
+                false,
+            );
+            optional_diagnostic_field(
+                &mut lifecycle,
+                "Recovery outcome",
+                incident.recovery_outcome.clone(),
+                false,
+            );
+            return Ok(Some(DiagnosticLogDetail {
+                id: id.to_owned(),
+                kind: "session_error".to_owned(),
+                occurred_at_ms: incident.occurred_at_ms,
+                title: diagnostic_title(&incident.classification),
+                summary: incident.summary,
+                sections: vec![
+                    DiagnosticLogSection {
+                        title: "Identity".to_owned(),
+                        fields: identity,
+                    },
+                    DiagnosticLogSection {
+                        title: "Lifecycle".to_owned(),
+                        fields: lifecycle,
+                    },
+                ],
+                evidence: (!incident
+                    .detail
+                    .as_object()
+                    .is_some_and(serde_json::Map::is_empty))
+                .then_some(incident.detail),
+            }));
+        }
+
+        if let Some(action_id) = id.strip_prefix("automation:") {
+            let Ok(action_id) = action_id.parse::<i64>() else {
+                return Ok(None);
+            };
+            let row = sqlx::query_as::<
+                _,
+                (
+                    String,
+                    String,
+                    String,
+                    String,
+                    String,
+                    String,
+                    Option<String>,
+                    Option<String>,
+                    i64,
+                ),
+            >(
+                "SELECT provider, action, trigger, status, phase, message, credit_id, \
+                 idempotency_suffix, created_at_ms FROM provider_action_logs WHERE id = $1",
+            )
+            .bind(action_id)
+            .fetch_optional(&self.pool)
+            .await
+            .context("load automation diagnostic detail")?;
+            let Some((
+                provider,
+                action,
+                trigger,
+                status,
+                phase,
+                message,
+                credit_id,
+                key,
+                occurred_at_ms,
+            )) = row
+            else {
+                return Ok(None);
+            };
+            let mut fields = vec![
+                diagnostic_field("Log ID", id, true),
+                diagnostic_field("Provider", provider.clone(), false),
+                diagnostic_field("Action", action.clone(), false),
+                diagnostic_field("Trigger", trigger, false),
+                diagnostic_field("Status", status, false),
+                diagnostic_field("Phase", phase, false),
+            ];
+            optional_diagnostic_field(&mut fields, "Credit ID", credit_id, true);
+            optional_diagnostic_field(&mut fields, "Idempotency suffix", key, true);
+            return Ok(Some(DiagnosticLogDetail {
+                id: id.to_owned(),
+                kind: "automation".to_owned(),
+                occurred_at_ms,
+                title: format!(
+                    "{} {}",
+                    diagnostic_title(&provider),
+                    action.replace('_', " ")
+                ),
+                summary: message,
+                sections: vec![DiagnosticLogSection {
+                    title: "Automation".to_owned(),
+                    fields,
+                }],
+                evidence: None,
+            }));
+        }
+
+        let (kind, prefix) = if id.starts_with("provider:") {
+            ("provider_error", "provider:")
+        } else if id.starts_with("cache:") {
+            ("cache_anomaly", "cache:")
+        } else {
+            return Ok(None);
+        };
+        let Some((machine_id, producer_id, sequence)) = parse_provider_diagnostic_id(id, prefix)
+        else {
+            return Ok(None);
+        };
+        let row = sqlx::query_as::<_, (i64, serde_json::Value)>(
+            r"
+                WITH target AS (
+                  SELECT * FROM provider_usage_events
+                  WHERE machine_id = $1 AND producer_id = $2 AND sequence = $3
+                ), previous AS (
+                  SELECT candidate.* FROM provider_usage_events candidate, target
+                  WHERE candidate.machine_id = target.machine_id
+                    AND candidate.producer_id = target.producer_id
+                    AND candidate.account_fingerprint = target.account_fingerprint
+                    AND candidate.agent = target.agent
+                    AND candidate.session_fingerprint IS NOT DISTINCT FROM target.session_fingerprint
+                    AND (candidate.occurred_at, candidate.sequence) <
+                      (target.occurred_at, target.sequence)
+                  ORDER BY candidate.occurred_at DESC, candidate.sequence DESC
+                  LIMIT 1
+                )
+                SELECT (extract(epoch FROM target.occurred_at) * 1000)::bigint,
+                  jsonb_build_object(
+                    'current', to_jsonb(target),
+                    'previous', CASE WHEN previous.sequence IS NULL THEN '{}'::jsonb
+                      ELSE to_jsonb(previous) END,
+                    'gap_ms', CASE WHEN previous.sequence IS NULL THEN NULL
+                      ELSE (extract(epoch FROM target.occurred_at - previous.occurred_at) * 1000)::bigint END
+                  )
+                FROM target LEFT JOIN previous ON true
+            ",
+        )
+        .bind(machine_id)
+        .bind(producer_id)
+        .bind(sequence)
+        .fetch_optional(&self.pool)
+        .await
+        .context("load provider diagnostic detail")?;
+        let Some((occurred_at_ms, evidence)) = row else {
+            return Ok(None);
+        };
+        let current = evidence.get("current").cloned().unwrap_or_default();
+        let previous = evidence.get("previous").cloned().unwrap_or_default();
+        let gap_ms = json_i64(&evidence, "gap_ms");
+        if !provider_detail_matches_kind(kind, &current, &previous, gap_ms) {
+            return Ok(None);
+        }
+        let status = json_scalar(&current, "status").unwrap_or_else(|| "unknown".to_owned());
+        let agent = json_scalar(&current, "agent").unwrap_or_else(|| "unknown".to_owned());
+        let cause = (kind == "cache_anomaly").then(|| cache_transition_cause(&current, &previous));
+        let title = cause.map_or_else(
+            || format!("DeepSeek HTTP {status}"),
+            |cause| cache_transition_title(cause).to_owned(),
+        );
+        let summary = if kind == "cache_anomaly" {
+            match (cache_rate_label(&previous), cache_rate_label(&current)) {
+                (Some(previous), Some(current)) => {
+                    format!("Cache hit rate fell from {previous}% to {current}% within 30 minutes")
+                }
+                _ => "Active-session cache hit rate fell below 10%".to_owned(),
+            }
+        } else {
+            format!(
+                "{} request failed with HTTP status {status}",
+                diagnostic_title(&agent)
+            )
+        };
+        let mut identity = vec![
+            diagnostic_field("Log ID", id, true),
+            diagnostic_field("Machine ID", machine_id, true),
+            diagnostic_field("Producer ID", producer_id, true),
+            diagnostic_field("Sequence", sequence.to_string(), true),
+        ];
+        for (label, key, copyable) in [
+            ("Provider", "provider", false),
+            ("Agent", "agent", false),
+            ("Model", "model", false),
+            ("Resolved model", "resolved_model", false),
+            ("Model family", "model_family", false),
+            ("Model revision", "model_revision", true),
+            ("Session fingerprint", "session_fingerprint", true),
+            ("Account fingerprint", "account_fingerprint", true),
+        ] {
+            optional_diagnostic_field(&mut identity, label, json_scalar(&current, key), copyable);
+        }
+        let mut request = Vec::new();
+        if let Some(cause) = cause {
+            request.push(diagnostic_field("Cache classification", cause, false));
+        }
+        for (label, key) in [
+            ("HTTP status", "status"),
+            ("Operation", "operation"),
+            ("Request role", "request_role"),
+            ("Client protocol", "client_protocol"),
+            ("Upstream protocol", "upstream_protocol"),
+            ("Translation mode", "translation_mode"),
+            ("Thinking mode", "thinking_mode"),
+            ("Reasoning effort", "reasoning_effort"),
+            ("Duration ms", "duration_ms"),
+            ("Completed", "completed"),
+            ("Streaming", "streaming"),
+            ("Input tokens", "input_tokens"),
+            ("Output tokens", "output_tokens"),
+            ("Reasoning tokens", "reasoning_tokens"),
+            ("Cache hit tokens", "cache_hit_tokens"),
+            ("Cache miss tokens", "cache_miss_tokens"),
+            ("Request bytes", "request_bytes"),
+            ("Input items", "input_item_count"),
+            ("Tools", "tool_count"),
+            ("System blocks", "system_block_count"),
+            ("Compatibility fixes", "compatibility_fixes"),
+        ] {
+            optional_diagnostic_field(&mut request, label, json_scalar(&current, key), false);
+        }
+        let mut cache_identity = Vec::new();
+        for (label, key) in [
+            ("Static prefix", "static_prefix_fingerprint"),
+            ("Request prefix", "request_prefix_fingerprint"),
+            ("Gateway build", "gateway_build"),
+            ("Gateway boot", "gateway_boot_id"),
+        ] {
+            optional_diagnostic_field(&mut cache_identity, label, json_scalar(&current, key), true);
+            optional_diagnostic_field(
+                &mut cache_identity,
+                &format!("Previous {label}"),
+                json_scalar(&previous, key),
+                true,
+            );
+        }
+        optional_diagnostic_field(
+            &mut cache_identity,
+            "Previous cache hit tokens",
+            json_scalar(&previous, "cache_hit_tokens"),
+            false,
+        );
+        optional_diagnostic_field(
+            &mut cache_identity,
+            "Previous cache miss tokens",
+            json_scalar(&previous, "cache_miss_tokens"),
+            false,
+        );
+        optional_diagnostic_field(
+            &mut cache_identity,
+            "Gap ms",
+            gap_ms.map(|value| value.to_string()),
+            false,
+        );
+        let mut sections = vec![
+            DiagnosticLogSection {
+                title: "Identity".to_owned(),
+                fields: identity,
+            },
+            DiagnosticLogSection {
+                title: "Request".to_owned(),
+                fields: request,
+            },
+        ];
+        if !cache_identity.is_empty() {
+            sections.push(DiagnosticLogSection {
+                title: "Cache lineage".to_owned(),
+                fields: cache_identity,
+            });
+        }
+        Ok(Some(DiagnosticLogDetail {
+            id: id.to_owned(),
+            kind: kind.to_owned(),
+            occurred_at_ms,
+            title,
+            summary,
+            sections,
+            evidence: Some(evidence),
+        }))
     }
 
     /// Storage metrics for the info panel: `(db_bytes, events_rows,
@@ -2082,6 +2860,87 @@ mod provider_usage_validation_tests {
         let mut candidate = event();
         candidate.reasoning_tokens = Some(5);
         assert!(validate_provider_usage_event("codex-deepseek", &candidate).is_err());
+    }
+
+    #[test]
+    fn cache_transition_classification_identifies_prefix_instability() {
+        let previous = serde_json::json!({
+            "agent": "claude",
+            "operation": "messages",
+            "model_family": "flash",
+            "model_revision": "v4",
+            "request_role": "executor",
+            "upstream_protocol": "anthropic_messages",
+            "translation_mode": "anthropic_compat",
+            "thinking_mode": "enabled",
+            "reasoning_effort": "high",
+            "gateway_build": "build-1",
+            "gateway_boot_id": "boot-1",
+            "static_prefix_fingerprint": "prefix-1",
+            "request_prefix_fingerprint": "request-1",
+            "input_item_count": 20,
+            "compatibility_fixes": 0,
+        });
+        let mut current = previous.clone();
+        current["static_prefix_fingerprint"] = serde_json::json!("prefix-2");
+        assert_eq!(
+            cache_transition_cause(&current, &previous),
+            "static_prefix_changed"
+        );
+
+        current = previous.clone();
+        assert_eq!(
+            cache_transition_cause(&current, &previous),
+            "unexpected_exact_prefix_miss"
+        );
+    }
+
+    #[test]
+    fn diagnostic_detail_ids_cannot_relabel_healthy_provider_rows() {
+        let current = serde_json::json!({
+            "schema_version": 3,
+            "status": 200,
+            "session_fingerprint": "session",
+            "session_attribution": "explicit",
+            "cache_observation": "explicit",
+            "static_prefix_fingerprint": "prefix",
+            "input_tokens": 10_000,
+            "cache_hit_tokens": 0,
+            "cache_miss_tokens": 10_000,
+        });
+        let previous = serde_json::json!({
+            "status": 200,
+            "static_prefix_fingerprint": "prefix",
+            "input_tokens": 10_000,
+            "cache_hit_tokens": 9_500,
+            "cache_miss_tokens": 500,
+        });
+        assert!(!provider_detail_matches_kind(
+            "provider_error",
+            &current,
+            &previous,
+            Some(1_000),
+        ));
+        assert!(provider_detail_matches_kind(
+            "cache_anomaly",
+            &current,
+            &previous,
+            Some(1_000),
+        ));
+        assert!(!provider_detail_matches_kind(
+            "cache_anomaly",
+            &current,
+            &previous,
+            Some(31 * 60 * 1_000),
+        ));
+    }
+
+    #[test]
+    fn provider_diagnostic_ids_preserve_colons_inside_producer_ids() {
+        assert_eq!(
+            parse_provider_diagnostic_id("cache:hawk:gateway:boot:42", "cache:"),
+            Some(("hawk", "gateway:boot", 42))
+        );
     }
 }
 
@@ -2561,6 +3420,10 @@ async fn load_provider_usage_low_hit(
              WHEN session_attribution = 'prefix_root' THEN 'prefix_lineage_ambiguous' \
              WHEN previous_occurred_at IS NULL THEN 'first_session_observation' \
              WHEN operation = 'compact' THEN 'client_compaction' \
+             WHEN occurred_at - previous_occurred_at >= interval '6 hours' \
+               AND previous_cache_hit_tokens * 10 >= \
+                 9 * (previous_cache_hit_tokens + previous_cache_miss_tokens) \
+               THEN 'probable_cache_eviction' \
              WHEN gateway_build IS DISTINCT FROM previous_gateway_build THEN 'gateway_build_changed' \
              WHEN gateway_boot_id IS DISTINCT FROM previous_gateway_boot_id THEN 'post_gateway_restart' \
              WHEN model_family IS DISTINCT FROM previous_model_family THEN 'model_changed' \
@@ -2579,10 +3442,6 @@ async fn load_provider_usage_low_hit(
                AND previous_cache_hit_tokens * 10 >= \
                  9 * (previous_cache_hit_tokens + previous_cache_miss_tokens) \
                THEN 'unexpected_exact_prefix_miss' \
-             WHEN occurred_at - previous_occurred_at >= interval '6 hours' \
-               AND previous_cache_hit_tokens * 10 >= \
-                 9 * (previous_cache_hit_tokens + previous_cache_miss_tokens) \
-               THEN 'probable_cache_eviction' \
              ELSE 'unexplained_low_hit' END AS cause \
            FROM lineage WHERE occurred_at >= now() - make_interval(secs => $2::double precision) \
              AND ($4::text IS NULL OR model_family = $4) \

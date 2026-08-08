@@ -11,4 +11,6 @@ Deno.test("DeepSeek usage exposes short rolling windows", () => {
     ),
     true,
   );
+  assertEquals(infoSheetSource.includes("Error rate"), true);
+  assertEquals(infoSheetSource.includes("Cache miss rate"), true);
 });
