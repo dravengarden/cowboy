@@ -1111,6 +1111,22 @@ async fn apply_npm_release_status(inventory: &mut [ComponentInventory]) {
     }
 }
 
+fn npm_update_is_confirmed_by_inventory(
+    id: &ComponentId,
+    inventory: &[ComponentInventory],
+) -> bool {
+    inventory.iter().any(|component| {
+        component.id == *id
+            && !component.version.is_empty()
+            && component.update.as_ref().is_some_and(|update| {
+                update.installable
+                    && !update.available
+                    && !update.latest_version.is_empty()
+                    && update.source == "npm registry"
+            })
+    })
+}
+
 async fn update_npm_component(id: &ComponentId) -> anyhow::Result<()> {
     let package = npm_package_for_component(id).context("component has no npm update channel")?;
     let _guard = NPM_UPDATE_LOCK.lock().await;
@@ -1482,25 +1498,39 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
         } => {
             tokio::spawn(async move {
                 let result = update_npm_component(&component).await;
-                if result.is_ok() {
-                    if let Some(provider) = provider_for_component(&component) {
-                        let _ = runtime_commands.send(crate::runtime_wire::Frame::CoreCommand {
-                            command: crate::runtime_wire::CoreCommand::RollProvider {
-                                provider: provider.to_owned(),
-                            },
-                        });
-                    }
-                    let inventory =
-                        collect_inventory(&components, zed_adapter_socket.as_deref()).await;
-                    let _ = events.send(MachineEvent::Inventory {
-                        components: inventory,
-                        observed_at_ms: unix_ms(),
+                let inventory = collect_inventory(&components, zed_adapter_socket.as_deref()).await;
+                let recovered =
+                    result.is_err() && npm_update_is_confirmed_by_inventory(&component, &inventory);
+                let accepted = result.is_ok() || recovered;
+                if recovered && let Err(error) = &result {
+                    tracing::warn!(
+                        component = ?component,
+                        error = %error,
+                        "npm update reported an error but inventory confirms the latest release"
+                    );
+                }
+                if accepted && let Some(provider) = provider_for_component(&component) {
+                    let _ = runtime_commands.send(crate::runtime_wire::Frame::CoreCommand {
+                        command: crate::runtime_wire::CoreCommand::RollProvider {
+                            provider: provider.to_owned(),
+                        },
                     });
                 }
+                let _ = events.send(MachineEvent::Inventory {
+                    components: inventory,
+                    observed_at_ms: unix_ms(),
+                });
                 let _ = events.send(MachineEvent::CommandResult {
                     request_id,
-                    accepted: result.is_ok(),
-                    detail: result.err().map(|error| format!("{error:#}")),
+                    accepted,
+                    detail: match result {
+                        Ok(()) => None,
+                        Err(_) if recovered => Some(
+                            "npm reported an error, but the installed component is up to date"
+                                .to_owned(),
+                        ),
+                        Err(error) => Some(format!("{error:#}")),
+                    },
                 });
             });
         }
@@ -2182,12 +2212,14 @@ mod tests {
     use super::{
         Args, bootstrap_acp_inventory, disabled_provider_slots_from, gemini_auth_from_metadata,
         gemini_env_value_from, managed_provider_environment, npm_package_for_component,
-        parse_workspaces, provider_for_component, reject_untrusted_workspace, selected_zed_pair,
-        send_frame_with_timeout, validate_controller_url, workspace_path_allowed,
+        npm_update_is_confirmed_by_inventory, parse_workspaces, provider_for_component,
+        reject_untrusted_workspace, selected_zed_pair, send_frame_with_timeout,
+        validate_controller_url, workspace_path_allowed,
     };
     use crate::machine_components::ComponentStore;
     use crate::machine_protocol::{
-        ArtifactFormat, ComponentId, ComponentKind, DesiredComponent, MachineFrame,
+        ArtifactFormat, ComponentId, ComponentInventory, ComponentKind, ComponentState,
+        ComponentUpdate, DesiredComponent, MachineFrame,
     };
     use crate::runtime_wire::{CoreCommand, Frame, StartSession};
 
@@ -2303,6 +2335,50 @@ mod tests {
             }),
             Some("claude-code")
         );
+    }
+
+    #[test]
+    fn npm_update_error_is_recovered_only_by_authoritative_latest_inventory() {
+        let id = ComponentId {
+            kind: ComponentKind::ProviderCli,
+            slot: "claude".to_owned(),
+        };
+        let current = ComponentInventory {
+            id: id.clone(),
+            state: ComponentState::Active,
+            version: "2.1.226".to_owned(),
+            generation: String::new(),
+            digest: String::new(),
+            rollback_generation: None,
+            active_leases: 0,
+            auth: None,
+            detail: None,
+            update: Some(ComponentUpdate {
+                latest_version: "2.1.226".to_owned(),
+                available: false,
+                source: "npm registry".to_owned(),
+                checked_at_ms: 1,
+                installable: true,
+            }),
+        };
+        assert!(npm_update_is_confirmed_by_inventory(
+            &id,
+            std::slice::from_ref(&current)
+        ));
+
+        let mut outdated = current.clone();
+        outdated.update.as_mut().expect("release status").available = true;
+        assert!(!npm_update_is_confirmed_by_inventory(
+            &id,
+            std::slice::from_ref(&outdated)
+        ));
+
+        let mut untrusted = current;
+        untrusted.update.as_mut().expect("release status").source = "cached inventory".to_owned();
+        assert!(!npm_update_is_confirmed_by_inventory(
+            &id,
+            std::slice::from_ref(&untrusted)
+        ));
     }
 
     #[test]
