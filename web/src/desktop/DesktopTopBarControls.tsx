@@ -678,6 +678,10 @@ export function DesktopTopBarControls({
       return leftIndex - rightIndex;
     });
   }, [rawOptions, session?.provider]);
+  const contextBudgetAvailable = options.some((option) =>
+    option.id === "deepseek_context"
+  );
+  const configDisabled = options.length === 0 || (dead && !contextBudgetAvailable);
   const configSummary = options.map(compactOptionName).join(" · ");
   const loadUsage = useCallback(async (manual: boolean): Promise<void> => {
     if (refreshing) return;
@@ -976,7 +980,7 @@ export function DesktopTopBarControls({
                   }} />
                 }
                 endIcon={<ExpandMore fontSize="small" />}
-                disabled={dead || options.length === 0}
+                disabled={configDisabled}
                 onClick={(event): void => setConfigAnchor(event.currentTarget)}
                 sx={{
                   ...desktopEmbeddedControlSx({
@@ -1003,7 +1007,7 @@ export function DesktopTopBarControls({
                   variant="global"
                   accent={shortcutsActive || configAnchor !== null}
                   availability={shortcutAvailability(
-                    shortcutsActive && !dead && options.length > 0,
+                    shortcutsActive && !configDisabled,
                     configAnchor !== null,
                   )}
                   sx={{ flexShrink: 0, ml: 0.75 }}
@@ -1036,9 +1040,9 @@ export function DesktopTopBarControls({
                 option={option}
                 sessionId={sessionId}
                 disabled={
-                  dead ||
-                  (option.id === "deepseek_context" &&
-                    (status === "busy" || status === "starting"))
+                  option.id === "deepseek_context"
+                    ? status === "busy" || status === "starting"
+                    : dead
                 }
               />
             ))}

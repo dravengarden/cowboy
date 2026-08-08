@@ -5490,6 +5490,9 @@ export function SessionControls({
       return ai - bi;
     });
   }, [configOptions, session?.provider]);
+  const contextBudgetAvailable = options.some((option) =>
+    option.id === "deepseek_context"
+  );
   const showSkeleton = !dead && options.length === 0 &&
     (status === "starting" || status === "running");
   const hasConfig = showSkeleton || options.length > 0;
@@ -5499,7 +5502,7 @@ export function SessionControls({
         <Tooltip title="Options">
           <IconButton
             aria-label="options"
-            disabled={dead}
+            disabled={dead && !contextBudgetAvailable}
             onPointerDown={(): void => {
               // Session settings lives in the navbar, outside the Composer's
               // focus region. Release the active Mobile editor while the
@@ -5754,9 +5757,9 @@ function ComposerSheet({
                       key={opt.id}
                       option={opt}
                       disabled={
-                        dead ||
-                        (opt.id === "deepseek_context" &&
-                          (status === "busy" || status === "starting"))
+                        opt.id === "deepseek_context"
+                          ? status === "busy" || status === "starting"
+                          : dead
                       }
                       onSelect={(value): void => onSelectOption(opt.id, value)}
                     />
