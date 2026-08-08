@@ -13,4 +13,5 @@ Deno.test("DeepSeek usage exposes diagnostic time and error controls", () => {
   assertEquals(infoSheetSource.includes("Clear selections"), true);
   assertEquals(infoSheetSource.includes("resetFilters"), true);
   assertEquals(infoSheetSource.includes("Cache miss rate"), true);
+  assertEquals(infoSheetSource.includes("animateOnOpen={false}"), true);
 });
