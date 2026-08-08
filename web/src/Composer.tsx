@@ -4298,17 +4298,6 @@ function PendingRow({
   const connected = useConnected();
   // Confirm popover for force push (anchored to the Bolt button). Null = closed.
   const [confirmAnchor, setConfirmAnchor] = useState<HTMLElement | null>(null);
-  const confirmForcePush = async (): Promise<void> => {
-    // `starting` has no interruptible turn yet, and a disconnected client would
-    // drop this non-durable command. Keep the event path guarded as well as the
-    // button so keyboard/confirm callbacks cannot bypass the disabled state.
-    if (!connected || status !== "busy") return;
-    await forcePushQueued(sessionId, message.id);
-    setConfirmAnchor(null);
-  };
-  useConfirmEnter(confirmAnchor !== null, () => {
-    void confirmForcePush();
-  });
   // Per-row delete confirm. Dropping a queued message / draft is irreversible, so
   // the × opens this modal instead of deleting on a single tap.
   const [confirmRemove, setConfirmRemove] = useState(false);
@@ -4381,13 +4370,92 @@ function PendingRow({
     setOverlayOpen(false);
     onEditDone();
   };
-  const saveEdit = (): void => {
+  const persistEdit = (): void => {
     if (kind === "draft") {
       editDraft(sessionId, message.id, draft, editAttachments);
     } else editQueued(sessionId, message.id, draft, editAttachments);
+  };
+  const saveEdit = (): void => {
+    persistEdit();
     setOverlayOpen(false);
     onEditDone();
   };
+  const completePendingDelivery = async (
+    operation: () => Promise<void>,
+  ): Promise<void> => {
+    persistEdit();
+    await operation();
+    setOverlayOpen(false);
+    onEditDone();
+  };
+  const sendDraftFromEdit = (): Promise<void> =>
+    kind === "draft"
+      ? completePendingDelivery(() => activateDraft(sessionId, message.id))
+      : Promise.resolve();
+  const scheduleDraftFromEdit = (): void => {
+    if (kind !== "draft" || onSchedule === undefined) return;
+    // The schedule sheet targets the durable draft id. Persist the current
+    // inline buffer before opening it so scheduling never sends stale text.
+    persistEdit();
+    setOverlayOpen(false);
+    onEditDone();
+    onSchedule();
+  };
+  const confirmForcePush = async (): Promise<void> => {
+    // `starting` has no interruptible turn yet, and a disconnected client would
+    // drop this non-durable command. Keep the event path guarded as well as the
+    // button so keyboard/confirm callbacks cannot bypass the disabled state.
+    if (!connected || status !== "busy") return;
+    if (editing) {
+      await completePendingDelivery(() => forcePushQueued(sessionId, message.id));
+    } else {
+      await forcePushQueued(sessionId, message.id);
+    }
+    setConfirmAnchor(null);
+  };
+  useConfirmEnter(confirmAnchor !== null, () => {
+    void confirmForcePush();
+  });
+  const forcePushConfirmation = kind === "queued"
+    ? (
+      <Popover
+        open={confirmAnchor !== null}
+        anchorEl={confirmAnchor}
+        onClose={(): void => setConfirmAnchor(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+        transformOrigin={{ vertical: "top", horizontal: "right" }}
+      >
+        <Box sx={{ p: 1.5, maxWidth: 240 }}>
+          <Typography variant="body2" sx={{ mb: 1 }}>
+            Stop the current turn and send this message now? The agent's
+            in-progress work is discarded.
+          </Typography>
+          <Stack direction="row" spacing={1} justifyContent="flex-end">
+            <Button
+              size="small"
+              color="inherit"
+              onClick={(): void => setConfirmAnchor(null)}
+              sx={{ textTransform: "none" }}
+            >
+              Cancel
+              <Kbd keys="Esc" />
+            </Button>
+            <NetworkButton
+              size="small"
+              variant="contained"
+              color="warning"
+              startIcon={<Bolt />}
+              networkAction={confirmForcePush}
+              sx={{ textTransform: "none" }}
+            >
+              Force push
+              <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+            </NetworkButton>
+          </Stack>
+        </Box>
+      </Popover>
+    )
+    : null;
   // Mobile Queue/Draft edits are continuously buffered in this row. Dismissing
   // the keyboard is therefore the completion gesture: persist a non-empty edit
   // (or restore an edit that was cleared), leave fullscreen, and return to the
@@ -4526,6 +4594,7 @@ function PendingRow({
     return () => globalThis.cancelAnimationFrame(frame);
   }, [editing, touchInput]);
   if (keyboardBoundEditing) {
+    const editSendable = !!draft.trim() || editAttachments.length > 0;
     const addEditFiles = (files: File[]): void => {
       if (files.length === 0) return;
       void filesToAttachments(files).then((added) => {
@@ -4681,30 +4750,6 @@ function PendingRow({
               }}
             />
           )}
-          {!overlayOpen && touchInput && (
-            <Tooltip title="Fullscreen editor">
-              <IconButton
-                size="small"
-                aria-label="fullscreen editor"
-                onPointerDown={(event): void => event.preventDefault()}
-                onClick={(): void => {
-                  haptic();
-                  flushSync(() => setOverlayOpen(true));
-                  overlayEditorRef.current?.focusEnd();
-                }}
-                sx={{
-                  position: "absolute",
-                  top: 2,
-                  right: 2,
-                  zIndex: 2,
-                  color: "text.secondary",
-                  "& .MuiSvgIcon-root": { fontSize: "1.25rem" },
-                }}
-              >
-                <OpenInFull />
-              </IconButton>
-            </Tooltip>
-          )}
           {!overlayOpen && (desktop
             ? desktopEditBar
             : (
@@ -4713,12 +4758,61 @@ function PendingRow({
                 mode={hasEditSelection ? "selection" : "insert"}
                 formatActions={editFormatActions}
                 utilityActions={
-                  <MobileComposerAccessoryButton
-                    title="Attach file"
-                    onClick={(): void => editFileInputRef.current?.click()}
-                  >
-                    <AttachFile />
-                  </MobileComposerAccessoryButton>
+                  <>
+                    <MobileComposerAccessoryButton
+                      title="Attach file"
+                      onClick={(): void => editFileInputRef.current?.click()}
+                    >
+                      <AttachFile />
+                    </MobileComposerAccessoryButton>
+                    <MobileComposerAccessoryButton
+                      title="Expand editor"
+                      onClick={(): void => {
+                        haptic();
+                        flushSync(() => setOverlayOpen(true));
+                        overlayEditorRef.current?.focusEnd();
+                      }}
+                    >
+                      <OpenInFull />
+                    </MobileComposerAccessoryButton>
+                    {kind === "draft" && (
+                      <>
+                        <MobileComposerAccessoryButton
+                          title="Send draft"
+                          color="primary"
+                          disabled={!editSendable}
+                          networkAction={sendDraftFromEdit}
+                        >
+                          <Send />
+                        </MobileComposerAccessoryButton>
+                        {onSchedule && (
+                          <MobileComposerAccessoryButton
+                            title={message.schedule ? "Reschedule send" : "Schedule send"}
+                            disabled={!editSendable}
+                            onClick={(): void => {
+                              haptic();
+                              scheduleDraftFromEdit();
+                            }}
+                          >
+                            <Schedule />
+                          </MobileComposerAccessoryButton>
+                        )}
+                      </>
+                    )}
+                    {kind === "queued" && (
+                      <MobileComposerAccessoryButton
+                        title="Force push"
+                        color="warning"
+                        disabled={!editSendable || !connected || status !== "busy"}
+                        onClick={(event): void => {
+                          haptic();
+                          setConfirmAnchor(event.currentTarget);
+                        }}
+                      >
+                        <Bolt />
+                      </MobileComposerAccessoryButton>
+                    )}
+                  </>
                 }
                 fixedAction={
                   <MobileComposerAccessoryButton
@@ -4738,6 +4832,7 @@ function PendingRow({
               />
             ))}
         </Paper>
+        {forcePushConfirmation}
         {/* Focused edit overlay: the row's expanded edit reuses the SAME component
             as the main input's expand — FullscreenComposer (the toolbar registry,
             inline images, native caret) — NOT a bespoke DetentSheet. Desktop keeps
@@ -5017,44 +5112,7 @@ function PendingRow({
       <Stack direction="row" alignItems="center" sx={{ flexShrink: 0 }}>
         {primary}
         {/* Force-push confirm — only the queued row has the force path. */}
-        {kind === "queued" && (
-          <Popover
-            open={confirmAnchor !== null}
-            anchorEl={confirmAnchor}
-            onClose={(): void => setConfirmAnchor(null)}
-            anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
-            transformOrigin={{ vertical: "top", horizontal: "right" }}
-          >
-            <Box sx={{ p: 1.5, maxWidth: 240 }}>
-              <Typography variant="body2" sx={{ mb: 1 }}>
-                Stop the current turn and send this message now? The agent's
-                in-progress work is discarded.
-              </Typography>
-              <Stack direction="row" spacing={1} justifyContent="flex-end">
-                <Button
-                  size="small"
-                  color="inherit"
-                  onClick={(): void => setConfirmAnchor(null)}
-                  sx={{ textTransform: "none" }}
-                >
-                  Cancel
-                  <Kbd keys="Esc" />
-                </Button>
-                <NetworkButton
-                  size="small"
-                  variant="contained"
-                  color="warning"
-                  startIcon={<Bolt />}
-                  networkAction={confirmForcePush}
-                  sx={{ textTransform: "none" }}
-                >
-                  Force push
-                  <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-                </NetworkButton>
-              </Stack>
-            </Box>
-          </Popover>
-        )}
+        {forcePushConfirmation}
         {/* Secondary actions — inline on a roomy (iPad/desktop) panel … */}
         <Stack
           direction="row"

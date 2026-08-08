@@ -1138,3 +1138,14 @@ Desktop Vim + IME checks:
     keeps tooltips; touch controls remain named by their `aria-label`. Do not
     solve this with pointer/touch interception around the composer because that
     would compete with UIKit's native selection and paste sequence.
+
+54. **Mobile Queue/Draft inline edits expose context actions in the first
+    accessory track.** Keep `Expand editor` beside Attach so the action lives in
+    the same keyboard-adjacent surface shown by the screenshot, not as an
+    absolute button over the writing canvas. Draft editing exposes Send and
+    Schedule; Queue editing exposes confirmation-gated Force push. Persist the
+    latest editor buffer before any of these operations, close only after an
+    authoritative delivery acknowledgement, and retain the editor on rejection.
+    Scheduling may release the editor before opening its sheet because it commits
+    the durable draft first. Keep every control's pointer-down focus protection;
+    do not add custom touch, selection, or IME handling.

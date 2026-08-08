@@ -1,6 +1,7 @@
 import type { MouseEventHandler, ReactNode } from "react";
 import { alpha, Box, IconButton, Stack, Tooltip } from "@mui/material";
 import { mobileComposerPanelFrameSx } from "./mobileComposerPrimitives";
+import { NetworkIconButton } from "./NetworkActionFeedback";
 
 /** A two-track keyboard-adjacent command surface for every focused Mobile editor. */
 export function MobileComposerAccessoryDock({
@@ -139,37 +140,58 @@ export function MobileComposerAccessoryDock({
 export function MobileComposerAccessoryButton({
   title,
   onClick,
+  networkAction,
   children,
   disabled = false,
   color = "default",
 }: {
   title: string;
-  onClick: MouseEventHandler<HTMLButtonElement>;
+  onClick?: MouseEventHandler<HTMLButtonElement>;
+  networkAction?: () => Promise<void> | void;
   children: ReactNode;
   disabled?: boolean;
-  color?: "default" | "warning";
+  color?: "default" | "primary" | "warning";
 }): React.JSX.Element {
+  const buttonSx = {
+    width: 44,
+    height: 44,
+    flexShrink: 0,
+    color: "text.secondary",
+    ...(color === "primary" && { color: "primary.main" }),
+    ...(color === "warning" && { color: "warning.main" }),
+    "&:active": { transform: "scale(0.94)" },
+    "&.Mui-disabled": { color: "text.disabled", opacity: 0.44 },
+    "& .MuiSvgIcon-root": { fontSize: "1.375rem" },
+  };
   return (
     <Tooltip title={title}>
-      <IconButton
-        aria-label={title}
-        color={color}
-        disabled={disabled}
-        onPointerDown={(event): void => event.preventDefault()}
-        onClick={onClick}
-        sx={{
-          width: 44,
-          height: 44,
-          flexShrink: 0,
-          color: "text.secondary",
-          ...(color === "warning" && { color: "warning.main" }),
-          "&:active": { transform: "scale(0.94)" },
-          "&.Mui-disabled": { color: "text.disabled", opacity: 0.44 },
-          "& .MuiSvgIcon-root": { fontSize: "1.375rem" },
-        }}
-      >
-        {children}
-      </IconButton>
+      <span>
+        {networkAction
+          ? (
+            <NetworkIconButton
+              aria-label={title}
+              color={color}
+              disabled={disabled}
+              networkAction={networkAction}
+              onPointerDown={(event): void => event.preventDefault()}
+              sx={buttonSx}
+            >
+              {children}
+            </NetworkIconButton>
+          )
+          : (
+            <IconButton
+              aria-label={title}
+              color={color}
+              disabled={disabled}
+              onPointerDown={(event): void => event.preventDefault()}
+              onClick={onClick}
+              sx={buttonSx}
+            >
+              {children}
+            </IconButton>
+          )}
+      </span>
     </Tooltip>
   );
 }

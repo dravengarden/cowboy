@@ -351,6 +351,28 @@ Deno.test("mobile keyboard focus presents one floating composer surface", () => 
   );
 });
 
+Deno.test("mobile pending editing keeps expansion and context delivery actions in the first dock", () => {
+  const pendingStart = composerSource.indexOf("if (keyboardBoundEditing) {");
+  const pendingEnd = composerSource.indexOf("// Secondary actions", pendingStart);
+  const pending = composerSource.slice(pendingStart, pendingEnd);
+
+  assertEquals(pendingStart >= 0 && pendingEnd > pendingStart, true);
+  assertEquals(
+    pending.indexOf('title="Attach file"') < pending.indexOf('title="Expand editor"'),
+    true,
+  );
+  assertEquals(pending.includes('title="Expand editor"'), true);
+  assertEquals(pending.includes('title="Send draft"'), true);
+  assertEquals(
+    pending.includes('title={message.schedule ? "Reschedule send" : "Schedule send"}'),
+    true,
+  );
+  assertEquals(pending.includes('title="Force push"'), true);
+  assertEquals(pending.includes("networkAction={sendDraftFromEdit}"), true);
+  assertEquals(composerSource.includes("const completePendingDelivery = async"), true);
+  assertEquals(composerSource.includes("persistEdit();"), true);
+});
+
 Deno.test("mobile keyboard dismissal belongs to the fixed utility rail", () => {
   const utilityStart = composerSource.indexOf(
     "data-mobile-composer-utility-rail",
