@@ -1554,17 +1554,21 @@ fn session_context_environment(session: &StartSession) -> Result<Vec<(&'static s
             )
         }
     };
-    if let Some(enabled) = session.cache_protection {
-        if !crate::deepseek_cache::supported_provider(&session.provider) {
-            anyhow::bail!(
-                "cache protection is unavailable for provider {}",
-                session.provider
-            );
-        }
+    let cache_provider = crate::deepseek_cache::supported_provider(&session.provider);
+    if cache_provider {
+        // Legacy launch snapshots predate the additive policy field. Preserve
+        // the product default during a rolling Machine cutover instead of
+        // silently enrolling only sessions created after the upgrade.
+        let enabled = session.cache_protection.unwrap_or(true);
         environment.push((
             crate::deepseek_cache::SESSION_POLICY_ENV,
             if enabled { "auto" } else { "off" }.to_owned(),
         ));
+    } else if session.cache_protection.is_some() {
+        anyhow::bail!(
+            "cache protection is unavailable for provider {}",
+            session.provider
+        );
     }
     Ok(environment)
 }
@@ -2281,6 +2285,19 @@ mod tests {
         assert_eq!(
             session_context_environment(&session).expect("known cache policy"),
             vec![(crate::deepseek_cache::SESSION_POLICY_ENV, "off".to_owned(),)]
+        );
+
+        session.cache_protection = None;
+        assert_eq!(
+            session_context_environment(&session).expect("legacy cache policy"),
+            vec![(crate::deepseek_cache::SESSION_POLICY_ENV, "auto".to_owned(),)]
+        );
+
+        session.provider = "codex".to_owned();
+        assert!(
+            session_context_environment(&session)
+                .expect("unrelated legacy session")
+                .is_empty()
         );
     }
     use crate::runtime_wire::{RuntimeEvent, WorkerState};
