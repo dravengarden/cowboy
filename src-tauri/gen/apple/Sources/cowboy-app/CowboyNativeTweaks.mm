@@ -110,16 +110,12 @@ __attribute__((constructor)) static void cowboyStripKeyboardAccessoryBar(void) {
 }
 @end
 
-// (2b) Native clipboard READ bridge. iOS WKWebView does NOT grant
-// `navigator.clipboard.readText()` (Safari does; a WKWebView app does not), so the
-// web UI's in-composer Paste button silently no-op'd in the shell. Expose the
-// system pasteboard via a reply-style script handler: JS calls
-// `window.__cowboyReadClipboard()` and gets a Promise that resolves to
-// `UIPasteboard.general.string`. Reply variant (WKScriptMessageHandlerWithReply,
-// iOS 14+) is what lets the handler return a value to the JS Promise. The "Pasted
-// from …" banner iOS shows on read is the expected, correct affordance. Text only;
-// images still go through the attach button. (cowboy-ios-native-shell-fixes BUG 1
-// fallback — the dependable paste path now actually works in the shell.)
+// (2b) Native clipboard bridge. A remote-origin WKWebView cannot reliably inspect
+// or read image clipboard items through navigator.clipboard. Keep metadata and
+// payload access separate: the Mobile dock probes `hasImages` to render an exact
+// enabled state without fetching bytes, then an explicit Paste image tap asks for
+// PNG payloads. The payload read is the only operation that may show iOS's
+// "Pasted from …" affordance. The legacy text reply remains for older web bundles.
 @interface CowboyClipboardHandler : NSObject <WKScriptMessageHandlerWithReply>
 @end
 
@@ -127,7 +123,50 @@ __attribute__((constructor)) static void cowboyStripKeyboardAccessoryBar(void) {
 - (void)userContentController:(WKUserContentController *)ucc
       didReceiveScriptMessage:(WKScriptMessage *)message
                  replyHandler:(void (^)(id _Nullable, NSString *_Nullable))replyHandler {
-    NSString *s = UIPasteboard.generalPasteboard.string;
+    (void)ucc;
+    UIPasteboard *pasteboard = UIPasteboard.generalPasteboard;
+    NSString *action = nil;
+    if ([message.body isKindOfClass:[NSDictionary class]]) {
+        id rawAction = ((NSDictionary *)message.body)[@"action"];
+        if ([rawAction isKindOfClass:[NSString class]]) {
+            action = (NSString *)rawAction;
+        }
+    }
+
+    if ([action isEqualToString:@"image-status"]) {
+        replyHandler(@{
+            @"hasImages": @(pasteboard.hasImages),
+            @"changeCount": @(pasteboard.changeCount),
+        }, nil);
+        return;
+    }
+
+    if ([action isEqualToString:@"read-images"]) {
+        NSArray<UIImage *> *images = pasteboard.images ?: @[];
+        NSMutableArray<NSDictionary *> *payloads =
+            [[NSMutableArray alloc] initWithCapacity:images.count];
+        NSUInteger index = 0;
+        for (UIImage *image in images) {
+            @autoreleasepool {
+                NSData *data = UIImagePNGRepresentation(image);
+                if (data == nil) continue;
+                index += 1;
+                [payloads addObject:@{
+                    @"name": [NSString stringWithFormat:@"pasted-image-%lu.png",
+                                                     (unsigned long)index],
+                    @"mimeType": @"image/png",
+                    @"data": [data base64EncodedStringWithOptions:0],
+                }];
+            }
+        }
+        replyHandler(@{
+            @"images": payloads,
+            @"changeCount": @(pasteboard.changeCount),
+        }, nil);
+        return;
+    }
+
+    NSString *s = pasteboard.string;
     replyHandler(s != nil ? s : @"", nil);
 }
 @end
@@ -192,6 +231,14 @@ __attribute__((constructor)) static void cowboyInstallHapticBridge(void) {
                         @"window.__cowboyReadClipboard=function(){try{"
                         @"return window.webkit.messageHandlers.cowboyClipboard.postMessage(0)}"
                         @"catch(e){return Promise.reject(e)}};"
+                        // Image availability is a metadata-only probe. Actual PNG
+                        // bytes are read only from the explicit user-facing action.
+                        @"window.__cowboyClipboardImageStatus=function(){try{"
+                        @"return window.webkit.messageHandlers.cowboyClipboard.postMessage("
+                        @"{action:'image-status'})}catch(e){return Promise.reject(e)}};"
+                        @"window.__cowboyReadClipboardImages=function(){try{"
+                        @"return window.webkit.messageHandlers.cowboyClipboard.postMessage("
+                        @"{action:'read-images'})}catch(e){return Promise.reject(e)}};"
                         // ARM the web's native-shell gate (src/nativeShell.ts): the
                         // shell now does native keyboard avoidance (below), so the
                         // web drops its position:fixed/translateZ/IME-composition
@@ -249,11 +296,20 @@ __attribute__((constructor)) static void cowboyInstallHapticBridge(void) {
 
 - (instancetype)init {
     if ((self = [super init])) {
-        [[NSNotificationCenter defaultCenter]
+        NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+        [nc
             addObserver:self
                selector:@selector(onDidBecomeActive:)
                    name:UIApplicationDidBecomeActiveNotification
                  object:nil];
+        [nc addObserver:self
+               selector:@selector(onPasteboardChanged:)
+                   name:UIPasteboardChangedNotification
+                 object:UIPasteboard.generalPasteboard];
+        [nc addObserver:self
+               selector:@selector(onPasteboardChanged:)
+                   name:UIPasteboardRemovedNotification
+                 object:UIPasteboard.generalPasteboard];
     }
     return self;
 }
@@ -264,6 +320,15 @@ __attribute__((constructor)) static void cowboyInstallHapticBridge(void) {
     if (wv == nil) return;
     [wv evaluateJavaScript:
             @"window.dispatchEvent(new Event('cowboy:native-resume'))"
+         completionHandler:nil];
+}
+
+- (void)onPasteboardChanged:(NSNotification *)note {
+    (void)note;
+    WKWebView *wv = gCowboyWebView;
+    if (wv == nil) return;
+    [wv evaluateJavaScript:
+            @"window.dispatchEvent(new Event('cowboy:clipboard-change'))"
          completionHandler:nil];
 }
 
