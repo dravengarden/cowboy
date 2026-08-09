@@ -153,12 +153,12 @@ export function useThemeMode(): ThemeControls {
           MuiButton: {
             styleOverrides: {
               root: {
-                "& .MuiButton-startIcon > *, & .MuiButton-endIcon > *": {
+                "& .MuiButton-startIcon.MuiButton-icon > :nth-of-type(1), & .MuiButton-endIcon.MuiButton-icon > :nth-of-type(1)": {
                   fontSize: "1.25rem",
                 },
               },
               sizeSmall: {
-                "& .MuiButton-startIcon > *, & .MuiButton-endIcon > *": {
+                "& .MuiButton-startIcon.MuiButton-icon > :nth-of-type(1), & .MuiButton-endIcon.MuiButton-icon > :nth-of-type(1)": {
                   fontSize: "1.125rem",
                 },
                 "@media (pointer: coarse)": { minHeight: 40 },

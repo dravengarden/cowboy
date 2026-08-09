@@ -10,7 +10,7 @@ const frontendDesign = await Deno.readTextFile(
 Deno.test("functional Button icons follow Cowboy's global font scale", () => {
   assertEquals(
     themeSource.includes(
-      '"& .MuiButton-startIcon > *, & .MuiButton-endIcon > *"',
+      '"& .MuiButton-startIcon.MuiButton-icon > :nth-of-type(1), & .MuiButton-endIcon.MuiButton-icon > :nth-of-type(1)"',
     ),
     true,
   );
