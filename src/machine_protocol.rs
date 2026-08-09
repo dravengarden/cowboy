@@ -128,6 +128,9 @@ pub struct MachineHello {
     /// arbitrary controller-side path to a remote host.
     #[serde(default)]
     pub workspaces: Vec<MachineWorkspace>,
+    /// Immutable host-configuration revision that produced `workspaces`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_revision: Option<String>,
     /// Scheduling envelope declared by the stable host. Active usage is
     /// controller-derived so a reconnect cannot under-report existing
     /// session leases.
@@ -417,6 +420,13 @@ fn not_applicable_provider_usage_dimension() -> String {
 pub enum MachineEvent {
     Inventory {
         components: Vec<ComponentInventory>,
+        /// Present only when the Machine has reloaded its workspace contract.
+        /// Older Machines omit both workspace fields, so component-only
+        /// refreshes must preserve the controller's current workspace set.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workspaces: Option<Vec<MachineWorkspace>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workspace_revision: Option<String>,
         observed_at_ms: i64,
     },
     CommandResult {
@@ -547,6 +557,24 @@ mod tests {
     }
 
     #[test]
+    fn old_inventory_event_preserves_the_existing_workspace_contract() {
+        let event: MachineEvent = serde_json::from_value(serde_json::json!({
+            "event": "inventory",
+            "components": [],
+            "observed_at_ms": 1
+        }))
+        .unwrap();
+        assert!(matches!(
+            event,
+            MachineEvent::Inventory {
+                workspaces: None,
+                workspace_revision: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn old_login_challenge_defaults_to_browser_only_completion() {
         let event: MachineEvent = serde_json::from_value(serde_json::json!({
             "event": "login_challenge",
@@ -602,6 +630,7 @@ mod tests {
             challenge_signature: None,
             components: Vec::new(),
             workspaces: Vec::new(),
+            workspace_revision: None,
             capacity: MachineCapacity::default(),
         };
         let proof = challenge_proof_v1("id", "nonce", 42, &hello);
@@ -637,6 +666,7 @@ mod tests {
                 challenge_signature: None,
                 components: Vec::new(),
                 workspaces: Vec::new(),
+                workspace_revision: None,
                 capacity: MachineCapacity::default(),
             },
         };

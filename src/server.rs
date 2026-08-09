@@ -2501,6 +2501,7 @@ struct MachineSummary {
     schedulable: bool,
     fingerprint: Option<String>,
     workspaces: Vec<crate::machine_protocol::MachineWorkspace>,
+    workspace_revision: Option<String>,
     components: Vec<crate::machine_protocol::ComponentInventory>,
     capacity: crate::machine_protocol::MachineCapacity,
     active_sessions: u32,
@@ -2521,6 +2522,11 @@ async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
                             .cloned()
                             .and_then(|value| serde_json::from_value(value).ok())
                             .unwrap_or_default();
+                        let workspace_revision = machine
+                            .inventory
+                            .get("workspace_revision")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_owned);
                         let mut components: Vec<crate::machine_protocol::ComponentInventory> =
                             machine
                                 .inventory
@@ -2620,6 +2626,7 @@ async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
                             status: machine.status,
                             fingerprint: machine.fingerprint,
                             workspaces,
+                            workspace_revision,
                             components,
                             capacity,
                             active_sessions,
@@ -2708,6 +2715,18 @@ fn machine_request_id(prefix: &str) -> String {
         "{prefix}-{}",
         random_machine_token().unwrap_or_else(|_| now_ms().to_string())
     )
+}
+
+fn apply_workspace_inventory(
+    current: &mut Vec<crate::machine_protocol::MachineWorkspace>,
+    current_revision: &mut Option<String>,
+    workspaces: Option<Vec<crate::machine_protocol::MachineWorkspace>>,
+    revision: Option<String>,
+) {
+    if let Some(workspaces) = workspaces {
+        *current = workspaces;
+        *current_revision = revision;
+    }
 }
 
 async fn api_machine_refresh(
@@ -3083,6 +3102,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     let inventory = serde_json::json!({
         "components": &hello.components,
         "workspaces": &hello.workspaces,
+        "workspace_revision": &hello.workspace_revision,
         "capacity": &hello.capacity,
     });
     if let Err(error) = store
@@ -3137,6 +3157,8 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
         &hello.machine_id,
         crate::machine_protocol::MachineEvent::Inventory {
             components: hello.components.clone(),
+            workspaces: Some(hello.workspaces.clone()),
+            workspace_revision: hello.workspace_revision.clone(),
             observed_at_ms: now_ms(),
         },
     );
@@ -3185,6 +3207,8 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     }
     let mut connected_runtime: Option<Arc<RemoteRuntime>> = None;
     let mut runtime_registration_pending = true;
+    let mut current_workspaces = hello.workspaces.clone();
+    let mut current_workspace_revision = hello.workspace_revision.clone();
     let mut revocation_check = tokio::time::interval(std::time::Duration::from_secs(2));
     revocation_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     revocation_check.tick().await;
@@ -3256,18 +3280,33 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                     .await
             }
             crate::machine_protocol::MachineFrame::Event {
-                event: crate::machine_protocol::MachineEvent::Inventory { components, .. },
+                event:
+                    crate::machine_protocol::MachineEvent::Inventory {
+                        components,
+                        workspaces,
+                        workspace_revision,
+                        ..
+                    },
             } => {
+                apply_workspace_inventory(
+                    &mut current_workspaces,
+                    &mut current_workspace_revision,
+                    workspaces,
+                    workspace_revision,
+                );
                 state.machine_control.record(
                     &hello.machine_id,
                     crate::machine_protocol::MachineEvent::Inventory {
                         components: components.clone(),
+                        workspaces: Some(current_workspaces.clone()),
+                        workspace_revision: current_workspace_revision.clone(),
                         observed_at_ms: now_ms(),
                     },
                 );
                 let inventory = serde_json::json!({
                     "components": components,
-                    "workspaces": &hello.workspaces,
+                    "workspaces": &current_workspaces,
+                    "workspace_revision": &current_workspace_revision,
                     "capacity": &hello.capacity,
                 });
                 store
@@ -3854,7 +3893,8 @@ fn gemini_machine_auth_is_current(
 #[cfg(test)]
 mod machine_provider_tests {
     use super::{
-        machine_supports_provider, resolve_machine_workspace, web_session_is_missing_machine,
+        apply_workspace_inventory, machine_supports_provider, resolve_machine_workspace,
+        web_session_is_missing_machine,
     };
     use crate::core::SessionOrigin;
     use crate::machine_protocol::{
@@ -4010,6 +4050,29 @@ mod machine_provider_tests {
         );
         assert!(resolve_machine_workspace(&workspaces, Some("/srv/cowboy")).is_err());
         assert!(resolve_machine_workspace(&workspaces, Some("unknown")).is_err());
+    }
+
+    #[test]
+    fn component_only_inventory_preserves_workspaces_until_an_explicit_reload() {
+        let workspace = |id: &str| crate::machine_protocol::MachineWorkspace {
+            id: id.to_owned(),
+            display_name: id.to_owned(),
+            canonical_path: format!("/srv/{id}"),
+        };
+        let mut workspaces = vec![workspace("old")];
+        let mut revision = Some("revision-old".to_owned());
+        apply_workspace_inventory(&mut workspaces, &mut revision, None, None);
+        assert_eq!(workspaces, vec![workspace("old")]);
+        assert_eq!(revision.as_deref(), Some("revision-old"));
+
+        apply_workspace_inventory(
+            &mut workspaces,
+            &mut revision,
+            Some(vec![workspace("new")]),
+            Some("revision-new".to_owned()),
+        );
+        assert_eq!(workspaces, vec![workspace("new")]);
+        assert_eq!(revision.as_deref(), Some("revision-new"));
     }
 }
 

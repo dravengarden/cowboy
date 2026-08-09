@@ -41,7 +41,7 @@ struct ControllerConfig {
     display_name: String,
     identity: MachineIdentity,
     runtime_socket: PathBuf,
-    workspaces: Vec<MachineWorkspace>,
+    workspaces: Arc<WorkspaceConfig>,
     components: Arc<ComponentStore>,
     zed_adapter_socket: Option<PathBuf>,
     code_adapter_socket: Option<PathBuf>,
@@ -49,6 +49,61 @@ struct ControllerConfig {
     capacity: MachineCapacity,
     local: bool,
     provider_usage: crate::provider_usage_spool::ProviderUsageSpool,
+}
+
+const DEFAULT_WORKSPACE_CONFIG: &str = "/etc/cowboy-machine/workspaces.json";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WorkspaceSnapshot {
+    revision: Option<String>,
+    workspaces: Vec<MachineWorkspace>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkspaceFile {
+    version: u16,
+    revision: String,
+    workspaces: Vec<String>,
+}
+
+struct WorkspaceConfig {
+    path: PathBuf,
+    fallback: Vec<String>,
+    updates: tokio::sync::watch::Sender<WorkspaceSnapshot>,
+}
+
+impl WorkspaceConfig {
+    fn new(path: PathBuf, fallback: Vec<String>) -> anyhow::Result<Self> {
+        let snapshot = load_workspace_snapshot(&path, &fallback)?;
+        let (updates, _) = tokio::sync::watch::channel(snapshot);
+        Ok(Self {
+            path,
+            fallback,
+            updates,
+        })
+    }
+
+    fn snapshot(&self) -> WorkspaceSnapshot {
+        self.updates.borrow().clone()
+    }
+
+    fn subscribe(&self) -> tokio::sync::watch::Receiver<WorkspaceSnapshot> {
+        self.updates.subscribe()
+    }
+
+    fn reload(&self) -> anyhow::Result<WorkspaceSnapshot> {
+        let snapshot = load_workspace_snapshot(&self.path, &self.fallback)?;
+        self.updates.send_if_modified(|current| {
+            if *current == snapshot {
+                false
+            } else {
+                current.clone_from(&snapshot);
+                true
+            }
+        });
+        Ok(snapshot)
+    }
 }
 
 // The Machine and controller multiplex runtime traffic, adapter responses, and
@@ -131,6 +186,14 @@ pub struct Args {
         value_delimiter = ','
     )]
     workspaces: Vec<String>,
+    /// Declarative workspace contract. When absent, `--workspace` remains the
+    /// compatibility fallback for non-Nix and older installations.
+    #[arg(
+        long,
+        env = "COWBOY_MACHINE_WORKSPACE_CONFIG",
+        default_value = DEFAULT_WORKSPACE_CONFIG
+    )]
+    workspace_config: PathBuf,
     /// Ed25519/OpenSSH public key allowed to sign managed component artifacts.
     #[arg(long, env = "COWBOY_MACHINE_ARTIFACT_PUBLIC_KEY")]
     artifact_public_key: Option<PathBuf>,
@@ -233,7 +296,10 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
     validate_controller_url(&controller_url)?;
     let identity = MachineIdentity::load_or_create(&args.state_dir)?;
     let display_name = args.display_name.unwrap_or_else(default_display_name);
-    let workspaces = parse_workspaces(&args.workspaces)?;
+    let workspaces = Arc::new(WorkspaceConfig::new(
+        args.workspace_config,
+        args.workspaces,
+    )?);
     let file_token = args
         .enrollment_token_file
         .as_ref()
@@ -262,7 +328,7 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
         display_name,
         identity,
         runtime_socket,
-        workspaces: workspaces.clone(),
+        workspaces: Arc::clone(&workspaces),
         components: Arc::clone(&components),
         zed_adapter_socket: zed_adapter_socket.clone(),
         code_adapter_socket: code_adapter_socket.clone(),
@@ -279,7 +345,7 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
     let code_adapter = supervise_code_adapter(
         Arc::clone(&components),
         code_adapter_socket,
-        workspaces.clone(),
+        Arc::clone(&workspaces),
     );
     let zed_adapter = supervise_zed_adapter(
         Arc::clone(&components),
@@ -510,22 +576,24 @@ fn selected_zed_pair(
 async fn supervise_code_adapter(
     components: Arc<ComponentStore>,
     socket: Option<PathBuf>,
-    workspaces: Vec<MachineWorkspace>,
+    workspaces: Arc<WorkspaceConfig>,
 ) -> anyhow::Result<()> {
     let Some(socket) = socket else {
         return std::future::pending().await;
     };
+    let mut workspace_updates = workspaces.subscribe();
     loop {
         let command = components.command_path("cowboy-code-adapter");
         let Ok(executable) = command.canonicalize() else {
             tokio::time::sleep(Duration::from_secs(2)).await;
             continue;
         };
+        let workspace_snapshot = workspaces.snapshot();
         let mut child =
             tokio::process::Command::new(&executable)
                 .arg("--socket")
                 .arg(&socket)
-                .args(workspaces.iter().flat_map(|workspace| {
+                .args(workspace_snapshot.workspaces.iter().flat_map(|workspace| {
                     ["--workspace".to_owned(), workspace.canonical_path.clone()]
                 }))
                 .kill_on_drop(true)
@@ -543,6 +611,12 @@ async fn supervise_code_adapter(
                         let _ = child.wait().await;
                         break;
                     }
+                }
+                changed = workspace_updates.changed() => {
+                    changed.context("workspace configuration channel closed")?;
+                    child.kill().await?;
+                    let _ = child.wait().await;
+                    break;
                 }
             }
         }
@@ -603,6 +677,7 @@ async fn controller_loop(config: ControllerConfig) -> anyhow::Result<()> {
 }
 
 async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> {
+    let workspace_snapshot = config.workspaces.reload()?;
     let mut endpoint =
         reqwest::Url::parse(&config.controller_url).context("parsing controller URL")?;
     endpoint
@@ -648,7 +723,8 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
         challenge_signature: None,
         components: collect_inventory(&config.components, config.zed_adapter_socket.as_deref())
             .await,
-        workspaces: config.workspaces.clone(),
+        workspaces: workspace_snapshot.workspaces,
+        workspace_revision: workspace_snapshot.revision,
         capacity: config.capacity.clone(),
     };
     let proof =
@@ -727,9 +803,10 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                             .context("parsing Machine controller frame")?;
                         match frame {
                             MachineFrame::Runtime { frame } => {
+                                let workspace_snapshot = config.workspaces.snapshot();
                                 if let Some(rejection) = reject_untrusted_workspace(
                                     &frame,
-                                    &config.workspaces,
+                                    &workspace_snapshot.workspaces,
                                     &config.worktree_root,
                                 ) {
                                     send_frame(&mut socket, &MachineFrame::Runtime { frame: rejection }).await?;
@@ -748,7 +825,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                                     zed_adapter_socket: config.zed_adapter_socket.clone(),
                                     code_adapter_socket: config.code_adapter_socket.clone(),
                                     worktree_root: config.worktree_root.clone(),
-                                    workspaces: config.workspaces.clone(),
+                                    workspaces: Arc::clone(&config.workspaces),
                                     login_sessions: Arc::clone(&login_sessions),
                                     runtime_commands: runtime_command_tx.clone(),
                                 });
@@ -1416,7 +1493,7 @@ struct MachineCommandContext {
     zed_adapter_socket: Option<PathBuf>,
     code_adapter_socket: Option<PathBuf>,
     worktree_root: PathBuf,
-    workspaces: Vec<MachineWorkspace>,
+    workspaces: Arc<WorkspaceConfig>,
     login_sessions: LoginSessions,
     runtime_commands: tokio::sync::mpsc::UnboundedSender<crate::runtime_wire::Frame>,
 }
@@ -1437,14 +1514,21 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
             tokio::spawn(async move {
                 let components =
                     collect_inventory(&components, zed_adapter_socket.as_deref()).await;
-                let _ = events.send(MachineEvent::Inventory {
-                    components,
-                    observed_at_ms: unix_ms(),
-                });
+                let workspace_result = workspaces.reload();
+                if let Ok(snapshot) = &workspace_result {
+                    let _ = events.send(MachineEvent::Inventory {
+                        components,
+                        workspaces: Some(snapshot.workspaces.clone()),
+                        workspace_revision: snapshot.revision.clone(),
+                        observed_at_ms: unix_ms(),
+                    });
+                }
                 let _ = events.send(MachineEvent::CommandResult {
                     request_id,
-                    accepted: true,
-                    detail: None,
+                    accepted: workspace_result.is_ok(),
+                    detail: workspace_result
+                        .err()
+                        .map(|error| format!("workspace configuration reload failed: {error:#}")),
                 });
             });
         }
@@ -1489,7 +1573,7 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
                     zed_adapter_socket,
                     code_adapter_socket,
                     worktree_root,
-                    workspaces,
+                    workspaces: workspaces.snapshot().workspaces,
                     events,
                 },
             ));
@@ -1573,6 +1657,8 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
                 }
                 let _ = events.send(MachineEvent::Inventory {
                     components: inventory,
+                    workspaces: None,
+                    workspace_revision: None,
                     observed_at_ms: unix_ms(),
                 });
                 let _ = events.send(MachineEvent::CommandResult {
@@ -1681,7 +1767,7 @@ async fn run_adapter_request(
             }
             _ => bail!("unknown Machine adapter {adapter:?}"),
         };
-        if adapter == "zed" {
+        if matches!(adapter.as_str(), "zed" | "code") {
             validate_adapter_workspace(&payload, &workspaces, &worktree_root)?;
         }
         let stream = tokio::time::timeout(Duration::from_secs(2), UnixStream::connect(&socket))
@@ -1790,6 +1876,8 @@ async fn reconcile_components(
     vec![
         MachineEvent::Inventory {
             components: inventory,
+            workspaces: None,
+            workspace_revision: None,
             observed_at_ms: unix_ms(),
         },
         MachineEvent::CommandResult {
@@ -2011,6 +2099,8 @@ async fn run_login(
         let inventory = collect_inventory(&components, zed_adapter_socket.as_deref()).await;
         let _ = events.send(MachineEvent::Inventory {
             components: inventory,
+            workspaces: None,
+            workspace_revision: None,
             observed_at_ms: unix_ms(),
         });
     }
@@ -2068,6 +2158,8 @@ async fn run_gemini_api_key_login(
         let inventory = collect_inventory(&components, zed_adapter_socket.as_deref()).await;
         let _ = events.send(MachineEvent::Inventory {
             components: inventory,
+            workspaces: None,
+            workspace_revision: None,
             observed_at_ms: unix_ms(),
         });
     }
@@ -2161,6 +2253,42 @@ fn current_platform() -> Platform {
     } else {
         Platform::Linux
     }
+}
+
+fn load_workspace_snapshot(path: &Path, fallback: &[String]) -> anyhow::Result<WorkspaceSnapshot> {
+    let file = match std::fs::read(path) {
+        Ok(contents) => Some(
+            serde_json::from_slice::<WorkspaceFile>(&contents)
+                .with_context(|| format!("parsing workspace configuration {}", path.display()))?,
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("reading workspace configuration {}", path.display()));
+        }
+    };
+    let (revision, values) = if let Some(file) = file {
+        if file.version != 1 {
+            bail!(
+                "workspace configuration {} uses unsupported version {}",
+                path.display(),
+                file.version
+            );
+        }
+        if file.revision.trim().is_empty() {
+            bail!(
+                "workspace configuration {} has an empty revision",
+                path.display()
+            );
+        }
+        (Some(file.revision), file.workspaces)
+    } else {
+        (None, fallback.to_vec())
+    };
+    Ok(WorkspaceSnapshot {
+        revision,
+        workspaces: parse_workspaces(&values)?,
+    })
 }
 
 fn parse_workspaces(values: &[String]) -> anyhow::Result<Vec<MachineWorkspace>> {
@@ -2290,10 +2418,11 @@ mod tests {
     use clap::Parser as _;
 
     use super::{
-        Args, bootstrap_acp_inventory, claude_runtime_enabled, disabled_provider_slots_from,
-        gemini_auth_from_metadata, gemini_env_value_from, managed_provider_environment,
-        npm_package_for_component, npm_script_shell_with, npm_update_is_confirmed_by_inventory,
-        parse_workspaces, provider_for_component, reject_untrusted_workspace, selected_zed_pair,
+        Args, WorkspaceConfig, bootstrap_acp_inventory, claude_runtime_enabled,
+        disabled_provider_slots_from, gemini_auth_from_metadata, gemini_env_value_from,
+        load_workspace_snapshot, managed_provider_environment, npm_package_for_component,
+        npm_script_shell_with, npm_update_is_confirmed_by_inventory, parse_workspaces,
+        provider_for_component, reject_untrusted_workspace, selected_zed_pair,
         send_frame_with_timeout, validate_controller_url, workspace_path_allowed,
     };
     use crate::machine_components::ComponentStore;
@@ -2726,6 +2855,69 @@ mod tests {
             std::fs::remove_dir_all(outside).expect("cleanup outside workspace");
         }
 
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn missing_workspace_file_uses_cli_compatibility_values() {
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-machine-workspace-fallback-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("workspace");
+        let snapshot = load_workspace_snapshot(
+            &root.join("missing.json"),
+            &[format!("fallback={}", root.display())],
+        )
+        .expect("fallback workspace");
+        assert_eq!(snapshot.revision, None);
+        assert_eq!(snapshot.workspaces[0].id, "fallback");
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn declarative_workspace_config_reloads_atomically() {
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-machine-workspace-reload-{}",
+            std::process::id()
+        ));
+        let first = root.join("first");
+        let second = root.join("second");
+        std::fs::create_dir_all(&first).expect("first workspace");
+        std::fs::create_dir_all(&second).expect("second workspace");
+        let path = root.join("workspaces.json");
+        let write_config = |version: u16, revision: &str, workspace: &std::path::Path| {
+            std::fs::write(
+                &path,
+                serde_json::to_vec(&serde_json::json!({
+                    "version": version,
+                    "revision": revision,
+                    "workspaces": [format!("project={}", workspace.display())]
+                }))
+                .expect("serialize workspace config"),
+            )
+            .expect("write workspace config");
+        };
+        write_config(1, "revision-one", &first);
+        let config = WorkspaceConfig::new(path.clone(), Vec::new()).expect("initial config");
+        let updates = config.subscribe();
+        assert_eq!(
+            config.snapshot().workspaces[0].canonical_path,
+            first.canonicalize().unwrap().display().to_string()
+        );
+
+        write_config(1, "revision-two", &second);
+        let reloaded = config.reload().expect("reload config");
+        assert_eq!(reloaded.revision.as_deref(), Some("revision-two"));
+        assert_eq!(
+            reloaded.workspaces[0].canonical_path,
+            second.canonicalize().unwrap().display().to_string()
+        );
+        assert!(updates.has_changed().expect("workspace update channel"));
+
+        write_config(2, "unsupported", &first);
+        assert!(config.reload().is_err());
+        assert_eq!(config.snapshot().revision.as_deref(), Some("revision-two"));
         std::fs::remove_dir_all(root).expect("cleanup");
     }
 }
