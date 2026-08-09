@@ -15,6 +15,12 @@ const textareaSource = await Deno.readTextFile(
 const appSource = await Deno.readTextFile(
   new URL("../App.tsx", import.meta.url),
 );
+const fullscreenComposerSource = await Deno.readTextFile(
+  new URL("../FullscreenComposer.tsx", import.meta.url),
+);
+const accessoryDockSource = await Deno.readTextFile(
+  new URL("../MobileComposerAccessoryDock.tsx", import.meta.url),
+);
 
 Deno.test("mobile composer promotion requires a visible keyboard and real editor focus", () => {
   assertEquals(
@@ -52,6 +58,19 @@ Deno.test("mobile settings commits touch taps when Safari drops synthetic click"
   assertEquals(mobileSettings.includes("settingsTap.onPointerUp"), true);
   assertEquals(mobileSettings.includes("settingsTap.onPointerCancel"), true);
   assertEquals(mobileSettings.includes("settingsTap.onClick"), true);
+});
+
+Deno.test("Machine npm updates survive a swallowed Safari click", () => {
+  const updateButtonStart = appSource.indexOf("function MachineNpmUpdateButton");
+  const updateButtonEnd = appSource.indexOf("function MachinesContent", updateButtonStart);
+  const updateButton = appSource.slice(updateButtonStart, updateButtonEnd);
+
+  assertEquals(updateButtonStart >= 0 && updateButtonEnd > updateButtonStart, true);
+  assertEquals(
+    updateButton.includes("useReliableTouchTap<HTMLButtonElement>(onUpdate)"),
+    true,
+  );
+  assertEquals(updateButton.includes("{...updateTap}"), true);
 });
 
 Deno.test("mobile column and pending ownership cannot fill the viewport without a keyboard", () => {
@@ -186,6 +205,19 @@ Deno.test("fullscreen pending edit distinguishes collapse from keyboard dismissa
   assertEquals(
     composerSource.includes(
       "submitIcon={touchInput ? <CloseFullscreen /> : <Check />}",
+    ),
+    true,
+  );
+});
+
+Deno.test("fullscreen collapse forms a right-edge group with the primary action", () => {
+  assertEquals(
+    fullscreenComposerSource.includes("primaryCompanion={showCollapse"),
+    true,
+  );
+  assertEquals(
+    accessoryDockSource.includes(
+      "<Box sx={{ flex: 1, minWidth: 8 }} />\n        {primaryCompanion}\n        <Tooltip title={primaryLabel}>",
     ),
     true,
   );

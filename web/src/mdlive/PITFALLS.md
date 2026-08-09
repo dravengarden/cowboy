@@ -734,9 +734,12 @@ here says otherwise.
     Every pointer-operated accessory button prevents its pointer-down default so
     MUI cannot take focus from the editor before click; click semantics and
     keyboard accessibility remain intact. Fullscreen Collapse is the one action
-    that replaces the focused editor: synchronously mount the compact editor and
-    transfer focus within the originating gesture. Never replace either rule
-    with a timer, which runs after UIKit has ended the keyboard transaction.
+    that replaces the focused editor. Keep it in the right-edge primary group,
+    immediately before Send/Queue, rather than stranded at the end of the left
+    utility group by the dock's flexible spacer. Synchronously mount the compact
+    editor and transfer focus within the originating gesture. Never replace
+    either rule with a timer, which runs after UIKit has ended the keyboard
+    transaction.
 
 34. **Mobile scrollback batches are measured in visible rows, not cursor
     pages.** History cursors are byte bounded, so a tool-heavy page may render

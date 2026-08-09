@@ -16,6 +16,14 @@ export interface DeepSeekCacheStats {
   coverageRate: number | undefined;
 }
 
+export interface DeepSeekCacheProtectionStats {
+  attempts: number;
+  hits: number;
+  verifiedOutcomes: number;
+  verifiedHitRate: number | undefined;
+  protectedHitTokens: number;
+}
+
 function finite(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
     ? value
@@ -51,6 +59,26 @@ export function deepseekCacheStats(
     coverageRate: eligibleRequests > 0
       ? measuredRequests * 100 / eligibleRequests
       : undefined,
+  };
+}
+
+/** Attempt-level cache-protection outcomes, separate from agent traffic. */
+export function deepseekCacheProtectionStats(
+  totals: Record<string, unknown> | undefined,
+): DeepSeekCacheProtectionStats {
+  const attempts = finite(totals?.cacheKeepaliveRequests);
+  const hits = finite(totals?.cacheKeepaliveHits);
+  const verifiedOutcomes = hits +
+    finite(totals?.cacheKeepaliveMisses) +
+    finite(totals?.cacheKeepalivePartials);
+  return {
+    attempts,
+    hits,
+    verifiedOutcomes,
+    verifiedHitRate: verifiedOutcomes > 0
+      ? hits * 100 / verifiedOutcomes
+      : undefined,
+    protectedHitTokens: finite(totals?.cacheKeepaliveHitTokens),
   };
 }
 

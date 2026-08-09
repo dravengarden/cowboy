@@ -358,6 +358,7 @@ export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Ele
       <Sheet
         open={filterOpen}
         onClose={() => setFilterOpen(false)}
+        portal
         title="Filter diagnostic logs"
         desktopMaxWidth={560}
         mobileDismiss="none"

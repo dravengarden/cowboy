@@ -75,8 +75,19 @@ export const PlanDock = memo(function PlanDock({
           : mobileComposerPanelFrameSx),
         mb: desktop ? 1 : 0,
         bgcolor: "background.default",
+        // The progress track owns the panel's bottom edge. Clip it to the same
+        // rounded silhouette instead of letting its square layer read as a
+        // shelf below the card.
+        overflow: "hidden",
         ...(desktop && {
           transition: "background-color 120ms ease, border-color 120ms ease",
+          // Desktop workspace focus already recolors the Plan surface's 1px
+          // boundary. A second 3px outer ring visually merged with the 4px
+          // progress track into a thick, offset bar along the bottom edge.
+          "&:focus-within": {
+            borderColor: "primary.main",
+            boxShadow: "none",
+          },
         }),
       }}
     >

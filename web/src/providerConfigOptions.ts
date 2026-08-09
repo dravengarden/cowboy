@@ -38,10 +38,7 @@ function deepseekContextOption(
       const window = DEEPSEEK_CONTEXT_WINDOWS[value];
       const compaction = compactionPoints?.[value];
       if (!window || !compaction) return candidate;
-      const suffix = provider === "claude-deepseek" && value === "830k" ||
-          provider === "codex-deepseek" && value === "680k"
-        ? " · recommended"
-        : provider === "codex-deepseek" && value === "830k"
+      const suffix = provider === "codex-deepseek" && value === "830k"
         ? " · large"
         : "";
       return {
@@ -50,6 +47,12 @@ function deepseekContextOption(
       };
     }),
   };
+}
+
+function withoutRecommendation(name: string): string {
+  return name
+    .replace(/\s*[·(]\s*recommended\)?$/iu, "")
+    .trim();
 }
 
 export function currentConfigOptionName(
@@ -75,8 +78,7 @@ export function providerConfigOptions(
     if (option.id === "deepseek_context") {
       return deepseekContextOption(provider, option);
     }
-    if (provider !== "claude-deepseek") return option;
-    if (option.id === "model") {
+    if (provider === "claude-deepseek" && option.id === "model") {
       const modelFor = new Map(
         option.options.map((candidate) => [
           String(candidate.value),
@@ -84,9 +86,6 @@ export function providerConfigOptions(
             ? "deepseek-v4-flash"
             : candidate.name.replace(/\[1m\]$/, ""),
         ]),
-      );
-      const defaultCandidate = option.options.find((candidate) =>
-        candidate.value === "default"
       );
       const representative = new Map<string, string | boolean>();
       for (const model of ["deepseek-v4-flash", "deepseek-v4-pro"]) {
@@ -103,42 +102,61 @@ export function providerConfigOptions(
       const currentModel = modelFor.get(String(option.currentValue));
       return {
         ...option,
-        currentValue: option.currentValue === "default"
-          ? "default"
-          : currentModel
+        currentValue: currentModel
           ? representative.get(currentModel) ?? option.currentValue
           : option.currentValue,
-        options: [
-          ...(defaultCandidate
-            ? [{ ...defaultCandidate, name: "Default · Flash (recommended)" }]
-            : []),
-          ...["deepseek-v4-flash", "deepseek-v4-pro"].flatMap((model) => {
-            const value = representative.get(model);
-            const candidate = option.options.find((item) =>
-              item.value === value
-            );
-            return candidate ? [candidate] : [];
-          }),
-        ],
+        options: ["deepseek-v4-flash", "deepseek-v4-pro"].flatMap((model) => {
+          const value = representative.get(model);
+          const candidate = option.options.find((item) => item.value === value);
+          return candidate ? [candidate] : [];
+        }),
+      };
+    }
+    if (provider === "codex-deepseek" && option.id === "model") {
+      const candidates = option.options.filter((candidate) =>
+        String(candidate.value) !== "default"
+      );
+      const flash = candidates.find((candidate) =>
+        /deepseek-v4-flash/iu.test(
+          `${String(candidate.value)} ${candidate.name}`,
+        )
+      );
+      return {
+        ...option,
+        currentValue: String(option.currentValue) === "default" && flash
+          ? flash.value
+          : option.currentValue,
+        options: candidates.map((candidate) => ({
+          ...candidate,
+          name: withoutRecommendation(candidate.name),
+        })),
       };
     }
     if (option.id === "effort" || option.id === "reasoning_effort") {
+      const currentIsAutomatic = String(option.currentValue) === "default";
       return {
         ...option,
         name: "Reasoning effort",
-        description:
-          "DeepSeek automatic, high, or maximum reasoning for this session",
+        description: "DeepSeek reasoning effort for this session",
         options: option.options
           .filter((candidate) =>
-            ["default", "high", "max"].includes(String(candidate.value))
+            (provider !== "claude-deepseek" ||
+              ["default", "high", "max"].includes(String(candidate.value))) &&
+            (String(candidate.value) !== "default" || currentIsAutomatic)
           )
           .map((candidate) =>
             candidate.value === "default"
-              ? { ...candidate, name: "Automatic (recommended)" }
-              : candidate
+              ? { ...candidate, name: "Automatic" }
+              : { ...candidate, name: withoutRecommendation(candidate.name) }
           ),
       };
     }
-    return option;
+    return {
+      ...option,
+      options: option.options.map((candidate) => ({
+        ...candidate,
+        name: withoutRecommendation(candidate.name),
+      })),
+    };
   });
 }

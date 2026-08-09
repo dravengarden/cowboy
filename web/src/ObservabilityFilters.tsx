@@ -197,6 +197,7 @@ export function TimeRangeButton({
       <Sheet
         open={open}
         onClose={() => setOpen(false)}
+        portal
         title="Time range"
         desktopMaxWidth={520}
         mobileDismiss="none"

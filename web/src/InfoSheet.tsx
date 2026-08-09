@@ -28,6 +28,7 @@ import { NetworkButton, NetworkIconButton } from "./NetworkActionFeedback";
 import {
   DEEPSEEK_CACHE_MIN_HIT_LABEL,
   deepseekAvailableAgents,
+  deepseekCacheProtectionStats,
   deepseekCacheStats,
   deepseekCostStats,
   deepseekVisibleAgents,
@@ -121,6 +122,21 @@ function formatEstimatedCny(
   const partial = cost.priceCoverageRate === undefined ||
     cost.priceCoverageRate < 99.999;
   return `${partial ? "≥" : ""}${formatCny(value)}`;
+}
+
+function formatProtectionSpend(
+  cost: DeepSeekCostStats | undefined,
+  attempts: number,
+): string {
+  if (!cost) return "—";
+  if (attempts === 0) return "CN¥0.0000";
+  if (cost.totalTokens === 0) return "—";
+  const partial = cost.priceCoverageRate === undefined ||
+    cost.priceCoverageRate < 99.999;
+  const value = cost.estimatedCny < 1
+    ? `CN¥${cost.estimatedCny.toFixed(4)}`
+    : formatCny(cost.estimatedCny);
+  return `${partial ? "≥" : ""}${value}`;
 }
 
 function fullyPriced(cost: DeepSeekCostStats | undefined): boolean {
@@ -371,7 +387,6 @@ function DeepSeekDetails(
   const blockingErrors = num(summary?.blockingErrors);
   const transientErrors = num(summary?.transientErrors);
   const cacheKeepaliveRequests = num(summary?.cacheKeepaliveRequests) ?? 0;
-  const cacheKeepaliveHits = num(summary?.cacheKeepaliveHits) ?? 0;
   const cacheKeepaliveMisses = num(summary?.cacheKeepaliveMisses) ?? 0;
   const cacheKeepalivePartials = num(summary?.cacheKeepalivePartials) ?? 0;
   const cacheKeepaliveRetryableErrors =
@@ -379,6 +394,7 @@ function DeepSeekDetails(
   const cacheKeepaliveTerminalErrors =
     num(summary?.cacheKeepaliveTerminalErrors) ?? 0;
   const cacheKeepalivePreemptions = num(summary?.cacheKeepalivePreemptions) ?? 0;
+  const cacheProtection = deepseekCacheProtectionStats(summary);
   const cacheKeepaliveIntervalObservations =
     num(summary?.cacheKeepaliveIntervalObservations) ?? 0;
   const cacheKeepaliveSourceAgeObservations =
@@ -486,6 +502,7 @@ function DeepSeekDetails(
       <Sheet
         open={filterOpen}
         onClose={() => setFilterOpen(false)}
+        portal
         title="Filter DeepSeek usage"
         desktopMaxWidth={520}
         mobileDismiss="none"
@@ -597,6 +614,56 @@ function DeepSeekDetails(
                     Auto · verified ≥{DEEPSEEK_CACHE_MIN_HIT_LABEL}
                   </Typography>
                 </Stack>
+                <Box
+                  sx={{
+                    display: "grid",
+                    gridTemplateColumns: { xs: "repeat(2, minmax(0, 1fr))", sm: "repeat(4, minmax(0, 1fr))" },
+                    gap: 1,
+                  }}
+                >
+                  <Box>
+                    <Tooltip title="Billed cost of background cache-protection requests in this time window. It is reported separately and is not included in agent spend.">
+                      <Typography variant="caption" color="text.secondary" sx={{ cursor: "help", textDecoration: "underline dotted" }}>
+                        Protection spend
+                      </Typography>
+                    </Tooltip>
+                    <Typography variant="subtitle2" fontWeight={700}>
+                      {formatProtectionSpend(
+                        cacheProtectionCost,
+                        cacheProtection.attempts,
+                      )}
+                    </Typography>
+                  </Box>
+                  <Box>
+                    <Typography variant="caption" color="text.secondary">
+                      Attempts
+                    </Typography>
+                    <Typography variant="subtitle2" fontWeight={700}>
+                      {formatTokens(cacheProtection.attempts)}
+                    </Typography>
+                  </Box>
+                  <Box>
+                    <Tooltip title="Verified hits divided by outcomes where DeepSeek reported a hit, miss, or partial hit. Network errors and agent preemption are excluded from this rate.">
+                      <Typography variant="caption" color="text.secondary" sx={{ cursor: "help", textDecoration: "underline dotted" }}>
+                        Verified hit rate
+                      </Typography>
+                    </Tooltip>
+                    <Typography variant="subtitle2" fontWeight={700}>
+                      {percentLabel(cacheProtection.verifiedHitRate)}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {formatTokens(cacheProtection.hits)} / {formatTokens(cacheProtection.verifiedOutcomes)} outcomes
+                    </Typography>
+                  </Box>
+                  <Box>
+                    <Typography variant="caption" color="text.secondary">
+                      Protected tokens
+                    </Typography>
+                    <Typography variant="subtitle2" fontWeight={700}>
+                      {formatTokens(cacheProtection.protectedHitTokens)}
+                    </Typography>
+                  </Box>
+                </Box>
                 {cacheKeepaliveRequests > 0
                   ? (
                     <>
@@ -607,8 +674,6 @@ function DeepSeekDetails(
                           gap: 1,
                         }}
                       >
-                        <InfoRow k="Attempts" v={formatTokens(cacheKeepaliveRequests)} />
-                        <InfoRow k="Verified hits" v={formatTokens(cacheKeepaliveHits)} />
                         <InfoRow
                           k="Miss / partial"
                           v={`${formatTokens(cacheKeepaliveMisses)} / ${formatTokens(cacheKeepalivePartials)}`}
@@ -618,11 +683,6 @@ function DeepSeekDetails(
                           v={`${formatTokens(cacheKeepaliveRetryableErrors)} / ${formatTokens(cacheKeepaliveTerminalErrors)}`}
                         />
                         <InfoRow k="Preempted by agents" v={formatTokens(cacheKeepalivePreemptions)} />
-                        <InfoRow
-                          k="Protected hit tokens"
-                          v={formatTokens(num(summary?.cacheKeepaliveHitTokens))}
-                        />
-                        <InfoRow k="Keepalive spend" v={formatEstimatedCny(cacheProtectionCost)} />
                         <InfoRow
                           k="Average source age"
                           v={averageKeepaliveSourceAgeMs === undefined
@@ -640,7 +700,7 @@ function DeepSeekDetails(
                   )
                   : (
                     <Typography variant="caption" color="text.secondary">
-                      No keepalive attempts in this window. Eligible snapshots start after a verified ≥90% cache hit with at least {DEEPSEEK_CACHE_MIN_HIT_LABEL} hit tokens.
+                      No keepalive attempts in this window. Eligible snapshots start after a verified ≥90% cache hit with at least {DEEPSEEK_CACHE_MIN_HIT_LABEL} hit tokens. Protection spend is separate from agent spend.
                     </Typography>
                   )}
               </Stack>
