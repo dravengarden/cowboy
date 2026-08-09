@@ -27,7 +27,7 @@ material, operational guidance, research evidence, and historical notes.
 - [`architecture/06-server-api.md`](architecture/06-server-api.md) — 06 Server Api
 - [`architecture/07-confirm-inference.md`](architecture/07-confirm-inference.md) — 07 Confirm Inference
 - [`architecture/08-memory.md`](architecture/08-memory.md) — 08 Memory
-- [`architecture/09-frontend.md`](architecture/09-frontend.md) — 09 Frontend, including the global type and icon scaling contract
+- [`architecture/09-frontend.md`](architecture/09-frontend.md) — 09 Frontend, including global scaling and native iOS scroll elasticity contracts
 - [`architecture/10-deploy-build.md`](architecture/10-deploy-build.md) — 10 Deploy Build
 - [`architecture/11-operations.md`](architecture/11-operations.md) — 11 Operations
 - [`architecture/12-rolling-updates.md`](architecture/12-rolling-updates.md) — 12 Rolling Updates

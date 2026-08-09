@@ -178,6 +178,14 @@ and routes to native commands where the PWA can't reach (lock-screen, native fil
 picker). `AppErrorBoundary` + `ConnectionBanner` degrade gracefully when the WS
 drops.
 
+The iOS shell restores `WKWebView.scrollView.bounces` on the next main-queue
+turn after WebView construction because Wry 0.55.1 disables it after the
+initializer returns. Keep `alwaysBounceVertical` disabled: overflowing web
+scrollers should retain native edge elasticity, while a document that already
+fits the viewport must not make the whole application surface draggable. This
+is a native-shell contract and requires a SideStore release plus physical-device
+acceptance when changed.
+
 ## A house rule worth knowing
 
 `web/src/App.tsx` is a **4-space-indent outlier** (the rest of `src/` is 2-space)
