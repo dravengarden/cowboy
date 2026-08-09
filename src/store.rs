@@ -2003,7 +2003,54 @@ impl Store {
               FROM provider_usage_events event
               WHERE event.occurred_at >= to_timestamp($1::double precision / 1000)
                 AND event.occurred_at <= to_timestamp($2::double precision / 1000)
+                AND event.request_purpose = 'interactive'
                 AND event.status >= 400
+            ), cache_keepalive_logs AS (
+              SELECT 'keepalive:' || event.machine_id || ':' || event.producer_id || ':' ||
+                  event.sequence::text AS id,
+                (extract(epoch FROM event.occurred_at) * 1000)::bigint AS occurred_at_ms,
+                'cache_anomaly'::text AS kind,
+                CASE
+                  WHEN event.cache_keepalive_outcome = 'terminal_error'
+                    AND event.status IN (401, 402, 403) THEN 'critical'
+                  WHEN event.cache_keepalive_outcome IN
+                    ('miss', 'partial', 'retryable_error', 'terminal_error') THEN 'warning'
+                  ELSE 'info'
+                END::text AS severity,
+                CASE event.cache_keepalive_outcome
+                  WHEN 'hit' THEN 'succeeded'
+                  WHEN 'preempted' THEN 'recovered'
+                  WHEN 'retryable_error' THEN 'retrying'
+                  ELSE 'failed'
+                END::text AS state,
+                CASE event.cache_keepalive_outcome
+                  WHEN 'hit' THEN 'DeepSeek cache protected'
+                  WHEN 'miss' THEN 'DeepSeek keepalive cache miss'
+                  WHEN 'partial' THEN 'DeepSeek keepalive partial hit'
+                  WHEN 'retryable_error' THEN 'DeepSeek keepalive will retry'
+                  WHEN 'terminal_error' THEN 'DeepSeek keepalive stopped'
+                  ELSE 'DeepSeek keepalive preempted'
+                END::text AS title,
+                CASE event.cache_keepalive_outcome
+                  WHEN 'hit' THEN format('Protected %s cached tokens',
+                    coalesce(event.cache_hit_tokens, 0))
+                  WHEN 'miss' THEN format('Cache expired after %s ms; protection stopped',
+                    coalesce(event.cache_keepalive_source_age_ms, 0))
+                  WHEN 'partial' THEN format('Cache hit fell below 90%% after %s ms; protection stopped',
+                    coalesce(event.cache_keepalive_source_age_ms, 0))
+                  WHEN 'retryable_error' THEN format('Retryable HTTP %s; one bounded retry is allowed',
+                    event.status)
+                  WHEN 'terminal_error' THEN format('HTTP %s made this snapshot ineligible for further keepalives',
+                    event.status)
+                  ELSE 'A real agent request preempted the background keepalive'
+                END::text AS summary,
+                event.session_fingerprint AS session_ref, event.provider,
+                event.agent, nullif(coalesce(event.resolved_model, event.model), '') AS model,
+                'cache_keepalive_' || event.cache_keepalive_outcome AS classification
+              FROM provider_usage_events event
+              WHERE event.occurred_at >= to_timestamp($1::double precision / 1000)
+                AND event.occurred_at <= to_timestamp($2::double precision / 1000)
+                AND event.request_purpose = 'cache_keepalive'
             ), lineage AS (
               SELECT event.*,
                 lag(event.status) OVER session_window AS previous_status,
@@ -2029,6 +2076,7 @@ impl Store {
                   to_timestamp($1::double precision / 1000) - interval '30 minutes'
                 AND event.occurred_at <= to_timestamp($2::double precision / 1000)
                 AND event.schema_version >= 3
+                AND event.request_purpose = 'interactive'
                 AND event.session_fingerprint IS NOT NULL
                 AND event.session_attribution <> 'prefix_root'
                 AND event.status < 400
@@ -2073,6 +2121,7 @@ impl Store {
                       AND failed.account_fingerprint = lineage.account_fingerprint
                       AND failed.agent = lineage.agent
                       AND failed.session_fingerprint IS NOT DISTINCT FROM lineage.session_fingerprint
+                      AND failed.request_purpose = 'interactive'
                       AND (failed.occurred_at, failed.sequence) >
                         (lineage.previous_occurred_at, lineage.previous_sequence)
                       AND (failed.occurred_at, failed.sequence) <
@@ -2152,6 +2201,7 @@ impl Store {
             ), logs AS (
               SELECT * FROM runtime_logs
               UNION ALL SELECT * FROM provider_error_logs
+              UNION ALL SELECT * FROM cache_keepalive_logs
               UNION ALL SELECT * FROM cache_logs
               UNION ALL SELECT * FROM automation_logs
             )
@@ -2342,6 +2392,8 @@ impl Store {
             ("provider_error", "provider:")
         } else if id.starts_with("cache:") {
             ("cache_anomaly", "cache:")
+        } else if id.starts_with("keepalive:") {
+            ("cache_keepalive", "keepalive:")
         } else {
             return Ok(None);
         };
@@ -2362,6 +2414,7 @@ impl Store {
                     AND candidate.agent = target.agent
                     AND candidate.session_fingerprint IS NOT DISTINCT FROM target.session_fingerprint
                     AND candidate.schema_version >= 3
+                    AND candidate.request_purpose = 'interactive'
                     AND candidate.session_attribution <> 'prefix_root'
                     AND candidate.status < 400
                     AND candidate.cache_observation IN ('explicit', 'derived')
@@ -2387,6 +2440,7 @@ impl Store {
                           AND failed.account_fingerprint = target.account_fingerprint
                           AND failed.agent = target.agent
                           AND failed.session_fingerprint IS NOT DISTINCT FROM target.session_fingerprint
+                          AND failed.request_purpose = 'interactive'
                           AND (failed.occurred_at, failed.sequence) >
                             (previous.occurred_at, previous.sequence)
                           AND (failed.occurred_at, failed.sequence) <
@@ -2408,6 +2462,119 @@ impl Store {
         let current = evidence.get("current").cloned().unwrap_or_default();
         let previous = evidence.get("previous").cloned().unwrap_or_default();
         let gap_ms = json_i64(&evidence, "gap_ms");
+        if kind == "cache_keepalive" {
+            if json_scalar(&current, "request_purpose").as_deref() != Some("cache_keepalive") {
+                return Ok(None);
+            }
+            let outcome = json_scalar(&current, "cache_keepalive_outcome")
+                .unwrap_or_else(|| "unknown".to_owned());
+            let status = json_scalar(&current, "status").unwrap_or_else(|| "unknown".to_owned());
+            let title = match outcome.as_str() {
+                "hit" => "DeepSeek cache protected",
+                "miss" => "DeepSeek keepalive cache miss",
+                "partial" => "DeepSeek keepalive partial hit",
+                "retryable_error" => "DeepSeek keepalive will retry",
+                "terminal_error" => "DeepSeek keepalive stopped",
+                "preempted" => "DeepSeek keepalive preempted",
+                _ => "DeepSeek keepalive observation",
+            }
+            .to_owned();
+            let summary = match outcome.as_str() {
+                "hit" => format!(
+                    "Protected {} cached tokens",
+                    json_scalar(&current, "cache_hit_tokens")
+                        .unwrap_or_else(|| "0".to_owned())
+                ),
+                "miss" => "The cached prefix expired; automatic protection stopped".to_owned(),
+                "partial" => {
+                    "The cached prefix fell below the 90% hit threshold; automatic protection stopped"
+                        .to_owned()
+                }
+                "retryable_error" => {
+                    format!("Retryable HTTP {status}; one bounded retry is allowed")
+                }
+                "terminal_error" => {
+                    format!("HTTP {status} made this snapshot ineligible for further keepalives")
+                }
+                "preempted" => {
+                    "A real agent request preempted the background keepalive".to_owned()
+                }
+                _ => "Unknown cache-protection outcome".to_owned(),
+            };
+            let mut identity = vec![
+                diagnostic_field("Log ID", id, true),
+                diagnostic_field("Machine ID", machine_id, true),
+                diagnostic_field("Producer ID", producer_id, true),
+                diagnostic_field("Sequence", sequence.to_string(), true),
+            ];
+            for (label, key, copyable) in [
+                ("Provider", "provider", false),
+                ("Agent", "agent", false),
+                ("Model", "model", false),
+                ("Resolved model", "resolved_model", false),
+                ("Session fingerprint", "session_fingerprint", true),
+                ("Account fingerprint", "account_fingerprint", true),
+            ] {
+                optional_diagnostic_field(
+                    &mut identity,
+                    label,
+                    json_scalar(&current, key),
+                    copyable,
+                );
+            }
+            let mut protection = Vec::new();
+            for (label, key, copyable) in [
+                ("Outcome", "cache_keepalive_outcome", false),
+                ("Algorithm", "cache_keepalive_algorithm", false),
+                ("Attempt", "cache_keepalive_attempt", false),
+                (
+                    "Scheduled interval ms",
+                    "cache_keepalive_interval_ms",
+                    false,
+                ),
+                ("Source age ms", "cache_keepalive_source_age_ms", false),
+                ("HTTP status", "status", false),
+                ("Duration ms", "duration_ms", false),
+                ("Input tokens", "input_tokens", false),
+                ("Output tokens", "output_tokens", false),
+                ("Cache hit tokens", "cache_hit_tokens", false),
+                ("Cache miss tokens", "cache_miss_tokens", false),
+                (
+                    "Source request prefix",
+                    "source_request_prefix_fingerprint",
+                    true,
+                ),
+                ("Replay request prefix", "request_prefix_fingerprint", true),
+                ("Static prefix", "static_prefix_fingerprint", true),
+                ("Gateway build", "gateway_build", true),
+                ("Gateway boot", "gateway_boot_id", true),
+            ] {
+                optional_diagnostic_field(
+                    &mut protection,
+                    label,
+                    json_scalar(&current, key),
+                    copyable,
+                );
+            }
+            return Ok(Some(DiagnosticLogDetail {
+                id: id.to_owned(),
+                kind: "cache_anomaly".to_owned(),
+                occurred_at_ms,
+                title,
+                summary,
+                sections: vec![
+                    DiagnosticLogSection {
+                        title: "Identity".to_owned(),
+                        fields: identity,
+                    },
+                    DiagnosticLogSection {
+                        title: "Cache protection".to_owned(),
+                        fields: protection,
+                    },
+                ],
+                evidence: Some(evidence),
+            }));
+        }
         if !provider_detail_matches_kind(kind, &current, &previous, gap_ms) {
             return Ok(None);
         }
@@ -2647,6 +2814,13 @@ fn provider_usage_metrics_within_bounds(
         .into_iter()
         .flatten()
         .any(|value| value > crate::machine_protocol::PROVIDER_USAGE_MAX_SHAPE_COUNT)
+        && ![
+            event.cache_keepalive_interval_ms,
+            event.cache_keepalive_source_age_ms,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|value| value > crate::machine_protocol::PROVIDER_USAGE_MAX_KEEPALIVE_MS)
 }
 
 fn valid_provider_usage_hex(value: &str, length: usize) -> bool {
@@ -2658,6 +2832,15 @@ fn valid_provider_usage_hex(value: &str, length: usize) -> bool {
 
 fn valid_optional_provider_usage_hex(value: Option<&String>, length: usize) -> bool {
     value.is_none_or(|value| valid_provider_usage_hex(value, length))
+}
+
+fn valid_provider_usage_keepalive_algorithm(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value.as_bytes()[0].is_ascii_lowercase()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+        })
 }
 
 fn provider_usage_model_family(model: &str) -> &'static str {
@@ -2744,6 +2927,51 @@ fn valid_provider_usage_v3_dimensions(event: &crate::machine_protocol::ProviderU
         && lane_valid
 }
 
+fn valid_provider_usage_v4_dimensions(event: &crate::machine_protocol::ProviderUsageEvent) -> bool {
+    if !valid_provider_usage_v3_dimensions(event) {
+        return false;
+    }
+    match event.request_purpose.as_str() {
+        "interactive" => {
+            event.cache_keepalive_outcome == "not_applicable"
+                && event.cache_keepalive_algorithm.is_none()
+                && event.cache_keepalive_attempt.is_none_or(|value| value == 0)
+                && event
+                    .cache_keepalive_interval_ms
+                    .is_none_or(|value| value == 0)
+                && event
+                    .cache_keepalive_source_age_ms
+                    .is_none_or(|value| value == 0)
+                && event.source_request_prefix_fingerprint.is_none()
+        }
+        "cache_keepalive" => {
+            event.session_attribution == "explicit"
+                && event.traffic_source == "cowboy"
+                && matches!(
+                    event.cache_keepalive_outcome.as_str(),
+                    "hit" | "miss" | "partial" | "retryable_error" | "terminal_error" | "preempted"
+                )
+                && event
+                    .cache_keepalive_algorithm
+                    .as_deref()
+                    .is_some_and(valid_provider_usage_keepalive_algorithm)
+                && event
+                    .cache_keepalive_attempt
+                    .is_some_and(|value| (1..=1_000).contains(&value))
+                && event
+                    .cache_keepalive_interval_ms
+                    .is_some_and(|value| value > 0)
+                && event.cache_keepalive_source_age_ms.is_some()
+                && valid_optional_provider_usage_hex(
+                    event.source_request_prefix_fingerprint.as_ref(),
+                    32,
+                )
+                && event.source_request_prefix_fingerprint.is_some()
+        }
+        _ => false,
+    }
+}
+
 fn valid_provider_usage_token_algebra(event: &crate::machine_protocol::ProviderUsageEvent) -> bool {
     if event.schema_version < 2 {
         return true;
@@ -2798,7 +3026,7 @@ fn validate_provider_usage_event(
             .all(|byte| byte.is_ascii_hexdigit())
         || event.model.len() > 128
         || !(100..=599).contains(&event.status)
-        || !matches!(event.schema_version, 1..=3)
+        || !matches!(event.schema_version, 1..=4)
         || !matches!(
             event.operation.as_str(),
             "legacy" | "responses" | "compact" | "messages" | "chat_completions"
@@ -2858,8 +3086,11 @@ fn validate_provider_usage_event(
     {
         anyhow::bail!("inconsistent provider usage dimensions");
     }
-    if event.schema_version == 3 && !valid_provider_usage_v3_dimensions(event) {
+    if event.schema_version >= 3 && !valid_provider_usage_v3_dimensions(event) {
         anyhow::bail!("invalid version three provider usage dimensions");
+    }
+    if event.schema_version == 4 && !valid_provider_usage_v4_dimensions(event) {
+        anyhow::bail!("invalid version four provider usage dimensions");
     }
     match event.cache_observation.as_str() {
         "absent" if event.cache_hit_tokens.is_some() || event.cache_miss_tokens.is_some() => {
@@ -2927,6 +3158,13 @@ mod provider_usage_validation_tests {
             system_block_count: Some(1),
             has_previous_response_id: Some(true),
             compatibility_fixes: Some(0),
+            request_purpose: "interactive".to_owned(),
+            cache_keepalive_outcome: "not_applicable".to_owned(),
+            cache_keepalive_algorithm: None,
+            cache_keepalive_attempt: Some(0),
+            cache_keepalive_interval_ms: Some(0),
+            cache_keepalive_source_age_ms: Some(0),
+            source_request_prefix_fingerprint: None,
         }
     }
 
@@ -2959,6 +3197,26 @@ mod provider_usage_validation_tests {
 
         let mut candidate = event();
         candidate.reasoning_tokens = Some(5);
+        assert!(validate_provider_usage_event("codex-deepseek", &candidate).is_err());
+    }
+
+    #[test]
+    fn controller_accepts_complete_cache_keepalive_and_rejects_missing_source_prefix() {
+        let mut candidate = event();
+        candidate.schema_version = 4;
+        candidate.request_purpose = "cache_keepalive".to_owned();
+        candidate.cache_keepalive_outcome = "hit".to_owned();
+        candidate.cache_keepalive_algorithm = Some("adaptive-replay-v1".to_owned());
+        candidate.cache_keepalive_attempt = Some(1);
+        candidate.cache_keepalive_interval_ms = Some(19_800_000);
+        candidate.cache_keepalive_source_age_ms = Some(19_801_000);
+        candidate.source_request_prefix_fingerprint =
+            Some("66666666666666666666666666666666".to_owned());
+        candidate.session_attribution = "explicit".to_owned();
+        candidate.traffic_source = "cowboy".to_owned();
+        assert!(validate_provider_usage_event("codex-deepseek", &candidate).is_ok());
+
+        candidate.source_request_prefix_fingerprint = None;
         assert!(validate_provider_usage_event("codex-deepseek", &candidate).is_err());
     }
 
@@ -3084,11 +3342,15 @@ async fn insert_provider_usage_event(
          static_prefix_fingerprint, request_prefix_fingerprint, gateway_build, \
          gateway_boot_id, cache_observation, usage_observed, completed, streaming, \
          duration_ms, request_bytes, input_item_count, tool_count, system_block_count, \
-         has_previous_response_id, compatibility_fixes) VALUES ( \
+         has_previous_response_id, compatibility_fixes, request_purpose, \
+         cache_keepalive_outcome, cache_keepalive_algorithm, cache_keepalive_attempt, \
+         cache_keepalive_interval_ms, cache_keepalive_source_age_ms, \
+         source_request_prefix_fingerprint) VALUES ( \
          $1, $2, $3, to_timestamp($4::double precision / 1000), $5, $6, $7, $8, $9, \
          $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, \
          $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, \
-         $38, $39, $40, $41, $42, $43, $44) ON CONFLICT DO NOTHING",
+         $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, \
+         $51) ON CONFLICT DO NOTHING",
     )
     .bind(machine_id)
     .bind(producer_id)
@@ -3134,40 +3396,66 @@ async fn insert_provider_usage_event(
     .bind(provider_usage_metric(event.system_block_count)?)
     .bind(event.has_previous_response_id)
     .bind(provider_usage_metric(event.compatibility_fixes)?)
+    .bind(&event.request_purpose)
+    .bind(&event.cache_keepalive_outcome)
+    .bind(&event.cache_keepalive_algorithm)
+    .bind(provider_usage_metric(event.cache_keepalive_attempt)?)
+    .bind(provider_usage_metric(event.cache_keepalive_interval_ms)?)
+    .bind(provider_usage_metric(event.cache_keepalive_source_age_ms)?)
+    .bind(&event.source_request_prefix_fingerprint)
     .execute(&mut **transaction)
     .await
     .context("insert provider usage event")?;
     Ok(())
 }
 
-const PROVIDER_USAGE_AGGREGATE_COLUMNS: &str = "count(*)::bigint AS requests, \
-     count(*) FILTER (WHERE status >= 400)::bigint AS errors, \
-     count(*) FILTER (WHERE status BETWEEN 400 AND 499 AND status NOT IN (408, 425, 429, 499))::bigint AS blocking_errors, \
-     count(*) FILTER (WHERE status IN (408, 425, 429, 499) OR status >= 500)::bigint AS transient_errors, \
-     count(*) FILTER (WHERE completed IS TRUE)::bigint AS completed_requests, \
-     count(completed)::bigint AS completion_observations, \
-     count(*) FILTER (WHERE usage_observed IS TRUE)::bigint AS usage_observations, \
-     least(coalesce(sum(input_tokens::numeric), 0), 9223372036854775807)::bigint AS input_tokens, \
-     least(coalesce(sum(output_tokens::numeric), 0), 9223372036854775807)::bigint AS output_tokens, \
-     least(coalesce(sum(reasoning_tokens::numeric), 0), 9223372036854775807)::bigint AS reasoning_tokens, \
-     least(coalesce(sum(cache_hit_tokens::numeric) FILTER (WHERE cache_observation IN ('explicit', 'derived')), 0), 9223372036854775807)::bigint AS cache_hit_tokens, \
-     least(coalesce(sum(cache_miss_tokens::numeric) FILTER (WHERE cache_observation IN ('explicit', 'derived')), 0), 9223372036854775807)::bigint AS cache_miss_tokens, \
-     count(*) FILTER (WHERE cache_observation IN ('explicit', 'derived') AND cache_hit_tokens IS NOT NULL AND cache_miss_tokens IS NOT NULL)::bigint AS cache_observations, \
-     count(*) FILTER (WHERE cache_observation = 'explicit')::bigint AS explicit_cache_observations, \
-     count(*) FILTER (WHERE cache_observation = 'derived')::bigint AS derived_cache_observations, \
-     count(*) FILTER (WHERE cache_observation = 'absent')::bigint AS absent_cache_observations, \
-     count(*) FILTER (WHERE cache_observation IN ('explicit', 'derived') AND cache_hit_tokens::numeric + cache_miss_tokens::numeric > 0 AND cache_hit_tokens::numeric * 10 < cache_hit_tokens::numeric + cache_miss_tokens::numeric)::bigint AS cold_cache_requests, \
-     count(*) FILTER (WHERE cache_observation IN ('explicit', 'derived') AND cache_hit_tokens::numeric + cache_miss_tokens::numeric > 0 AND cache_hit_tokens::numeric * 10 >= 9 * (cache_hit_tokens::numeric + cache_miss_tokens::numeric))::bigint AS hot_cache_requests, \
-     least(coalesce(sum(duration_ms::numeric), 0), 9223372036854775807)::bigint AS duration_ms, \
-     count(duration_ms)::bigint AS duration_observations, \
-     least(coalesce(sum(request_bytes::numeric), 0), 9223372036854775807)::bigint AS request_bytes, \
-     count(request_bytes)::bigint AS request_shape_observations, \
-     least(coalesce(sum(input_item_count::numeric), 0), 9223372036854775807)::bigint AS input_item_count, \
-     least(coalesce(sum(tool_count::numeric), 0), 9223372036854775807)::bigint AS tool_count, \
-     least(coalesce(sum(system_block_count::numeric), 0), 9223372036854775807)::bigint AS system_block_count, \
-     count(*) FILTER (WHERE has_previous_response_id IS TRUE)::bigint AS previous_response_requests, \
-     least(coalesce(sum(compatibility_fixes::numeric), 0), 9223372036854775807)::bigint AS compatibility_fixes, \
-     count(*) FILTER (WHERE streaming IS TRUE)::bigint AS streaming_requests";
+const PROVIDER_USAGE_AGGREGATE_COLUMNS: &str = "count(*) FILTER (WHERE request_purpose = 'interactive')::bigint AS requests, \
+     count(*) FILTER (WHERE request_purpose = 'interactive' AND status >= 400)::bigint AS errors, \
+     count(*) FILTER (WHERE request_purpose = 'interactive' AND status BETWEEN 400 AND 499 AND status NOT IN (408, 425, 429, 499))::bigint AS blocking_errors, \
+     count(*) FILTER (WHERE request_purpose = 'interactive' AND (status IN (408, 425, 429, 499) OR status >= 500))::bigint AS transient_errors, \
+     count(*) FILTER (WHERE request_purpose = 'interactive' AND completed IS TRUE)::bigint AS completed_requests, \
+     count(completed) FILTER (WHERE request_purpose = 'interactive')::bigint AS completion_observations, \
+     count(*) FILTER (WHERE request_purpose = 'interactive' AND usage_observed IS TRUE)::bigint AS usage_observations, \
+     least(coalesce(sum(input_tokens::numeric) FILTER (WHERE request_purpose = 'interactive'), 0), 9223372036854775807)::bigint AS input_tokens, \
+     least(coalesce(sum(output_tokens::numeric) FILTER (WHERE request_purpose = 'interactive'), 0), 9223372036854775807)::bigint AS output_tokens, \
+     least(coalesce(sum(reasoning_tokens::numeric) FILTER (WHERE request_purpose = 'interactive'), 0), 9223372036854775807)::bigint AS reasoning_tokens, \
+     least(coalesce(sum(cache_hit_tokens::numeric) FILTER (WHERE request_purpose = 'interactive' AND cache_observation IN ('explicit', 'derived')), 0), 9223372036854775807)::bigint AS cache_hit_tokens, \
+     least(coalesce(sum(cache_miss_tokens::numeric) FILTER (WHERE request_purpose = 'interactive' AND cache_observation IN ('explicit', 'derived')), 0), 9223372036854775807)::bigint AS cache_miss_tokens, \
+     count(*) FILTER (WHERE request_purpose = 'interactive' AND cache_observation IN ('explicit', 'derived') AND cache_hit_tokens IS NOT NULL AND cache_miss_tokens IS NOT NULL)::bigint AS cache_observations, \
+     count(*) FILTER (WHERE request_purpose = 'interactive' AND cache_observation = 'explicit')::bigint AS explicit_cache_observations, \
+     count(*) FILTER (WHERE request_purpose = 'interactive' AND cache_observation = 'derived')::bigint AS derived_cache_observations, \
+     count(*) FILTER (WHERE request_purpose = 'interactive' AND cache_observation = 'absent')::bigint AS absent_cache_observations, \
+     count(*) FILTER (WHERE request_purpose = 'interactive' AND cache_observation IN ('explicit', 'derived') AND cache_hit_tokens::numeric + cache_miss_tokens::numeric > 0 AND cache_hit_tokens::numeric * 10 < cache_hit_tokens::numeric + cache_miss_tokens::numeric)::bigint AS cold_cache_requests, \
+     count(*) FILTER (WHERE request_purpose = 'interactive' AND cache_observation IN ('explicit', 'derived') AND cache_hit_tokens::numeric + cache_miss_tokens::numeric > 0 AND cache_hit_tokens::numeric * 10 >= 9 * (cache_hit_tokens::numeric + cache_miss_tokens::numeric))::bigint AS hot_cache_requests, \
+     least(coalesce(sum(duration_ms::numeric) FILTER (WHERE request_purpose = 'interactive'), 0), 9223372036854775807)::bigint AS duration_ms, \
+     count(duration_ms) FILTER (WHERE request_purpose = 'interactive')::bigint AS duration_observations, \
+     least(coalesce(sum(request_bytes::numeric) FILTER (WHERE request_purpose = 'interactive'), 0), 9223372036854775807)::bigint AS request_bytes, \
+     count(request_bytes) FILTER (WHERE request_purpose = 'interactive')::bigint AS request_shape_observations, \
+     least(coalesce(sum(input_item_count::numeric) FILTER (WHERE request_purpose = 'interactive'), 0), 9223372036854775807)::bigint AS input_item_count, \
+     least(coalesce(sum(tool_count::numeric) FILTER (WHERE request_purpose = 'interactive'), 0), 9223372036854775807)::bigint AS tool_count, \
+     least(coalesce(sum(system_block_count::numeric) FILTER (WHERE request_purpose = 'interactive'), 0), 9223372036854775807)::bigint AS system_block_count, \
+     count(*) FILTER (WHERE request_purpose = 'interactive' AND has_previous_response_id IS TRUE)::bigint AS previous_response_requests, \
+     least(coalesce(sum(compatibility_fixes::numeric) FILTER (WHERE request_purpose = 'interactive'), 0), 9223372036854775807)::bigint AS compatibility_fixes, \
+     count(*) FILTER (WHERE request_purpose = 'interactive' AND streaming IS TRUE)::bigint AS streaming_requests, \
+     count(*) FILTER (WHERE request_purpose = 'cache_keepalive')::bigint AS cache_keepalive_requests, \
+     count(*) FILTER (WHERE request_purpose = 'cache_keepalive' AND cache_keepalive_outcome = 'hit')::bigint AS cache_keepalive_hits, \
+     count(*) FILTER (WHERE request_purpose = 'cache_keepalive' AND cache_keepalive_outcome = 'miss')::bigint AS cache_keepalive_misses, \
+     count(*) FILTER (WHERE request_purpose = 'cache_keepalive' AND cache_keepalive_outcome = 'partial')::bigint AS cache_keepalive_partials, \
+     count(*) FILTER (WHERE request_purpose = 'cache_keepalive' AND cache_keepalive_outcome = 'retryable_error')::bigint AS cache_keepalive_retryable_errors, \
+     count(*) FILTER (WHERE request_purpose = 'cache_keepalive' AND cache_keepalive_outcome = 'terminal_error')::bigint AS cache_keepalive_terminal_errors, \
+     count(*) FILTER (WHERE request_purpose = 'cache_keepalive' AND cache_keepalive_outcome = 'preempted')::bigint AS cache_keepalive_preemptions, \
+     count(*) FILTER (WHERE request_purpose = 'cache_keepalive' AND usage_observed IS TRUE)::bigint AS cache_keepalive_usage_observations, \
+     least(coalesce(sum(input_tokens::numeric) FILTER (WHERE request_purpose = 'cache_keepalive'), 0), 9223372036854775807)::bigint AS cache_keepalive_input_tokens, \
+     least(coalesce(sum(output_tokens::numeric) FILTER (WHERE request_purpose = 'cache_keepalive'), 0), 9223372036854775807)::bigint AS cache_keepalive_output_tokens, \
+     least(coalesce(sum(reasoning_tokens::numeric) FILTER (WHERE request_purpose = 'cache_keepalive'), 0), 9223372036854775807)::bigint AS cache_keepalive_reasoning_tokens, \
+     least(coalesce(sum(cache_hit_tokens::numeric) FILTER (WHERE request_purpose = 'cache_keepalive' AND cache_observation IN ('explicit', 'derived')), 0), 9223372036854775807)::bigint AS cache_keepalive_hit_tokens, \
+     least(coalesce(sum(cache_miss_tokens::numeric) FILTER (WHERE request_purpose = 'cache_keepalive' AND cache_observation IN ('explicit', 'derived')), 0), 9223372036854775807)::bigint AS cache_keepalive_miss_tokens, \
+     least(coalesce(sum(duration_ms::numeric) FILTER (WHERE request_purpose = 'cache_keepalive'), 0), 9223372036854775807)::bigint AS cache_keepalive_duration_ms, \
+     count(duration_ms) FILTER (WHERE request_purpose = 'cache_keepalive')::bigint AS cache_keepalive_duration_observations, \
+     least(coalesce(sum(cache_keepalive_interval_ms::numeric) FILTER (WHERE request_purpose = 'cache_keepalive'), 0), 9223372036854775807)::bigint AS cache_keepalive_interval_ms, \
+     count(cache_keepalive_interval_ms) FILTER (WHERE request_purpose = 'cache_keepalive')::bigint AS cache_keepalive_interval_observations, \
+     least(coalesce(sum(cache_keepalive_source_age_ms::numeric) FILTER (WHERE request_purpose = 'cache_keepalive'), 0), 9223372036854775807)::bigint AS cache_keepalive_source_age_ms, \
+     count(cache_keepalive_source_age_ms) FILTER (WHERE request_purpose = 'cache_keepalive')::bigint AS cache_keepalive_source_age_observations";
 
 #[derive(Default, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -3534,6 +3822,7 @@ async fn load_provider_usage_low_hit(
            WHERE provider = $1 AND occurred_at >= \
              to_timestamp($2::double precision / 1000) - interval '6 hours' \
              AND occurred_at <= to_timestamp($3::double precision / 1000) \
+             AND request_purpose = 'interactive' \
              AND ($4::text IS NULL OR agent = $4) \
            WINDOW session_window AS ( \
              PARTITION BY machine_id, producer_id, account_fingerprint, agent, \
@@ -3919,6 +4208,25 @@ struct UsageAggregate {
     previous_response_requests: i64,
     compatibility_fixes: i64,
     streaming_requests: i64,
+    cache_keepalive_requests: i64,
+    cache_keepalive_hits: i64,
+    cache_keepalive_misses: i64,
+    cache_keepalive_partials: i64,
+    cache_keepalive_retryable_errors: i64,
+    cache_keepalive_terminal_errors: i64,
+    cache_keepalive_preemptions: i64,
+    cache_keepalive_usage_observations: i64,
+    cache_keepalive_input_tokens: i64,
+    cache_keepalive_output_tokens: i64,
+    cache_keepalive_reasoning_tokens: i64,
+    cache_keepalive_hit_tokens: i64,
+    cache_keepalive_miss_tokens: i64,
+    cache_keepalive_duration_ms: i64,
+    cache_keepalive_duration_observations: i64,
+    cache_keepalive_interval_ms: i64,
+    cache_keepalive_interval_observations: i64,
+    cache_keepalive_source_age_ms: i64,
+    cache_keepalive_source_age_observations: i64,
 }
 
 impl UsageAggregate {
@@ -3952,6 +4260,26 @@ impl UsageAggregate {
             previous_response_requests: row.get("previous_response_requests"),
             compatibility_fixes: row.get("compatibility_fixes"),
             streaming_requests: row.get("streaming_requests"),
+            cache_keepalive_requests: row.get("cache_keepalive_requests"),
+            cache_keepalive_hits: row.get("cache_keepalive_hits"),
+            cache_keepalive_misses: row.get("cache_keepalive_misses"),
+            cache_keepalive_partials: row.get("cache_keepalive_partials"),
+            cache_keepalive_retryable_errors: row.get("cache_keepalive_retryable_errors"),
+            cache_keepalive_terminal_errors: row.get("cache_keepalive_terminal_errors"),
+            cache_keepalive_preemptions: row.get("cache_keepalive_preemptions"),
+            cache_keepalive_usage_observations: row.get("cache_keepalive_usage_observations"),
+            cache_keepalive_input_tokens: row.get("cache_keepalive_input_tokens"),
+            cache_keepalive_output_tokens: row.get("cache_keepalive_output_tokens"),
+            cache_keepalive_reasoning_tokens: row.get("cache_keepalive_reasoning_tokens"),
+            cache_keepalive_hit_tokens: row.get("cache_keepalive_hit_tokens"),
+            cache_keepalive_miss_tokens: row.get("cache_keepalive_miss_tokens"),
+            cache_keepalive_duration_ms: row.get("cache_keepalive_duration_ms"),
+            cache_keepalive_duration_observations: row.get("cache_keepalive_duration_observations"),
+            cache_keepalive_interval_ms: row.get("cache_keepalive_interval_ms"),
+            cache_keepalive_interval_observations: row.get("cache_keepalive_interval_observations"),
+            cache_keepalive_source_age_ms: row.get("cache_keepalive_source_age_ms"),
+            cache_keepalive_source_age_observations: row
+                .get("cache_keepalive_source_age_observations"),
         }
     }
 
@@ -4016,6 +4344,67 @@ impl UsageAggregate {
         self.streaming_requests = self
             .streaming_requests
             .saturating_add(other.streaming_requests);
+        self.add_cache_keepalive(other);
+    }
+
+    fn add_cache_keepalive(&mut self, other: &Self) {
+        self.cache_keepalive_requests = self
+            .cache_keepalive_requests
+            .saturating_add(other.cache_keepalive_requests);
+        self.cache_keepalive_hits = self
+            .cache_keepalive_hits
+            .saturating_add(other.cache_keepalive_hits);
+        self.cache_keepalive_misses = self
+            .cache_keepalive_misses
+            .saturating_add(other.cache_keepalive_misses);
+        self.cache_keepalive_partials = self
+            .cache_keepalive_partials
+            .saturating_add(other.cache_keepalive_partials);
+        self.cache_keepalive_retryable_errors = self
+            .cache_keepalive_retryable_errors
+            .saturating_add(other.cache_keepalive_retryable_errors);
+        self.cache_keepalive_terminal_errors = self
+            .cache_keepalive_terminal_errors
+            .saturating_add(other.cache_keepalive_terminal_errors);
+        self.cache_keepalive_preemptions = self
+            .cache_keepalive_preemptions
+            .saturating_add(other.cache_keepalive_preemptions);
+        self.cache_keepalive_usage_observations = self
+            .cache_keepalive_usage_observations
+            .saturating_add(other.cache_keepalive_usage_observations);
+        self.cache_keepalive_input_tokens = self
+            .cache_keepalive_input_tokens
+            .saturating_add(other.cache_keepalive_input_tokens);
+        self.cache_keepalive_output_tokens = self
+            .cache_keepalive_output_tokens
+            .saturating_add(other.cache_keepalive_output_tokens);
+        self.cache_keepalive_reasoning_tokens = self
+            .cache_keepalive_reasoning_tokens
+            .saturating_add(other.cache_keepalive_reasoning_tokens);
+        self.cache_keepalive_hit_tokens = self
+            .cache_keepalive_hit_tokens
+            .saturating_add(other.cache_keepalive_hit_tokens);
+        self.cache_keepalive_miss_tokens = self
+            .cache_keepalive_miss_tokens
+            .saturating_add(other.cache_keepalive_miss_tokens);
+        self.cache_keepalive_duration_ms = self
+            .cache_keepalive_duration_ms
+            .saturating_add(other.cache_keepalive_duration_ms);
+        self.cache_keepalive_duration_observations = self
+            .cache_keepalive_duration_observations
+            .saturating_add(other.cache_keepalive_duration_observations);
+        self.cache_keepalive_interval_ms = self
+            .cache_keepalive_interval_ms
+            .saturating_add(other.cache_keepalive_interval_ms);
+        self.cache_keepalive_interval_observations = self
+            .cache_keepalive_interval_observations
+            .saturating_add(other.cache_keepalive_interval_observations);
+        self.cache_keepalive_source_age_ms = self
+            .cache_keepalive_source_age_ms
+            .saturating_add(other.cache_keepalive_source_age_ms);
+        self.cache_keepalive_source_age_observations = self
+            .cache_keepalive_source_age_observations
+            .saturating_add(other.cache_keepalive_source_age_observations);
     }
 }
 

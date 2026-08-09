@@ -543,6 +543,18 @@ export function isCompactionCompletionTail(timeline: Envelope[]): boolean {
   return text !== null && isCompactionCompletionText(text);
 }
 
+/// True only while the user's compact command is still the live tail. The
+/// Transcript needs a synthetic live-edge widget for this brief state because
+/// it hides the command message itself. Once the agent's `COMPACTING_NOTICE`
+/// arrives, that assistant message owns the visible widget and this becomes
+/// false so the same lifecycle is not rendered twice.
+export function isCompactionRequestTail(timeline: Envelope[]): boolean {
+  const last = derive(timeline).at(-1);
+  if (last?.kind !== "message" || last.role !== "user") return false;
+  const text = messageText(last);
+  return text !== null && isCompactionCommandText(text);
+}
+
 /// True while a compaction is running RIGHT NOW — the `COMPACTING_NOTICE` message
 /// is the live tail of the turn. Once the agent continues (a new item follows) or
 /// the turn ends, the tail changes and this goes false. The composer uses it to

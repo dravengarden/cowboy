@@ -195,8 +195,24 @@ loopback caller supplies an explicit role header; telemetry must never infer
 `executor` from absence. The UI shows attributed-role coverage so role-based
 cost conclusions cannot be drawn from unknown traffic.
 
-Schema v3 rollout is ordered because old Machine collectors reject it before it
-can enter the durable spool:
+Schema v4 extends this envelope with an explicit interactive versus
+cache-keepalive request purpose, protection outcome and algorithm, attempt and
+interval, source age, and an opaque source-request fingerprint. Existing
+request/error/cache/spend aggregates filter to interactive rows; protection
+attempts, hits, misses, retries, preemptions, tokens, duration, age, interval,
+and price have a separate read model. The Machine also exposes a bounded
+`deepseek-cache-status` adapter operation that queries only its local gateway;
+the controller never receives a retained request body.
+
+Schema-v4 rollout and rollback follow the same controller-first and drain-first
+ordering as v3. Roll out the controller and Machine before either v4-producing
+gateway. Before reverting a Machine to a release that cannot decode v4, stop or
+replace both v4 producers and require `pendingV4Events: 0` plus
+`v4Drained: true` from the read-only spool status. A successful gateway restart
+is not drain evidence.
+
+Schema v3 and v4 rollout is ordered because old Machine collectors reject a
+newer envelope before it can enter the durable spool:
 
 1. Build and deploy the migration-compatible controller bridge by itself. Its
    successful controller receipt must be the active rollback boundary before
@@ -210,7 +226,7 @@ can enter the durable spool:
    on one Machine at a time. Verify reconnect, ACP inventory, and
    `--provider-usage-status` before proceeding to its gateways.
 4. Activate that Machine's Codex and Claude DeepSeek gateway components through
-   the model-gateway release transaction. Confirm new schema-v3 events receive
+   the model-gateway release transaction. Confirm new schema-v4 events receive
    controller ACKs, then repeat steps 3–4 on the peer Machine.
 5. Web may follow the final controller independently; it does not authorize or
    imply Machine maintenance.

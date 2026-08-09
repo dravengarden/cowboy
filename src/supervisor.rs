@@ -210,6 +210,7 @@ impl Supervisor {
     ) -> Result<(), String> {
         let runtime = self.runtime_for_session(session_id)?;
         let budget = self.deepseek_context_budget(session_id, spec.id);
+        let cache_protection = self.deepseek_cache_protection(session_id, spec.id);
         runtime.ensure(StartSession {
             session_id: session_id.to_owned(),
             provider: spec.id.to_owned(),
@@ -218,6 +219,7 @@ impl Supervisor {
             system: self.hub.session_is_system(session_id),
             context_window: budget.map(|value| value.context_window),
             auto_compact_token_limit: budget.map(|value| value.auto_compact_token_limit),
+            cache_protection,
             generation: String::new(),
             fallback_for: None,
             adopt_only: false,
@@ -311,6 +313,7 @@ impl Supervisor {
             .find(|meta| meta.id == session_id)
             .ok_or_else(|| format!("unknown session {session_id:?}"))?;
         let budget = self.deepseek_context_budget(session_id, &meta.provider);
+        let cache_protection = self.deepseek_cache_protection(session_id, &meta.provider);
         Ok(StartSession {
             session_id: meta.id,
             provider: meta.provider,
@@ -319,6 +322,7 @@ impl Supervisor {
             system: meta.system,
             context_window: budget.map(|value| value.context_window),
             auto_compact_token_limit: budget.map(|value| value.auto_compact_token_limit),
+            cache_protection,
             generation: String::new(),
             fallback_for: None,
             adopt_only: false,
@@ -336,6 +340,11 @@ impl Supervisor {
             .get(crate::deepseek_context::CONFIG_ID)
             .and_then(serde_json::Value::as_str);
         crate::deepseek_context::launch_budget(provider, model, requested)
+    }
+
+    fn deepseek_cache_protection(&self, session_id: &str, provider: &str) -> Option<bool> {
+        let preferences = self.hub.config_preferences(session_id)?;
+        crate::deepseek_cache::selected(&preferences, provider)
     }
 
     /// Tear down a session's detached worker. Hub state is the caller's
@@ -411,6 +420,52 @@ impl Supervisor {
         self.hub.set_config_preference(
             session_id,
             crate::deepseek_context::CONFIG_ID.to_owned(),
+            value,
+        )?;
+        if unchanged {
+            return Ok(());
+        }
+        self.resolve_and_persist_cwd(session_id)?;
+        self.recycle_session_inner(session_id)
+    }
+
+    /// Enable or disable Cowboy-owned `DeepSeek` cache protection. The policy is
+    /// carried in a local HTTP header, never in the model prompt. Recycle only
+    /// an idle worker so an active agent turn is never interrupted.
+    pub fn set_deepseek_cache_protection(
+        &self,
+        session_id: &str,
+        value: serde_json::Value,
+    ) -> Result<(), String> {
+        let _lifecycle = self.lifecycle.lock();
+        let enabled = value
+            .as_bool()
+            .ok_or_else(|| "DeepSeek cache protection must be a boolean".to_owned())?;
+        let meta = self
+            .hub
+            .session_list()
+            .into_iter()
+            .find(|meta| meta.id == session_id)
+            .ok_or_else(|| format!("unknown session {session_id:?}"))?;
+        if !crate::deepseek_cache::supported_provider(&meta.provider) {
+            return Err("cache protection is available only for DeepSeek sessions".to_owned());
+        }
+        if matches!(meta.status, Status::Busy | Status::Starting)
+            || self.hub.session_has_in_flight_prompt(session_id)
+        {
+            return Err(
+                "wait for the current turn to finish before changing cache protection".to_owned(),
+            );
+        }
+        let preferences = self
+            .hub
+            .config_preferences(session_id)
+            .unwrap_or_else(|| serde_json::json!({}));
+        let unchanged =
+            crate::deepseek_cache::selected(&preferences, &meta.provider) == Some(enabled);
+        self.hub.set_config_preference(
+            session_id,
+            crate::deepseek_cache::CONFIG_ID.to_owned(),
             value,
         )?;
         if unchanged {
@@ -622,6 +677,7 @@ mod tests {
                 system: false,
                 context_window: None,
                 auto_compact_token_limit: None,
+                cache_protection: None,
                 generation: "test-generation".to_owned(),
                 fallback_for: None,
                 adopt_only: false,

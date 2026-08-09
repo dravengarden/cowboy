@@ -128,6 +128,34 @@ struct Broker {
 }
 
 impl Broker {
+    fn revoke_cache_protection(&self, provider: &str, session_id: &str, reason: &'static str) {
+        if !crate::deepseek_cache::supported_provider(provider) {
+            return;
+        }
+        let provider = provider.to_owned();
+        let session_id = session_id.to_owned();
+        tokio::spawn(async move {
+            if let Err(error) =
+                crate::deepseek_cache::revoke_local_snapshot(&provider, &session_id).await
+            {
+                tracing::warn!(
+                    provider,
+                    session = %session_id,
+                    reason,
+                    %error,
+                    "failed to revoke DeepSeek cache-protection snapshot"
+                );
+            } else {
+                tracing::debug!(
+                    provider,
+                    session = %session_id,
+                    reason,
+                    "revoked DeepSeek cache-protection snapshot"
+                );
+            }
+        });
+    }
+
     fn new(args: MachineBrokerArgs) -> Self {
         let mut generation_commands = HashMap::new();
         if !args.desired_generation.is_empty() {
@@ -852,6 +880,7 @@ impl Broker {
 
     async fn reset_session(self: &Arc<Self>, mut session: StartSession, command_id: String) {
         let session_id = session.session_id.clone();
+        self.revoke_cache_protection(&session.provider, &session_id, "session_reset");
         session.adopt_only = false;
         let cleanup_gate = self.deleted_session_cleanup_gate(&session_id);
         let _cleanup_guard = cleanup_gate.lock().await;
@@ -1187,6 +1216,7 @@ impl Broker {
             .map(|(session_id, _)| session_id.clone())
             .collect();
         for session_id in sessions {
+            self.revoke_cache_protection(provider, &session_id, "provider_roll");
             let snapshot = if let Some(worker) = self.workers.lock().get_mut(&session_id) {
                 worker.snapshot.drain_requested = true;
                 Some(worker.snapshot.clone())
@@ -1498,13 +1528,13 @@ impl Broker {
 }
 
 fn session_context_environment(session: &StartSession) -> Result<Vec<(&'static str, String)>> {
-    match (session.context_window, session.auto_compact_token_limit) {
-        (None, None) => Ok(Vec::new()),
+    let mut environment = match (session.context_window, session.auto_compact_token_limit) {
+        (None, None) => Vec::new(),
         (Some(window), Some(compact))
             if crate::deepseek_context::from_launch_values(&session.provider, window, compact)
                 .is_some() =>
         {
-            Ok(vec![
+            vec![
                 (
                     crate::deepseek_context::SESSION_CONTEXT_WINDOW_ENV,
                     window.to_string(),
@@ -1513,15 +1543,34 @@ fn session_context_environment(session: &StartSession) -> Result<Vec<(&'static s
                     crate::deepseek_context::SESSION_AUTO_COMPACT_TOKEN_LIMIT_ENV,
                     compact.to_string(),
                 ),
-            ])
+            ]
         }
-        _ => anyhow::bail!(
-            "invalid context budget for provider {}: window={:?}, compact={:?}",
-            session.provider,
-            session.context_window,
-            session.auto_compact_token_limit
-        ),
+        _ => {
+            anyhow::bail!(
+                "invalid context budget for provider {}: window={:?}, compact={:?}",
+                session.provider,
+                session.context_window,
+                session.auto_compact_token_limit
+            )
+        }
+    };
+    let cache_provider = crate::deepseek_cache::supported_provider(&session.provider);
+    if cache_provider {
+        // Legacy launch snapshots predate the additive policy field. Preserve
+        // the product default during a rolling Machine cutover instead of
+        // silently enrolling only sessions created after the upgrade.
+        let enabled = session.cache_protection.unwrap_or(true);
+        environment.push((
+            crate::deepseek_cache::SESSION_POLICY_ENV,
+            if enabled { "auto" } else { "off" }.to_owned(),
+        ));
+    } else if session.cache_protection.is_some() {
+        anyhow::bail!(
+            "cache protection is unavailable for provider {}",
+            session.provider
+        );
     }
+    Ok(environment)
 }
 
 /// `systemd-run --collect` removes a transient unit asynchronously after its
@@ -1982,14 +2031,24 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
             command_id,
             config_id,
             value,
-        } => broker.route_worker(
-            &session_id,
-            WorkerCommand::SetConfigOption {
-                command_id,
-                config_id,
-                value,
-            },
-        ),
+        } => {
+            if let Some(provider) = broker
+                .sessions
+                .lock()
+                .get(&session_id)
+                .map(|session| session.provider.clone())
+            {
+                broker.revoke_cache_protection(&provider, &session_id, "agent_config_changed");
+            }
+            broker.route_worker(
+                &session_id,
+                WorkerCommand::SetConfigOption {
+                    command_id,
+                    config_id,
+                    value,
+                },
+            );
+        }
         CoreCommand::DrainSession { session_id, .. } => {
             let snapshot = if let Some(worker) = broker.workers.lock().get_mut(&session_id) {
                 worker.snapshot.drain_requested = true;
@@ -2028,11 +2087,11 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
             let cleanup_gate = broker.deleted_session_cleanup_gate(&session_id);
             let _cleanup_guard = cleanup_gate.lock().await;
             let cleanup_command_id = command_id.clone();
-            let cleanup_cwd = broker
-                .sessions
-                .lock()
-                .get(&session_id)
-                .map(|session| session.cwd.clone());
+            let cleanup_session = broker.sessions.lock().get(&session_id).cloned();
+            let cleanup_cwd = cleanup_session.as_ref().map(|session| session.cwd.clone());
+            if let Some(session) = cleanup_session {
+                broker.revoke_cache_protection(&session.provider, &session_id, "session_deleted");
+            }
             broker.resetting_sessions.lock().remove(&session_id);
             let mut cancelled = broker.cancelled_sessions.lock();
             cancelled.insert(session_id.clone());
@@ -2194,6 +2253,7 @@ mod tests {
             system: false,
             context_window: Some(830_000),
             auto_compact_token_limit: Some(819_200),
+            cache_protection: Some(true),
             generation: "gen-1".to_owned(),
             fallback_for: None,
             adopt_only: false,
@@ -2209,6 +2269,7 @@ mod tests {
                     crate::deepseek_context::SESSION_AUTO_COMPACT_TOKEN_LIMIT_ENV,
                     "819200".to_owned(),
                 ),
+                (crate::deepseek_cache::SESSION_POLICY_ENV, "auto".to_owned(),),
             ]
         );
 
@@ -2216,6 +2277,28 @@ mod tests {
         assert!(session_context_environment(&session).is_err());
         session.provider = "claude-code".to_owned();
         assert!(session_context_environment(&session).is_err());
+
+        session.provider = "codex-deepseek".to_owned();
+        session.context_window = None;
+        session.auto_compact_token_limit = None;
+        session.cache_protection = Some(false);
+        assert_eq!(
+            session_context_environment(&session).expect("known cache policy"),
+            vec![(crate::deepseek_cache::SESSION_POLICY_ENV, "off".to_owned(),)]
+        );
+
+        session.cache_protection = None;
+        assert_eq!(
+            session_context_environment(&session).expect("legacy cache policy"),
+            vec![(crate::deepseek_cache::SESSION_POLICY_ENV, "auto".to_owned(),)]
+        );
+
+        session.provider = "codex".to_owned();
+        assert!(
+            session_context_environment(&session)
+                .expect("unrelated legacy session")
+                .is_empty()
+        );
     }
     use crate::runtime_wire::{RuntimeEvent, WorkerState};
 
@@ -2390,6 +2473,7 @@ mod tests {
                 system: false,
                 context_window: None,
                 auto_compact_token_limit: None,
+                cache_protection: None,
                 generation: "gen-1".to_owned(),
                 fallback_for: None,
                 adopt_only: false,
@@ -2469,6 +2553,7 @@ mod tests {
             system: false,
             context_window: None,
             auto_compact_token_limit: None,
+            cache_protection: None,
             generation: "gen-1".to_owned(),
             fallback_for: None,
             adopt_only: false,
@@ -2559,6 +2644,7 @@ mod tests {
                     system: false,
                     context_window: None,
                     auto_compact_token_limit: None,
+                    cache_protection: None,
                     generation: "gen-1".to_owned(),
                     fallback_for: Some("gen-2".to_owned()),
                     adopt_only: false,
@@ -2617,6 +2703,7 @@ mod tests {
                 system: false,
                 context_window: None,
                 auto_compact_token_limit: None,
+                cache_protection: None,
                 generation: "gen-1".to_owned(),
                 fallback_for: Some("gen-2".to_owned()),
                 adopt_only: false,
@@ -2678,6 +2765,7 @@ mod tests {
                 system: false,
                 context_window: None,
                 auto_compact_token_limit: None,
+                cache_protection: None,
                 generation: "gen-2".to_owned(),
                 fallback_for: None,
                 adopt_only: false,
@@ -2693,6 +2781,7 @@ mod tests {
                 system: false,
                 context_window: None,
                 auto_compact_token_limit: None,
+                cache_protection: None,
                 generation: "gen-1".to_owned(),
                 fallback_for: Some("gen-2".to_owned()),
                 adopt_only: false,
@@ -2788,6 +2877,7 @@ mod tests {
             system: false,
             context_window: None,
             auto_compact_token_limit: None,
+            cache_protection: None,
             generation: "gen-1".to_owned(),
             fallback_for: None,
             adopt_only: false,
@@ -2837,6 +2927,7 @@ mod tests {
                 system: false,
                 context_window: None,
                 auto_compact_token_limit: None,
+                cache_protection: None,
                 generation: "gen-1".to_owned(),
                 fallback_for: None,
                 adopt_only: true,
@@ -2883,6 +2974,7 @@ mod tests {
                 system: false,
                 context_window: None,
                 auto_compact_token_limit: None,
+                cache_protection: None,
                 generation: "gen-1".to_owned(),
                 fallback_for: None,
                 adopt_only: false,
@@ -2941,6 +3033,7 @@ mod tests {
                 system: false,
                 context_window: None,
                 auto_compact_token_limit: None,
+                cache_protection: None,
                 generation: "gen-1".to_owned(),
                 fallback_for: None,
                 adopt_only: false,
@@ -3077,6 +3170,7 @@ mod tests {
                 system: false,
                 context_window: None,
                 auto_compact_token_limit: None,
+                cache_protection: None,
                 generation: "gen-1".to_owned(),
                 fallback_for: None,
                 adopt_only: false,
@@ -3144,6 +3238,7 @@ mod tests {
                 system: false,
                 context_window: None,
                 auto_compact_token_limit: None,
+                cache_protection: None,
                 generation: "gen-1".to_owned(),
                 fallback_for: None,
                 adopt_only: false,
@@ -3219,6 +3314,7 @@ mod tests {
                     system: false,
                     context_window: None,
                     auto_compact_token_limit: None,
+                    cache_protection: None,
                     generation: "gen-2".to_owned(),
                     fallback_for: None,
                     adopt_only: false,

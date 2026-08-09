@@ -113,6 +113,10 @@ const PUBLISHED_MIGRATIONS: &[(&str, &str)] = &[
         "0026_session_config.sql",
         "64c6080585e93cfaec59156882786149cb85e0a69d30bdd2b4feab103ab78a09",
     ),
+    (
+        "0027_deepseek_cache_keepalive.sql",
+        "f07d7821ab0c58fef0d97204500a092aef64b910ca67dd4a7236be7603b3dd48",
+    ),
 ];
 
 #[test]

@@ -108,6 +108,17 @@ system-prompt sections, and future provider adaptations must preserve the
 largest possible byte-identical prefix. A deliberate prefix change needs a
 documented reason, content-free telemetry attribution, and regression coverage.
 
+DeepSeek cache-protection attempts are also audit events, not session
+incidents. Schema-v4 provider usage rows record the attempt number, scheduled
+interval, source age, outcome, measured cache tokens, duration, and opaque
+source-request fingerprint. Verified hits and agent preemptions are informational;
+misses, partial hits, and retryable provider failures are warnings; terminal
+credential or balance failures are critical and other terminal failures remain
+warnings. A background failure never raises the agent blocking-error count unless
+an independent interactive request or lifecycle event proves that the session
+was interrupted. Details remain body-free and load lazily through the same Logs
+surface.
+
 ## Client ingestion
 
 `POST /api/observability/batches` accepts bounded batches. The server validates

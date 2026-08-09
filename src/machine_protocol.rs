@@ -366,6 +366,20 @@ pub struct ProviderUsageEvent {
     pub has_previous_response_id: Option<bool>,
     #[serde(default)]
     pub compatibility_fixes: Option<u64>,
+    #[serde(default = "interactive_provider_usage_dimension")]
+    pub request_purpose: String,
+    #[serde(default = "not_applicable_provider_usage_dimension")]
+    pub cache_keepalive_outcome: String,
+    #[serde(default)]
+    pub cache_keepalive_algorithm: Option<String>,
+    #[serde(default)]
+    pub cache_keepalive_attempt: Option<u64>,
+    #[serde(default)]
+    pub cache_keepalive_interval_ms: Option<u64>,
+    #[serde(default)]
+    pub cache_keepalive_source_age_ms: Option<u64>,
+    #[serde(default)]
+    pub source_request_prefix_fingerprint: Option<String>,
 }
 
 // These bounds are deliberately above every supported model/request limit.
@@ -375,6 +389,7 @@ pub(crate) const PROVIDER_USAGE_MAX_TOKENS: u64 = 10_000_000;
 pub(crate) const PROVIDER_USAGE_MAX_DURATION_MS: u64 = 86_400_000;
 pub(crate) const PROVIDER_USAGE_MAX_REQUEST_BYTES: u64 = 64 << 20;
 pub(crate) const PROVIDER_USAGE_MAX_SHAPE_COUNT: u64 = 1_000_000;
+pub(crate) const PROVIDER_USAGE_MAX_KEEPALIVE_MS: u64 = 604_800_000;
 
 const fn default_provider_usage_schema_version() -> u16 {
     1
@@ -390,6 +405,14 @@ fn unknown_provider_usage_dimension() -> String {
 
 fn unattributed_provider_usage_dimension() -> String {
     "unattributed".to_owned()
+}
+
+fn interactive_provider_usage_dimension() -> String {
+    "interactive".to_owned()
+}
+
+fn not_applicable_provider_usage_dimension() -> String {
+    "not_applicable".to_owned()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

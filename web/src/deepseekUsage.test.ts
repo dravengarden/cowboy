@@ -1,11 +1,18 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
+  DEEPSEEK_CACHE_MIN_HIT_LABEL,
+  DEEPSEEK_CACHE_MIN_HIT_TOKENS,
   deepseekAvailableAgents,
   deepseekCacheStats,
   deepseekCostStats,
   deepseekVisibleAgents,
   percentLabel,
 } from "./deepseekUsage.ts";
+
+Deno.test("DeepSeek cache protection uses the shared 64K minimum", () => {
+  assertEquals(DEEPSEEK_CACHE_MIN_HIT_TOKENS, 64_000);
+  assertEquals(DEEPSEEK_CACHE_MIN_HIT_LABEL, "64K");
+});
 
 Deno.test("DeepSeek agent capability follows the full retained telemetry window", () => {
   assertEquals(

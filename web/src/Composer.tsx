@@ -213,6 +213,7 @@ import {
 } from "./NetworkActionFeedback";
 import { originLabel } from "./protocol";
 import { providerConfigOptions } from "./providerConfigOptions";
+import { DEEPSEEK_CACHE_MIN_HIT_TOKENS } from "./deepseekUsage";
 import type {
   AvailableCommand,
   ConfigOption,
@@ -4418,42 +4419,57 @@ function PendingRow({
   });
   const forcePushConfirmation = kind === "queued"
     ? (
-      <Popover
+      <Popper
         open={confirmAnchor !== null}
         anchorEl={confirmAnchor}
-        onClose={(): void => setConfirmAnchor(null)}
-        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
-        transformOrigin={{ vertical: "top", horizontal: "right" }}
+        placement="bottom-end"
+        modifiers={[
+          { name: "offset", options: { offset: [0, 8] } },
+          { name: "flip", options: { fallbackPlacements: ["top-end", "left"] } },
+          { name: "preventOverflow", options: { padding: 8 } },
+        ]}
+        sx={{ zIndex: (theme) => theme.zIndex.modal }}
       >
-        <Box sx={{ p: 1.5, maxWidth: 240 }}>
-          <Typography variant="body2" sx={{ mb: 1 }}>
-            Stop the current turn and send this message now? The agent's
-            in-progress work is discarded.
-          </Typography>
-          <Stack direction="row" spacing={1} justifyContent="flex-end">
-            <Button
-              size="small"
-              color="inherit"
-              onClick={(): void => setConfirmAnchor(null)}
-              sx={{ textTransform: "none" }}
-            >
-              Cancel
-              <Kbd keys="Esc" />
-            </Button>
-            <NetworkButton
-              size="small"
-              variant="contained"
-              color="warning"
-              startIcon={<Bolt />}
-              networkAction={confirmForcePush}
-              sx={{ textTransform: "none" }}
-            >
-              Force push
-              <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-            </NetworkButton>
-          </Stack>
-        </Box>
-      </Popover>
+        <ClickAwayListener onClickAway={(): void => setConfirmAnchor(null)}>
+          <Paper
+            role="dialog"
+            aria-modal="false"
+            aria-label="Force push confirmation"
+            sx={{ maxWidth: 240, borderRadius: 2, boxShadow: 8 }}
+          >
+            <Box sx={{ p: 1.5 }}>
+              <Typography variant="body2" sx={{ mb: 1 }}>
+                Stop the current turn and send this message now? The agent's
+                in-progress work is discarded.
+              </Typography>
+              <Stack direction="row" spacing={1} justifyContent="flex-end">
+                <Button
+                  size="small"
+                  color="inherit"
+                  onPointerDown={(event): void => event.preventDefault()}
+                  onClick={(): void => setConfirmAnchor(null)}
+                  sx={{ textTransform: "none" }}
+                >
+                  Cancel
+                  <Kbd keys="Esc" />
+                </Button>
+                <NetworkButton
+                  size="small"
+                  variant="contained"
+                  color="warning"
+                  startIcon={<Bolt />}
+                  onPointerDown={(event): void => event.preventDefault()}
+                  networkAction={confirmForcePush}
+                  sx={{ textTransform: "none" }}
+                >
+                  Force push
+                  <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+                </NetworkButton>
+              </Stack>
+            </Box>
+          </Paper>
+        </ClickAwayListener>
+      </Popper>
     )
     : null;
   // Mobile Queue/Draft edits are continuously buffered in this row. Dismissing
@@ -5478,6 +5494,7 @@ export function SessionControls({
       "mode",
       "model",
       "deepseek_context",
+      "deepseek_cache_protection",
       "effort",
       "reasoning_effort",
     ];
@@ -5757,7 +5774,8 @@ function ComposerSheet({
                       key={opt.id}
                       option={opt}
                       disabled={
-                        opt.id === "deepseek_context"
+                        opt.id === "deepseek_context" ||
+                          opt.id === "deepseek_cache_protection"
                           ? status === "busy" || status === "starting"
                           : dead
                       }
@@ -5778,6 +5796,25 @@ function ComposerSheet({
 // so it now rides the one popup the user already opens to change mode / model
 // / effort. Desktop shows the same facts in the persistent sidebar, so this
 // section only renders inside the compact-tier sheet.
+interface DeepseekCacheProtectionStatus {
+  state: "protected" | "inactive" | "disabled";
+  protected_tokens?: number;
+  last_verified_at_ms?: number;
+  next_attempt_at_ms?: number;
+  scheduled_interval_ms?: number;
+  expires_at_ms?: number;
+  attempts?: number;
+  minimumHitTokens?: number;
+  contextUsed?: number;
+}
+
+function compactCacheTokens(tokens: number | undefined): string {
+  if (tokens === undefined || !Number.isFinite(tokens) || tokens < 0) return "";
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
+  if (tokens >= 1_000) return `${Math.round(tokens / 1_000).toLocaleString()}K`;
+  return tokens.toLocaleString();
+}
+
 function SessionInfoSection({
   session,
   title,
@@ -5808,6 +5845,46 @@ function SessionInfoSection({
   const contextPercent = hasContext
     ? Math.min(100, Math.max(0, contextUsed / contextSize * 100))
     : 0;
+  const cacheProtectionVisible = (session.provider === "claude-deepseek" ||
+    session.provider === "codex-deepseek") &&
+    contextUsed >= DEEPSEEK_CACHE_MIN_HIT_TOKENS;
+  const [cacheProtection, setCacheProtection] = useState<
+    DeepseekCacheProtectionStatus | null
+  >(null);
+  const [cacheProtectionUnavailable, setCacheProtectionUnavailable] = useState(false);
+  useEffect(() => {
+    if (!cacheProtectionVisible) {
+      setCacheProtection(null);
+      setCacheProtectionUnavailable(false);
+      return;
+    }
+    const controller = new AbortController();
+    const refresh = (): void => {
+      void fetch(
+        `/api/sessions/${encodeURIComponent(session.id)}/cache-protection`,
+        { signal: controller.signal },
+      ).then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${String(response.status)}`);
+        const value = await response.json() as DeepseekCacheProtectionStatus;
+        if (!["protected", "inactive", "disabled"].includes(value.state)) {
+          throw new Error("invalid cache status");
+        }
+        setCacheProtection(value);
+        setCacheProtectionUnavailable(false);
+      }).catch(() => {
+        if (!controller.signal.aborted) {
+          setCacheProtection(null);
+          setCacheProtectionUnavailable(true);
+        }
+      });
+    };
+    refresh();
+    const interval = globalThis.setInterval(refresh, 60_000);
+    return (): void => {
+      controller.abort();
+      globalThis.clearInterval(interval);
+    };
+  }, [cacheProtectionVisible, session.id]);
   const rows: { label: string; value: string; mono?: boolean }[] = [
     { label: "Provider", value: session.provider },
     { label: "Project", value: project },
@@ -5891,6 +5968,44 @@ function SessionInfoSection({
           <Typography variant="caption" color="text.secondary" sx={{ textAlign: "right" }}>
             {contextUsed.toLocaleString()} / {contextSize.toLocaleString()} tokens
           </Typography>
+        )}
+        {cacheProtectionVisible &&
+          (cacheProtection || cacheProtectionUnavailable) && (
+          <Tooltip
+            title={cacheProtection?.state === "protected"
+              ? `Last verified ${
+                cacheProtection.last_verified_at_ms
+                  ? new Date(cacheProtection.last_verified_at_ms).toLocaleString()
+                  : "recently"
+              }. Next attempt ${
+                cacheProtection.next_attempt_at_ms
+                  ? new Date(cacheProtection.next_attempt_at_ms).toLocaleString()
+                  : "is being scheduled"
+              }. Real agent work always preempts it.`
+              : cacheProtection?.state === "disabled"
+              ? "Automatic DeepSeek cache protection is disabled for this session."
+              : cacheProtectionUnavailable
+              ? "The owning Machine could not report cache status. Agent work is unaffected."
+              : "This session is large enough for protection; Cowboy is waiting for a verified ≥90% cache hit before scheduling a keepalive."}
+          >
+            <Chip
+              size="small"
+              variant="outlined"
+              color={cacheProtection?.state === "protected"
+                ? "success"
+                : cacheProtectionUnavailable
+                ? "warning"
+                : "default"}
+              label={cacheProtection?.state === "protected"
+                ? `Cache protected · ${compactCacheTokens(cacheProtection.protected_tokens)}`
+                : cacheProtection?.state === "disabled"
+                ? "Cache protection off"
+                : cacheProtectionUnavailable
+                ? "Cache status unavailable"
+                : "Cache protection learning"}
+              sx={{ alignSelf: "flex-start" }}
+            />
+          </Tooltip>
         )}
       </Stack>
     </>

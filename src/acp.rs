@@ -20,7 +20,6 @@
 #![warn(clippy::pedantic)]
 
 use parking_lot::Mutex;
-use sha2::{Digest as _, Sha256};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -70,8 +69,9 @@ fn deepseek_session_environment(
     provider_id: &str,
     session_id: &str,
     existing_claude_headers: Option<&str>,
+    cache_policy: Option<&str>,
 ) -> Option<(&'static str, String)> {
-    let opaque_session_id = format!("{:x}", Sha256::digest(session_id.as_bytes()));
+    let opaque_session_id = crate::deepseek_cache::opaque_session_id(session_id);
     match provider_id {
         "claude-deepseek" => {
             let mut headers = existing_claude_headers
@@ -83,6 +83,10 @@ fn deepseek_session_environment(
             }
             headers.push_str("X-Cowboy-Session-Id: ");
             headers.push_str(&opaque_session_id);
+            if let Some(policy @ ("auto" | "off")) = cache_policy {
+                headers.push_str("\nX-Cowboy-Cache-Protection: ");
+                headers.push_str(policy);
+            }
             Some(("ANTHROPIC_CUSTOM_HEADERS", headers))
         }
         "codex-deepseek" => Some((crate::provider::DEEPSEEK_SESSION_ID_ENV, opaque_session_id)),
@@ -253,23 +257,30 @@ mod startup_mode_tests {
             "claude-deepseek",
             "sess-private-value",
             Some("X-Existing: retained"),
+            Some("auto"),
         )
         .expect("Claude DeepSeek attribution");
-        let (codex_key, codex_value) =
-            deepseek_session_environment("codex-deepseek", "sess-private-value", None)
-                .expect("Codex DeepSeek attribution");
+        let (codex_key, codex_value) = deepseek_session_environment(
+            "codex-deepseek",
+            "sess-private-value",
+            None,
+            Some("auto"),
+        )
+        .expect("Codex DeepSeek attribution");
 
         assert_eq!(claude_key, "ANTHROPIC_CUSTOM_HEADERS");
         assert_eq!(codex_key, "COWBOY_DEEPSEEK_SESSION_ID");
         assert_eq!(
             claude_value,
-            format!("X-Existing: retained\nX-Cowboy-Session-Id: {codex_value}")
+            format!(
+                "X-Existing: retained\nX-Cowboy-Session-Id: {codex_value}\nX-Cowboy-Cache-Protection: auto"
+            )
         );
         assert_eq!(codex_value.len(), 64);
         assert!(codex_value.bytes().all(|byte| byte.is_ascii_hexdigit()));
         assert!(!claude_value.contains("sess-private-value"));
-        assert!(deepseek_session_environment("claude-code", "session", None).is_none());
-        assert!(deepseek_session_environment("codex", "session", None).is_none());
+        assert!(deepseek_session_environment("claude-code", "session", None, None).is_none());
+        assert!(deepseek_session_environment("codex", "session", None, None).is_none());
     }
 
     #[test]
@@ -811,6 +822,9 @@ async fn agent_main(
         spec.id,
         session_id,
         spec.env.get("ANTHROPIC_CUSTOM_HEADERS").map(String::as_str),
+        std::env::var(crate::deepseek_cache::SESSION_POLICY_ENV)
+            .ok()
+            .as_deref(),
     ) {
         command.env(key, value);
     }

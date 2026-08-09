@@ -1,6 +1,7 @@
 import {
   derive,
   isCompactionCompletionTail,
+  isCompactionRequestTail,
   isCompactingTail,
   latestCompactionCompletionSeq,
   linkTimeline,
@@ -82,10 +83,29 @@ Deno.test("Codex compact command and completion drive the compact state", () => 
     },
   }];
   if (!isCompactingTail(requested)) throw new Error("compact request should be active");
+  if (!isCompactionRequestTail(requested)) {
+    throw new Error("compact request should own the synthetic live-edge widget");
+  }
+
+  const compacting: Envelope[] = [...requested, {
+    session_id: "s1",
+    seq: 11,
+    kind: "update",
+    update: {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "Compacting..." },
+    },
+  }];
+  if (!isCompactingTail(compacting)) {
+    throw new Error("agent compact notice should keep compact state active");
+  }
+  if (isCompactionRequestTail(compacting)) {
+    throw new Error("agent compact notice already owns the visible widget");
+  }
 
   const completed: Envelope[] = [...requested, {
     session_id: "s1",
-    seq: 11,
+    seq: 12,
     kind: "update",
     update: {
       sessionUpdate: "agent_message_chunk",
@@ -99,7 +119,7 @@ Deno.test("Codex compact command and completion drive the compact state", () => 
   if (!isCompactionCompletionTail(completed)) {
     throw new Error("Codex completion notice should be recognized");
   }
-  if (latestCompactionCompletionSeq(completed) !== 11) {
+  if (latestCompactionCompletionSeq(completed) !== 12) {
     throw new Error("completion sequence should identify the fresh compact result");
   }
 });

@@ -1166,3 +1166,13 @@ Desktop Vim + IME checks:
     inserted in the middle of text. Delete actions must consume that surrounding
     one-line range and map the old selection through it; removing only the token
     line leaves a stale separator and makes the caret appear on the wrong line.
+
+57. **Queue Force push confirmation must not unmount its own anchor.** MUI
+    `Popover` is backed by `Modal`; opening it moves focus out of the native
+    textarea, dismisses the iOS keyboard, and completes the keyboard-bound Queue
+    edit. The accessory button is then unmounted, so Popover loses `anchorEl` and
+    falls back to the viewport's top-left under the status bar. Keep this confirm
+    on non-modal `Popper` with click-away dismissal, prevent pointer-down focus
+    transfer on both confirmation buttons, and close the editor only after the
+    authoritative Force push acknowledgement. Do not repair the symptom with a
+    safe-area offset: the missing anchor and lost edit transaction are the bug.

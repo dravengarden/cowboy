@@ -373,6 +373,28 @@ Deno.test("mobile pending editing keeps expansion and context delivery actions i
   assertEquals(composerSource.includes("persistEdit();"), true);
 });
 
+Deno.test("pending Force push confirmation keeps the native editor and anchor mounted", () => {
+  const confirmationStart = composerSource.indexOf(
+    'const forcePushConfirmation = kind === "queued"',
+  );
+  const confirmationEnd = composerSource.indexOf(
+    "// Mobile Queue/Draft edits are continuously buffered",
+    confirmationStart,
+  );
+  const confirmation = composerSource.slice(confirmationStart, confirmationEnd);
+
+  assertEquals(confirmationStart >= 0 && confirmationEnd > confirmationStart, true);
+  assertEquals(confirmation.includes("<Popper"), true);
+  assertEquals(confirmation.includes("<Popover"), false);
+  assertEquals(confirmation.includes("<ClickAwayListener"), true);
+  assertEquals(confirmation.includes('aria-modal="false"'), true);
+  assertEquals(
+    confirmation.match(/onPointerDown=\{\(event\): void => event\.preventDefault\(\)\}/g)
+      ?.length,
+    2,
+  );
+});
+
 Deno.test("mobile keyboard dismissal belongs to the fixed utility rail", () => {
   const utilityStart = composerSource.indexOf(
     "data-mobile-composer-utility-rail",

@@ -80,10 +80,11 @@ const OPTION_RANK: Record<string, number> = {
   mode: 0,
   model: 1,
   deepseek_context: 2,
-  effort: 3,
-  reasoning_effort: 3,
-  fast: 4,
-  fast_mode: 4,
+  deepseek_cache_protection: 3,
+  effort: 4,
+  reasoning_effort: 4,
+  fast: 5,
+  fast_mode: 5,
 };
 
 const EMPTY_CONFIG_OPTIONS: ConfigOption[] = [];
@@ -513,7 +514,9 @@ function ConfigOptionControl({
         gridTemplateColumns: "108px minmax(0, 1fr)",
         alignItems: "center",
         gap: 1.25,
-        gridColumn: label === "Reasoning effort" || option.id === "deepseek_context"
+        gridColumn: label === "Reasoning effort" ||
+            option.id === "deepseek_context" ||
+            option.id === "deepseek_cache_protection"
           ? "1 / -1"
           : undefined,
       }}
@@ -1040,7 +1043,8 @@ export function DesktopTopBarControls({
                 option={option}
                 sessionId={sessionId}
                 disabled={
-                  option.id === "deepseek_context"
+                  option.id === "deepseek_context" ||
+                      option.id === "deepseek_cache_protection"
                     ? status === "busy" || status === "starting"
                     : dead
                 }

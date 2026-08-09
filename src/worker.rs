@@ -317,6 +317,14 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
         .and_then(|(window, compact)| {
             crate::deepseek_context::from_launch_values(&args.provider, window, compact)
         });
+    let cache_protection = std::env::var(crate::deepseek_cache::SESSION_POLICY_ENV)
+        .ok()
+        .and_then(|value| match value.as_str() {
+            "auto" => Some(true),
+            "off" => Some(false),
+            _ => None,
+        })
+        .filter(|_| crate::deepseek_cache::supported_provider(&args.provider));
     let epoch = args.worker_epoch.unwrap_or_else(generated_epoch);
     let executable = std::env::current_exe()
         .ok()
@@ -329,6 +337,7 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
         system: args.system,
         context_window: context_budget.map(|value| value.context_window),
         auto_compact_token_limit: context_budget.map(|value| value.auto_compact_token_limit),
+        cache_protection,
         generation: args.generation.clone(),
         fallback_for: args.fallback_for.clone(),
         adopt_only: false,
@@ -845,6 +854,7 @@ mod tests {
             system: false,
             context_window: Some(680_000),
             auto_compact_token_limit: Some(646_000),
+            cache_protection: Some(true),
             generation: "gen-1".to_owned(),
             fallback_for: None,
             adopt_only: false,
