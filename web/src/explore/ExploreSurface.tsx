@@ -43,7 +43,10 @@ import {
 } from "../desktop/commands/DesktopCommandProvider";
 import { sequentialShortcutAvailability } from "../desktop/commands/shortcutAvailability";
 import { DesktopModal } from "../desktop/DesktopModal";
-import { desktopEmbeddedControlSx } from "../desktop/DesktopEmbeddedControl";
+import {
+  desktopEmbeddedControlSx,
+  desktopListItemSx,
+} from "../desktop/DesktopEmbeddedControl";
 import { desktopScrollbarSx } from "../desktop/desktopScrollbar";
 import { derive } from "../derive";
 import { Kbd } from "../Kbd";
@@ -1071,20 +1074,27 @@ function PageList({
                   px: dense ? 1 : 1.25,
                   py: dense ? 0.625 : 0.875,
                   mb: 0.25,
-                  borderRadius: 1.25,
                   alignItems: "center",
-                  transition: "background-color 120ms ease",
-                  "&.Mui-selected": {
-                    bgcolor: (theme) => alpha(theme.palette.primary.main, 0.1),
-                  },
+                  ...(vimNavigation
+                    ? desktopListItemSx()
+                    : {
+                      borderRadius: 1,
+                      transition: "background-color 120ms ease",
+                      "&.Mui-selected": {
+                        bgcolor: (theme) =>
+                          alpha(theme.palette.primary.main, 0.075),
+                      },
+                      "&:not(.Mui-selected):hover": {
+                        bgcolor: "action.hover",
+                      },
+                    }),
                   ...(cursor && {
-                    bgcolor: "action.hover",
+                    borderColor: "primary.main",
+                    bgcolor: (theme) =>
+                      alpha(theme.palette.primary.main, 0.08),
                     boxShadow: (theme) =>
-                      `inset 3px 0 0 ${theme.palette.primary.main}`,
+                      `0 0 0 2px ${alpha(theme.palette.primary.main, 0.14)}`,
                   }),
-                  "&:not(.Mui-selected):hover": {
-                    bgcolor: "action.hover",
-                  },
                 }}
               >
                 <Typography
