@@ -5,6 +5,9 @@ import { persisted, useStore } from "./_store/mod.ts";
 export const COMPOSER_COL_MIN = 320;
 export const COMPOSER_COL_MAX = 720;
 const COMPOSER_COL_DEFAULT = 440;
+export const READING_QUESTIONS_MIN = 240;
+export const READING_QUESTIONS_MAX = 480;
+const READING_QUESTIONS_DEFAULT = 320;
 
 function clampColWidth(px: number): number {
   return Math.min(COMPOSER_COL_MAX, Math.max(COMPOSER_COL_MIN, Math.round(px)));
@@ -32,3 +35,24 @@ export function useComposerColWidth(): number {
 export function clampComposerColWidth(px: number): number {
   return clampColWidth(px);
 }
+
+export function clampReadingQuestionsWidth(px: number): number {
+  return Math.min(
+    READING_QUESTIONS_MAX,
+    Math.max(READING_QUESTIONS_MIN, Math.round(px)),
+  );
+}
+
+export const readingQuestionsWidthStore = persisted<number>(
+  "cowboy:reading-questions-width",
+  READING_QUESTIONS_DEFAULT,
+  {
+    serialize: (n) => String(Math.round(n)),
+    deserialize: (s) => {
+      const n = Number(s);
+      return Number.isFinite(n)
+        ? clampReadingQuestionsWidth(n)
+        : READING_QUESTIONS_DEFAULT;
+    },
+  },
+);

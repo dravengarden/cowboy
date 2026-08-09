@@ -345,6 +345,15 @@ background, accent rail, or focus ring.
 than Vim windows; enter them through their dedicated commands, so vertical
 window movement never collapses or selects them as an intermediate stop.
 
+`Ctrl-W R` enters layout Resize mode and selects the nearest visible vertical
+bar: Sessions / Prompt from Sessions, Prompt / Conversation from either work
+pane, or Questions / Page in Reading mode. The selected bar uses the shared
+accent and keycap language; `H/L` moves it by 16px, `Shift-H/L` moves it by
+48px, `Tab` cycles visible bars, and `Esc` or `Enter` returns to the previously
+focused region. Resize mode is exclusive, so unrelated bare keys never leak
+into lists, transcript widgets, or destructive actions. Pointer dragging keeps
+working and selecting a bar with the pointer enters the same visible state.
+
 Queue and Draft use the same list contract as Sessions: `J/K` selects, `gg` and
 `G` jump to the ends, `g1` through `g0` jump to one of the first ten visible
 slots, and `L`/`Enter` opens the selected message editor. `P` pins reorder mode

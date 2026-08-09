@@ -20,6 +20,15 @@ import { assertMacShortcutAllowed } from "./macShortcutPolicy";
 import { desktopImeOwnsKey } from "./imeShortcut";
 import { desktopOverlayOwnsShortcuts } from "./desktopShortcutScope";
 import { listJumpIndex, pendingItemActionKey } from "./listNavigation";
+import {
+  adjacentDesktopSplitter,
+  DESKTOP_SPLITTER_ADJUST_EVENT,
+  DESKTOP_SPLITTER_LARGE_STEP,
+  DESKTOP_SPLITTER_STEP,
+  preferredDesktopSplitter,
+  visibleDesktopSplitterIds,
+} from "../desktopSplitterKeyboard";
+import type { DesktopSplitterId } from "../DesktopWorkspaceController";
 
 export interface DesktopCommand {
   id: string;
@@ -202,6 +211,73 @@ export function DesktopCommandProvider(
         clearPendingJumpChord();
         return;
       }
+      const selectSplitter = (splitter: DesktopSplitterId | null): void => {
+        if (splitter === null) return;
+        workspace.setSelectedSplitter(splitter);
+        requestAnimationFrame(() =>
+          document.querySelector<HTMLElement>(
+            `[data-desktop-splitter="${CSS.escape(splitter)}"]`,
+          )?.focus({ preventScroll: true })
+        );
+      };
+      if (workspace.selectedSplitter !== null) {
+        const visible = visibleDesktopSplitterIds();
+        const splitter = document.querySelector<HTMLElement>(
+          `[data-desktop-splitter="${CSS.escape(workspace.selectedSplitter)}"]`,
+        );
+        if (!splitter || !visible.includes(workspace.selectedSplitter)) {
+          workspace.setSelectedSplitter(null);
+          return;
+        }
+        const key = workspaceCommandKey(event);
+        if (!event.metaKey && !event.ctrlKey && !event.altKey) {
+          if (key === "Escape" || key === "Enter") {
+            event.preventDefault();
+            event.stopPropagation();
+            workspace.setSelectedSplitter(null);
+            if (workspace.focusedRegion) {
+              requestAnimationFrame(() =>
+                workspace.focusRegion(workspace.focusedRegion as string)
+              );
+            }
+            return;
+          }
+          if (key === "Tab") {
+            event.preventDefault();
+            event.stopPropagation();
+            selectSplitter(adjacentDesktopSplitter(
+              visible,
+              workspace.selectedSplitter,
+              event.shiftKey ? -1 : 1,
+            ));
+            return;
+          }
+          const lower = key.toLowerCase();
+          if (lower === "h" || lower === "l" || key === "ArrowLeft" || key === "ArrowRight") {
+            event.preventDefault();
+            event.stopPropagation();
+            const left = lower === "h" || key === "ArrowLeft";
+            const step = event.shiftKey
+              ? DESKTOP_SPLITTER_LARGE_STEP
+              : DESKTOP_SPLITTER_STEP;
+            globalThis.dispatchEvent(new CustomEvent(
+              DESKTOP_SPLITTER_ADJUST_EVENT,
+              {
+                detail: {
+                  splitter: workspace.selectedSplitter,
+                  delta: left ? -step : step,
+                },
+              },
+            ));
+            return;
+          }
+          // Resize mode is exclusive: unrelated bare keys must not leak into
+          // the selected list, transcript widgets, or destructive row actions.
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+      }
       // Queue and Draft direct jumps are a visible, transient `G -> slot`
       // chord. Once armed, the next non-modifier key belongs exclusively to
       // that chord: a valid 1-9/0 (or a second G) jumps, while Escape, a
@@ -254,6 +330,32 @@ export function DesktopCommandProvider(
       }
       if (workspace.productMode === "reading") {
         const key = workspaceCommandKey(event);
+        if (windowChord.current !== null) {
+          globalThis.clearTimeout(windowChord.current);
+          windowChord.current = null;
+          if (key.toLowerCase() === "r") {
+            event.preventDefault();
+            event.stopPropagation();
+            const visible = visibleDesktopSplitterIds();
+            selectSplitter(preferredDesktopSplitter(
+              visible,
+              workspace.focusedPane,
+              workspace.productMode,
+            ));
+            return;
+          }
+        }
+        if (
+          event.ctrlKey && !event.metaKey && !event.altKey &&
+          key.toLowerCase() === "w"
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          windowChord.current = globalThis.setTimeout(() => {
+            windowChord.current = null;
+          }, 1200);
+          return;
+        }
         const readingSidebarOwnsKey = Boolean(eventElement?.closest(
           "[data-reading-question-sidebar]",
         ));
@@ -360,13 +462,21 @@ export function DesktopCommandProvider(
         globalThis.clearTimeout(windowChord.current);
         windowChord.current = null;
         const key = workspaceCommandKey(event).toLowerCase();
-        if (["h", "j", "k", "l", "w"].includes(key)) {
+        if (["h", "j", "k", "l", "r", "w"].includes(key)) {
           event.preventDefault();
           event.stopPropagation();
           if (key === "h") workspace.focusAdjacentPane(-1);
           else if (key === "l") workspace.focusAdjacentPane(1);
           else if (key === "j") workspace.focusAdjacentRegion(1);
           else if (key === "k") workspace.focusAdjacentRegion(-1);
+          else if (key === "r") {
+            const visible = visibleDesktopSplitterIds();
+            selectSplitter(preferredDesktopSplitter(
+              visible,
+              workspace.focusedPane,
+              workspace.productMode,
+            ));
+          }
           else workspace.cycleRegion();
           return;
         }

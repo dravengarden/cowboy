@@ -1150,10 +1150,12 @@ function PageList({
 export function DesktopReadingQuestionDirectory({
   sessionId,
   projection,
+  width,
   onClose,
 }: {
   sessionId: string;
   projection: TranscriptProjection;
+  width: number;
   onClose: () => void;
 }): React.JSX.Element {
   const timeline = useStoreSelector((snapshot) =>
@@ -1293,13 +1295,11 @@ export function DesktopReadingQuestionDirectory({
       data-reading-question-sidebar
       data-desktop-region="conversation.questions"
       sx={{
-        width: "clamp(268px, 22vw, 360px)",
+        width,
         flexShrink: 0,
         minHeight: 0,
         display: "flex",
         flexDirection: "column",
-        borderRight: 1,
-        borderColor: "divider",
         bgcolor: (theme) => alpha(theme.palette.background.paper, 0.5),
       }}
     >

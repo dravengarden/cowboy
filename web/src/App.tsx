@@ -187,6 +187,11 @@ import { defaultNewSessionWorkspace } from "./newSessionWorkspace";
 import { resolveActiveSession } from "./sessionSelection";
 import { DesktopShortcutBar } from "./desktop/DesktopShortcutBar";
 import { DesktopModal as DesktopModalShell } from "./desktop/DesktopModal";
+import { useOptionalDesktopWorkspace } from "./desktop/DesktopWorkspaceController";
+import {
+    DESKTOP_SPLITTER_ADJUST_EVENT,
+    splitterAdjustment,
+} from "./desktop/desktopSplitterKeyboard";
 
 const DesktopCommandHost = lazy(async () => {
     const module = await import("./desktop/commands/DesktopCommandHost");
@@ -219,6 +224,10 @@ const DesktopRegionShortcut = lazy(async () => {
 const DesktopContextShortcut = lazy(async () => {
     const module = await import("./desktop/commands/DesktopContextShortcut");
     return { default: module.DesktopContextShortcut };
+});
+const DesktopSplitterHint = lazy(async () => {
+    const module = await import("./desktop/DesktopSplitterHint");
+    return { default: module.DesktopSplitterHint };
 });
 // Desktop sidebar width: a user-draggable pixel width (VSCode-style divider),
 // persisted in localStorage. The bounds keep both panes usable — 240px floor
@@ -1664,6 +1673,7 @@ export function App({
     surface: "desktop" | "touch";
     onMobileDrawerOpenChange?: (open: boolean) => void;
 }): React.JSX.Element {
+    const desktopWorkspace = useOptionalDesktopWorkspace();
     const sessions = useStoreSelector((snapshot) => snapshot.sessions);
     const lastError = useStoreSelector((snapshot) => snapshot.lastError);
     const sessionsLoaded = useStoreSelector((snapshot) => snapshot.sessionsLoaded);
@@ -1888,6 +1898,33 @@ export function App({
     const [colResizing, setColResizing] = useState(false);
     const colWidthRef = useRef(colWidth);
     colWidthRef.current = colWidth;
+    useEffect(() => {
+        if (!desktopWorkspace) return undefined;
+        const onKeyboardResize = (event: Event): void => {
+            const adjustment = splitterAdjustment(event);
+            if (adjustment?.splitter === "sessions-prompt") {
+                setSidebarWidth((current) => {
+                    const next = clampSidebarWidth(current + adjustment.delta);
+                    widthRef.current = next;
+                    sidebarWidthStore.set(next);
+                    return next;
+                });
+            } else if (adjustment?.splitter === "prompt-conversation") {
+                setColWidth((current) => {
+                    const next = clampComposerColWidth(current + adjustment.delta);
+                    colWidthRef.current = next;
+                    composerColWidthStore.set(next);
+                    return next;
+                });
+            }
+        };
+        globalThis.addEventListener(DESKTOP_SPLITTER_ADJUST_EVENT, onKeyboardResize);
+        return (): void =>
+            globalThis.removeEventListener(
+                DESKTOP_SPLITTER_ADJUST_EVENT,
+                onKeyboardResize,
+            );
+    }, [desktopWorkspace]);
     useEffect(() => {
         if (!colResizing) return undefined;
         const { body } = document;
@@ -2418,6 +2455,17 @@ export function App({
                         role="separator"
                         aria-orientation="vertical"
                         aria-label="Resize sidebar"
+                        title="Resize layout · Ctrl+W R"
+                        aria-valuemin={SIDEBAR_MIN}
+                        aria-valuemax={SIDEBAR_MAX}
+                        aria-valuenow={Math.round(sidebarWidth)}
+                        data-desktop-splitter="sessions-prompt"
+                        data-desktop-splitter-selected={
+                            desktopWorkspace?.selectedSplitter === "sessions-prompt"
+                                ? "true"
+                                : undefined
+                        }
+                        tabIndex={-1}
                         onPointerDown={startResize}
                         sx={{
                             position: "absolute",
@@ -2441,14 +2489,26 @@ export function App({
                                 transform: "translateX(-50%)",
                                 width: "1px",
                                 height: "100%",
-                                bgcolor: resizing ? "primary.main" : "divider",
+                                bgcolor: resizing ||
+                                        desktopWorkspace?.selectedSplitter ===
+                                            "sessions-prompt"
+                                    ? "primary.main"
+                                    : "divider",
                                 transition: "background-color 120ms",
                             },
                             "&:hover::after": {
                                 bgcolor: "primary.main",
                             },
+                            "&:focus": { outline: "none" },
                         }}
-                    />
+                    >
+                        {desktopWorkspace?.selectedSplitter ===
+                                "sessions-prompt" && (
+                            <Suspense fallback={null}>
+                                <DesktopSplitterHint />
+                            </Suspense>
+                        )}
+                    </Box>
                 </Stack>
             ) : null}
 

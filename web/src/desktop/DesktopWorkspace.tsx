@@ -1,6 +1,6 @@
 import { alpha, Box, Button, Stack, Typography } from "@mui/material";
 import { ArrowBack, ListAltOutlined } from "@mui/icons-material";
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   type DesktopPane,
   useDesktopWorkspace,
@@ -19,6 +19,19 @@ import {
   useDesktopCommand,
 } from "./commands/DesktopCommandProvider";
 import { DESKTOP_FOCUS_PROMPT_SHORTCUT } from "./commands/workspaceShortcuts";
+import { DesktopSplitterHint } from "./DesktopSplitterHint";
+import {
+  clampReadingQuestionsWidth,
+  COMPOSER_COL_MAX,
+  COMPOSER_COL_MIN,
+  readingQuestionsWidthStore,
+  READING_QUESTIONS_MAX,
+  READING_QUESTIONS_MIN,
+} from "../desktopLayout";
+import {
+  DESKTOP_SPLITTER_ADJUST_EVENT,
+  splitterAdjustment,
+} from "./desktopSplitterKeyboard";
 
 const PROMPT_MIN = 360;
 const CONVERSATION_MIN = 520;
@@ -86,6 +99,64 @@ export function DesktopWorkspace({
   onProjectionChange: (projection: TranscriptProjection) => void;
 }): React.JSX.Element {
   const workspace = useDesktopWorkspace();
+  const [questionsWidth, setQuestionsWidth] = useState(
+    readingQuestionsWidthStore.get,
+  );
+  const [questionsResizing, setQuestionsResizing] = useState(false);
+  const questionsWidthRef = useRef(questionsWidth);
+  questionsWidthRef.current = questionsWidth;
+  useEffect(() => {
+    const onKeyboardResize = (event: Event): void => {
+      const adjustment = splitterAdjustment(event);
+      if (adjustment?.splitter !== "questions-page") return;
+      setQuestionsWidth((current) => {
+        const next = clampReadingQuestionsWidth(current + adjustment.delta);
+        questionsWidthRef.current = next;
+        readingQuestionsWidthStore.set(next);
+        return next;
+      });
+    };
+    globalThis.addEventListener(DESKTOP_SPLITTER_ADJUST_EVENT, onKeyboardResize);
+    return (): void =>
+      globalThis.removeEventListener(
+        DESKTOP_SPLITTER_ADJUST_EVENT,
+        onKeyboardResize,
+      );
+  }, []);
+  useEffect(() => {
+    if (!questionsResizing) return undefined;
+    const previousCursor = document.body.style.cursor;
+    const previousSelect = document.body.style.userSelect;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    return (): void => {
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousSelect;
+    };
+  }, [questionsResizing]);
+  function startQuestionsResize(event: React.PointerEvent<HTMLDivElement>): void {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = questionsWidthRef.current;
+    const element = event.currentTarget;
+    element.setPointerCapture(event.pointerId);
+    setQuestionsResizing(true);
+    const onMove = (moveEvent: PointerEvent): void => {
+      setQuestionsWidth(clampReadingQuestionsWidth(
+        startWidth + (moveEvent.clientX - startX),
+      ));
+    };
+    const onUp = (): void => {
+      element.releasePointerCapture(event.pointerId);
+      element.removeEventListener("pointermove", onMove);
+      element.removeEventListener("pointerup", onUp);
+      setQuestionsResizing(false);
+      readingQuestionsWidthStore.set(questionsWidthRef.current);
+    };
+    element.addEventListener("pointermove", onMove);
+    element.addEventListener("pointerup", onUp);
+  }
   const conversationShortcutsActive = workspace.focusedPane === "conversation";
   const projectionPageName = workspace.productMode === "reading" ? "Page" : "Explore";
   const toggleProjectionCommand = useMemo<DesktopCommand>(() => ({
@@ -196,12 +267,58 @@ export function DesktopWorkspace({
             <DesktopReadingQuestionDirectory
               sessionId={sessionId}
               projection={projection}
+              width={questionsWidth}
               onClose={(): void => {
                 workspace.setReadingSidebarOpen(false);
                 requestAnimationFrame(() =>
                   workspace.focusRegion("conversation.transcript"));
               }}
             />
+          )}
+          {workspace.readingSidebarOpen && (
+            <Box
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize question directory"
+              title="Resize layout · Ctrl+W R"
+              aria-valuemin={READING_QUESTIONS_MIN}
+              aria-valuemax={READING_QUESTIONS_MAX}
+              aria-valuenow={Math.round(questionsWidth)}
+              data-desktop-splitter="questions-page"
+              data-desktop-splitter-selected={
+                workspace.selectedSplitter === "questions-page" ? "true" : undefined
+              }
+              tabIndex={-1}
+              onPointerDown={startQuestionsResize}
+              sx={{
+                flex: "0 0 auto",
+                alignSelf: "stretch",
+                width: "1px",
+                bgcolor: questionsResizing ||
+                    workspace.selectedSplitter === "questions-page"
+                  ? "primary.main"
+                  : "divider",
+                transition: "background-color 120ms",
+                position: "relative",
+                cursor: "col-resize",
+                touchAction: "none",
+                zIndex: 3,
+                "&::after": {
+                  content: '""',
+                  position: "absolute",
+                  top: 0,
+                  bottom: 0,
+                  left: "-11px",
+                  right: "-11px",
+                },
+                "&:hover": { bgcolor: "primary.main" },
+                "&:focus": { outline: "none" },
+              }}
+            >
+              {workspace.selectedSplitter === "questions-page" && (
+                <DesktopSplitterHint />
+              )}
+            </Box>
           )}
           <Box
             data-desktop-region="conversation.transcript"
@@ -234,13 +351,12 @@ export function DesktopWorkspace({
         data-desktop-pane="prompt"
         tabIndex={-1}
         sx={{
-          // Prefer the persisted working width, but protect both productive
-          // surfaces. The conversation floor is deliberately lower than before:
-          // at a compact Desktop width the Sessions rail collapses first, then
-          // Prompt and Conversation share the full window instead of falling
-          // back to Mobile's vertical stack.
+          // Prefer the persisted working width while preserving Conversation's
+          // productive floor. Do not impose a second percentage ceiling: it
+          // would let pointer/keyboard state change while the visible divider
+          // stayed fixed, making Resize mode appear broken.
           width:
-            `min(${String(promptWidth)}px, 46%, max(${String(PROMPT_MIN)}px, calc(100% - ${String(CONVERSATION_MIN)}px)))`,
+            `min(${String(promptWidth)}px, max(${String(PROMPT_MIN)}px, calc(100% - ${String(CONVERSATION_MIN)}px)))`,
           flexShrink: 0,
           minWidth: 0,
           display: "flex",
@@ -265,12 +381,23 @@ export function DesktopWorkspace({
         role="separator"
         aria-orientation="vertical"
         aria-label="Resize composer column"
+        title="Resize layout · Ctrl+W R"
+        aria-valuemin={COMPOSER_COL_MIN}
+        aria-valuemax={COMPOSER_COL_MAX}
+        aria-valuenow={Math.round(promptWidth)}
+        data-desktop-splitter="prompt-conversation"
+        data-desktop-splitter-selected={
+          workspace.selectedSplitter === "prompt-conversation" ? "true" : undefined
+        }
+        tabIndex={-1}
         onPointerDown={onResizeStart}
         sx={{
           flex: "0 0 auto",
           alignSelf: "stretch",
           width: "1px",
-          bgcolor: resizing ? "primary.main" : "divider",
+          bgcolor: resizing || workspace.selectedSplitter === "prompt-conversation"
+            ? "primary.main"
+            : "divider",
           transition: "background-color 120ms",
           position: "relative",
           cursor: "col-resize",
@@ -285,8 +412,13 @@ export function DesktopWorkspace({
             right: "-11px",
           },
           "&:hover": { bgcolor: "primary.main" },
+          "&:focus": { outline: "none" },
         }}
-      />
+      >
+        {workspace.selectedSplitter === "prompt-conversation" && (
+          <DesktopSplitterHint />
+        )}
+      </Box>
 
       <Box
         component="section"
