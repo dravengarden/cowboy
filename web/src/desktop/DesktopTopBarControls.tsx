@@ -769,7 +769,14 @@ export function DesktopTopBarControls({
         if (choices.length === 0) return false;
         const select = choices.find((choice) => choice.hasAttribute("data-config-select"));
         if (select) {
-          activateChoice(select);
+          // MUI Select opens from its display's primary mousedown, not click.
+          // Preserve that component contract while exposing it through the
+          // panel's visible keyboard grammar.
+          select.dispatchEvent(new MouseEvent("mousedown", {
+            bubbles: true,
+            cancelable: true,
+            button: 0,
+          }));
           return true;
         }
         const active = document.activeElement instanceof HTMLElement

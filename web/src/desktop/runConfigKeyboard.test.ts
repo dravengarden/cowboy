@@ -35,6 +35,10 @@ Deno.test("run configuration shortcuts apply choices instead of only moving focu
     controlsSource.includes('choice.hasAttribute("data-config-select")'),
     true,
   );
+  assertEquals(
+    controlsSource.includes('new MouseEvent("mousedown"'),
+    true,
+  );
   assertEquals(controlsSource.includes('action.type === "direct"'), true);
   assertEquals(
     controlsSource.includes('{ shortcut: "←/→", label: "Change" }'),
