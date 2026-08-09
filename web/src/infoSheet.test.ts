@@ -17,6 +17,6 @@ Deno.test("DeepSeek usage exposes diagnostic time and error controls", () => {
   assertEquals(infoSheetSource.includes("cacheKeepaliveRequests"), true);
   assertEquals(infoSheetSource.includes("Keepalive spend"), true);
   assertEquals(infoSheetSource.includes("Schema v3+"), true);
-  assertEquals(infoSheetSource.includes("verified ≥96K"), true);
+  assertEquals(infoSheetSource.includes("DEEPSEEK_CACHE_MIN_HIT_LABEL"), true);
   assertEquals(infoSheetSource.includes("animateOnOpen"), true);
 });

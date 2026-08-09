@@ -26,6 +26,7 @@ import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { useSkills } from "./store";
 import { NetworkButton, NetworkIconButton } from "./NetworkActionFeedback";
 import {
+  DEEPSEEK_CACHE_MIN_HIT_LABEL,
   deepseekAvailableAgents,
   deepseekCacheStats,
   deepseekCostStats,
@@ -593,7 +594,7 @@ function DeepSeekDetails(
                     Cache protection
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
-                    Auto · verified ≥96K
+                    Auto · verified ≥{DEEPSEEK_CACHE_MIN_HIT_LABEL}
                   </Typography>
                 </Stack>
                 {cacheKeepaliveRequests > 0
@@ -639,7 +640,7 @@ function DeepSeekDetails(
                   )
                   : (
                     <Typography variant="caption" color="text.secondary">
-                      No keepalive attempts in this window. Eligible snapshots start after a verified ≥90% cache hit with at least 96K hit tokens.
+                      No keepalive attempts in this window. Eligible snapshots start after a verified ≥90% cache hit with at least {DEEPSEEK_CACHE_MIN_HIT_LABEL} hit tokens.
                     </Typography>
                   )}
               </Stack>

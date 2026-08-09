@@ -3403,7 +3403,7 @@ async fn api_session_cache_protection(
         return Json(serde_json::json!({
             "state": "disabled",
             "algorithm": "adaptive-replay-v1",
-            "minimumHitTokens": 96_000,
+            "minimumHitTokens": crate::deepseek_cache::MINIMUM_HIT_TOKENS,
             "contextUsed": session.context_used,
         }))
         .into_response();
@@ -3422,7 +3422,10 @@ async fn api_session_cache_protection(
     {
         Ok(mut status) => {
             if let Some(object) = status.as_object_mut() {
-                object.insert("minimumHitTokens".to_owned(), 96_000.into());
+                object.insert(
+                    "minimumHitTokens".to_owned(),
+                    crate::deepseek_cache::MINIMUM_HIT_TOKENS.into(),
+                );
                 object.insert("contextUsed".to_owned(), session.context_used.into());
             }
             Json(status).into_response()

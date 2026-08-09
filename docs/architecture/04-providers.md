@@ -132,7 +132,7 @@ Older sessions without a stored choice use the lane default above.
 DeepSeek sessions expose a separate `Prompt cache protection` option. It is
 enabled by default for new and existing `claude-deepseek` and
 `codex-deepseek` sessions, but does no work until a completed interactive
-request proves that at least 96,000 input tokens were cache hits at a hit rate
+request proves that at least 64,000 input tokens were cache hits at a hit rate
 of at least 90%. The controller persists only the policy. The owning gateway
 keeps the last eligible upstream request in bounded process memory and never
 stores its prompt, response, tools, or reasoning in Cowboy telemetry or logs.
@@ -157,7 +157,7 @@ workload.
 
 The Machine can query content-free protection state through a loopback-only
 gateway endpoint. The UI shows status only for DeepSeek sessions whose measured
-context has reached 96K. Schema-v4 usage events identify
+context has reached 64K. Schema-v4 usage events identify
 `request_purpose=cache_keepalive`; their attempts, outcomes, source age,
 interval, tokens, and price are reported separately. They never contribute to
 interactive request counts, blocking-error rates, cache-miss rates, or agent

@@ -1,3 +1,6 @@
+export const DEEPSEEK_CACHE_MIN_HIT_TOKENS = 64_000;
+export const DEEPSEEK_CACHE_MIN_HIT_LABEL = "64K";
+
 export interface DeepSeekCacheStats {
   hitTokens: number;
   missTokens: number;

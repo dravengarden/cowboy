@@ -7,6 +7,8 @@ use sha2::{Digest as _, Sha256};
 #[cfg(feature = "full")]
 pub const CONFIG_ID: &str = "deepseek_cache_protection";
 pub const SESSION_POLICY_ENV: &str = "COWBOY_DEEPSEEK_CACHE_PROTECTION";
+#[cfg(feature = "full")]
+pub const MINIMUM_HIT_TOKENS: u64 = 64_000;
 #[cfg(feature = "machine-host")]
 pub const SESSION_HEADER: &str = "X-Cowboy-Session-Id";
 #[cfg(feature = "machine-host")]
@@ -105,7 +107,7 @@ pub fn config_option(provider: &str, enabled: bool) -> Option<serde_json::Value>
         serde_json::json!({
             "id": CONFIG_ID,
             "name": "Cache protection",
-            "description": "Automatically protects DeepSeek prompt caches after at least 96K verified hit tokens. Keepalives run only while idle, are preempted by real requests, and changing this setting restarts only this idle session.",
+            "description": "Automatically protects DeepSeek prompt caches after at least 64K verified hit tokens. Keepalives run only while idle, are preempted by real requests, and changing this setting restarts only this idle session.",
             "category": "model_config",
             "type": "select",
             "currentValue": enabled,

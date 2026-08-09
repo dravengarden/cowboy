@@ -213,6 +213,7 @@ import {
 } from "./NetworkActionFeedback";
 import { originLabel } from "./protocol";
 import { providerConfigOptions } from "./providerConfigOptions";
+import { DEEPSEEK_CACHE_MIN_HIT_TOKENS } from "./deepseekUsage";
 import type {
   AvailableCommand,
   ConfigOption,
@@ -5845,7 +5846,8 @@ function SessionInfoSection({
     ? Math.min(100, Math.max(0, contextUsed / contextSize * 100))
     : 0;
   const cacheProtectionVisible = (session.provider === "claude-deepseek" ||
-    session.provider === "codex-deepseek") && contextUsed >= 96_000;
+    session.provider === "codex-deepseek") &&
+    contextUsed >= DEEPSEEK_CACHE_MIN_HIT_TOKENS;
   const [cacheProtection, setCacheProtection] = useState<
     DeepseekCacheProtectionStatus | null
   >(null);
