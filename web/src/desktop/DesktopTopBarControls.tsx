@@ -781,6 +781,9 @@ export function DesktopTopBarControls({
     (shortcut): shortcut is string => shortcut !== undefined,
   );
   const recommendedPresets = runConfigPresets(session?.provider, options);
+  const presetShortcutLabel = recommendedPresets
+    .map((_, index) => String(index + 1))
+    .join("/");
   const loadUsage = useCallback(async (manual: boolean): Promise<void> => {
     if (refreshing) return;
     setRefreshing(true);
@@ -1183,7 +1186,7 @@ export function DesktopTopBarControls({
             { shortcut: "←/→", label: "Change" },
             ...(recommendedPresets.length > 0
               ? [{
-                shortcut: recommendedPresets.length === 1 ? "1" : "1/2",
+                shortcut: presetShortcutLabel,
                 label: "Preset",
               }]
               : []),

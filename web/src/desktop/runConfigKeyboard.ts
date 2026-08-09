@@ -1,7 +1,7 @@
 export type RunConfigKeyAction =
   | { type: "field"; delta: -1 | 1 }
   | { type: "choice"; delta: -1 | 1 }
-  | { type: "preset"; index: 0 | 1 }
+  | { type: "preset"; index: 0 | 1 | 2 }
   | { type: "direct"; shortcut: "a" | "m" | "e" | "c" | "f" };
 
 /** Resolve both standard arrows and visible Vim/mnemonic keys. */
@@ -32,6 +32,8 @@ export function runConfigKeyAction(key: string): RunConfigKeyAction | null {
       return { type: "preset", index: 0 };
     case "2":
       return { type: "preset", index: 1 };
+    case "3":
+      return { type: "preset", index: 2 };
     default:
       return null;
   }

@@ -1,7 +1,7 @@
 import type { ConfigOption } from "./protocol";
 
 export interface RunConfigPreset {
-  id: "luna-max" | "sol-medium" | "deepseek-flash-max";
+  id: "luna-max" | "sol-medium" | "sol-max" | "deepseek-flash-max";
   name: string;
   detail: string;
   isDefault: boolean;
@@ -22,6 +22,13 @@ const OPENAI_CODEX_PRESETS: readonly RunConfigPreset[] = [
     detail: "GPT-5.6-Sol · Medium reasoning",
     isDefault: false,
     values: { model: "gpt-5.6-sol", reasoning_effort: "medium" },
+  },
+  {
+    id: "sol-max",
+    name: "Sol · Max",
+    detail: "GPT-5.6-Sol · Max reasoning",
+    isDefault: false,
+    values: { model: "gpt-5.6-sol", reasoning_effort: "max" },
   },
 ];
 

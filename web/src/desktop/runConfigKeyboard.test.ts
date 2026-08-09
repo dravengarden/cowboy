@@ -24,6 +24,7 @@ Deno.test("run configuration mnemonic keys are direct field actions", () => {
 Deno.test("run configuration number keys select recommended presets", () => {
   assertEquals(runConfigKeyAction("1"), { type: "preset", index: 0 });
   assertEquals(runConfigKeyAction("2"), { type: "preset", index: 1 });
+  assertEquals(runConfigKeyAction("3"), { type: "preset", index: 2 });
 });
 
 Deno.test("choice navigation clamps while direct field actions wrap", () => {

@@ -31,11 +31,12 @@ const composerSource = await Deno.readTextFile(
   new URL("./Composer.tsx", import.meta.url),
 );
 
-Deno.test("OpenAI Codex exposes Luna Max as the default preset and Sol Medium", () => {
+Deno.test("OpenAI Codex exposes Luna Max, Sol Medium, and Sol Max", () => {
   const presets = runConfigPresets("codex", openAiOptions);
   assertEquals(presets.map((preset) => [preset.id, preset.isDefault]), [
     ["luna-max", true],
     ["sol-medium", false],
+    ["sol-max", false],
   ]);
   assertEquals(activeRunConfigPreset(presets, openAiOptions)?.id, "luna-max");
 });
@@ -77,11 +78,14 @@ Deno.test("preset changes omit values the session already owns", () => {
     { configId: "model", value: "gpt-5.6-sol" },
     { configId: "reasoning_effort", value: "medium" },
   ]);
+  assertEquals(runConfigPresetChanges(presets[2], openAiOptions), [
+    { configId: "model", value: "gpt-5.6-sol" },
+  ]);
 });
 
 Deno.test("desktop and mobile expose presets with surface-native interactions", () => {
   assertEquals(desktopSource.includes("data-config-preset={index}"), true);
-  assertEquals(desktopSource.includes("recommendedPresets.length === 1"), true);
+  assertEquals(desktopSource.includes("presetShortcutLabel"), true);
   assertEquals(composerSource.includes("minHeight: 58"), true);
   assertEquals(composerSource.includes("in={showAgentDetails}"), true);
   assertEquals(composerSource.includes("setCustomizeAgent(false)"), true);
