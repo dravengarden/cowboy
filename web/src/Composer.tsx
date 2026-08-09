@@ -469,6 +469,81 @@ export function compactTooltip(used: number, size: number): string {
   return `Compact conversation · context ${pct}% · ${fmtTokens(used)} / ${fmtTokens(size)} tokens`;
 }
 
+function SessionActionConfirmDialog({
+  action,
+  provider,
+  activeTurn,
+  disableRestoreFocus = false,
+  onClose,
+  onConfirm,
+}: {
+  action: SessionAction | null;
+  provider: string;
+  activeTurn: boolean;
+  disableRestoreFocus?: boolean;
+  onClose: () => void;
+  onConfirm: () => Promise<void>;
+}): React.JSX.Element {
+  return (
+    <Dialog
+      open={action !== null}
+      onClose={onClose}
+      disableRestoreFocus={disableRestoreFocus}
+      maxWidth="xs"
+      fullWidth
+    >
+      {action !== null && (
+        <>
+          <DialogTitle>{action.label}?</DialogTitle>
+          <DialogContent>
+            <DialogContentText>{action.detail}</DialogContentText>
+            <DialogContentText sx={{ mt: 1.5, fontSize: "0.8125rem" }}>
+              {action.kind === "slash" && action.command !== undefined
+                ? (
+                  <>
+                    Sends{" "}
+                    <Box
+                      component="code"
+                      sx={{
+                        fontFamily: "ui-monospace, monospace",
+                        px: 0.5,
+                        py: 0.125,
+                        borderRadius: 0.75,
+                        bgcolor: "action.hover",
+                      }}
+                    >
+                      {action.command}
+                    </Box>{" "}
+                    to {provider || "the agent"}
+                    {activeTurn ? " (queued — the agent is mid-turn)" : ""}.
+                  </>
+                )
+                : `Resets ${provider || "the agent"} to a fresh context now${
+                  activeTurn ? " (ends the current turn)" : ""
+                }.`}
+            </DialogContentText>
+          </DialogContent>
+          <DialogActions>
+            <Button color="inherit" onClick={onClose} sx={{ textTransform: "none" }}>
+              Cancel
+              <Kbd keys="Esc" />
+            </Button>
+            <NetworkButton
+              variant="contained"
+              color={action.destructive ? "error" : "primary"}
+              networkAction={onConfirm}
+              sx={{ textTransform: "none" }}
+            >
+              {action.destructive ? "Clear" : "Compact"}
+              <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+            </NetworkButton>
+          </DialogActions>
+        </>
+      )}
+    </Dialog>
+  );
+}
+
 // The mobile fullscreen compose/edit docked BAR — ONE shared bar so Compose and
 // Edit look + behave identically (Send, not Cancel/Save). Stacked in the sticky
 // docked footer (above the keyboard): attachment thumbnails, then — only when the
@@ -2981,66 +3056,14 @@ export function ComposerWorkspace({
           slash-command; Clear is a cowboy session RESET (fresh agent context).
           Both meaningfully change context, so neither fires on a bare tap; Clear
           is styled destructive (it discards the agent's memory of the chat). */}
-      <Dialog
-        open={cmdConfirm !== null}
-        onClose={(): void => setCmdConfirm(null)}
+      <SessionActionConfirmDialog
+        action={cmdConfirm}
+        provider={provider}
+        activeTurn={busy || starting}
         disableRestoreFocus={touchInput && cmdConfirm?.kind === "reset"}
-        maxWidth="xs"
-        fullWidth
-      >
-        {cmdConfirm !== null && (
-          <>
-            <DialogTitle>{cmdConfirm.label}?</DialogTitle>
-            <DialogContent>
-              <DialogContentText>{cmdConfirm.detail}</DialogContentText>
-              <DialogContentText sx={{ mt: 1.5, fontSize: "0.8125rem" }}>
-                {cmdConfirm.kind === "slash" && cmdConfirm.command !== undefined
-                  ? (
-                    <>
-                      Sends{" "}
-                      <Box
-                        component="code"
-                        sx={{
-                          fontFamily: "ui-monospace, monospace",
-                          px: 0.5,
-                          py: 0.125,
-                          borderRadius: 0.75,
-                          bgcolor: "action.hover",
-                        }}
-                      >
-                        {cmdConfirm.command}
-                      </Box>{" "}
-                      to {provider || "the agent"}
-                      {busy || starting ? " (queued — the agent is mid-turn)" : ""}.
-                    </>
-                  )
-                  : `Resets ${provider || "the agent"} to a fresh context now${
-                    busy || starting ? " (ends the current turn)" : ""
-                  }.`}
-              </DialogContentText>
-            </DialogContent>
-            <DialogActions>
-              <Button
-                color="inherit"
-                onClick={(): void => setCmdConfirm(null)}
-                sx={{ textTransform: "none" }}
-              >
-                Cancel
-                <Kbd keys="Esc" />
-              </Button>
-              <NetworkButton
-                variant="contained"
-                color={cmdConfirm.destructive ? "error" : "primary"}
-                networkAction={confirmSessionAction}
-                sx={{ textTransform: "none" }}
-              >
-                {cmdConfirm.destructive ? "Clear" : "Compact"}
-                <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-              </NetworkButton>
-            </DialogActions>
-          </>
-        )}
-      </Dialog>
+        onClose={(): void => setCmdConfirm(null)}
+        onConfirm={confirmSessionAction}
+      />
       {/* Mobile fullscreen compose (the ↗ on touch). A near-full-screen sheet for
           comfortable long-form writing — the first-class editor + future home of a
           markdown / rich-text toolbar + preview. Shares the composer's `text` +
@@ -5948,65 +5971,13 @@ function ComposerSheet({
           </Box>
         </>
       )}
-      <Dialog
-        open={cmdConfirm !== null}
+      <SessionActionConfirmDialog
+        action={cmdConfirm}
+        provider={session?.provider ?? ""}
+        activeTurn={session?.status === "busy" || session?.status === "starting"}
         onClose={(): void => setCmdConfirm(null)}
-        maxWidth="xs"
-        fullWidth
-      >
-        {cmdConfirm !== null && (
-          <>
-            <DialogTitle>{cmdConfirm.label}?</DialogTitle>
-            <DialogContent>
-              <DialogContentText>{cmdConfirm.detail}</DialogContentText>
-              <DialogContentText sx={{ mt: 1.5, fontSize: "0.8125rem" }}>
-                {cmdConfirm.kind === "slash" && cmdConfirm.command !== undefined
-                  ? (
-                    <>
-                      Sends{" "}
-                      <Box
-                        component="code"
-                        sx={{
-                          fontFamily: "ui-monospace, monospace",
-                          px: 0.5,
-                          py: 0.125,
-                          borderRadius: 0.75,
-                          bgcolor: "action.hover",
-                        }}
-                      >
-                        {cmdConfirm.command}
-                      </Box>{" "}
-                      to {session?.provider || "the agent"}
-                      {session?.status === "busy" ? " (queued — the agent is mid-turn)" : ""}.
-                    </>
-                  )
-                  : `Resets ${session?.provider || "the agent"} to a fresh context now${
-                    session?.status === "busy" ? " (ends the current turn)" : ""
-                  }.`}
-              </DialogContentText>
-            </DialogContent>
-            <DialogActions>
-              <Button
-                color="inherit"
-                onClick={(): void => setCmdConfirm(null)}
-                sx={{ textTransform: "none" }}
-              >
-                Cancel
-                <Kbd keys="Esc" />
-              </Button>
-              <NetworkButton
-                variant="contained"
-                color={cmdConfirm.destructive ? "error" : "primary"}
-                networkAction={confirmSessionAction}
-                sx={{ textTransform: "none" }}
-              >
-                {cmdConfirm.destructive ? "Clear" : "Compact"}
-                <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-              </NetworkButton>
-            </DialogActions>
-          </>
-        )}
-      </Dialog>
+        onConfirm={confirmSessionAction}
+      />
     </Sheet>
   );
 }

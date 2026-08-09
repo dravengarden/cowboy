@@ -22,7 +22,7 @@ Deno.test("session settings exposes confirmed compact and clear actions", () => 
     true,
   );
   assertEquals(
-    composerSource.includes('color={cmdConfirm.destructive ? "error" : "primary"}'),
+    composerSource.includes('color={action.destructive ? "error" : "primary"}'),
     true,
   );
 });
