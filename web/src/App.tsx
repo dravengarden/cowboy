@@ -1734,9 +1734,8 @@ export function App({
     const drawerOpenRef = useRef(false);
     useEffect(() => {
         if (!mobile) return undefined;
-        onMobileDrawerOpenChange?.(drawerOpen);
         return () => onMobileDrawerOpenChange?.(false);
-    }, [drawerOpen, mobile, onMobileDrawerOpenChange]);
+    }, [mobile, onMobileDrawerOpenChange]);
     const mobileShellRef = useRef<HTMLDivElement>(null);
     const mobileDrawerRef = useRef<HTMLDivElement>(null);
     const mobileDrawerMaskRef = useRef<HTMLDivElement>(null);
@@ -1777,7 +1776,12 @@ export function App({
             phone,
             getOpen: () => drawerOpenRef.current,
             setOpen: (open) => {
+                // The parent product pager listens in the capture phase. Publish
+                // drawer ownership in this same input frame, before React's
+                // state/effects run, so a quick reversal cannot both close the
+                // Sessions drawer and begin the Agent -> Review transition.
                 drawerOpenRef.current = open;
+                onMobileDrawerOpenChange?.(open);
                 setDrawerOpen(open);
             },
             holdPresentation: holdStorePresentation,
@@ -1787,7 +1791,7 @@ export function App({
             settleMobileDrawerRef.current = null;
             binding.dispose();
         };
-    }, [mobile, phone]);
+    }, [mobile, onMobileDrawerOpenChange, phone]);
 
     // The native viewport owns full-screen device corners. While the keyboard
     // is present, temporarily square the drawer surface's bottom edge; on
