@@ -15,8 +15,8 @@ Deno.test("pager prediction removes one-frame lag without escaping the rail", ()
   assertEquals(predictPagerOffset(-8, 2, 24, 390), 0);
 });
 
-Deno.test("Agent swipes never enter Review while Review can swipe back", () => {
-  assertEquals(pagerDirectionAllowed("agent", -40), false);
+Deno.test("Agent left swipe and Review right swipe are the only app transitions", () => {
+  assertEquals(pagerDirectionAllowed("agent", -40), true);
   assertEquals(pagerDirectionAllowed("agent", 40), false);
   assertEquals(pagerDirectionAllowed("review", 40), true);
   assertEquals(pagerDirectionAllowed("review", -40), false);
