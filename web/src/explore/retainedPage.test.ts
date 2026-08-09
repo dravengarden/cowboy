@@ -1,5 +1,6 @@
 import { assertEquals, assertNotEquals } from "jsr:@std/assert";
 import {
+  canPresentQuestionPageDuringRestore,
   nextFollowedTailPage,
   pageStartHandshakeIdentity,
   questionPageNeedsRestore,
@@ -61,4 +62,11 @@ Deno.test("a busy live tail renders without waiting for persisted page restore",
   assertEquals(questionPageNeedsRestore("busy", false), false);
   assertEquals(questionPageNeedsRestore("running", false), true);
   assertEquals(questionPageNeedsRestore("running", true), false);
+});
+
+Deno.test("a rooted live page stays visible during authoritative restoration", () => {
+  assertEquals(canPresentQuestionPageDuringRestore("42", 1, "42"), true);
+  assertEquals(canPresentQuestionPageDuringRestore("42", 0, "42"), false);
+  assertEquals(canPresentQuestionPageDuringRestore("84", 1, "42"), false);
+  assertEquals(canPresentQuestionPageDuringRestore("42", 1, null), false);
 });

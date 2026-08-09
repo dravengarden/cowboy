@@ -718,10 +718,8 @@ const thoughtTextShimmer = keyframes`
   to   { background-position: 0% 0; }
 `;
 const codexPhraseFade = keyframes`
-  0%   { opacity: 0.28; transform: translateY(1px); }
-  12%  { opacity: 1; transform: translateY(0); }
-  88%  { opacity: 1; transform: translateY(0); }
-  100% { opacity: 0.28; transform: translateY(-1px); }
+  0%, 100% { opacity: 0.28; }
+  12%, 88% { opacity: 1; }
 `;
 
 // Codex activity uses the smallest useful coding gesture: a prompt chevron

@@ -86,6 +86,7 @@ import {
   type QuestionPage,
 } from "./questionPages";
 import {
+  canPresentQuestionPageDuringRestore,
   nextFollowedTailPage,
   pageStartHandshakeIdentity,
   questionPageNeedsRestore,
@@ -1543,6 +1544,12 @@ export function ExploreTranscript(
     isQuestionPageLoaded(props.sessionId, restorePageId);
   const restorePagePending = restorePageId !== null &&
     questionPageNeedsRestore(props.status, restorePageLoaded);
+  const restorePageBlocksPresentation = restorePagePending &&
+    !canPresentQuestionPageDuringRestore(
+      current?.id ?? null,
+      current?.questionCount ?? 0,
+      restorePageId,
+    );
 
   useEffect(() => {
     if (
@@ -1947,7 +1954,7 @@ export function ExploreTranscript(
         </DesktopModal>
       )}
       <Stack sx={{ flex: 1, minWidth: 0, minHeight: 0, position: "relative" }}>
-        {unresolvedQuestionRoot || restorePagePending
+        {unresolvedQuestionRoot || restorePageBlocksPresentation
           ? (
             <Stack
               role="status"

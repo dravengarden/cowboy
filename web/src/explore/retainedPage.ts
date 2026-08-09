@@ -44,3 +44,21 @@ export function questionPageNeedsRestore(
 ): boolean {
   return status !== "busy" && !loaded;
 }
+
+/**
+ * Keep an already visible rooted page on screen while its immutable server
+ * snapshot is fetched. This is the Page View equivalent of stale-while-
+ * revalidate: replacing useful live content with a skeleton at turn completion
+ * creates a false full-page reload.
+ *
+ * A provisional mid-answer page or a retained page outside the loaded timeline
+ * still blocks because the visible projection is not the requested document.
+ */
+export function canPresentQuestionPageDuringRestore(
+  currentPageId: string | null,
+  currentQuestionCount: number,
+  restorePageId: string | null,
+): boolean {
+  return restorePageId !== null && currentQuestionCount > 0 &&
+    currentPageId === restorePageId;
+}
