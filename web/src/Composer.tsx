@@ -103,6 +103,7 @@ import { MobileComposerFormatActions } from "./MobileComposerFormatActions";
 import {
   MobileComposerAccessoryButton,
   MobileComposerAccessoryDock,
+  MobileComposerEditingBar,
 } from "./MobileComposerAccessoryDock";
 import { MessagePreview } from "./MessagePreview";
 import { useTouchComposer } from "./ComposerTextarea";
@@ -1994,9 +1995,6 @@ export function ComposerWorkspace({
               transition:
                 `max-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, opacity 110ms ease 55ms, transform ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, border-color 120ms ease`,
             },
-            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-keyboard-hide]": {
-              display: "inline-flex",
-            },
             "@media (prefers-reduced-motion: reduce)": {
               transition: "none",
             },
@@ -2186,23 +2184,6 @@ export function ComposerWorkspace({
                   <OpenInFull />
                 </IconButton>
               </Tooltip>
-              <Box data-mobile-keyboard-hide sx={{ display: "none" }}>
-                <Tooltip title="Hide keyboard">
-                  <IconButton
-                    size="small"
-                    aria-label="hide keyboard"
-                    sx={{
-                      ...TOOLBAR_ICON_BTN,
-                      color: "text.secondary",
-                      "& .MuiSvgIcon-root": { fontSize: "1.15rem" },
-                    }}
-                    onPointerDown={(event): void => event.preventDefault()}
-                    onClick={dismissMobileSoftwareKeyboard}
-                  >
-                    <KeyboardHide />
-                  </IconButton>
-                </Tooltip>
-              </Box>
             </Stack>
           )
           : (
@@ -2445,63 +2426,54 @@ export function ComposerWorkspace({
         ) : (
         <>
         {touchInput && (
-          <Stack
+          <Box
             data-mobile-focus-format-row
-            direction="row"
-            alignItems="center"
-            spacing={0.125}
             sx={{
               order: 2,
               flexShrink: 0,
               maxHeight: 0,
               minHeight: 0,
-              px: 0.75,
               opacity: 0,
-              overflowX: "auto",
-              overflowY: "hidden",
-              overscrollBehaviorX: "contain",
-              scrollbarWidth: "none",
+              overflow: "hidden",
               pointerEvents: "none",
               transform: "translateY(8px)",
               borderTop: 1,
               borderTopColor: "transparent",
               transition:
                 `max-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, opacity 90ms ease, transform ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, border-color 120ms ease`,
-              "&::-webkit-scrollbar": { display: "none" },
               "@media (prefers-reduced-motion: reduce)": {
                 transition: "none",
                 transform: "none",
               },
             }}
           >
-            <MobileComposerFormatActions
-              commandIds={mobileToolbarIds}
-              editorRef={editorRef}
-              onAttach={(): void => fileInputRef.current?.click()}
-              onPasteImages={(files, selection): void =>
-                addFiles(files, {
-                  preserveFocus: true,
-                  selection,
-                })}
+            <MobileComposerEditingBar
+              actions={
+                <MobileComposerFormatActions
+                  commandIds={mobileToolbarIds}
+                  editorRef={editorRef}
+                  onAttach={(): void => fileInputRef.current?.click()}
+                  onPasteImages={(files, selection): void =>
+                    addFiles(files, {
+                      preserveFocus: true,
+                      selection,
+                    })}
+                  onCustomize={(): void => {
+                    releaseMobileComposerFocus();
+                    setMobileToolbarSettingsOpen(true);
+                  }}
+                />
+              }
+              fixedAction={
+                <MobileComposerAccessoryButton
+                  title="Hide keyboard"
+                  onClick={dismissMobileSoftwareKeyboard}
+                >
+                  <KeyboardHide />
+                </MobileComposerAccessoryButton>
+              }
             />
-            <Box sx={{ flex: 1, minWidth: 6 }} />
-            <Box
-              sx={{
-                flexShrink: 0,
-                pl: 0.25,
-              }}
-            >
-              <MobileComposerAccessoryButton
-                title="Customize toolbar"
-                onClick={(): void => {
-                  releaseMobileComposerFocus();
-                  setMobileToolbarSettingsOpen(true);
-                }}
-              >
-                <Tune />
-              </MobileComposerAccessoryButton>
-            </Box>
-          </Stack>
+          </Box>
         )}
         <Box
           data-mobile-action-row={touchInput ? "true" : undefined}
@@ -4731,10 +4703,17 @@ function PendingRow({
         onExpand={(): void => setOverlayOpen(true)}
       />
     );
+    const expandMobileEdit = (): void => {
+      haptic();
+      const selection = editorRef.current?.getSelection();
+      flushSync(() => setOverlayOpen(true));
+      if (selection) overlayEditorRef.current?.focusSelection(selection);
+      else overlayEditorRef.current?.focusEnd();
+    };
     const editFormatActions = (
       <MobileComposerFormatActions
         commandIds={hasEditSelection
-          ? ["bold", "italic", "code", "link"]
+          ? ["undo", "redo", "bold", "italic", "code", "link"]
           : mobileToolbarIds}
         editorRef={editorRef}
         onAttach={(): void => editFileInputRef.current?.click()}
@@ -4743,6 +4722,10 @@ function PendingRow({
             preserveFocus: true,
             selection,
           })}
+        onCustomize={(): void => {
+          releaseMobileComposerFocus();
+          setMobileToolbarSettingsOpen(true);
+        }}
       />
     );
     return (
@@ -4854,19 +4837,6 @@ function PendingRow({
                     >
                       <AttachFile />
                     </MobileComposerAccessoryButton>
-                    <MobileComposerAccessoryButton
-                      title="Expand editor"
-                      onClick={(): void => {
-                        haptic();
-                        const selection = editorRef.current?.getSelection();
-                        flushSync(() => setOverlayOpen(true));
-                        if (selection) {
-                          overlayEditorRef.current?.focusSelection(selection);
-                        } else overlayEditorRef.current?.focusEnd();
-                      }}
-                    >
-                      <OpenInFull />
-                    </MobileComposerAccessoryButton>
                     {kind === "draft" && (
                       <>
                         <MobileComposerAccessoryButton
@@ -4908,19 +4878,17 @@ function PendingRow({
                 }
                 fixedAction={
                   <MobileComposerAccessoryButton
-                    title="Customize toolbar"
-                    onClick={(): void => {
-                      releaseMobileComposerFocus();
-                      setMobileToolbarSettingsOpen(true);
-                    }}
+                    title="Hide keyboard"
+                    disabled={editAttachmentsPending}
+                    onClick={finishMobileEdit}
                   >
-                    <Tune />
+                    <KeyboardHide />
                   </MobileComposerAccessoryButton>
                 }
-                primaryLabel="Hide keyboard"
-                primaryDisabled={editAttachmentsPending}
-                onPrimary={finishMobileEdit}
-                primaryIcon={<KeyboardHide />}
+                primaryLabel="Expand editor"
+                primaryDisabled={false}
+                onPrimary={expandMobileEdit}
+                primaryIcon={<OpenInFull />}
               />
             ))}
         </Paper>

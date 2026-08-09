@@ -5,7 +5,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { ContentPaste } from "@mui/icons-material";
+import { ContentPaste, Tune } from "@mui/icons-material";
 import type {
   ComposerEditorHandle,
   ComposerEditorSelection,
@@ -29,6 +29,7 @@ interface MobileComposerFormatActionsProps {
     files: File[],
     selection: ComposerEditorSelection,
   ) => void;
+  onCustomize?: () => void;
 }
 
 function MobileClipboardImagePasteButton({
@@ -92,6 +93,7 @@ function MobileClipboardImagePasteButton({
     <MobileComposerAccessoryButton
       title="Paste image"
       disabled={!hasImages || reading}
+      color={hasImages ? "primary" : "default"}
       onClick={(): void => void paste()}
     >
       <ContentPaste />
@@ -105,6 +107,7 @@ export function MobileComposerFormatActions({
   editorRef,
   onAttach,
   onPasteImages,
+  onCustomize,
 }: MobileComposerFormatActionsProps): React.JSX.Element {
   const commands = commandIds
     .map((id) => COMPOSER_COMMANDS_BY_ID[id])
@@ -137,6 +140,14 @@ export function MobileComposerFormatActions({
         onPasteImages={onPasteImages}
       />
       {commands.slice(pasteIndex).map(renderCommand)}
+      {onCustomize && (
+        <MobileComposerAccessoryButton
+          title="Customize toolbar"
+          onClick={onCustomize}
+        >
+          <Tune />
+        </MobileComposerAccessoryButton>
+      )}
     </>
   );
 }

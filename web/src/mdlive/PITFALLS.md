@@ -677,16 +677,18 @@ here says otherwise.
     accessory dock.** The former single rail mixed Markdown transformations with
     keyboard, attachment, and completion lifecycle actions; overflow then made the
     stable Settings area look like a selected column. `MobileComposerAccessoryDock`
-    now owns one 96px material with two semantic tracks: keyboard/attachment and
-    contextual Send/Hide keyboard remain stable above, while formatting scrolls alone on
-    the track nearest the keyboard. Fullscreen editors render that material as
+    now owns one 96px material with two semantic tracks. The upper track owns
+    attachment, message lifecycle, and the non-scrolling right-edge primary
+    group. The lower track owns Undo/Redo/Paste plus horizontally scrolling
+    formatting; Hide keyboard is its non-scrolling final 48px slot nearest the
+    keyboard. Fullscreen editors render that material as
     the same inset, rounded panel used by the compact composer, not as two
     edge-to-edge system bars. Both surfaces use the same 8px Mobile composer
     gutter; do not introduce a separate fullscreen inset. Its only internal
     separator is the quiet horizontal boundary between semantic tracks. Settings
-    is an ordinary trailing 44pt
-    formatting action, never a selected-looking rail, gradient, or separately
-    divided region. Main fullscreen compose also moves Collapse into the upper
+    is an ordinary trailing 44pt formatting action inside the scrollable group,
+    never a sticky selected-looking rail, gradient, or separately divided region.
+    Main fullscreen compose also moves Collapse into the upper
     message-action track and uses that track's flexible center for Save Draft,
     Schedule, and state-gated Force Push; do not restore a mostly empty top app
     bar. The overlay
@@ -721,7 +723,8 @@ here says otherwise.
     its message-action track is present at rest, and the formatting track expands
     above it while the persistent editor owns focus.
     Settings remains an ordinary equal-width formatting action, never a sticky
-    contrasting block. Focus may increase the editor canvas, but the card radius
+    contrasting block. The fixed lower slot is reserved for Hide keyboard across
+    main, Queue, Draft, compact, and fullscreen surfaces. Focus may increase the editor canvas, but the card radius
     and horizontal outer edge stay on the shared Mobile panel geometry. Do not
     animate margin or width on focus: that makes the right border jump and reads
     as a different component replacing the compact composer. Coordinate the bottom session-nav
@@ -900,16 +903,17 @@ here says otherwise.
     focused, fullscreen, and Queue/Draft edit transitions; do not key that inset
     on focus, because fullscreen handoff otherwise makes the gap jump. Internal
     stack children use that same 4px rhythm so optional Pending panels have
-    equal space above and below. Keep destructive Clear
-    out of the card's top-right utility rail; fullscreen remains there. During
-    keyboard focus, keyboard dismissal owns the unstyled trailing action slot
-    and Clear sits one 40px touch row directly above it. The touch editor area
+    equal space above and below. Keep destructive Clear out of the card's
+    top-right utility rail; only the compact main editor's Fullscreen action
+    remains there. During keyboard focus, keyboard dismissal owns the lower
+    bar's fixed trailing action slot and Clear stays in the scrollable
+    message-action track above it. The touch editor area
     keeps an 80px minimum so that compact fixed rail never manufactures a tall
     blank canvas or overlaps itself; content growth remains textarea-owned.
-    Keep keyboard dismissal in the fixed top-right utility rail directly below
-    Fullscreen, so iOS rubber-band cannot move it. Clear belongs immediately
-    after Schedule in the scrollable delivery actions and stays mounted disabled
-    when there is no clearable text or attachment.
+    Keep keyboard dismissal outside every horizontal scroller, so iOS
+    rubber-band cannot move it. Clear belongs immediately after Schedule in the
+    scrollable delivery actions and stays mounted disabled when there is no
+    clearable text or attachment.
     Keep Force push earlier in the scrollable action sequence and Schedule next
     to the fixed rail; two lightning-shaped glyphs beside each other make the
     terminal cluster visually ambiguous.
@@ -920,12 +924,12 @@ here says otherwise.
     `space-evenly`: distribution space made adjacent Schedule and Clear actions
     look unrelated and hid the fact that the row could scroll. Fade only the
     edge that has offscreen content, measured from the real scroll extent; the
-    affordance disappears at either end and never animates the fixed utility
-    rail with iOS rubber-band.
+    affordance disappears at either end and never animates either fixed trailing
+    group with iOS rubber-band.
 
 42. **The Mobile keyboard-dismiss action is an explicit focus boundary, not an
-    editor mutation.** Keep the button in the main action track's final slot and
-    reveal it from the composer's native `:focus-within` state; do not mirror
+    editor mutation.** Keep the button in the lower editing track's fixed final
+    slot and reveal that track from the composer's native `:focus-within` state; do not mirror
     focus or keyboard visibility through React state. Its `pointerdown` must
     prevent the button from stealing focus, and its click must call the shared
     keyboard-dismiss helper without changing text, selection, attachments, or
@@ -1124,9 +1128,10 @@ Desktop Vim + IME checks:
     the shared 550ms keyboard settle window and finish only if the keyboard stays
     closed. A renewed open frame cancels the timer. The explicit Hide keyboard
     action remains immediate. In fullscreen pending-row editing, keep that
-    keyboard-only action in the left utility track and use `CloseFullscreen` for
-    the right completion action that saves and returns to the ordinary card; two
-    KeyboardHide glyphs falsely present different actions as duplicates. Do not
+    keyboard-only action fixed at the lower track's right edge and use
+    `CloseFullscreen` for the upper-right completion action that saves and
+    returns to the ordinary card; two KeyboardHide glyphs falsely present
+    different actions as duplicates. Do not
     intercept pointer, touch, `contextmenu`, or
     selection events to implement this guard: UIKit must continue to own the
     long-press sequence end to end.
@@ -1154,10 +1159,10 @@ Desktop Vim + IME checks:
     would compete with UIKit's native selection and paste sequence.
 
 54. **Mobile Queue/Draft inline edits expose context actions in the first
-    accessory track.** Keep `Expand editor` beside Attach so the action lives in
-    the same keyboard-adjacent surface shown by the screenshot, not as an
-    absolute button over the writing canvas. Draft editing exposes Send and
-    Schedule; Queue editing exposes confirmation-gated Force push. Persist the
+    accessory track.** Keep `Expand editor` in that track's non-scrolling right
+    group so it remains stable while Attach and contextual actions scroll; never
+    put it back as an absolute button over the writing canvas. Draft editing
+    exposes Send and Schedule; Queue editing exposes confirmation-gated Force push. Persist the
     latest editor buffer before any of these operations, close only after an
     authoritative delivery acknowledgement, and retain the editor on rejection.
     Scheduling may release the editor before opening its sheet because it commits

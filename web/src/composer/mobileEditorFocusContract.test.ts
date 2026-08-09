@@ -302,9 +302,40 @@ Deno.test("fullscreen collapse forms a right-edge group with the primary action"
     true,
   );
   assertEquals(
-    accessoryDockSource.includes(
-      "<Box sx={{ flex: 1, minWidth: 8 }} />\n        {primaryCompanion}\n        <Tooltip title={primaryLabel}>",
-    ),
+    accessoryDockSource.includes("data-mobile-composer-primary-actions"),
+    true,
+  );
+  assertEquals(
+    accessoryDockSource.includes("{primaryCompanion}\n          <Tooltip title={primaryLabel}>"),
+    true,
+  );
+});
+
+Deno.test("every focused mobile editor uses two semantic bars with a fixed keyboard action", () => {
+  assertEquals(
+    accessoryDockSource.includes("data-mobile-composer-utility-actions"),
+    true,
+  );
+  assertEquals(
+    accessoryDockSource.includes("data-mobile-composer-editing-bar"),
+    true,
+  );
+  assertEquals(
+    accessoryDockSource.includes("data-mobile-composer-fixed-action"),
+    true,
+  );
+  assertEquals(composerSource.includes("<MobileComposerEditingBar"), true);
+  assertEquals(composerSource.includes("data-mobile-keyboard-hide"), false);
+  assertEquals(
+    fullscreenComposerSource.includes('fixedAction={\n          <MobileComposerAccessoryButton\n            title="Hide keyboard"'),
+    true,
+  );
+  assertEquals(
+    composerSource.includes('primaryLabel="Expand editor"'),
+    true,
+  );
+  assertEquals(
+    formatActionsSource.includes('title="Customize toolbar"'),
     true,
   );
 });
@@ -476,10 +507,11 @@ Deno.test("mobile pending editing keeps expansion and context delivery actions i
 
   assertEquals(pendingStart >= 0 && pendingEnd > pendingStart, true);
   assertEquals(
-    pending.indexOf('title="Attach file"') < pending.indexOf('title="Expand editor"'),
+    pending.indexOf('title="Attach file"') < pending.indexOf('primaryLabel="Expand editor"'),
     true,
   );
-  assertEquals(pending.includes('title="Expand editor"'), true);
+  assertEquals(pending.includes('primaryLabel="Expand editor"'), true);
+  assertEquals(pending.includes("onPrimary={expandMobileEdit}"), true);
   assertEquals(pending.includes('title="Send draft"'), true);
   assertEquals(
     pending.includes('title={message.schedule ? "Reschedule send" : "Schedule send"}'),
@@ -513,7 +545,7 @@ Deno.test("pending Force push confirmation keeps the native editor and anchor mo
   );
 });
 
-Deno.test("mobile keyboard dismissal belongs to the fixed utility rail", () => {
+Deno.test("mobile keyboard dismissal belongs to the fixed lower editing rail", () => {
   const utilityStart = composerSource.indexOf(
     "data-mobile-composer-utility-rail",
   );
@@ -522,17 +554,22 @@ Deno.test("mobile keyboard dismissal belongs to the fixed utility rail", () => {
     utilityStart,
   );
   const actionStart = composerSource.indexOf("data-mobile-action-row");
+  const editingStart = composerSource.indexOf("data-mobile-focus-format-row");
   const actionEnd = composerSource.indexOf(
     "<ComposerToolbarSettings",
     actionStart,
   );
   const utilityRail = composerSource.slice(utilityStart, utilityEnd);
+  const editingRail = composerSource.slice(editingStart, actionStart);
   const actionRow = composerSource.slice(actionStart, actionEnd);
 
   assertEquals(utilityStart >= 0 && utilityEnd > utilityStart, true);
+  assertEquals(editingStart >= 0 && actionStart > editingStart, true);
   assertEquals(actionStart >= 0 && actionEnd > actionStart, true);
-  assertEquals(utilityRail.includes("data-mobile-keyboard-hide"), true);
-  assertEquals(actionRow.includes("data-mobile-keyboard-hide"), false);
+  assertEquals(utilityRail.includes('title="Hide keyboard"'), false);
+  assertEquals(editingRail.includes("<MobileComposerEditingBar"), true);
+  assertEquals(editingRail.includes('title="Hide keyboard"'), true);
+  assertEquals(actionRow.includes('title="Hide keyboard"'), false);
   assertEquals(actionRow.includes("data-mobile-composer-clear"), true);
   assertEquals(actionRow.includes("disabled={!clearable}"), true);
   assertEquals(actionRow.includes("data-mobile-scrollable-actions"), true);

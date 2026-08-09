@@ -27,7 +27,6 @@ import {
   KeyboardHide,
   Schedule,
   Send,
-  Tune,
 } from "@mui/icons-material";
 import {
   type ComposerEditorHandle,
@@ -166,7 +165,7 @@ export function FullscreenComposer({
   const [discardOpen, setDiscardOpen] = useState(false);
   useConfirmEnter(discardOpen, () => onDiscard?.());
   const visibleToolbarIds = hasSelection
-    ? ["bold", "italic", "code", "link"]
+    ? ["undo", "redo", "bold", "italic", "code", "link"]
     : toolbarIds;
 
   // Portal to <body>: the composer is rendered deep inside the app's flex layout,
@@ -292,20 +291,16 @@ export function FullscreenComposer({
             editorRef={editorRef}
             onAttach={onAttach}
             onPasteImages={onPasteFiles}
+            onCustomize={act(() => {
+              // The full-cover settings sheet intentionally ends this focus
+              // session; ordinary actions in either bar leave it untouched.
+              releaseMobileComposerFocus();
+              setSettingsOpen(true);
+            })}
           />
         }
         utilityActions={
           <>
-            <MobileComposerAccessoryButton
-              title="Hide keyboard"
-              onClick={act(() => {
-                if (document.activeElement instanceof HTMLElement) {
-                  document.activeElement.blur();
-                }
-              })}
-            >
-              <KeyboardHide />
-            </MobileComposerAccessoryButton>
             <MobileComposerAccessoryButton
               title="Attach file"
               onClick={act(onAttach)}
@@ -357,16 +352,14 @@ export function FullscreenComposer({
           : null}
         fixedAction={
           <MobileComposerAccessoryButton
-            title="Customize toolbar"
+            title="Hide keyboard"
             onClick={act(() => {
-              // Do this in the button's user gesture. Waiting for the sheet's
-              // layout effect is too late on iOS: focus may already have moved
-              // while the old editor still matches :focus-within visually.
-              releaseMobileComposerFocus();
-              setSettingsOpen(true);
+              if (document.activeElement instanceof HTMLElement) {
+                document.activeElement.blur();
+              }
             })}
           >
-            <Tune />
+            <KeyboardHide />
           </MobileComposerAccessoryButton>
         }
         primaryLabel={submitLabel}

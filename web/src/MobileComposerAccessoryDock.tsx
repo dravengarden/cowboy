@@ -61,7 +61,9 @@ export function MobileComposerAccessoryDock({
               : "0 8px 24px rgba(57, 42, 92, 0.08)",
         userSelect: "none",
         WebkitUserSelect: "none",
-        animation: embedded ? "none" : "mobile-composer-dock-enter 180ms ease-out both",
+        animation: embedded
+          ? "none"
+          : "mobile-composer-dock-enter 180ms ease-out both",
         "@keyframes mobile-composer-dock-enter": {
           from: { opacity: 0, transform: "translateY(6px)" },
           to: { opacity: 1, transform: "translateY(0)" },
@@ -73,69 +75,133 @@ export function MobileComposerAccessoryDock({
         data-mobile-composer-message-actions
         direction="row"
         alignItems="center"
-        spacing={0.125}
         sx={{
           minWidth: 0,
-          px: 0.75,
+          px: 0.5,
           borderBottom: 1,
           borderColor: (theme) => alpha(theme.palette.divider, 0.34),
         }}
       >
-        {utilityActions}
+        <Stack
+          data-mobile-composer-utility-actions
+          direction="row"
+          alignItems="center"
+          spacing={0.125}
+          sx={{
+            minWidth: 0,
+            overflowX: "auto",
+            overflowY: "hidden",
+            overscrollBehaviorX: "contain",
+            scrollbarWidth: "none",
+            "&::-webkit-scrollbar": { display: "none" },
+          }}
+        >
+          {utilityActions}
+        </Stack>
         <Box sx={{ flex: 1, minWidth: 8 }} />
-        {primaryCompanion}
-        <Tooltip title={primaryLabel}>
-          <span>
-            <IconButton
-              aria-label={primaryLabel.toLowerCase()}
-              disabled={primaryDisabled}
-              onPointerDown={(event): void => event.preventDefault()}
-              onClick={onPrimary}
-              sx={{
-                width: 44,
-                height: 44,
-                flexShrink: 0,
-                color: "primary.main",
-                transition:
-                  "color 120ms ease, opacity 120ms ease, transform 120ms ease",
-                "&:active": { transform: "scale(0.94)" },
-                "&.Mui-disabled": {
-                  color: "text.disabled",
-                  opacity: 0.44,
-                },
-                "& .MuiSvgIcon-root": { fontSize: "1.375rem" },
-              }}
-            >
-              {primaryIcon}
-            </IconButton>
-          </span>
-        </Tooltip>
+        <Stack
+          data-mobile-composer-primary-actions
+          direction="row"
+          alignItems="center"
+          spacing={0.125}
+          sx={{
+            flexShrink: 0,
+            ml: 0.25,
+            pl: 0.25,
+            borderLeft: 1,
+            borderColor: (theme) => alpha(theme.palette.divider, 0.22),
+          }}
+        >
+          {primaryCompanion}
+          <Tooltip title={primaryLabel}>
+            <span>
+              <IconButton
+                aria-label={primaryLabel.toLowerCase()}
+                disabled={primaryDisabled}
+                onPointerDown={(event): void => event.preventDefault()}
+                onClick={onPrimary}
+                sx={{
+                  width: 44,
+                  height: 44,
+                  flexShrink: 0,
+                  color: "primary.main",
+                  transition:
+                    "color 120ms ease, opacity 120ms ease, transform 120ms ease",
+                  "&:active": { transform: "scale(0.94)" },
+                  "&.Mui-disabled": {
+                    color: "text.disabled",
+                    opacity: 0.44,
+                  },
+                  "& .MuiSvgIcon-root": { fontSize: "1.375rem" },
+                }}
+              >
+                {primaryIcon}
+              </IconButton>
+            </span>
+          </Tooltip>
+        </Stack>
       </Stack>
 
+      <MobileComposerEditingBar
+        actions={formatActions}
+        fixedAction={fixedAction}
+      />
+    </Box>
+  );
+}
+
+/**
+ * The keyboard-nearest track shared by compact, pending, and fullscreen editors.
+ * Formatting may scroll, but the high-frequency keyboard boundary never does.
+ */
+export function MobileComposerEditingBar({
+  actions,
+  fixedAction,
+}: {
+  actions: ReactNode;
+  fixedAction: ReactNode;
+}): React.JSX.Element {
+  return (
+    <Box
+      data-mobile-composer-editing-bar
+      sx={{ minWidth: 0, height: 48, display: "flex", alignItems: "center" }}
+    >
       <Stack
         data-mobile-composer-format-actions
         direction="row"
         alignItems="center"
         spacing={0.125}
         sx={{
-          minHeight: 48,
+          flex: 1,
           minWidth: 0,
-          px: 0.75,
+          height: 48,
+          pl: 0.5,
           overflowX: "auto",
+          overflowY: "hidden",
           overscrollBehaviorX: "contain",
           scrollbarWidth: "none",
           "&::-webkit-scrollbar": { display: "none" },
         }}
       >
-        {formatActions}
-        <Box sx={{ flex: 1, minWidth: 8 }} />
-        <Box
-          data-mobile-composer-fixed-action
-          sx={{ flex: "0 0 44px", width: 44, height: 44 }}
-        >
-          {fixedAction}
-        </Box>
+        {actions}
       </Stack>
+      <Box
+        data-mobile-composer-fixed-action
+        sx={{
+          flex: "0 0 48px",
+          width: 48,
+          height: 44,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          ml: 0.25,
+          pr: 0.25,
+          borderLeft: 1,
+          borderColor: (theme) => alpha(theme.palette.divider, 0.22),
+        }}
+      >
+        {fixedAction}
+      </Box>
     </Box>
   );
 }
