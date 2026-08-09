@@ -5488,6 +5488,10 @@ export function SessionControls({
     (snapshot) => snapshot.sessions.find((candidate) => candidate.id === sessionId),
     sameComposerSheetSession,
   );
+  const timelineState = useStoreSelector(
+    (snapshot) => composerTimelineSlice(snapshot.timelines.get(sessionId)),
+    sameComposerTimelineSlice,
+  );
   const touchInput = useTouchComposer();
   const [sheetOpen, setSheetOpen] = useState(false);
   const dead = status === "exited" || status === "crashed" ||
@@ -5518,6 +5522,30 @@ export function SessionControls({
   const showSkeleton = !dead && options.length === 0 &&
     (status === "starting" || status === "running");
   const hasConfig = showSkeleton || options.length > 0;
+  const compactAction = useMemo(
+    () =>
+      resolveSessionAction(
+        "compact",
+        session?.provider ?? "",
+        timelineState.availableCommands,
+      ),
+    [session?.provider, timelineState.availableCommands],
+  );
+  const clearAction = useMemo(
+    () =>
+      resolveSessionAction(
+        "clear",
+        session?.provider ?? "",
+        timelineState.availableCommands,
+      ),
+    [session?.provider, timelineState.availableCommands],
+  );
+  const runSessionAction = (action: SessionAction): Promise<void> => {
+    haptic();
+    if (action.kind === "reset") return resetSession(sessionId);
+    if (action.command !== undefined) return submitPrompt(sessionId, action.command, []);
+    return Promise.resolve();
+  };
   return (
     <>
       {hasConfig && (
@@ -5567,6 +5595,10 @@ export function SessionControls({
           options={options}
           loading={showSkeleton}
           dead={dead}
+          compacting={status === "busy" && timelineState.compactingTail}
+          compactAction={compactAction}
+          clearAction={clearAction}
+          onSessionAction={runSessionAction}
           projection={projection}
           onProjectionChange={onProjectionChange}
           onSelectOption={(configId, value): void => {
@@ -5596,6 +5628,10 @@ function ComposerSheet({
   options,
   loading,
   dead,
+  compacting,
+  compactAction,
+  clearAction,
+  onSessionAction,
   projection,
   onProjectionChange,
   onSelectOption,
@@ -5606,6 +5642,10 @@ function ComposerSheet({
   options: ConfigOption[];
   loading: boolean;
   dead: boolean;
+  compacting: boolean;
+  compactAction: SessionAction | null;
+  clearAction: SessionAction | null;
+  onSessionAction: (action: SessionAction) => Promise<void>;
   projection?: TranscriptProjection | undefined;
   onProjectionChange?: ((projection: TranscriptProjection) => void) | undefined;
   onSelectOption: (configId: string, value: string | boolean) => void;
@@ -5618,8 +5658,12 @@ function ComposerSheet({
   const recommendedPresets = runConfigPresets(session?.provider, options);
   const activePreset = activeRunConfigPreset(recommendedPresets, options);
   const [customizeAgent, setCustomizeAgent] = useState(false);
+  const [cmdConfirm, setCmdConfirm] = useState<SessionAction | null>(null);
   useEffect(() => {
-    if (open) setCustomizeAgent(false);
+    if (open) {
+      setCustomizeAgent(false);
+      setCmdConfirm(null);
+    }
   }, [open, session?.id]);
   const showAgentDetails = recommendedPresets.length === 0 || customizeAgent;
   const displayTitle = session?.title.startsWith(`${session.provider} · `)
@@ -5646,8 +5690,18 @@ function ComposerSheet({
   const close = (): void => {
     setTitle(displayTitle);
     setTitleFocused(false);
+    setCmdConfirm(null);
     onClose();
   };
+  const confirmSessionAction = async (): Promise<void> => {
+    if (cmdConfirm === null) return;
+    const action = cmdConfirm;
+    setCmdConfirm(null);
+    await onSessionAction(action);
+  };
+  useConfirmEnter(cmdConfirm !== null, () => {
+    void confirmSessionAction();
+  });
   const editingTitle = titleFocused || titleDirty;
   return (
     <Sheet
@@ -5714,6 +5768,11 @@ function ComposerSheet({
           onTitleFocusChange={setTitleFocused}
           onTitleSave={saveTitle}
           saveOnBlur={!useSheetSurface}
+          compactAction={compactAction}
+          clearAction={clearAction}
+          compacting={compacting}
+          dead={dead}
+          onSessionAction={setCmdConfirm}
         />
       )}
       {session && <QueueSection session={session} />}
@@ -5889,6 +5948,65 @@ function ComposerSheet({
           </Box>
         </>
       )}
+      <Dialog
+        open={cmdConfirm !== null}
+        onClose={(): void => setCmdConfirm(null)}
+        maxWidth="xs"
+        fullWidth
+      >
+        {cmdConfirm !== null && (
+          <>
+            <DialogTitle>{cmdConfirm.label}?</DialogTitle>
+            <DialogContent>
+              <DialogContentText>{cmdConfirm.detail}</DialogContentText>
+              <DialogContentText sx={{ mt: 1.5, fontSize: "0.8125rem" }}>
+                {cmdConfirm.kind === "slash" && cmdConfirm.command !== undefined
+                  ? (
+                    <>
+                      Sends{" "}
+                      <Box
+                        component="code"
+                        sx={{
+                          fontFamily: "ui-monospace, monospace",
+                          px: 0.5,
+                          py: 0.125,
+                          borderRadius: 0.75,
+                          bgcolor: "action.hover",
+                        }}
+                      >
+                        {cmdConfirm.command}
+                      </Box>{" "}
+                      to {session?.provider || "the agent"}
+                      {session?.status === "busy" ? " (queued — the agent is mid-turn)" : ""}.
+                    </>
+                  )
+                  : `Resets ${session?.provider || "the agent"} to a fresh context now${
+                    session?.status === "busy" ? " (ends the current turn)" : ""
+                  }.`}
+              </DialogContentText>
+            </DialogContent>
+            <DialogActions>
+              <Button
+                color="inherit"
+                onClick={(): void => setCmdConfirm(null)}
+                sx={{ textTransform: "none" }}
+              >
+                Cancel
+                <Kbd keys="Esc" />
+              </Button>
+              <NetworkButton
+                variant="contained"
+                color={cmdConfirm.destructive ? "error" : "primary"}
+                networkAction={confirmSessionAction}
+                sx={{ textTransform: "none" }}
+              >
+                {cmdConfirm.destructive ? "Clear" : "Compact"}
+                <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+              </NetworkButton>
+            </DialogActions>
+          </>
+        )}
+      </Dialog>
     </Sheet>
   );
 }
@@ -5925,6 +6043,11 @@ function SessionInfoSection({
   onTitleFocusChange,
   onTitleSave,
   saveOnBlur,
+  compactAction,
+  clearAction,
+  compacting,
+  dead,
+  onSessionAction,
 }: {
   session: SessionMeta;
   title: string;
@@ -5933,6 +6056,11 @@ function SessionInfoSection({
   onTitleFocusChange: (focused: boolean) => void;
   onTitleSave: () => void;
   saveOnBlur: boolean;
+  compactAction: SessionAction | null;
+  clearAction: SessionAction | null;
+  compacting: boolean;
+  dead: boolean;
+  onSessionAction: (action: SessionAction) => void;
 }): React.JSX.Element {
   // Title is editable right here — this sheet already shows the session's identity,
   // so the rename (edit-title) belongs with it rather than off in app Settings.
@@ -6071,6 +6199,35 @@ function SessionInfoSection({
             {contextUsed.toLocaleString()} / {contextSize.toLocaleString()} tokens
           </Typography>
         )}
+        <Stack direction="row" spacing={1} sx={{ pt: 0.5 }}>
+          {compactAction && (
+            <Button
+              fullWidth
+              variant="outlined"
+              startIcon={<Compress />}
+              disabled={dead || compacting}
+              aria-label="compact conversation from session settings"
+              onClick={(): void => onSessionAction(compactAction)}
+              sx={{ minHeight: 44, textTransform: "none" }}
+            >
+              {compacting ? "Compacting…" : "Compact"}
+            </Button>
+          )}
+          {clearAction && (
+            <Button
+              fullWidth
+              variant="outlined"
+              color="error"
+              startIcon={<CleaningServices />}
+              disabled={dead}
+              aria-label="clear conversation from session settings"
+              onClick={(): void => onSessionAction(clearAction)}
+              sx={{ minHeight: 44, textTransform: "none" }}
+            >
+              Clear
+            </Button>
+          )}
+        </Stack>
         {cacheProtectionVisible &&
           (cacheProtection || cacheProtectionUnavailable) && (
           <Tooltip
