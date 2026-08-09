@@ -229,10 +229,10 @@ levels:
    confirmations show the real confirmation/dismissal chord next to the button.
 
 Embedded contextual shortcuts are the persistent exception to visibility
-gating. Controls such as Top Bar Run Configuration, Usage, Compact, and Stop
-keep their one-key badge visible for discovery, but the shared keycap primitive
-must render it as `data-shortcut-state="inactive"` whenever its owning region
-is not focused. Once the region owns focus it becomes
+gating. Controls such as Top Bar Run Configuration, Usage, Compact, Clear, and
+Stop keep their one-key badge visible for discovery, but the shared keycap
+primitive must render it as `data-shortcut-state="inactive"` whenever its
+owning region is not focused. Once the region owns focus it becomes
 `data-shortcut-state="available"` and gains the normal accent treatment. Do not
 approximate these states with component-local opacity or colors; all persistent
 contextual badges must use `ShortcutKeycap` availability so enabled and inactive
@@ -270,8 +270,9 @@ contract and the conventions users depend on in editors and browsers:
   `Mod+N` creates a session, `Mod+,` opens Settings, `Mod+S` saves a draft,
   and `Mod+1…0` switches session tabs;
 - global Cowboy workspace navigation uses mnemonic `Mod+E/I/L/T` for Sessions,
-  Editor, Log, and Top Bar. Focused Top Bar uses bare `R/U/C/S` for Run
-  Configuration, Usage, Compact, and Stop; `Mod+1…0` remains global session slots;
+  Editor, Log, and Top Bar. Focused Top Bar uses bare `R/U/C/X/S` for Run
+  Configuration, Usage, Compact, Clear, and Stop; `Mod+1…0` remains global
+  session slots;
 - macOS input-source and dead-key chords (`Ctrl+Space`, `Ctrl+Alt+Space`,
   `Alt+E/I/N/U`) are reserved so Cowboy never breaks accent or IME entry;
 - do not assign bare `Q` to Cowboy navigation. A key pressed while Command is

@@ -2413,25 +2413,6 @@ export function ComposerWorkspace({
               </MenuItem>}
             </Menu>
 
-            {clearAction && (
-              <Tooltip title="Clear conversation">
-                <span>
-                  <IconButton
-                    size="small"
-                    aria-label="clear conversation"
-                    disabled={dead}
-                    onClick={(): void => setCmdConfirm(clearAction)}
-                    sx={{
-                      color: "text.secondary",
-                      "&:hover": { color: "error.main" },
-                    }}
-                  >
-                    <CleaningServices fontSize="small" />
-                  </IconButton>
-                </span>
-              </Tooltip>
-            )}
-
             {desktopShortcut(<Button
               ref={queueBtnRef}
               variant="contained"

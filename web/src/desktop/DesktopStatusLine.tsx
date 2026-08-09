@@ -92,6 +92,7 @@ function regionHints(
         { keys: "R", label: "Config" },
         { keys: "U", label: "Usage" },
         { keys: "C", label: "Compact" },
+        { keys: "X", label: "Clear" },
         ...(status === "busy" ? [{ keys: "S", label: "Stop" }] : []),
       ];
     case "sessions.list":
