@@ -213,6 +213,7 @@ import {
 } from "./NetworkActionFeedback";
 import { originLabel } from "./protocol";
 import { providerConfigOptions } from "./providerConfigOptions";
+import { DEEPSEEK_CACHE_MIN_HIT_TOKENS } from "./deepseekUsage";
 import type {
   AvailableCommand,
   ConfigOption,
@@ -5493,6 +5494,7 @@ export function SessionControls({
       "mode",
       "model",
       "deepseek_context",
+      "deepseek_cache_protection",
       "effort",
       "reasoning_effort",
     ];
@@ -5772,7 +5774,8 @@ function ComposerSheet({
                       key={opt.id}
                       option={opt}
                       disabled={
-                        opt.id === "deepseek_context"
+                        opt.id === "deepseek_context" ||
+                          opt.id === "deepseek_cache_protection"
                           ? status === "busy" || status === "starting"
                           : dead
                       }
@@ -5793,6 +5796,25 @@ function ComposerSheet({
 // so it now rides the one popup the user already opens to change mode / model
 // / effort. Desktop shows the same facts in the persistent sidebar, so this
 // section only renders inside the compact-tier sheet.
+interface DeepseekCacheProtectionStatus {
+  state: "protected" | "inactive" | "disabled";
+  protected_tokens?: number;
+  last_verified_at_ms?: number;
+  next_attempt_at_ms?: number;
+  scheduled_interval_ms?: number;
+  expires_at_ms?: number;
+  attempts?: number;
+  minimumHitTokens?: number;
+  contextUsed?: number;
+}
+
+function compactCacheTokens(tokens: number | undefined): string {
+  if (tokens === undefined || !Number.isFinite(tokens) || tokens < 0) return "";
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
+  if (tokens >= 1_000) return `${Math.round(tokens / 1_000).toLocaleString()}K`;
+  return tokens.toLocaleString();
+}
+
 function SessionInfoSection({
   session,
   title,
@@ -5823,6 +5845,46 @@ function SessionInfoSection({
   const contextPercent = hasContext
     ? Math.min(100, Math.max(0, contextUsed / contextSize * 100))
     : 0;
+  const cacheProtectionVisible = (session.provider === "claude-deepseek" ||
+    session.provider === "codex-deepseek") &&
+    contextUsed >= DEEPSEEK_CACHE_MIN_HIT_TOKENS;
+  const [cacheProtection, setCacheProtection] = useState<
+    DeepseekCacheProtectionStatus | null
+  >(null);
+  const [cacheProtectionUnavailable, setCacheProtectionUnavailable] = useState(false);
+  useEffect(() => {
+    if (!cacheProtectionVisible) {
+      setCacheProtection(null);
+      setCacheProtectionUnavailable(false);
+      return;
+    }
+    const controller = new AbortController();
+    const refresh = (): void => {
+      void fetch(
+        `/api/sessions/${encodeURIComponent(session.id)}/cache-protection`,
+        { signal: controller.signal },
+      ).then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${String(response.status)}`);
+        const value = await response.json() as DeepseekCacheProtectionStatus;
+        if (!["protected", "inactive", "disabled"].includes(value.state)) {
+          throw new Error("invalid cache status");
+        }
+        setCacheProtection(value);
+        setCacheProtectionUnavailable(false);
+      }).catch(() => {
+        if (!controller.signal.aborted) {
+          setCacheProtection(null);
+          setCacheProtectionUnavailable(true);
+        }
+      });
+    };
+    refresh();
+    const interval = globalThis.setInterval(refresh, 60_000);
+    return (): void => {
+      controller.abort();
+      globalThis.clearInterval(interval);
+    };
+  }, [cacheProtectionVisible, session.id]);
   const rows: { label: string; value: string; mono?: boolean }[] = [
     { label: "Provider", value: session.provider },
     { label: "Project", value: project },
@@ -5906,6 +5968,44 @@ function SessionInfoSection({
           <Typography variant="caption" color="text.secondary" sx={{ textAlign: "right" }}>
             {contextUsed.toLocaleString()} / {contextSize.toLocaleString()} tokens
           </Typography>
+        )}
+        {cacheProtectionVisible &&
+          (cacheProtection || cacheProtectionUnavailable) && (
+          <Tooltip
+            title={cacheProtection?.state === "protected"
+              ? `Last verified ${
+                cacheProtection.last_verified_at_ms
+                  ? new Date(cacheProtection.last_verified_at_ms).toLocaleString()
+                  : "recently"
+              }. Next attempt ${
+                cacheProtection.next_attempt_at_ms
+                  ? new Date(cacheProtection.next_attempt_at_ms).toLocaleString()
+                  : "is being scheduled"
+              }. Real agent work always preempts it.`
+              : cacheProtection?.state === "disabled"
+              ? "Automatic DeepSeek cache protection is disabled for this session."
+              : cacheProtectionUnavailable
+              ? "The owning Machine could not report cache status. Agent work is unaffected."
+              : "This session is large enough for protection; Cowboy is waiting for a verified ≥90% cache hit before scheduling a keepalive."}
+          >
+            <Chip
+              size="small"
+              variant="outlined"
+              color={cacheProtection?.state === "protected"
+                ? "success"
+                : cacheProtectionUnavailable
+                ? "warning"
+                : "default"}
+              label={cacheProtection?.state === "protected"
+                ? `Cache protected · ${compactCacheTokens(cacheProtection.protected_tokens)}`
+                : cacheProtection?.state === "disabled"
+                ? "Cache protection off"
+                : cacheProtectionUnavailable
+                ? "Cache status unavailable"
+                : "Cache protection learning"}
+              sx={{ alignSelf: "flex-start" }}
+            />
+          </Tooltip>
         )}
       </Stack>
     </>

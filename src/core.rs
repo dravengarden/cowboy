@@ -534,6 +534,7 @@ fn default_config_preferences(provider: &str) -> serde_json::Value {
         serde_json::json!({
             "model": "deepseek-v4-flash",
             "deepseek_context": "680k",
+            "deepseek_cache_protection": true,
             "collaboration_mode": "default",
             "reasoning_effort": "max",
         })
@@ -541,6 +542,7 @@ fn default_config_preferences(provider: &str) -> serde_json::Value {
         serde_json::json!({
             "model": "deepseek-v4-flash[1m]",
             "deepseek_context": "830k",
+            "deepseek_cache_protection": true,
             "effort": "max",
             "agent": "default",
         })
@@ -560,8 +562,9 @@ fn projected_config_options(
         return Some(options);
     };
     array.retain(|option| {
-        option.get("id").and_then(serde_json::Value::as_str)
-            != Some(crate::deepseek_context::CONFIG_ID)
+        let id = option.get("id").and_then(serde_json::Value::as_str);
+        id != Some(crate::deepseek_context::CONFIG_ID)
+            && id != Some(crate::deepseek_cache::CONFIG_ID)
     });
     let model = preferences.get("model").and_then(serde_json::Value::as_str);
     let requested = preferences
@@ -575,8 +578,20 @@ fn projected_config_options(
             })
             .map_or(array.len(), |index| index.saturating_add(1));
         array.insert(insert_at, option);
-        Some(options)
-    } else if had_options {
+    }
+    if let Some(enabled) = crate::deepseek_cache::selected(preferences, provider)
+        && let Some(option) = crate::deepseek_cache::config_option(provider, enabled)
+    {
+        let insert_at = array
+            .iter()
+            .position(|candidate| {
+                candidate.get("id").and_then(serde_json::Value::as_str)
+                    == Some(crate::deepseek_context::CONFIG_ID)
+            })
+            .map_or(array.len(), |index| index.saturating_add(1));
+        array.insert(insert_at, option);
+    }
+    if had_options || crate::deepseek_cache::supported_provider(provider) {
         Some(options)
     } else {
         None
@@ -4997,6 +5012,7 @@ mod config_preference_tests {
             Some(serde_json::json!({
                 "model": "deepseek-v4-flash[1m]",
                 "deepseek_context": "830k",
+                "deepseek_cache_protection": true,
                 "effort": "max",
                 "agent": "default",
             }))
@@ -5020,6 +5036,7 @@ mod config_preference_tests {
             Some(serde_json::json!({
                 "model": "deepseek-v4-flash",
                 "deepseek_context": "680k",
+                "deepseek_cache_protection": true,
                 "collaboration_mode": "default",
                 "reasoning_effort": "max",
             }))
@@ -5088,7 +5105,9 @@ mod config_preference_tests {
         assert_eq!(options[0]["id"], "model");
         assert_eq!(options[1]["id"], "deepseek_context");
         assert_eq!(options[1]["currentValue"], "680k");
-        assert_eq!(options[2]["id"], "reasoning_effort");
+        assert_eq!(options[2]["id"], "deepseek_cache_protection");
+        assert_eq!(options[2]["currentValue"], true);
+        assert_eq!(options[3]["id"], "reasoning_effort");
     }
 }
 

@@ -60,6 +60,7 @@ Built incrementally by the `migrations/*.sql` files (sqlx applies them on boot):
 | `0017_machines` | Stable machine registry plus immutable per-session machine placement |
 | `0018_machine_enrollment` | Single-use enrollment tokens and per-machine public-key identity |
 | `0025_provider_usage_telemetry_v3` | Provider-neutral model, role, protocol, HMAC lineage, and gateway-build dimensions for DeepSeek cache/cost diagnosis |
+| `0027_deepseek_cache_keepalive` | Schema-v4 request purpose, cache-protection outcomes, adaptive timing, source age, and content-free source fingerprints |
 
 The writer UPSERTs consecutive message/thought chunks into their first sequence
 row, folds tool updates into the initial call, and stores only the sequence
@@ -100,3 +101,13 @@ access pattern — high-rate streaming appends, paginated reads, search, restart
 recovery — is exactly a database's job. A pure-file fallback (`events.jsonl` +
 `meta.json` per session) is possible, but pagination and search would then be
 hand-rolled. Postgres earns its place here.
+
+Provider usage rows are the durable, queryable product ledger for both
+interactive DeepSeek requests and cache-protection attempts. The
+`request_purpose` column keeps those populations disjoint in every aggregate;
+background attempts have their own token, outcome, duration, and cost fields.
+PostgreSQL stores only content-free dimensions and keyed fingerprints. Exact
+request snapshots remain bounded gateway memory and are lost deliberately on
+gateway restart. VictoriaLogs continues to own high-volume process evidence,
+while the Logs UI derives compact cache-protection audit rows from the durable
+usage ledger and loads details lazily.

@@ -734,7 +734,7 @@ fn render_codex_deepseek_config(catalog: &Path) -> String {
      base_url = \"http://127.0.0.1:61137/v1\"\n\
      wire_api = \"responses\"\n\
      requires_openai_auth = false\n\
-     env_http_headers = {{ \"X-Cowboy-Session-Id\" = \"{DEEPSEEK_SESSION_ID_ENV}\" }}\n\
+     env_http_headers = {{ \"X-Cowboy-Session-Id\" = \"{DEEPSEEK_SESSION_ID_ENV}\", \"X-Cowboy-Cache-Protection\" = \"{cache_policy_env}\" }}\n\
      request_max_retries = 1\n\
      stream_max_retries = 0\n\
      stream_idle_timeout_ms = 600000\n\n\
@@ -745,7 +745,8 @@ fn render_codex_deepseek_config(catalog: &Path) -> String {
      extract_model = \"deepseek-v4-flash\"\n\
      consolidation_model = \"deepseek-v4-flash\"\n\
      min_rate_limit_remaining_percent = 0\n",
-        catalog.display()
+        catalog.display(),
+        cache_policy_env = crate::deepseek_cache::SESSION_POLICY_ENV,
     )
 }
 
@@ -1077,9 +1078,11 @@ mod tests {
         assert!(rendered.contains("model_auto_compact_token_limit_scope = \"body_after_prefix\""));
         assert!(rendered.contains("[model_providers.deepseek-local]"));
         assert!(rendered.contains("requires_openai_auth = false"));
-        assert!(rendered.contains(
-            "env_http_headers = { \"X-Cowboy-Session-Id\" = \"COWBOY_DEEPSEEK_SESSION_ID\" }"
-        ));
+        assert!(rendered.contains("\"X-Cowboy-Session-Id\" = \"COWBOY_DEEPSEEK_SESSION_ID\""));
+        assert!(
+            rendered
+                .contains("\"X-Cowboy-Cache-Protection\" = \"COWBOY_DEEPSEEK_CACHE_PROTECTION\"")
+        );
         assert!(rendered.contains("[features]\nmemories = true"));
         assert!(rendered.contains("[memories]\ndisable_on_external_context = true"));
         assert!(rendered.contains("extract_model = \"deepseek-v4-flash\""));

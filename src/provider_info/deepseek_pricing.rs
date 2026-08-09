@@ -73,13 +73,52 @@ struct CostEstimate {
     model_families: BTreeSet<String>,
 }
 
+#[derive(Clone, Copy)]
+struct CostMetricKeys {
+    requests: &'static str,
+    usage_observations: &'static str,
+    input_tokens: &'static str,
+    output_tokens: &'static str,
+    reasoning_tokens: &'static str,
+    cache_hit_tokens: &'static str,
+    cache_miss_tokens: &'static str,
+}
+
+const INTERACTIVE_COST_KEYS: CostMetricKeys = CostMetricKeys {
+    requests: "requests",
+    usage_observations: "usageObservations",
+    input_tokens: "inputTokens",
+    output_tokens: "outputTokens",
+    reasoning_tokens: "reasoningTokens",
+    cache_hit_tokens: "cacheHitTokens",
+    cache_miss_tokens: "cacheMissTokens",
+};
+
+const CACHE_KEEPALIVE_COST_KEYS: CostMetricKeys = CostMetricKeys {
+    requests: "cacheKeepaliveRequests",
+    usage_observations: "cacheKeepaliveUsageObservations",
+    input_tokens: "cacheKeepaliveInputTokens",
+    output_tokens: "cacheKeepaliveOutputTokens",
+    reasoning_tokens: "cacheKeepaliveReasoningTokens",
+    cache_hit_tokens: "cacheKeepaliveHitTokens",
+    cache_miss_tokens: "cacheKeepaliveMissTokens",
+};
+
 impl CostEstimate {
     fn for_model(model: &str, aggregate: &Value) -> Self {
-        let requests = metric(aggregate, "requests");
-        let usage_observed_requests = metric(aggregate, "usageObservations");
-        let input_tokens = metric(aggregate, "inputTokens");
-        let output_tokens = metric(aggregate, "outputTokens");
-        let reasoning_tokens = metric(aggregate, "reasoningTokens");
+        Self::for_model_metrics(model, aggregate, INTERACTIVE_COST_KEYS)
+    }
+
+    fn for_cache_keepalive_model(model: &str, aggregate: &Value) -> Self {
+        Self::for_model_metrics(model, aggregate, CACHE_KEEPALIVE_COST_KEYS)
+    }
+
+    fn for_model_metrics(model: &str, aggregate: &Value, keys: CostMetricKeys) -> Self {
+        let requests = metric(aggregate, keys.requests);
+        let usage_observed_requests = metric(aggregate, keys.usage_observations);
+        let input_tokens = metric(aggregate, keys.input_tokens);
+        let output_tokens = metric(aggregate, keys.output_tokens);
+        let reasoning_tokens = metric(aggregate, keys.reasoning_tokens);
         let Some(family) = model_family(model) else {
             return Self {
                 requests,
@@ -93,8 +132,8 @@ impl CostEstimate {
                 ..Self::default()
             };
         };
-        let cache_hit_tokens = metric(aggregate, "cacheHitTokens");
-        let cache_miss_tokens = metric(aggregate, "cacheMissTokens");
+        let cache_hit_tokens = metric(aggregate, keys.cache_hit_tokens);
+        let cache_miss_tokens = metric(aggregate, keys.cache_miss_tokens);
         let priced_input_tokens = cache_hit_tokens.saturating_add(cache_miss_tokens);
         let price = family.price();
         let hit = cache_hit_tokens as f64 / TOKENS_PER_MILLION;
@@ -165,6 +204,16 @@ struct CostView {
     by_billing_model: BTreeMap<String, CostEstimate>,
     by_agent_billing_model: BTreeMap<String, BTreeMap<String, CostEstimate>>,
     by_low_hit_cause: BTreeMap<String, CostEstimate>,
+    cache_protection: CacheProtectionCostView,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CacheProtectionCostView {
+    summary: CostEstimate,
+    by_agent: BTreeMap<String, CostEstimate>,
+    by_billing_model: BTreeMap<String, CostEstimate>,
+    by_agent_billing_model: BTreeMap<String, BTreeMap<String, CostEstimate>>,
 }
 
 pub(crate) fn decorate_activity(activity: &mut Value) {
@@ -203,6 +252,7 @@ fn cost_view(
     by_agent_billing_model: Option<&Value>,
     by_low_hit_cause_model: Option<&Value>,
 ) -> CostView {
+    let cache_protection = cache_protection_cost_view(by_billing_model, by_agent_billing_model);
     let by_billing_model = cost_map(by_billing_model);
     let mut summary = CostEstimate::default();
     for estimate in by_billing_model.values() {
@@ -237,6 +287,37 @@ fn cost_view(
         by_billing_model,
         by_agent_billing_model: agent_models,
         by_low_hit_cause,
+        cache_protection,
+    }
+}
+
+fn cache_protection_cost_view(
+    by_billing_model: Option<&Value>,
+    by_agent_billing_model: Option<&Value>,
+) -> CacheProtectionCostView {
+    let by_billing_model = cache_keepalive_cost_map(by_billing_model);
+    let mut summary = CostEstimate::default();
+    for estimate in by_billing_model.values() {
+        summary.add(estimate);
+    }
+    let mut agent_models = BTreeMap::new();
+    let mut by_agent = BTreeMap::new();
+    if let Some(agents) = by_agent_billing_model.and_then(Value::as_object) {
+        for (agent, models) in agents {
+            let models = cache_keepalive_cost_map(Some(models));
+            let mut agent_total = CostEstimate::default();
+            for estimate in models.values() {
+                agent_total.add(estimate);
+            }
+            by_agent.insert(agent.clone(), agent_total);
+            agent_models.insert(agent.clone(), models);
+        }
+    }
+    CacheProtectionCostView {
+        summary,
+        by_agent,
+        by_billing_model,
+        by_agent_billing_model: agent_models,
     }
 }
 
@@ -246,6 +327,20 @@ fn cost_map(value: Option<&Value>) -> BTreeMap<String, CostEstimate> {
         .into_iter()
         .flat_map(Map::iter)
         .map(|(model, aggregate)| (model.clone(), CostEstimate::for_model(model, aggregate)))
+        .collect()
+}
+
+fn cache_keepalive_cost_map(value: Option<&Value>) -> BTreeMap<String, CostEstimate> {
+    value
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(Map::iter)
+        .map(|(model, aggregate)| {
+            (
+                model.clone(),
+                CostEstimate::for_cache_keepalive_model(model, aggregate),
+            )
+        })
         .collect()
 }
 
@@ -400,5 +495,53 @@ mod tests {
             3.0,
         );
         assert_eq!(activity["cost"]["summary"]["modelFamilies"][0], "pro");
+    }
+
+    #[test]
+    fn cache_protection_cost_is_valued_separately_from_interactive_spend() {
+        let mut activity = json!({
+            "byBillingModel": {
+                "deepseek-v4-flash": {
+                    "requests": 2,
+                    "usageObservations": 2,
+                    "inputTokens": 100,
+                    "outputTokens": 10,
+                    "cacheHitTokens": 80,
+                    "cacheMissTokens": 20,
+                    "cacheKeepaliveRequests": 1,
+                    "cacheKeepaliveUsageObservations": 1,
+                    "cacheKeepaliveInputTokens": 1_000_000,
+                    "cacheKeepaliveOutputTokens": 1,
+                    "cacheKeepaliveReasoningTokens": 0,
+                    "cacheKeepaliveHitTokens": 1_000_000,
+                    "cacheKeepaliveMissTokens": 0
+                }
+            },
+            "byAgentBillingModel": {
+                "claude": {
+                    "deepseek-v4-flash": {
+                        "cacheKeepaliveRequests": 1,
+                        "cacheKeepaliveUsageObservations": 1,
+                        "cacheKeepaliveInputTokens": 1_000_000,
+                        "cacheKeepaliveOutputTokens": 1,
+                        "cacheKeepaliveReasoningTokens": 0,
+                        "cacheKeepaliveHitTokens": 1_000_000,
+                        "cacheKeepaliveMissTokens": 0
+                    }
+                }
+            }
+        });
+        decorate_activity(&mut activity);
+        assert_eq!(activity["cost"]["summary"]["requests"], 2);
+        assert_eq!(
+            activity["cost"]["cacheProtection"]["summary"]["requests"],
+            1
+        );
+        assert_close(
+            activity["cost"]["cacheProtection"]["summary"]["estimatedCny"]
+                .as_f64()
+                .unwrap(),
+            0.02 + 0.000_002,
+        );
     }
 }

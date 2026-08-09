@@ -127,6 +127,42 @@ the change during a live or dispatching turn. The synthetic option never crosses
 ACP, and neither gateway receives invented model aliases or routing parameters.
 Older sessions without a stored choice use the lane default above.
 
+### DeepSeek prompt-cache protection
+
+DeepSeek sessions expose a separate `Prompt cache protection` option. It is
+enabled by default for new and existing `claude-deepseek` and
+`codex-deepseek` sessions, but does no work until a completed interactive
+request proves that at least 64,000 input tokens were cache hits at a hit rate
+of at least 90%. The controller persists only the policy. The owning gateway
+keeps the last eligible upstream request in bounded process memory and never
+stores its prompt, response, tools, or reasoning in Cowboy telemetry or logs.
+
+An eligible idle session is refreshed by replaying that exact request with
+streaming enabled and the smallest supported output allowance. The replay is a
+gateway-internal request: it never enters ACP, the transcript, the session
+queue, or the agent process. Any interactive request globally preempts an
+in-flight refresh, and agent traffic never waits for the cache protector. A
+reset, deletion, provider change, gateway restart, model/configuration change,
+or missing exact request snapshot revokes protection rather than guessing a
+replacement prompt.
+
+The initial refresh interval is 5 hours 30 minutes with deterministic jitter.
+A verified hit increases the interval gradually, up to 5 hours 45 minutes. A
+miss or partial hit shortens the learned global interval and stops that
+session; retryable transport, rate-limit, and provider failures receive one
+bounded retry. These times are operating hypotheses rather than a provider TTL
+contract. The gateway caps retained sessions, bytes, attempts, and source age
+so abandoned or disconnected sessions cannot create an unbounded background
+workload.
+
+The Machine can query content-free protection state through a loopback-only
+gateway endpoint. The UI shows status only for DeepSeek sessions whose measured
+context has reached 64K. Schema-v4 usage events identify
+`request_purpose=cache_keepalive`; their attempts, outcomes, source age,
+interval, tokens, and price are reported separately. They never contribute to
+interactive request counts, blocking-error rates, cache-miss rates, or agent
+spend.
+
 Gemini CLI stopped accepting Google Login for consumer, Google AI Pro, and AI
 Ultra accounts on 2026-06-18. Its ACP mode remains usable with a Gemini API key
 or Code Assist Standard/Enterprise credentials. Machine authentication therefore
