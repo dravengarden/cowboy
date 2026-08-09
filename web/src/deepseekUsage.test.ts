@@ -3,6 +3,7 @@ import {
   DEEPSEEK_CACHE_MIN_HIT_LABEL,
   DEEPSEEK_CACHE_MIN_HIT_TOKENS,
   deepseekAvailableAgents,
+  deepseekCacheProtectionStats,
   deepseekCacheStats,
   deepseekCostStats,
   deepseekVisibleAgents,
@@ -66,6 +67,24 @@ Deno.test("DeepSeek cache rate stays unknown without cache fields", () => {
   assertEquals(stats.hitRate, undefined);
   assertEquals(stats.missRate, undefined);
   assertEquals(stats.coverageRate, 0);
+});
+
+Deno.test("DeepSeek cache protection separates verified outcomes from all attempts", () => {
+  const stats = deepseekCacheProtectionStats({
+    cacheKeepaliveRequests: 6,
+    cacheKeepaliveHits: 2,
+    cacheKeepaliveMisses: 1,
+    cacheKeepalivePartials: 1,
+    cacheKeepaliveRetryableErrors: 1,
+    cacheKeepalivePreemptions: 1,
+    cacheKeepaliveHitTokens: 610_944,
+  });
+  assertEquals(stats.attempts, 6);
+  assertEquals(stats.hits, 2);
+  assertEquals(stats.verifiedOutcomes, 4);
+  assertEquals(stats.verifiedHitRate, 50);
+  assertEquals(stats.protectedHitTokens, 610_944);
+  assertEquals(deepseekCacheProtectionStats({}).verifiedHitRate, undefined);
 });
 
 Deno.test("percentLabel renders two decimals", () => {
