@@ -39,6 +39,12 @@ import { desktopImeOwnsKey } from "./commands/imeShortcut";
 import { workspaceCommandKey } from "./commands/workspaceCommandKey";
 import type { ConfigOption, Status } from "../protocol";
 import { providerConfigOptions } from "../providerConfigOptions";
+import {
+  activeCodexRunPreset,
+  type CodexRunPreset,
+  codexRunPresetChanges,
+  codexRunPresets,
+} from "../codexRunPresets";
 import { send, submitPrompt, useStoreSelector } from "../store";
 import { useCompactionContext } from "../useCompactionContext";
 import { NetworkButton } from "../NetworkActionFeedback";
@@ -650,6 +656,84 @@ function ConfigOptionControl({
   );
 }
 
+function CodexPresetControls({
+  presets,
+  options,
+  sessionId,
+  disabled,
+}: {
+  presets: readonly CodexRunPreset[];
+  options: readonly ConfigOption[];
+  sessionId: string;
+  disabled: boolean;
+}): React.JSX.Element {
+  const active = activeCodexRunPreset(presets, options);
+  return (
+    <Box sx={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "108px minmax(0, 1fr)", alignItems: "center", gap: 1.25 }}>
+      <Typography variant="caption" fontWeight={750} color="text.secondary" sx={{ letterSpacing: "0.02em" }}>
+        Recommended
+      </Typography>
+      <Stack direction="row" spacing={0.75}>
+        {presets.map((preset, index) => {
+          const selected = active?.id === preset.id;
+          return (
+            <ButtonBase
+              key={preset.id}
+              data-config-preset={index}
+              disabled={disabled}
+              aria-pressed={selected}
+              onClick={(): void => {
+                for (const change of codexRunPresetChanges(preset, options)) {
+                  send({
+                    type: "set_config_option",
+                    session_id: sessionId,
+                    config_id: change.configId,
+                    value: change.value,
+                  });
+                }
+              }}
+              sx={{
+                flex: 1,
+                minWidth: 0,
+                minHeight: 44,
+                px: 1.2,
+                py: 0.65,
+                borderRadius: 1.25,
+                border: 1,
+                borderColor: selected ? "primary.main" : "divider",
+                bgcolor: (theme) => selected
+                  ? alpha(theme.palette.primary.main, 0.14)
+                  : alpha(theme.palette.background.default, 0.42),
+                justifyContent: "flex-start",
+                textAlign: "left",
+                "&:hover": { bgcolor: "action.hover" },
+                "&.Mui-disabled": { opacity: 0.46 },
+              }}
+            >
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Stack direction="row" spacing={0.65} alignItems="center">
+                  <Typography variant="caption" fontWeight={750} color={selected ? "primary.main" : "text.primary"}>
+                    {preset.name}
+                  </Typography>
+                  {preset.isDefault && (
+                    <Typography variant="caption" color="primary.main" sx={{ fontSize: "0.625rem", fontWeight: 750 }}>
+                      Default
+                    </Typography>
+                  )}
+                </Stack>
+                <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block", fontSize: "0.625rem" }}>
+                  {preset.detail}
+                </Typography>
+              </Box>
+              <Kbd keys={String(index + 1)} availability={disabled ? "inactive" : "available"} />
+            </ButtonBase>
+          );
+        })}
+      </Stack>
+    </Box>
+  );
+}
+
 export function DesktopTopBarControls({
   sessionId,
   status,
@@ -696,6 +780,7 @@ export function DesktopTopBarControls({
   const directConfigShortcuts = options.map(optionShortcut).filter(
     (shortcut): shortcut is string => shortcut !== undefined,
   );
+  const recommendedPresets = codexRunPresets(session?.provider, options);
   const loadUsage = useCallback(async (manual: boolean): Promise<void> => {
     if (refreshing) return;
     setRefreshing(true);
@@ -793,6 +878,17 @@ export function DesktopTopBarControls({
       };
       const rows = [...panel.querySelectorAll<HTMLElement>("[data-config-row]")]
         .filter((row) => choicesFor(row).length > 0);
+      if (action.type === "preset") {
+        const preset = panel.querySelector<HTMLElement>(
+          `[data-config-preset="${String(action.index)}"]`,
+        );
+        if (!preset || preset.matches(":disabled, [aria-disabled='true']")) return;
+        preset.focus();
+        preset.click();
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       if (action.type === "direct") {
         const row = panel.querySelector<HTMLElement>(
           `[data-config-shortcut="${action.shortcut}"]`,
@@ -1085,6 +1181,9 @@ export function DesktopTopBarControls({
             { shortcut: "↑/↓", label: "Field" },
             { shortcut: "H/L", label: "Change" },
             { shortcut: "←/→", label: "Change" },
+            ...(recommendedPresets.length > 0
+              ? [{ shortcut: "1/2", label: "Preset" }]
+              : []),
             ...(directConfigShortcuts.length > 0
               ? [{ shortcut: directConfigShortcuts.join("/"), label: "Direct" }]
               : []),
@@ -1094,6 +1193,14 @@ export function DesktopTopBarControls({
       >
         <Box ref={configPanelRef} data-desktop-shortcut-scope="exclusive">
           <Box sx={{ px: 2.25, py: 1.75, display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 1.25 }}>
+            {recommendedPresets.length > 0 && (
+              <CodexPresetControls
+                presets={recommendedPresets}
+                options={options}
+                sessionId={sessionId}
+                disabled={dead}
+              />
+            )}
             {options.map((option) => (
               <ConfigOptionControl
                 key={option.id}

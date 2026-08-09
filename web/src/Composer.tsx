@@ -213,6 +213,11 @@ import {
 } from "./NetworkActionFeedback";
 import { originLabel } from "./protocol";
 import { providerConfigOptions } from "./providerConfigOptions";
+import {
+  activeCodexRunPreset,
+  codexRunPresetChanges,
+  codexRunPresets,
+} from "./codexRunPresets";
 import { DEEPSEEK_CACHE_MIN_HIT_TOKENS } from "./deepseekUsage";
 import type {
   AvailableCommand,
@@ -5610,6 +5615,13 @@ function ComposerSheet({
   const useSheetSurface = useMediaQuery(
     "(max-width: 767.95px), (min-width: 768px) and (max-width: 1023.95px) and (pointer: coarse)",
   );
+  const recommendedPresets = codexRunPresets(session?.provider, options);
+  const activePreset = activeCodexRunPreset(recommendedPresets, options);
+  const [customizeAgent, setCustomizeAgent] = useState(false);
+  useEffect(() => {
+    if (open) setCustomizeAgent(false);
+  }, [open, session?.id]);
+  const showAgentDetails = recommendedPresets.length === 0 || customizeAgent;
   const displayTitle = session?.title.startsWith(`${session.provider} · `)
     ? session.title.slice(session.provider.length + 3)
     : session?.title ?? "";
@@ -5768,20 +5780,110 @@ function ComposerSheet({
                 // effort are commonly changed together, and each <Select> already
                 // closes its own menu on pick. The user dismisses the sheet by
                 // tapping outside once they're done.
-                <Stack spacing={2} sx={{ mt: 1.5 }}>
-                  {options.map((opt) => (
-                    <ConfigSheetDropdown
-                      key={opt.id}
-                      option={opt}
-                      disabled={
-                        opt.id === "deepseek_context" ||
-                          opt.id === "deepseek_cache_protection"
-                          ? status === "busy" || status === "starting"
-                          : dead
-                      }
-                      onSelect={(value): void => onSelectOption(opt.id, value)}
-                    />
-                  ))}
+                <Stack spacing={1.25} sx={{ mt: 1.25 }}>
+                  {recommendedPresets.length > 0 && (
+                    <>
+                      <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
+                        Recommended
+                      </Typography>
+                      <Box
+                        sx={{
+                          display: "grid",
+                          gridTemplateColumns: { xs: "1fr", sm: "repeat(2, minmax(0, 1fr))" },
+                          gap: 1,
+                        }}
+                      >
+                        {recommendedPresets.map((preset) => {
+                          const selected = activePreset?.id === preset.id;
+                          return (
+                            <ButtonBase
+                              key={preset.id}
+                              disabled={dead}
+                              aria-pressed={selected}
+                              onClick={(): void => {
+                                haptic();
+                                for (const change of codexRunPresetChanges(preset, options)) {
+                                  onSelectOption(change.configId, change.value);
+                                }
+                                setCustomizeAgent(false);
+                              }}
+                              sx={{
+                                minHeight: 58,
+                                px: 1.5,
+                                py: 1,
+                                borderRadius: 2,
+                                border: 1,
+                                borderColor: selected ? "primary.main" : "divider",
+                                bgcolor: (theme) => selected
+                                  ? alpha(theme.palette.primary.main, 0.13)
+                                  : alpha(theme.palette.background.default, 0.34),
+                                textAlign: "left",
+                                justifyContent: "flex-start",
+                                "&:active": { transform: "scale(0.99)" },
+                                "&.Mui-disabled": { opacity: 0.46 },
+                              }}
+                            >
+                              <Box sx={{ flex: 1, minWidth: 0 }}>
+                                <Stack direction="row" spacing={0.75} alignItems="center">
+                                  <Typography variant="body2" sx={{ fontWeight: 750 }}>
+                                    {preset.name}
+                                  </Typography>
+                                  {preset.isDefault && (
+                                    <Chip label="Default" size="small" color="primary" variant="outlined" sx={{ height: 20, fontSize: "0.625rem" }} />
+                                  )}
+                                </Stack>
+                                <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.2 }}>
+                                  {preset.detail}
+                                </Typography>
+                              </Box>
+                            </ButtonBase>
+                          );
+                        })}
+                      </Box>
+                      <ButtonBase
+                        aria-expanded={showAgentDetails}
+                        onClick={(): void => {
+                          haptic();
+                          setCustomizeAgent((value) => !value);
+                        }}
+                        sx={{
+                          minHeight: 44,
+                          px: 0.5,
+                          borderRadius: 1.5,
+                          justifyContent: "space-between",
+                          color: "text.secondary",
+                        }}
+                      >
+                        <Typography variant="body2" sx={{ fontWeight: 650 }}>
+                          Customize
+                        </Typography>
+                        <ExpandMore
+                          fontSize="small"
+                          sx={{
+                            transform: showAgentDetails ? "rotate(180deg)" : "none",
+                            transition: (theme) => theme.transitions.create("transform"),
+                          }}
+                        />
+                      </ButtonBase>
+                    </>
+                  )}
+                  <Collapse in={showAgentDetails} unmountOnExit={recommendedPresets.length > 0}>
+                    <Stack spacing={2} sx={{ pt: recommendedPresets.length > 0 ? 0.5 : 0 }}>
+                      {options.map((opt) => (
+                        <ConfigSheetDropdown
+                          key={opt.id}
+                          option={opt}
+                          disabled={
+                            opt.id === "deepseek_context" ||
+                              opt.id === "deepseek_cache_protection"
+                              ? status === "busy" || status === "starting"
+                              : dead
+                          }
+                          onSelect={(value): void => onSelectOption(opt.id, value)}
+                        />
+                      ))}
+                    </Stack>
+                  </Collapse>
                 </Stack>
               )}
           </Box>
