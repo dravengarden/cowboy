@@ -213,7 +213,10 @@ import {
 } from "./NetworkActionFeedback";
 import { originLabel } from "./protocol";
 import { providerConfigOptions } from "./providerConfigOptions";
-import { DEEPSEEK_CACHE_MIN_HIT_TOKENS } from "./deepseekUsage";
+import {
+  DEEPSEEK_CACHE_BASE_INTERVAL_LABEL,
+  DEEPSEEK_CACHE_MIN_HIT_TOKENS,
+} from "./deepseekUsage";
 import type {
   AvailableCommand,
   ConfigOption,
@@ -5802,6 +5805,11 @@ interface DeepseekCacheProtectionStatus {
   last_verified_at_ms?: number;
   next_attempt_at_ms?: number;
   scheduled_interval_ms?: number;
+  base_interval_ms?: number;
+  adaptive_interval_ms?: number;
+  minimum_interval_ms?: number;
+  maximum_interval_ms?: number;
+  jitter_ms?: number;
   expires_at_ms?: number;
   attempts?: number;
   minimumHitTokens?: number;
@@ -5813,6 +5821,17 @@ function compactCacheTokens(tokens: number | undefined): string {
   if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
   if (tokens >= 1_000) return `${Math.round(tokens / 1_000).toLocaleString()}K`;
   return tokens.toLocaleString();
+}
+
+function compactCacheDuration(milliseconds: number | undefined): string {
+  if (milliseconds === undefined || !Number.isFinite(milliseconds) || milliseconds <= 0) {
+    return "";
+  }
+  const totalMinutes = Math.max(1, Math.round(milliseconds / 60_000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours === 0) return `${minutes}m`;
+  return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
 }
 
 function SessionInfoSection({
@@ -5893,6 +5912,13 @@ function SessionInfoSection({
     { label: "Status", value: session.status },
     { label: "Session id", value: session.id, mono: true },
   ];
+  const cacheBaseInterval = compactCacheDuration(cacheProtection?.base_interval_ms) ||
+    DEEPSEEK_CACHE_BASE_INTERVAL_LABEL;
+  const cacheAdaptiveInterval = compactCacheDuration(cacheProtection?.adaptive_interval_ms);
+  const cacheScheduledInterval = compactCacheDuration(cacheProtection?.scheduled_interval_ms);
+  const cacheIntervalDetail = cacheProtection?.state === "protected"
+    ? `Base ${cacheBaseInterval} · next ${cacheScheduledInterval || cacheAdaptiveInterval || "learning"}`
+    : `Base ${cacheBaseInterval} · adaptive target ${cacheAdaptiveInterval || "learning"}`;
   return (
     <>
       <Box sx={{ pt: 0.5, pb: 0.25 }}>
@@ -5971,9 +5997,10 @@ function SessionInfoSection({
         )}
         {cacheProtectionVisible &&
           (cacheProtection || cacheProtectionUnavailable) && (
-          <Tooltip
-            title={cacheProtection?.state === "protected"
-              ? `Last verified ${
+          <Stack spacing={0.35} alignItems="flex-start">
+            <Tooltip
+              title={cacheProtection?.state === "protected"
+                ? `${cacheIntervalDetail}. Last verified ${
                 cacheProtection.last_verified_at_ms
                   ? new Date(cacheProtection.last_verified_at_ms).toLocaleString()
                   : "recently"
@@ -5983,29 +6010,35 @@ function SessionInfoSection({
                   : "is being scheduled"
               }. Real agent work always preempts it.`
               : cacheProtection?.state === "disabled"
-              ? "Automatic DeepSeek cache protection is disabled for this session."
+              ? `Automatic DeepSeek cache protection is disabled for this session. Base interval is ${cacheBaseInterval}.`
               : cacheProtectionUnavailable
               ? "The owning Machine could not report cache status. Agent work is unaffected."
-              : "This session is large enough for protection; Cowboy is waiting for a verified ≥90% cache hit before scheduling a keepalive."}
-          >
-            <Chip
-              size="small"
-              variant="outlined"
-              color={cacheProtection?.state === "protected"
-                ? "success"
-                : cacheProtectionUnavailable
-                ? "warning"
-                : "default"}
-              label={cacheProtection?.state === "protected"
-                ? `Cache protected · ${compactCacheTokens(cacheProtection.protected_tokens)}`
-                : cacheProtection?.state === "disabled"
-                ? "Cache protection off"
-                : cacheProtectionUnavailable
-                ? "Cache status unavailable"
-                : "Cache protection learning"}
-              sx={{ alignSelf: "flex-start" }}
-            />
-          </Tooltip>
+                : "This session is large enough for protection; Cowboy is waiting for a verified ≥90% cache hit before scheduling a keepalive."}
+            >
+              <Chip
+                size="small"
+                variant="outlined"
+                color={cacheProtection?.state === "protected"
+                  ? "success"
+                  : cacheProtectionUnavailable
+                  ? "warning"
+                  : "default"}
+                label={cacheProtection?.state === "protected"
+                  ? `Cache protected · ${compactCacheTokens(cacheProtection.protected_tokens)}`
+                  : cacheProtection?.state === "disabled"
+                  ? "Cache protection off"
+                  : cacheProtectionUnavailable
+                  ? "Cache status unavailable"
+                  : "Cache protection learning"}
+                sx={{ alignSelf: "flex-start" }}
+              />
+            </Tooltip>
+            {cacheProtection && !cacheProtectionUnavailable && (
+              <Typography variant="caption" color="text.secondary">
+                {cacheIntervalDetail} · adaptive learning
+              </Typography>
+            )}
+          </Stack>
         )}
       </Stack>
     </>

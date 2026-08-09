@@ -1,5 +1,7 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
+  DEEPSEEK_CACHE_BASE_INTERVAL_LABEL,
+  DEEPSEEK_CACHE_BASE_INTERVAL_MS,
   DEEPSEEK_CACHE_MIN_HIT_LABEL,
   DEEPSEEK_CACHE_MIN_HIT_TOKENS,
   deepseekAvailableAgents,
@@ -13,6 +15,11 @@ import {
 Deno.test("DeepSeek cache protection uses the shared 64K minimum", () => {
   assertEquals(DEEPSEEK_CACHE_MIN_HIT_TOKENS, 64_000);
   assertEquals(DEEPSEEK_CACHE_MIN_HIT_LABEL, "64K");
+});
+
+Deno.test("DeepSeek cache protection exposes the eight-hour base interval", () => {
+  assertEquals(DEEPSEEK_CACHE_BASE_INTERVAL_MS, 28_800_000);
+  assertEquals(DEEPSEEK_CACHE_BASE_INTERVAL_LABEL, "8h");
 });
 
 Deno.test("DeepSeek agent capability follows the full retained telemetry window", () => {

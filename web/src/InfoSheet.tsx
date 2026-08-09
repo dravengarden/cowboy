@@ -27,6 +27,7 @@ import { useSkills } from "./store";
 import { NetworkButton, NetworkIconButton } from "./NetworkActionFeedback";
 import {
   DEEPSEEK_CACHE_MIN_HIT_LABEL,
+  DEEPSEEK_CACHE_BASE_INTERVAL_LABEL,
   deepseekAvailableAgents,
   deepseekCacheProtectionStats,
   deepseekCacheStats,
@@ -610,7 +611,7 @@ function DeepSeekDetails(
                     Cache protection
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
-                    Auto · verified ≥{DEEPSEEK_CACHE_MIN_HIT_LABEL}
+                    Auto · base {DEEPSEEK_CACHE_BASE_INTERVAL_LABEL} · verified ≥{DEEPSEEK_CACHE_MIN_HIT_LABEL}
                   </Typography>
                 </Stack>
                 <Box

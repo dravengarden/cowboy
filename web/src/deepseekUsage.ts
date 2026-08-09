@@ -1,5 +1,7 @@
 export const DEEPSEEK_CACHE_MIN_HIT_TOKENS = 64_000;
 export const DEEPSEEK_CACHE_MIN_HIT_LABEL = "64K";
+export const DEEPSEEK_CACHE_BASE_INTERVAL_MS = 8 * 60 * 60 * 1_000;
+export const DEEPSEEK_CACHE_BASE_INTERVAL_LABEL = "8h";
 
 export interface DeepSeekCacheStats {
   hitTokens: number;
