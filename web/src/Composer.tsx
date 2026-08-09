@@ -5893,7 +5893,9 @@ function ComposerSheet({
                                 minHeight: 58,
                                 px: 1.5,
                                 py: 1,
-                                borderRadius: 2,
+                                // Match the theme's 10px control radius used by
+                                // the other actions in this settings sheet.
+                                borderRadius: 1,
                                 border: 1,
                                 borderColor: selected ? "primary.main" : "divider",
                                 bgcolor: (theme) => selected

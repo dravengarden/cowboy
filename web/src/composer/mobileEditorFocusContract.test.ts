@@ -73,6 +73,16 @@ Deno.test("Machine npm updates survive a swallowed Safari click", () => {
   assertEquals(updateButton.includes("{...updateTap}"), true);
 });
 
+Deno.test("mobile recommended presets use the Cowboy control radius", () => {
+  const presetsStart = composerSource.indexOf("{recommendedPresets.map((preset) => {");
+  const presetsEnd = composerSource.indexOf("<ButtonBase\n                        aria-expanded", presetsStart);
+  const presets = composerSource.slice(presetsStart, presetsEnd);
+
+  assertEquals(presetsStart >= 0 && presetsEnd > presetsStart, true);
+  assertEquals(presets.includes("borderRadius: 1,"), true);
+  assertEquals(presets.includes("borderRadius: 2,"), false);
+});
+
 Deno.test("mobile column and pending ownership cannot fill the viewport without a keyboard", () => {
   assertEquals(
     composerSource.includes(
