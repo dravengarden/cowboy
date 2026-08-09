@@ -3711,6 +3711,40 @@ function machineComponentName(component: MachineChoice["components"][number]): s
     return component.id.slot || component.id.kind.replaceAll("_", " ");
 }
 
+function MachineNpmUpdateButton({
+    updating,
+    onUpdate,
+    fullWidthOnTouch = false,
+}: {
+    updating: boolean;
+    onUpdate: () => void;
+    fullWidthOnTouch?: boolean;
+}): React.JSX.Element {
+    // A stationary touch can end scroll momentum without producing Safari's
+    // synthetic click. Commit on pointerup while retaining ordinary click and
+    // keyboard activation so Machine updates always reach the controller.
+    const updateTap = useReliableTouchTap<HTMLButtonElement>(onUpdate);
+    return (
+        <Button
+            size="small"
+            variant="outlined"
+            color="warning"
+            disabled={updating}
+            startIcon={updating ? <DelayedNetworkProgress size={14} /> : <SystemUpdateAlt />}
+            {...updateTap}
+            sx={fullWidthOnTouch
+                ? {
+                    "@media (pointer: coarse), (max-width: 600px)": {
+                        width: "100%",
+                    },
+                }
+                : undefined}
+        >
+            {updating ? "Updating" : "Update"}
+        </Button>
+    );
+}
+
 function MachinesContent(): React.JSX.Element {
     const [machines, setMachines] = useState<readonly MachineChoice[]>([]);
     const [events, setEvents] = useState<Record<string, readonly MachineEventView[]>>({});
@@ -4248,19 +4282,11 @@ function MachinesContent(): React.JSX.Element {
                                                             >{loginBusy ? "Waiting" : "Sign in"}</Button>
                                                         )}
                                                         {provider && npmInstallable && (
-                                                            <Button
-                                                                size="small"
-                                                                variant="outlined"
-                                                                color="warning"
-                                                                disabled={npmUpdating}
-                                                                startIcon={npmUpdating ? <DelayedNetworkProgress size={14} /> : <SystemUpdateAlt />}
-                                                                onClick={() => requestNpmUpdate(machine.id, component)}
-                                                                sx={{
-                                                                    "@media (pointer: coarse), (max-width: 600px)": {
-                                                                        width: "100%",
-                                                                    },
-                                                                }}
-                                                            >{npmUpdating ? "Updating" : "Update"}</Button>
+                                                            <MachineNpmUpdateButton
+                                                                updating={Boolean(npmUpdating)}
+                                                                onUpdate={() => requestNpmUpdate(machine.id, component)}
+                                                                fullWidthOnTouch
+                                                            />
                                                         )}
                                                         {!provider && componentPending && (
                                                             <Button
@@ -4272,14 +4298,10 @@ function MachinesContent(): React.JSX.Element {
                                                             >{busy[componentKey] ? <DelayedNetworkProgress size={14} /> : "Update"}</Button>
                                                         )}
                                                         {!provider && !componentPending && npmInstallable && (
-                                                            <Button
-                                                                size="small"
-                                                                variant="outlined"
-                                                                color="warning"
-                                                                disabled={npmUpdating}
-                                                                startIcon={npmUpdating ? <DelayedNetworkProgress size={14} /> : <SystemUpdateAlt />}
-                                                                onClick={() => requestNpmUpdate(machine.id, component)}
-                                                            >{npmUpdating ? "Updating" : "Update"}</Button>
+                                                            <MachineNpmUpdateButton
+                                                                updating={Boolean(npmUpdating)}
+                                                                onUpdate={() => requestNpmUpdate(machine.id, component)}
+                                                            />
                                                         )}
                                                         {!provider && !componentPending && !npmInstallable && (
                                                             <Chip

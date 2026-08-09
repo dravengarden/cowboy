@@ -60,6 +60,19 @@ Deno.test("mobile settings commits touch taps when Safari drops synthetic click"
   assertEquals(mobileSettings.includes("settingsTap.onClick"), true);
 });
 
+Deno.test("Machine npm updates survive a swallowed Safari click", () => {
+  const updateButtonStart = appSource.indexOf("function MachineNpmUpdateButton");
+  const updateButtonEnd = appSource.indexOf("function MachinesContent", updateButtonStart);
+  const updateButton = appSource.slice(updateButtonStart, updateButtonEnd);
+
+  assertEquals(updateButtonStart >= 0 && updateButtonEnd > updateButtonStart, true);
+  assertEquals(
+    updateButton.includes("useReliableTouchTap<HTMLButtonElement>(onUpdate)"),
+    true,
+  );
+  assertEquals(updateButton.includes("{...updateTap}"), true);
+});
+
 Deno.test("mobile column and pending ownership cannot fill the viewport without a keyboard", () => {
   assertEquals(
     composerSource.includes(
