@@ -214,6 +214,11 @@ import {
 import { originLabel } from "./protocol";
 import { providerConfigOptions } from "./providerConfigOptions";
 import {
+  activeRunConfigPreset,
+  runConfigPresetChanges,
+  runConfigPresets,
+} from "./runConfigPresets";
+import {
   DEEPSEEK_CACHE_BASE_INTERVAL_LABEL,
   DEEPSEEK_CACHE_MIN_HIT_TOKENS,
 } from "./deepseekUsage";
@@ -465,6 +470,81 @@ export function compactTooltip(used: number, size: number): string {
   if (!(size > 0)) return "Compact conversation";
   const pct = used > 0 ? Math.max(1, Math.round(Math.min(100, (used / size) * 100))) : 0;
   return `Compact conversation · context ${pct}% · ${fmtTokens(used)} / ${fmtTokens(size)} tokens`;
+}
+
+function SessionActionConfirmDialog({
+  action,
+  provider,
+  activeTurn,
+  disableRestoreFocus = false,
+  onClose,
+  onConfirm,
+}: {
+  action: SessionAction | null;
+  provider: string;
+  activeTurn: boolean;
+  disableRestoreFocus?: boolean;
+  onClose: () => void;
+  onConfirm: () => Promise<void>;
+}): React.JSX.Element {
+  return (
+    <Dialog
+      open={action !== null}
+      onClose={onClose}
+      disableRestoreFocus={disableRestoreFocus}
+      maxWidth="xs"
+      fullWidth
+    >
+      {action !== null && (
+        <>
+          <DialogTitle>{action.label}?</DialogTitle>
+          <DialogContent>
+            <DialogContentText>{action.detail}</DialogContentText>
+            <DialogContentText sx={{ mt: 1.5, fontSize: "0.8125rem" }}>
+              {action.kind === "slash" && action.command !== undefined
+                ? (
+                  <>
+                    Sends{" "}
+                    <Box
+                      component="code"
+                      sx={{
+                        fontFamily: "ui-monospace, monospace",
+                        px: 0.5,
+                        py: 0.125,
+                        borderRadius: 0.75,
+                        bgcolor: "action.hover",
+                      }}
+                    >
+                      {action.command}
+                    </Box>{" "}
+                    to {provider || "the agent"}
+                    {activeTurn ? " (queued — the agent is mid-turn)" : ""}.
+                  </>
+                )
+                : `Resets ${provider || "the agent"} to a fresh context now${
+                  activeTurn ? " (ends the current turn)" : ""
+                }.`}
+            </DialogContentText>
+          </DialogContent>
+          <DialogActions>
+            <Button color="inherit" onClick={onClose} sx={{ textTransform: "none" }}>
+              Cancel
+              <Kbd keys="Esc" />
+            </Button>
+            <NetworkButton
+              variant="contained"
+              color={action.destructive ? "error" : "primary"}
+              networkAction={onConfirm}
+              sx={{ textTransform: "none" }}
+            >
+              {action.destructive ? "Clear" : "Compact"}
+              <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+            </NetworkButton>
+          </DialogActions>
+        </>
+      )}
+    </Dialog>
+  );
 }
 
 // The mobile fullscreen compose/edit docked BAR — ONE shared bar so Compose and
@@ -2336,25 +2416,6 @@ export function ComposerWorkspace({
               </MenuItem>}
             </Menu>
 
-            {clearAction && (
-              <Tooltip title="Clear conversation">
-                <span>
-                  <IconButton
-                    size="small"
-                    aria-label="clear conversation"
-                    disabled={dead}
-                    onClick={(): void => setCmdConfirm(clearAction)}
-                    sx={{
-                      color: "text.secondary",
-                      "&:hover": { color: "error.main" },
-                    }}
-                  >
-                    <CleaningServices fontSize="small" />
-                  </IconButton>
-                </span>
-              </Tooltip>
-            )}
-
             {desktopShortcut(<Button
               ref={queueBtnRef}
               variant="contained"
@@ -2979,66 +3040,14 @@ export function ComposerWorkspace({
           slash-command; Clear is a cowboy session RESET (fresh agent context).
           Both meaningfully change context, so neither fires on a bare tap; Clear
           is styled destructive (it discards the agent's memory of the chat). */}
-      <Dialog
-        open={cmdConfirm !== null}
-        onClose={(): void => setCmdConfirm(null)}
+      <SessionActionConfirmDialog
+        action={cmdConfirm}
+        provider={provider}
+        activeTurn={busy || starting}
         disableRestoreFocus={touchInput && cmdConfirm?.kind === "reset"}
-        maxWidth="xs"
-        fullWidth
-      >
-        {cmdConfirm !== null && (
-          <>
-            <DialogTitle>{cmdConfirm.label}?</DialogTitle>
-            <DialogContent>
-              <DialogContentText>{cmdConfirm.detail}</DialogContentText>
-              <DialogContentText sx={{ mt: 1.5, fontSize: "0.8125rem" }}>
-                {cmdConfirm.kind === "slash" && cmdConfirm.command !== undefined
-                  ? (
-                    <>
-                      Sends{" "}
-                      <Box
-                        component="code"
-                        sx={{
-                          fontFamily: "ui-monospace, monospace",
-                          px: 0.5,
-                          py: 0.125,
-                          borderRadius: 0.75,
-                          bgcolor: "action.hover",
-                        }}
-                      >
-                        {cmdConfirm.command}
-                      </Box>{" "}
-                      to {provider || "the agent"}
-                      {busy || starting ? " (queued — the agent is mid-turn)" : ""}.
-                    </>
-                  )
-                  : `Resets ${provider || "the agent"} to a fresh context now${
-                    busy || starting ? " (ends the current turn)" : ""
-                  }.`}
-              </DialogContentText>
-            </DialogContent>
-            <DialogActions>
-              <Button
-                color="inherit"
-                onClick={(): void => setCmdConfirm(null)}
-                sx={{ textTransform: "none" }}
-              >
-                Cancel
-                <Kbd keys="Esc" />
-              </Button>
-              <NetworkButton
-                variant="contained"
-                color={cmdConfirm.destructive ? "error" : "primary"}
-                networkAction={confirmSessionAction}
-                sx={{ textTransform: "none" }}
-              >
-                {cmdConfirm.destructive ? "Clear" : "Compact"}
-                <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-              </NetworkButton>
-            </DialogActions>
-          </>
-        )}
-      </Dialog>
+        onClose={(): void => setCmdConfirm(null)}
+        onConfirm={confirmSessionAction}
+      />
       {/* Mobile fullscreen compose (the ↗ on touch). A near-full-screen sheet for
           comfortable long-form writing — the first-class editor + future home of a
           markdown / rich-text toolbar + preview. Shares the composer's `text` +
@@ -5486,6 +5495,10 @@ export function SessionControls({
     (snapshot) => snapshot.sessions.find((candidate) => candidate.id === sessionId),
     sameComposerSheetSession,
   );
+  const timelineState = useStoreSelector(
+    (snapshot) => composerTimelineSlice(snapshot.timelines.get(sessionId)),
+    sameComposerTimelineSlice,
+  );
   const touchInput = useTouchComposer();
   const [sheetOpen, setSheetOpen] = useState(false);
   const dead = status === "exited" || status === "crashed" ||
@@ -5516,6 +5529,30 @@ export function SessionControls({
   const showSkeleton = !dead && options.length === 0 &&
     (status === "starting" || status === "running");
   const hasConfig = showSkeleton || options.length > 0;
+  const compactAction = useMemo(
+    () =>
+      resolveSessionAction(
+        "compact",
+        session?.provider ?? "",
+        timelineState.availableCommands,
+      ),
+    [session?.provider, timelineState.availableCommands],
+  );
+  const clearAction = useMemo(
+    () =>
+      resolveSessionAction(
+        "clear",
+        session?.provider ?? "",
+        timelineState.availableCommands,
+      ),
+    [session?.provider, timelineState.availableCommands],
+  );
+  const runSessionAction = (action: SessionAction): Promise<void> => {
+    haptic();
+    if (action.kind === "reset") return resetSession(sessionId);
+    if (action.command !== undefined) return submitPrompt(sessionId, action.command, []);
+    return Promise.resolve();
+  };
   return (
     <>
       {hasConfig && (
@@ -5565,6 +5602,10 @@ export function SessionControls({
           options={options}
           loading={showSkeleton}
           dead={dead}
+          compacting={status === "busy" && timelineState.compactingTail}
+          compactAction={compactAction}
+          clearAction={clearAction}
+          onSessionAction={runSessionAction}
           projection={projection}
           onProjectionChange={onProjectionChange}
           onSelectOption={(configId, value): void => {
@@ -5594,6 +5635,10 @@ function ComposerSheet({
   options,
   loading,
   dead,
+  compacting,
+  compactAction,
+  clearAction,
+  onSessionAction,
   projection,
   onProjectionChange,
   onSelectOption,
@@ -5604,6 +5649,10 @@ function ComposerSheet({
   options: ConfigOption[];
   loading: boolean;
   dead: boolean;
+  compacting: boolean;
+  compactAction: SessionAction | null;
+  clearAction: SessionAction | null;
+  onSessionAction: (action: SessionAction) => Promise<void>;
   projection?: TranscriptProjection | undefined;
   onProjectionChange?: ((projection: TranscriptProjection) => void) | undefined;
   onSelectOption: (configId: string, value: string | boolean) => void;
@@ -5613,6 +5662,17 @@ function ComposerSheet({
   const useSheetSurface = useMediaQuery(
     "(max-width: 767.95px), (min-width: 768px) and (max-width: 1023.95px) and (pointer: coarse)",
   );
+  const recommendedPresets = runConfigPresets(session?.provider, options);
+  const activePreset = activeRunConfigPreset(recommendedPresets, options);
+  const [customizeAgent, setCustomizeAgent] = useState(false);
+  const [cmdConfirm, setCmdConfirm] = useState<SessionAction | null>(null);
+  useEffect(() => {
+    if (open) {
+      setCustomizeAgent(false);
+      setCmdConfirm(null);
+    }
+  }, [open, session?.id]);
+  const showAgentDetails = recommendedPresets.length === 0 || customizeAgent;
   const displayTitle = session?.title.startsWith(`${session.provider} · `)
     ? session.title.slice(session.provider.length + 3)
     : session?.title ?? "";
@@ -5637,8 +5697,18 @@ function ComposerSheet({
   const close = (): void => {
     setTitle(displayTitle);
     setTitleFocused(false);
+    setCmdConfirm(null);
     onClose();
   };
+  const confirmSessionAction = async (): Promise<void> => {
+    if (cmdConfirm === null) return;
+    const action = cmdConfirm;
+    setCmdConfirm(null);
+    await onSessionAction(action);
+  };
+  useConfirmEnter(cmdConfirm !== null, () => {
+    void confirmSessionAction();
+  });
   const editingTitle = titleFocused || titleDirty;
   return (
     <Sheet
@@ -5705,6 +5775,11 @@ function ComposerSheet({
           onTitleFocusChange={setTitleFocused}
           onTitleSave={saveTitle}
           saveOnBlur={!useSheetSurface}
+          compactAction={compactAction}
+          clearAction={clearAction}
+          compacting={compacting}
+          dead={dead}
+          onSessionAction={setCmdConfirm}
         />
       )}
       {session && <QueueSection session={session} />}
@@ -5771,25 +5846,124 @@ function ComposerSheet({
                 // effort are commonly changed together, and each <Select> already
                 // closes its own menu on pick. The user dismisses the sheet by
                 // tapping outside once they're done.
-                <Stack spacing={2} sx={{ mt: 1.5 }}>
-                  {options.map((opt) => (
-                    <ConfigSheetDropdown
-                      key={opt.id}
-                      option={opt}
-                      disabled={
-                        opt.id === "deepseek_context" ||
-                          opt.id === "deepseek_cache_protection"
-                          ? status === "busy" || status === "starting"
-                          : dead
-                      }
-                      onSelect={(value): void => onSelectOption(opt.id, value)}
-                    />
-                  ))}
+                <Stack spacing={1.25} sx={{ mt: 1.25 }}>
+                  {recommendedPresets.length > 0 && (
+                    <>
+                      <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
+                        Recommended
+                      </Typography>
+                      <Box
+                        sx={{
+                          display: "grid",
+                          gridTemplateColumns: { xs: "1fr", sm: "repeat(2, minmax(0, 1fr))" },
+                          gap: 1,
+                        }}
+                      >
+                        {recommendedPresets.map((preset) => {
+                          const selected = activePreset?.id === preset.id;
+                          return (
+                            <ButtonBase
+                              key={preset.id}
+                              disabled={dead}
+                              aria-pressed={selected}
+                              onClick={(): void => {
+                                haptic();
+                                for (const change of runConfigPresetChanges(preset, options)) {
+                                  onSelectOption(change.configId, change.value);
+                                }
+                                setCustomizeAgent(false);
+                              }}
+                              sx={{
+                                minHeight: 58,
+                                px: 1.5,
+                                py: 1,
+                                // Match the theme's 10px control radius used by
+                                // the other actions in this settings sheet.
+                                borderRadius: 1,
+                                border: 1,
+                                borderColor: selected ? "primary.main" : "divider",
+                                bgcolor: (theme) => selected
+                                  ? alpha(theme.palette.primary.main, 0.13)
+                                  : alpha(theme.palette.background.default, 0.34),
+                                textAlign: "left",
+                                justifyContent: "flex-start",
+                                "&:active": { transform: "scale(0.99)" },
+                                "&.Mui-disabled": { opacity: 0.46 },
+                              }}
+                            >
+                              <Box sx={{ flex: 1, minWidth: 0 }}>
+                                <Stack direction="row" spacing={0.75} alignItems="center">
+                                  <Typography variant="body2" sx={{ fontWeight: 750 }}>
+                                    {preset.name}
+                                  </Typography>
+                                  {preset.isDefault && (
+                                    <Chip label="Default" size="small" color="primary" variant="outlined" sx={{ height: 20, fontSize: "0.625rem" }} />
+                                  )}
+                                </Stack>
+                                <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.2 }}>
+                                  {preset.detail}
+                                </Typography>
+                              </Box>
+                            </ButtonBase>
+                          );
+                        })}
+                      </Box>
+                      <ButtonBase
+                        aria-expanded={showAgentDetails}
+                        onClick={(): void => {
+                          haptic();
+                          setCustomizeAgent((value) => !value);
+                        }}
+                        sx={{
+                          minHeight: 44,
+                          px: 0.5,
+                          borderRadius: 1.5,
+                          justifyContent: "space-between",
+                          color: "text.secondary",
+                        }}
+                      >
+                        <Typography variant="body2" sx={{ fontWeight: 650 }}>
+                          Customize
+                        </Typography>
+                        <ExpandMore
+                          fontSize="small"
+                          sx={{
+                            transform: showAgentDetails ? "rotate(180deg)" : "none",
+                            transition: (theme) => theme.transitions.create("transform"),
+                          }}
+                        />
+                      </ButtonBase>
+                    </>
+                  )}
+                  <Collapse in={showAgentDetails} unmountOnExit={recommendedPresets.length > 0}>
+                    <Stack spacing={2} sx={{ pt: recommendedPresets.length > 0 ? 0.5 : 0 }}>
+                      {options.map((opt) => (
+                        <ConfigSheetDropdown
+                          key={opt.id}
+                          option={opt}
+                          disabled={
+                            opt.id === "deepseek_context" ||
+                              opt.id === "deepseek_cache_protection"
+                              ? status === "busy" || status === "starting"
+                              : dead
+                          }
+                          onSelect={(value): void => onSelectOption(opt.id, value)}
+                        />
+                      ))}
+                    </Stack>
+                  </Collapse>
                 </Stack>
               )}
           </Box>
         </>
       )}
+      <SessionActionConfirmDialog
+        action={cmdConfirm}
+        provider={session?.provider ?? ""}
+        activeTurn={session?.status === "busy" || session?.status === "starting"}
+        onClose={(): void => setCmdConfirm(null)}
+        onConfirm={confirmSessionAction}
+      />
     </Sheet>
   );
 }
@@ -5842,6 +6016,11 @@ function SessionInfoSection({
   onTitleFocusChange,
   onTitleSave,
   saveOnBlur,
+  compactAction,
+  clearAction,
+  compacting,
+  dead,
+  onSessionAction,
 }: {
   session: SessionMeta;
   title: string;
@@ -5850,6 +6029,11 @@ function SessionInfoSection({
   onTitleFocusChange: (focused: boolean) => void;
   onTitleSave: () => void;
   saveOnBlur: boolean;
+  compactAction: SessionAction | null;
+  clearAction: SessionAction | null;
+  compacting: boolean;
+  dead: boolean;
+  onSessionAction: (action: SessionAction) => void;
 }): React.JSX.Element {
   // Title is editable right here — this sheet already shows the session's identity,
   // so the rename (edit-title) belongs with it rather than off in app Settings.
@@ -5932,6 +6116,7 @@ function SessionInfoSection({
       </Box>
       <TextField
         inputRef={titleInputRef}
+        name="session-title"
         size="small"
         label="Title"
         value={title}
@@ -5995,6 +6180,41 @@ function SessionInfoSection({
             {contextUsed.toLocaleString()} / {contextSize.toLocaleString()} tokens
           </Typography>
         )}
+        <Stack direction="row" spacing={1} sx={{ pt: 0.5 }}>
+          {compactAction && (
+            <Button
+              fullWidth
+              variant="outlined"
+              startIcon={<Compress />}
+              disabled={dead || compacting}
+              aria-label="compact conversation from session settings"
+              onClick={(event): void => {
+                event.currentTarget.blur();
+                onSessionAction(compactAction);
+              }}
+              sx={{ minHeight: 44, textTransform: "none" }}
+            >
+              {compacting ? "Compacting…" : "Compact"}
+            </Button>
+          )}
+          {clearAction && (
+            <Button
+              fullWidth
+              variant="outlined"
+              color="error"
+              startIcon={<CleaningServices />}
+              disabled={dead}
+              aria-label="clear conversation from session settings"
+              onClick={(event): void => {
+                event.currentTarget.blur();
+                onSessionAction(clearAction);
+              }}
+              sx={{ minHeight: 44, textTransform: "none" }}
+            >
+              Clear
+            </Button>
+          )}
+        </Stack>
         {cacheProtectionVisible &&
           (cacheProtection || cacheProtectionUnavailable) && (
           <Stack spacing={0.35} alignItems="flex-start">

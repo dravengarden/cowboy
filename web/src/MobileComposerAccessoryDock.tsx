@@ -8,6 +8,7 @@ export function MobileComposerAccessoryDock({
   mode,
   formatActions,
   utilityActions,
+  primaryCompanion,
   fixedAction,
   primaryLabel,
   primaryDisabled,
@@ -18,6 +19,8 @@ export function MobileComposerAccessoryDock({
   mode: "insert" | "selection";
   formatActions: ReactNode;
   utilityActions: ReactNode;
+  /** Optional editor chrome grouped immediately beside the primary action. */
+  primaryCompanion?: ReactNode;
   fixedAction: ReactNode;
   primaryLabel: string;
   primaryDisabled: boolean;
@@ -80,6 +83,7 @@ export function MobileComposerAccessoryDock({
       >
         {utilityActions}
         <Box sx={{ flex: 1, minWidth: 8 }} />
+        {primaryCompanion}
         <Tooltip title={primaryLabel}>
           <span>
             <IconButton

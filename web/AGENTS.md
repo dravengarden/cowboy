@@ -55,8 +55,11 @@ routinely breaks another.
 - Prefer MUI's native component semantics and composition for Desktop UI:
   AppBar/Toolbar, Tabs, Menu, List, Select, Dialog, Tooltip, theme tokens, and
   `sx`. Build custom primitives only where MUI has no suitable interaction
-  model, such as pane splitters, the Vim status line, and
-  Vimium hint overlays.
+  model, such as pane splitters and the Vim status line.
+- Desktop must never render a page-wide Vimium-style target-hint overlay or
+  reserve bare `f` for one. It duplicates Cowboy's own navigation model and
+  obscures the working surface. Keep actions reachable through native focus,
+  direct Vim motions, visible contextual shortcuts, and the Command Palette.
 - Share protocol, stores, API clients, domain logic, attachments, and markdown
   machinery. Desktop and mobile may intentionally duplicate layout, component,
   and interaction code so either product can evolve without responsive-UI

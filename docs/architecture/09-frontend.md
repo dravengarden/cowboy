@@ -29,6 +29,35 @@ flowchart TB
     style MD fill:#fef9c3,stroke:#ca8a04
 ```
 
+## Global type and icon scaling
+
+The user-selected global font size is an application-wide readability control,
+not a transcript-only preference. `useGlobalFontScale` changes the root
+`<html>` font size and publishes `--cowboy-font-scale`; text, editor content,
+keycaps, and every functional icon glyph must respond to it together.
+
+This is a core visual invariant:
+
+- Size functional icons with `rem`/`em`, or with
+  `calc(<baseline px> * var(--cowboy-font-scale, 1))` when browser minimum-font
+  behavior requires explicit geometry. Do not introduce a fixed-pixel glyph
+  size for an interactive action.
+- Framework defaults are not exempt. MUI `Button` assigns fixed-pixel sizes to
+  start/end icons, so the Cowboy theme overrides those descendants globally.
+  Component-level `sx` may choose a different optical size, but it must retain a
+  root-relative unit or the shared scale variable.
+- Keep hit-target geometry separate from glyph geometry. Mobile controls retain
+  their 40–44 px minimum physical target while the icon inside scales with the
+  global font size; enlarging text must not shrink the target or clip the glyph.
+- Non-semantic pixel geometry such as a progress stroke, chart mark, or
+  alignment hairline may remain fixed only when it is not the action's readable
+  symbol. Document and regression-test any interactive exception.
+
+Verify new or changed controls at the smallest and largest supported global font
+sizes on both Desktop and Mobile. Acceptance includes icon/label proportion,
+no clipping, stable touch targets, and no fixed-size icon left behind while text
+scales.
+
 ## State: store + sync
 
 Two vendored copies of the shared `@shared-utils` engines back all state:
@@ -148,6 +177,14 @@ auto-reload onto the fresh bundle. `nativeShell.ts` detects the **Tauri** wrappe
 and routes to native commands where the PWA can't reach (lock-screen, native file
 picker). `AppErrorBoundary` + `ConnectionBanner` degrade gracefully when the WS
 drops.
+
+The iOS shell restores `WKWebView.scrollView.bounces` on the next main-queue
+turn after WebView construction because Wry 0.55.1 disables it after the
+initializer returns. Keep `alwaysBounceVertical` disabled: overflowing web
+scrollers should retain native edge elasticity, while a document that already
+fits the viewport must not make the whole application surface draggable. This
+is a native-shell contract and requires a SideStore release plus physical-device
+acceptance when changed.
 
 ## A house rule worth knowing
 

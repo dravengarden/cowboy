@@ -9,8 +9,12 @@ import {
 import { verticalWorkspaceRegion } from "./verticalWorkspaceRegion";
 
 export type DesktopPane = "sessions" | "prompt" | "conversation";
-export type WorkspaceMode = "normal" | "hint" | "search" | "command";
+export type WorkspaceMode = "normal" | "search" | "command";
 export type DesktopProductMode = "agent" | "reading" | "code";
+export type DesktopSplitterId =
+  | "sessions-prompt"
+  | "prompt-conversation"
+  | "questions-page";
 
 interface DesktopWorkspaceContextValue {
   focusedPane: DesktopPane;
@@ -26,6 +30,8 @@ interface DesktopWorkspaceContextValue {
   setProductMode: (mode: DesktopProductMode) => void;
   readingSidebarOpen: boolean;
   setReadingSidebarOpen: (open: boolean) => void;
+  selectedSplitter: DesktopSplitterId | null;
+  setSelectedSplitter: (splitter: DesktopSplitterId | null) => void;
 }
 
 const DesktopWorkspaceContext = createContext<DesktopWorkspaceContextValue | null>(null);
@@ -92,6 +98,7 @@ export function DesktopWorkspaceProvider({
   const [mode, setMode] = useState<WorkspaceMode>("normal");
   const [productMode, setProductMode] = useState<DesktopProductMode>("agent");
   const [readingSidebarOpen, setReadingSidebarOpen] = useState(false);
+  const [selectedSplitter, setSelectedSplitter] = useState<DesktopSplitterId | null>(null);
   const focusRegion = useCallback((region: string): void => {
     const element = document.querySelector<HTMLElement>(
       `[data-desktop-region="${CSS.escape(region)}"]`,
@@ -142,6 +149,16 @@ export function DesktopWorkspaceProvider({
 
   useEffect(() => {
     const syncPane = (event: Event): void => {
+      if (event.type === "pointerdown" && event.target instanceof Element) {
+        const splitter = event.target.closest<HTMLElement>("[data-desktop-splitter]")
+          ?.dataset.desktopSplitter;
+        setSelectedSplitter(
+          splitter === "sessions-prompt" || splitter === "prompt-conversation" ||
+              splitter === "questions-page"
+            ? splitter
+            : null,
+        );
+      }
       const pane = paneFromTarget(event.target);
       if (pane) {
         setFocusedPane(pane);
@@ -175,6 +192,17 @@ export function DesktopWorkspaceProvider({
       document.removeEventListener("focusin", syncPane, true);
     };
   }, []);
+
+  useEffect(() => {
+    if (selectedSplitter === null) return undefined;
+    const frame = requestAnimationFrame(() => {
+      const splitter = document.querySelector<HTMLElement>(
+        `[data-desktop-splitter="${CSS.escape(selectedSplitter)}"]`,
+      );
+      if (!splitter || splitter.offsetParent === null) setSelectedSplitter(null);
+    });
+    return (): void => cancelAnimationFrame(frame);
+  }, [productMode, readingSidebarOpen, selectedSplitter]);
 
   useEffect(() => {
     const syncMountedWorkspace = (): boolean => {
@@ -236,6 +264,8 @@ export function DesktopWorkspaceProvider({
     setProductMode,
     readingSidebarOpen,
     setReadingSidebarOpen,
+    selectedSplitter,
+    setSelectedSplitter,
   }), [
     cycleRegion,
     focusAdjacentPane,
@@ -247,6 +277,7 @@ export function DesktopWorkspaceProvider({
     mode,
     productMode,
     readingSidebarOpen,
+    selectedSplitter,
   ]);
 
   return (

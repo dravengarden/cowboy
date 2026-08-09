@@ -21,7 +21,13 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import { ArrowForwardRounded, ExpandMore, Refresh, Tune } from "@mui/icons-material";
+import {
+  ArrowForwardRounded,
+  CleaningServices,
+  ExpandMore,
+  Refresh,
+  Tune,
+} from "@mui/icons-material";
 import {
   type HTMLAttributes,
   useCallback,
@@ -39,7 +45,13 @@ import { desktopImeOwnsKey } from "./commands/imeShortcut";
 import { workspaceCommandKey } from "./commands/workspaceCommandKey";
 import type { ConfigOption, Status } from "../protocol";
 import { providerConfigOptions } from "../providerConfigOptions";
-import { send, submitPrompt, useStoreSelector } from "../store";
+import {
+  activeRunConfigPreset,
+  type RunConfigPreset,
+  runConfigPresetChanges,
+  runConfigPresets,
+} from "../runConfigPresets";
+import { resetSession, send, submitPrompt, useStoreSelector } from "../store";
 import { useCompactionContext } from "../useCompactionContext";
 import { NetworkButton } from "../NetworkActionFeedback";
 import {
@@ -75,6 +87,10 @@ import {
   desktopTopBarTimelineSlice,
   sameDesktopTopBarTimelineSlice,
 } from "./desktopTopBarTimelineSlice";
+import {
+  nextRunConfigChoiceIndex,
+  runConfigKeyAction,
+} from "./runConfigKeyboard";
 
 const OPTION_RANK: Record<string, number> = {
   mode: 0,
@@ -534,7 +550,9 @@ function ConfigOptionControl({
           >
             {label}
           </Typography>
-          {shortcut && <Kbd keys={shortcut} />}
+          {shortcut && (
+            <Kbd keys={shortcut} availability={disabled ? "inactive" : "available"} />
+          )}
         </Stack>
       </Tooltip>
       {label === "Model"
@@ -545,6 +563,7 @@ function ConfigOptionControl({
               value={String(option.currentValue)}
               SelectDisplayProps={{
                 "data-config-choice": "true",
+                "data-config-select": "true",
               } as HTMLAttributes<HTMLDivElement>}
               onChange={(event): void => setValue(String(event.target.value))}
               aria-label="Model"
@@ -643,6 +662,84 @@ function ConfigOptionControl({
   );
 }
 
+function CodexPresetControls({
+  presets,
+  options,
+  sessionId,
+  disabled,
+}: {
+  presets: readonly RunConfigPreset[];
+  options: readonly ConfigOption[];
+  sessionId: string;
+  disabled: boolean;
+}): React.JSX.Element {
+  const active = activeRunConfigPreset(presets, options);
+  return (
+    <Box sx={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "108px minmax(0, 1fr)", alignItems: "center", gap: 1.25 }}>
+      <Typography variant="caption" fontWeight={750} color="text.secondary" sx={{ letterSpacing: "0.02em" }}>
+        Recommended
+      </Typography>
+      <Stack direction="row" spacing={0.75}>
+        {presets.map((preset, index) => {
+          const selected = active?.id === preset.id;
+          return (
+            <ButtonBase
+              key={preset.id}
+              data-config-preset={index}
+              disabled={disabled}
+              aria-pressed={selected}
+              onClick={(): void => {
+                for (const change of runConfigPresetChanges(preset, options)) {
+                  send({
+                    type: "set_config_option",
+                    session_id: sessionId,
+                    config_id: change.configId,
+                    value: change.value,
+                  });
+                }
+              }}
+              sx={{
+                flex: 1,
+                minWidth: 0,
+                minHeight: 44,
+                px: 1.2,
+                py: 0.65,
+                borderRadius: 1.25,
+                border: 1,
+                borderColor: selected ? "primary.main" : "divider",
+                bgcolor: (theme) => selected
+                  ? alpha(theme.palette.primary.main, 0.14)
+                  : alpha(theme.palette.background.default, 0.42),
+                justifyContent: "flex-start",
+                textAlign: "left",
+                "&:hover": { bgcolor: "action.hover" },
+                "&.Mui-disabled": { opacity: 0.46 },
+              }}
+            >
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Stack direction="row" spacing={0.65} alignItems="center">
+                  <Typography variant="caption" fontWeight={750} color={selected ? "primary.main" : "text.primary"}>
+                    {preset.name}
+                  </Typography>
+                  {preset.isDefault && (
+                    <Typography variant="caption" color="primary.main" sx={{ fontSize: "0.625rem", fontWeight: 750 }}>
+                      Default
+                    </Typography>
+                  )}
+                </Stack>
+                <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block", fontSize: "0.625rem" }}>
+                  {preset.detail}
+                </Typography>
+              </Box>
+              <Kbd keys={String(index + 1)} availability={disabled ? "inactive" : "available"} />
+            </ButtonBase>
+          );
+        })}
+      </Stack>
+    </Box>
+  );
+}
+
 export function DesktopTopBarControls({
   sessionId,
   status,
@@ -671,6 +768,7 @@ export function DesktopTopBarControls({
   const [refreshing, setRefreshing] = useState(false);
   const [clock, setClock] = useState(() => Date.now());
   const [compactConfirm, setCompactConfirm] = useState(false);
+  const [clearConfirm, setClearConfirm] = useState(false);
   const dead = status === "exited" || status === "crashed" ||
     status === "interrupted";
   const options = useMemo(() => {
@@ -686,6 +784,13 @@ export function DesktopTopBarControls({
   );
   const configDisabled = options.length === 0 || (dead && !contextBudgetAvailable);
   const configSummary = options.map(compactOptionName).join(" · ");
+  const directConfigShortcuts = options.map(optionShortcut).filter(
+    (shortcut): shortcut is string => shortcut !== undefined,
+  );
+  const recommendedPresets = runConfigPresets(session?.provider, options);
+  const presetShortcutLabel = recommendedPresets
+    .map((_, index) => String(index + 1))
+    .join("/");
   const loadUsage = useCallback(async (manual: boolean): Promise<void> => {
     if (refreshing) return;
     setRefreshing(true);
@@ -708,68 +813,121 @@ export function DesktopTopBarControls({
   useEffect(() => {
     if (configAnchor === null) return undefined;
     const focusFirst = requestAnimationFrame(() => {
-      configPanelRef.current?.querySelector<HTMLElement>(
-        "[data-config-choice]:not(:disabled):not([aria-disabled='true'])",
-      )?.focus();
+      const firstRow = configPanelRef.current?.querySelector<HTMLElement>(
+        "[data-config-row]",
+      );
+      const choices = firstRow
+        ? [...firstRow.querySelectorAll<HTMLElement>("[data-config-choice]")]
+          .filter((choice) => !choice.matches(":disabled, [aria-disabled='true']"))
+        : [];
+      const selected = choices.find((choice) =>
+        choice.classList.contains("Mui-selected") ||
+        choice.getAttribute("aria-selected") === "true" ||
+        choice.getAttribute("aria-pressed") === "true"
+      );
+      (selected ?? choices[0])?.focus();
     });
     const onKeyDown = (event: KeyboardEvent): void => {
       if (desktopImeOwnsKey(event)) return;
       if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
-      const key = workspaceCommandKey(event).toLowerCase();
       if (document.querySelector("[role='listbox']") !== null) return;
       const panel = configPanelRef.current;
       if (!panel) return;
-      const rows = [...panel.querySelectorAll<HTMLElement>("[data-config-row]")];
-      const focusChoice = (row: HTMLElement, preferred = 0): boolean => {
-        const choices = [...row.querySelectorAll<HTMLElement>("[data-config-choice]")]
+      const action = runConfigKeyAction(workspaceCommandKey(event));
+      if (action === null) return;
+      const choicesFor = (row: HTMLElement): HTMLElement[] =>
+        [...row.querySelectorAll<HTMLElement>("[data-config-choice]")]
           .filter((choice) => !choice.matches(":disabled, [aria-disabled='true']"));
-        if (choices.length === 0) return false;
-        const selected = choices.findIndex((choice) =>
+      const selectedChoiceIndex = (choices: readonly HTMLElement[]): number =>
+        choices.findIndex((choice) =>
           choice.classList.contains("Mui-selected") ||
-          choice.getAttribute("aria-selected") === "true"
+          choice.getAttribute("aria-selected") === "true" ||
+          choice.getAttribute("aria-pressed") === "true"
         );
-        choices[Math.min(choices.length - 1, Math.max(0, preferred >= 0 ? preferred : selected))]?.focus();
+      const focusChoice = (row: HTMLElement): boolean => {
+        const choices = choicesFor(row);
+        if (choices.length === 0) return false;
+        const selected = selectedChoiceIndex(choices);
+        choices[Math.max(0, selected)]?.focus();
         return true;
       };
-      if (["a", "m", "e", "c", "f"].includes(key)) {
-        const row = panel.querySelector<HTMLElement>(`[data-config-shortcut="${key}"]`);
-        if (!row) return;
+      const activateChoice = (choice: HTMLElement): void => {
+        choice.focus();
+        choice.click();
+      };
+      const changeChoice = (
+        row: HTMLElement,
+        delta: -1 | 1,
+        wrap: boolean,
+      ): boolean => {
+        const choices = choicesFor(row);
+        if (choices.length === 0) return false;
+        const select = choices.find((choice) => choice.hasAttribute("data-config-select"));
+        if (select) {
+          // MUI Select opens from its display's primary mousedown, not click.
+          // Preserve that component contract while exposing it through the
+          // panel's visible keyboard grammar.
+          select.dispatchEvent(new MouseEvent("mousedown", {
+            bubbles: true,
+            cancelable: true,
+            button: 0,
+          }));
+          return true;
+        }
+        const active = document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
+        const focused = active ? choices.indexOf(active) : -1;
+        const current = focused >= 0 ? focused : selectedChoiceIndex(choices);
+        const next = nextRunConfigChoiceIndex(choices.length, current, delta, wrap);
+        const nextChoice = choices[next];
+        if (!nextChoice) return false;
+        if (next !== current) activateChoice(nextChoice);
+        else nextChoice.focus();
+        return true;
+      };
+      const rows = [...panel.querySelectorAll<HTMLElement>("[data-config-row]")]
+        .filter((row) => choicesFor(row).length > 0);
+      if (action.type === "preset") {
+        const preset = panel.querySelector<HTMLElement>(
+          `[data-config-preset="${String(action.index)}"]`,
+        );
+        if (!preset || preset.matches(":disabled, [aria-disabled='true']")) return;
+        preset.focus();
+        preset.click();
         event.preventDefault();
         event.stopPropagation();
-        focusChoice(row, -1);
         return;
       }
-      if (!["h", "j", "k", "l"].includes(key)) return;
+      if (action.type === "direct") {
+        const row = panel.querySelector<HTMLElement>(
+          `[data-config-shortcut="${action.shortcut}"]`,
+        );
+        if (!row || !changeChoice(row, 1, true)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       const active = document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null;
       const activeRow = active?.closest<HTMLElement>("[data-config-row]");
       const rowIndex = activeRow ? rows.indexOf(activeRow) : -1;
+      if (action.type === "field") {
+        const nextRow = rowIndex < 0
+          ? (action.delta > 0 ? rows[0] : rows.at(-1))
+          : rows[Math.min(
+            rows.length - 1,
+            Math.max(0, rowIndex + action.delta),
+          )];
+        if (!nextRow) return;
+        focusChoice(nextRow);
+      } else {
+        const targetRow = activeRow ?? rows[0];
+        if (!targetRow || !changeChoice(targetRow, action.delta, false)) return;
+      }
       event.preventDefault();
       event.stopPropagation();
-      if (key === "j" || key === "k") {
-        const nextRow = rowIndex < 0
-          ? (key === "j" ? rows[0] : rows.at(-1))
-          : rows[Math.min(rows.length - 1, Math.max(0, rowIndex + (key === "j" ? 1 : -1)))];
-        if (!nextRow) return;
-        const activeChoices = activeRow
-          ? [...activeRow.querySelectorAll<HTMLElement>("[data-config-choice]")]
-          : [];
-        focusChoice(nextRow, Math.max(0, active ? activeChoices.indexOf(active) : 0));
-        return;
-      }
-      if (!activeRow) {
-        if (rows[0]) focusChoice(rows[0], 0);
-        return;
-      }
-      const choices = [...activeRow.querySelectorAll<HTMLElement>("[data-config-choice]")]
-        .filter((choice) => !choice.matches(":disabled, [aria-disabled='true']"));
-      const choiceIndex = active ? choices.indexOf(active) : -1;
-      const nextChoice = choices[Math.min(
-        choices.length - 1,
-        Math.max(0, choiceIndex + (key === "l" ? 1 : -1)),
-      )];
-      nextChoice?.focus();
     };
     globalThis.addEventListener("keydown", onKeyDown, true);
     return (): void => {
@@ -848,6 +1006,15 @@ export function DesktopTopBarControls({
       ),
     [availableCommands, session?.provider],
   );
+  const clearAction = useMemo(
+    () =>
+      resolveSessionAction(
+        "clear",
+        session?.provider ?? "",
+        availableCommands,
+      ),
+    [availableCommands, session?.provider],
+  );
   const compacting = status === "busy" && timelineState.compactingTail;
   const serverContextUsed = session?.context_used ?? 0;
   const serverContextSize = session?.context_size ?? 0;
@@ -873,6 +1040,13 @@ export function DesktopTopBarControls({
     sessionId,
   ]);
   useConfirmEnter(compactConfirm, confirmCompact);
+  const confirmClear = useCallback(async (): Promise<void> => {
+    setClearConfirm(false);
+    await resetSession(sessionId);
+  }, [sessionId]);
+  useConfirmEnter(clearConfirm, () => {
+    void confirmClear();
+  });
   const contextPercent = contextSize > 0
     ? Math.round(Math.min(100, (contextUsed / contextSize) * 100))
     : null;
@@ -919,6 +1093,21 @@ export function DesktopTopBarControls({
         )?.click(),
     },
     {
+      id: "topbar.clear",
+      title: "Clear Conversation",
+      group: "Top Bar",
+      shortcut: "X",
+      regions: ["topbar.controls"],
+      when: () =>
+        document.querySelector(
+          "[data-desktop-topbar-action='clear']:not(:disabled)",
+        ) !== null,
+      run: () =>
+        document.querySelector<HTMLButtonElement>(
+          "[data-desktop-topbar-action='clear']",
+        )?.click(),
+    },
+    {
       id: "topbar.stop",
       title: "Stop Current Turn",
       group: "Top Bar",
@@ -936,8 +1125,9 @@ export function DesktopTopBarControls({
   useDesktopCommand(topbarCommands[1] as DesktopCommand);
   useDesktopCommand(topbarCommands[2] as DesktopCommand);
   useDesktopCommand(topbarCommands[3] as DesktopCommand);
+  useDesktopCommand(topbarCommands[4] as DesktopCommand);
   // Lower bound for the complete session-control strip. Provider summaries own
-  // their intrinsic compact width, and run configuration / Compact keep
+  // their intrinsic compact width, and run configuration / session actions keep
   // their full touch targets. Auto margin restores the spacious, trailing
   // desktop layout whenever the pane can afford it; once the pane is narrower
   // than this strip, the margin collapses and the parent toolbar scrolls instead
@@ -949,7 +1139,8 @@ export function DesktopTopBarControls({
       0,
     ) + Math.max(0, widgetProviders.length - 1) * 4 + 44;
   const controlsMinWidth = 190 + usageMinWidth +
-    (compactAction ? 126 : 0) + (compactAction ? 12 : 6);
+    (compactAction ? 126 : 0) + (clearAction ? 96 : 0) +
+    (compactAction || clearAction ? 18 : 6);
 
   return (
     <Stack
@@ -1030,13 +1221,32 @@ export function DesktopTopBarControls({
           label: "Navigate",
           slots: [
             { shortcut: "J/K", label: "Field" },
-            { shortcut: "H/L", label: "Choice" },
-            { shortcut: ENTER_LABEL, label: "Select" },
+            { shortcut: "↑/↓", label: "Field" },
+            { shortcut: "H/L", label: "Change" },
+            { shortcut: "←/→", label: "Change" },
+            ...(recommendedPresets.length > 0
+              ? [{
+                shortcut: presetShortcutLabel,
+                label: "Preset",
+              }]
+              : []),
+            ...(directConfigShortcuts.length > 0
+              ? [{ shortcut: directConfigShortcuts.join("/"), label: "Direct" }]
+              : []),
+            { shortcut: `${ENTER_LABEL}/Space`, label: "Open · Select" },
           ],
         }, { slots: [{ shortcut: "Esc", label: "Close" }] }]}
       >
         <Box ref={configPanelRef} data-desktop-shortcut-scope="exclusive">
           <Box sx={{ px: 2.25, py: 1.75, display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 1.25 }}>
+            {recommendedPresets.length > 0 && (
+              <CodexPresetControls
+                presets={recommendedPresets}
+                options={options}
+                sessionId={sessionId}
+                disabled={dead}
+              />
+            )}
             {options.map((option) => (
               <ConfigOptionControl
                 key={option.id}
@@ -1252,6 +1462,60 @@ export function DesktopTopBarControls({
           </Tooltip>
       )}
 
+      {clearAction && (
+        <Tooltip title="Clear conversation · start with a fresh context">
+          <span>
+            <Button
+              data-desktop-item="topbar-clear"
+              data-desktop-topbar-action="clear"
+              data-desktop-clear
+              size="small"
+              color="inherit"
+              variant="outlined"
+              startIcon={
+                <CleaningServices
+                  sx={{
+                    ...desktopEmbeddedControlIconSx(),
+                    color: "text.secondary",
+                  }}
+                />
+              }
+              disabled={dead}
+              onClick={(): void => setClearConfirm(true)}
+              sx={{
+                ...desktopEmbeddedControlSx({ active: shortcutsActive }),
+                height: 36,
+                px: 1.1,
+                minWidth: 96,
+                flexShrink: 0,
+                textTransform: "none",
+                "& .MuiButton-startIcon": { mr: 0.75 },
+                "&:hover": {
+                  borderColor: "error.main",
+                  color: "error.main",
+                },
+              }}
+            >
+              <Stack direction="row" spacing={0.65} alignItems="center" sx={{ width: "100%" }}>
+                <Typography variant="caption" fontWeight={750}>
+                  Clear
+                </Typography>
+                <ShortcutKeycap
+                  keyLabel="X"
+                  variant="global"
+                  accent={shortcutsActive || clearConfirm}
+                  availability={shortcutAvailability(
+                    shortcutsActive && !dead,
+                    clearConfirm,
+                  )}
+                  sx={{ flexShrink: 0, ml: "auto !important" }}
+                />
+              </Stack>
+            </Button>
+          </span>
+        </Tooltip>
+      )}
+
       <Dialog
         open={compactConfirm}
         onClose={(): void => setCompactConfirm(false)}
@@ -1299,6 +1563,43 @@ export function DesktopTopBarControls({
             Compact
             <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={clearConfirm}
+        onClose={(): void => setClearConfirm(false)}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle>Clear conversation?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>{clearAction?.detail}</DialogContentText>
+          <DialogContentText sx={{ mt: 1.5, fontSize: "0.8125rem" }}>
+            Resets {session?.provider ?? "the agent"} to a fresh context now
+            {status === "busy" || status === "starting"
+              ? " (ends the current turn)"
+              : ""}.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            color="inherit"
+            onClick={(): void => setClearConfirm(false)}
+            sx={{ textTransform: "none" }}
+          >
+            Cancel
+            <Kbd keys="Esc" />
+          </Button>
+          <NetworkButton
+            variant="contained"
+            color="error"
+            networkAction={confirmClear}
+            sx={{ textTransform: "none" }}
+          >
+            Clear
+            <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+          </NetworkButton>
         </DialogActions>
       </Dialog>
 

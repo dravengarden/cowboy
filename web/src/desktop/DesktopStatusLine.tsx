@@ -92,6 +92,7 @@ function regionHints(
         { keys: "R", label: "Config" },
         { keys: "U", label: "Usage" },
         { keys: "C", label: "Compact" },
+        { keys: "X", label: "Clear" },
         ...(status === "busy" ? [{ keys: "S", label: "Stop" }] : []),
       ];
     case "sessions.list":
@@ -146,8 +147,13 @@ export function DesktopStatusLine({
   const projection = useExploreSessionState(sessionId).projection;
   const connected = useStoreSelector((snapshot) => snapshot.connected);
   const promptEditorContext = focusedRegion?.startsWith("prompt.") === true;
-  const effectiveMode = promptEditorContext && vimEnabled ? vimMode : mode;
-  const modeColor = promptEditorContext && vimEnabled
+  const resizingLayout = workspace.selectedSplitter !== null;
+  const effectiveMode = resizingLayout
+    ? "resize"
+    : promptEditorContext && vimEnabled ? vimMode : mode;
+  const modeColor = resizingLayout
+    ? "primary.main"
+    : promptEditorContext && vimEnabled
     ? (VIM_MODE_COLOR[vimMode] ?? "primary.main")
     : "primary.main";
   const imeLabel = ime.phase === "composing"
@@ -174,7 +180,7 @@ export function DesktopStatusLine({
       { keys: DESKTOP_FOCUS_PROMPT_SHORTCUT, label: "Editor" },
     ]
     : [];
-  const hints = [
+  const ordinaryHints = [
     ...promptRegions,
     ...regionHints(focusedRegion, status, projection),
     ...(focusedRegion === "sessions.list" && itemCount > 0
@@ -196,8 +202,20 @@ export function DesktopStatusLine({
         document.querySelector("[data-desktop-permission-action='reject']")
       ? [{ keys: "R", label: "Reject" }]
       : []),
+    { keys: "Ctrl+W R", label: "Resize" },
   ];
-  const paneLabel = focusedRegion === "topbar.controls" ? "topbar" : focusedPane;
+  const hints = resizingLayout
+    ? [
+      { keys: "H/L", label: "Resize" },
+      { keys: "Shift+H/L", label: "Large step" },
+      { keys: "Tab", label: "Next bar" },
+      { keys: "Esc/Enter", label: "Done" },
+    ]
+    : ordinaryHints;
+  const paneLabel = resizingLayout
+    ? "layout"
+    : focusedRegion === "topbar.controls" ? "topbar" : focusedPane;
+  const regionLabel = workspace.selectedSplitter ?? focusedRegion;
 
   return (
     <Box
@@ -229,10 +247,10 @@ export function DesktopStatusLine({
           mono
         />
         <Segment label={paneLabel.toUpperCase()} tooltip="Focused workspace pane" mono />
-        {focusedRegion && (
+        {regionLabel && (
           <Segment
-            label={(focusedRegion.split(".").at(-1) ?? focusedRegion).toUpperCase()}
-            tooltip="Focused region"
+            label={(regionLabel.split(".").at(-1) ?? regionLabel).toUpperCase()}
+            tooltip={resizingLayout ? "Selected resize bar" : "Focused region"}
             mono
           />
         )}

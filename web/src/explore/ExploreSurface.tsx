@@ -43,7 +43,10 @@ import {
 } from "../desktop/commands/DesktopCommandProvider";
 import { sequentialShortcutAvailability } from "../desktop/commands/shortcutAvailability";
 import { DesktopModal } from "../desktop/DesktopModal";
-import { desktopEmbeddedControlSx } from "../desktop/DesktopEmbeddedControl";
+import {
+  desktopEmbeddedControlSx,
+  desktopListItemSx,
+} from "../desktop/DesktopEmbeddedControl";
 import { desktopScrollbarSx } from "../desktop/desktopScrollbar";
 import { derive } from "../derive";
 import { Kbd } from "../Kbd";
@@ -83,6 +86,7 @@ import {
   type QuestionPage,
 } from "./questionPages";
 import {
+  canPresentQuestionPageDuringRestore,
   nextFollowedTailPage,
   pageStartHandshakeIdentity,
   questionPageNeedsRestore,
@@ -1071,20 +1075,27 @@ function PageList({
                   px: dense ? 1 : 1.25,
                   py: dense ? 0.625 : 0.875,
                   mb: 0.25,
-                  borderRadius: 1.25,
                   alignItems: "center",
-                  transition: "background-color 120ms ease",
-                  "&.Mui-selected": {
-                    bgcolor: (theme) => alpha(theme.palette.primary.main, 0.1),
-                  },
+                  ...(vimNavigation
+                    ? desktopListItemSx()
+                    : {
+                      borderRadius: 1,
+                      transition: "background-color 120ms ease",
+                      "&.Mui-selected": {
+                        bgcolor: (theme) =>
+                          alpha(theme.palette.primary.main, 0.075),
+                      },
+                      "&:not(.Mui-selected):hover": {
+                        bgcolor: "action.hover",
+                      },
+                    }),
                   ...(cursor && {
-                    bgcolor: "action.hover",
+                    borderColor: "primary.main",
+                    bgcolor: (theme) =>
+                      alpha(theme.palette.primary.main, 0.08),
                     boxShadow: (theme) =>
-                      `inset 3px 0 0 ${theme.palette.primary.main}`,
+                      `0 0 0 2px ${alpha(theme.palette.primary.main, 0.14)}`,
                   }),
-                  "&:not(.Mui-selected):hover": {
-                    bgcolor: "action.hover",
-                  },
                 }}
               >
                 <Typography
@@ -1139,10 +1150,12 @@ function PageList({
 export function DesktopReadingQuestionDirectory({
   sessionId,
   projection,
+  width,
   onClose,
 }: {
   sessionId: string;
   projection: TranscriptProjection;
+  width: number;
   onClose: () => void;
 }): React.JSX.Element {
   const timeline = useStoreSelector((snapshot) =>
@@ -1282,13 +1295,11 @@ export function DesktopReadingQuestionDirectory({
       data-reading-question-sidebar
       data-desktop-region="conversation.questions"
       sx={{
-        width: "clamp(268px, 22vw, 360px)",
+        width,
         flexShrink: 0,
         minHeight: 0,
         display: "flex",
         flexDirection: "column",
-        borderRight: 1,
-        borderColor: "divider",
         bgcolor: (theme) => alpha(theme.palette.background.paper, 0.5),
       }}
     >
@@ -1533,6 +1544,12 @@ export function ExploreTranscript(
     isQuestionPageLoaded(props.sessionId, restorePageId);
   const restorePagePending = restorePageId !== null &&
     questionPageNeedsRestore(props.status, restorePageLoaded);
+  const restorePageBlocksPresentation = restorePagePending &&
+    !canPresentQuestionPageDuringRestore(
+      current?.id ?? null,
+      current?.questionCount ?? 0,
+      restorePageId,
+    );
 
   useEffect(() => {
     if (
@@ -1937,7 +1954,7 @@ export function ExploreTranscript(
         </DesktopModal>
       )}
       <Stack sx={{ flex: 1, minWidth: 0, minHeight: 0, position: "relative" }}>
-        {unresolvedQuestionRoot || restorePagePending
+        {unresolvedQuestionRoot || restorePageBlocksPresentation
           ? (
             <Stack
               role="status"

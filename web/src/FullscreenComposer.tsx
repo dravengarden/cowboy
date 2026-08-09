@@ -351,16 +351,18 @@ export function FullscreenComposer({
                 <Bolt />
               </MobileComposerAccessoryButton>
             )}
-            {showCollapse && (
-              <MobileComposerAccessoryButton
-                title="Collapse editor"
-                onClick={act(onCollapse)}
-              >
-                <CloseFullscreen />
-              </MobileComposerAccessoryButton>
-            )}
           </>
         }
+        primaryCompanion={showCollapse
+          ? (
+            <MobileComposerAccessoryButton
+              title="Collapse editor"
+              onClick={act(onCollapse)}
+            >
+              <CloseFullscreen />
+            </MobileComposerAccessoryButton>
+          )
+          : null}
         fixedAction={
           <MobileComposerAccessoryButton
             title="Customize toolbar"

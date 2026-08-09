@@ -1074,6 +1074,50 @@ fn npm_package_for_component(id: &ComponentId) -> Option<&'static str> {
         .map(|(_, _, package)| *package)
 }
 
+fn executable_file(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        std::fs::metadata(path)
+            .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        path.is_file()
+    }
+}
+
+fn npm_script_shell_with(
+    path: Option<&std::ffi::OsStr>,
+    usable: impl Fn(&Path) -> bool,
+) -> Option<PathBuf> {
+    if let Some(path) = path {
+        for directory in std::env::split_paths(path) {
+            let candidate = directory.join("sh");
+            if usable(&candidate) {
+                return Some(candidate);
+            }
+        }
+    }
+    // NixOS does not provide /bin/sh. Its system profile is a stable,
+    // generation-independent path; the remaining candidates cover ordinary
+    // Linux and macOS Machine hosts.
+    [
+        "/run/current-system/sw/bin/sh",
+        "/bin/sh",
+        "/usr/bin/sh",
+        "/usr/local/bin/sh",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .find(|candidate| usable(candidate))
+}
+
+fn npm_script_shell() -> Option<PathBuf> {
+    npm_script_shell_with(std::env::var_os("PATH").as_deref(), executable_file)
+}
+
 async fn apply_npm_release_status(inventory: &mut [ComponentInventory]) {
     let (installed, outdated) = tokio::join!(
         npm_json(&["list", "--global", "--depth=0", "--json"]),
@@ -1142,17 +1186,15 @@ fn npm_update_is_confirmed_by_inventory(
 
 async fn update_npm_component(id: &ComponentId) -> anyhow::Result<()> {
     let package = npm_package_for_component(id).context("component has no npm update channel")?;
+    let script_shell =
+        npm_script_shell().context("npm update requires an executable POSIX shell")?;
     let _guard = NPM_UPDATE_LOCK.lock().await;
     let status = tokio::time::timeout(
         Duration::from_secs(180),
         tokio::process::Command::new("npm")
-            .args([
-                "install",
-                "--global",
-                "--no-audit",
-                "--no-fund",
-                &format!("{package}@latest"),
-            ])
+            .args(["install", "--global", "--no-audit", "--no-fund"])
+            .arg(format!("--script-shell={}", script_shell.display()))
+            .arg(format!("{package}@latest"))
             .env("NO_UPDATE_NOTIFIER", "1")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -2250,8 +2292,8 @@ mod tests {
     use super::{
         Args, bootstrap_acp_inventory, claude_runtime_enabled, disabled_provider_slots_from,
         gemini_auth_from_metadata, gemini_env_value_from, managed_provider_environment,
-        npm_package_for_component, npm_update_is_confirmed_by_inventory, parse_workspaces,
-        provider_for_component, reject_untrusted_workspace, selected_zed_pair,
+        npm_package_for_component, npm_script_shell_with, npm_update_is_confirmed_by_inventory,
+        parse_workspaces, provider_for_component, reject_untrusted_workspace, selected_zed_pair,
         send_frame_with_timeout, validate_controller_url, workspace_path_allowed,
     };
     use crate::machine_components::ComponentStore;
@@ -2383,6 +2425,24 @@ mod tests {
             }),
             Some("claude-code")
         );
+    }
+
+    #[test]
+    fn npm_lifecycle_shell_falls_back_to_the_nixos_system_profile() {
+        let shell = npm_script_shell_with(
+            Some(std::ffi::OsStr::new("/service/node/bin:/service/git/bin")),
+            |candidate| candidate == std::path::Path::new("/run/current-system/sw/bin/sh"),
+        );
+        assert_eq!(shell, Some(PathBuf::from("/run/current-system/sw/bin/sh")));
+    }
+
+    #[test]
+    fn npm_lifecycle_shell_prefers_the_service_path() {
+        let shell = npm_script_shell_with(
+            Some(std::ffi::OsStr::new("/service/node/bin:/service/shell/bin")),
+            |candidate| candidate == std::path::Path::new("/service/shell/bin/sh"),
+        );
+        assert_eq!(shell, Some(PathBuf::from("/service/shell/bin/sh")));
     }
 
     #[test]

@@ -31,6 +31,7 @@ const NAVIGATION: ShortcutRow[] = [
   { keys: ["R"], title: "Open Run Configuration in Top Bar" },
   { keys: ["U"], title: "Open Usage Limits in Top Bar" },
   { keys: ["C"], title: "Compact Conversation in Top Bar" },
+  { keys: ["X"], title: "Clear Conversation in Top Bar" },
   { keys: ["S"], title: "Stop Current Turn in Top Bar" },
   {
     keys: ["Mod+Y", "Mod+D"],
@@ -41,6 +42,12 @@ const NAVIGATION: ShortcutRow[] = [
   { keys: ["Ctrl", "W", "H/L"], title: "Move between workspace panes" },
   { keys: ["Ctrl", "W", "J/K"], title: "Move between regions in a pane" },
   { keys: ["Ctrl", "W", "W"], title: "Cycle focus regions" },
+  {
+    keys: ["Ctrl", "W", "R"],
+    title: "Select the nearest layout resize bar",
+    description:
+      "H/L resizes, Shift+H/L uses a larger step, Tab selects the next visible bar, and Esc or Enter finishes",
+  },
   { keys: ["J/K"], title: "Move through items in list regions" },
   { keys: ["Mod+1…0"], title: "Switch directly to a visible session from anywhere" },
   { keys: ["Mod+J/K"], title: "Reorder the focused item when supported" },

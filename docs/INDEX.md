@@ -27,7 +27,7 @@ material, operational guidance, research evidence, and historical notes.
 - [`architecture/06-server-api.md`](architecture/06-server-api.md) — 06 Server Api
 - [`architecture/07-confirm-inference.md`](architecture/07-confirm-inference.md) — 07 Confirm Inference
 - [`architecture/08-memory.md`](architecture/08-memory.md) — 08 Memory
-- [`architecture/09-frontend.md`](architecture/09-frontend.md) — 09 Frontend
+- [`architecture/09-frontend.md`](architecture/09-frontend.md) — 09 Frontend, including global scaling and native iOS scroll elasticity contracts
 - [`architecture/10-deploy-build.md`](architecture/10-deploy-build.md) — 10 Deploy Build
 - [`architecture/11-operations.md`](architecture/11-operations.md) — 11 Operations
 - [`architecture/12-rolling-updates.md`](architecture/12-rolling-updates.md) — 12 Rolling Updates
@@ -38,7 +38,7 @@ material, operational guidance, research evidence, and historical notes.
 
 ### Core documents
 
-- [`desktop-efficiency-redesign.md`](desktop-efficiency-redesign.md) — Desktop Efficiency Redesign
+- [`desktop-efficiency-redesign.md`](desktop-efficiency-redesign.md) — Desktop Efficiency Redesign, including the no page-wide target overlay contract
 - [`explore-transcript-design.md`](explore-transcript-design.md) — Explore Transcript Design
 - [`ios-simulator.md`](ios-simulator.md) — Ios Simulator
 - [`machine-operations.md`](machine-operations.md) — Machine Operations
@@ -46,4 +46,3 @@ material, operational guidance, research evidence, and historical notes.
 ### Integrations
 
 - [`integrations/zed.md`](integrations/zed.md) — Zed
-

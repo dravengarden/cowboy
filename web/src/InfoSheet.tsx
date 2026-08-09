@@ -503,6 +503,7 @@ function DeepSeekDetails(
       <Sheet
         open={filterOpen}
         onClose={() => setFilterOpen(false)}
+        portal
         title="Filter DeepSeek usage"
         desktopMaxWidth={520}
         mobileDismiss="none"

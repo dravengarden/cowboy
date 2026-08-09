@@ -25,6 +25,15 @@ Deno.test("mobile Page Dock retains disabled previous and next slots", () => {
   );
 });
 
+Deno.test("question rows use the shared Cowboy list selection language", () => {
+  assertEquals(exploreSurfaceSource.includes("desktopListItemSx()"), true);
+  assertEquals(
+    exploreSurfaceSource.includes("`inset 3px 0 0 ${theme.palette.primary.main}`"),
+    false,
+  );
+  assertEquals(exploreSurfaceSource.includes("borderRadius: 1,"), true);
+});
+
 Deno.test("question directory merges live pages and sorts oldest to newest", () => {
   assertEquals(
     mergeQuestionPageDirectory(

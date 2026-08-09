@@ -164,8 +164,9 @@ session state, not a global top-bar action. While Conversation is focused:
 - `Ctrl-d/u` scroll down/up by half a page;
 - `Ctrl-f/b` scroll down/up by one page;
 - `gg/G` jump to the oldest/latest output;
-- `Shift-f` toggles automatic following; bare `f` opens Vimium-style target
-  hints for every visible clickable control, including dialogs.
+- `Shift-f` toggles automatic following. Bare `f` never opens a page-wide
+  target overlay; Prompt Vim retains native `f<char>`, and workspace actions
+  remain discoverable through visible contextual shortcuts and Command Palette.
 - `Tab/Shift-Tab` selects the next/previous expandable transcript widget;
 - `h/l` closes/opens the selected widget, and `Enter` toggles it. With no
   selection these keys target the widget nearest the viewport centre;
@@ -228,10 +229,10 @@ levels:
    confirmations show the real confirmation/dismissal chord next to the button.
 
 Embedded contextual shortcuts are the persistent exception to visibility
-gating. Controls such as Top Bar Run Configuration, Usage, Compact, and Stop
-keep their one-key badge visible for discovery, but the shared keycap primitive
-must render it as `data-shortcut-state="inactive"` whenever its owning region
-is not focused. Once the region owns focus it becomes
+gating. Controls such as Top Bar Run Configuration, Usage, Compact, Clear, and
+Stop keep their one-key badge visible for discovery, but the shared keycap
+primitive must render it as `data-shortcut-state="inactive"` whenever its
+owning region is not focused. Once the region owns focus it becomes
 `data-shortcut-state="available"` and gains the normal accent treatment. Do not
 approximate these states with component-local opacity or colors; all persistent
 contextual badges must use `ShortcutKeycap` availability so enabled and inactive
@@ -269,8 +270,9 @@ contract and the conventions users depend on in editors and browsers:
   `Mod+N` creates a session, `Mod+,` opens Settings, `Mod+S` saves a draft,
   and `Mod+1…0` switches session tabs;
 - global Cowboy workspace navigation uses mnemonic `Mod+E/I/L/T` for Sessions,
-  Editor, Log, and Top Bar. Focused Top Bar uses bare `R/U/C/S` for Run
-  Configuration, Usage, Compact, and Stop; `Mod+1…0` remains global session slots;
+  Editor, Log, and Top Bar. Focused Top Bar uses bare `R/U/C/X/S` for Run
+  Configuration, Usage, Compact, Clear, and Stop; `Mod+1…0` remains global
+  session slots;
 - macOS input-source and dead-key chords (`Ctrl+Space`, `Ctrl+Alt+Space`,
   `Alt+E/I/N/U`) are reserved so Cowboy never breaks accent or IME entry;
 - do not assign bare `Q` to Cowboy navigation. A key pressed while Command is
@@ -342,6 +344,15 @@ background, accent rail, or focus ring.
 `topbar.controls`. Prompt Plan, Queue, and Draft are auxiliary panels rather
 than Vim windows; enter them through their dedicated commands, so vertical
 window movement never collapses or selects them as an intermediate stop.
+
+`Ctrl-W R` enters layout Resize mode and selects the nearest visible vertical
+bar: Sessions / Prompt from Sessions, Prompt / Conversation from either work
+pane, or Questions / Page in Reading mode. The selected bar uses the shared
+accent and keycap language; `H/L` moves it by 16px, `Shift-H/L` moves it by
+48px, `Tab` cycles visible bars, and `Esc` or `Enter` returns to the previously
+focused region. Resize mode is exclusive, so unrelated bare keys never leak
+into lists, transcript widgets, or destructive actions. Pointer dragging keeps
+working and selecting a bar with the pointer enters the same visible state.
 
 Queue and Draft use the same list contract as Sessions: `J/K` selects, `gg` and
 `G` jump to the ends, `g1` through `g0` jump to one of the first ten visible
