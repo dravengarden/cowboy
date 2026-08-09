@@ -2,18 +2,12 @@ import { useEffect, useLayoutEffect } from "react";
 import { DEFAULT_FONT_ID, getFontPreset } from "./fonts";
 import { persisted, useStore } from "./_store/mod.ts";
 
-// Reading-comfort controls for the transcript: a font-size SCALE applied to the
-// message/markdown content, and the transcript's horizontal PADDING (the side
-// gutter). Both are persisted in localStorage and reactive across the app
-// (Settings writes, Transcript reads) without prop-drilling — the same
-// useSyncExternalStore pattern as vimSetting.
-//
-// Only the reading CONTENT takes the scale: it's applied as an `em` multiplier
-// on the transcript scroll container, so the markdown body (which inherits) and
-// its em-relative headings/code grow together, while MUI Typography chrome
-// (tool-card captions, the app bar, the sidebar) keeps its fixed rem size. This
-// mirrors liveview, where the reader column scales but the surrounding UI does
-// not.
+// Application readability controls: font-size SCALE applies at the root so
+// transcript prose, MUI chrome, editors, keycaps, and functional icons move
+// together; PADDING controls only the transcript's horizontal gutter. Both are
+// persisted in localStorage and reactive across the app (Settings writes,
+// consumers read) without prop-drilling — the same useSyncExternalStore pattern
+// as vimSetting.
 
 const FONT_KEY = "cowboy:font-scale";
 const PAD_KEY = "cowboy:reading-pad";

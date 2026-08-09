@@ -145,7 +145,26 @@ export function useThemeMode(): ThemeControls {
               },
             },
           },
-          MuiButton: { styleOverrides: { sizeSmall: { "@media (pointer: coarse)": { minHeight: 40 } } } },
+          // MUI's Button start/end-icon rules use fixed 18px/20px glyphs by
+          // default. That breaks Cowboy's global font-size contract: labels grow
+          // while their action glyphs stay behind. Own the child size with rem so
+          // every ordinary Button icon follows the root scale. The physical tap
+          // target remains independently bounded below on touch surfaces.
+          MuiButton: {
+            styleOverrides: {
+              root: {
+                "& .MuiButton-startIcon > *, & .MuiButton-endIcon > *": {
+                  fontSize: "1.25rem",
+                },
+              },
+              sizeSmall: {
+                "& .MuiButton-startIcon > *, & .MuiButton-endIcon > *": {
+                  fontSize: "1.125rem",
+                },
+                "@media (pointer: coarse)": { minHeight: 40 },
+              },
+            },
+          },
           MuiToggleButton: { styleOverrides: { sizeSmall: { "@media (pointer: coarse)": { minHeight: 40, minWidth: 40 } } } },
           // Tooltips are a DESKTOP-HOVER affordance only. On a touch screen MUI
           // fires them on tap-focus AND long-press, and they LINGER — tapping any
