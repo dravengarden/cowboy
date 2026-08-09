@@ -12,6 +12,7 @@ import {
   pendingImageAttachment,
   promoteUnplacedImageTokens,
   reconcileDeletedInlineImages,
+  settlePendingAttachments,
 } from "../attachments";
 import { getDraft, setDraft } from "../draftStore";
 import {
@@ -158,11 +159,7 @@ export function useComposerDraftController(
           const failed = pending.filter((item) => !completedById.has(item.id));
           failed.forEach((item) => editorRef.current?.deleteImage(item.id));
           setAttachments((current) =>
-            current.flatMap((item) => {
-              if (!item.pending) return [item];
-              const replacement = completedById.get(item.id);
-              return replacement ? [replacement] : [];
-            })
+            settlePendingAttachments(current, pending, completed)
           );
           editorRef.current?.refreshImages();
           pending.forEach((item) => {

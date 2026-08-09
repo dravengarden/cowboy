@@ -5,6 +5,7 @@ import {
   clipboardFiles,
   promoteUnplacedImageTokens,
   reconcileDeletedInlineImages,
+  settlePendingAttachments,
 } from "./attachments.ts";
 
 Deno.test("clipboard files include iOS item-only images without duplicates", () => {
@@ -30,6 +31,22 @@ function attachment(id: string, isImage: boolean): Attachment {
     block: { type: isImage ? "image" : "resource" },
   };
 }
+
+Deno.test("settling one image paste batch preserves newer pending images", () => {
+  const firstPending = { ...attachment("first", true), pending: true };
+  const secondPending = { ...attachment("second", true), pending: true };
+  const firstCompleted = attachment("first", true);
+  const existing = attachment("existing", false);
+
+  assertEquals(
+    settlePendingAttachments(
+      [existing, firstPending, secondPending],
+      [firstPending],
+      [firstCompleted],
+    ),
+    [existing, firstCompleted, secondPending],
+  );
+});
 
 Deno.test("deleted inline tokens remove only their image attachments", () => {
   const inline = attachment("inline", true);

@@ -7,7 +7,10 @@ import {
   useState,
 } from "react";
 import { Box, Paper, TextField, Typography } from "@mui/material";
-import type { ComposerEditorHandle } from "./ComposerEditor";
+import type {
+  ComposerEditorHandle,
+  ComposerEditorSelection,
+} from "./ComposerEditor";
 import { type Attachment, clipboardFiles } from "./attachments";
 import { hasDraftMod, hasSendMod } from "./platform";
 import type { AvailableCommand } from "./protocol";
@@ -321,6 +324,30 @@ export const ComposerTextarea = forwardRef<
 
   useImperativeHandle(ref, () => ({
     focus: (): void => inputRef.current?.focus(),
+    getSelection: (): ComposerEditorSelection => {
+      const ta = inputRef.current;
+      if (!ta) return { anchor: 0, head: 0 };
+      const start = ta.selectionStart ?? 0;
+      const end = ta.selectionEnd ?? start;
+      return ta.selectionDirection === "backward"
+        ? { anchor: end, head: start }
+        : { anchor: start, head: end };
+    },
+    focusSelection: (selection: ComposerEditorSelection): void => {
+      const ta = inputRef.current;
+      if (!ta) return;
+      const clamp = (position: number): number =>
+        Math.max(0, Math.min(position, ta.value.length));
+      const anchor = clamp(selection.anchor);
+      const head = clamp(selection.head);
+      ta.focus();
+      ta.setSelectionRange(
+        Math.min(anchor, head),
+        Math.max(anchor, head),
+        anchor > head ? "backward" : "forward",
+      );
+      publishSelection(ta);
+    },
     // The native touch textarea has no Vim state; Escape belongs to its host.
     escapeBelongsToApp: (): boolean => true,
     focusEnd: (): void => {

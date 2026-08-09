@@ -201,4 +201,7 @@ export const PlatformComposerEditor = forwardRef<
   );
 });
 
-export type { ComposerEditorHandle } from "../ComposerEditor";
+export type {
+  ComposerEditorHandle,
+  ComposerEditorSelection,
+} from "../ComposerEditor";

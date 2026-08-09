@@ -105,6 +105,23 @@ export function pendingImageAttachment(file: File, id = nextAttachmentId()): Att
   };
 }
 
+/** Resolve one asynchronous paste batch without touching a newer pending batch. */
+export function settlePendingAttachments(
+  current: readonly Attachment[],
+  pendingBatch: readonly Attachment[],
+  completedBatch: readonly Attachment[],
+): Attachment[] {
+  const pendingIds = new Set(pendingBatch.map((attachment) => attachment.id));
+  const completedById = new Map(
+    completedBatch.map((attachment) => [attachment.id, attachment]),
+  );
+  return current.flatMap((attachment) => {
+    if (!pendingIds.has(attachment.id)) return [attachment];
+    const replacement = completedById.get(attachment.id);
+    return replacement ? [replacement] : [];
+  });
+}
+
 function extOf(name: string): string {
   const dot = name.lastIndexOf(".");
   return dot >= 0 ? name.slice(dot + 1).toLowerCase() : "";

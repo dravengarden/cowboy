@@ -957,7 +957,9 @@ fullscreen editor:
       same native iOS edit menu; no Cowboy-drawn Paste pill appears.
 - [ ] No stray dot near the caret / rendered markdown (pitfall #4).
 - [ ] `**`/`(`/`` ` ``/`[` then Backspace clears the whole pair (pitfall #5).
-- [ ] Type inline → expand → type → collapse: text is preserved (pitfall #6).
+- [ ] Put the caret/selection in the middle of inline text → expand → type →
+      collapse: text and the exact forward/backward selection are preserved,
+      with no second focus write (pitfalls #6 and #58).
 - [ ] Edit a Queue/Draft row, change text, then tap the panel header: the edit
       stays visible behind a Save/Discard/Keep decision; no hidden editor owns
       the composer slot. Save or Discard collapses the panel and restores the
@@ -1179,3 +1181,26 @@ Desktop Vim + IME checks:
     transfer on both confirmation buttons, and close the editor only after the
     authoritative Force push acknowledgement. Do not repair the symptom with a
     safe-area offset: the missing anchor and lost edit transaction are the bug.
+
+58. **Compact/fullscreen replacement must transfer the logical selection, not
+    call `focusEnd()`.** Main and Queue/Draft expand/collapse used to preserve the
+    document but place the replacement editor's caret at its end. The pending-row
+    expand path also focused the new editor once from its layout effect and again
+    after `flushSync`; that second selection write could leave an iOS caret with
+    no keyboard. Both native textarea and CM6 handles expose `{anchor, head}` and
+    restore it synchronously in the originating accessory gesture, including a
+    backward selection. Pointer-down on the compact fullscreen control must not
+    focus its button first. Initial Queue/Draft edit may still deliberately use
+    `focusEnd()`; it has no replaced user selection.
+
+    Image insertion follows the same range contract. Native textarea and CM6
+    both replace the current selection, sanitize the token label, and land after
+    the complete image batch. Queue/Draft paste must stage object-URL image
+    placeholders and insert their tokens synchronously before raster encoding,
+    just like the primary Composer; delivery, persistence, and keyboard-dismiss
+    completion remain disabled while any placeholder is pending. Waiting for
+    encoding before the first token moves native-to-CM6 promotion outside the
+    UIKit Paste gesture and loses its caret/keyboard transaction. When paste
+    batches overlap, each completion may replace or remove only the placeholder
+    ids it created; treating every `pending` attachment as part of the completed
+    batch drops newer images and leaves orphaned document tokens.

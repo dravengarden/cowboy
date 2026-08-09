@@ -159,8 +159,11 @@ import { listJumpKey } from "./desktop/commands/listNavigation";
 import { shortcutAvailability } from "./desktop/commands/shortcutAvailability";
 import {
   type Attachment,
+  fileToAttachment,
   filesToAttachments,
+  pendingImageAttachment,
   reconcileDeletedInlineImages,
+  settlePendingAttachments,
   stripImageTokens,
 } from "./attachments";
 import {
@@ -2166,19 +2169,17 @@ export function ComposerWorkspace({
                     color: "text.secondary",
                     "& .MuiSvgIcon-root": { fontSize: "1.25rem" },
                   }}
+                  onPointerDown={(event): void => event.preventDefault()}
                   onClick={(): void => {
-                // Mount the fullscreen editor SYNCHRONOUSLY inside this user tap
-                // (flushSync), then focus it IN-gesture. iOS only ARMS the native
-                // text interaction (the long-press Paste/Select menu) for a
-                // USER-initiated focus of the contenteditable. The old path
-                // (claimKeyboard a hidden input → a timer transfers focus to the
-                // editor) left the editor focus PROGRAMMATIC, so the menu stayed
-                // disarmed until you manually tapped the editor — the root cause of
-                // "长按空白没菜单, 点一下输入框才有". flushSync makes editorRef.current
-                // the just-mounted fullscreen editor, so focusEnd() runs in the same
-                // user gesture → armed + keyboard up (no claim/timer needed).
-                flushSync(() => setComposeFs(true));
-                editorRef.current?.focusEnd();
+                    // Snapshot the logical selection before replacing the compact
+                    // editor. Pointer-down keeps the old editor focused, then the
+                    // same tap mounts and focuses fullscreen exactly once so UIKit
+                    // retains both its keyboard transaction and caret/range.
+                    const selection = editorRef.current?.getSelection();
+                    flushSync(() => setComposeFs(true));
+                    if (selection) {
+                      editorRef.current?.focusSelection(selection);
+                    } else editorRef.current?.focusEnd();
                   }}
                 >
                   <OpenInFull />
@@ -3087,10 +3088,12 @@ export function ComposerWorkspace({
             initialDraftText.current = text;
             // The fullscreen editor is the current focus owner. Replace it with
             // the compact editor synchronously inside this same user gesture,
-            // then transfer focus before UIKit ends its keyboard transaction.
-            // A delayed effect cannot preserve the software keyboard here.
+            // then restore its exact selection before UIKit ends the keyboard
+            // transaction. A delayed effect or focusEnd() loses the user's caret.
+            const selection = editorRef.current?.getSelection();
             flushSync(() => setComposeFs(false));
-            editorRef.current?.focusEnd();
+            if (selection) editorRef.current?.focusSelection(selection);
+            else editorRef.current?.focusEnd();
           }}
           onAttach={(): void => fileInputRef.current?.click()}
           onPasteFiles={(files): void => addFiles(files, { preserveFocus: true })}
@@ -4300,6 +4303,9 @@ function PendingRow({
     seedInlineAttachments(message.attachments);
     return message.attachments;
   });
+  const editAttachmentsPending = editAttachments.some((attachment) =>
+    attachment.pending
+  );
   const updateEditDraft = (next: string): void => {
     const previous = editTextRef.current;
     editTextRef.current = next;
@@ -4383,20 +4389,25 @@ function PendingRow({
     setOverlayOpen(false);
     onEditDone();
   };
-  const persistEdit = (): void => {
+  const persistEdit = (): boolean => {
+    // A synchronous paste placeholder has no ACP bytes yet. Keep the editor
+    // alive until encoding either promotes or removes it; persisting the empty
+    // block would make the pending row restore a broken inline token.
+    if (editAttachmentsPending) return false;
     if (kind === "draft") {
       editDraft(sessionId, message.id, draft, editAttachments);
     } else editQueued(sessionId, message.id, draft, editAttachments);
+    return true;
   };
   const saveEdit = (): void => {
-    persistEdit();
+    if (!persistEdit()) return;
     setOverlayOpen(false);
     onEditDone();
   };
   const completePendingDelivery = async (
     operation: () => Promise<void>,
   ): Promise<void> => {
-    persistEdit();
+    if (!persistEdit()) return;
     await operation();
     setOverlayOpen(false);
     onEditDone();
@@ -4409,7 +4420,7 @@ function PendingRow({
     if (kind !== "draft" || onSchedule === undefined) return;
     // The schedule sheet targets the durable draft id. Persist the current
     // inline buffer before opening it so scheduling never sends stale text.
-    persistEdit();
+    if (!persistEdit()) return;
     setOverlayOpen(false);
     onEditDone();
     onSchedule();
@@ -4493,7 +4504,9 @@ function PendingRow({
   const [mobileEditKeyboardSettledClosed, setMobileEditKeyboardSettledClosed] =
     useState(false);
   const finishMobileEdit = (): void => {
-    if (!touchInput || mobileEditFinishingRef.current) return;
+    if (
+      !touchInput || editAttachmentsPending || mobileEditFinishingRef.current
+    ) return;
     mobileEditFinishingRef.current = true;
     dismissMobileSoftwareKeyboard();
     if (draft.trim() || editAttachments.length > 0) saveEdit();
@@ -4513,6 +4526,11 @@ function PendingRow({
       setMobileEditKeyboardSettledClosed(false);
       return undefined;
     }
+    // A pasted image placeholder must retain its real editor until durable ACP
+    // bytes replace it. Hiding the keyboard during encoding is not permission to
+    // unmount the selection owner or persist an empty image block; completion
+    // changes this dependency and re-enters the ordinary close-settle path.
+    if (editAttachmentsPending) return undefined;
     // Entering an edit and raising a third-party keyboard are not atomic. Give
     // WebKit one animation window to report it; if the keyboard remains absent,
     // end the keyboard-bound edit anyway. This also repairs stale ownership
@@ -4540,7 +4558,7 @@ function PendingRow({
       mobilePendingKeyboardCloseSettleMs,
     );
     return () => globalThis.clearTimeout(timer);
-  }, [editing, keyboardOpen, touchInput]);
+  }, [editAttachmentsPending, editing, keyboardOpen, touchInput]);
   // Mobile pending editing chrome is a keyboard-owned presentation state, not
   // the durable edit ownership itself. Keep it mounted while the initiating
   // tap is still raising the keyboard, but collapse it in the first render
@@ -4585,14 +4603,12 @@ function PendingRow({
   };
   useConfirmEnter(confirmDiscardEdit, discardEdit);
   useLayoutEffect(() => {
-    if (!overlayOpen) return undefined;
-    if (touchInput) {
-      // The Edit tap's layout effect below claims the keyboard and mounts this
-      // overlay in the same task. Transfer once before paint so UIKit retains
-      // user-activated text ownership.
-      overlayEditorRef.current?.focusEnd();
-      return undefined;
-    }
+    // Touch opens through the accessory tap below, which snapshots selection,
+    // flush-mounts the overlay, and transfers focus once inside that gesture.
+    // Re-focusing here would overwrite the restored caret and can make WebKit
+    // decline the already-open software keyboard. Desktop still needs one frame
+    // for its lazy CM6/Vim mount.
+    if (!overlayOpen || touchInput) return undefined;
     const frame = globalThis.requestAnimationFrame(() =>
       overlayEditorRef.current?.focusEnd()
     );
@@ -4622,9 +4638,62 @@ function PendingRow({
     return () => globalThis.cancelAnimationFrame(frame);
   }, [editing, touchInput]);
   if (keyboardBoundEditing) {
-    const editSendable = !!draft.trim() || editAttachments.length > 0;
-    const addEditFiles = (files: File[]): void => {
+    const editSendable = (!!draft.trim() || editAttachments.length > 0) &&
+      !editAttachmentsPending;
+    const activeEditEditor = (): ComposerEditorHandle | null =>
+      overlayEditorRef.current ?? editorRef.current;
+    const addEditFiles = (
+      files: File[],
+      options: { preserveFocus?: boolean } = {},
+    ): void => {
       if (files.length === 0) return;
+      if (options.preserveFocus) {
+        const images = files.filter((file) =>
+          (file.type || "").startsWith("image/")
+        );
+        const rest = files.filter((file) =>
+          !(file.type || "").startsWith("image/")
+        );
+        if (images.length > 0) {
+          // Match the primary Composer's iOS paste path: place every image and
+          // its caret synchronously while the native Paste gesture is live, then
+          // replace the object-URL placeholders with durable ACP bytes. Waiting
+          // for raster encoding first unmounts the textarea outside UIKit's
+          // activation window and loses the keyboard/selection.
+          const pending = images.map((file) => pendingImageAttachment(file));
+          pending.forEach(registerInlineAttachment);
+          setEditAttachments((previous) => [...previous, ...pending]);
+          activeEditEditor()?.insertImages(pending);
+          void Promise.allSettled(
+            images.map((file, index) =>
+              fileToAttachment(file, pending[index]!.id)
+            ),
+          ).then((settled) => {
+            const completed = settled.flatMap((result) =>
+              result.status === "fulfilled" ? [result.value] : []
+            );
+            completed.forEach(registerInlineAttachment);
+            const completedById = new Map(
+              completed.map((item) => [item.id, item]),
+            );
+            const failed = pending.filter((item) =>
+              !completedById.has(item.id)
+            );
+            failed.forEach((item) => activeEditEditor()?.deleteImage(item.id));
+            setEditAttachments((current) =>
+              settlePendingAttachments(current, pending, completed)
+            );
+            activeEditEditor()?.refreshImages();
+            pending.forEach((item) => {
+              if (item.previewUrl?.startsWith("blob:")) {
+                URL.revokeObjectURL(item.previewUrl);
+              }
+            });
+          });
+        }
+        if (rest.length === 0) return;
+        files = rest;
+      }
       void filesToAttachments(files).then((added) => {
         if (added.length === 0) return;
         // Mirror addFiles: register bytes BEFORE inserting the token so the
@@ -4641,8 +4710,7 @@ function PendingRow({
         // — insertImage no-op'd on the null inline ref, so the image became a
         // gallery-only chip with no inline token (collapsed showed it, expanded
         // didn't — the reported "展开末尾粘贴图片还是有 bug").
-        const active = overlayOpen ? overlayEditorRef : editorRef;
-        active.current?.insertImages(added);
+        activeEditEditor()?.insertImages(added);
       });
     };
     // Editing reuses the composer surface, but Desktop treats it as a transaction:
@@ -4651,7 +4719,7 @@ function PendingRow({
       <ComposeBar
         desktop={desktop}
         dead={false}
-        sendable={!!draft.trim() || editAttachments.length > 0}
+        sendable={editSendable}
         attachments={editAttachments}
         onRemoveAttachment={(id): void =>
           setEditAttachments((prev) => prev.filter((a) => a.id !== id))}
@@ -4741,7 +4809,7 @@ function PendingRow({
             <Suspense fallback={null}>
               <DesktopPendingEditCommandBindings
                 kind={kind}
-                sendable={!!draft.trim() || editAttachments.length > 0}
+                sendable={editSendable}
                 onSlash={(): void => editorRef.current?.insertTrigger("/")}
                 onReference={(): void => editorRef.current?.insertTrigger("@")}
                 onAttach={(): void => editFileInputRef.current?.click()}
@@ -4769,7 +4837,8 @@ function PendingRow({
               sessionId={sessionId}
               commands={commands}
               placeholder="Edit message…"
-              onPasteFiles={addEditFiles}
+              onPasteFiles={(files): void =>
+                addEditFiles(files, { preserveFocus: true })}
               onSelectionChange={setHasEditSelection}
               onEscape={(): boolean => {
                 if (desktop) requestDiscardEdit();
@@ -4797,8 +4866,11 @@ function PendingRow({
                       title="Expand editor"
                       onClick={(): void => {
                         haptic();
+                        const selection = editorRef.current?.getSelection();
                         flushSync(() => setOverlayOpen(true));
-                        overlayEditorRef.current?.focusEnd();
+                        if (selection) {
+                          overlayEditorRef.current?.focusSelection(selection);
+                        } else overlayEditorRef.current?.focusEnd();
                       }}
                     >
                       <OpenInFull />
@@ -4854,7 +4926,7 @@ function PendingRow({
                   </MobileComposerAccessoryButton>
                 }
                 primaryLabel="Hide keyboard"
-                primaryDisabled={false}
+                primaryDisabled={editAttachmentsPending}
                 onPrimary={finishMobileEdit}
                 primaryIcon={<KeyboardHide />}
               />
@@ -4889,12 +4961,13 @@ function PendingRow({
               ? finishMobileEdit
               : (): void => setOverlayOpen(false)}
             onAttach={(): void => editFileInputRef.current?.click()}
-            onPasteFiles={addEditFiles}
+            onPasteFiles={(files): void =>
+              addEditFiles(files, { preserveFocus: true })}
             sessionId={sessionId}
             commands={commands}
             placeholder="Edit message…"
-            sendable={!!draft.trim() || editAttachments.length > 0}
-            // The parent layout effect owns exactly one focus transfer.
+            sendable={editSendable}
+            // The originating accessory tap owns exactly one focus transfer.
             autoFocus={false}
             showCollapse={false}
             submitLabel={touchInput ? "Collapse editor" : "Done editing"}

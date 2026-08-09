@@ -58,9 +58,19 @@ import {
   type VimEscapeState,
   vimEscapeBelongsToApp,
 } from "./desktop/vim/vimEscapeOwnership";
+import { inlineImageInsertion } from "./inlineImageSelection";
+
+export interface ComposerEditorSelection {
+  anchor: number;
+  head: number;
+}
 
 export interface ComposerEditorHandle {
   focus: () => void;
+  /** Read the logical selection before replacing one editor surface with another. */
+  getSelection: () => ComposerEditorSelection;
+  /** Focus this editor and restore a selection captured from the replaced surface. */
+  focusSelection: (selection: ComposerEditorSelection) => void;
   /** Whether the current editor mode may delegate Escape to Cowboy chrome. */
   escapeBelongsToApp: () => boolean;
   // Focus AND place the caret at the very end of the document — used when
@@ -383,6 +393,26 @@ export const ComposerEditor = forwardRef<
 
   useImperativeHandle(ref, () => ({
     focus: (): void => cmRef.current?.view?.focus(),
+    getSelection: (): ComposerEditorSelection => {
+      const selection = cmRef.current?.view?.state.selection.main;
+      return selection
+        ? { anchor: selection.anchor, head: selection.head }
+        : { anchor: 0, head: 0 };
+    },
+    focusSelection: (selection: ComposerEditorSelection): void => {
+      const view = cmRef.current?.view;
+      if (!view) return;
+      const clamp = (position: number): number =>
+        Math.max(0, Math.min(position, view.state.doc.length));
+      view.dispatch({
+        selection: {
+          anchor: clamp(selection.anchor),
+          head: clamp(selection.head),
+        },
+        scrollIntoView: true,
+      });
+      view.focus();
+    },
     escapeBelongsToApp: (): boolean => {
       const view = cmRef.current?.view;
       const state = view
@@ -417,15 +447,16 @@ export const ComposerEditor = forwardRef<
       const view = cmRef.current?.view;
       if (!view || attachments.length === 0) return;
       attachments.forEach(registerInlineAttachment);
-      const pos = view.state.selection.main.head;
-      const atLineStart = pos === view.state.doc.lineAt(pos).from;
-      const insert = attachments.map((attachment, index) => {
-        const lead = index === 0 && !atLineStart ? "\n" : "";
-        return `${lead}![${attachment.name}](cowboy-att:${attachment.id})\n`;
-      }).join("");
+      const selection = view.state.selection.main;
+      const edit = inlineImageInsertion(
+        view.state.doc.toString(),
+        selection.anchor,
+        selection.head,
+        attachments,
+      );
       view.dispatch({
-        changes: { from: pos, insert },
-        selection: { anchor: pos + insert.length },
+        changes: { from: edit.from, to: edit.to, insert: edit.insert },
+        selection: { anchor: edit.caret },
         scrollIntoView: true,
       });
       view.focus();

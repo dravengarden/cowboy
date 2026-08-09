@@ -1,4 +1,5 @@
 import { imageTokensInText } from "../attachments";
+import { inlineImageInsertion } from "../inlineImageSelection";
 
 interface NativeInlineImage {
   id: string;
@@ -20,18 +21,11 @@ export function insertNativeInlineImages(
   to: number,
   attachments: readonly NativeInlineImage[],
 ): NativeInlineImageEdit {
-  const start = Math.max(0, Math.min(from, value.length));
-  const end = Math.max(start, Math.min(to, value.length));
-  if (attachments.length === 0) return { value, caret: start };
-  const lineStart = value.lastIndexOf("\n", start - 1) + 1;
-  const tokens = attachments.map((attachment, index) => {
-    const lead = index === 0 && start !== lineStart ? "\n" : "";
-    const label = attachment.name.replaceAll("]", "");
-    return `${lead}![${label}](cowboy-att:${attachment.id})\n`;
-  }).join("");
+  const edit = inlineImageInsertion(value, from, to, attachments);
+  if (attachments.length === 0) return { value, caret: edit.from };
   return {
-    value: value.slice(0, start) + tokens + value.slice(end),
-    caret: start + tokens.length,
+    value: value.slice(0, edit.from) + edit.insert + value.slice(edit.to),
+    caret: edit.caret,
   };
 }
 

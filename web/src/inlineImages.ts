@@ -23,6 +23,7 @@ import type { Attachment } from "./attachments";
 import { openLightbox } from "./ResourceLightbox";
 import {
   imageDeletionRange,
+  inlineImageInsertion,
   mapImageDeletionPosition,
 } from "./inlineImageSelection";
 
@@ -283,15 +284,16 @@ export const inlineImageTheme = EditorView.theme({
 export function insertImageToken(view: EditorView, a: Attachment): void {
   registerInlineAttachment(a);
   const { state } = view;
-  const pos = state.selection.main.head;
-  // Put the image alone on its OWN line so it block-renders (see the decoration).
-  // Lead with a newline unless we're already at line start; always trail with one,
-  // landing the caret on a fresh line below the image, ready to keep typing.
-  const atLineStart = pos === state.doc.lineAt(pos).from;
-  const insert = `${atLineStart ? "" : "\n"}![${a.name}](cowboy-att:${a.id})\n`;
+  const selection = state.selection.main;
+  const edit = inlineImageInsertion(
+    state.doc.toString(),
+    selection.anchor,
+    selection.head,
+    [a],
+  );
   view.dispatch({
-    changes: { from: pos, insert },
-    selection: { anchor: pos + insert.length },
+    changes: { from: edit.from, to: edit.to, insert: edit.insert },
+    selection: { anchor: edit.caret },
     // Best-effort immediate scroll (the image is still height-0 here); the
     // widget's load handler re-scrolls once it lays out for the real position.
     scrollIntoView: true,

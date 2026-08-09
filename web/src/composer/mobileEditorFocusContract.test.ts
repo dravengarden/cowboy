@@ -220,6 +220,47 @@ Deno.test("fullscreen pending edit distinguishes collapse from keyboard dismissa
   );
 });
 
+Deno.test("mobile compact and fullscreen handoffs preserve selection with one focus transfer", () => {
+  assertEquals(
+    composerSource.includes(
+      "const selection = editorRef.current?.getSelection();\n                    flushSync(() => setComposeFs(true));",
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "editorRef.current?.focusSelection(selection);",
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "if (!overlayOpen || touchInput) return undefined;",
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "overlayEditorRef.current?.focusSelection(selection);",
+    ),
+    true,
+  );
+});
+
+Deno.test("pending-row image paste stages synchronously before encoding", () => {
+  const pendingStart = composerSource.indexOf("if (keyboardBoundEditing) {");
+  const pendingEnd = composerSource.indexOf("// Secondary actions", pendingStart);
+  const pending = composerSource.slice(pendingStart, pendingEnd);
+
+  assertEquals(pending.includes("pendingImageAttachment(file)"), true);
+  assertEquals(pending.includes("activeEditEditor()?.insertImages(pending)"), true);
+  assertEquals(
+    pending.includes("addEditFiles(files, { preserveFocus: true })"),
+    true,
+  );
+  assertEquals(pending.includes("!editAttachmentsPending"), true);
+});
+
 Deno.test("fullscreen collapse forms a right-edge group with the primary action", () => {
   assertEquals(
     fullscreenComposerSource.includes("primaryCompanion={showCollapse"),
@@ -412,7 +453,7 @@ Deno.test("mobile pending editing keeps expansion and context delivery actions i
   assertEquals(pending.includes('title="Force push"'), true);
   assertEquals(pending.includes("networkAction={sendDraftFromEdit}"), true);
   assertEquals(composerSource.includes("const completePendingDelivery = async"), true);
-  assertEquals(composerSource.includes("persistEdit();"), true);
+  assertEquals(composerSource.includes("if (!persistEdit()) return;"), true);
 });
 
 Deno.test("pending Force push confirmation keeps the native editor and anchor mounted", () => {
