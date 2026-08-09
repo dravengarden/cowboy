@@ -75,6 +75,10 @@ import {
   desktopTopBarTimelineSlice,
   sameDesktopTopBarTimelineSlice,
 } from "./desktopTopBarTimelineSlice";
+import {
+  nextRunConfigChoiceIndex,
+  runConfigKeyAction,
+} from "./runConfigKeyboard";
 
 const OPTION_RANK: Record<string, number> = {
   mode: 0,
@@ -531,7 +535,9 @@ function ConfigOptionControl({
           >
             {label}
           </Typography>
-          {shortcut && <Kbd keys={shortcut} />}
+          {shortcut && (
+            <Kbd keys={shortcut} availability={disabled ? "inactive" : "available"} />
+          )}
         </Stack>
       </Tooltip>
       {label === "Model"
@@ -542,6 +548,7 @@ function ConfigOptionControl({
               value={String(option.currentValue)}
               SelectDisplayProps={{
                 "data-config-choice": "true",
+                "data-config-select": "true",
               } as HTMLAttributes<HTMLDivElement>}
               onChange={(event): void => setValue(String(event.target.value))}
               aria-label="Model"
@@ -712,61 +719,86 @@ export function DesktopTopBarControls({
     const onKeyDown = (event: KeyboardEvent): void => {
       if (desktopImeOwnsKey(event)) return;
       if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
-      const key = workspaceCommandKey(event).toLowerCase();
       if (document.querySelector("[role='listbox']") !== null) return;
       const panel = configPanelRef.current;
       if (!panel) return;
-      const rows = [...panel.querySelectorAll<HTMLElement>("[data-config-row]")];
-      const focusChoice = (row: HTMLElement, preferred = 0): boolean => {
-        const choices = [...row.querySelectorAll<HTMLElement>("[data-config-choice]")]
+      const action = runConfigKeyAction(workspaceCommandKey(event));
+      if (action === null) return;
+      const choicesFor = (row: HTMLElement): HTMLElement[] =>
+        [...row.querySelectorAll<HTMLElement>("[data-config-choice]")]
           .filter((choice) => !choice.matches(":disabled, [aria-disabled='true']"));
-        if (choices.length === 0) return false;
-        const selected = choices.findIndex((choice) =>
+      const selectedChoiceIndex = (choices: readonly HTMLElement[]): number =>
+        choices.findIndex((choice) =>
           choice.classList.contains("Mui-selected") ||
-          choice.getAttribute("aria-selected") === "true"
+          choice.getAttribute("aria-selected") === "true" ||
+          choice.getAttribute("aria-pressed") === "true"
         );
-        choices[Math.min(choices.length - 1, Math.max(0, preferred >= 0 ? preferred : selected))]?.focus();
+      const focusChoice = (row: HTMLElement): boolean => {
+        const choices = choicesFor(row);
+        if (choices.length === 0) return false;
+        const selected = selectedChoiceIndex(choices);
+        choices[Math.max(0, selected)]?.focus();
         return true;
       };
-      if (["a", "m", "e", "c", "f"].includes(key)) {
-        const row = panel.querySelector<HTMLElement>(`[data-config-shortcut="${key}"]`);
-        if (!row) return;
+      const activateChoice = (choice: HTMLElement): void => {
+        choice.focus();
+        choice.click();
+      };
+      const changeChoice = (
+        row: HTMLElement,
+        delta: -1 | 1,
+        wrap: boolean,
+      ): boolean => {
+        const choices = choicesFor(row);
+        if (choices.length === 0) return false;
+        const select = choices.find((choice) => choice.hasAttribute("data-config-select"));
+        if (select) {
+          activateChoice(select);
+          return true;
+        }
+        const active = document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
+        const focused = active ? choices.indexOf(active) : -1;
+        const current = focused >= 0 ? focused : selectedChoiceIndex(choices);
+        const next = nextRunConfigChoiceIndex(choices.length, current, delta, wrap);
+        const nextChoice = choices[next];
+        if (!nextChoice) return false;
+        if (next !== current) activateChoice(nextChoice);
+        else nextChoice.focus();
+        return true;
+      };
+      const rows = [...panel.querySelectorAll<HTMLElement>("[data-config-row]")]
+        .filter((row) => choicesFor(row).length > 0);
+      if (action.type === "direct") {
+        const row = panel.querySelector<HTMLElement>(
+          `[data-config-shortcut="${action.shortcut}"]`,
+        );
+        if (!row || !changeChoice(row, 1, true)) return;
         event.preventDefault();
         event.stopPropagation();
-        focusChoice(row, -1);
         return;
       }
-      if (!["h", "j", "k", "l"].includes(key)) return;
       const active = document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null;
       const activeRow = active?.closest<HTMLElement>("[data-config-row]");
       const rowIndex = activeRow ? rows.indexOf(activeRow) : -1;
+      if (action.type === "field") {
+        const nextRow = rowIndex < 0
+          ? (action.delta > 0 ? rows[0] : rows.at(-1))
+          : rows[Math.min(
+            rows.length - 1,
+            Math.max(0, rowIndex + action.delta),
+          )];
+        if (!nextRow) return;
+        focusChoice(nextRow);
+      } else {
+        const targetRow = activeRow ?? rows[0];
+        if (!targetRow || !changeChoice(targetRow, action.delta, false)) return;
+      }
       event.preventDefault();
       event.stopPropagation();
-      if (key === "j" || key === "k") {
-        const nextRow = rowIndex < 0
-          ? (key === "j" ? rows[0] : rows.at(-1))
-          : rows[Math.min(rows.length - 1, Math.max(0, rowIndex + (key === "j" ? 1 : -1)))];
-        if (!nextRow) return;
-        const activeChoices = activeRow
-          ? [...activeRow.querySelectorAll<HTMLElement>("[data-config-choice]")]
-          : [];
-        focusChoice(nextRow, Math.max(0, active ? activeChoices.indexOf(active) : 0));
-        return;
-      }
-      if (!activeRow) {
-        if (rows[0]) focusChoice(rows[0], 0);
-        return;
-      }
-      const choices = [...activeRow.querySelectorAll<HTMLElement>("[data-config-choice]")]
-        .filter((choice) => !choice.matches(":disabled, [aria-disabled='true']"));
-      const choiceIndex = active ? choices.indexOf(active) : -1;
-      const nextChoice = choices[Math.min(
-        choices.length - 1,
-        Math.max(0, choiceIndex + (key === "l" ? 1 : -1)),
-      )];
-      nextChoice?.focus();
     };
     globalThis.addEventListener("keydown", onKeyDown, true);
     return (): void => {
@@ -1027,8 +1059,11 @@ export function DesktopTopBarControls({
           label: "Navigate",
           slots: [
             { shortcut: "J/K", label: "Field" },
-            { shortcut: "H/L", label: "Choice" },
-            { shortcut: ENTER_LABEL, label: "Select" },
+            { shortcut: "↑/↓", label: "Field" },
+            { shortcut: "H/L", label: "Change" },
+            { shortcut: "←/→", label: "Change" },
+            { shortcut: "A/M/E/C/F", label: "Direct" },
+            { shortcut: `${ENTER_LABEL}/Space`, label: "Open · Select" },
           ],
         }, { slots: [{ shortcut: "Esc", label: "Close" }] }]}
       >
