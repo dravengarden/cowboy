@@ -40,11 +40,11 @@ import { workspaceCommandKey } from "./commands/workspaceCommandKey";
 import type { ConfigOption, Status } from "../protocol";
 import { providerConfigOptions } from "../providerConfigOptions";
 import {
-  activeCodexRunPreset,
-  type CodexRunPreset,
-  codexRunPresetChanges,
-  codexRunPresets,
-} from "../codexRunPresets";
+  activeRunConfigPreset,
+  type RunConfigPreset,
+  runConfigPresetChanges,
+  runConfigPresets,
+} from "../runConfigPresets";
 import { send, submitPrompt, useStoreSelector } from "../store";
 import { useCompactionContext } from "../useCompactionContext";
 import { NetworkButton } from "../NetworkActionFeedback";
@@ -662,12 +662,12 @@ function CodexPresetControls({
   sessionId,
   disabled,
 }: {
-  presets: readonly CodexRunPreset[];
+  presets: readonly RunConfigPreset[];
   options: readonly ConfigOption[];
   sessionId: string;
   disabled: boolean;
 }): React.JSX.Element {
-  const active = activeCodexRunPreset(presets, options);
+  const active = activeRunConfigPreset(presets, options);
   return (
     <Box sx={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "108px minmax(0, 1fr)", alignItems: "center", gap: 1.25 }}>
       <Typography variant="caption" fontWeight={750} color="text.secondary" sx={{ letterSpacing: "0.02em" }}>
@@ -683,7 +683,7 @@ function CodexPresetControls({
               disabled={disabled}
               aria-pressed={selected}
               onClick={(): void => {
-                for (const change of codexRunPresetChanges(preset, options)) {
+                for (const change of runConfigPresetChanges(preset, options)) {
                   send({
                     type: "set_config_option",
                     session_id: sessionId,
@@ -780,7 +780,7 @@ export function DesktopTopBarControls({
   const directConfigShortcuts = options.map(optionShortcut).filter(
     (shortcut): shortcut is string => shortcut !== undefined,
   );
-  const recommendedPresets = codexRunPresets(session?.provider, options);
+  const recommendedPresets = runConfigPresets(session?.provider, options);
   const loadUsage = useCallback(async (manual: boolean): Promise<void> => {
     if (refreshing) return;
     setRefreshing(true);
@@ -1182,7 +1182,10 @@ export function DesktopTopBarControls({
             { shortcut: "H/L", label: "Change" },
             { shortcut: "←/→", label: "Change" },
             ...(recommendedPresets.length > 0
-              ? [{ shortcut: "1/2", label: "Preset" }]
+              ? [{
+                shortcut: recommendedPresets.length === 1 ? "1" : "1/2",
+                label: "Preset",
+              }]
               : []),
             ...(directConfigShortcuts.length > 0
               ? [{ shortcut: directConfigShortcuts.join("/"), label: "Direct" }]

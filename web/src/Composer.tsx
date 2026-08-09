@@ -214,10 +214,10 @@ import {
 import { originLabel } from "./protocol";
 import { providerConfigOptions } from "./providerConfigOptions";
 import {
-  activeCodexRunPreset,
-  codexRunPresetChanges,
-  codexRunPresets,
-} from "./codexRunPresets";
+  activeRunConfigPreset,
+  runConfigPresetChanges,
+  runConfigPresets,
+} from "./runConfigPresets";
 import { DEEPSEEK_CACHE_MIN_HIT_TOKENS } from "./deepseekUsage";
 import type {
   AvailableCommand,
@@ -5615,8 +5615,8 @@ function ComposerSheet({
   const useSheetSurface = useMediaQuery(
     "(max-width: 767.95px), (min-width: 768px) and (max-width: 1023.95px) and (pointer: coarse)",
   );
-  const recommendedPresets = codexRunPresets(session?.provider, options);
-  const activePreset = activeCodexRunPreset(recommendedPresets, options);
+  const recommendedPresets = runConfigPresets(session?.provider, options);
+  const activePreset = activeRunConfigPreset(recommendedPresets, options);
   const [customizeAgent, setCustomizeAgent] = useState(false);
   useEffect(() => {
     if (open) setCustomizeAgent(false);
@@ -5802,7 +5802,7 @@ function ComposerSheet({
                               aria-pressed={selected}
                               onClick={(): void => {
                                 haptic();
-                                for (const change of codexRunPresetChanges(preset, options)) {
+                                for (const change of runConfigPresetChanges(preset, options)) {
                                   onSelectOption(change.configId, change.value);
                                 }
                                 setCustomizeAgent(false);

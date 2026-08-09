@@ -18,24 +18,52 @@ Deno.test("Claude DeepSeek exposes real models and distinct effort behavior", ()
   }, {
     id: "effort",
     name: "Effort",
-    currentValue: "default",
+    currentValue: "max",
     options: ["default", "low", "medium", "high", "xhigh", "max"].map(
       (value) => ({ value, name: value }),
     ),
   }];
   const normalized = providerConfigOptions("claude-deepseek", options);
   assertEquals(normalized[0]?.options.map((option) => option.name), [
-    "Default · Flash (recommended)",
     "deepseek-v4-flash[1m]",
     "deepseek-v4-pro[1m]",
   ]);
   assertEquals(normalized[0]?.currentValue, "deepseek-v4-flash[1m]");
   assertEquals(normalized[1]?.options.map((option) => option.value), [
-    "default",
     "high",
     "max",
   ]);
-  assertEquals(normalized[1]?.options[0]?.name, "Automatic (recommended)");
+});
+
+Deno.test("DeepSeek custom controls remove default aliases and recommendation labels", () => {
+  const options: ConfigOption[] = [{
+    id: "model",
+    name: "Model",
+    currentValue: "default",
+    options: [
+      { value: "default", name: "Default (recommended)" },
+      { value: "deepseek-v4-flash", name: "DeepSeek-V4-Flash" },
+      { value: "deepseek-v4-pro", name: "DeepSeek-V4-Pro" },
+    ],
+  }, {
+    id: "deepseek_cache_protection",
+    name: "Cache protection",
+    currentValue: true,
+    options: [
+      { value: true, name: "Auto · recommended" },
+      { value: false, name: "Off" },
+    ],
+  }];
+  const normalized = providerConfigOptions("codex-deepseek", options);
+  assertEquals(normalized[0]?.currentValue, "deepseek-v4-flash");
+  assertEquals(normalized[0]?.options.map((option) => option.name), [
+    "DeepSeek-V4-Flash",
+    "DeepSeek-V4-Pro",
+  ]);
+  assertEquals(normalized[1]?.options.map((option) => option.name), [
+    "Auto",
+    "Off",
+  ]);
 });
 
 Deno.test("DeepSeek context options show working windows and compaction points", () => {
@@ -55,7 +83,7 @@ Deno.test("DeepSeek context options show working windows and compaction points",
     "256K window · compacts at 256K",
     "512K window · compacts at 512K",
     "680K window · compacts at 680K",
-    "830K window · compacts at 819.2K · recommended",
+    "830K window · compacts at 819.2K",
     "FUTURE",
   ]);
 
@@ -65,7 +93,7 @@ Deno.test("DeepSeek context options show working windows and compaction points",
     "128K window · compacts at 121.6K",
     "256K window · compacts at 243.2K",
     "512K window · compacts at 486.4K",
-    "680K window · compacts at 646K · recommended",
+    "680K window · compacts at 646K",
     "830K window · compacts at 788.5K · large",
     "FUTURE",
   ]);
