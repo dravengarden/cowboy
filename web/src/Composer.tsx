@@ -6107,6 +6107,7 @@ function SessionInfoSection({
       </Box>
       <TextField
         inputRef={titleInputRef}
+        name="session-title"
         size="small"
         label="Title"
         value={title}
@@ -6178,7 +6179,10 @@ function SessionInfoSection({
               startIcon={<Compress />}
               disabled={dead || compacting}
               aria-label="compact conversation from session settings"
-              onClick={(): void => onSessionAction(compactAction)}
+              onClick={(event): void => {
+                event.currentTarget.blur();
+                onSessionAction(compactAction);
+              }}
               sx={{ minHeight: 44, textTransform: "none" }}
             >
               {compacting ? "Compacting…" : "Compact"}
@@ -6192,7 +6196,10 @@ function SessionInfoSection({
               startIcon={<CleaningServices />}
               disabled={dead}
               aria-label="clear conversation from session settings"
-              onClick={(): void => onSessionAction(clearAction)}
+              onClick={(event): void => {
+                event.currentTarget.blur();
+                onSessionAction(clearAction);
+              }}
               sx={{ minHeight: 44, textTransform: "none" }}
             >
               Clear

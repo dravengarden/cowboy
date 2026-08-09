@@ -17,6 +17,7 @@ Deno.test("session settings exposes confirmed compact and clear actions", () => 
     composerSource.includes("onSessionAction={setCmdConfirm}"),
     true,
   );
+  assertEquals(composerSource.includes("event.currentTarget.blur();"), true);
   assertEquals(
     composerSource.includes('disabled={dead || compacting}'),
     true,
