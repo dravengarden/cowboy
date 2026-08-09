@@ -21,6 +21,9 @@ const fullscreenComposerSource = await Deno.readTextFile(
 const accessoryDockSource = await Deno.readTextFile(
   new URL("../MobileComposerAccessoryDock.tsx", import.meta.url),
 );
+const formatActionsSource = await Deno.readTextFile(
+  new URL("../MobileComposerFormatActions.tsx", import.meta.url),
+);
 
 Deno.test("mobile composer promotion requires a visible keyboard and real editor focus", () => {
   assertEquals(
@@ -253,12 +256,44 @@ Deno.test("pending-row image paste stages synchronously before encoding", () => 
   const pending = composerSource.slice(pendingStart, pendingEnd);
 
   assertEquals(pending.includes("pendingImageAttachment(file)"), true);
-  assertEquals(pending.includes("activeEditEditor()?.insertImages(pending)"), true);
+  assertEquals(
+    pending.includes(
+      "activeEditEditor()?.insertImages(pending, options.selection)",
+    ),
+    true,
+  );
   assertEquals(
     pending.includes("addEditFiles(files, { preserveFocus: true })"),
     true,
   );
   assertEquals(pending.includes("!editAttachmentsPending"), true);
+});
+
+Deno.test("native image paste action is shared by every mobile editor surface", () => {
+  assertEquals(
+    composerSource.match(/<MobileComposerFormatActions/g)?.length,
+    2,
+  );
+  assertEquals(
+    fullscreenComposerSource.includes("<MobileComposerFormatActions"),
+    true,
+  );
+  assertEquals(
+    formatActionsSource.includes(
+      "const selection = editorRef.current?.getSelection();",
+    ),
+    true,
+  );
+  assertEquals(
+    accessoryDockSource.includes(
+      "onPointerDown={(event): void => event.preventDefault()}",
+    ),
+    true,
+  );
+  assertEquals(
+    textareaSource.includes("ta.focus();\n        writeNativeEdit(ta"),
+    true,
+  );
 });
 
 Deno.test("fullscreen collapse forms a right-edge group with the primary action", () => {

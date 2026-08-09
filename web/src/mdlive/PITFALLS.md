@@ -841,9 +841,11 @@ here says otherwise.
 
     Keep the obsolete blank-canvas clipboard reader deleted as well as its
     visual menu. A dead `navigator.clipboard.read()` fallback makes it too easy
-    to accidentally restore a second paste interaction later. The only
-    application hook is the textarea's real `paste` event, used to extract file
-    attachments after UIKit has completed the native gesture.
+    to accidentally restore a second paste interaction later. Ordinary native
+    paste still reaches the textarea's real `paste` event after UIKit completes
+    the gesture. The fixed native-shell image action in pitfall #59 is a separate
+    explicit button; it must not add a canvas overlay or browser clipboard
+    preflight.
 
 39. **Native-to-CM6 image promotion transfers selection, not only text and
     focus.** The first inline-image token immediately unmounts the native iOS
@@ -977,6 +979,13 @@ fullscreen editor:
 - [ ] Paste a photo in the middle of text — the image lands at the caret and the
       caret resumes immediately after the image, before the original trailing
       text; the keyboard stays visible.
+- [ ] With an empty or text-only clipboard, the image Paste accessory is visibly
+      disabled. Copy a photo and it becomes enabled without opening a permission
+      prompt merely because the app focused or resumed (pitfall #59).
+- [ ] In the main composer and Queue/Draft editing, test the image Paste
+      accessory in both compact and fullscreen states: the copied image replaces
+      the exact current range, the keyboard remains open, and neither the button
+      nor `BODY` owns focus after insertion (pitfall #59).
 - [ ] Attach a photo, put the caret below it, press the SOFT-keyboard Backspace
       twice — the image is ringed then deleted (pitfall #11; keydown-only handlers
       don't fire on a phone, so this is the beforeinput path).
@@ -1204,3 +1213,21 @@ Desktop Vim + IME checks:
     batches overlap, each completion may replace or remove only the placeholder
     ids it created; treating every `pending` attachment as part of the completed
     batch drops newer images and leaves orphaned document tokens.
+
+59. **The dedicated Mobile image Paste action is a native capability, not a
+    browser clipboard menu.** Keep the action fixed immediately after Undo/Redo
+    in the shared formatting row, independent of the user's configurable toolbar,
+    so main, Queue, and Draft editors expose it in both compact and fullscreen
+    states. The iOS shell probes only `UIPasteboard.hasImages` plus its change
+    count to render the exact enabled state. Older shells and ordinary browsers
+    must show the action disabled; do not restore a privacy-gated
+    `navigator.clipboard.read()` preflight or infer availability from a previous
+    paste. Read and encode image payloads only after the explicit tap.
+
+    The accessory primitive prevents pointer-down focus transfer. Snapshot the
+    editor's logical `{anchor, head}` before awaiting the native payload, then
+    insert the full image batch against that range. The native textarea must own
+    focus again before its synchronous value/selection write and CM6 promotion,
+    so the open software keyboard transfers with the caret. Pasteboard-change,
+    app-resume, visibility, and window-focus notifications may refresh metadata;
+    none may read payloads, mutate the document, or refocus the editor.

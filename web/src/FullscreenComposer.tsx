@@ -31,14 +31,12 @@ import {
 } from "@mui/icons-material";
 import {
   type ComposerEditorHandle,
+  type ComposerEditorSelection,
   PlatformComposerEditor,
 } from "./composer/PlatformComposerEditor";
-import {
-  COMPOSER_COMMANDS_BY_ID,
-  type ComposerCommand,
-} from "./composerCommands";
 import { useComposerToolbar } from "./composerToolbarConfig";
 import { ComposerToolbarSettings } from "./ComposerToolbarSettings";
+import { MobileComposerFormatActions } from "./MobileComposerFormatActions";
 import {
   MobileComposerAccessoryButton,
   MobileComposerAccessoryDock,
@@ -89,7 +87,10 @@ export function FullscreenComposer({
   onSaveDraft: () => void;
   onCollapse: () => void;
   onAttach: () => void;
-  onPasteFiles: (files: File[]) => void;
+  onPasteFiles: (
+    files: File[],
+    selection?: ComposerEditorSelection,
+  ) => void;
   sessionId: string;
   commands: () => AvailableCommand[];
   placeholder: string;
@@ -164,25 +165,9 @@ export function FullscreenComposer({
   const [hasSelection, setHasSelection] = useState(false);
   const [discardOpen, setDiscardOpen] = useState(false);
   useConfirmEnter(discardOpen, () => onDiscard?.());
-  const runCmd = (cmd: ComposerCommand): void => {
-    const ed = editorRef.current;
-    if (ed) cmd.run({ editor: ed, attach: onAttach });
-  };
   const visibleToolbarIds = hasSelection
     ? ["bold", "italic", "code", "link"]
     : toolbarIds;
-  const actions = visibleToolbarIds
-    .map((id) => COMPOSER_COMMANDS_BY_ID[id])
-    .filter((c): c is ComposerCommand => c !== undefined)
-    .map((cmd) => (
-      <MobileComposerAccessoryButton
-        key={cmd.id}
-        title={cmd.label}
-        onClick={act(() => runCmd(cmd))}
-      >
-        {cmd.icon}
-      </MobileComposerAccessoryButton>
-    ));
 
   // Portal to <body>: the composer is rendered deep inside the app's flex layout,
   // whose ancestors form stacking contexts (the bottom navbar paints over an
@@ -301,7 +286,14 @@ export function FullscreenComposer({
       }
       <MobileComposerAccessoryDock
         mode={hasSelection ? "selection" : "insert"}
-        formatActions={actions}
+        formatActions={
+          <MobileComposerFormatActions
+            commandIds={visibleToolbarIds}
+            editorRef={editorRef}
+            onAttach={onAttach}
+            onPasteImages={onPasteFiles}
+          />
+        }
         utilityActions={
           <>
             <MobileComposerAccessoryButton

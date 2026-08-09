@@ -81,6 +81,7 @@ import {
 import {
   PlatformComposerEditor,
   type ComposerEditorHandle,
+  type ComposerEditorSelection,
 } from "./composer/PlatformComposerEditor";
 import { useComposerDraftController } from "./composer/useComposerDraftController";
 import {
@@ -98,7 +99,7 @@ import { createPortal, flushSync } from "react-dom";
 import { FullscreenComposer } from "./FullscreenComposer";
 import { ComposerToolbarSettings } from "./ComposerToolbarSettings";
 import { useComposerToolbar } from "./composerToolbarConfig";
-import { COMPOSER_COMMANDS_BY_ID, type ComposerCommand } from "./composerCommands";
+import { MobileComposerFormatActions } from "./MobileComposerFormatActions";
 import {
   MobileComposerAccessoryButton,
   MobileComposerAccessoryDock,
@@ -2473,26 +2474,16 @@ export function ComposerWorkspace({
               },
             }}
           >
-            {mobileToolbarIds
-              .map((id) => COMPOSER_COMMANDS_BY_ID[id])
-              .filter((command): command is ComposerCommand => command !== undefined)
-              .map((command) => (
-                <MobileComposerAccessoryButton
-                  key={command.id}
-                  title={command.label}
-                  onClick={(): void => {
-                    const editor = editorRef.current;
-                    if (editor === null) return;
-                    haptic();
-                    command.run({
-                      editor,
-                      attach: (): void => fileInputRef.current?.click(),
-                    });
-                  }}
-                >
-                  {command.icon}
-                </MobileComposerAccessoryButton>
-              ))}
+            <MobileComposerFormatActions
+              commandIds={mobileToolbarIds}
+              editorRef={editorRef}
+              onAttach={(): void => fileInputRef.current?.click()}
+              onPasteImages={(files, selection): void =>
+                addFiles(files, {
+                  preserveFocus: true,
+                  selection,
+                })}
+            />
             <Box sx={{ flex: 1, minWidth: 6 }} />
             <Box
               sx={{
@@ -3096,7 +3087,13 @@ export function ComposerWorkspace({
             else editorRef.current?.focusEnd();
           }}
           onAttach={(): void => fileInputRef.current?.click()}
-          onPasteFiles={(files): void => addFiles(files, { preserveFocus: true })}
+          onPasteFiles={(files, selection): void =>
+            addFiles(
+              files,
+              selection === undefined
+                ? { preserveFocus: true }
+                : { preserveFocus: true, selection },
+            )}
           sessionId={sessionId}
           commands={(): AvailableCommand[] => availableCommands}
           placeholder={dead ? "Send to resume this session…" : "Message the agent…"}
@@ -4644,7 +4641,10 @@ function PendingRow({
       overlayEditorRef.current ?? editorRef.current;
     const addEditFiles = (
       files: File[],
-      options: { preserveFocus?: boolean } = {},
+      options: {
+        preserveFocus?: boolean;
+        selection?: ComposerEditorSelection;
+      } = {},
     ): void => {
       if (files.length === 0) return;
       if (options.preserveFocus) {
@@ -4663,7 +4663,7 @@ function PendingRow({
           const pending = images.map((file) => pendingImageAttachment(file));
           pending.forEach(registerInlineAttachment);
           setEditAttachments((previous) => [...previous, ...pending]);
-          activeEditEditor()?.insertImages(pending);
+          activeEditEditor()?.insertImages(pending, options.selection);
           void Promise.allSettled(
             images.map((file, index) =>
               fileToAttachment(file, pending[index]!.id)
@@ -4731,28 +4731,20 @@ function PendingRow({
         onExpand={(): void => setOverlayOpen(true)}
       />
     );
-    const editFormatActions = (hasEditSelection
-      ? ["bold", "italic", "code", "link"]
-      : mobileToolbarIds)
-      .map((id) => COMPOSER_COMMANDS_BY_ID[id])
-      .filter((command): command is ComposerCommand => command !== undefined)
-      .map((command) => (
-        <MobileComposerAccessoryButton
-          key={command.id}
-          title={command.label}
-          onClick={(): void => {
-            const editor = editorRef.current;
-            if (editor === null) return;
-            haptic();
-            command.run({
-              editor,
-              attach: (): void => editFileInputRef.current?.click(),
-            });
-          }}
-        >
-          {command.icon}
-        </MobileComposerAccessoryButton>
-      ));
+    const editFormatActions = (
+      <MobileComposerFormatActions
+        commandIds={hasEditSelection
+          ? ["bold", "italic", "code", "link"]
+          : mobileToolbarIds}
+        editorRef={editorRef}
+        onAttach={(): void => editFileInputRef.current?.click()}
+        onPasteImages={(files, selection): void =>
+          addEditFiles(files, {
+            preserveFocus: true,
+            selection,
+          })}
+      />
+    );
     return (
       <>
         {/* One file input for BOTH the inline edit and the overlay's attach button. */}
@@ -4961,8 +4953,13 @@ function PendingRow({
               ? finishMobileEdit
               : (): void => setOverlayOpen(false)}
             onAttach={(): void => editFileInputRef.current?.click()}
-            onPasteFiles={(files): void =>
-              addEditFiles(files, { preserveFocus: true })}
+            onPasteFiles={(files, selection): void =>
+              addEditFiles(
+                files,
+                selection === undefined
+                  ? { preserveFocus: true }
+                  : { preserveFocus: true, selection },
+              )}
             sessionId={sessionId}
             commands={commands}
             placeholder="Edit message…"

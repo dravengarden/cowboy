@@ -400,19 +400,30 @@ export const ComposerTextarea = forwardRef<
       }
       onChange(edit.value);
     },
-    insertImages: (attachments: Attachment[]): void => {
+    insertImages: (
+      attachments: Attachment[],
+      capturedSelection?: ComposerEditorSelection,
+    ): void => {
       if (attachments.length === 0) return;
       const ta = inputRef.current;
       // Read the live DOM value: image conversion is asynchronous and React's
       // render-time `value` may lag text entered while the clipboard was read.
       const current = ta?.value ?? value;
-      const at = ta?.selectionStart ?? current.length;
-      const to = ta?.selectionEnd ?? at;
+      const anchor = capturedSelection?.anchor ??
+        ta?.selectionStart ?? current.length;
+      const head = capturedSelection?.head ?? ta?.selectionEnd ?? anchor;
+      const at = Math.min(anchor, head);
+      const to = Math.max(anchor, head);
       const edit = insertNativeInlineImages(current, at, to, attachments);
       // CM6's initial EditorState consumes this exact selection in the same
       // promotion commit. Defaulting to 0 strands the caret before the image.
       onInlineImageInsertion?.(edit.caret);
       if (ta) {
+        // The accessory button prevents pointer-down focus transfer, but iOS may
+        // briefly project BODY while showing its native paste affordance. Restore
+        // the same textarea before the promotion render so the replacement CM6
+        // inherits the still-open keyboard rather than needing delayed refocus.
+        ta.focus();
         writeNativeEdit(ta, {
           value: edit.value,
           from: edit.caret,

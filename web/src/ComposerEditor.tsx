@@ -85,7 +85,10 @@ export interface ComposerEditorHandle {
   insertImage: (a: Attachment) => void;
   // Batch paste is one document transaction. Inserting files one-by-one can
   // reuse a stale native-textarea value during the touch → CM6 promotion.
-  insertImages: (attachments: Attachment[]) => void;
+  insertImages: (
+    attachments: Attachment[],
+    selection?: ComposerEditorSelection,
+  ) => void;
   // Rebuild image widgets after an asynchronously encoded paste replaces its
   // same-id object-URL placeholder with durable data.
   refreshImages: () => void;
@@ -443,11 +446,14 @@ export const ComposerEditor = forwardRef<
       if (!view) return;
       insertImageToken(view, a);
     },
-    insertImages: (attachments: Attachment[]): void => {
+    insertImages: (
+      attachments: Attachment[],
+      capturedSelection?: ComposerEditorSelection,
+    ): void => {
       const view = cmRef.current?.view;
       if (!view || attachments.length === 0) return;
       attachments.forEach(registerInlineAttachment);
-      const selection = view.state.selection.main;
+      const selection = capturedSelection ?? view.state.selection.main;
       const edit = inlineImageInsertion(
         view.state.doc.toString(),
         selection.anchor,

@@ -19,7 +19,10 @@ import {
   registerInlineAttachment,
   seedInlineAttachments,
 } from "../inlineImages";
-import type { ComposerEditorHandle } from "./PlatformComposerEditor";
+import type {
+  ComposerEditorHandle,
+  ComposerEditorSelection,
+} from "./PlatformComposerEditor";
 import type { Delivery } from "../protocol";
 import {
   addDraft,
@@ -38,7 +41,13 @@ export interface ComposerDraftController {
   setAttachments: React.Dispatch<React.SetStateAction<Attachment[]>>;
   initialText: React.MutableRefObject<string>;
   sendable: boolean;
-  addFiles: (files: File[], options?: { preserveFocus?: boolean }) => void;
+  addFiles: (
+    files: File[],
+    options?: {
+      preserveFocus?: boolean;
+      selection?: ComposerEditorSelection;
+    },
+  ) => void;
   removeAttachment: (id: string) => void;
   clear: () => void;
   submit: () => boolean;
@@ -134,7 +143,10 @@ export function useComposerDraftController(
 
   const addFiles = (
     files: File[],
-    options: { preserveFocus?: boolean } = {},
+    options: {
+      preserveFocus?: boolean;
+      selection?: ComposerEditorSelection;
+    } = {},
   ): void => {
     if (files.length === 0) return;
     if (options.preserveFocus) {
@@ -147,7 +159,7 @@ export function useComposerDraftController(
         const pending = images.map((file) => pendingImageAttachment(file));
         pending.forEach(registerInlineAttachment);
         setAttachments((previous) => [...previous, ...pending]);
-        editorRef.current?.insertImages(pending);
+        editorRef.current?.insertImages(pending, options.selection);
         void Promise.allSettled(
           images.map((file, index) => fileToAttachment(file, pending[index]!.id)),
         ).then((settled) => {
