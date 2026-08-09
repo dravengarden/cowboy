@@ -15,6 +15,12 @@ const textareaSource = await Deno.readTextFile(
 const appSource = await Deno.readTextFile(
   new URL("../App.tsx", import.meta.url),
 );
+const fullscreenComposerSource = await Deno.readTextFile(
+  new URL("../FullscreenComposer.tsx", import.meta.url),
+);
+const accessoryDockSource = await Deno.readTextFile(
+  new URL("../MobileComposerAccessoryDock.tsx", import.meta.url),
+);
 
 Deno.test("mobile composer promotion requires a visible keyboard and real editor focus", () => {
   assertEquals(
@@ -186,6 +192,19 @@ Deno.test("fullscreen pending edit distinguishes collapse from keyboard dismissa
   assertEquals(
     composerSource.includes(
       "submitIcon={touchInput ? <CloseFullscreen /> : <Check />}",
+    ),
+    true,
+  );
+});
+
+Deno.test("fullscreen collapse forms a right-edge group with the primary action", () => {
+  assertEquals(
+    fullscreenComposerSource.includes("primaryCompanion={showCollapse"),
+    true,
+  );
+  assertEquals(
+    accessoryDockSource.includes(
+      "<Box sx={{ flex: 1, minWidth: 8 }} />\n        {primaryCompanion}\n        <Tooltip title={primaryLabel}>",
     ),
     true,
   );
