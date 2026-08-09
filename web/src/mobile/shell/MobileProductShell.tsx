@@ -42,9 +42,11 @@ const MODAL_OVERLAY_SELECTOR = [
 ].join(",");
 
 function restoredProduct(): MobileProduct {
-  return globalThis.localStorage?.getItem(PRODUCT_STORAGE_KEY) === "review"
-    ? "review"
-    : "agent";
+  // Review used to be entered by a page-wide left swipe and persisted across
+  // reloads. Agent no longer exposes that gesture, so always recover into the
+  // primary surface instead of trapping someone in a previously accidental
+  // Review transition. The key remains for a bounded in-session Review exit.
+  return "agent";
 }
 
 function ignoredGestureTarget(

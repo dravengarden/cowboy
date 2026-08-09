@@ -26,7 +26,11 @@ export function pagerDirectionAllowed(
   product: MobileProduct,
   deltaX: number,
 ): boolean {
-  return product === "agent" ? deltaX < 0 : deltaX > 0;
+  // Agent is the primary touch surface. A page-wide left swipe must remain
+  // available to content, native navigation, and the Sessions drawer instead
+  // of silently entering Code Review. Review may still swipe right to leave
+  // the legacy pager when it is already active.
+  return product === "review" && deltaX > 0;
 }
 
 export function pagerOffset(
