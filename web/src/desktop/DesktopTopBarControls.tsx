@@ -693,6 +693,9 @@ export function DesktopTopBarControls({
   );
   const configDisabled = options.length === 0 || (dead && !contextBudgetAvailable);
   const configSummary = options.map(compactOptionName).join(" · ");
+  const directConfigShortcuts = options.map(optionShortcut).filter(
+    (shortcut): shortcut is string => shortcut !== undefined,
+  );
   const loadUsage = useCallback(async (manual: boolean): Promise<void> => {
     if (refreshing) return;
     setRefreshing(true);
@@ -715,9 +718,19 @@ export function DesktopTopBarControls({
   useEffect(() => {
     if (configAnchor === null) return undefined;
     const focusFirst = requestAnimationFrame(() => {
-      configPanelRef.current?.querySelector<HTMLElement>(
-        "[data-config-choice]:not(:disabled):not([aria-disabled='true'])",
-      )?.focus();
+      const firstRow = configPanelRef.current?.querySelector<HTMLElement>(
+        "[data-config-row]",
+      );
+      const choices = firstRow
+        ? [...firstRow.querySelectorAll<HTMLElement>("[data-config-choice]")]
+          .filter((choice) => !choice.matches(":disabled, [aria-disabled='true']"))
+        : [];
+      const selected = choices.find((choice) =>
+        choice.classList.contains("Mui-selected") ||
+        choice.getAttribute("aria-selected") === "true" ||
+        choice.getAttribute("aria-pressed") === "true"
+      );
+      (selected ?? choices[0])?.focus();
     });
     const onKeyDown = (event: KeyboardEvent): void => {
       if (desktopImeOwnsKey(event)) return;
@@ -1065,7 +1078,9 @@ export function DesktopTopBarControls({
             { shortcut: "↑/↓", label: "Field" },
             { shortcut: "H/L", label: "Change" },
             { shortcut: "←/→", label: "Change" },
-            { shortcut: "A/M/E/C/F", label: "Direct" },
+            ...(directConfigShortcuts.length > 0
+              ? [{ shortcut: directConfigShortcuts.join("/"), label: "Direct" }]
+              : []),
             { shortcut: `${ENTER_LABEL}/Space`, label: "Open · Select" },
           ],
         }, { slots: [{ shortcut: "Esc", label: "Close" }] }]}

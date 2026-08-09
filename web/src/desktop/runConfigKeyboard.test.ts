@@ -41,7 +41,11 @@ Deno.test("run configuration shortcuts apply choices instead of only moving focu
     true,
   );
   assertEquals(
-    controlsSource.includes('{ shortcut: "A/M/E/C/F", label: "Direct" }'),
+    controlsSource.includes('directConfigShortcuts.join("/")'),
+    true,
+  );
+  assertEquals(
+    controlsSource.includes("(selected ?? choices[0])?.focus();"),
     true,
   );
 });
