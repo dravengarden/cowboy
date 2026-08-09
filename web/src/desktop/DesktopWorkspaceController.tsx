@@ -9,7 +9,7 @@ import {
 import { verticalWorkspaceRegion } from "./verticalWorkspaceRegion";
 
 export type DesktopPane = "sessions" | "prompt" | "conversation";
-export type WorkspaceMode = "normal" | "hint" | "search" | "command";
+export type WorkspaceMode = "normal" | "search" | "command";
 export type DesktopProductMode = "agent" | "reading" | "code";
 
 interface DesktopWorkspaceContextValue {

@@ -19,7 +19,7 @@ Cowboy Desktop and Cowboy Mobile are separate products.
 - Desktop visual primitives should use MUI semantics and theme tokens wherever
   MUI already has the right interaction model. Custom UI is reserved for
   editor/workspace primitives that MUI does not provide: splitters, Vim status,
-  shortcut bars, sequential-chord state, and Vimium target hints.
+  shortcut bars, and sequential-chord state.
 
 ## Current architectural debt
 
@@ -31,7 +31,7 @@ The current split is nominal rather than structural:
   remain embedded in `App.tsx`.
 - Desktop composer actions remain embedded in the shared `Composer.tsx`.
 - The command registry understands single shortcuts but still needs complete
-  focus-context coverage, shared sequential commands, and visible target hints.
+  focus-context coverage and shared sequential commands.
 - Vim mode is editor-local; the workspace does not have a coherent mode/focus
   model.
 
@@ -107,38 +107,28 @@ invalid unmodified continuation, timeout, or focus change cancels. Modified
 global commands cancel the prefix but keep executing. The executable details
 and accessibility contract live in `web/src/desktop/FOCUS.md`.
 
-### Vimium hint mode
+### No page-wide target overlays
 
-`f` in workspace Normal mode labels every currently actionable target with a
-short, high-contrast key token. This includes top-bar controls, sessions, links,
-tool cards, transcript folds, composer actions, tabs, and dialog buttons.
+Cowboy Desktop never renders a Vimium-style target-hint layer over the working
+surface and never reserves bare `f` for one. A dense page can expose hundreds
+of targets; covering the content with generated key tokens raises visual and
+cognitive load and conflicts with Prompt Vim's native `f<char>` motion.
 
-- Prefer stable semantic labels when possible; generate two-character labels on
-  collision.
-- Typing narrows the visible targets; `Backspace` widens; `Esc` cancels.
-- Hints follow elements during scroll and disappear when the element becomes
-  unavailable.
-- The same target metadata supplies accessible names and command-palette entries.
-- Prompt Vim keeps native `f<char>`; workspace hint mode is active outside the
-  editor and remains discoverable through the Command Palette.
+Keyboard reachability comes from native focus order, direct Vim motions,
+visible contextual shortcuts, and `Mod+K` Command Palette. New controls must
+join those mechanisms instead of adding a page-wide overlay.
 
 ### Persistent key badges
 
 High-frequency fixed controls show a small key badge in workspace Normal mode.
-Dynamic page targets receive badges only in hint mode. This gives discoverability
-without covering the transcript permanently.
+Dynamic page content never receives floating generated badges. This preserves
+discoverability without covering the transcript.
 
 Product-mode transitions are visible fixed controls rather than palette-only
 knowledge. In the Conversation header, Reading is a separate embedded action—not
 a History/Explore projection—and its contextual `Z` slot truthfully reflects
 whether Conversation currently owns keyboard focus. Entering Reading preserves
 the projection; `Esc` returns to Agent.
-
-User preference:
-
-- Normal mode only (default)
-- Always visible
-- Hint mode only
 
 ## Top command/config bar
 
@@ -154,8 +144,8 @@ Desktop should expose frequently changed session options inline:
 - Stop
 
 Controls are compact select buttons or segmented values, not mobile sheets. They
-support mouse selection, arrow-key selection, command execution, contextual
-shortcut slots, and hint targets. Settings retains only low-frequency application preferences and
+support mouse selection, arrow-key selection, command execution, and contextual
+shortcut slots. Settings retains only low-frequency application preferences and
 diagnostics.
 
 ## Focus and mode state
@@ -164,7 +154,7 @@ Introduce one Desktop workspace controller with:
 
 ```ts
 type DesktopPane = "sessions" | "prompt" | "conversation";
-type WorkspaceMode = "normal" | "sequence" | "hint" | "search" | "command";
+type WorkspaceMode = "normal" | "sequence" | "search" | "command";
 ```
 
 Editor Vim mode is separate (`normal`, `insert`, `visual`, and so on). The
@@ -204,7 +194,6 @@ One registry powers:
 - direct and sequential shortcuts;
 - command palette and `:` command line;
 - persistent badges;
-- Vimium hint actions;
 - toolbar menus and disabled explanations.
 
 ## Target code ownership
@@ -226,10 +215,6 @@ desktop/
     shortcutAvailability.ts
     CommandPalette.tsx
     CommandLine.tsx
-  hints/
-    HintProvider.tsx
-    HintOverlay.tsx
-    HintTarget.tsx
   vim/
     workspaceMotions.ts
     inputOwnership.ts
@@ -290,15 +275,15 @@ Acceptance: every fixed Desktop action is available from both UI and Command
 Palette/status discovery;
 disabled actions explain why.
 
-### Phase 4: Vimium hints
+### Phase 4: native focus and direct action coverage
 
-- Add target registration and overlay positioning.
-- Cover top bar, session rows, transcript links/cards, composer actions, settings,
-  and dialogs.
-- Add focus restoration and scroll-safe target updates.
+- Give every actionable control a stable accessible name and native focus path.
+- Cover high-frequency actions with direct contextual shortcuts.
+- Register remaining actions in Command Palette with clear scope and disabled
+  explanations.
 
-Acceptance: any visible clickable control can be activated without a pointer and
-without memorizing a Cowboy command.
+Acceptance: every visible clickable control can be reached through native focus,
+a direct contextual command, or Command Palette, with no page-wide hint overlay.
 
 ### Phase 5: dense Desktop top bar and panes
 
@@ -313,7 +298,7 @@ prompt sending, queue operations, and stop are keyboard-complete.
 ### Phase 6: hard isolation
 
 - Delete obsolete Desktop branches from shared `App.tsx` and `Composer.tsx`.
-- Verify Mobile chunks contain no Desktop shortcut-bar, hint, or command code.
+- Verify Mobile chunks contain no Desktop shortcut-bar or command code.
 - Keep duplicated UI code where ownership differs.
 
 Acceptance: Desktop and Mobile can change layout independently with no shared

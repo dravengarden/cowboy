@@ -164,8 +164,9 @@ session state, not a global top-bar action. While Conversation is focused:
 - `Ctrl-d/u` scroll down/up by half a page;
 - `Ctrl-f/b` scroll down/up by one page;
 - `gg/G` jump to the oldest/latest output;
-- `Shift-f` toggles automatic following; bare `f` opens Vimium-style target
-  hints for every visible clickable control, including dialogs.
+- `Shift-f` toggles automatic following. Bare `f` never opens a page-wide
+  target overlay; Prompt Vim retains native `f<char>`, and workspace actions
+  remain discoverable through visible contextual shortcuts and Command Palette.
 - `Tab/Shift-Tab` selects the next/previous expandable transcript widget;
 - `h/l` closes/opens the selected widget, and `Enter` toggles it. With no
   selection these keys target the widget nearest the viewport centre;

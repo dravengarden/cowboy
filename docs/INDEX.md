@@ -38,7 +38,7 @@ material, operational guidance, research evidence, and historical notes.
 
 ### Core documents
 
-- [`desktop-efficiency-redesign.md`](desktop-efficiency-redesign.md) — Desktop Efficiency Redesign
+- [`desktop-efficiency-redesign.md`](desktop-efficiency-redesign.md) — Desktop Efficiency Redesign, including the no page-wide target overlay contract
 - [`explore-transcript-design.md`](explore-transcript-design.md) — Explore Transcript Design
 - [`ios-simulator.md`](ios-simulator.md) — Ios Simulator
 - [`machine-operations.md`](machine-operations.md) — Machine Operations
