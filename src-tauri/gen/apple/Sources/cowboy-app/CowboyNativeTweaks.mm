@@ -130,6 +130,23 @@ static NSString *cowboyProviderImageTypeIdentifier(NSItemProvider *provider) {
     return nil;
 }
 
+static BOOL cowboyProviderCanLoadText(NSItemProvider *provider) {
+    // `UIPasteboard.hasStrings` covers eager NSString values, but source apps
+    // may publish text lazily through NSItemProvider. Capability checks do not
+    // load the payload, so they retain the metadata-only availability contract.
+    return [provider canLoadObjectOfClass:NSString.class] ||
+           [provider canLoadObjectOfClass:NSAttributedString.class] ||
+           [provider canLoadObjectOfClass:NSURL.class];
+}
+
+static BOOL cowboyPasteboardHasText(UIPasteboard *pasteboard) {
+    if (pasteboard.hasStrings || pasteboard.hasURLs) return YES;
+    for (NSItemProvider *provider in pasteboard.itemProviders) {
+        if (cowboyProviderCanLoadText(provider)) return YES;
+    }
+    return NO;
+}
+
 static NSUInteger cowboyPasteboardImageCount(UIPasteboard *pasteboard) {
     NSUInteger count = 0;
     // Some apps publish copied photos as lazy NSItemProviders instead of the
@@ -171,6 +188,68 @@ static NSArray<NSDictionary *> *cowboyClipboardImagePayloads(
 }
 
 typedef void (^CowboyProviderImageCompletion)(UIImage *_Nullable image);
+typedef void (^CowboyProviderTextCompletion)(NSString *_Nullable text);
+
+static void cowboyCompleteProviderText(
+    NSString *_Nullable text,
+    CowboyProviderTextCompletion completion
+) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        completion(text);
+    });
+}
+
+static void cowboyLoadProviderText(
+    NSArray<NSItemProvider *> *providers,
+    NSUInteger providerIndex,
+    CowboyProviderTextCompletion completion
+) {
+    if (providerIndex >= providers.count) {
+        cowboyCompleteProviderText(nil, completion);
+        return;
+    }
+
+    NSItemProvider *provider = providers[providerIndex];
+    void (^continueWith)(NSString *_Nullable) = ^(NSString *_Nullable text) {
+        if (text.length > 0) {
+            cowboyCompleteProviderText(text, completion);
+        } else {
+            cowboyLoadProviderText(providers, providerIndex + 1, completion);
+        }
+    };
+
+    if ([provider canLoadObjectOfClass:NSString.class]) {
+        [provider loadObjectOfClass:NSString.class
+                  completionHandler:^(id<NSItemProviderReading> object,
+                                      __unused NSError *error) {
+                      continueWith([object isKindOfClass:NSString.class]
+                                       ? (NSString *)object
+                                       : nil);
+                  }];
+        return;
+    }
+    if ([provider canLoadObjectOfClass:NSAttributedString.class]) {
+        [provider loadObjectOfClass:NSAttributedString.class
+                  completionHandler:^(id<NSItemProviderReading> object,
+                                      __unused NSError *error) {
+                      continueWith([object isKindOfClass:NSAttributedString.class]
+                                       ? ((NSAttributedString *)object).string
+                                       : nil);
+                  }];
+        return;
+    }
+    if ([provider canLoadObjectOfClass:NSURL.class]) {
+        [provider loadObjectOfClass:NSURL.class
+                  completionHandler:^(id<NSItemProviderReading> object,
+                                      __unused NSError *error) {
+                      continueWith([object isKindOfClass:NSURL.class]
+                                       ? ((NSURL *)object).absoluteString
+                                       : nil);
+                  }];
+        return;
+    }
+    cowboyLoadProviderText(providers, providerIndex + 1, completion);
+}
 
 static void cowboyCompleteProviderImage(
     UIImage *_Nullable image,
@@ -298,7 +377,7 @@ static void cowboyLoadProviderImages(
         NSUInteger imageCount = cowboyPasteboardImageCount(pasteboard);
         replyHandler(@{
             @"hasImages": @(imageCount > 0),
-            @"hasText": @(pasteboard.hasStrings),
+            @"hasText": @(cowboyPasteboardHasText(pasteboard)),
             @"imageCount": @(imageCount),
             @"changeCount": @(pasteboard.changeCount),
         }, nil);
@@ -334,8 +413,26 @@ static void cowboyLoadProviderImages(
         return;
     }
 
-    NSString *s = pasteboard.string;
-    replyHandler(s != nil ? s : @"", nil);
+    NSString *text = pasteboard.string;
+    if (text.length > 0) {
+        replyHandler(text, nil);
+        return;
+    }
+    NSURL *url = pasteboard.URL;
+    if (url.absoluteString.length > 0) {
+        replyHandler(url.absoluteString, nil);
+        return;
+    }
+    // Like provider-backed images, provider-backed strings/attributed text are
+    // loaded only after the explicit Paste gesture. Keep the source provider
+    // alive until its asynchronous representation finishes.
+    cowboyLoadProviderText(
+        pasteboard.itemProviders ?: @[],
+        0,
+        ^(NSString *providerText) {
+            replyHandler(providerText ?: @"", nil);
+        }
+    );
 }
 @end
 

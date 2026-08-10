@@ -66,10 +66,10 @@ The point of the native shell is doing what a pure-web PWA can't. What's wired u
   constructor, runs before any webview). Focusing the composer then shows only
   the standard QuickType bar, not the ∧∨+Done strip.
 - **Clipboard bridge** — the same native tweak exposes a metadata-only text and
-  image capability probe plus user-gesture-gated payload reads. Image paste
-  supports both eager `UIPasteboard.images` values and lazy `NSItemProvider`
-  images without reading clipboard content merely to enable the Mobile Paste
-  button.
+  image capability probe plus user-gesture-gated payload reads. Text and image
+  paste support both eager `UIPasteboard` values and lazy `NSItemProvider`
+  representations without reading clipboard content merely to enable the
+  Mobile Paste button.
 - **File-picker permissions** — `src-tauri/Info.ios.plist` carries
   `NSCameraUsageDescription` / `NSPhotoLibraryUsageDescription` (+ encryption
   declaration). Tauri **merges** this file into the app Info.plist on every build.
