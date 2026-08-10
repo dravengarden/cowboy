@@ -109,6 +109,7 @@ export function MobileComposerAccessoryDock({
                   event.preventDefault();
                   primaryTap.onPointerDown(event);
                 }}
+                onMouseDown={(event): void => event.preventDefault()}
                 onPointerMove={primaryTap.onPointerMove}
                 onPointerUp={primaryTap.onPointerUp}
                 onPointerCancel={primaryTap.onPointerCancel}
@@ -283,6 +284,7 @@ export function MobileComposerAccessoryButton({
                 event.preventDefault();
                 onPointerDown?.(event);
               }}
+              onMouseDown={(event): void => event.preventDefault()}
               onPointerMove={onPointerMove}
               onPointerUp={onPointerUp}
               onPointerCancel={onPointerCancel}
@@ -300,6 +302,7 @@ export function MobileComposerAccessoryButton({
                 event.preventDefault();
                 onPointerDown?.(event);
               }}
+              onMouseDown={(event): void => event.preventDefault()}
               onPointerMove={onPointerMove}
               onPointerUp={onPointerUp}
               onPointerCancel={onPointerCancel}

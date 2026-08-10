@@ -1279,7 +1279,11 @@ Desktop Vim + IME checks:
     selection so a click-only accessibility activation cannot replace the
     logical range with WebKit's post-blur `0...0`. Capture that remembered range
     and prevent the click's default focus action, then restore it synchronously
-    before asking the native bridge for text. Do not disable the still-focusable
+    before asking the native bridge for text. After a reliable touch pointerup,
+    iOS may synthesize a separate compatibility `mousedown` even when its later
+    click is retargeted outside the button; the shared accessory primitive must
+    prevent that mousedown default as well as pointerdown or it will focus the
+    button and close the keyboard after insertion. Do not disable the still-focusable
     Paste button while a text read is pending; guard duplicate reads internally
     instead. After the reply, replace that exact range rather than using the
     current or end position.
