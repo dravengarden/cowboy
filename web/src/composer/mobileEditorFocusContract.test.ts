@@ -358,6 +358,30 @@ Deno.test("every focused mobile editor uses two semantic bars with a fixed keybo
   );
 });
 
+Deno.test("both mobile action tracks share one pixel-aligned fixed slot", () => {
+  assertEquals(
+    accessoryDockSource.match(/<MobileComposerFixedActionSlot region=/g)?.length,
+    2,
+  );
+  assertEquals(
+    accessoryDockSource.includes("data-mobile-composer-fixed-slot"),
+    true,
+  );
+  assertEquals(
+    accessoryDockSource.includes(
+      'data-mobile-composer-primary-actions={region === "primary"',
+    ),
+    true,
+  );
+  assertEquals(
+    accessoryDockSource.includes(
+      'data-mobile-composer-fixed-action={region === "editing" ? "" : undefined}',
+    ),
+    true,
+  );
+  assertEquals(accessoryDockSource.includes("px: 0.5"), false);
+});
+
 Deno.test("fullscreen delivery closes only after authoritative success", () => {
   assertEquals(
     composerSource.includes(

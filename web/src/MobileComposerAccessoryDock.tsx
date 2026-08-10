@@ -74,7 +74,7 @@ export function MobileComposerAccessoryDock({
         alignItems="center"
         sx={{
           minWidth: 0,
-          px: 0.5,
+          pl: 0.5,
           borderBottom: 1,
           borderColor: (theme) => alpha(theme.palette.divider, 0.34),
         }}
@@ -96,19 +96,7 @@ export function MobileComposerAccessoryDock({
           {utilityActions}
         </Stack>
         <Box sx={{ flex: 1, minWidth: 8 }} />
-        <Stack
-          data-mobile-composer-primary-actions
-          direction="row"
-          alignItems="center"
-          spacing={0.125}
-          sx={{
-            flexShrink: 0,
-            ml: 0.25,
-            pl: 0.25,
-            borderLeft: 1,
-            borderColor: (theme) => alpha(theme.palette.divider, 0.22),
-          }}
-        >
+        <MobileComposerFixedActionSlot region="primary">
           <Tooltip title={primaryLabel}>
             <span>
               <IconButton
@@ -135,7 +123,7 @@ export function MobileComposerAccessoryDock({
               </IconButton>
             </span>
           </Tooltip>
-        </Stack>
+        </MobileComposerFixedActionSlot>
       </Stack>
 
       <MobileComposerEditingBar
@@ -181,23 +169,42 @@ export function MobileComposerEditingBar({
       >
         {actions}
       </Stack>
-      <Box
-        data-mobile-composer-fixed-action
-        sx={{
-          flex: "0 0 48px",
-          width: 48,
-          height: 44,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          ml: 0.25,
-          pr: 0.25,
-          borderLeft: 1,
-          borderColor: (theme) => alpha(theme.palette.divider, 0.22),
-        }}
-      >
+      <MobileComposerFixedActionSlot region="editing">
         {fixedAction}
-      </Box>
+      </MobileComposerFixedActionSlot>
+    </Box>
+  );
+}
+
+/** One shared right-edge geometry keeps both track dividers pixel-aligned. */
+function MobileComposerFixedActionSlot({
+  children,
+  region,
+}: {
+  children: ReactNode;
+  region: "primary" | "editing";
+}): React.JSX.Element {
+  return (
+    <Box
+      data-mobile-composer-fixed-slot
+      data-mobile-composer-primary-actions={region === "primary"
+        ? ""
+        : undefined}
+      data-mobile-composer-fixed-action={region === "editing" ? "" : undefined}
+      sx={{
+        flex: "0 0 48px",
+        width: 48,
+        height: 44,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        ml: 0.25,
+        pr: 0.25,
+        borderLeft: 1,
+        borderColor: (theme) => alpha(theme.palette.divider, 0.22),
+      }}
+    >
+      {children}
     </Box>
   );
 }

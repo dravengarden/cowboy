@@ -1224,11 +1224,14 @@ Desktop Vim + IME checks:
     browser clipboard menu.** Keep the action fixed immediately after Undo/Redo
     in the shared formatting row, independent of the user's configurable toolbar,
     so main, Queue, and Draft editors expose it in both compact and fullscreen
-    states. The iOS shell probes only `UIPasteboard.hasImages` plus its change
-    count to render the exact enabled state. Older shells and ordinary browsers
-    must show the action disabled; do not restore a privacy-gated
-    `navigator.clipboard.read()` preflight or infer availability from a previous
-    paste. Read and encode image payloads only after the explicit tap.
+    states. The iOS shell probes `UIPasteboard.hasImages` plus loadable
+    `NSItemProvider` image capability and its change count to render the exact
+    enabled state. The provider fallback is required because some source apps
+    publish copied photos lazily without an eager PNG/JPEG representation. Older
+    shells and ordinary browsers must show the action disabled; do not restore a
+    privacy-gated `navigator.clipboard.read()` preflight or infer availability
+    from a previous paste. Read and encode image payloads only after the explicit
+    tap.
 
     The accessory primitive prevents pointer-down focus transfer. Snapshot the
     editor's logical `{anchor, head}` before awaiting the native payload, then
@@ -1250,3 +1253,12 @@ Desktop Vim + IME checks:
     viewport's 8px horizontal gutters, and keep Undo available for the full
     acknowledgement window. This is distinct from a Popover that lost its anchor:
     the Snackbar is healthy and needs safe placement, not focus or anchor repair.
+
+61. **Both Mobile accessory tracks share one right-edge fixed-slot geometry.**
+    The upper message track once used symmetric horizontal padding while the
+    keyboard-nearest editing track ran to the panel edge. Their otherwise
+    identical 48px trailing actions therefore drew vertical dividers several
+    pixels apart. Keep both trailing actions inside the same fixed-slot primitive
+    and let the upper track use left padding only. This is layout-only: do not
+    move focus ownership, pointer-down prevention, or keyboard actions to repair
+    divider alignment.
