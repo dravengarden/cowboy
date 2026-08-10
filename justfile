@@ -50,6 +50,7 @@ native-shell-check:
     ! rg -n 'cowboy\.hawk\.thundersparrow\.top' loader src-tauri design.md
     test "$(jq -r '.build.devUrl' src-tauri/tauri.conf.json)" = "https://cowboy.stormbird.xyz"
     jq -e '.remote.urls | index("https://cowboy.stormbird.xyz") != null and index("https://cowboy.stormbird.xyz/*") != null' src-tauri/capabilities/remote-haptics.json >/dev/null
+    tools/check-keyboard-geometry.sh
 
 check: fmt lint typecheck native-shell-check
     cargo build

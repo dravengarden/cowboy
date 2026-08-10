@@ -14,6 +14,8 @@
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <WebKit/WebKit.h>
 
+#include "CowboyKeyboardGeometry.h"
+
 // (1) Remove the iOS keyboard accessory bar (the ∧ ∨ + Done strip above the
 // keyboard). It cannot be removed from a pure-web PWA — only a native WKWebView
 // owner can, by making the private WKContentView return a nil inputAccessoryView.
@@ -714,31 +716,34 @@ __attribute__((constructor)) static void cowboyInstallLifecycleBridge(void) {
     // document; trimming the whole WebView to their top creates a huge blank
     // region below the composer.
     CGRect kbInParent = [parent convertRect:kbScreen fromView:nil];
-    CGFloat parentBottom = CGRectGetMaxY(parent.bounds);
-    BOOL frameReachesBottom = CGRectGetMaxY(kbInParent) >= parentBottom - 2;
     // During the first keyboard presentation after an interface rotation,
     // UIKeyboardFrameEnd can briefly use the new full-width keyboard geometry
     // with an old-orientation bottom coordinate. Treat a substantial full-width
     // keyboard as docked as well. A truly floating iPad keyboard is narrow, so
     // it continues to overlay the document without resizing the WebView.
-    CGFloat parentWidth = CGRectGetWidth(parent.bounds);
-    BOOL fullWidthDockCandidate =
-        CGRectGetHeight(kbInParent) >= 80 &&
-        CGRectGetWidth(kbInParent) >= parentWidth * 0.8;
-    BOOL dockedToBottom = frameReachesBottom || fullWidthDockCandidate;
+    CowboyKeyboardOverlapResult geometry =
+        cowboyKeyboardOverlapForNotification((CowboyKeyboardOverlapInput) {
+            .parentWidth = CGRectGetWidth(parent.bounds),
+            .parentHeight = CGRectGetHeight(parent.bounds),
+            .keyboardMinY = CGRectGetMinY(kbInParent),
+            .keyboardMaxY = CGRectGetMaxY(kbInParent),
+            .keyboardWidth = CGRectGetWidth(kbInParent),
+            .keyboardHeight = CGRectGetHeight(kbInParent),
+        });
+    BOOL dockedToBottom =
+        geometry.frameReachesBottom || geometry.fullWidthDockCandidate;
     // A full-width fallback exists specifically because the notification may
     // combine the new keyboard size with an old-orientation bottom coordinate.
-    // In that case parentBottom - minY includes the coordinate mismatch and can
-    // over-shrink the WebView by hundreds of points. The frame's own height is
-    // the only internally consistent overlap until keyboardLayoutGuide settles.
-    CGFloat overlap = frameReachesBottom
-        ? MAX(0, parentBottom - CGRectGetMinY(kbInParent))
-        : (fullWidthDockCandidate ? CGRectGetHeight(kbInParent) : 0);
-    overlap = MIN(overlap, CGRectGetHeight(parent.bounds));
+    // The coordinate conversion can also swap the frame's axes. Bound both the
+    // bottom intersection and fallback by the orientation-invariant short edge;
+    // otherwise the old screen width becomes a false keyboard depth and leaves
+    // most of the iPad as a blank region.
+    CGFloat overlap = (CGFloat)geometry.overlap;
 #if DEBUG
-    NSLog(@"[cowboy] keyboard note frame=%@ parent=%@ docked=%d fullWidth=%d overlap=%.1f",
+    NSLog(@"[cowboy] keyboard note frame=%@ parent=%@ docked=%d fullWidth=%d depth=%.1f overlap=%.1f",
           NSStringFromCGRect(kbInParent), NSStringFromCGRect(parent.bounds),
-          dockedToBottom, fullWidthDockCandidate, overlap);
+          dockedToBottom, geometry.fullWidthDockCandidate,
+          geometry.frameDepth, overlap);
 #endif
     [self applyOverlap:overlap userInfo:note.userInfo];
 }
