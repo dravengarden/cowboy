@@ -42,6 +42,8 @@ export interface NativeClipboardImageStatus {
   supported: boolean;
   hasImages: boolean;
   hasText: boolean;
+  canReadText: boolean;
+  textAvailabilityKnown: boolean;
   imageCount: number;
   changeCount: number;
 }
@@ -65,6 +67,7 @@ export async function nativeClipboardImageStatus(): Promise<
 > {
   const root = nativeClipboardWindow();
   const bridge = root.__cowboyClipboardImageStatus;
+  const canReadText = typeof root.__cowboyReadClipboard === "function";
   if (
     typeof bridge !== "function" ||
     typeof root.__cowboyReadClipboardImages !== "function"
@@ -73,17 +76,22 @@ export async function nativeClipboardImageStatus(): Promise<
       supported: false,
       hasImages: false,
       hasText: false,
+      canReadText,
+      textAvailabilityKnown: !canReadText,
       imageCount: 0,
       changeCount: -1,
     };
   }
   try {
     const raw = await bridge() as NativeClipboardImageStatusPayload | null;
+    const textAvailabilityKnown = !canReadText ||
+      typeof raw?.hasText === "boolean";
     return {
       supported: true,
       hasImages: raw?.hasImages === true,
-      hasText: raw?.hasText === true &&
-        typeof root.__cowboyReadClipboard === "function",
+      hasText: raw?.hasText === true && canReadText,
+      canReadText,
+      textAvailabilityKnown,
       imageCount: typeof raw?.imageCount === "number" &&
           Number.isSafeInteger(raw.imageCount) && raw.imageCount > 0
         ? Math.min(raw.imageCount, 100)
@@ -100,10 +108,24 @@ export async function nativeClipboardImageStatus(): Promise<
       supported: true,
       hasImages: false,
       hasText: false,
+      canReadText,
+      textAvailabilityKnown: !canReadText,
       imageCount: 0,
       changeCount: -1,
     };
   }
+}
+
+/**
+ * Older native shells can read text but predate the metadata `hasText` field.
+ * Keep their explicit Paste action usable without speculatively reading the
+ * clipboard; the tap itself remains the first payload access.
+ */
+export function nativeClipboardPasteAvailable(
+  status: NativeClipboardImageStatus,
+): boolean {
+  return status.hasImages || status.hasText ||
+    (status.canReadText && !status.textAvailabilityKnown);
 }
 
 /** Read plain text only after the user taps the dedicated Paste action. */

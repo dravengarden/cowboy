@@ -2,6 +2,7 @@ import { assertEquals } from "jsr:@std/assert";
 import {
   nativeClipboardImageFiles,
   nativeClipboardImageStatus,
+  nativeClipboardPasteAvailable,
   readNativeClipboardImages,
   readNativeClipboardText,
   supportsNativeClipboardImages,
@@ -69,6 +70,8 @@ Deno.test("image status probes metadata without reading clipboard payloads", asy
       supported: true,
       hasImages: true,
       hasText: true,
+      canReadText: true,
+      textAvailabilityKnown: true,
       imageCount: 2,
       changeCount: 9,
     });
@@ -111,6 +114,8 @@ Deno.test("legacy native image status defaults an available clipboard to one ima
       supported: true,
       hasImages: true,
       hasText: false,
+      canReadText: false,
+      textAvailabilityKnown: true,
       imageCount: 1,
       changeCount: 3,
     });
@@ -119,5 +124,76 @@ Deno.test("legacy native image status defaults an available clipboard to one ima
     else root.__cowboyClipboardImageStatus = previousStatus;
     if (previousRead === undefined) delete root.__cowboyReadClipboardImages;
     else root.__cowboyReadClipboardImages = previousRead;
+  }
+});
+
+Deno.test("legacy native shells keep explicit text Paste available", async () => {
+  const root = globalThis as typeof globalThis & {
+    __cowboyReadClipboard?: () => Promise<unknown>;
+    __cowboyClipboardImageStatus?: () => Promise<unknown>;
+    __cowboyReadClipboardImages?: () => Promise<unknown>;
+  };
+  const previousTextRead = root.__cowboyReadClipboard;
+  const previousStatus = root.__cowboyClipboardImageStatus;
+  const previousImageRead = root.__cowboyReadClipboardImages;
+  root.__cowboyReadClipboard = () => Promise.resolve("legacy text");
+  root.__cowboyClipboardImageStatus = () =>
+    Promise.resolve({ hasImages: false, imageCount: 0, changeCount: 4 });
+  root.__cowboyReadClipboardImages = () => Promise.resolve({ images: [] });
+  try {
+    const status = await nativeClipboardImageStatus();
+    assertEquals(status, {
+      supported: true,
+      hasImages: false,
+      hasText: false,
+      canReadText: true,
+      textAvailabilityKnown: false,
+      imageCount: 0,
+      changeCount: 4,
+    });
+    assertEquals(nativeClipboardPasteAvailable(status), true);
+    assertEquals(await readNativeClipboardText(), "legacy text");
+  } finally {
+    if (previousTextRead === undefined) delete root.__cowboyReadClipboard;
+    else root.__cowboyReadClipboard = previousTextRead;
+    if (previousStatus === undefined) delete root.__cowboyClipboardImageStatus;
+    else root.__cowboyClipboardImageStatus = previousStatus;
+    if (previousImageRead === undefined) {
+      delete root.__cowboyReadClipboardImages;
+    } else root.__cowboyReadClipboardImages = previousImageRead;
+  }
+});
+
+Deno.test("current native shell disables Paste for a known empty clipboard", async () => {
+  const root = globalThis as typeof globalThis & {
+    __cowboyReadClipboard?: () => Promise<unknown>;
+    __cowboyClipboardImageStatus?: () => Promise<unknown>;
+    __cowboyReadClipboardImages?: () => Promise<unknown>;
+  };
+  const previousTextRead = root.__cowboyReadClipboard;
+  const previousStatus = root.__cowboyClipboardImageStatus;
+  const previousImageRead = root.__cowboyReadClipboardImages;
+  root.__cowboyReadClipboard = () => Promise.resolve("");
+  root.__cowboyClipboardImageStatus = () =>
+    Promise.resolve({
+      hasImages: false,
+      hasText: false,
+      imageCount: 0,
+      changeCount: 5,
+    });
+  root.__cowboyReadClipboardImages = () => Promise.resolve({ images: [] });
+  try {
+    const status = await nativeClipboardImageStatus();
+    assertEquals(status.textAvailabilityKnown, true);
+    assertEquals(status.canReadText, true);
+    assertEquals(nativeClipboardPasteAvailable(status), false);
+  } finally {
+    if (previousTextRead === undefined) delete root.__cowboyReadClipboard;
+    else root.__cowboyReadClipboard = previousTextRead;
+    if (previousStatus === undefined) delete root.__cowboyClipboardImageStatus;
+    else root.__cowboyClipboardImageStatus = previousStatus;
+    if (previousImageRead === undefined) {
+      delete root.__cowboyReadClipboardImages;
+    } else root.__cowboyReadClipboardImages = previousImageRead;
   }
 });

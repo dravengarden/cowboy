@@ -1240,18 +1240,22 @@ Desktop Vim + IME checks:
     in the shared formatting row, independent of the user's configurable toolbar,
     so main, Queue, and Draft editors expose it in both compact and fullscreen
     states. The iOS shell probes `UIPasteboard.hasStrings`, `hasImages`, plus
-    loadable/declared `NSItemProvider` image capability, image count, and change
-    count to render the exact enabled state without reading a payload. Images
+    loadable `NSItemProvider` text/URL/attributed-text capability and
+    loadable/declared provider image capability, image count, and change count
+    to render the exact enabled state without reading a payload. Images
     take precedence when the pasteboard advertises both forms; otherwise text
     replaces the captured logical range and leaves a collapsed caret after it.
-    The provider
-    fallback is required because some source apps publish copied photos lazily
-    without an eager PNG/JPEG representation. On the explicit read, fall back
-    from `UIImage` loading to the provider's registered image data and file
-    representations; capability without retrievable bytes is not a successful
-    paste. Older
-    shells that do not advertise the required capability and ordinary browsers
-    must show the action disabled; do not restore a
+    Provider fallback is required because some source apps publish copied text
+    or photos lazily rather than exposing an eager `UIPasteboard.string` or
+    PNG/JPEG representation. On the explicit read, load provider-backed
+    `NSString`, attributed text, or URL as plain text; for images, fall back
+    from `UIImage` loading to registered image data and file representations.
+    Capability without retrievable content is not a successful paste. Current
+    shells expose exact text metadata. A legacy shell that has the explicit
+    text-read bridge but predates `hasText` keeps Paste enabled in an
+    availability-unknown compatibility mode; an empty read must leave the
+    selection untouched. Shells without a read bridge and ordinary browsers
+    keep the action disabled. Do not restore a
     privacy-gated `navigator.clipboard.read()` preflight or infer availability
     from a previous paste. Read text or encode image payloads only after the
     explicit tap.

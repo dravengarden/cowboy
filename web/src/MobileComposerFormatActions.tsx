@@ -18,6 +18,7 @@ import {
 import { MobileComposerAccessoryButton } from "./MobileComposerAccessoryDock";
 import {
   nativeClipboardImageStatus,
+  nativeClipboardPasteAvailable,
   readNativeClipboardImages,
   readNativeClipboardText,
 } from "./nativeShell";
@@ -44,7 +45,11 @@ function MobileClipboardPasteButton({
   const [availability, setAvailability] = useState({
     hasImages: false,
     hasText: false,
+    canReadText: false,
+    textAvailabilityKnown: true,
     imageCount: 0,
+    changeCount: -1,
+    supported: false,
   });
   const [reading, setReading] = useState(false);
   const refreshGeneration = useRef(0);
@@ -55,11 +60,7 @@ function MobileClipboardPasteButton({
     const generation = ++refreshGeneration.current;
     void nativeClipboardImageStatus().then((status) => {
       if (generation !== refreshGeneration.current) return;
-      setAvailability({
-        hasImages: status.supported && status.hasImages,
-        hasText: status.supported && status.hasText,
-        imageCount: status.supported ? status.imageCount : 0,
-      });
+      setAvailability(status);
     });
   }, []);
 
@@ -100,7 +101,7 @@ function MobileClipboardPasteButton({
     capturedSelectionRef.current = null;
     if (!selection) return;
     const pasteImages = availability.hasImages;
-    if (!pasteImages && !availability.hasText) return;
+    if (!pasteImages && !nativeClipboardPasteAvailable(availability)) return;
     haptic();
     readingRef.current = true;
     try {
@@ -126,7 +127,9 @@ function MobileClipboardPasteButton({
         editor.focusSelection(selection);
         setReading(true);
         const text = await readNativeClipboardText();
-        editorRef.current?.insertText(text, selection);
+        // A legacy shell cannot expose metadata for an empty clipboard. Never
+        // let its explicit fallback tap replace a selection with an empty read.
+        if (text.length > 0) editorRef.current?.insertText(text, selection);
       }
     } finally {
       readingRef.current = false;
@@ -138,17 +141,16 @@ function MobileClipboardPasteButton({
   const pasteTap = useReliableTouchTap<HTMLButtonElement>(() => {
     void paste();
   });
+  const pasteAvailable = nativeClipboardPasteAvailable(availability);
 
   return (
     <MobileComposerAccessoryButton
       title="Paste"
       disabled={
-        !(availability.hasImages || availability.hasText) ||
+        !pasteAvailable ||
         (reading && availability.hasImages)
       }
-      color={availability.hasImages || availability.hasText
-        ? "primary"
-        : "default"}
+      color={pasteAvailable ? "primary" : "default"}
       onPointerDown={(event): void => {
         // Accessibility activation in iOS WebKit can focus the button even
         // though its pointer default is prevented. Preserve the textarea range

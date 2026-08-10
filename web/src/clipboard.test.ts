@@ -33,12 +33,16 @@ Deno.test("explicit dock paste uses only the capability-scoped native bridge", (
   assertEquals(nativeShellSource.includes("__cowboyReadClipboard"), true);
   assertEquals(nativeShellSource.includes("navigator.clipboard.read("), false);
   assertEquals(formatActionsSource.includes('title="Paste"'), true);
-  assertEquals(formatActionsSource.includes("status.hasText"), true);
+  assertEquals(
+    formatActionsSource.includes("nativeClipboardPasteAvailable"),
+    true,
+  );
   assertEquals(formatActionsSource.includes("readNativeClipboardText"), true);
   assertEquals(
     formatActionsSource.includes("insertText(text, selection)"),
     true,
   );
+  assertEquals(formatActionsSource.includes("text.length > 0"), true);
   assertEquals(
     formatActionsSource.includes("setInterval(refreshVisible, 1000)"),
     true,
