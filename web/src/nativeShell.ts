@@ -15,6 +15,7 @@ export function isNativeShell(): boolean {
 
 interface NativeClipboardImageStatusPayload {
   hasImages?: unknown;
+  imageCount?: unknown;
   changeCount?: unknown;
 }
 
@@ -37,6 +38,7 @@ interface CowboyNativeClipboardWindow extends Window {
 export interface NativeClipboardImageStatus {
   supported: boolean;
   hasImages: boolean;
+  imageCount: number;
   changeCount: number;
 }
 
@@ -61,20 +63,36 @@ export async function nativeClipboardImageStatus(): Promise<NativeClipboardImage
     typeof bridge !== "function" ||
     typeof root.__cowboyReadClipboardImages !== "function"
   ) {
-    return { supported: false, hasImages: false, changeCount: -1 };
+    return {
+      supported: false,
+      hasImages: false,
+      imageCount: 0,
+      changeCount: -1,
+    };
   }
   try {
     const raw = await bridge() as NativeClipboardImageStatusPayload | null;
     return {
       supported: true,
       hasImages: raw?.hasImages === true,
+      imageCount: typeof raw?.imageCount === "number" &&
+          Number.isSafeInteger(raw.imageCount) && raw.imageCount > 0
+        ? Math.min(raw.imageCount, 100)
+        : raw?.hasImages === true
+        ? 1
+        : 0,
       changeCount: typeof raw?.changeCount === "number" &&
           Number.isSafeInteger(raw.changeCount)
         ? raw.changeCount
         : -1,
     };
   } catch {
-    return { supported: true, hasImages: false, changeCount: -1 };
+    return {
+      supported: true,
+      hasImages: false,
+      imageCount: 0,
+      changeCount: -1,
+    };
   }
 }
 

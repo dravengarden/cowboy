@@ -285,6 +285,16 @@ Deno.test("native image paste action is shared by every mobile editor surface", 
     true,
   );
   assertEquals(
+    formatActionsSource.includes("read: readNativeClipboardImages"),
+    true,
+  );
+  assertEquals(
+    textareaSource.includes(
+      "attachments.some((attachment) => attachment.pending === true)",
+    ),
+    true,
+  );
+  assertEquals(
     accessoryDockSource.includes(
       "onPointerDown={(event): void => event.preventDefault()}",
     ),

@@ -3,10 +3,23 @@ import {
   attachmentDisplayParts,
   type Attachment,
   clipboardFiles,
+  pendingClipboardImageAttachment,
   promoteUnplacedImageTokens,
   reconcileDeletedInlineImages,
   settlePendingAttachments,
 } from "./attachments.ts";
+
+Deno.test("native clipboard placeholders reserve image ids without fake bytes", () => {
+  const pending = pendingClipboardImageAttachment(1, "clipboard-two");
+  assertEquals(pending, {
+    id: "clipboard-two",
+    name: "pasted-image-2.png",
+    mimeType: "image/png",
+    isImage: true,
+    block: { type: "image", data: "", mimeType: "image/png" },
+    pending: true,
+  });
+});
 
 Deno.test("clipboard files include iOS item-only images without duplicates", () => {
   const direct = new File(["direct"], "direct.png", { type: "image/png" });

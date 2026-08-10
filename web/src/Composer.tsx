@@ -85,6 +85,10 @@ import {
 } from "./composer/PlatformComposerEditor";
 import { useComposerDraftController } from "./composer/useComposerDraftController";
 import {
+  type NativeClipboardImagePasteRequest,
+  runNativeClipboardImagePaste,
+} from "./composer/nativeClipboardImagePaste";
+import {
   didMobileSoftwareKeyboardClose,
   dismissMobileSoftwareKeyboard,
   mobilePendingKeyboardCloseSettleMs,
@@ -936,6 +940,7 @@ export function ComposerWorkspace({
     initialText: initialDraftText,
     sendable,
     addFiles,
+    pasteClipboardImages,
     removeAttachment,
     clear: clearComposer,
     submit,
@@ -2444,11 +2449,7 @@ export function ComposerWorkspace({
                   commandIds={mobileToolbarIds}
                   editorRef={editorRef}
                   onAttach={(): void => fileInputRef.current?.click()}
-                  onPasteImages={(files, selection): void =>
-                    addFiles(files, {
-                      preserveFocus: true,
-                      selection,
-                    })}
+                  onPasteImages={pasteClipboardImages}
                   onCustomize={(): void => {
                     releaseMobileComposerFocus();
                     setMobileToolbarSettingsOpen(true);
@@ -3057,6 +3058,7 @@ export function ComposerWorkspace({
                 ? { preserveFocus: true }
                 : { preserveFocus: true, selection },
             )}
+          onPasteClipboardImages={pasteClipboardImages}
           sessionId={sessionId}
           commands={(): AvailableCommand[] => availableCommands}
           placeholder={dead ? "Send to resume this session…" : "Message the agent…"}
@@ -4691,6 +4693,32 @@ function PendingRow({
         activeEditEditor()?.insertImages(added);
       });
     };
+    const pasteEditClipboardImages = (
+      request: NativeClipboardImagePasteRequest,
+    ): Promise<void> =>
+      runNativeClipboardImagePaste(request, {
+        stage: (pending, selection): void => {
+          pending.forEach(registerInlineAttachment);
+          const editor = activeEditEditor();
+          flushSync(() => {
+            setEditAttachments((previous) => [...previous, ...pending]);
+            editor?.insertImages(pending, selection);
+          });
+        },
+        settle: (pending, completed): void => {
+          completed.forEach(registerInlineAttachment);
+          const completedById = new Map(
+            completed.map((attachment) => [attachment.id, attachment]),
+          );
+          const editor = activeEditEditor();
+          pending.filter((attachment) => !completedById.has(attachment.id))
+            .forEach((attachment) => editor?.deleteImage(attachment.id));
+          setEditAttachments((current) =>
+            settlePendingAttachments(current, pending, completed)
+          );
+          editor?.refreshImages();
+        },
+      });
     // Editing reuses the composer surface, but Desktop treats it as a transaction:
     // Mod+Enter commits and Esc asks before throwing away the local buffer.
     const desktopEditBar = (
@@ -4723,11 +4751,7 @@ function PendingRow({
           : mobileToolbarIds}
         editorRef={editorRef}
         onAttach={(): void => editFileInputRef.current?.click()}
-        onPasteImages={(files, selection): void =>
-          addEditFiles(files, {
-            preserveFocus: true,
-            selection,
-          })}
+        onPasteImages={pasteEditClipboardImages}
         onCustomize={(): void => {
           releaseMobileComposerFocus();
           setMobileToolbarSettingsOpen(true);
@@ -4934,6 +4958,7 @@ function PendingRow({
                   ? { preserveFocus: true }
                   : { preserveFocus: true, selection },
               )}
+            onPasteClipboardImages={pasteEditClipboardImages}
             sessionId={sessionId}
             commands={commands}
             placeholder="Edit message…"

@@ -42,6 +42,7 @@ import {
 } from "./MobileComposerAccessoryDock";
 import { mobileComposerKeyboardGap } from "./mobileComposerPrimitives";
 import { releaseMobileComposerFocus } from "./composer/mobileComposerFocus";
+import type { NativeClipboardImagePasteRequest } from "./composer/nativeClipboardImagePaste";
 import { isNativeShell } from "./nativeShell";
 import type { AvailableCommand } from "./protocol";
 import { haptic } from "./haptic";
@@ -63,6 +64,7 @@ export function FullscreenComposer({
   onCollapse,
   onAttach,
   onPasteFiles,
+  onPasteClipboardImages,
   sessionId,
   commands,
   placeholder,
@@ -90,6 +92,9 @@ export function FullscreenComposer({
     files: File[],
     selection?: ComposerEditorSelection,
   ) => void;
+  onPasteClipboardImages: (
+    request: NativeClipboardImagePasteRequest,
+  ) => Promise<void> | void;
   sessionId: string;
   commands: () => AvailableCommand[];
   placeholder: string;
@@ -290,7 +295,7 @@ export function FullscreenComposer({
             commandIds={visibleToolbarIds}
             editorRef={editorRef}
             onAttach={onAttach}
-            onPasteImages={onPasteFiles}
+            onPasteImages={onPasteClipboardImages}
             onCustomize={act(() => {
               // The full-cover settings sheet intentionally ends this focus
               // session; ordinary actions in either bar leave it untouched.

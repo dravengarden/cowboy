@@ -990,7 +990,9 @@ fullscreen editor:
 - [ ] In the main composer and Queue/Draft editing, test the image Paste
       accessory in both compact and fullscreen states: the copied image replaces
       the exact current range, the keyboard remains open, and neither the button
-      nor `BODY` owns focus after insertion (pitfall #59).
+      nor `BODY` owns focus after insertion. Repeat with an image supplied by the
+      Screenshot/IME shelf so the provider data/file fallback is exercised
+      (pitfall #59).
 - [ ] Attach a photo, put the caret below it, press the SOFT-keyboard Backspace
       twice — the image is ringed then deleted (pitfall #11; keydown-only handlers
       don't fire on a phone, so this is the beforeinput path).
@@ -1210,9 +1212,10 @@ Desktop Vim + IME checks:
 
     Image insertion follows the same range contract. Native textarea and CM6
     both replace the current selection, sanitize the token label, and land after
-    the complete image batch. Queue/Draft paste must stage object-URL image
-    placeholders and insert their tokens synchronously before raster encoding,
-    just like the primary Composer; delivery, persistence, and keyboard-dismiss
+    the complete image batch. Queue/Draft paste must stage local image
+    placeholders and insert their tokens synchronously before raster encoding or
+    a native payload read, just like the primary Composer; delivery, persistence,
+    and keyboard-dismiss
     completion remain disabled while any placeholder is pending. Waiting for
     encoding before the first token moves native-to-CM6 promotion outside the
     UIKit Paste gesture and loses its caret/keyboard transaction. When paste
@@ -1224,20 +1227,27 @@ Desktop Vim + IME checks:
     browser clipboard menu.** Keep the action fixed immediately after Undo/Redo
     in the shared formatting row, independent of the user's configurable toolbar,
     so main, Queue, and Draft editors expose it in both compact and fullscreen
-    states. The iOS shell probes `UIPasteboard.hasImages` plus loadable
-    `NSItemProvider` image capability and its change count to render the exact
-    enabled state. The provider fallback is required because some source apps
-    publish copied photos lazily without an eager PNG/JPEG representation. Older
+    states. The iOS shell probes `UIPasteboard.hasImages` plus loadable/declared
+    `NSItemProvider` image capability, image count, and change count to render the
+    exact enabled state and reserve one inline position per item. The provider
+    fallback is required because some source apps publish copied photos lazily
+    without an eager PNG/JPEG representation. On the explicit read, fall back
+    from `UIImage` loading to the provider's registered image data and file
+    representations; capability without retrievable bytes is not a successful
+    paste. Older
     shells and ordinary browsers must show the action disabled; do not restore a
     privacy-gated `navigator.clipboard.read()` preflight or infer availability
     from a previous paste. Read and encode image payloads only after the explicit
     tap.
 
     The accessory primitive prevents pointer-down focus transfer. Snapshot the
-    editor's logical `{anchor, head}` before awaiting the native payload, then
-    insert the full image batch against that range. The native textarea must own
-    focus again before its synchronous value/selection write and CM6 promotion,
-    so the open software keyboard transfers with the caret. Pasteboard-change,
+    editor's logical `{anchor, head}`, synchronously insert pending tokens for
+    the advertised image count against that range, and commit the native
+    textarea -> CM6 focus transfer **before invoking** the privacy-gated payload
+    bridge. The native textarea must own focus during that value/selection write
+    so the open software keyboard transfers with the caret. Resolve those exact
+    pending ids after bytes arrive; a stale count may add/remove only its own
+    batch. Pasteboard-change,
     app-resume, visibility, and window-focus notifications refresh metadata, but
     iOS pasteboard notifications can be process-local: an image copied in another
     app, an IME clipboard shelf, or Screenshot may produce no foreground event.

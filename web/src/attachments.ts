@@ -105,6 +105,25 @@ export function pendingImageAttachment(file: File, id = nextAttachmentId()): Att
   };
 }
 
+/** Reserve an inline image position before the native shell starts its
+ * asynchronous clipboard read. Unlike `pendingImageAttachment`, no image bytes
+ * exist yet, so the inline renderer intentionally shows its compact image chip
+ * until the matching native payload settles under the same attachment id. */
+export function pendingClipboardImageAttachment(
+  index: number,
+  id = nextAttachmentId(),
+): Attachment {
+  const mimeType = "image/png";
+  return {
+    id,
+    name: `pasted-image-${String(index + 1)}.png`,
+    mimeType,
+    isImage: true,
+    block: { type: "image", data: "", mimeType },
+    pending: true,
+  };
+}
+
 /** Resolve one asynchronous paste batch without touching a newer pending batch. */
 export function settlePendingAttachments(
   current: readonly Attachment[],

@@ -8,8 +8,8 @@ import {
 import { ContentPaste, Tune } from "@mui/icons-material";
 import type {
   ComposerEditorHandle,
-  ComposerEditorSelection,
 } from "./composer/PlatformComposerEditor";
+import type { NativeClipboardImagePasteRequest } from "./composer/nativeClipboardImagePaste";
 import {
   COMPOSER_COMMANDS_BY_ID,
   type ComposerCommand,
@@ -26,9 +26,8 @@ interface MobileComposerFormatActionsProps {
   editorRef: RefObject<ComposerEditorHandle | null>;
   onAttach: () => void;
   onPasteImages: (
-    files: File[],
-    selection: ComposerEditorSelection,
-  ) => void;
+    request: NativeClipboardImagePasteRequest,
+  ) => Promise<void> | void;
   onCustomize?: () => void;
 }
 
@@ -39,7 +38,10 @@ function MobileClipboardImagePasteButton({
   MobileComposerFormatActionsProps,
   "editorRef" | "onPasteImages"
 >): React.JSX.Element {
-  const [hasImages, setHasImages] = useState(false);
+  const [availability, setAvailability] = useState({
+    hasImages: false,
+    imageCount: 0,
+  });
   const [reading, setReading] = useState(false);
   const refreshGeneration = useRef(0);
 
@@ -47,7 +49,10 @@ function MobileClipboardImagePasteButton({
     const generation = ++refreshGeneration.current;
     void nativeClipboardImageStatus().then((status) => {
       if (generation !== refreshGeneration.current) return;
-      setHasImages(status.supported && status.hasImages);
+      setAvailability({
+        hasImages: status.supported && status.hasImages,
+        imageCount: status.supported ? status.imageCount : 0,
+      });
     });
   }, []);
 
@@ -88,8 +93,14 @@ function MobileClipboardImagePasteButton({
     haptic();
     setReading(true);
     try {
-      const files = await readNativeClipboardImages();
-      if (files.length > 0) onPasteImages(files, selection);
+      // The callback stages inline placeholders and performs the native
+      // textarea -> CM6 focus handoff synchronously. Only then may it invoke the
+      // privacy-gated `read` thunk and await provider bytes.
+      await onPasteImages({
+        expectedCount: Math.max(1, availability.imageCount),
+        selection,
+        read: readNativeClipboardImages,
+      });
     } finally {
       setReading(false);
       refresh();
@@ -99,8 +110,8 @@ function MobileClipboardImagePasteButton({
   return (
     <MobileComposerAccessoryButton
       title="Paste image"
-      disabled={!hasImages || reading}
-      color={hasImages ? "primary" : "default"}
+      disabled={!availability.hasImages || reading}
+      color={availability.hasImages ? "primary" : "default"}
       onClick={(): void => void paste()}
     >
       <ContentPaste />

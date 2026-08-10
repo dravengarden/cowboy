@@ -143,7 +143,7 @@ export const ComposerTextarea = forwardRef<
     onEscape?: () => boolean;
     onPasteFiles?: (files: File[]) => void;
     /** Synchronous native -> CM6 handoff point for an inline-image insert. */
-    onInlineImageInsertion?: (caret: number) => void;
+    onInlineImageInsertion?: (caret: number, preserveFocus: boolean) => void;
     onSelectionChange?: (hasSelection: boolean) => void;
     /// Right padding (px) reserved on the text so it never runs under the action
     /// buttons the composer overlays at the input's bottom-right. 0 when none.
@@ -390,7 +390,7 @@ export const ComposerTextarea = forwardRef<
       const to = ta?.selectionEnd ?? at;
       const edit = insertNativeInlineImages(current, at, to, [attachment]);
       // Record before onChange schedules the render that replaces this textarea.
-      onInlineImageInsertion?.(edit.caret);
+      onInlineImageInsertion?.(edit.caret, attachment.pending === true);
       if (ta) {
         writeNativeEdit(ta, {
           value: edit.value,
@@ -417,7 +417,10 @@ export const ComposerTextarea = forwardRef<
       const edit = insertNativeInlineImages(current, at, to, attachments);
       // CM6's initial EditorState consumes this exact selection in the same
       // promotion commit. Defaulting to 0 strands the caret before the image.
-      onInlineImageInsertion?.(edit.caret);
+      onInlineImageInsertion?.(
+        edit.caret,
+        attachments.some((attachment) => attachment.pending === true),
+      );
       if (ta) {
         // The accessory button prevents pointer-down focus transfer, but iOS may
         // briefly project BODY while showing its native paste affordance. Restore

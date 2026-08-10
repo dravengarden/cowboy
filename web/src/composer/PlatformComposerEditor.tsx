@@ -150,8 +150,13 @@ export const PlatformComposerEditor = forwardRef<
         {...(props.onSelectionChange
           ? { onSelectionChange: props.onSelectionChange }
           : {})}
-        onInlineImageInsertion={(caret): void => {
+        onInlineImageInsertion={(caret, preserveFocus): void => {
           promotionCaretRef.current = caret;
+          // The dedicated native Paste button does not pass through the
+          // textarea's browser `paste` event. Its synchronously staged pending
+          // placeholder therefore claims the same one-commit focus transfer
+          // here, while ordinary file-picker inserts remain unclaimed.
+          pastePromotionPendingRef.current = preserveFocus;
         }}
         {...(props.onPasteFiles
           ? {

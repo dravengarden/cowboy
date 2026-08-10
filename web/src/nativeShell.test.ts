@@ -39,7 +39,7 @@ Deno.test("image status probes metadata without reading clipboard payloads", asy
   const previousRead = root.__cowboyReadClipboardImages;
   let payloadReads = 0;
   root.__cowboyClipboardImageStatus = () =>
-    Promise.resolve({ hasImages: true, changeCount: 9 });
+    Promise.resolve({ hasImages: true, imageCount: 2, changeCount: 9 });
   root.__cowboyReadClipboardImages = () => {
     payloadReads += 1;
     return Promise.resolve({
@@ -56,6 +56,7 @@ Deno.test("image status probes metadata without reading clipboard payloads", asy
     assertEquals(await nativeClipboardImageStatus(), {
       supported: true,
       hasImages: true,
+      imageCount: 2,
       changeCount: 9,
     });
     assertEquals(payloadReads, 0);
@@ -72,5 +73,25 @@ Deno.test("image status probes metadata without reading clipboard payloads", asy
     } else {
       root.__cowboyReadClipboardImages = previousRead;
     }
+  }
+});
+
+Deno.test("legacy native image status defaults an available clipboard to one image", async () => {
+  const root = globalThis as typeof globalThis & {
+    __cowboyClipboardImageStatus?: () => Promise<unknown>;
+    __cowboyReadClipboardImages?: () => Promise<unknown>;
+  };
+  const previousStatus = root.__cowboyClipboardImageStatus;
+  const previousRead = root.__cowboyReadClipboardImages;
+  root.__cowboyClipboardImageStatus = () =>
+    Promise.resolve({ hasImages: true, changeCount: 3 });
+  root.__cowboyReadClipboardImages = () => Promise.resolve({ images: [] });
+  try {
+    assertEquals((await nativeClipboardImageStatus()).imageCount, 1);
+  } finally {
+    if (previousStatus === undefined) delete root.__cowboyClipboardImageStatus;
+    else root.__cowboyClipboardImageStatus = previousStatus;
+    if (previousRead === undefined) delete root.__cowboyReadClipboardImages;
+    else root.__cowboyReadClipboardImages = previousRead;
   }
 });

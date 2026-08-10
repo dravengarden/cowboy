@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { flushSync } from "react-dom";
 import {
   type Attachment,
   filesToAttachments,
@@ -32,6 +33,10 @@ import {
   submitPrompt,
 } from "../store";
 import { haptic } from "../haptic";
+import {
+  type NativeClipboardImagePasteRequest,
+  runNativeClipboardImagePaste,
+} from "./nativeClipboardImagePaste";
 import { prepareUserPrompt } from "./slashCommandIntent";
 
 export interface ComposerDraftController {
@@ -48,6 +53,9 @@ export interface ComposerDraftController {
       selection?: ComposerEditorSelection;
     },
   ) => void;
+  pasteClipboardImages: (
+    request: NativeClipboardImagePasteRequest,
+  ) => Promise<void>;
   removeAttachment: (id: string) => void;
   clear: () => void;
   submit: () => boolean;
@@ -196,6 +204,33 @@ export function useComposerDraftController(
     });
   };
 
+  const pasteClipboardImages = (
+    request: NativeClipboardImagePasteRequest,
+  ): Promise<void> =>
+    runNativeClipboardImagePaste(request, {
+      stage: (pending, selection): void => {
+        pending.forEach(registerInlineAttachment);
+        const editor = editorRef.current;
+        flushSync(() => {
+          setAttachments((previous) => [...previous, ...pending]);
+          editor?.insertImages(pending, selection);
+        });
+      },
+      settle: (pending, completed): void => {
+        completed.forEach(registerInlineAttachment);
+        const completedById = new Map(
+          completed.map((attachment) => [attachment.id, attachment]),
+        );
+        const editor = editorRef.current;
+        pending.filter((attachment) => !completedById.has(attachment.id))
+          .forEach((attachment) => editor?.deleteImage(attachment.id));
+        setAttachments((current) =>
+          settlePendingAttachments(current, pending, completed)
+        );
+        editor?.refreshImages();
+      },
+    });
+
   const removeAttachment = (id: string): void => {
     setAttachments((previous) =>
       previous.filter((attachment) => attachment.id !== id)
@@ -252,6 +287,7 @@ export function useComposerDraftController(
     initialText,
     sendable,
     addFiles,
+    pasteClipboardImages,
     removeAttachment,
     clear,
     submit: () =>
