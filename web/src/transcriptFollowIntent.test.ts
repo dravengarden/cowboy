@@ -1,7 +1,9 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
   keyLeavesLatest,
+  keyMovesTranscriptViewport,
   shouldRestoreDetachedAnchor,
+  transcriptScrollHasReaderIntent,
   wheelLeavesLatest,
 } from "./transcriptFollowIntent.ts";
 
@@ -23,6 +25,51 @@ Deno.test("keyboard follow intent preserves following for bottom-bound commands"
     assertEquals(keyLeavesLatest({ key, shiftKey: false }), false, key);
   }
   assertEquals(keyLeavesLatest({ key: " ", shiftKey: false }), false);
+});
+
+Deno.test("keyboard viewport motion is armed in both directions", () => {
+  for (const key of [
+    "ArrowUp",
+    "ArrowDown",
+    "PageUp",
+    "PageDown",
+    "Home",
+    "End",
+    " ",
+  ]) {
+    assertEquals(keyMovesTranscriptViewport({ key }), true, key);
+  }
+  for (const key of ["Tab", "Enter", "Escape", "a"]) {
+    assertEquals(keyMovesTranscriptViewport({ key }), false, key);
+  }
+});
+
+Deno.test("layout-compensating scroll does not claim reader ownership", () => {
+  const layoutCompensation = {
+    nativeScrollActive: false,
+    touchActive: false,
+    pointerActive: false,
+    directManipulationActive: false,
+  };
+  assertEquals(
+    transcriptScrollHasReaderIntent(layoutCompensation),
+    false,
+  );
+  for (const owner of [
+    "nativeScrollActive",
+    "touchActive",
+    "pointerActive",
+    "directManipulationActive",
+  ] as const) {
+    assertEquals(
+      transcriptScrollHasReaderIntent({
+        ...layoutCompensation,
+        [owner]: true,
+      }),
+      true,
+      owner,
+    );
+  }
 });
 
 Deno.test("detached anchor yields to active native scrolling on both products", () => {

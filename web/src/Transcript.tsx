@@ -112,7 +112,9 @@ import {
 } from "./stickyStore";
 import {
   keyLeavesLatest,
+  keyMovesTranscriptViewport,
   shouldRestoreDetachedAnchor,
+  transcriptScrollHasReaderIntent,
   wheelLeavesLatest,
 } from "./transcriptFollowIntent";
 import { markTranscriptScrollActivity } from "./transcriptRenderPacing";
@@ -4030,6 +4032,7 @@ export function Transcript({
     const el = parentRef.current;
     if (!el) return undefined;
     let touching = false;
+    let pointerScrolling = false;
     let magneticArmed = false;
     let directManipulationActive = false;
     let directManipulationShouldFollow = false;
@@ -4207,10 +4210,25 @@ export function Transcript({
       markNativeScrollActive();
       if (wheelLeavesLatest(event.deltaY)) detach();
     };
+    const onPointerDown = (event: PointerEvent): void => {
+      if (event.pointerType !== "mouse" || event.button !== 0) return;
+      const rect = el.getBoundingClientRect();
+      const scrollbarWidth = Math.max(16, el.offsetWidth - el.clientWidth);
+      if (event.clientX < rect.right - scrollbarWidth) return;
+      // A mouse scrollbar drag has no wheel event to pre-arm ownership. Keep
+      // the pointer signal until the global pointerup in case the drag leaves
+      // the scroll container before release.
+      pointerScrolling = true;
+      markNativeScrollActive();
+    };
+    const onPointerEnd = (): void => {
+      pointerScrolling = false;
+    };
     const onKeyDown = (event: KeyboardEvent): void => {
       // Same boundary rule for keyboard repeat: ArrowDown/PageDown/End/Space
       // may continue firing after reaching the bottom and must not undo the
       // `scroll` handler's automatic re-enable.
+      if (keyMovesTranscriptViewport(event)) markNativeScrollActive();
       if (keyLeavesLatest(event)) detach();
     };
     const onScroll = (): void => {
@@ -4227,11 +4245,27 @@ export function Transcript({
         reportScrollableRef.current();
         return;
       }
-      // Covers scrollbar drags and keyboard/native scrolling as well as wheel
-      // gestures. Debouncing here keeps inertia authoritative between events.
-      markNativeScrollActive();
+      // A column-reverse browser adjusts scrollTop when streamed content grows
+      // below a detached Page viewport. That trusted scroll event is layout
+      // compensation, not reader motion; treating it as input pauses rendering
+      // for 240ms after every chunk and turns smooth output into visible bursts.
+      // Touch, wheel, keyboard, scrollbar, and drawer paths all arm ownership
+      // before their first scroll event, and the active flag carries inertia.
+      const readerOwned = transcriptScrollHasReaderIntent({
+        nativeScrollActive: nativeScrollActiveRef.current,
+        touchActive: touching,
+        pointerActive: pointerScrolling,
+        directManipulationActive,
+      });
+      if (readerOwned) markNativeScrollActive();
       // column-reverse: the bottom is scrollTop 0 (abs handles the sign).
       const fromBottom = Math.abs(el.scrollTop);
+      if (!readerOwned) {
+        if (!stick.current) captureAnchor();
+        saveViewport();
+        reportScrollableRef.current();
+        return;
+      }
       const insideMagneticZone = !stick.current &&
         (managesScrollHistoryRef.current || workingRef.current) &&
         fromBottom <= magneticThreshold();
@@ -4274,11 +4308,13 @@ export function Transcript({
       return el.scrollTop > 0.5 ? 1 : -1;
     };
     const scrollAway = (distance: number): void => {
+      markNativeScrollActive();
       detach();
       const direction = awayDirection();
       el.scrollBy({ top: direction * distance, behavior: "auto" });
     };
     const scrollTowardLatest = (distance: number): void => {
+      markNativeScrollActive();
       const fromBottom = Math.abs(el.scrollTop);
       if (fromBottom <= distance) {
         el.scrollTop = 0;
@@ -4292,6 +4328,7 @@ export function Transcript({
       el.scrollBy({ top: direction * distance, behavior: "auto" });
     };
     const followLatest = (): void => {
+      markNativeScrollActive();
       stick.current = true;
       freezeRef.current.key = null;
       scheduleHistoryRelease();
@@ -4311,6 +4348,7 @@ export function Transcript({
       }
       // A settled or older Explore page is a bounded reading surface. Move to
       // the end of that page without enabling Following or changing pages.
+      markNativeScrollActive();
       freezeRef.current.key = null;
       el.scrollTo({ top: 0, behavior: "smooth" });
     };
@@ -4350,6 +4388,7 @@ export function Transcript({
       else if (action === "page-up") scrollAway(page);
       else if (action === "page-down") scrollTowardLatest(page);
       else if (action === "oldest") {
+        markNativeScrollActive();
         detach();
         el.scrollTo({
           top: awayDirection() * el.scrollHeight,
@@ -4362,10 +4401,14 @@ export function Transcript({
       }
     };
     el.addEventListener("wheel", onWheel, { passive: true });
+    el.addEventListener("pointerdown", onPointerDown, { passive: true });
     el.addEventListener("touchstart", onTouchStart, { passive: true });
     el.addEventListener("touchend", onTouchEnd, { passive: true });
     el.addEventListener("touchcancel", onTouchEnd, { passive: true });
     el.addEventListener("scroll", onScroll, { passive: true });
+    globalThis.addEventListener("pointerup", onPointerEnd, { passive: true });
+    globalThis.addEventListener("pointercancel", onPointerEnd, { passive: true });
+    globalThis.addEventListener("blur", onPointerEnd);
     el.addEventListener("cowboy:desktop-transcript-nav", onDesktopNavigation);
     globalThis.addEventListener(
       "cowboy:explore-current-page-bottom",
@@ -4452,10 +4495,14 @@ export function Transcript({
     reportScrollableRef.current(); // initial measure once the container exists
     return () => {
       el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("pointerdown", onPointerDown);
       el.removeEventListener("touchstart", onTouchStart);
       el.removeEventListener("touchend", onTouchEnd);
       el.removeEventListener("touchcancel", onTouchEnd);
       el.removeEventListener("scroll", onScroll);
+      globalThis.removeEventListener("pointerup", onPointerEnd);
+      globalThis.removeEventListener("pointercancel", onPointerEnd);
+      globalThis.removeEventListener("blur", onPointerEnd);
       el.removeEventListener(
         "cowboy:desktop-transcript-nav",
         onDesktopNavigation,

@@ -18,6 +18,41 @@ export function shouldRestoreDetachedAnchor(
   return !nativeScrollActive;
 }
 
+/** A `scroll` event alone does not prove reader intent. In a column-reverse
+ * transcript, appending or growing content below a detached viewport makes the
+ * browser compensate `scrollTop` and dispatch a trusted scroll event even
+ * though the visible anchor did not move. Only an input-armed interaction may
+ * take rendering ownership; layout compensation must remain presentation-live. */
+export function transcriptScrollHasReaderIntent({
+  nativeScrollActive,
+  touchActive,
+  pointerActive,
+  directManipulationActive,
+}: {
+  nativeScrollActive: boolean;
+  touchActive: boolean;
+  pointerActive: boolean;
+  directManipulationActive: boolean;
+}): boolean {
+  return nativeScrollActive || touchActive || pointerActive ||
+    directManipulationActive;
+}
+
+/** Native keyboard commands that can move a focused transcript in either
+ * direction. They arm scroll ownership before the browser emits `scroll`; the
+ * narrower `keyLeavesLatest` predicate below still owns follow-mode changes. */
+export function keyMovesTranscriptViewport(
+  event: Pick<KeyboardEvent, "key">,
+): boolean {
+  return event.key === "ArrowUp" ||
+    event.key === "ArrowDown" ||
+    event.key === "PageUp" ||
+    event.key === "PageDown" ||
+    event.key === "Home" ||
+    event.key === "End" ||
+    event.key === " ";
+}
+
 /** Keyboard scroll commands that move away from the latest (bottom) edge.
  * Down/End/Space are deliberately excluded: their inertial/key-repeat tail may
  * continue after the viewport reaches the bottom and must not turn Following
