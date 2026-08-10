@@ -8,6 +8,7 @@ import {
 import { ContentPaste, Tune } from "@mui/icons-material";
 import type {
   ComposerEditorHandle,
+  ComposerEditorSelection,
 } from "./composer/PlatformComposerEditor";
 import type { NativeClipboardImagePasteRequest } from "./composer/nativeClipboardImagePaste";
 import {
@@ -20,6 +21,7 @@ import {
   readNativeClipboardImages,
 } from "./nativeShell";
 import { haptic } from "./haptic";
+import { useReliableTouchTap } from "./useReliableTouchTap";
 
 interface MobileComposerFormatActionsProps {
   commandIds: readonly string[];
@@ -44,6 +46,8 @@ function MobileClipboardImagePasteButton({
   });
   const [reading, setReading] = useState(false);
   const refreshGeneration = useRef(0);
+  const readingRef = useRef(false);
+  const capturedSelectionRef = useRef<ComposerEditorSelection | null>(null);
 
   const refresh = useCallback((): void => {
     const generation = ++refreshGeneration.current;
@@ -87,32 +91,58 @@ function MobileClipboardImagePasteButton({
   }, [refresh]);
 
   const paste = async (): Promise<void> => {
-    if (reading) return;
-    const selection = editorRef.current?.getSelection();
+    if (readingRef.current) return;
+    const selection = capturedSelectionRef.current ??
+      editorRef.current?.getSelection();
+    capturedSelectionRef.current = null;
     if (!selection) return;
     haptic();
-    setReading(true);
+    readingRef.current = true;
     try {
       // The callback stages inline placeholders and performs the native
       // textarea -> CM6 focus handoff synchronously. Only then may it invoke the
       // privacy-gated `read` thunk and await provider bytes.
-      await onPasteImages({
+      const completion = onPasteImages({
         expectedCount: Math.max(1, availability.imageCount),
         selection,
         read: readNativeClipboardImages,
       });
+      // Staging must happen before this state update can disable a button that
+      // WebKit briefly made the accessibility focus owner during the tap.
+      setReading(true);
+      await completion;
     } finally {
+      readingRef.current = false;
       setReading(false);
       refresh();
     }
   };
+
+  const pasteTap = useReliableTouchTap<HTMLButtonElement>(() => {
+    void paste();
+  });
 
   return (
     <MobileComposerAccessoryButton
       title="Paste image"
       disabled={!availability.hasImages || reading}
       color={availability.hasImages ? "primary" : "default"}
-      onClick={(): void => void paste()}
+      onPointerDown={(event): void => {
+        // Accessibility activation in iOS WebKit can focus the button even
+        // though its pointer default is prevented. Preserve the textarea range
+        // before that transfer; the reliable pointerup path restores/promotes
+        // the editor before WebKit's mis-targeted compatibility click.
+        capturedSelectionRef.current = editorRef.current?.getSelection() ??
+          null;
+        pasteTap.onPointerDown(event);
+      }}
+      onPointerMove={pasteTap.onPointerMove}
+      onPointerUp={pasteTap.onPointerUp}
+      onPointerCancel={(event): void => {
+        capturedSelectionRef.current = null;
+        pasteTap.onPointerCancel(event);
+      }}
+      onClick={pasteTap.onClick}
     >
       <ContentPaste />
     </MobileComposerAccessoryButton>

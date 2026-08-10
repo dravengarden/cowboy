@@ -280,10 +280,11 @@ Deno.test("native image paste action is shared by every mobile editor surface", 
   );
   assertEquals(
     formatActionsSource.includes(
-      "const selection = editorRef.current?.getSelection();",
+      "capturedSelectionRef.current ??\n      editorRef.current?.getSelection()",
     ),
     true,
   );
+  assertEquals(formatActionsSource.includes("pasteTap.onPointerUp"), true);
   assertEquals(
     formatActionsSource.includes("read: readNativeClipboardImages"),
     true,

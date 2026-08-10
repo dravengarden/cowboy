@@ -1241,8 +1241,13 @@ Desktop Vim + IME checks:
     tap.
 
     The accessory primitive prevents pointer-down focus transfer. Snapshot the
-    editor's logical `{anchor, head}`, synchronously insert pending tokens for
-    the advertised image count against that range, and commit the native
+    editor's logical `{anchor, head}` on that pointer-down. iOS WebKit
+    accessibility activation can still focus the button and retarget the later
+    compatibility `click` to an ancestor, so commit a stationary touch on the
+    button's reliable `pointerup` path and suppress its duplicate click; a
+    click-only handler can dismiss the keyboard without ever starting paste.
+    Synchronously insert pending tokens for the advertised image count against
+    the captured range, and commit the native
     textarea -> CM6 focus transfer **before invoking** the privacy-gated payload
     bridge. The native textarea must own focus during that value/selection write
     so the open software keyboard transfers with the caret. Resolve those exact

@@ -1,4 +1,4 @@
-import type { MouseEventHandler, ReactNode } from "react";
+import type { MouseEventHandler, PointerEventHandler, ReactNode } from "react";
 import { alpha, Box, IconButton, Stack, Tooltip } from "@mui/material";
 import { mobileComposerPanelFrameSx } from "./mobileComposerPrimitives";
 import { NetworkIconButton } from "./NetworkActionFeedback";
@@ -227,6 +227,10 @@ export function MobileComposerFixedActionSlot({
 export function MobileComposerAccessoryButton({
   title,
   onClick,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
+  onPointerCancel,
   networkAction,
   children,
   disabled = false,
@@ -234,6 +238,10 @@ export function MobileComposerAccessoryButton({
 }: {
   title: string;
   onClick?: MouseEventHandler<HTMLButtonElement>;
+  onPointerDown?: PointerEventHandler<HTMLButtonElement>;
+  onPointerMove?: PointerEventHandler<HTMLButtonElement>;
+  onPointerUp?: PointerEventHandler<HTMLButtonElement>;
+  onPointerCancel?: PointerEventHandler<HTMLButtonElement>;
   networkAction?: () => Promise<void> | void;
   children: ReactNode;
   disabled?: boolean;
@@ -260,7 +268,13 @@ export function MobileComposerAccessoryButton({
               color={color}
               disabled={disabled}
               networkAction={networkAction}
-              onPointerDown={(event): void => event.preventDefault()}
+              onPointerDown={(event): void => {
+                event.preventDefault();
+                onPointerDown?.(event);
+              }}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+              onPointerCancel={onPointerCancel}
               sx={buttonSx}
             >
               {children}
@@ -271,7 +285,13 @@ export function MobileComposerAccessoryButton({
               aria-label={title}
               color={color}
               disabled={disabled}
-              onPointerDown={(event): void => event.preventDefault()}
+              onPointerDown={(event): void => {
+                event.preventDefault();
+                onPointerDown?.(event);
+              }}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+              onPointerCancel={onPointerCancel}
               onClick={onClick}
               sx={buttonSx}
             >

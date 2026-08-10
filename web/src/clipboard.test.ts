@@ -38,8 +38,16 @@ Deno.test("explicit image paste uses only the capability-scoped native bridge", 
   );
   assertEquals(
     formatActionsSource.includes(
-      "const selection = editorRef.current?.getSelection()",
+      "capturedSelectionRef.current ??\n      editorRef.current?.getSelection()",
     ),
     true,
   );
+  assertEquals(
+    formatActionsSource.includes(
+      "useReliableTouchTap<HTMLButtonElement>",
+    ),
+    true,
+  );
+  assertEquals(formatActionsSource.includes("pasteTap.onPointerUp"), true);
+  assertEquals(formatActionsSource.includes("pasteTap.onClick"), true);
 });
