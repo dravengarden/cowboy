@@ -65,6 +65,10 @@ The point of the native shell is doing what a pure-web PWA can't. What's wired u
   swizzles the private `WKContentView`'s `inputAccessoryView` to nil (a C
   constructor, runs before any webview). Focusing the composer then shows only
   the standard QuickType bar, not the ∧∨+Done strip.
+- **Image clipboard bridge** — the same native tweak exposes a metadata-only
+  image capability probe and a user-gesture-gated payload read. It supports both
+  eager `UIPasteboard.images` values and lazy `NSItemProvider` images without
+  reading clipboard bytes merely to enable the Mobile Paste button.
 - **File-picker permissions** — `src-tauri/Info.ios.plist` carries
   `NSCameraUsageDescription` / `NSPhotoLibraryUsageDescription` (+ encryption
   declaration). Tauri **merges** this file into the app Info.plist on every build.

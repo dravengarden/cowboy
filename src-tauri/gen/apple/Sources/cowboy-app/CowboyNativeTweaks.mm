@@ -119,6 +119,76 @@ __attribute__((constructor)) static void cowboyStripKeyboardAccessoryBar(void) {
 @interface CowboyClipboardHandler : NSObject <WKScriptMessageHandlerWithReply>
 @end
 
+static BOOL cowboyPasteboardHasLoadableImages(UIPasteboard *pasteboard) {
+    if (pasteboard.hasImages) return YES;
+
+    // Some apps publish copied photos as lazy NSItemProviders instead of the
+    // eager PNG/JPEG representations covered by UIPasteboard.hasImages. Asking
+    // whether a provider can vend UIImage inspects capability only; it does not
+    // load bytes or trigger the cross-app paste affordance.
+    for (NSItemProvider *provider in pasteboard.itemProviders) {
+        if ([provider canLoadObjectOfClass:UIImage.class]) return YES;
+    }
+    return NO;
+}
+
+static NSArray<NSDictionary *> *cowboyClipboardImagePayloads(
+    NSArray<UIImage *> *images
+) {
+    NSMutableArray<NSDictionary *> *payloads =
+        [[NSMutableArray alloc] initWithCapacity:images.count];
+    NSUInteger index = 0;
+    for (UIImage *image in images) {
+        @autoreleasepool {
+            NSData *data = UIImagePNGRepresentation(image);
+            if (data == nil) continue;
+            index += 1;
+            [payloads addObject:@{
+                @"name": [NSString stringWithFormat:@"pasted-image-%lu.png",
+                                                 (unsigned long)index],
+                @"mimeType": @"image/png",
+                @"data": [data base64EncodedStringWithOptions:0],
+            }];
+        }
+    }
+    return payloads;
+}
+
+static void cowboyLoadProviderImages(
+    NSArray<NSItemProvider *> *providers,
+    NSUInteger providerIndex,
+    NSMutableArray<UIImage *> *images,
+    void (^completion)(NSArray<UIImage *> *)
+) {
+    if (providerIndex >= providers.count) {
+        completion([images copy]);
+        return;
+    }
+
+    NSItemProvider *provider = providers[providerIndex];
+    if (![provider canLoadObjectOfClass:UIImage.class]) {
+        cowboyLoadProviderImages(providers, providerIndex + 1, images, completion);
+        return;
+    }
+
+    [provider loadObjectOfClass:UIImage.class
+              completionHandler:^(__kindof id<NSItemProviderReading> object,
+                                  NSError *error) {
+        (void)error;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if ([object isKindOfClass:UIImage.class]) {
+                [images addObject:(UIImage *)object];
+            }
+            cowboyLoadProviderImages(
+                providers,
+                providerIndex + 1,
+                images,
+                completion
+            );
+        });
+    }];
+}
+
 @implementation CowboyClipboardHandler
 - (void)userContentController:(WKUserContentController *)ucc
       didReceiveScriptMessage:(WKScriptMessage *)message
@@ -135,7 +205,7 @@ __attribute__((constructor)) static void cowboyStripKeyboardAccessoryBar(void) {
 
     if ([action isEqualToString:@"image-status"]) {
         replyHandler(@{
-            @"hasImages": @(pasteboard.hasImages),
+            @"hasImages": @(cowboyPasteboardHasLoadableImages(pasteboard)),
             @"changeCount": @(pasteboard.changeCount),
         }, nil);
         return;
@@ -143,26 +213,30 @@ __attribute__((constructor)) static void cowboyStripKeyboardAccessoryBar(void) {
 
     if ([action isEqualToString:@"read-images"]) {
         NSArray<UIImage *> *images = pasteboard.images ?: @[];
-        NSMutableArray<NSDictionary *> *payloads =
-            [[NSMutableArray alloc] initWithCapacity:images.count];
-        NSUInteger index = 0;
-        for (UIImage *image in images) {
-            @autoreleasepool {
-                NSData *data = UIImagePNGRepresentation(image);
-                if (data == nil) continue;
-                index += 1;
-                [payloads addObject:@{
-                    @"name": [NSString stringWithFormat:@"pasted-image-%lu.png",
-                                                     (unsigned long)index],
-                    @"mimeType": @"image/png",
-                    @"data": [data base64EncodedStringWithOptions:0],
-                }];
-            }
+        NSInteger changeCount = pasteboard.changeCount;
+        if (images.count > 0) {
+            replyHandler(@{
+                @"images": cowboyClipboardImagePayloads(images),
+                @"changeCount": @(changeCount),
+            }, nil);
+            return;
         }
-        replyHandler(@{
-            @"images": payloads,
-            @"changeCount": @(pasteboard.changeCount),
-        }, nil);
+
+        // A provider-backed image may advertise capability while the eager
+        // `images` convenience property stays empty. This path runs only from
+        // the explicit Paste image tap, so loading bytes retains user intent.
+        NSArray<NSItemProvider *> *providers = pasteboard.itemProviders ?: @[];
+        cowboyLoadProviderImages(
+            providers,
+            0,
+            [[NSMutableArray alloc] init],
+            ^(NSArray<UIImage *> *providerImages) {
+                replyHandler(@{
+                    @"images": cowboyClipboardImagePayloads(providerImages),
+                    @"changeCount": @(changeCount),
+                }, nil);
+            }
+        );
         return;
     }
 
