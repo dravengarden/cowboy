@@ -1,8 +1,9 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
-  nativeClipboardImageStatus,
   nativeClipboardImageFiles,
+  nativeClipboardImageStatus,
   readNativeClipboardImages,
+  readNativeClipboardText,
   supportsNativeClipboardImages,
 } from "./nativeShell.ts";
 
@@ -32,14 +33,25 @@ Deno.test("image paste stays disabled without both native clipboard bridges", ()
 
 Deno.test("image status probes metadata without reading clipboard payloads", async () => {
   const root = globalThis as typeof globalThis & {
+    __cowboyReadClipboard?: () => Promise<unknown>;
     __cowboyClipboardImageStatus?: () => Promise<unknown>;
     __cowboyReadClipboardImages?: () => Promise<unknown>;
   };
+  const previousTextRead = root.__cowboyReadClipboard;
   const previousStatus = root.__cowboyClipboardImageStatus;
   const previousRead = root.__cowboyReadClipboardImages;
   let payloadReads = 0;
   root.__cowboyClipboardImageStatus = () =>
-    Promise.resolve({ hasImages: true, imageCount: 2, changeCount: 9 });
+    Promise.resolve({
+      hasImages: true,
+      hasText: true,
+      imageCount: 2,
+      changeCount: 9,
+    });
+  root.__cowboyReadClipboard = () => {
+    payloadReads += 1;
+    return Promise.resolve("clipboard text");
+  };
   root.__cowboyReadClipboardImages = () => {
     payloadReads += 1;
     return Promise.resolve({
@@ -56,13 +68,21 @@ Deno.test("image status probes metadata without reading clipboard payloads", asy
     assertEquals(await nativeClipboardImageStatus(), {
       supported: true,
       hasImages: true,
+      hasText: true,
       imageCount: 2,
       changeCount: 9,
     });
     assertEquals(payloadReads, 0);
-    assertEquals((await readNativeClipboardImages()).length, 1);
+    assertEquals(await readNativeClipboardText(), "clipboard text");
     assertEquals(payloadReads, 1);
+    assertEquals((await readNativeClipboardImages()).length, 1);
+    assertEquals(payloadReads, 2);
   } finally {
+    if (previousTextRead === undefined) {
+      delete root.__cowboyReadClipboard;
+    } else {
+      root.__cowboyReadClipboard = previousTextRead;
+    }
     if (previousStatus === undefined) {
       delete root.__cowboyClipboardImageStatus;
     } else {
@@ -87,7 +107,13 @@ Deno.test("legacy native image status defaults an available clipboard to one ima
     Promise.resolve({ hasImages: true, changeCount: 3 });
   root.__cowboyReadClipboardImages = () => Promise.resolve({ images: [] });
   try {
-    assertEquals((await nativeClipboardImageStatus()).imageCount, 1);
+    assertEquals(await nativeClipboardImageStatus(), {
+      supported: true,
+      hasImages: true,
+      hasText: false,
+      imageCount: 1,
+      changeCount: 3,
+    });
   } finally {
     if (previousStatus === undefined) delete root.__cowboyClipboardImageStatus;
     else root.__cowboyClipboardImageStatus = previousStatus;

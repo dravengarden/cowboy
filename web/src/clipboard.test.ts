@@ -21,7 +21,7 @@ Deno.test("mobile paste stays on UIKit's native edit-menu path", () => {
   assertEquals(clipboardSource.includes("readComposerClipboard"), false);
 });
 
-Deno.test("explicit image paste uses only the capability-scoped native bridge", () => {
+Deno.test("explicit dock paste uses only the capability-scoped native bridge", () => {
   assertEquals(
     nativeShellSource.includes("__cowboyClipboardImageStatus"),
     true,
@@ -30,8 +30,15 @@ Deno.test("explicit image paste uses only the capability-scoped native bridge", 
     nativeShellSource.includes("__cowboyReadClipboardImages"),
     true,
   );
+  assertEquals(nativeShellSource.includes("__cowboyReadClipboard"), true);
   assertEquals(nativeShellSource.includes("navigator.clipboard.read("), false);
-  assertEquals(formatActionsSource.includes('title="Paste image"'), true);
+  assertEquals(formatActionsSource.includes('title="Paste"'), true);
+  assertEquals(formatActionsSource.includes("status.hasText"), true);
+  assertEquals(formatActionsSource.includes("readNativeClipboardText"), true);
+  assertEquals(
+    formatActionsSource.includes("insertText(text, selection)"),
+    true,
+  );
   assertEquals(
     formatActionsSource.includes("setInterval(refreshVisible, 1000)"),
     true,

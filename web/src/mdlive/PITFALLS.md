@@ -994,15 +994,16 @@ fullscreen editor:
 - [ ] Paste a photo in the middle of text — the image lands at the caret and the
       caret resumes immediately after the image, before the original trailing
       text; the keyboard stays visible.
-- [ ] With an empty or text-only clipboard, the image Paste accessory is visibly
-      disabled. Copy a photo and it becomes enabled without opening a permission
-      prompt merely because the app focused or resumed (pitfall #59).
-- [ ] In the main composer and Queue/Draft editing, test the image Paste
-      accessory in both compact and fullscreen states: the copied image replaces
-      the exact current range, the keyboard remains open, and neither the button
-      nor `BODY` owns focus after insertion. Repeat with an image supplied by the
-      Screenshot/IME shelf so the provider data/file fallback is exercised
-      (pitfall #59).
+- [ ] With an empty clipboard, the Paste accessory is visibly disabled. Copy
+      text and it becomes enabled, replaces the exact current range, leaves the
+      caret after the inserted text, and keeps the keyboard open. Copy a photo
+      and the same action becomes enabled without reading either payload merely
+      because the app focused or resumed (pitfall #59).
+- [ ] In the main composer and Queue/Draft editing, test Paste in both compact
+      and fullscreen states: copied text or an image replaces the exact current
+      range, the keyboard remains open, and neither the button nor `BODY` owns
+      focus after insertion. Repeat with an image supplied by the Screenshot/IME
+      shelf so the provider data/file fallback is exercised (pitfall #59).
 - [ ] Attach a photo, put the caret below it, press the SOFT-keyboard Backspace
       twice — the image is ringed then deleted, the token-free native textarea
       inherits the exact caret, and the keyboard stays open (pitfall #12;
@@ -1234,22 +1235,26 @@ Desktop Vim + IME checks:
     ids it created; treating every `pending` attachment as part of the completed
     batch drops newer images and leaves orphaned document tokens.
 
-59. **The dedicated Mobile image Paste action is a native capability, not a
+59. **The dedicated Mobile Paste action is a native capability, not a
     browser clipboard menu.** Keep the action fixed immediately after Undo/Redo
     in the shared formatting row, independent of the user's configurable toolbar,
     so main, Queue, and Draft editors expose it in both compact and fullscreen
-    states. The iOS shell probes `UIPasteboard.hasImages` plus loadable/declared
-    `NSItemProvider` image capability, image count, and change count to render the
-    exact enabled state and reserve one inline position per item. The provider
+    states. The iOS shell probes `UIPasteboard.hasStrings`, `hasImages`, plus
+    loadable/declared `NSItemProvider` image capability, image count, and change
+    count to render the exact enabled state without reading a payload. Images
+    take precedence when the pasteboard advertises both forms; otherwise text
+    replaces the captured logical range and leaves a collapsed caret after it.
+    The provider
     fallback is required because some source apps publish copied photos lazily
     without an eager PNG/JPEG representation. On the explicit read, fall back
     from `UIImage` loading to the provider's registered image data and file
     representations; capability without retrievable bytes is not a successful
     paste. Older
-    shells and ordinary browsers must show the action disabled; do not restore a
+    shells that do not advertise the required capability and ordinary browsers
+    must show the action disabled; do not restore a
     privacy-gated `navigator.clipboard.read()` preflight or infer availability
-    from a previous paste. Read and encode image payloads only after the explicit
-    tap.
+    from a previous paste. Read text or encode image payloads only after the
+    explicit tap.
 
     The accessory primitive prevents pointer-down focus transfer. Snapshot the
     editor's logical `{anchor, head}` on that pointer-down. iOS WebKit
@@ -1270,7 +1275,10 @@ Desktop Vim + IME checks:
     While the action is mounted and the document visible, poll only the metadata
     bridge at a restrained interval so the disabled state converges. Neither an
     event nor that poll may read payloads, mutate the document, or refocus the
-    editor.
+    editor. Text paste keeps the same editor mounted. If accessibility activation
+    temporarily focused the button, restore the captured selection synchronously
+    on pointerup before asking the native bridge for text; after the reply,
+    replace that exact range rather than using the current or end position.
 
 60. **Top-anchored Mobile Snackbars must clear the status-bar safe area.** MUI's
     narrow-screen default is `top: 8px`; on an iPhone that places the complete
@@ -1293,3 +1301,13 @@ Desktop Vim + IME checks:
     divider; only expanded two-track docks need the aligned separators. This is
     layout-only: do not move focus ownership, pointer-down
     prevention, or keyboard actions to repair divider alignment.
+
+62. **Touch session rows must not retain synthetic hover or focus paint.** iOS
+    WebKit can synthesize `:hover` after a finger touches a MUI `ListItemButton`;
+    the resulting gray band can remain on a non-selected session and compete
+    with the real selected row. Mark rows activated by a touch pointer and
+    neutralize only their latched hover/focus-visible background. Preserve the
+    primary-tinted selected material, native `:active` feedback, real mouse
+    hover, and keyboard focus. A real mouse enter or keyboard event clears the
+    touch marker. Do not intercept the touch sequence or disable ripple/selection
+    semantics to repair paint.

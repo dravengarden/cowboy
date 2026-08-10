@@ -82,6 +82,8 @@ export interface ComposerEditorHandle {
   // Insert a trigger char (`/` or `@`) at the caret + open the picker — used by
   // the action-row buttons. Mirrors the old `appendToken` + focus behavior.
   insertTrigger: (ch: string) => void;
+  // Replace the current or captured logical range with literal clipboard text.
+  insertText: (text: string, selection?: ComposerEditorSelection) => void;
   // Insert an image at the caret as an inline `![](cowboy-att:id)` token (the host
   // adds the bytes to `attachments[]`; this renders it as an inline thumbnail).
   insertImage: (a: Attachment) => void;
@@ -443,6 +445,25 @@ export const ComposerEditor = forwardRef<
       });
       view.focus();
       startCompletion(view);
+    },
+    insertText: (
+      text: string,
+      capturedSelection?: ComposerEditorSelection,
+    ): void => {
+      const view = cmRef.current?.view;
+      if (!view || text.length === 0) return;
+      const selection = capturedSelection ?? view.state.selection.main;
+      const clamp = (position: number): number =>
+        Math.max(0, Math.min(position, view.state.doc.length));
+      const from = Math.min(clamp(selection.anchor), clamp(selection.head));
+      const to = Math.max(clamp(selection.anchor), clamp(selection.head));
+      const caret = from + text.length;
+      view.dispatch({
+        changes: { from, to, insert: text },
+        selection: { anchor: caret },
+        scrollIntoView: true,
+      });
+      view.focus();
     },
     insertImage: (a: Attachment): void => {
       const view = cmRef.current?.view;

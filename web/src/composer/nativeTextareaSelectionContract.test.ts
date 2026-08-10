@@ -22,9 +22,15 @@ Deno.test("native textarea keeps React rerenders from replacing iOS selection", 
 
 Deno.test("native textarea and CM6 expose the same logical selection handoff", () => {
   assertEquals(textareaSource.includes("getSelection: ()"), true);
-  assertEquals(textareaSource.includes('selectionDirection === "backward"'), true);
+  assertEquals(
+    textareaSource.includes('selectionDirection === "backward"'),
+    true,
+  );
   assertEquals(textareaSource.includes("focusSelection: (selection"), true);
   assertEquals(editorSource.includes("getSelection: ()"), true);
   assertEquals(editorSource.includes("focusSelection: (selection"), true);
   assertEquals(editorSource.includes("scrollIntoView: true"), true);
+  assertEquals(textareaSource.includes("insertText: ("), true);
+  assertEquals(editorSource.includes("insertText: ("), true);
+  assertEquals(textareaSource.includes("replaceNativeSelection"), true);
 });

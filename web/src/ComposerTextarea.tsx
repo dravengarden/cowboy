@@ -23,6 +23,7 @@ import {
   mapNativeSelectionThroughValueChange,
   type NativeTextEdit,
   outdentNativeLines,
+  replaceNativeSelection,
   setNativeHeading,
   toggleNativeCheckbox,
   toggleNativeLinePrefix,
@@ -400,6 +401,19 @@ export const ComposerTextarea = forwardRef<
       onChange(next);
       sync(next, pos);
       if (ta) publishSelection(ta);
+    },
+    insertText: (
+      text: string,
+      capturedSelection?: ComposerEditorSelection,
+    ): void => {
+      if (text.length === 0) return;
+      const ta = inputRef.current;
+      const current = ta?.value ?? value;
+      const anchor = capturedSelection?.anchor ??
+        ta?.selectionStart ?? current.length;
+      const head = capturedSelection?.head ??
+        ta?.selectionEnd ?? anchor;
+      applyTextEdit(replaceNativeSelection(current, anchor, head, text));
     },
     clear: (): void => {
       selectedSlashCommandRef.current = null;

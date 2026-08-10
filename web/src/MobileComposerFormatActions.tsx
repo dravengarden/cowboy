@@ -19,6 +19,7 @@ import { MobileComposerAccessoryButton } from "./MobileComposerAccessoryDock";
 import {
   nativeClipboardImageStatus,
   readNativeClipboardImages,
+  readNativeClipboardText,
 } from "./nativeShell";
 import { haptic } from "./haptic";
 import { useReliableTouchTap } from "./useReliableTouchTap";
@@ -33,7 +34,7 @@ interface MobileComposerFormatActionsProps {
   onCustomize?: () => void;
 }
 
-function MobileClipboardImagePasteButton({
+function MobileClipboardPasteButton({
   editorRef,
   onPasteImages,
 }: Pick<
@@ -42,6 +43,7 @@ function MobileClipboardImagePasteButton({
 >): React.JSX.Element {
   const [availability, setAvailability] = useState({
     hasImages: false,
+    hasText: false,
     imageCount: 0,
   });
   const [reading, setReading] = useState(false);
@@ -55,6 +57,7 @@ function MobileClipboardImagePasteButton({
       if (generation !== refreshGeneration.current) return;
       setAvailability({
         hasImages: status.supported && status.hasImages,
+        hasText: status.supported && status.hasText,
         imageCount: status.supported ? status.imageCount : 0,
       });
     });
@@ -71,10 +74,10 @@ function MobileClipboardImagePasteButton({
     globalThis.addEventListener("cowboy:clipboard-change", refresh);
     globalThis.document?.addEventListener("visibilitychange", refreshVisible);
     // UIPasteboard change notifications are process-local on some iOS releases:
-    // copying an image in another app, an IME clipboard shelf, or the screenshot
+    // copying content in another app, an IME clipboard shelf, or the screenshot
     // UI may not emit any event when Cowboy is already foregrounded. Poll only
-    // the metadata bridge while this action is mounted and visible; image bytes
-    // remain user-gesture gated in readNativeClipboardImages().
+    // the metadata bridge while this action is mounted and visible; text/image
+    // payloads remain user-gesture gated in their explicit read functions.
     const poll = globalThis.setInterval(refreshVisible, 1000);
     return (): void => {
       refreshGeneration.current += 1;
@@ -96,21 +99,35 @@ function MobileClipboardImagePasteButton({
       editorRef.current?.getSelection();
     capturedSelectionRef.current = null;
     if (!selection) return;
+    const pasteImages = availability.hasImages;
+    if (!pasteImages && !availability.hasText) return;
     haptic();
     readingRef.current = true;
     try {
-      // The callback stages inline placeholders and performs the native
-      // textarea -> CM6 focus handoff synchronously. Only then may it invoke the
-      // privacy-gated `read` thunk and await provider bytes.
-      const completion = onPasteImages({
-        expectedCount: Math.max(1, availability.imageCount),
-        selection,
-        read: readNativeClipboardImages,
-      });
-      // Staging must happen before this state update can disable a button that
-      // WebKit briefly made the accessibility focus owner during the tap.
-      setReading(true);
-      await completion;
+      if (pasteImages) {
+        // The callback stages inline placeholders and performs the native
+        // textarea -> CM6 focus handoff synchronously. Only then may it invoke
+        // the privacy-gated `read` thunk and await provider bytes.
+        const completion = onPasteImages({
+          expectedCount: Math.max(1, availability.imageCount),
+          selection,
+          read: readNativeClipboardImages,
+        });
+        // Staging must happen before this state update can disable a button that
+        // WebKit briefly made the accessibility focus owner during the tap.
+        setReading(true);
+        await completion;
+      } else {
+        // Unlike image insertion, text does not replace the editor. If WebKit
+        // projected accessibility focus onto the button, restore the captured
+        // editor range synchronously while pointerup still owns user activation.
+        const editor = editorRef.current;
+        if (!editor) return;
+        if (!editor.hasFocus()) editor.focusSelection(selection);
+        setReading(true);
+        const text = await readNativeClipboardText();
+        editorRef.current?.insertText(text, selection);
+      }
     } finally {
       readingRef.current = false;
       setReading(false);
@@ -124,9 +141,11 @@ function MobileClipboardImagePasteButton({
 
   return (
     <MobileComposerAccessoryButton
-      title="Paste image"
-      disabled={!availability.hasImages || reading}
-      color={availability.hasImages ? "primary" : "default"}
+      title="Paste"
+      disabled={!(availability.hasImages || availability.hasText) || reading}
+      color={availability.hasImages || availability.hasText
+        ? "primary"
+        : "default"}
       onPointerDown={(event): void => {
         // Accessibility activation in iOS WebKit can focus the button even
         // though its pointer default is prevented. Preserve the textarea range
@@ -183,7 +202,7 @@ export function MobileComposerFormatActions({
   return (
     <>
       {commands.slice(0, pasteIndex).map(renderCommand)}
-      <MobileClipboardImagePasteButton
+      <MobileClipboardPasteButton
         editorRef={editorRef}
         onPasteImages={onPasteImages}
       />

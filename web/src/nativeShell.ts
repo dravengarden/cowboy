@@ -10,11 +10,13 @@
 // work-items/archive/2026/07/cowboy-native-keyboard-ime.
 export function isNativeShell(): boolean {
   if (typeof window === "undefined") return false;
-  return (window as { __cowboyNativeShell?: boolean }).__cowboyNativeShell === true;
+  return (window as { __cowboyNativeShell?: boolean }).__cowboyNativeShell ===
+    true;
 }
 
 interface NativeClipboardImageStatusPayload {
   hasImages?: unknown;
+  hasText?: unknown;
   imageCount?: unknown;
   changeCount?: unknown;
 }
@@ -31,6 +33,7 @@ interface NativeClipboardImagesPayload {
 }
 
 interface CowboyNativeClipboardWindow extends Window {
+  __cowboyReadClipboard?: () => Promise<unknown>;
   __cowboyClipboardImageStatus?: () => Promise<unknown>;
   __cowboyReadClipboardImages?: () => Promise<unknown>;
 }
@@ -38,6 +41,7 @@ interface CowboyNativeClipboardWindow extends Window {
 export interface NativeClipboardImageStatus {
   supported: boolean;
   hasImages: boolean;
+  hasText: boolean;
   imageCount: number;
   changeCount: number;
 }
@@ -56,7 +60,9 @@ export function supportsNativeClipboardImages(): boolean {
 }
 
 /** Metadata-only pasteboard probe used to render the exact disabled state. */
-export async function nativeClipboardImageStatus(): Promise<NativeClipboardImageStatus> {
+export async function nativeClipboardImageStatus(): Promise<
+  NativeClipboardImageStatus
+> {
   const root = nativeClipboardWindow();
   const bridge = root.__cowboyClipboardImageStatus;
   if (
@@ -66,6 +72,7 @@ export async function nativeClipboardImageStatus(): Promise<NativeClipboardImage
     return {
       supported: false,
       hasImages: false,
+      hasText: false,
       imageCount: 0,
       changeCount: -1,
     };
@@ -75,6 +82,8 @@ export async function nativeClipboardImageStatus(): Promise<NativeClipboardImage
     return {
       supported: true,
       hasImages: raw?.hasImages === true,
+      hasText: raw?.hasText === true &&
+        typeof root.__cowboyReadClipboard === "function",
       imageCount: typeof raw?.imageCount === "number" &&
           Number.isSafeInteger(raw.imageCount) && raw.imageCount > 0
         ? Math.min(raw.imageCount, 100)
@@ -90,9 +99,22 @@ export async function nativeClipboardImageStatus(): Promise<NativeClipboardImage
     return {
       supported: true,
       hasImages: false,
+      hasText: false,
       imageCount: 0,
       changeCount: -1,
     };
+  }
+}
+
+/** Read plain text only after the user taps the dedicated Paste action. */
+export async function readNativeClipboardText(): Promise<string> {
+  const bridge = nativeClipboardWindow().__cowboyReadClipboard;
+  if (typeof bridge !== "function") return "";
+  try {
+    const value = await bridge();
+    return typeof value === "string" ? value : "";
+  } catch {
+    return "";
   }
 }
 
@@ -109,8 +131,9 @@ export function nativeClipboardImageFiles(raw: unknown): File[] {
     ) return [];
     try {
       const decoded = atob(image.data);
-      const bytes = Uint8Array.from(decoded, (character) =>
-        character.charCodeAt(0)
+      const bytes = Uint8Array.from(
+        decoded,
+        (character) => character.charCodeAt(0),
       );
       const name = typeof image.name === "string" && image.name.trim() !== ""
         ? image.name

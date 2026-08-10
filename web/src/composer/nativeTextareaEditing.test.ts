@@ -6,12 +6,26 @@ import {
   insertNativeLink,
   mapNativeSelectionThroughValueChange,
   outdentNativeLines,
+  replaceNativeSelection,
   setNativeHeading,
   toggleNativeCheckbox,
   toggleNativeLinePrefix,
   toggleNativeWrap,
   wrapNativeSelection,
 } from "./nativeTextareaEditing";
+
+Deno.test("native text paste replaces forward or backward selections", () => {
+  assertEquals(replaceNativeSelection("before after", 7, 12, "middle"), {
+    value: "before middle",
+    from: 13,
+    to: 13,
+  });
+  assertEquals(replaceNativeSelection("before after", 12, 7, "middle"), {
+    value: "before middle",
+    from: 13,
+    to: 13,
+  });
+});
 
 Deno.test("native toolbar wraps a caret or selected text", () => {
   assertEquals(wrapNativeSelection("hello", 5, 5, "**", "**"), {

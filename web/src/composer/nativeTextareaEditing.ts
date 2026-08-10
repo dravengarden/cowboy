@@ -15,6 +15,22 @@ function orderedSelection(
   return a <= b ? [a, b] : [b, a];
 }
 
+/** Replace one native textarea range and leave a collapsed caret after it. */
+export function replaceNativeSelection(
+  value: string,
+  from: number,
+  to: number,
+  insert: string,
+): NativeTextEdit {
+  const [start, end] = orderedSelection(value, from, to);
+  const caret = start + insert.length;
+  return {
+    value: value.slice(0, start) + insert + value.slice(end),
+    from: caret,
+    to: caret,
+  };
+}
+
 /**
  * Map a native textarea selection through an external value replacement.
  *
