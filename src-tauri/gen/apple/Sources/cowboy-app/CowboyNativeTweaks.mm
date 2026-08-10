@@ -11,6 +11,7 @@
 #import <objc/message.h>
 #import <objc/runtime.h>
 #import <UIKit/UIKit.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <WebKit/WebKit.h>
 
 // (1) Remove the iOS keyboard accessory bar (the ∧ ∨ + Done strip above the
@@ -119,17 +120,32 @@ __attribute__((constructor)) static void cowboyStripKeyboardAccessoryBar(void) {
 @interface CowboyClipboardHandler : NSObject <WKScriptMessageHandlerWithReply>
 @end
 
-static BOOL cowboyPasteboardHasLoadableImages(UIPasteboard *pasteboard) {
-    if (pasteboard.hasImages) return YES;
+static NSString *cowboyProviderImageTypeIdentifier(NSItemProvider *provider) {
+    for (NSString *identifier in provider.registeredTypeIdentifiers) {
+        UTType *type = [UTType typeWithIdentifier:identifier];
+        if (type != nil && [type conformsToType:UTTypeImage]) {
+            return identifier;
+        }
+    }
+    return nil;
+}
 
+static NSUInteger cowboyPasteboardImageCount(UIPasteboard *pasteboard) {
+    NSUInteger count = 0;
     // Some apps publish copied photos as lazy NSItemProviders instead of the
     // eager PNG/JPEG representations covered by UIPasteboard.hasImages. Asking
-    // whether a provider can vend UIImage inspects capability only; it does not
-    // load bytes or trigger the cross-app paste affordance.
+    // whether a provider can vend UIImage or declares a UTType image inspects
+    // capability only; it does not load bytes or trigger the paste affordance.
     for (NSItemProvider *provider in pasteboard.itemProviders) {
-        if ([provider canLoadObjectOfClass:UIImage.class]) return YES;
+        if ([provider canLoadObjectOfClass:UIImage.class] ||
+            cowboyProviderImageTypeIdentifier(provider) != nil) {
+            count += 1;
+        }
     }
-    return NO;
+    if (count > 0) return count;
+    if (!pasteboard.hasImages) return 0;
+    NSInteger itemCount = pasteboard.numberOfItems;
+    return itemCount > 0 ? (NSUInteger)itemCount : 1;
 }
 
 static NSArray<NSDictionary *> *cowboyClipboardImagePayloads(
@@ -154,6 +170,88 @@ static NSArray<NSDictionary *> *cowboyClipboardImagePayloads(
     return payloads;
 }
 
+typedef void (^CowboyProviderImageCompletion)(UIImage *_Nullable image);
+
+static void cowboyCompleteProviderImage(
+    UIImage *_Nullable image,
+    CowboyProviderImageCompletion completion
+) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        completion(image);
+    });
+}
+
+static void cowboyLoadProviderImageFile(
+    NSItemProvider *provider,
+    NSString *typeIdentifier,
+    CowboyProviderImageCompletion completion
+) {
+    [provider loadFileRepresentationForTypeIdentifier:typeIdentifier
+                                    completionHandler:^(NSURL *url, NSError *error) {
+        (void)error;
+        NSData *data = url != nil ? [NSData dataWithContentsOfURL:url] : nil;
+        UIImage *image = data != nil ? [UIImage imageWithData:data] : nil;
+        cowboyCompleteProviderImage(image, completion);
+    }];
+}
+
+static void cowboyLoadProviderImageRepresentation(
+    NSItemProvider *provider,
+    NSString *_Nullable typeIdentifier,
+    CowboyProviderImageCompletion completion
+) {
+    if (typeIdentifier == nil) {
+        cowboyCompleteProviderImage(nil, completion);
+        return;
+    }
+    [provider loadDataRepresentationForTypeIdentifier:typeIdentifier
+                                    completionHandler:^(NSData *data, NSError *error) {
+        (void)error;
+        UIImage *image = data != nil ? [UIImage imageWithData:data] : nil;
+        if (image != nil) {
+            cowboyCompleteProviderImage(image, completion);
+            return;
+        }
+        // Screenshot/IME providers sometimes advertise UIImage but vend only a
+        // registered file representation. Read that temporary URL while the
+        // provider completion still owns it.
+        cowboyLoadProviderImageFile(
+            provider,
+            typeIdentifier,
+            completion
+        );
+    }];
+}
+
+static void cowboyLoadProviderImage(
+    NSItemProvider *provider,
+    CowboyProviderImageCompletion completion
+) {
+    NSString *typeIdentifier = cowboyProviderImageTypeIdentifier(provider);
+    if (![provider canLoadObjectOfClass:UIImage.class]) {
+        cowboyLoadProviderImageRepresentation(
+            provider,
+            typeIdentifier,
+            completion
+        );
+        return;
+    }
+    [provider loadObjectOfClass:UIImage.class
+              completionHandler:^(__kindof id<NSItemProviderReading> object,
+                                  NSError *error) {
+        (void)error;
+        if ([object isKindOfClass:UIImage.class]) {
+            cowboyCompleteProviderImage((UIImage *)object, completion);
+            return;
+        }
+        cowboyLoadProviderImageRepresentation(
+            provider,
+            typeIdentifier,
+            completion
+        );
+    }];
+}
+
 static void cowboyLoadProviderImages(
     NSArray<NSItemProvider *> *providers,
     NSUInteger providerIndex,
@@ -166,27 +264,20 @@ static void cowboyLoadProviderImages(
     }
 
     NSItemProvider *provider = providers[providerIndex];
-    if (![provider canLoadObjectOfClass:UIImage.class]) {
+    if (![provider canLoadObjectOfClass:UIImage.class] &&
+        cowboyProviderImageTypeIdentifier(provider) == nil) {
         cowboyLoadProviderImages(providers, providerIndex + 1, images, completion);
         return;
     }
-
-    [provider loadObjectOfClass:UIImage.class
-              completionHandler:^(__kindof id<NSItemProviderReading> object,
-                                  NSError *error) {
-        (void)error;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if ([object isKindOfClass:UIImage.class]) {
-                [images addObject:(UIImage *)object];
-            }
-            cowboyLoadProviderImages(
-                providers,
-                providerIndex + 1,
-                images,
-                completion
-            );
-        });
-    }];
+    cowboyLoadProviderImage(provider, ^(UIImage *image) {
+        if (image != nil) [images addObject:image];
+        cowboyLoadProviderImages(
+            providers,
+            providerIndex + 1,
+            images,
+            completion
+        );
+    });
 }
 
 @implementation CowboyClipboardHandler
@@ -204,8 +295,10 @@ static void cowboyLoadProviderImages(
     }
 
     if ([action isEqualToString:@"image-status"]) {
+        NSUInteger imageCount = cowboyPasteboardImageCount(pasteboard);
         replyHandler(@{
-            @"hasImages": @(cowboyPasteboardHasLoadableImages(pasteboard)),
+            @"hasImages": @(imageCount > 0),
+            @"imageCount": @(imageCount),
             @"changeCount": @(pasteboard.changeCount),
         }, nil);
         return;
