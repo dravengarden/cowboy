@@ -112,11 +112,11 @@ __attribute__((constructor)) static void cowboyStripKeyboardAccessoryBar(void) {
 @end
 
 // (2b) Native clipboard bridge. A remote-origin WKWebView cannot reliably inspect
-// or read image clipboard items through navigator.clipboard. Keep metadata and
-// payload access separate: the Mobile dock probes `hasImages` to render an exact
-// enabled state without fetching bytes, then an explicit Paste image tap asks for
-// PNG payloads. The payload read is the only operation that may show iOS's
-// "Pasted from …" affordance. The legacy text reply remains for older web bundles.
+// or read clipboard items through navigator.clipboard. Keep metadata and payload
+// access separate: the Mobile dock probes image/text capability to render an exact
+// enabled state without fetching content, then an explicit Paste tap asks for the
+// selected payload. A payload read is the only operation that may show iOS's
+// "Pasted from …" affordance. The text reply remains compatible with older web.
 @interface CowboyClipboardHandler : NSObject <WKScriptMessageHandlerWithReply>
 @end
 
@@ -298,6 +298,7 @@ static void cowboyLoadProviderImages(
         NSUInteger imageCount = cowboyPasteboardImageCount(pasteboard);
         replyHandler(@{
             @"hasImages": @(imageCount > 0),
+            @"hasText": @(pasteboard.hasStrings),
             @"imageCount": @(imageCount),
             @"changeCount": @(pasteboard.changeCount),
         }, nil);
@@ -398,8 +399,8 @@ __attribute__((constructor)) static void cowboyInstallHapticBridge(void) {
                         @"window.__cowboyReadClipboard=function(){try{"
                         @"return window.webkit.messageHandlers.cowboyClipboard.postMessage(0)}"
                         @"catch(e){return Promise.reject(e)}};"
-                        // Image availability is a metadata-only probe. Actual PNG
-                        // bytes are read only from the explicit user-facing action.
+                        // Clipboard availability is a metadata-only probe. Actual
+                        // text/PNG payloads are read only from an explicit action.
                         @"window.__cowboyClipboardImageStatus=function(){try{"
                         @"return window.webkit.messageHandlers.cowboyClipboard.postMessage("
                         @"{action:'image-status'})}catch(e){return Promise.reject(e)}};"
