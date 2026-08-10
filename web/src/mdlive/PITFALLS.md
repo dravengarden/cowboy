@@ -555,15 +555,17 @@ here says otherwise.
     fallback even if its transient bottom coordinate misses the edge; genuinely
     floating iPad keyboards remain narrow and continue to overlay. Reconcile the
     guide for a bounded two-second window because iPad interface coordinates may
-    settle after the old 700ms final sample. **The fallback must derive overlap
-    from the keyboard frame's own height, never `parentBottom - frame.minY`:** the
-    latter includes the stale coordinate offset and over-shrinks the WKWebView,
-    recreating a large blank region above an iPad split keyboard. A frame that
-    genuinely reaches the current parent bottom still uses the normal
-    `parentBottom - frame.minY` intersection. Ignore face-up/face-down device
-    motion so ordinary handling cannot reset a visible keyboard. Verify the exact
-    cold sequence: keyboard hidden → rotate → first focus, in both directions,
-    plus split and floating keyboard regressions.
+    settle after the old 700ms final sample. **Both the full-width fallback and a
+    bottom-edge intersection must be bounded by the keyboard rectangle's
+    orientation-invariant short edge.** `convertRect` can swap a stale frame's
+    axes and make its old screen width look like the current vertical depth;
+    trusting either the converted `height` or an unbounded
+    `parentBottom - frame.minY` then shrinks a 1376pt WebView to about 480pt and
+    recreates the large blank region above an iPad split keyboard. An ordinary
+    current-orientation frame still resolves to the same bottom intersection.
+    Ignore face-up/face-down device motion so ordinary handling cannot reset a
+    visible keyboard. Verify the exact cold sequence: keyboard hidden → rotate →
+    first focus, in both directions, plus split and floating keyboard regressions.
 
 26. **Mobile compact and fullscreen composers must preserve the same inline-image
     tokens.** Replacing compact CM6 with a native textarea made long-press text
