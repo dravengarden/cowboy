@@ -184,6 +184,9 @@ export const ComposerTextarea = forwardRef<
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const initialSelectionRef = useRef(initialSelection);
+  const lastSelectionRef = useRef<ComposerEditorSelection>(
+    initialSelection ?? { anchor: value.length, head: value.length },
+  );
   const onSelectionChangeRef = useRef(onSelectionChange);
   onSelectionChangeRef.current = onSelectionChange;
   // Keep the live textarea value out of React's controlled reconciliation. On
@@ -223,8 +226,32 @@ export const ComposerTextarea = forwardRef<
   const commandsRef = useRef(commands);
   commandsRef.current = commands;
 
+  const rememberSelection = (
+    ta: HTMLTextAreaElement,
+  ): ComposerEditorSelection => {
+    const start = ta.selectionStart ?? 0;
+    const end = ta.selectionEnd ?? start;
+    const selection = ta.selectionDirection === "backward"
+      ? { anchor: end, head: start }
+      : { anchor: start, head: end };
+    lastSelectionRef.current = selection;
+    return selection;
+  };
+
+  const rememberedSelection = (
+    ta: HTMLTextAreaElement,
+  ): ComposerEditorSelection => {
+    const clamp = (position: number): number =>
+      Math.max(0, Math.min(position, ta.value.length));
+    return {
+      anchor: clamp(lastSelectionRef.current.anchor),
+      head: clamp(lastSelectionRef.current.head),
+    };
+  };
+
   const publishSelection = (ta: HTMLTextAreaElement): void => {
-    onSelectionChangeRef.current?.(ta.selectionStart !== ta.selectionEnd);
+    const selection = rememberSelection(ta);
+    onSelectionChangeRef.current?.(selection.anchor !== selection.head);
   };
 
   // Deleting the last inline-image token replaces the focused CM6 editor with
@@ -245,6 +272,7 @@ export const ComposerTextarea = forwardRef<
       Math.max(anchor, head),
       anchor > head ? "backward" : "forward",
     );
+    lastSelectionRef.current = { anchor, head };
     onSelectionChangeRef.current?.(anchor !== head);
   }, []);
 
@@ -255,8 +283,13 @@ export const ComposerTextarea = forwardRef<
   } => {
     const ta = inputRef.current;
     const current = ta?.value ?? value;
-    const from = ta?.selectionStart ?? current.length;
-    const to = ta?.selectionEnd ?? from;
+    const selection = ta
+      ? (ta.ownerDocument.activeElement === ta
+        ? rememberSelection(ta)
+        : rememberedSelection(ta))
+      : { anchor: current.length, head: current.length };
+    const from = Math.min(selection.anchor, selection.head);
+    const to = Math.max(selection.anchor, selection.head);
     return { value: current, from, to };
   };
 
@@ -282,6 +315,7 @@ export const ComposerTextarea = forwardRef<
     );
     ta.value = value;
     ta.setSelectionRange(selection.from, selection.to);
+    rememberSelection(ta);
     lastNativeValueRef.current = null;
   }, [value]);
 
@@ -291,6 +325,7 @@ export const ComposerTextarea = forwardRef<
   ): void => {
     ta.value = edit.value;
     ta.setSelectionRange(edit.from, edit.to);
+    rememberSelection(ta);
     lastNativeValueRef.current = edit.value;
   };
 
@@ -358,12 +393,10 @@ export const ComposerTextarea = forwardRef<
     },
     getSelection: (): ComposerEditorSelection => {
       const ta = inputRef.current;
-      if (!ta) return { anchor: 0, head: 0 };
-      const start = ta.selectionStart ?? 0;
-      const end = ta.selectionEnd ?? start;
-      return ta.selectionDirection === "backward"
-        ? { anchor: end, head: start }
-        : { anchor: start, head: end };
+      if (!ta) return lastSelectionRef.current;
+      return ta.ownerDocument.activeElement === ta
+        ? rememberSelection(ta)
+        : rememberedSelection(ta);
     },
     focusSelection: (selection: ComposerEditorSelection): void => {
       const ta = inputRef.current;
@@ -378,6 +411,7 @@ export const ComposerTextarea = forwardRef<
         Math.max(anchor, head),
         anchor > head ? "backward" : "forward",
       );
+      lastSelectionRef.current = { anchor, head };
       publishSelection(ta);
     },
     // The native touch textarea has no Vim state; Escape belongs to its host.
@@ -388,6 +422,7 @@ export const ComposerTextarea = forwardRef<
       ta.focus();
       const end = ta.value.length;
       ta.setSelectionRange(end, end);
+      rememberSelection(ta);
     },
     insertTrigger: (ch: string): void => {
       const ta = inputRef.current;
@@ -687,6 +722,7 @@ export const ComposerTextarea = forwardRef<
             e.target.value,
             e.target.selectionStart ?? e.target.value.length,
           );
+          rememberSelection(e.target as HTMLTextAreaElement);
         }}
         onSelect={(e): void => {
           const ta = e.target as HTMLTextAreaElement;
@@ -711,7 +747,10 @@ export const ComposerTextarea = forwardRef<
             e.preventDefault();
           }
         }}
-        onBlur={(): void => setTrigger(null)}
+        onBlur={(e): void => {
+          rememberSelection(e.currentTarget as HTMLTextAreaElement);
+          setTrigger(null);
+        }}
         onPaste={(e): void => {
           const files = clipboardFiles(e.clipboardData);
           if (files.length > 0 && onPasteFiles) {

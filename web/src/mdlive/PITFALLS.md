@@ -1275,10 +1275,14 @@ Desktop Vim + IME checks:
     While the action is mounted and the document visible, poll only the metadata
     bridge at a restrained interval so the disabled state converges. Neither an
     event nor that poll may read payloads, mutate the document, or refocus the
-    editor. Text paste keeps the same editor mounted. If accessibility activation
-    temporarily focused the button, restore the captured selection synchronously
-    on pointerup before asking the native bridge for text; after the reply,
-    replace that exact range rather than using the current or end position.
+    editor. Text paste keeps the same editor mounted. Cache its last native
+    selection so a click-only accessibility activation cannot replace the
+    logical range with WebKit's post-blur `0...0`. Capture that remembered range
+    and prevent the click's default focus action, then restore it synchronously
+    before asking the native bridge for text. Do not disable the still-focusable
+    Paste button while a text read is pending; guard duplicate reads internally
+    instead. After the reply, replace that exact range rather than using the
+    current or end position.
 
 60. **Top-anchored Mobile Snackbars must clear the status-bar safe area.** MUI's
     narrow-screen default is `top: 8px`; on an iPhone that places the complete

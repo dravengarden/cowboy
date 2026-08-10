@@ -321,6 +321,16 @@ Deno.test("native image and text paste action is shared by every mobile editor s
     true,
   );
   assertEquals(
+    formatActionsSource.includes("event.preventDefault();\n        pasteTap.onClick(event)"),
+    true,
+  );
+  assertEquals(
+    formatActionsSource.includes(
+      "(reading && availability.hasImages)",
+    ),
+    true,
+  );
+  assertEquals(
     textareaSource.includes(
       "attachments.some((attachment) => attachment.pending === true)",
     ),

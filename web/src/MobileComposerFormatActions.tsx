@@ -123,7 +123,7 @@ function MobileClipboardPasteButton({
         // editor range synchronously while pointerup still owns user activation.
         const editor = editorRef.current;
         if (!editor) return;
-        if (!editor.hasFocus()) editor.focusSelection(selection);
+        editor.focusSelection(selection);
         setReading(true);
         const text = await readNativeClipboardText();
         editorRef.current?.insertText(text, selection);
@@ -142,7 +142,10 @@ function MobileClipboardPasteButton({
   return (
     <MobileComposerAccessoryButton
       title="Paste"
-      disabled={!(availability.hasImages || availability.hasText) || reading}
+      disabled={
+        !(availability.hasImages || availability.hasText) ||
+        (reading && availability.hasImages)
+      }
       color={availability.hasImages || availability.hasText
         ? "primary"
         : "default"}
@@ -161,7 +164,15 @@ function MobileClipboardPasteButton({
         capturedSelectionRef.current = null;
         pasteTap.onPointerCancel(event);
       }}
-      onClick={pasteTap.onClick}
+      onClick={(event): void => {
+        // VoiceOver/XCUITest may issue a trusted click without Pointer Events.
+        // Capture the editor's remembered range and cancel the button's default
+        // focus action before it can end the native first-responder session.
+        capturedSelectionRef.current ??=
+          editorRef.current?.getSelection() ?? null;
+        event.preventDefault();
+        pasteTap.onClick(event);
+      }}
     >
       <ContentPaste />
     </MobileComposerAccessoryButton>

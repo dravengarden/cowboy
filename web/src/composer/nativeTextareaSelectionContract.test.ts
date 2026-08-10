@@ -33,4 +33,6 @@ Deno.test("native textarea and CM6 expose the same logical selection handoff", (
   assertEquals(textareaSource.includes("insertText: ("), true);
   assertEquals(editorSource.includes("insertText: ("), true);
   assertEquals(textareaSource.includes("replaceNativeSelection"), true);
+  assertEquals(textareaSource.includes("lastSelectionRef"), true);
+  assertEquals(textareaSource.includes("rememberedSelection(ta)"), true);
 });
