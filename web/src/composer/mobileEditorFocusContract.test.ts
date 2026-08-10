@@ -369,7 +369,7 @@ Deno.test("every focused mobile editor uses two semantic bars with a fixed keybo
   );
 });
 
-Deno.test("every mobile right-edge rail shares one pixel-aligned fixed slot", () => {
+Deno.test("expanded mobile rails align while compact overlay stays undivided", () => {
   assertEquals(
     accessoryDockSource.match(/<MobileComposerFixedActionSlot region=/g)?.length,
     2,
@@ -391,6 +391,10 @@ Deno.test("every mobile right-edge rail shares one pixel-aligned fixed slot", ()
     true,
   );
   assertEquals(accessoryDockSource.includes("px: 0.5"), false);
+  assertEquals(
+    accessoryDockSource.includes("borderLeft: overlay ? 0 : 1"),
+    true,
+  );
   assertEquals(
     composerSource.includes(
       '<MobileComposerFixedActionSlot region="primary" overlay>',

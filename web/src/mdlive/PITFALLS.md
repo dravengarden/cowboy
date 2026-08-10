@@ -1277,5 +1277,8 @@ Desktop Vim + IME checks:
     repeated the same drift by using its own two-pixel right inset. Keep every
     paired trailing action inside the same fixed-slot primitive, pin an overlay
     slot directly to the card edge, and let flowing upper tracks use left padding
-    only. This is layout-only: do not move focus ownership, pointer-down
+    only. The compact overlay is a lone fullscreen control rather than one half
+    of a paired rail, so it keeps the shared 48px geometry but draws no vertical
+    divider; only expanded two-track docks need the aligned separators. This is
+    layout-only: do not move focus ownership, pointer-down
     prevention, or keyboard actions to repair divider alignment.

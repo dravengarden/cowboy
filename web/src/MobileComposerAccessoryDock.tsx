@@ -176,7 +176,7 @@ export function MobileComposerEditingBar({
   );
 }
 
-/** One shared right-edge geometry keeps both track dividers pixel-aligned. */
+/** One shared right-edge geometry; only paired flowing tracks draw a divider. */
 export function MobileComposerFixedActionSlot({
   children,
   region,
@@ -204,7 +204,9 @@ export function MobileComposerFixedActionSlot({
         justifyContent: "center",
         ml: 0.25,
         pr: 0.25,
-        borderLeft: 1,
+        // The compact fullscreen control floats alone over the editor and needs
+        // no rail separator. Expanded two-track docks retain aligned dividers.
+        borderLeft: overlay ? 0 : 1,
         borderColor: (theme) => alpha(theme.palette.divider, 0.22),
         ...(overlay && {
           position: "absolute",
