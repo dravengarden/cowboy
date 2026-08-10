@@ -1,12 +1,17 @@
 import {
   type ComponentPropsWithoutRef,
   forwardRef,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
   useState,
 } from "react";
-import { ComposerEditor, type ComposerEditorHandle } from "../ComposerEditor";
+import {
+  ComposerEditor,
+  type ComposerEditorHandle,
+  type ComposerEditorSelection,
+} from "../ComposerEditor";
 import { ComposerTextarea } from "../ComposerTextarea";
 import { useSurfaceProfile } from "../surface/SurfaceProfile";
 import {
@@ -20,7 +25,9 @@ import {
 } from "./desktopVimMountPolicy";
 import {
   composerEditorMountSeed,
+  nativeDemotionSelection,
   nativePromotionSelection,
+  shouldFocusDemotedEditor,
   shouldFocusPromotedEditor,
   shouldUseNativeTouchEditor,
 } from "./mobileCompactEditorPolicy";
@@ -64,6 +71,36 @@ export const PlatformComposerEditor = forwardRef<
   // the one-shot native -> CM6 transition and reset image-paste selection to 0.
   const committedNativeTouchRef = useRef(nativeTouch);
   const promotionCaretRef = useRef<number | null>(null);
+  const demotionSelectionRef = useRef<ComposerEditorSelection | null>(null);
+  const demotionFocusPendingRef = useRef(false);
+  const childEditorRef = useRef<ComposerEditorHandle | null>(null);
+  const forwardedRefRef = useRef(ref);
+  forwardedRefRef.current = ref;
+  const bindEditorRef = useCallback(
+    (handle: ComposerEditorHandle | null): void => {
+      childEditorRef.current = handle;
+      const forwarded = forwardedRefRef.current;
+      if (typeof forwarded === "function") forwarded(handle);
+      else if (forwarded !== null) forwarded.current = handle;
+    },
+    [],
+  );
+  const surfaceKindRef = useRef(surface.kind);
+  surfaceKindRef.current = surface.kind;
+  const onChangeRef = useRef(props.onChange);
+  onChangeRef.current = props.onChange;
+  const handleChange = useCallback((next: string): void => {
+    const demoting = !committedNativeTouchRef.current &&
+      shouldUseNativeTouchEditor(surfaceKindRef.current, next);
+    if (demoting) {
+      // Capture the post-edit selection before the parent mirrors `next` and
+      // replaces CM6. The refs survive React replay until the native child's
+      // layout commit confirms that it consumed this one-shot handoff.
+      demotionSelectionRef.current = childEditorRef.current?.getSelection() ?? null;
+      demotionFocusPendingRef.current = childEditorRef.current?.hasFocus() ?? false;
+    }
+    onChangeRef.current(next);
+  }, []);
   // The iOS paste-permission alert temporarily owns focus. When the accepted
   // paste event returns, `document.activeElement` can therefore be BODY even
   // though UIKit still considers this one native paste transaction. Preserve
@@ -76,6 +113,22 @@ export const PlatformComposerEditor = forwardRef<
   // The explicit paste intent covers the system permission alert's transient
   // focus loss without weakening ordinary attachment/file-picker semantics.
   const wasNativeTouch = committedNativeTouchRef.current;
+  const demotingToNative = !wasNativeTouch && nativeTouch;
+  const liveDemotionSelection = demotingToNative
+    ? demotionSelectionRef.current ?? childEditorRef.current?.getSelection() ?? null
+    : null;
+  const demotionSelection = nativeDemotionSelection(
+    wasNativeTouch,
+    nativeTouch,
+    liveDemotionSelection,
+  );
+  const focusDemotedEditor = shouldFocusDemotedEditor(
+    wasNativeTouch,
+    nativeTouch,
+    demotingToNative &&
+      (demotionFocusPendingRef.current ||
+        (childEditorRef.current?.hasFocus() ?? false)),
+  );
   const focusPromotedEditor = shouldFocusPromotedEditor(
     wasNativeTouch,
     nativeTouch,
@@ -100,13 +153,19 @@ export const PlatformComposerEditor = forwardRef<
   );
 
   useLayoutEffect(() => {
-    const promoted = committedNativeTouchRef.current && !nativeTouch;
+    const previousNativeTouch = committedNativeTouchRef.current;
+    const promoted = previousNativeTouch && !nativeTouch;
+    const demoted = !previousNativeTouch && nativeTouch;
     committedNativeTouchRef.current = nativeTouch;
     if (promoted) {
       // The child CM6 state has now committed with the supplied selection. Only
       // now is it safe to release the one-shot paste/focus claim.
       promotionCaretRef.current = null;
       pastePromotionPendingRef.current = false;
+    }
+    if (demoted) {
+      demotionSelectionRef.current = null;
+      demotionFocusPendingRef.current = false;
     }
   }, [nativeTouch]);
 
@@ -132,9 +191,9 @@ export const PlatformComposerEditor = forwardRef<
   if (nativeTouch) {
     return (
       <ComposerTextarea
-        ref={ref}
+        ref={bindEditorRef}
         value={touchValue}
-        onChange={props.onChange}
+        onChange={handleChange}
         onSubmit={props.onSubmit}
         sessionId={props.sessionId}
         commands={props.commands}
@@ -143,8 +202,9 @@ export const PlatformComposerEditor = forwardRef<
           ? { placeholder: props.placeholder }
           : {})}
         {...(props.disabled !== undefined ? { disabled: props.disabled } : {})}
-        {...(props.autoFocus !== undefined
-          ? { autoFocus: props.autoFocus }
+        autoFocus={props.autoFocus || focusDemotedEditor}
+        {...(demotionSelection !== undefined
+          ? { initialSelection: demotionSelection }
           : {})}
         {...(props.onEscape ? { onEscape: props.onEscape } : {})}
         {...(props.onSelectionChange
@@ -191,6 +251,7 @@ export const PlatformComposerEditor = forwardRef<
     <ComposerEditor
       {...props}
       value={cmSeedRef.current}
+      onChange={handleChange}
       autoFocus={props.autoFocus || focusPromotedEditor}
       {...(initialSelection !== undefined
         ? { initialSelection }
@@ -199,7 +260,7 @@ export const PlatformComposerEditor = forwardRef<
       // lifetime. The real editor mounts only after Vim can be included in its
       // initial EditorState, so native IME composition never spans reconfigure.
       key={policy.awaitingRuntime ? "vim-loading" : "interactive"}
-      ref={ref}
+      ref={bindEditorRef}
       disabled={props.disabled || policy.awaitingRuntime}
       vim={policy.enableVim}
     />

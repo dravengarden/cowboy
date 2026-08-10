@@ -247,8 +247,14 @@ here says otherwise.
     future keymap-only editing command. **Status: fix verified headlessly through
     the beforeinput channel** (Playwright: a synthetic `deleteContentBackward`
     removes the image after the fix, no-ops before it; keydown path unchanged).
-    **NOT yet device-verified** — the full iOS caret/IME/paste-menu matrix can't be
-    reproduced in emulated Chrome; confirm on the Simulator/device before landing.
+    Deleting the final token also changes the hybrid editor owner from CM6 back
+    to the native textarea. A plain React replacement leaves `BODY` focused and
+    collapses the keyboard. `PlatformComposerEditor` must snapshot the post-delete
+    logical selection and exact CM6 focus owner before mirroring the new text,
+    then give the replacement textarea one commit-time autofocus plus a one-shot
+    selection. Clear that claim only after the native child commits; never retain
+    token-free CM6 or repair the handoff with a timer/rAF refocus. **Status:
+    Simulator-verified through the real software-keyboard deletion path.**
 
 13. **Desktop Vim Normal mode must not toggle `contenteditable` to suppress the
     system IME.** `@replit/codemirror-vim` reacts to composition in Normal mode by
@@ -998,8 +1004,9 @@ fullscreen editor:
       Screenshot/IME shelf so the provider data/file fallback is exercised
       (pitfall #59).
 - [ ] Attach a photo, put the caret below it, press the SOFT-keyboard Backspace
-      twice — the image is ringed then deleted (pitfall #11; keydown-only handlers
-      don't fire on a phone, so this is the beforeinput path).
+      twice — the image is ringed then deleted, the token-free native textarea
+      inherits the exact caret, and the keyboard stays open (pitfall #12;
+      keydown-only handlers don't fire on a phone, so this is the beforeinput path).
 - [ ] Headings/bold/italic/code/list render (inactive line) + reveal (active line).
 
 Desktop (Chrome bridge) covers render + vim + desktop IME, but **cannot** prove

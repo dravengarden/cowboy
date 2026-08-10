@@ -6,8 +6,10 @@ import {
 import {
   composerEditorMountSeed,
   insertNativeInlineImages,
+  nativeDemotionSelection,
   nativePromotionSelection,
   shouldExpandInlineComposer,
+  shouldFocusDemotedEditor,
   shouldFocusPromotedEditor,
   shouldUseNativeTouchEditor,
 } from "./mobileCompactEditorPolicy";
@@ -78,6 +80,10 @@ Deno.test("native to CM6 promotion freezes the token-bearing live document", () 
     composerEditorMountSeed(false, false, promoted, "later React echo"),
     promoted,
   );
+  assertEquals(
+    composerEditorMountSeed(false, true, promoted, "text after image deletion"),
+    "text after image deletion",
+  );
 });
 
 Deno.test("only a focused native promotion inherits the software keyboard", () => {
@@ -90,6 +96,20 @@ Deno.test("an accepted iOS image paste survives permission-alert focus loss", ()
   assertEquals(shouldFocusPromotedEditor(true, false, false, true), true);
   assertEquals(shouldFocusPromotedEditor(false, false, false, true), false);
   assertEquals(shouldFocusPromotedEditor(true, true, false, true), false);
+});
+
+Deno.test("focused CM6 demotion hands focus and selection to the native editor", () => {
+  assertEquals(shouldFocusDemotedEditor(false, true, true), true);
+  assertEquals(shouldFocusDemotedEditor(false, true, false), false);
+  assertEquals(shouldFocusDemotedEditor(true, true, true), false);
+  assertEquals(shouldFocusDemotedEditor(false, false, true), false);
+
+  const backward = { anchor: 8, head: 3 };
+  assertEquals(nativeDemotionSelection(false, true, backward), backward);
+  // A replayed render retains the claim until the transition commits.
+  assertEquals(nativeDemotionSelection(false, true, backward), backward);
+  assertEquals(nativeDemotionSelection(true, true, backward), undefined);
+  assertEquals(nativeDemotionSelection(false, false, backward), undefined);
 });
 
 Deno.test("native image promotion carries the caret to the end of the pasted image", () => {

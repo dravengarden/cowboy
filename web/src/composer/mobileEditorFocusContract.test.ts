@@ -18,6 +18,9 @@ const appSource = await Deno.readTextFile(
 const fullscreenComposerSource = await Deno.readTextFile(
   new URL("../FullscreenComposer.tsx", import.meta.url),
 );
+const platformEditorSource = await Deno.readTextFile(
+  new URL("./PlatformComposerEditor.tsx", import.meta.url),
+);
 const accessoryDockSource = await Deno.readTextFile(
   new URL("../MobileComposerAccessoryDock.tsx", import.meta.url),
 );
@@ -303,6 +306,39 @@ Deno.test("native image paste action is shared by every mobile editor surface", 
   );
   assertEquals(
     textareaSource.includes("ta.focus();\n        writeNativeEdit(ta"),
+    true,
+  );
+});
+
+Deno.test("deleting the last inline image transfers CM6 focus to native text", () => {
+  assertEquals(
+    platformEditorSource.includes(
+      "demotionSelectionRef.current = childEditorRef.current?.getSelection()",
+    ),
+    true,
+  );
+  assertEquals(
+    platformEditorSource.includes(
+      "demotionFocusPendingRef.current = childEditorRef.current?.hasFocus()",
+    ),
+    true,
+  );
+  assertEquals(
+    platformEditorSource.includes(
+      "autoFocus={props.autoFocus || focusDemotedEditor}",
+    ),
+    true,
+  );
+  assertEquals(
+    platformEditorSource.includes("initialSelection: demotionSelection"),
+    true,
+  );
+  assertEquals(
+    textareaSource.includes("const initialSelectionRef = useRef(initialSelection)"),
+    true,
+  );
+  assertEquals(
+    textareaSource.includes("ta.setSelectionRange(\n      Math.min(anchor, head)"),
     true,
   );
 });

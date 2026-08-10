@@ -67,6 +67,8 @@ export interface ComposerEditorSelection {
 
 export interface ComposerEditorHandle {
   focus: () => void;
+  /** Whether this exact editor currently owns browser/native input focus. */
+  hasFocus: () => boolean;
   /** Read the logical selection before replacing one editor surface with another. */
   getSelection: () => ComposerEditorSelection;
   /** Focus this editor and restore a selection captured from the replaced surface. */
@@ -396,6 +398,7 @@ export const ComposerEditor = forwardRef<
 
   useImperativeHandle(ref, () => ({
     focus: (): void => cmRef.current?.view?.focus(),
+    hasFocus: (): boolean => cmRef.current?.view?.hasFocus ?? false,
     getSelection: (): ComposerEditorSelection => {
       const selection = cmRef.current?.view?.state.selection.main;
       return selection

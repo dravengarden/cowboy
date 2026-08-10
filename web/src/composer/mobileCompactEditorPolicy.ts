@@ -77,6 +77,30 @@ export function shouldFocusPromotedEditor(
     (activeElementIsTextarea || pastePromotionPending);
 }
 
+/** A focused CM6 editor replaced after its final image token is deleted must
+ * hand the existing UIKit keyboard session to the native textarea during that
+ * same commit. An unfocused/programmatic document change must not summon it. */
+export function shouldFocusDemotedEditor(
+  committedNative: boolean,
+  nativeNow: boolean,
+  cmHadFocus: boolean,
+): boolean {
+  return !committedNative && nativeNow && cmHadFocus;
+}
+
+/** Preserve a forward or backward logical selection across the CM6 -> native
+ * replacement. Keep the claim readable through replayed renders until the
+ * transition's layout effect confirms that the textarea committed. */
+export function nativeDemotionSelection(
+  committedNative: boolean,
+  nativeNow: boolean,
+  selection: { anchor: number; head: number } | null,
+): { anchor: number; head: number } | undefined {
+  return !committedNative && nativeNow && selection !== null
+    ? selection
+    : undefined;
+}
+
 /** Keep the native caret claim available for every render attempt until the
  * native -> CM6 transition actually commits. React may replay or supersede a
  * render before commit; consuming this value during render strands CM6 at its

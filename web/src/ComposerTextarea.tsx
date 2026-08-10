@@ -140,6 +140,8 @@ export const ComposerTextarea = forwardRef<
     placeholder?: string;
     disabled?: boolean;
     autoFocus?: boolean;
+    /** One-shot CM6 -> native selection restored during the replacement commit. */
+    initialSelection?: ComposerEditorSelection;
     onEscape?: () => boolean;
     onPasteFiles?: (files: File[]) => void;
     /** Synchronous native -> CM6 handoff point for an inline-image insert. */
@@ -167,6 +169,7 @@ export const ComposerTextarea = forwardRef<
     placeholder,
     disabled,
     autoFocus = false,
+    initialSelection,
     onEscape,
     onPasteFiles,
     onInlineImageInsertion,
@@ -179,6 +182,9 @@ export const ComposerTextarea = forwardRef<
 ): React.JSX.Element {
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const initialSelectionRef = useRef(initialSelection);
+  const onSelectionChangeRef = useRef(onSelectionChange);
+  onSelectionChangeRef.current = onSelectionChange;
   // Keep the live textarea value out of React's controlled reconciliation. On
   // iOS, a long-press changes the native selection first and `onSelect` may
   // re-render the parent before UIKit presents Paste/Select. Rebinding `value`
@@ -217,8 +223,29 @@ export const ComposerTextarea = forwardRef<
   commandsRef.current = commands;
 
   const publishSelection = (ta: HTMLTextAreaElement): void => {
-    onSelectionChange?.(ta.selectionStart !== ta.selectionEnd);
+    onSelectionChangeRef.current?.(ta.selectionStart !== ta.selectionEnd);
   };
+
+  // Deleting the last inline-image token replaces the focused CM6 editor with
+  // this textarea. React's autoFocus transfers the existing UIKit keyboard in
+  // the same commit; restore the logical selection without issuing a second
+  // focus write. A timer/rAF here runs after the first-responder transaction and
+  // lets the software keyboard collapse.
+  useLayoutEffect(() => {
+    const ta = inputRef.current;
+    const selection = initialSelectionRef.current;
+    if (!ta || selection === undefined) return;
+    const clamp = (position: number): number =>
+      Math.max(0, Math.min(position, ta.value.length));
+    const anchor = clamp(selection.anchor);
+    const head = clamp(selection.head);
+    ta.setSelectionRange(
+      Math.min(anchor, head),
+      Math.max(anchor, head),
+      anchor > head ? "backward" : "forward",
+    );
+    onSelectionChangeRef.current?.(anchor !== head);
+  }, []);
 
   const currentTextSelection = (): {
     value: string;
@@ -324,6 +351,10 @@ export const ComposerTextarea = forwardRef<
 
   useImperativeHandle(ref, () => ({
     focus: (): void => inputRef.current?.focus(),
+    hasFocus: (): boolean => {
+      const ta = inputRef.current;
+      return ta !== null && ta.ownerDocument.activeElement === ta;
+    },
     getSelection: (): ComposerEditorSelection => {
       const ta = inputRef.current;
       if (!ta) return { anchor: 0, head: 0 };
