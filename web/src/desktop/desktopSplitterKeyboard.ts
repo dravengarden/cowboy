@@ -67,4 +67,3 @@ export function adjacentDesktopSplitter(
   const currentIndex = index < 0 ? 0 : index;
   return visible[(currentIndex + delta + visible.length) % visible.length] ?? null;
 }
-
