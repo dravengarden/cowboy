@@ -27,6 +27,21 @@ const accessoryDockSource = await Deno.readTextFile(
 const formatActionsSource = await Deno.readTextFile(
   new URL("../MobileComposerFormatActions.tsx", import.meta.url),
 );
+const settingsPointerDown = appSource.lastIndexOf(
+  "settingsTap.onPointerDown",
+);
+const mobileSettingsStart = appSource.lastIndexOf(
+  "<IconButton",
+  settingsPointerDown,
+);
+const mobileSettingsEnd = appSource.indexOf(
+  "</IconButton>",
+  settingsPointerDown,
+);
+const mobileSettingsSource = appSource.slice(
+  mobileSettingsStart,
+  mobileSettingsEnd,
+);
 
 Deno.test("mobile composer promotion requires a visible keyboard and real editor focus", () => {
   assertEquals(
@@ -60,12 +75,46 @@ Deno.test("mobile session navigation stays tappable after keyboard dismissal", (
 });
 
 Deno.test("mobile settings commits touch taps when Safari drops synthetic click", () => {
-  const mobileSettings = appSource.slice(
-    appSource.lastIndexOf("settingsTap.onPointerDown"),
+  assertEquals(
+    mobileSettingsStart >= 0 && mobileSettingsEnd > mobileSettingsStart,
+    true,
   );
-  assertEquals(mobileSettings.includes("settingsTap.onPointerUp"), true);
-  assertEquals(mobileSettings.includes("settingsTap.onPointerCancel"), true);
-  assertEquals(mobileSettings.includes("settingsTap.onClick"), true);
+  assertEquals(
+    mobileSettingsSource.includes("settingsTap.onPointerUp"),
+    true,
+  );
+  assertEquals(
+    mobileSettingsSource.includes("settingsTap.onPointerCancel"),
+    true,
+  );
+  assertEquals(mobileSettingsSource.includes("settingsTap.onClick"), true);
+});
+
+Deno.test("mobile settings does not retain synthetic touch hover paint", () => {
+  assertEquals(
+    mobileSettingsSource.includes(
+      'event.currentTarget.dataset.touchActivated = "true"',
+    ),
+    true,
+  );
+  assertEquals(
+    mobileSettingsSource.includes(
+      "&[data-touch-activated='true']:hover, &[data-touch-activated='true'].Mui-focusVisible",
+    ),
+    true,
+  );
+  assertEquals(
+    mobileSettingsSource.match(
+      /delete event\.currentTarget\.dataset\.touchActivated/g,
+    )?.length,
+    3,
+  );
+  assertEquals(
+    mobileSettingsSource.includes(
+      "&[data-touch-activated='true']:active",
+    ),
+    true,
+  );
 });
 
 Deno.test("Machine npm updates survive a swallowed Safari click", () => {
