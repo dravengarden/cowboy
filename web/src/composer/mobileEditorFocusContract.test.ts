@@ -358,7 +358,7 @@ Deno.test("every focused mobile editor uses two semantic bars with a fixed keybo
   );
 });
 
-Deno.test("both mobile action tracks share one pixel-aligned fixed slot", () => {
+Deno.test("every mobile right-edge rail shares one pixel-aligned fixed slot", () => {
   assertEquals(
     accessoryDockSource.match(/<MobileComposerFixedActionSlot region=/g)?.length,
     2,
@@ -380,6 +380,18 @@ Deno.test("both mobile action tracks share one pixel-aligned fixed slot", () => 
     true,
   );
   assertEquals(accessoryDockSource.includes("px: 0.5"), false);
+  assertEquals(
+    composerSource.includes(
+      '<MobileComposerFixedActionSlot region="primary" overlay>',
+    ),
+    true,
+  );
+  assertEquals(
+    accessoryDockSource.includes(
+      'data-mobile-composer-utility-rail={overlay ? "" : undefined}',
+    ),
+    true,
+  );
 });
 
 Deno.test("fullscreen delivery closes only after authoritative success", () => {
@@ -589,7 +601,7 @@ Deno.test("pending Force push confirmation keeps the native editor and anchor mo
 
 Deno.test("mobile keyboard dismissal belongs to the fixed lower editing rail", () => {
   const utilityStart = composerSource.indexOf(
-    "data-mobile-composer-utility-rail",
+    '<MobileComposerFixedActionSlot region="primary" overlay>',
   );
   const utilityEnd = composerSource.indexOf(
     '<Tooltip title={expanded ? "Collapse editor"',

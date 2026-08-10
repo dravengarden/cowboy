@@ -177,16 +177,20 @@ export function MobileComposerEditingBar({
 }
 
 /** One shared right-edge geometry keeps both track dividers pixel-aligned. */
-function MobileComposerFixedActionSlot({
+export function MobileComposerFixedActionSlot({
   children,
   region,
+  overlay = false,
 }: {
   children: ReactNode;
   region: "primary" | "editing";
+  /** Pin the shared slot over the compact composer instead of flowing in a track. */
+  overlay?: boolean;
 }): React.JSX.Element {
   return (
     <Box
       data-mobile-composer-fixed-slot
+      data-mobile-composer-utility-rail={overlay ? "" : undefined}
       data-mobile-composer-primary-actions={region === "primary"
         ? ""
         : undefined}
@@ -202,6 +206,16 @@ function MobileComposerFixedActionSlot({
         pr: 0.25,
         borderLeft: 1,
         borderColor: (theme) => alpha(theme.palette.divider, 0.22),
+        ...(overlay && {
+          position: "absolute",
+          top: 2,
+          right: 0,
+          zIndex: 2,
+          // A flowing slot needs this gap after scrollable actions. An absolute
+          // slot is already pinned to the card edge, so the margin would shift
+          // its divider away from the editing track below.
+          ml: 0,
+        }),
       }}
     >
       {children}

@@ -104,6 +104,7 @@ import {
   MobileComposerAccessoryButton,
   MobileComposerAccessoryDock,
   MobileComposerEditingBar,
+  MobileComposerFixedActionSlot,
 } from "./MobileComposerAccessoryDock";
 import { MessagePreview } from "./MessagePreview";
 import { useTouchComposer } from "./ComposerTextarea";
@@ -2148,17 +2149,7 @@ export function ComposerWorkspace({
             Dropped in column mode — the editor already fills the column. */}
         {!column && (touchInput
           ? (
-            <Stack
-              data-mobile-composer-utility-rail
-              spacing={0.125}
-              sx={{
-                position: "absolute",
-                top: 2,
-                right: 2,
-                zIndex: 2,
-                alignItems: "center",
-              }}
-            >
+            <MobileComposerFixedActionSlot region="primary" overlay>
               <Tooltip title="Fullscreen editor">
                 <IconButton
                   size="small"
@@ -2184,7 +2175,7 @@ export function ComposerWorkspace({
                   <OpenInFull />
                 </IconButton>
               </Tooltip>
-            </Stack>
+            </MobileComposerFixedActionSlot>
           )
           : (
             <Tooltip title={expanded ? "Collapse editor" : "Expand editor"}>

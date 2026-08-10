@@ -1254,11 +1254,13 @@ Desktop Vim + IME checks:
     acknowledgement window. This is distinct from a Popover that lost its anchor:
     the Snackbar is healthy and needs safe placement, not focus or anchor repair.
 
-61. **Both Mobile accessory tracks share one right-edge fixed-slot geometry.**
+61. **Every paired Mobile action rail shares one right-edge fixed-slot geometry.**
     The upper message track once used symmetric horizontal padding while the
     keyboard-nearest editing track ran to the panel edge. Their otherwise
     identical 48px trailing actions therefore drew vertical dividers several
-    pixels apart. Keep both trailing actions inside the same fixed-slot primitive
-    and let the upper track use left padding only. This is layout-only: do not
-    move focus ownership, pointer-down prevention, or keyboard actions to repair
-    divider alignment.
+    pixels apart. The compact composer's absolutely positioned fullscreen action
+    repeated the same drift by using its own two-pixel right inset. Keep every
+    paired trailing action inside the same fixed-slot primitive, pin an overlay
+    slot directly to the card edge, and let flowing upper tracks use left padding
+    only. This is layout-only: do not move focus ownership, pointer-down
+    prevention, or keyboard actions to repair divider alignment.
