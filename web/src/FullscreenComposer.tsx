@@ -338,18 +338,18 @@ export function FullscreenComposer({
                 <Bolt />
               </MobileComposerAccessoryButton>
             )}
+            {showCollapse && (
+              <MobileComposerAccessoryButton
+                title={submitLabel}
+                color="primary"
+                disabled={!sendable}
+                onClick={act(onSubmit)}
+              >
+                {submitIcon ?? <Send />}
+              </MobileComposerAccessoryButton>
+            )}
           </>
         }
-        primaryCompanion={showCollapse
-          ? (
-            <MobileComposerAccessoryButton
-              title="Collapse editor"
-              onClick={act(onCollapse)}
-            >
-              <CloseFullscreen />
-            </MobileComposerAccessoryButton>
-          )
-          : null}
         fixedAction={
           <MobileComposerAccessoryButton
             title="Hide keyboard"
@@ -362,10 +362,10 @@ export function FullscreenComposer({
             <KeyboardHide />
           </MobileComposerAccessoryButton>
         }
-        primaryLabel={submitLabel}
-        primaryDisabled={!sendable}
-        onPrimary={act(onSubmit)}
-        primaryIcon={submitIcon ??
+        primaryLabel={showCollapse ? "Collapse editor" : submitLabel}
+        primaryDisabled={showCollapse ? false : !sendable}
+        onPrimary={showCollapse ? act(onCollapse) : act(onSubmit)}
+        primaryIcon={showCollapse ? <CloseFullscreen /> : submitIcon ??
           (submitLabel === "Done editing" ? <Check /> : <Send />)}
       />
 

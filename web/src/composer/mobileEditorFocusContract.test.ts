@@ -296,9 +296,11 @@ Deno.test("native image paste action is shared by every mobile editor surface", 
   );
 });
 
-Deno.test("fullscreen collapse forms a right-edge group with the primary action", () => {
+Deno.test("fullscreen keeps view chrome fixed right and send with message actions", () => {
   assertEquals(
-    fullscreenComposerSource.includes("primaryCompanion={showCollapse"),
+    fullscreenComposerSource.includes(
+      'title={submitLabel}\n                color="primary"',
+    ),
     true,
   );
   assertEquals(
@@ -306,7 +308,23 @@ Deno.test("fullscreen collapse forms a right-edge group with the primary action"
     true,
   );
   assertEquals(
-    accessoryDockSource.includes("{primaryCompanion}\n          <Tooltip title={primaryLabel}>"),
+    fullscreenComposerSource.includes(
+      'primaryLabel={showCollapse ? "Collapse editor" : submitLabel}',
+    ),
+    true,
+  );
+  assertEquals(accessoryDockSource.includes("primaryCompanion"), false);
+});
+
+Deno.test("move-draft undo toast clears the iOS status safe area", () => {
+  assertEquals(
+    composerSource.includes(
+      'xs: "calc(env(safe-area-inset-top, 0px) + 8px)"',
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes('width: { xs: "calc(100% - 16px)", sm: "auto" }'),
     true,
   );
 });

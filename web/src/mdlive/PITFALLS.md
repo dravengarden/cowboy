@@ -737,12 +737,13 @@ here says otherwise.
     Every pointer-operated accessory button prevents its pointer-down default so
     MUI cannot take focus from the editor before click; click semantics and
     keyboard accessibility remain intact. Fullscreen Collapse is the one action
-    that replaces the focused editor. Keep it in the right-edge primary group,
-    immediately before Send/Queue, rather than stranded at the end of the left
-    utility group by the dock's flexible spacer. Synchronously mount the compact
-    editor and transfer focus within the originating gesture. Never replace
-    either rule with a timer, which runs after UIKit has ended the keyboard
-    transaction.
+    that replaces the focused editor, so it alone owns the non-scrolling
+    right-edge primary slot. Send/Queue remains the final message action before
+    the flexible spacer; grouping it with Collapse falsely makes delivery look
+    like view chrome and wastes the useful center slot. Synchronously mount the
+    compact editor and transfer focus within the originating gesture. Never
+    replace either rule with a timer, which runs after UIKit has ended the
+    keyboard transaction.
 
 34. **Mobile scrollback batches are measured in visible rows, not cursor
     pages.** History cursors are byte bounded, so a tool-heavy page may render
@@ -1234,5 +1235,18 @@ Desktop Vim + IME checks:
     insert the full image batch against that range. The native textarea must own
     focus again before its synchronous value/selection write and CM6 promotion,
     so the open software keyboard transfers with the caret. Pasteboard-change,
-    app-resume, visibility, and window-focus notifications may refresh metadata;
-    none may read payloads, mutate the document, or refocus the editor.
+    app-resume, visibility, and window-focus notifications refresh metadata, but
+    iOS pasteboard notifications can be process-local: an image copied in another
+    app, an IME clipboard shelf, or Screenshot may produce no foreground event.
+    While the action is mounted and the document visible, poll only the metadata
+    bridge at a restrained interval so the disabled state converges. Neither an
+    event nor that poll may read payloads, mutate the document, or refocus the
+    editor.
+
+60. **Top-anchored Mobile Snackbars must clear the status-bar safe area.** MUI's
+    narrow-screen default is `top: 8px`; on an iPhone that places the complete
+    Move-draft Undo toast behind the status bar and leaves only a blank bottom
+    shadow visible. Offset the toast by `safe-area-inset-top`, constrain it to the
+    viewport's 8px horizontal gutters, and keep Undo available for the full
+    acknowledgement window. This is distinct from a Popover that lost its anchor:
+    the Snackbar is healthy and needs safe placement, not focus or anchor repair.

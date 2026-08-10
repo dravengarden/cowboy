@@ -3132,6 +3132,21 @@ export function ComposerWorkspace({
           if (reason !== "clickaway") setMoveUndo(null);
         }}
         anchorOrigin={{ vertical: "top", horizontal: "center" }}
+        // MUI's default Mobile top=8 sits entirely behind an iPhone status bar
+        // (only its bottom shadow remains visible). Keep the Undo toast inside
+        // both safe-area and horizontal viewport bounds.
+        sx={{
+          top: {
+            xs: "calc(env(safe-area-inset-top, 0px) + 8px)",
+            sm: 24,
+          },
+          width: { xs: "calc(100% - 16px)", sm: "auto" },
+          maxWidth: { xs: "calc(100% - 16px)", sm: "100%" },
+          "& .MuiSnackbarContent-root": {
+            width: { xs: "100%", sm: "auto" },
+            minWidth: { xs: 0, sm: 288 },
+          },
+        }}
         message={moveUndo ? `Moved to ${moveUndo.toTitle}` : ""}
         action={
           <Button

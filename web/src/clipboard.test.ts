@@ -33,7 +33,13 @@ Deno.test("explicit image paste uses only the capability-scoped native bridge", 
   assertEquals(nativeShellSource.includes("navigator.clipboard.read("), false);
   assertEquals(formatActionsSource.includes('title="Paste image"'), true);
   assertEquals(
-    formatActionsSource.includes("const selection = editorRef.current?.getSelection()"),
+    formatActionsSource.includes("setInterval(refreshVisible, 1000)"),
+    true,
+  );
+  assertEquals(
+    formatActionsSource.includes(
+      "const selection = editorRef.current?.getSelection()",
+    ),
     true,
   );
 });

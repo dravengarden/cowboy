@@ -61,8 +61,15 @@ function MobileClipboardImagePasteButton({
     globalThis.addEventListener("cowboy:native-resume", refresh);
     globalThis.addEventListener("cowboy:clipboard-change", refresh);
     globalThis.document?.addEventListener("visibilitychange", refreshVisible);
+    // UIPasteboard change notifications are process-local on some iOS releases:
+    // copying an image in another app, an IME clipboard shelf, or the screenshot
+    // UI may not emit any event when Cowboy is already foregrounded. Poll only
+    // the metadata bridge while this action is mounted and visible; image bytes
+    // remain user-gesture gated in readNativeClipboardImages().
+    const poll = globalThis.setInterval(refreshVisible, 1000);
     return (): void => {
       refreshGeneration.current += 1;
+      globalThis.clearInterval(poll);
       globalThis.removeEventListener("focus", refresh);
       globalThis.removeEventListener("pageshow", refresh);
       globalThis.removeEventListener("cowboy:native-resume", refresh);
