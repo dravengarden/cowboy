@@ -2,6 +2,7 @@ import type { MouseEventHandler, PointerEventHandler, ReactNode } from "react";
 import { alpha, Box, IconButton, Stack, Tooltip } from "@mui/material";
 import { mobileComposerPanelFrameSx } from "./mobileComposerPrimitives";
 import { NetworkIconButton } from "./NetworkActionFeedback";
+import { useReliableTouchTap } from "./useReliableTouchTap";
 
 /** A two-track keyboard-adjacent command surface for every focused Mobile editor. */
 export function MobileComposerAccessoryDock({
@@ -26,6 +27,8 @@ export function MobileComposerAccessoryDock({
   /** Nest the two tracks inside an existing composer card. */
   embedded?: boolean;
 }): React.JSX.Element {
+  const primaryTap = useReliableTouchTap<HTMLButtonElement>(onPrimary);
+
   return (
     <Box
       data-mobile-composer-accessory
@@ -102,8 +105,14 @@ export function MobileComposerAccessoryDock({
               <IconButton
                 aria-label={primaryLabel.toLowerCase()}
                 disabled={primaryDisabled}
-                onPointerDown={(event): void => event.preventDefault()}
-                onClick={onPrimary}
+                onPointerDown={(event): void => {
+                  event.preventDefault();
+                  primaryTap.onPointerDown(event);
+                }}
+                onPointerMove={primaryTap.onPointerMove}
+                onPointerUp={primaryTap.onPointerUp}
+                onPointerCancel={primaryTap.onPointerCancel}
+                onClick={primaryTap.onClick}
                 sx={{
                   width: 44,
                   height: 44,

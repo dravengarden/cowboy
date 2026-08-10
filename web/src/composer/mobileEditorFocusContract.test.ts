@@ -296,8 +296,8 @@ Deno.test("native image paste action is shared by every mobile editor surface", 
     true,
   );
   assertEquals(
-    accessoryDockSource.includes(
-      "onPointerDown={(event): void => event.preventDefault()}",
+    /event\.preventDefault\(\);\s+onPointerDown\?\.\(event\);/.test(
+      accessoryDockSource,
     ),
     true,
   );
@@ -325,6 +325,35 @@ Deno.test("fullscreen keeps view chrome fixed right and send with message action
     true,
   );
   assertEquals(accessoryDockSource.includes("primaryCompanion"), false);
+});
+
+Deno.test("fullscreen primary action survives a swallowed Safari click", () => {
+  const primaryStart = accessoryDockSource.indexOf(
+    "aria-label={primaryLabel.toLowerCase()}",
+  );
+  const primaryEnd = accessoryDockSource.indexOf(
+    "</IconButton>",
+    primaryStart,
+  );
+  const primaryButton = accessoryDockSource.slice(primaryStart, primaryEnd);
+
+  assertEquals(primaryStart >= 0 && primaryEnd > primaryStart, true);
+  assertEquals(
+    accessoryDockSource.includes(
+      "useReliableTouchTap<HTMLButtonElement>(onPrimary)",
+    ),
+    true,
+  );
+  assertEquals(
+    primaryButton.includes(
+      "event.preventDefault();\n                  primaryTap.onPointerDown(event);",
+    ),
+    true,
+  );
+  assertEquals(primaryButton.includes("primaryTap.onPointerMove"), true);
+  assertEquals(primaryButton.includes("primaryTap.onPointerUp"), true);
+  assertEquals(primaryButton.includes("primaryTap.onPointerCancel"), true);
+  assertEquals(primaryButton.includes("primaryTap.onClick"), true);
 });
 
 Deno.test("move-draft undo toast clears the iOS status safe area", () => {

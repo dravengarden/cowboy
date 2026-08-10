@@ -735,12 +735,16 @@ here says otherwise.
     state. Toolbar changes must not add focus retries, controlled editor state,
     editor remounts, or a second floating compact-composer toolbar.
     Every pointer-operated accessory button prevents its pointer-down default so
-    MUI cannot take focus from the editor before click; click semantics and
-    keyboard accessibility remain intact. Fullscreen Collapse is the one action
-    that replaces the focused editor, so it alone owns the non-scrolling
-    right-edge primary slot. Send/Queue remains the final message action before
-    the flexible spacer; grouping it with Collapse falsely makes delivery look
-    like view chrome and wastes the useful center slot. Synchronously mount the
+    MUI cannot take focus from the editor before activation; click semantics and
+    keyboard accessibility remain intact. The fixed primary slot must also
+    commit a stationary touch on reliable `pointerup` and suppress the duplicate
+    compatibility click: iOS WebKit can otherwise swallow the first Collapse or
+    pending-edit completion tap during a focus/keyboard transition. Fullscreen
+    Collapse is the one action that replaces the focused editor, so it alone
+    owns the non-scrolling right-edge primary slot. Send/Queue remains the final
+    message action before the flexible spacer; grouping it with Collapse falsely
+    makes delivery look like view chrome and wastes the useful center slot.
+    Synchronously mount the
     compact editor and transfer focus within the originating gesture. Never
     replace either rule with a timer, which runs after UIKit has ended the
     keyboard transaction.
