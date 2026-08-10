@@ -39,11 +39,8 @@ pub enum SpawnMode {
 
 #[derive(Debug, Clone)]
 pub struct MachineBrokerArgs {
-    /// Canonical endpoint advertised to newly launched workers.
+    /// Stable endpoint advertised to workers and the controller.
     pub socket: PathBuf,
-    /// Older endpoints kept temporarily so detached workers can reconnect
-    /// across a socket-name migration without interrupting their sessions.
-    pub compatibility_sockets: Vec<PathBuf>,
     pub worker_command: PathBuf,
     pub desired_generation: String,
     pub spawn_mode: SpawnMode,
@@ -1684,14 +1681,6 @@ fn worker_command_id(command: &WorkerCommand) -> Option<&str> {
 }
 
 pub async fn run(args: MachineBrokerArgs) -> Result<()> {
-    let mut paths = HashSet::with_capacity(1 + args.compatibility_sockets.len());
-    paths.insert(args.socket.clone());
-    for socket in &args.compatibility_sockets {
-        if !paths.insert(socket.clone()) {
-            anyhow::bail!("duplicate Machine broker socket {}", socket.display());
-        }
-    }
-    let mut listeners = Vec::with_capacity(paths.len());
     let listener = match inherited_systemd_listener()? {
         Some(listener) => {
             tracing::info!(socket = %args.socket.display(), "cowboy Machine broker using systemd socket");
@@ -1699,20 +1688,9 @@ pub async fn run(args: MachineBrokerArgs) -> Result<()> {
         }
         None => bind_runtime_listener(&args.socket).await?,
     };
-    listeners.push((args.socket.clone(), listener));
-    for socket in &args.compatibility_sockets {
-        listeners.push((socket.clone(), bind_runtime_listener(socket).await?));
-    }
     let broker = Arc::new(Broker::new(args));
     tokio::spawn(monitor_workers(Arc::clone(&broker)));
-    let mut accept_tasks = tokio::task::JoinSet::new();
-    for (socket, listener) in listeners {
-        accept_tasks.spawn(accept_runtime_peers(socket, listener, Arc::clone(&broker)));
-    }
-    while let Some(result) = accept_tasks.join_next().await {
-        result.context("joining Machine broker listener")??;
-    }
-    anyhow::bail!("all Machine broker listeners exited")
+    accept_runtime_peers(broker.args.socket.clone(), listener, broker).await
 }
 
 async fn bind_runtime_listener(socket: &Path) -> Result<UnixListener> {
@@ -2361,7 +2339,6 @@ mod tests {
     fn generation_rollout_drains_then_stops_only_an_idle_worker() {
         let broker = Broker::new(MachineBrokerArgs {
             socket: PathBuf::from("/tmp/unused.sock"),
-            compatibility_sockets: Vec::new(),
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
@@ -2455,7 +2432,6 @@ mod tests {
     fn provider_rollout_drains_and_replaces_matching_idle_workers() {
         let broker = Broker::new(MachineBrokerArgs {
             socket: PathBuf::from("/tmp/unused.sock"),
-            compatibility_sockets: Vec::new(),
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
@@ -2525,7 +2501,6 @@ mod tests {
     fn reconnecting_worker_rebuilds_broker_launch_state() {
         let broker = Broker::new(MachineBrokerArgs {
             socket: PathBuf::from("/tmp/unused.sock"),
-            compatibility_sockets: Vec::new(),
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: String::new(),
             spawn_mode: SpawnMode::Direct,
@@ -2585,7 +2560,6 @@ mod tests {
     fn healthy_fallback_is_not_redrained_until_next_rollout() {
         let broker = Broker::new(MachineBrokerArgs {
             socket: PathBuf::from("/tmp/unused.sock"),
-            compatibility_sockets: Vec::new(),
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: String::new(),
             spawn_mode: SpawnMode::Direct,
@@ -2625,7 +2599,6 @@ mod tests {
     fn healthy_generation_releases_matching_provider_fallbacks() {
         let broker = Broker::new(MachineBrokerArgs {
             socket: PathBuf::from("/tmp/unused.sock"),
-            compatibility_sockets: Vec::new(),
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-2".to_owned(),
             spawn_mode: SpawnMode::Direct,
@@ -2747,7 +2720,6 @@ mod tests {
     fn ready_event_rehabilitates_generation_fallbacks() {
         let broker = Broker::new(MachineBrokerArgs {
             socket: PathBuf::from("/tmp/unused.sock"),
-            compatibility_sockets: Vec::new(),
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-2".to_owned(),
             spawn_mode: SpawnMode::Direct,
@@ -2830,7 +2802,6 @@ mod tests {
     fn known_healthy_generation_is_not_requarantined() {
         let broker = Broker::new(MachineBrokerArgs {
             socket: PathBuf::from("/tmp/unused.sock"),
-            compatibility_sockets: Vec::new(),
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-2".to_owned(),
             spawn_mode: SpawnMode::Direct,
@@ -2861,7 +2832,6 @@ mod tests {
     fn broker_snapshot_preserves_launch_and_held_prompt_without_worker() {
         let broker = Broker::new(MachineBrokerArgs {
             socket: PathBuf::from("/tmp/unused.sock"),
-            compatibility_sockets: Vec::new(),
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
@@ -2910,7 +2880,6 @@ mod tests {
     async fn adopt_only_rebuilds_registry_without_spawning_an_owner() {
         let broker = Arc::new(Broker::new(MachineBrokerArgs {
             socket: PathBuf::from("/tmp/unused.sock"),
-            compatibility_sockets: Vec::new(),
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
@@ -2945,7 +2914,6 @@ mod tests {
     async fn explicit_reset_revokes_delete_tombstone_before_relaunch() {
         let broker = Arc::new(Broker::new(MachineBrokerArgs {
             socket: PathBuf::from("/tmp/unused.sock"),
-            compatibility_sockets: Vec::new(),
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
@@ -3015,7 +2983,6 @@ mod tests {
         .expect("cache tag");
         let broker = Arc::new(Broker::new(MachineBrokerArgs {
             socket: root.join("unused.sock"),
-            compatibility_sockets: Vec::new(),
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
@@ -3091,7 +3058,6 @@ mod tests {
     fn cancelled_worker_reconnect_is_rejected_and_stopped() {
         let broker = Broker::new(MachineBrokerArgs {
             socket: PathBuf::from("/tmp/unused.sock"),
-            compatibility_sockets: Vec::new(),
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
@@ -3149,7 +3115,6 @@ mod tests {
         std::fs::write(target.join("debug/deps/libtest.rlib"), "generated\n").expect("artifact");
         let broker = Arc::new(Broker::new(MachineBrokerArgs {
             socket: root.join("unused.sock"),
-            compatibility_sockets: Vec::new(),
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
@@ -3220,7 +3185,6 @@ mod tests {
         std::fs::write(target.join("debug/deps/libtest.rlib"), "generated\n").expect("artifact");
         let broker = Arc::new(Broker::new(MachineBrokerArgs {
             socket: root.join("unused.sock"),
-            compatibility_sockets: Vec::new(),
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
@@ -3291,7 +3255,6 @@ mod tests {
     async fn deleted_launch_does_not_quarantine_the_worker_generation() {
         let broker = Broker::new(MachineBrokerArgs {
             socket: PathBuf::from("/tmp/unused.sock"),
-            compatibility_sockets: Vec::new(),
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-2".to_owned(),
             spawn_mode: SpawnMode::Direct,
@@ -3334,7 +3297,6 @@ mod tests {
     async fn deletion_retracts_only_its_generation_failure() {
         let broker = Arc::new(Broker::new(MachineBrokerArgs {
             socket: PathBuf::from("/tmp/unused.sock"),
-            compatibility_sockets: Vec::new(),
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-2".to_owned(),
             spawn_mode: SpawnMode::Direct,
@@ -3367,36 +3329,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn duplicate_compatibility_socket_is_rejected_before_binding() {
+    async fn worker_replay_survives_controller_reconnect() {
         let socket = test_socket();
-        let error = run(MachineBrokerArgs {
-            socket: socket.clone(),
-            compatibility_sockets: vec![socket.clone()],
-            worker_command: PathBuf::from("/bin/false"),
-            desired_generation: "gen-1".to_owned(),
-            spawn_mode: SpawnMode::Direct,
-            worker_environment: BTreeMap::new(),
-            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
-            worker_ready_timeout: Duration::from_millis(100),
-        })
-        .await
-        .expect_err("duplicate endpoint must fail");
-
-        assert!(
-            error
-                .to_string()
-                .contains("duplicate Machine broker socket")
-        );
-        assert!(!socket.exists());
-    }
-
-    #[tokio::test]
-    async fn compatibility_socket_keeps_worker_replay_across_controller_reconnect() {
-        let socket = test_socket();
-        let compatibility_socket = test_socket();
         let task = tokio::spawn(run(MachineBrokerArgs {
             socket: socket.clone(),
-            compatibility_sockets: vec![compatibility_socket.clone()],
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
@@ -3405,7 +3341,7 @@ mod tests {
             worker_ready_timeout: Duration::from_millis(100),
         }));
         for _ in 0..100 {
-            if socket.exists() && compatibility_socket.exists() {
+            if socket.exists() {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
@@ -3414,13 +3350,8 @@ mod tests {
         let (mut core_reader, core_writer, welcome) =
             connect_peer(&socket, PeerRole::Core, None, None).await;
         assert!(matches!(welcome, Frame::Welcome { .. }));
-        let (mut worker_reader, mut worker_writer, welcome) = connect_peer(
-            &compatibility_socket,
-            PeerRole::Worker,
-            Some("sess-1"),
-            Some("epoch-1"),
-        )
-        .await;
+        let (mut worker_reader, mut worker_writer, welcome) =
+            connect_peer(&socket, PeerRole::Worker, Some("sess-1"), Some("epoch-1")).await;
         assert!(matches!(welcome, Frame::Welcome { .. }));
         write_frame(
             &mut worker_writer,
@@ -3467,8 +3398,6 @@ mod tests {
             Some(event.clone())
         );
 
-        // Drop the controller before it ACKs. The worker connection and turn
-        // remain alive.
         drop(core_reader);
         drop(core_writer);
         let (mut next_core_reader, mut next_core_writer, welcome) =

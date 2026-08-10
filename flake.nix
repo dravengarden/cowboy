@@ -332,8 +332,14 @@
           "$out/bin/cowboy-zed-adapter"
         ln -s ${cowboy-zed-server}/bin/cowboy-zed-server \
           "$out/bin/cowboy-zed-server"
-        ${cowboy-machine}/bin/cowboy-machine --help \
-          | ${pkgs.gnugrep}/bin/grep -F -- '--compat-socket' >/dev/null
+        machine_help="$(${cowboy-machine}/bin/cowboy-machine --help)"
+        printf '%s\n' "$machine_help" \
+          | ${pkgs.gnugrep}/bin/grep -F -- '--socket' >/dev/null
+        if printf '%s\n' "$machine_help" \
+          | ${pkgs.gnugrep}/bin/grep -F -- '--compat-socket' >/dev/null; then
+          echo "cowboy-machine still exposes retired --compat-socket" >&2
+          exit 1
+        fi
         cat >"$out/etc/cowboy-release/source.json" <<'EOF'
         ${builtins.toJSON ((release-source "machine" bootstrap) // {
           workerGeneration = cowboy.workerGeneration;
