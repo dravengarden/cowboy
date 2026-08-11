@@ -390,12 +390,24 @@ impl CodeProvider for LocalCodeProvider {
             let inner = inner.to_string_lossy();
             let (entries, truncated) =
                 crate::files::directory(&project_root, &inner, limit).map_err(str::to_owned)?;
-            let prefix = relative.trim_end_matches('/');
+            // `files::directory` returns paths relative to the project root,
+            // including `inner` (for example, `docs/architecture` when the
+            // requested virtual path is `projects/cowboy/docs`). Prefix with
+            // the virtual project root, not the requested directory, or every
+            // nested projected page repeats its current directory segment.
+            let project_prefix = relative_path
+                .components()
+                .take(2)
+                .map(|component| component.as_os_str())
+                .collect::<PathBuf>();
             (
                 entries
                     .into_iter()
                     .map(|mut entry| {
-                        entry.path = format!("{prefix}/{}", entry.path);
+                        entry.path = project_prefix
+                            .join(&entry.path)
+                            .to_string_lossy()
+                            .replace('\\', "/");
                         entry
                     })
                     .collect(),
@@ -1314,6 +1326,12 @@ mod tests {
             "pub fn projected() {}\n",
         )
         .unwrap();
+        fs::create_dir_all(dir.join("projects/external/src/nested")).unwrap();
+        fs::write(
+            dir.join("projects/external/src/nested/lib.rs"),
+            "pub fn nested() {}\n",
+        )
+        .unwrap();
         let linked = dir.with_extension("aggregate-linked");
         let _ = fs::remove_dir_all(&linked);
         Command::new("git")
@@ -1339,6 +1357,15 @@ mod tests {
         );
         let external = provider.directory("projects/external", 100).unwrap();
         assert_eq!(external.entries[0].path, "projects/external/src");
+        let external_src = provider.directory("projects/external/src", 100).unwrap();
+        assert_eq!(external_src.entries[0].path, "projects/external/src/nested");
+        let external_nested = provider
+            .directory("projects/external/src/nested", 100)
+            .unwrap();
+        assert_eq!(
+            external_nested.entries[0].path,
+            "projects/external/src/nested/lib.rs"
+        );
         assert_eq!(
             provider.file("projects/external/src/lib.rs").unwrap().text,
             "pub fn projected() {}\n"
