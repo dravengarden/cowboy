@@ -817,6 +817,8 @@ fn classify_crash_detail(detail: Option<&str>) -> &'static str {
     {
         "protocol_failure"
     } else if detail.contains("connection")
+        || detail.contains("disconnected")
+        || detail.contains("network error")
         || detail.contains("socket")
         || detail.contains("timed out")
     {
@@ -921,6 +923,12 @@ mod incident_classification_tests {
             "transport_failure"
         );
         assert_eq!(
+            classify_session_error(
+                "Error running remote compact task: stream disconnected before completion: Transport error: network error: error decoding response body"
+            ),
+            "transport_failure"
+        );
+        assert_eq!(
             classify_session_error("runtime rejected command"),
             "session_command_error"
         );
@@ -987,7 +995,7 @@ async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyhow::Result<
                     build: Some(env!("CARGO_PKG_VERSION").to_owned()),
                     evidence_start_ms: occurred_at_ms.saturating_sub(30_000),
                     evidence_end_ms: occurred_at_ms.saturating_add(30_000),
-                    detail: serde_json::json!({ "source": "outbound_error" }),
+                    detail: serde_json::json!({ "source": "session_error" }),
                 })
                 .await
         }
