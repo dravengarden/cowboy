@@ -117,6 +117,7 @@ import {
   transcriptScrollHasReaderIntent,
   wheelLeavesLatest,
 } from "./transcriptFollowIntent";
+import { transcriptRowContainment } from "./transcriptMotion";
 import { markTranscriptScrollActivity } from "./transcriptRenderPacing";
 import {
   historyPrefetchTransition,
@@ -3431,6 +3432,7 @@ export function Transcript({
     !!lastItem &&
     ((lastItem.kind === "message" && lastItem.role === "assistant") ||
       lastItem.kind === "thought");
+  const streamingRowKey = lastIsStreamingAssistant ? lastItem.key : null;
   const compacting = working && isCompactingTail(timeline);
   const showLiveCompactionRequest = working &&
     isCompactionRequestTail(timeline);
@@ -4951,12 +4953,15 @@ export function Transcript({
                   </Box>
                 ))}
               {items
-                .map((item, i) => ({ item, i }))
+                .slice()
                 .reverse()
-                .map(({ item, i }) => (
+                .map((item) => (
                   <Box
                     key={item.key}
                     data-key={item.key}
+                    data-streaming-row={item.key === streamingRowKey
+                      ? "true"
+                      : undefined}
                     {...(desktopNavigation
                       ? {
                         "data-desktop-item": item.key,
@@ -4967,14 +4972,14 @@ export function Transcript({
                       py: 0.625,
                       display: "flex",
                       flexDirection: "column",
-                      // Give every timeline row an independent paint boundary.
-                      // WebKit can otherwise retain a previous composited tool
-                      // card for one frame while a streamed sibling thought is
-                      // inserted/reflowed, visibly drawing the two rows on top of
-                      // each other even though their layout boxes do not overlap.
-                      // This does not size-contain the row: intrinsic Markdown and
-                      // tool height still contribute normally to scrollHeight.
-                      contain: "layout paint",
+                      // Settled rows stay independently painted so a streamed
+                      // sibling cannot expose a stale tool-card layer. Keep the
+                      // actively growing row in the scroller's paint flow so
+                      // WebKit commits its new raster and column-reverse scroll
+                      // compensation in the same frame.
+                      contain: transcriptRowContainment(
+                        item.key === streamingRowKey,
+                      ),
                       color: locatedToolKey === item.key ? "primary.main" : undefined,
                       animation: locatedToolKey === item.key
                         ? `${toolLocateFlash} 1.4s ease-out`
@@ -4989,7 +4994,7 @@ export function Transcript({
                   >
                     <ItemView
                       item={item}
-                      streaming={working && i === lastIdx}
+                      streaming={item.key === streamingRowKey}
                       provider={provider}
                       desktop={desktopNavigation}
                       selectedToolKey={selectedToolKey}
