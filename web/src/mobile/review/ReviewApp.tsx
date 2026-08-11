@@ -72,7 +72,9 @@ import {
   fetchCodeLanguage,
   fetchCodeManifest,
   fetchCodeNavigation,
+  isTransientCodeApiStatus,
   openCodeBuffer,
+  shouldCloseUnavailableSource,
 } from "./codeApi";
 import { invalidateDiffCache, loadCodeDiff } from "./diffCache";
 import { diffHunkLines, reviewEntryKey } from "./diffNavigationModel";
@@ -466,13 +468,11 @@ function DocumentView({
         fileRetry.current = { key: requestKey, count: 0 };
       }
       const status = reason instanceof CodeApiError ? reason.status : undefined;
-      const transient = status === undefined ||
-        status === 304 ||
-        status === 409 ||
-        status === 410 ||
-        status === 502 ||
-        status === 503 ||
-        status === 504;
+      if (shouldCloseUnavailableSource(target.kind, status)) {
+        mutateMobileReview(sessionId, "close", { path: target.path });
+        return;
+      }
+      const transient = isTransientCodeApiStatus(status);
       if (transient && fileRetry.current.count < 2) {
         const delay = fileRetry.current.count === 0 ? 400 : 1_200;
         fileRetry.current.count += 1;
@@ -579,6 +579,9 @@ function DocumentView({
   }
   if (error) {
     const missing = error === 404;
+    const unsupported = error === 415;
+    const invalid = error === 400;
+    const retryable = !missing && !unsupported && !invalid;
     return (
       <Box
         role="alert"
@@ -612,6 +615,10 @@ function DocumentView({
           <Typography variant="subtitle1" fontWeight={750}>
             {missing
               ? "This file is no longer available"
+              : unsupported
+              ? "This is a binary file"
+              : invalid
+              ? "This file can’t be opened"
               : target.kind === "diff"
               ? "Couldn’t load this diff"
               : "Couldn’t load this file"}
@@ -619,20 +626,26 @@ function DocumentView({
           <Typography variant="body2" color="text.secondary">
             {missing
               ? "It may have been moved or deleted in the worktree."
+              : unsupported
+              ? "Cowboy can preview UTF-8 text files, but not compiled programs or other binary data."
+              : invalid
+              ? "The saved path or file snapshot is no longer valid."
               : "The connection may have been interrupted. Your tabs and reading position are preserved."}
           </Typography>
-          <Button
-            variant="contained"
-            startIcon={<Refresh />}
-            onClick={() => {
-              fileRetry.current.count = 0;
-              setError(undefined);
-              setReloadKey((value) => value + 1);
-            }}
-            sx={{ mt: 0.75, textTransform: "none", borderRadius: 2 }}
-          >
-            Try again
-          </Button>
+          {retryable && (
+            <Button
+              variant="contained"
+              startIcon={<Refresh />}
+              onClick={() => {
+                fileRetry.current.count = 0;
+                setError(undefined);
+                setReloadKey((value) => value + 1);
+              }}
+              sx={{ mt: 0.75, textTransform: "none", borderRadius: 2 }}
+            >
+              Try again
+            </Button>
+          )}
         </Stack>
       </Box>
     );
@@ -1298,8 +1311,14 @@ export function ReviewApp({
           retryTimers.push(globalThis.setTimeout(loadLanguage, 8_000));
           retryTimers.push(globalThis.setTimeout(loadLanguage, 30_000));
         })
-        .catch(() => {
-          if (released || attempt >= 3) return;
+        .catch((reason) => {
+          const status = reason instanceof CodeApiError
+            ? reason.status
+            : undefined;
+          if (
+            released || attempt >= 3 ||
+            !isTransientCodeApiStatus(status)
+          ) return;
           const delay = [1_000, 4_000, 12_000][attempt] ?? 12_000;
           retryTimers.push(globalThis.setTimeout(acquire, delay));
         });

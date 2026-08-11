@@ -5274,7 +5274,7 @@ async fn api_code_file(
         Err(error) if error == "file snapshot changed" => {
             return (StatusCode::CONFLICT, error).into_response();
         }
-        Err(_) => return (StatusCode::BAD_REQUEST, "file unavailable").into_response(),
+        Err(error) => return code_file_error_response(&error),
     };
     let etag = format!("\"{}\"", result.revision);
     const FILE_CACHE_CONTROL: &str = "private, max-age=0, must-revalidate";
@@ -5311,6 +5311,18 @@ async fn api_code_file(
         header::HeaderValue::from_static(FILE_CACHE_CONTROL),
     );
     response
+}
+
+fn code_file_error_response(error: &str) -> Response {
+    match error {
+        "file not found" => (StatusCode::NOT_FOUND, "file not found").into_response(),
+        "binary file" | "file is not UTF-8" => (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "file is not previewable text",
+        )
+            .into_response(),
+        _ => (StatusCode::BAD_REQUEST, "file unavailable").into_response(),
+    }
 }
 
 async fn api_code_buffer_open(
@@ -5568,6 +5580,12 @@ async fn api_code_buffer_lease(
     {
         return (StatusCode::BAD_REQUEST, "invalid buffer lease").into_response();
     }
+    if open && !local_buffer_file_exists(&cwd, &request.path) {
+        // Aggregate-project files are a read-only Code projection and cannot be
+        // registered with a Zed worktree rooted at this session. Missing and
+        // projected paths are deterministic lease misses, not adapter outages.
+        return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable").into_response();
+    }
     if open
         && ensure_zed_worktree_for_session(&state, &session_id, &cwd)
             .await
@@ -5620,6 +5638,24 @@ async fn api_code_buffer_lease(
                 .into_response()
         }
     }
+}
+
+fn local_buffer_file_exists(cwd: &str, relative: &str) -> bool {
+    let relative = FsPath::new(relative);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return false;
+    }
+    let Ok(root) = FsPath::new(cwd).canonicalize() else {
+        return false;
+    };
+    let Ok(file) = root.join(relative).canonicalize() else {
+        return false;
+    };
+    file.starts_with(&root) && file.is_file()
 }
 
 #[derive(Debug, Serialize)]
@@ -6680,6 +6716,52 @@ where
         .await
         .map_err(|_| ())?
         .map_err(|_| ())
+}
+
+#[cfg(test)]
+mod code_file_policy_tests {
+    use super::{code_file_error_response, local_buffer_file_exists};
+    use axum::http::StatusCode;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn file_errors_distinguish_missing_binary_and_invalid_requests() {
+        assert_eq!(
+            code_file_error_response("file not found").status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            code_file_error_response("binary file").status(),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE
+        );
+        assert_eq!(
+            code_file_error_response("file is not UTF-8").status(),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE
+        );
+        assert_eq!(
+            code_file_error_response("invalid file cursor").status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[test]
+    fn buffer_leases_require_a_real_file_inside_the_session_worktree() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cowboy-buffer-policy-{unique}"));
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let root_text = root.to_string_lossy();
+        assert!(local_buffer_file_exists(&root_text, "src/main.rs"));
+        assert!(!local_buffer_file_exists(&root_text, "src/missing.rs"));
+        assert!(!local_buffer_file_exists(&root_text, "../outside.rs"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[cfg(test)]
