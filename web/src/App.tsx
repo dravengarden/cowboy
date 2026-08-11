@@ -436,6 +436,7 @@ const ReliableListItemButton = forwardRef<
     {
         onActivate,
         sx,
+        onPointerDownCapture,
         onPointerDown,
         onPointerEnter,
         onKeyDown,
@@ -447,12 +448,18 @@ const ReliableListItemButton = forwardRef<
     return (
         <ListItemButton
             {...props}
-            onPointerDown={(event): void => {
+            onPointerDownCapture={(event): void => {
+                // A grip touch stops propagation before the row's bubble
+                // handler. Mark touch in capture so iOS cannot leave the
+                // ancestor ListItemButton's synthetic :hover latched.
                 if (event.pointerType === "touch") {
                     event.currentTarget.dataset.touchActivated = "true";
                 } else if (event.pointerType === "mouse") {
                     delete event.currentTarget.dataset.touchActivated;
                 }
+                onPointerDownCapture?.(event);
+            }}
+            onPointerDown={(event): void => {
                 onPointerDown?.(event);
                 tap.onPointerDown(event);
             }}
