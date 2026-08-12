@@ -228,18 +228,28 @@ function ContextPreviousSessionRow({
       onClick={onPick}
       sx={{
         mx: 0.75,
-        minHeight: 56,
-        px: 1.25,
-        borderRadius: 2,
-        bgcolor: (theme) => alpha(theme.palette.primary.main, 0.075),
+        height: 52,
+        minHeight: 52,
+        flex: "0 0 52px",
+        px: 1.5,
+        borderRadius: 1.5,
+        border: 1,
+        borderColor: "divider",
+        bgcolor: "transparent",
       }}
     >
-      <Undo color="primary" sx={{ mr: 1.25 }} />
+      <Undo color="primary" fontSize="small" sx={{ mr: 1.25 }} />
       <Box sx={{ minWidth: 0, flex: 1 }}>
-        <Typography variant="caption" color="primary.main" fontWeight={700}>
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ display: "block", lineHeight: 1.2 }}
+        >
           Previous session
         </Typography>
-        <Typography variant="body2" noWrap>{session.title}</Typography>
+        <Typography variant="body2" fontWeight={600} noWrap>
+          {session.title}
+        </Typography>
       </Box>
       <ChevronRight color="disabled" fontSize="small" />
     </ListItemButton>
