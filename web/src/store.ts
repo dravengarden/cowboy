@@ -1602,6 +1602,26 @@ export function mutateMobileReview<K extends MobileReviewMutation>(
   name: K,
   args: ArgsOf<MobileReviewState, typeof mobileReviewMutators, K>,
 ): void {
+  // Registered project checkouts are read-only code contexts, not agent
+  // sessions. Their tabs and navigation remain local to the mounted Review
+  // surface; sending them through the session sync channel produces an
+  // `unknown mobile review session` warning and can never persist server-side.
+  if (sessionId.startsWith("workspace::")) {
+    const current = state.mobileReviewStates[sessionId] ?? EMPTY_MOBILE_REVIEW_STATE;
+    // `name` and `args` are linked by K at this public boundary. TypeScript
+    // widens an indexed generic function to the intersection of every argument
+    // shape, so narrow only the internal call after that relationship is proven.
+    const mutate = mobileReviewMutators[name] as unknown as (
+      value: MobileReviewState,
+      args: unknown,
+    ) => MobileReviewState;
+    const value = mutate(current, args);
+    setState({
+      ...state,
+      mobileReviewStates: { ...state.mobileReviewStates, [sessionId]: value },
+    });
+    return;
+  }
   mobileReviewClient(sessionId).mutate(name, args);
   commitMobileReview(sessionId);
 }

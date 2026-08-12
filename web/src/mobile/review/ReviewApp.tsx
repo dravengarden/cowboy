@@ -2068,7 +2068,7 @@ export function ReviewApp({
       sessionId,
       cwd: registered.canonicalPath,
       provider: "read-only",
-      title: `Target · ${project.label}`,
+      title: `Project code · ${project.label}`,
       machineId: project.machineId,
       workspaceId: registered.id,
       project: project.label,
@@ -2112,7 +2112,7 @@ export function ReviewApp({
             currentPath={sourceTarget?.path}
             onClose={() => setCloseRequest((value) => value + 1)}
             refreshToken={dataRevision}
-            contextLabel={projectCodeContext ? "Target branch" : "Worktree"}
+            contextLabel={projectCodeContext ? "Project code" : "Worktree"}
           />
         )
         : (
@@ -2155,7 +2155,7 @@ export function ReviewApp({
             >
               {target.kind === "changes"
                 ? mode === "files"
-                  ? projectCodeContext ? "Target branch" : "Worktree"
+                  ? projectCodeContext ? "Project code" : "Worktree"
                   : "Changes"
                 : target.path}
             </Typography>
@@ -2163,7 +2163,7 @@ export function ReviewApp({
               component="button"
               type="button"
               aria-label={projectCodeContext
-                ? `Open context. Current target ${projectCodeContext.project}`
+                ? `Open context. Current project code ${projectCodeContext.project}`
                 : `Switch session. Current session ${currentSession?.title ?? "none"}`}
               onClick={openContextSwitcher}
               sx={{
@@ -2206,14 +2206,14 @@ export function ReviewApp({
                     : "Conflict · "
                   : ""}
                 {projectCodeContext
-                  ? `Target · ${projectCodeContext.project}`
+                  ? `Project code · ${projectCodeContext.project}`
                   : currentSession?.title ?? currentProject ??
                   (workspace ? "Loading session…" : "Choose session")}
                 {!projectCodeContext && currentProject &&
                     currentSession?.title !== currentProject
                   ? ` · ${currentProject}`
                   : ""}
-                {repositoryContext?.branch
+                {!projectCodeContext && repositoryContext?.branch
                   ? ` · ${repositoryContext.branch}`
                   : ""}
               </Typography>
@@ -2301,7 +2301,7 @@ export function ReviewApp({
                 {mode === "git"
                   ? "Select a changed file from Git review"
                   : projectCodeContext
-                  ? "Select a file from the target branch"
+                  ? "Select a file from the registered project checkout"
                   : "Select a file from the Worktree"}
               </Typography>
             </Stack>
@@ -2829,14 +2829,10 @@ export function ReviewApp({
                     <FolderOpenOutlined color="primary" sx={{ mr: 1.25 }} />
                     <Box sx={{ flex: 1, minWidth: 0 }}>
                       <Typography variant="body2" fontWeight={700} noWrap>
-                        {projectCodeContext?.workspaceId ===
-                            selectedContextProject.registeredWorkspace.id &&
-                            repositoryContext?.branch
-                          ? `Target · ${repositoryContext.branch}`
-                          : "Target branch"}
+                        Project code
                       </Typography>
                       <Typography variant="caption" color="text.secondary" noWrap>
-                        Browse the registered project checkout
+                        Browse the current merged checkout
                       </Typography>
                       <Typography
                         variant="caption"

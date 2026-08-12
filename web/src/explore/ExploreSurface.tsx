@@ -1998,7 +1998,7 @@ export function ExploreTranscript(
               bottomInset={props.bottomInset}
               onScrollableChange={props.onScrollableChange}
               visibleItemKeys={visibleItemKeys}
-              pageFooter={current
+              pageFooter={current && props.desktop
                 ? (
                   <PageTurnFooter
                     currentOrdinal={currentOrdinal}

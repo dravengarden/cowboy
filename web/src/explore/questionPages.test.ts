@@ -25,6 +25,13 @@ Deno.test("mobile Page Dock retains disabled previous and next slots", () => {
   );
 });
 
+Deno.test("mobile question pages do not duplicate Page Dock navigation in the transcript", () => {
+  assertEquals(
+    exploreSurfaceSource.includes("pageFooter={current && props.desktop"),
+    true,
+  );
+});
+
 Deno.test("question rows use the shared Cowboy list selection language", () => {
   assertEquals(exploreSurfaceSource.includes("desktopListItemSx()"), true);
   assertEquals(
