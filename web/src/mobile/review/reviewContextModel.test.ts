@@ -38,7 +38,7 @@ Deno.test("review contexts group newest-first sessions by project and worktree",
   assertEquals(projects.map((project) => project.label), ["cowboy", "stormbird"]);
   assertEquals(projects[0]?.worktrees.map((worktree) => worktree.label), [
     "feature",
-    "Stable checkout",
+    "Shared workspace",
   ]);
   assertEquals(projects[0]?.worktrees[0]?.sessions.map((value) => value.id), [
     "new",
@@ -57,16 +57,15 @@ Deno.test("review contexts expose every registered project without a session", (
   }]);
   assertEquals(projects.map((project) => project.label), ["skydriver", "cowboy"]);
   assertEquals(projects[0]?.sessions, []);
-  assertEquals(projects[0]?.worktrees, [{
-    key: "hawk\u0000/home/draven/columbus/projects/skydriver",
-    path: "/home/draven/columbus/projects/skydriver",
-    label: "Stable checkout",
-    workspaceId: "skydriver",
-    sessions: [],
-  }]);
+  assertEquals(projects[0]?.worktrees, []);
+  assertEquals(projects[0]?.registeredWorkspace, {
+    id: "skydriver",
+    displayName: "skydriver",
+    canonicalPath: "/home/draven/columbus/projects/skydriver",
+  });
 });
 
-Deno.test("review contexts merge a stable-checkout session into inventory", () => {
+Deno.test("review contexts keep a shared-workspace session separate from creation source", () => {
   const projects = buildReviewContextProjects([
     session("main", "/home/draven/columbus/projects/cowboy", "cowboy"),
   ], "hawk", [{
@@ -75,7 +74,7 @@ Deno.test("review contexts merge a stable-checkout session into inventory", () =
     canonicalPath: "/home/draven/columbus/projects/cowboy",
   }]);
   assertEquals(projects[0]?.worktrees.length, 1);
-  assertEquals(projects[0]?.worktrees[0]?.workspaceId, "cowboy");
+  assertEquals(projects[0]?.worktrees[0]?.label, "Shared workspace");
   assertEquals(projects[0]?.worktrees[0]?.sessions.map((value) => value.id), ["main"]);
 });
 

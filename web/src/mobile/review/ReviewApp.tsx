@@ -1,5 +1,6 @@
 import {
   AccountTreeOutlined,
+  AddCircleOutline,
   ArrowBack,
   ArrowForward,
   CheckCircle,
@@ -105,7 +106,6 @@ import {
   previousReviewSessionId,
   pushReviewSessionHistory,
   type ReviewContextProject,
-  type ReviewContextWorktree,
   reviewSessionProject,
 } from "./reviewContextModel";
 import {
@@ -1359,7 +1359,7 @@ export function ReviewApp({
   const [machineInventories, setMachineInventories] = useState<
     readonly ReviewMachineInventory[]
   >([]);
-  const [startingWorkspaceKey, setStartingWorkspaceKey] = useState<string>();
+  const [startingProjectKey, setStartingProjectKey] = useState<string>();
   const [contextError, setContextError] = useState<string>();
   const [sessionHistory, setSessionHistory] = useState<string[]>([]);
   const sessionListRef = useRef<HTMLDivElement>(null);
@@ -2053,19 +2053,14 @@ export function ReviewApp({
     openSession(session.id);
     setSessionSwitcherOpen(false);
   };
-  const openWorktree = async (
+  const startProjectWorktree = async (
     project: ReviewContextProject,
-    worktree: ReviewContextWorktree,
   ): Promise<void> => {
-    const latest = worktree.sessions[0];
-    if (latest) {
-      switchSession(latest);
-      return;
-    }
-    if (!worktree.workspaceId || startingWorkspaceKey) return;
+    const registered = project.registeredWorkspace;
+    if (!registered || startingProjectKey) return;
     navigationHaptic();
     setContextError(undefined);
-    setStartingWorkspaceKey(worktree.key);
+    setStartingProjectKey(project.key);
     const provider = currentSession?.provider ?? "codex";
     try {
       const response = await fetch("/api/sessions", {
@@ -2074,7 +2069,7 @@ export function ReviewApp({
         body: JSON.stringify({
           provider,
           machine_id: project.machineId,
-          cwd: worktree.workspaceId,
+          cwd: registered.id,
           origin: "web",
         }),
       });
@@ -2085,10 +2080,10 @@ export function ReviewApp({
         id: value.session_id,
         provider,
         machine_id: project.machineId,
-        workspace_id: worktree.workspaceId,
+        workspace_id: registered.id,
         workspace_name: project.label,
-        workspace_source_path: worktree.path,
-        cwd: worktree.path,
+        workspace_source_path: registered.canonicalPath,
+        cwd: registered.canonicalPath,
         title: `${provider} · ${project.label}`,
         status: "starting",
         origin: "web",
@@ -2101,7 +2096,7 @@ export function ReviewApp({
         reason instanceof Error ? reason.message : "Could not start session",
       );
     } finally {
-      setStartingWorkspaceKey(undefined);
+      setStartingProjectKey(undefined);
     }
   };
   const returnToPreviousSession = (): void => {
@@ -2822,6 +2817,40 @@ export function ReviewApp({
                   <ChevronLeft sx={{ mr: 0.75 }} />
                   <Typography variant="body2" fontWeight={650}>All projects</Typography>
                 </ListItemButton>
+                {selectedContextProject.registeredWorkspace && (
+                  <ListItemButton
+                    disabled={Boolean(startingProjectKey)}
+                    onClick={() => void startProjectWorktree(selectedContextProject)}
+                    sx={{
+                      minHeight: 64,
+                      px: 1.25,
+                      borderRadius: 1.5,
+                      bgcolor: (theme) => alpha(theme.palette.primary.main, 0.055),
+                    }}
+                  >
+                    {startingProjectKey === selectedContextProject.key
+                      ? <CircularProgress size={22} sx={{ mr: 1.25 }} />
+                      : <AddCircleOutline color="primary" sx={{ mr: 1.25 }} />}
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                      <Typography variant="body2" fontWeight={700} noWrap>
+                        New worktree
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" noWrap>
+                        Start from origin&apos;s default branch
+                      </Typography>
+                    </Box>
+                    <ChevronRight color="disabled" fontSize="small" />
+                  </ListItemButton>
+                )}
+                {selectedContextProject.worktrees.length > 0 && (
+                  <Typography
+                    variant="overline"
+                    color="text.secondary"
+                    sx={{ px: 1.25, fontWeight: 700, letterSpacing: "0.09em" }}
+                  >
+                    Session worktrees
+                  </Typography>
+                )}
                 {selectedContextProject.worktrees.map((worktree) => {
                   const currentWorktree = worktree.path === currentSession?.cwd;
                   const label = currentWorktree && repositoryContext?.branch
@@ -2833,19 +2862,13 @@ export function ReviewApp({
                   return (
                     <Stack key={worktree.key} spacing={0.375}>
                       <ListItemButton
-                        disabled={Boolean(
-                          startingWorkspaceKey &&
-                            startingWorkspaceKey !== worktree.key
-                        )}
-                        onClick={() => void openWorktree(
-                          selectedContextProject,
-                          worktree,
-                        )}
+                        onClick={() => {
+                          const latest = worktree.sessions[0];
+                          if (latest) switchSession(latest);
+                        }}
                         sx={{ minHeight: 64, px: 1.25, borderRadius: 1.5 }}
                       >
-                        {startingWorkspaceKey === worktree.key
-                          ? <CircularProgress size={22} sx={{ mr: 1.25 }} />
-                          : <AccountTreeOutlined color="primary" sx={{ mr: 1.25 }} />}
+                        <AccountTreeOutlined color="primary" sx={{ mr: 1.25 }} />
                         <Box sx={{ flex: 1, minWidth: 0 }}>
                           <Typography variant="body2" fontWeight={700} noWrap>
                             {label}
@@ -2853,9 +2876,7 @@ export function ReviewApp({
                           <Typography variant="caption" color="text.secondary" noWrap>
                             {onlySession
                               ? `Open worktree · ${onlySession.title}`
-                              : worktree.sessions.length > 1
-                              ? `Open worktree · ${worktree.sessions.length} sessions`
-                              : "Start session in this worktree"}
+                              : `Open worktree · ${worktree.sessions.length} sessions`}
                           </Typography>
                           <Typography
                             variant="caption"

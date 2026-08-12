@@ -5,7 +5,6 @@ export interface ReviewContextWorktree {
   readonly key: string;
   readonly path: string;
   readonly label: string;
-  readonly workspaceId?: string;
   readonly sessions: readonly SessionMeta[];
 }
 
@@ -13,6 +12,7 @@ export interface ReviewContextProject {
   readonly key: string;
   readonly label: string;
   readonly machineId: string;
+  readonly registeredWorkspace?: ReviewRegisteredWorkspace;
   readonly worktrees: readonly ReviewContextWorktree[];
   readonly sessions: readonly SessionMeta[];
 }
@@ -35,15 +35,14 @@ export function reviewSessionProject(session: SessionMeta): string {
 export function worktreeLabel(path: string, sourcePath?: string): string {
   const normalized = path.replace(/\/+$/, "");
   const source = sourcePath?.replace(/\/+$/, "");
-  if (source && normalized === source) return "Stable checkout";
+  if (source && normalized === source) return "Shared workspace";
   return normalized.split("/").at(-1) || path;
 }
 
 /**
  * Build one Machine's phone context hierarchy from its registered workspace
- * inventory, then decorate it with the newest-first session snapshot. Stable
- * checkout navigation carries the trusted workspace id; session worktrees
- * carry only controller-originated cwd metadata.
+ * inventory, then decorate it with the newest-first session snapshot. The
+ * registered workspace is a trusted creation source, not a session worktree.
  */
 export function buildReviewContextProjects(
   sessions: readonly SessionMeta[],
@@ -56,11 +55,11 @@ export function buildReviewContextProjects(
     {
       label: string;
       machineId: string;
+      registeredWorkspace?: ReviewRegisteredWorkspace;
       sessions: SessionMeta[];
       worktrees: Map<string, {
         path: string;
         label: string;
-        workspaceId?: string;
         sessions: SessionMeta[];
       }>;
     }
@@ -69,17 +68,12 @@ export function buildReviewContextProjects(
   for (const workspace of registeredWorkspaces) {
     if (workspace.id === "home") continue;
     const projectKey = `${selectedMachineId}\u0000${workspace.displayName}`;
-    const worktreeKey = `${selectedMachineId}\u0000${workspace.canonicalPath}`;
     projects.set(projectKey, {
       label: workspace.displayName,
       machineId: selectedMachineId,
+      registeredWorkspace: workspace,
       sessions: [],
-      worktrees: new Map([[worktreeKey, {
-        path: workspace.canonicalPath,
-        label: "Stable checkout",
-        workspaceId: workspace.id,
-        sessions: [],
-      }]]),
+      worktrees: new Map(),
     });
   }
 
@@ -106,7 +100,6 @@ export function buildReviewContextProjects(
       worktree = {
         path: session.cwd,
         label: worktreeLabel(session.cwd, session.workspace_source_path),
-        ...(session.workspace_id ? { workspaceId: session.workspace_id } : {}),
         sessions: [],
       };
       project.worktrees.set(worktreeKey, worktree);
@@ -118,12 +111,14 @@ export function buildReviewContextProjects(
     key,
     label: project.label,
     machineId: project.machineId,
+    ...(project.registeredWorkspace
+      ? { registeredWorkspace: project.registeredWorkspace }
+      : {}),
     sessions: project.sessions,
     worktrees: [...project.worktrees.entries()].map(([worktreeKey, worktree]) => ({
       key: worktreeKey,
       path: worktree.path,
       label: worktree.label,
-      ...(worktree.workspaceId ? { workspaceId: worktree.workspaceId } : {}),
       sessions: worktree.sessions,
     })),
   }));
