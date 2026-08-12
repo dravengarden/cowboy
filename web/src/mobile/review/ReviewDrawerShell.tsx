@@ -66,6 +66,7 @@ export function ReviewDrawerShell({
   return (
     <Box
       ref={rootRef}
+      data-mobile-drawer-presented={open ? "true" : undefined}
       sx={{
         position: "relative",
         width: 1,
@@ -102,6 +103,7 @@ export function ReviewDrawerShell({
           zIndex: 0,
           inset: 0,
           bgcolor: "background.default",
+          boxShadow: open ? "-18px 0 42px rgba(0,0,0,0.16)" : "none",
           pointerEvents: "none",
           backfaceVisibility: "hidden",
           willChange: "transform",

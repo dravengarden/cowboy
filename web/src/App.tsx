@@ -2383,6 +2383,7 @@ export function App({
             )}
             <Box
                 ref={mobileShellRef}
+                data-mobile-drawer-presented={mobile && drawerOpen ? "true" : undefined}
                 sx={{
                     display: "flex",
                     flex: 1,
@@ -2450,8 +2451,16 @@ export function App({
                         zIndex: 0,
                         inset: 0,
                         bgcolor: "background.default",
+                        // React owns the settled depth cue. The gesture binding
+                        // may add the same inline shadow while opening, but its
+                        // cleanup must never make an already-open drawer look
+                        // closed or release the outer product pager.
+                        boxShadow: drawerOpen
+                            ? "18px 0 42px rgba(0,0,0,0.16)"
+                            : "none",
                         pointerEvents: "none",
                         backfaceVisibility: "hidden",
+                        willChange: "transform",
                     }}
                 />
             )}

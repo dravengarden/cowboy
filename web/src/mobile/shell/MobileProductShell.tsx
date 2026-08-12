@@ -80,7 +80,8 @@ function modalOwnsGesture(): boolean {
 
 function spatialDrawerOwnsGesture(shell: HTMLElement): boolean {
   return shell.querySelector(
-    "[data-mobile-drawer-open='true'], [data-mobile-drawer-moving='true']",
+    "[data-mobile-drawer-presented='true'], " +
+      "[data-mobile-drawer-open='true'], [data-mobile-drawer-moving='true']",
   ) != null;
 }
 
