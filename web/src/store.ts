@@ -29,6 +29,7 @@ import {
 } from "./durableDelivery.ts";
 import { pruneDrafts } from "./draftStore";
 import { linkTimeline } from "./derive";
+import { resetExploreAfterContextClear } from "./explore/exploreStore";
 import { notifyHaptic } from "./haptic";
 import { reportClientLog, reportClientMetric } from "./observability";
 import { newUuid } from "./uuid";
@@ -1005,6 +1006,7 @@ function handle(msg: Outbound): void {
         : state.pagination;
       let optimisticMessages = state.optimisticMessages;
       if (clearsContext) {
+        resetExploreAfterContextClear(env.session_id);
         completeQuestionPages.delete(env.session_id);
         transcriptEpoch.set(
           env.session_id,

@@ -1,21 +1,12 @@
 import { useSyncExternalStore } from "react";
 import { clearTranscriptViewport } from "../transcriptViewportStore";
+import {
+  type ExploreSessionState,
+  exploreStateAfterContextClear,
+  type TranscriptProjection,
+} from "./contextClear.ts";
 
-export type TranscriptProjection = "history" | "explore";
-
-interface ExploreSessionState {
-  projection: TranscriptProjection;
-  pageId: string | null;
-  pageStartId: string | null;
-  pageLoadingId: string | null;
-  transitionAnchorKey: string | null;
-  followTailRequested: boolean;
-  pageParents: Record<string, string>;
-  pendingFollowUp: {
-    targetPageId: string;
-    knownPageIds: string[];
-  } | null;
-}
+export type { ExploreSessionState, TranscriptProjection } from "./contextClear.ts";
 
 const STORAGE_KEY = "cowboy:transcript-projections:v1";
 const states = new Map<string, ExploreSessionState>();
@@ -132,6 +123,14 @@ export function setTranscriptProjection(
 
 export function setExplorePage(sessionId: string, pageId: string | null): void {
   update(sessionId, { pageId, followTailRequested: false });
+}
+
+export function resetExploreAfterContextClear(sessionId: string): void {
+  clearTranscriptViewport(sessionId, "page");
+  tailStates.delete(sessionId);
+  states.set(sessionId, exploreStateAfterContextClear(get(sessionId)));
+  persist();
+  emit();
 }
 
 export function setExploreAtTail(sessionId: string, atTail: boolean): void {
