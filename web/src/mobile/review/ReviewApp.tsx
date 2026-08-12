@@ -2112,6 +2112,7 @@ export function ReviewApp({
             currentPath={sourceTarget?.path}
             onClose={() => setCloseRequest((value) => value + 1)}
             refreshToken={dataRevision}
+            contextLabel={projectCodeContext ? "Target branch" : "Worktree"}
           />
         )
         : (
@@ -2153,15 +2154,17 @@ export function ReviewApp({
               noWrap
             >
               {target.kind === "changes"
-                ? mode === "files" ? "Worktree" : "Changes"
+                ? mode === "files"
+                  ? projectCodeContext ? "Target branch" : "Worktree"
+                  : "Changes"
                 : target.path}
             </Typography>
             <Box
               component="button"
               type="button"
-              aria-label={`Switch session. Current session ${
-                currentSession?.title ?? "none"
-              }`}
+              aria-label={projectCodeContext
+                ? `Open context. Current target ${projectCodeContext.project}`
+                : `Switch session. Current session ${currentSession?.title ?? "none"}`}
               onClick={openContextSwitcher}
               sx={{
                 display: "flex",
@@ -2297,6 +2300,8 @@ export function ReviewApp({
               <Typography color="text.secondary">
                 {mode === "git"
                   ? "Select a changed file from Git review"
+                  : projectCodeContext
+                  ? "Select a file from the target branch"
                   : "Select a file from the Worktree"}
               </Typography>
             </Stack>
