@@ -14,6 +14,7 @@ import {
   KeyboardArrowDown,
   KeyboardArrowUp,
   Refresh,
+  Undo,
   VisibilityOutlined,
   WrapText,
 } from "@mui/icons-material";
@@ -37,6 +38,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -55,7 +57,6 @@ import {
   useStoreSelector,
 } from "../../store";
 import type { SessionMeta } from "../../protocol";
-import { sessionProjectLabel } from "../../sessionProject";
 import { useSurfaceProfile } from "../../surface/SurfaceProfile";
 import { newUuid } from "../../uuid";
 import {
@@ -95,6 +96,14 @@ import type { GitReviewEntry } from "./gitReviewModel";
 import { groupGitChanges, reviewQueue } from "./gitReviewModel";
 import { ReviewTabStrip } from "./ReviewTabStrip";
 import {
+  buildReviewContextProjects,
+  orderReviewContextProjects,
+  popReviewSessionHistory,
+  previousReviewSessionId,
+  pushReviewSessionHistory,
+  reviewSessionProject,
+} from "./reviewContextModel";
+import {
   adjacentReviewTabAfterClose,
   closeAllReviewTabs,
   closeOtherReviewTabs,
@@ -109,13 +118,6 @@ import {
 
 const CodeViewer = lazy(() => import("./CodeViewer"));
 
-function sessionProject(session: SessionMeta): string {
-  const stableProject = sessionProjectLabel(session);
-  if (stableProject) return stableProject;
-  const normalized = session.cwd.replace(/\/+$/, "");
-  return normalized.split("/").at(-1) || session.cwd;
-}
-
 function sessionStatusColor(status: SessionMeta["status"]): string {
   switch (status) {
     case "running":
@@ -128,6 +130,104 @@ function sessionStatusColor(status: SessionMeta["status"]): string {
     default:
       return "text.disabled";
   }
+}
+
+function ContextSessionRow({
+  session,
+  selected,
+  onPick,
+  showWorktree = true,
+}: {
+  session: SessionMeta;
+  selected: boolean;
+  onPick: () => void;
+  showWorktree?: boolean;
+}): React.JSX.Element {
+  return (
+    <ListItemButton
+      selected={selected}
+      onClick={onPick}
+      sx={{
+        minHeight: 64,
+        px: 1.25,
+        py: 0.75,
+        borderRadius: 1.5,
+        gap: 1.25,
+      }}
+    >
+      <Box
+        aria-label={`${session.status} session`}
+        sx={{
+          width: 8,
+          height: 8,
+          flex: "0 0 auto",
+          borderRadius: "50%",
+          bgcolor: sessionStatusColor(session.status),
+        }}
+      />
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Stack direction="row" spacing={0.75} alignItems="baseline">
+          <Typography
+            variant="body2"
+            fontWeight={selected ? 700 : 600}
+            noWrap
+          >
+            {session.title}
+          </Typography>
+          {selected && (
+            <Typography variant="caption" color="primary.main">
+              Current
+            </Typography>
+          )}
+        </Stack>
+        <Typography variant="caption" color="text.secondary" noWrap>
+          {session.machine_id ?? "local"} · {session.provider} ·{" "}
+          {reviewSessionProject(session)}
+        </Typography>
+        {showWorktree && (
+          <Typography
+            variant="caption"
+            color="text.disabled"
+            sx={{ display: "block" }}
+            noWrap
+          >
+            {session.cwd.replace(/\/+$/, "").split("/").at(-1) || session.cwd}
+          </Typography>
+        )}
+      </Box>
+      <ChevronRight color="disabled" fontSize="small" />
+    </ListItemButton>
+  );
+}
+
+function ContextPreviousSessionRow({
+  session,
+  onPick,
+}: {
+  session: SessionMeta;
+  onPick: () => void;
+}): React.JSX.Element {
+  return (
+    <ListItemButton
+      onClick={onPick}
+      sx={{
+        mx: 0.75,
+        minHeight: 56,
+        px: 1.25,
+        borderRadius: 2,
+        bgcolor: (theme) => alpha(theme.palette.primary.main, 0.075),
+      }}
+    >
+      <Undo color="primary" sx={{ mr: 1.25 }} />
+      <Box sx={{ minWidth: 0, flex: 1 }}>
+        <Typography variant="caption" color="primary.main" fontWeight={700}>
+          Previous session
+        </Typography>
+        <Typography variant="body2" noWrap>{session.title}</Typography>
+      </Box>
+      <ChevronRight color="disabled" fontSize="small" />
+    </ListItemButton>
+  );
 }
 
 type ReviewTarget =
@@ -1215,7 +1315,12 @@ export function ReviewApp({
   const [toggleDrawerRequest, setToggleDrawerRequest] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [sessionSwitcherOpen, setSessionSwitcherOpen] = useState(false);
+  const [contextTab, setContextTab] = useState<"recent" | "projects">("recent");
+  const [contextProjectKey, setContextProjectKey] = useState<string>();
+  const [sessionHistory, setSessionHistory] = useState<string[]>([]);
   const sessionListRef = useRef<HTMLDivElement>(null);
+  const observedSessionRef = useRef<string | undefined>(undefined);
+  const suppressedHistoryTargetRef = useRef<string | undefined>(undefined);
   const [reviewProgress, setReviewProgress] = useState<ReviewProgress>({});
   const [currentRevision, setCurrentRevision] = useState<string>();
   const [dataRevision, setDataRevision] = useState(0);
@@ -1786,32 +1891,79 @@ export function ReviewApp({
     session.id === workspace?.sessionId
   );
   const currentProject = repositoryContext?.project ??
-    (currentSession ? sessionProject(currentSession) : undefined);
-  // Match the primary mobile Sessions rail: server order is newest-first, while
-  // the physical list reads oldest-to-newest from top to bottom and opens at
-  // its live edge. Users move upward to older sessions.
-  const displayedSessions = [...sessions].reverse();
-  const projectSessions = displayedSessions.filter((session) =>
-    sessionProject(session) === currentProject
+    (currentSession ? reviewSessionProject(currentSession) : undefined);
+  const contextProjects = useMemo(
+    () => orderReviewContextProjects(
+      buildReviewContextProjects(sessions),
+      currentProject,
+      currentSession?.machine_id,
+    ),
+    [currentProject, currentSession?.machine_id, sessions],
   );
-  const otherSessions = displayedSessions.filter((session) =>
-    sessionProject(session) !== currentProject
+  const selectedContextProject = contextProjects.find((project) =>
+    project.key === contextProjectKey
   );
+  const sessionById = new Map(sessions.map((session) => [session.id, session]));
+  const previousSessionId = previousReviewSessionId(
+    sessionHistory,
+    workspace?.sessionId,
+    new Set(sessionById.keys()),
+  );
+  const previousSession = previousSessionId
+    ? sessionById.get(previousSessionId)
+    : undefined;
+  useEffect(() => {
+    const next = workspace?.sessionId;
+    const previous = observedSessionRef.current;
+    if (!next || next === previous) return;
+    if (previous && suppressedHistoryTargetRef.current !== next) {
+      setSessionHistory((history) => [
+        ...pushReviewSessionHistory(history, previous, next),
+      ]);
+    }
+    if (suppressedHistoryTargetRef.current === next) {
+      suppressedHistoryTargetRef.current = undefined;
+    }
+    observedSessionRef.current = next;
+  }, [workspace?.sessionId]);
+  useEffect(() => {
+    const valid = new Set(sessions.map((session) => session.id));
+    setSessionHistory((history) => history.filter((id) => valid.has(id)));
+  }, [sessions]);
   useEffect(() => {
     if (!sessionSwitcherOpen) return undefined;
     let frame = requestAnimationFrame(() => {
       frame = requestAnimationFrame(() => {
         const list = sessionListRef.current;
-        if (list) list.scrollTop = list.scrollHeight - list.clientHeight;
+        if (list) list.scrollTop = 0;
       });
     });
     return () => cancelAnimationFrame(frame);
-  }, [sessionSwitcherOpen]);
-  const switchSession = (session: SessionMeta): void => {
+  }, [contextProjectKey, contextTab, sessionSwitcherOpen]);
+  const switchSession = (session: SessionMeta, rememberCurrent = true): void => {
     navigationHaptic();
+    const currentId = workspace?.sessionId;
+    if (rememberCurrent && currentId && currentId !== session.id) {
+      setSessionHistory((history) => [
+        ...pushReviewSessionHistory(history, currentId, session.id),
+      ]);
+    }
+    suppressedHistoryTargetRef.current = session.id;
     setActiveSessionId(session.id);
     openSession(session.id);
     setSessionSwitcherOpen(false);
+  };
+  const returnToPreviousSession = (): void => {
+    if (!previousSession) return;
+    setSessionHistory((history) => [
+      ...popReviewSessionHistory(history, previousSession.id),
+    ]);
+    switchSession(previousSession, false);
+  };
+  const openContextSwitcher = (): void => {
+    navigationHaptic();
+    setContextProjectKey(undefined);
+    setSessionSwitcherOpen(true);
   };
 
   return (
@@ -1878,10 +2030,7 @@ export function ReviewApp({
               aria-label={`Switch session. Current session ${
                 currentSession?.title ?? "none"
               }`}
-              onClick={() => {
-                navigationHaptic();
-                setSessionSwitcherOpen(true);
-              }}
+              onClick={openContextSwitcher}
               sx={{
                 display: "flex",
                 alignItems: "center",
@@ -1934,6 +2083,15 @@ export function ReviewApp({
               />
             </Box>
           </Box>
+          {previousSession && (
+            <IconButton
+              aria-label={`Back to previous session ${previousSession.title}`}
+              onClick={returnToPreviousSession}
+              sx={{ ml: 0.25 }}
+            >
+              <Undo />
+            </IconButton>
+          )}
           {mode === "files" &&
             (navigationHistory.length > 0 ||
               navigationForwardHistory.length > 0) &&
@@ -2383,7 +2541,7 @@ export function ReviewApp({
           onClose={() => {
             setSessionSwitcherOpen(false);
           }}
-          title="Sessions"
+          title={selectedContextProject?.label ?? "Context"}
           forceSheet
           cover
         >
@@ -2398,101 +2556,182 @@ export function ReviewApp({
               pb: "calc(88px + env(safe-area-inset-bottom, 0px))",
             }}
           >
-            {[
-              { label: "Other sessions", sessions: otherSessions },
-              { label: "Current project", sessions: projectSessions },
-            ].map((section) =>
-              section.sessions.length > 0 && (
-                <Stack key={section.label} spacing={0.5}>
-                  <Typography
-                    variant="overline"
-                    color="text.secondary"
-                    sx={{ px: 1.25, fontWeight: 700, letterSpacing: "0.09em" }}
-                  >
-                    {section.label}
-                  </Typography>
-                  <Stack divider={<Divider flexItem />}>
-                    {section.sessions.map((session) => {
-                      const selected = session.id === workspace?.sessionId;
-                      const project = sessionProject(session);
-                      return (
-                        <ListItemButton
-                          key={session.id}
-                          selected={selected}
-                          onClick={() => switchSession(session)}
-                          sx={{
-                            minHeight: 68,
-                            px: 1.25,
-                            py: 0.75,
-                            borderRadius: 1.5,
-                            gap: 1.25,
-                          }}
-                        >
-                          <Box
-                            aria-label={`${session.status} session`}
-                            sx={{
-                              width: 8,
-                              height: 8,
-                              flex: "0 0 auto",
-                              borderRadius: "50%",
-                              bgcolor: sessionStatusColor(session.status),
-                            }}
-                          />
-                          <Box sx={{ flex: 1, minWidth: 0 }}>
-                            <Stack
-                              direction="row"
-                              spacing={0.75}
-                              alignItems="baseline"
-                            >
-                              <Typography
-                                variant="body2"
-                                fontWeight={selected ? 700 : 600}
-                                noWrap
-                              >
-                                {session.title}
-                              </Typography>
-                              {selected && (
-                                <Typography
-                                  variant="caption"
-                                  color="primary.main"
-                                >
-                                  Current
-                                </Typography>
-                              )}
-                            </Stack>
-                            <Stack spacing={0.125} sx={{ mt: 0.125 }}>
-                              <Typography
-                                variant="caption"
-                                color="text.secondary"
-                                noWrap
-                              >
-                                {session.machine_id ?? "local"} ·{" "}
-                                {session.provider} · {project}
-                              </Typography>
-                              <Typography
-                                variant="caption"
-                                color="text.disabled"
-                                noWrap
-                              >
-                                {session.cwd}
-                              </Typography>
-                            </Stack>
-                          </Box>
-                          <ChevronRight color="disabled" fontSize="small" />
-                        </ListItemButton>
-                      );
-                    })}
-                  </Stack>
-                </Stack>
-              )
+            {previousSession && (
+              <ContextPreviousSessionRow
+                session={previousSession}
+                onPick={returnToPreviousSession}
+              />
             )}
-            {displayedSessions.length === 0 && (
+            {!selectedContextProject && (
+              <Stack
+                direction="row"
+                role="tablist"
+                aria-label="Context views"
+                spacing={0.5}
+                sx={{ px: 0.75 }}
+              >
+                {(["recent", "projects"] as const).map((value) => (
+                  <Button
+                    key={value}
+                    role="tab"
+                    aria-selected={contextTab === value}
+                    onClick={() => setContextTab(value)}
+                    sx={{
+                      flex: 1,
+                      minHeight: 40,
+                      borderRadius: 2,
+                      bgcolor: contextTab === value
+                        ? "action.selected"
+                        : "transparent",
+                      color: contextTab === value
+                        ? "text.primary"
+                        : "text.secondary",
+                      textTransform: "none",
+                    }}
+                  >
+                    {value === "recent" ? "Recent" : "Projects"}
+                  </Button>
+                ))}
+              </Stack>
+            )}
+            {!selectedContextProject && contextTab === "recent" && (
+              <Stack spacing={0.5}>
+                <Typography
+                  variant="overline"
+                  color="text.secondary"
+                  sx={{ px: 1.25, fontWeight: 700, letterSpacing: "0.09em" }}
+                >
+                  Recent sessions
+                </Typography>
+                <Stack divider={<Divider flexItem />}>
+                  {sessions.map((session) => (
+                    <ContextSessionRow
+                      key={session.id}
+                      session={session}
+                      selected={session.id === workspace?.sessionId}
+                      onPick={() => switchSession(session)}
+                    />
+                  ))}
+                </Stack>
+              </Stack>
+            )}
+            {!selectedContextProject && contextTab === "projects" && (
+              <Stack spacing={0.5}>
+                <Typography
+                  variant="overline"
+                  color="text.secondary"
+                  sx={{ px: 1.25, fontWeight: 700, letterSpacing: "0.09em" }}
+                >
+                  Projects with sessions
+                </Typography>
+                <Stack divider={<Divider flexItem />}>
+                  {contextProjects.map((project) => {
+                    const selected = project.label === currentProject &&
+                      project.machineId ===
+                        (currentSession?.machine_id ?? "local");
+                    return (
+                      <ListItemButton
+                        key={project.key}
+                        selected={selected}
+                        onClick={() => setContextProjectKey(project.key)}
+                        sx={{ minHeight: 64, px: 1.25, borderRadius: 1.5 }}
+                      >
+                        <FolderOutlined
+                          color={selected ? "primary" : "disabled"}
+                          sx={{ mr: 1.25 }}
+                        />
+                        <Box sx={{ flex: 1, minWidth: 0 }}>
+                          <Typography variant="body2" fontWeight={650} noWrap>
+                            {project.label}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary" noWrap>
+                            {project.machineId} · {project.worktrees.length}{" "}
+                            worktree{project.worktrees.length === 1 ? "" : "s"} ·{" "}
+                            {project.sessions.length} session{project.sessions.length === 1 ? "" : "s"}
+                          </Typography>
+                        </Box>
+                        <ChevronRight color="disabled" fontSize="small" />
+                      </ListItemButton>
+                    );
+                  })}
+                </Stack>
+              </Stack>
+            )}
+            {selectedContextProject && (
+              <Stack spacing={1.25}>
+                <ListItemButton
+                  onClick={() => setContextProjectKey(undefined)}
+                  sx={{ alignSelf: "flex-start", minHeight: 44, borderRadius: 2 }}
+                >
+                  <ChevronLeft sx={{ mr: 0.75 }} />
+                  <Typography variant="body2" fontWeight={650}>All projects</Typography>
+                </ListItemButton>
+                {selectedContextProject.worktrees.map((worktree) => {
+                  const currentWorktree = worktree.path === currentSession?.cwd;
+                  const label = currentWorktree && repositoryContext?.branch
+                    ? repositoryContext.branch
+                    : worktree.label;
+                  const onlySession = worktree.sessions.length === 1
+                    ? worktree.sessions[0]
+                    : undefined;
+                  return (
+                    <Stack key={worktree.key} spacing={0.375}>
+                      <ListItemButton
+                        onClick={() => {
+                          const latest = worktree.sessions[0];
+                          if (latest) switchSession(latest);
+                        }}
+                        sx={{ minHeight: 64, px: 1.25, borderRadius: 1.5 }}
+                      >
+                        <AccountTreeOutlined color="primary" sx={{ mr: 1.25 }} />
+                        <Box sx={{ flex: 1, minWidth: 0 }}>
+                          <Typography variant="body2" fontWeight={700} noWrap>
+                            {label}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary" noWrap>
+                            {onlySession
+                              ? `Open worktree · ${onlySession.title}`
+                              : `Open worktree · ${worktree.sessions.length} sessions`}
+                          </Typography>
+                          <Typography
+                            variant="caption"
+                            color="text.disabled"
+                            sx={{ display: "block" }}
+                            noWrap
+                          >
+                            {worktree.path}
+                          </Typography>
+                        </Box>
+                        <ChevronRight color="disabled" fontSize="small" />
+                      </ListItemButton>
+                      {worktree.sessions.length > 1 && (
+                        <Stack
+                          sx={{ ml: 2.25, borderLeft: 1, borderColor: "divider" }}
+                          divider={<Divider flexItem />}
+                        >
+                          {worktree.sessions.map((session) => (
+                            <ContextSessionRow
+                              key={session.id}
+                              session={session}
+                              selected={session.id === workspace?.sessionId}
+                              showWorktree={false}
+                              onPick={() => switchSession(session)}
+                            />
+                          ))}
+                        </Stack>
+                      )}
+                    </Stack>
+                  );
+                })}
+              </Stack>
+            )}
+            {sessions.length === 0 && (
               <Typography
                 color="text.secondary"
                 variant="body2"
                 sx={{ py: 3, textAlign: "center" }}
               >
-                No matching sessions
+                No sessions yet
               </Typography>
             )}
           </Stack>
