@@ -160,7 +160,13 @@ impl Supervisor {
     }
 
     /// Start the worker for an already registered fresh session.
+    ///
+    /// A client can open the projected session before Machine workspace
+    /// preparation completes. If that raced an older controller into starting
+    /// a worker from the stable source checkout, fence that worker here so the
+    /// prepared session-owned cwd is authoritative.
     pub fn start_registered_session(&self, session_id: &str) -> Result<(), String> {
+        let _lifecycle = self.lifecycle.lock();
         let meta = self
             .hub
             .session_list()
@@ -169,7 +175,12 @@ impl Supervisor {
             .ok_or_else(|| format!("unknown session {session_id:?}"))?;
         let spec = provider::lookup(&meta.provider)
             .ok_or_else(|| format!("unknown provider {:?}", meta.provider))?;
-        self.ensure_worker(session_id, &spec, std::path::Path::new(&meta.cwd), None)
+        let runtime = self.runtime_for_session(session_id)?;
+        if runtime.has_worker(session_id) && !runtime.worker_matches_cwd(session_id, &meta.cwd) {
+            self.recycle_session_inner(session_id)
+        } else {
+            self.ensure_worker(session_id, &spec, std::path::Path::new(&meta.cwd), None)
+        }
     }
 
     /// Compatibility path for callers that already own a prepared workspace.
@@ -295,6 +306,23 @@ impl Supervisor {
         let _lifecycle = self.lifecycle.lock();
         if self.prepare_session_inner(session_id)? {
             return Ok(true);
+        }
+        let meta = self
+            .hub
+            .session_list()
+            .into_iter()
+            .find(|meta| meta.id == session_id)
+            .ok_or_else(|| format!("unknown session {session_id:?}"))?;
+        // Web creation registers the durable id against the stable source root
+        // before Machine asynchronously returns the isolated worktree. Opening
+        // that projected session must not spawn a worker from the source root.
+        // The preparation task updates `cwd` and calls start_registered_session.
+        if meta.status == Status::Starting
+            && meta.machine_id != "local"
+            && meta.origin == SessionOrigin::Web
+            && meta.workspace_source_path.as_deref() == Some(meta.cwd.as_str())
+        {
+            return Ok(false);
         }
         let runtime = self.runtime_for_session(session_id)?;
         if runtime.has_worker(session_id) {
@@ -695,6 +723,27 @@ mod tests {
         }
     }
 
+    fn preparing_web_session(hub: &Hub, cwd: &str) {
+        hub.create_session(SessionRegistration {
+            id: "s".to_owned(),
+            provider: "codex".to_owned(),
+            machine_id: "hawk".to_owned(),
+            workspace_id: Some("columbus".to_owned()),
+            workspace_name: Some("columbus".to_owned()),
+            workspace_source_path: Some(cwd.to_owned()),
+            cwd: cwd.to_owned(),
+            title: "test".to_owned(),
+            origin: SessionOrigin::Web,
+            system: false,
+        });
+    }
+
+    fn remote_supervisor(hub: Hub, runtime: Arc<RemoteRuntime>, root: PathBuf) -> Supervisor {
+        let router = RuntimeRouter::new();
+        router.install("hawk".to_owned(), runtime);
+        Supervisor::new(hub, root, 0, router)
+    }
+
     #[test]
     fn session_counter_honors_live_persistent_and_clock_floors() {
         let hub = Hub::new();
@@ -710,6 +759,84 @@ mod tests {
         assert_eq!(initial_counter(&hub, 50, 25), 100);
         assert_eq!(initial_counter(&hub, 196, 25), 196);
         assert_eq!(initial_counter(&hub, 196, 10_000), 10_000);
+    }
+
+    #[tokio::test]
+    async fn opening_registered_web_session_waits_for_isolated_workspace() {
+        let root = TestDir::new();
+        let source = root.path().join("columbus");
+        std::fs::create_dir_all(&source).expect("source");
+        let hub = Hub::new();
+        preparing_web_session(&hub, source.to_string_lossy().as_ref());
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        let supervisor = remote_supervisor(hub, runtime.clone(), root.0.clone());
+
+        assert!(
+            !supervisor
+                .ensure_alive("s")
+                .expect("open preparing session")
+        );
+        assert!(runtime.pending_for_test().is_empty());
+    }
+
+    #[tokio::test]
+    async fn prepared_workspace_recycles_worker_started_from_source_checkout() {
+        let root = TestDir::new();
+        let source = root.path().join("columbus");
+        let prepared = root.path().join("worktrees/s");
+        std::fs::create_dir_all(&source).expect("source");
+        std::fs::create_dir_all(&prepared).expect("prepared");
+        let hub = Hub::new();
+        preparing_web_session(&hub, source.to_string_lossy().as_ref());
+        let mut worker = worker_snapshot(source.to_string_lossy().as_ref());
+        worker.state = WorkerState::Running;
+        let runtime = RemoteRuntime::for_test(hub.clone(), vec![worker]);
+        let supervisor = remote_supervisor(hub.clone(), runtime.clone(), root.0.clone());
+        hub.update_session_cwd("s", prepared.display().to_string())
+            .expect("prepared cwd");
+
+        supervisor
+            .start_registered_session("s")
+            .expect("start prepared session");
+
+        let pending = runtime.pending_for_test();
+        assert!(pending.iter().any(|command| {
+            matches!(
+                command,
+                CoreCommand::EnsureSession { session }
+                    if session.cwd == prepared.to_string_lossy()
+            )
+        }));
+        assert!(pending.iter().any(|command| {
+            matches!(command, CoreCommand::StopSession { command_id, .. } if command_id.starts_with("reset-"))
+        }));
+    }
+
+    #[tokio::test]
+    async fn duplicate_prepared_workspace_start_remains_idempotent() {
+        let root = TestDir::new();
+        let prepared = root.path().join("worktrees/s");
+        std::fs::create_dir_all(&prepared).expect("prepared");
+        let hub = Hub::new();
+        preparing_web_session(&hub, prepared.to_string_lossy().as_ref());
+        let mut worker = worker_snapshot(prepared.to_string_lossy().as_ref());
+        worker.state = WorkerState::Running;
+        let runtime = RemoteRuntime::for_test(hub.clone(), vec![worker]);
+        let supervisor = remote_supervisor(hub, runtime.clone(), root.0.clone());
+
+        supervisor
+            .start_registered_session("s")
+            .expect("repeat prepared start");
+
+        let pending = runtime.pending_for_test();
+        assert!(pending.iter().any(|command| {
+            matches!(command, CoreCommand::EnsureSession { session } if session.cwd == prepared.to_string_lossy())
+        }));
+        assert!(
+            !pending
+                .iter()
+                .any(|command| matches!(command, CoreCommand::StopSession { .. }))
+        );
     }
 
     #[tokio::test]

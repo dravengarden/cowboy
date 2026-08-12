@@ -198,6 +198,16 @@ impl RemoteRuntime {
     }
 
     #[must_use]
+    pub fn worker_matches_cwd(&self, session_id: &str, cwd: &str) -> bool {
+        self.shared
+            .workers
+            .lock()
+            .get(session_id)
+            .and_then(|worker| worker.launch.as_ref())
+            .is_some_and(|session| session.cwd == cwd)
+    }
+
+    #[must_use]
     pub fn stats(&self) -> RemoteRuntimeStats {
         let workers = self.shared.workers.lock();
         RemoteRuntimeStats {
