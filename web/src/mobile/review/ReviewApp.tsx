@@ -1,6 +1,5 @@
 import {
   AccountTreeOutlined,
-  AddCircleOutline,
   ArrowBack,
   ArrowForward,
   CheckCircle,
@@ -55,7 +54,6 @@ import { Markdown } from "../../Markdown";
 import { Sheet } from "../../Sheet";
 import {
   mutateMobileReview,
-  markSessionHydrated,
   openSession,
   useMobileReviewState,
   useStoreSelector,
@@ -107,6 +105,7 @@ import {
   pushReviewSessionHistory,
   type ReviewContextProject,
   reviewSessionProject,
+  workspaceCodeContextId,
 } from "./reviewContextModel";
 import {
   adjacentReviewTabAfterClose,
@@ -218,9 +217,11 @@ function ContextSessionRow({
 
 function ContextPreviousSessionRow({
   session,
+  label = "Previous session",
   onPick,
 }: {
   session: SessionMeta;
+  label?: string;
   onPick: () => void;
 }): React.JSX.Element {
   return (
@@ -245,7 +246,7 @@ function ContextPreviousSessionRow({
           color="text.secondary"
           sx={{ display: "block", lineHeight: 1.2 }}
         >
-          Previous session
+          {label}
         </Typography>
         <Typography variant="body2" fontWeight={600} noWrap>
           {session.title}
@@ -1322,18 +1323,18 @@ export function ReviewApp({
   const boundWorkspace = useActiveWorkspaceBinding();
   const activeSessionId = useActiveSessionId();
   const sessions = useStoreSelector((snapshot) => snapshot.sessions);
-  const [pendingCreatedSession, setPendingCreatedSession] = useState<
-    SessionMeta | undefined
+  const [projectCodeContext, setProjectCodeContext] = useState<
+    {
+      sessionId: string;
+      cwd: string;
+      provider: string;
+      title: string;
+      machineId: string;
+      workspaceId: string;
+      project: string;
+    } | undefined
   >();
-  const workspace = pendingCreatedSession?.id === activeSessionId &&
-      !sessions.some((session) => session.id === pendingCreatedSession.id)
-    ? {
-      sessionId: pendingCreatedSession.id,
-      cwd: pendingCreatedSession.cwd,
-      provider: pendingCreatedSession.provider,
-      title: pendingCreatedSession.title,
-    }
-    : boundWorkspace;
+  const workspace = projectCodeContext ?? boundWorkspace;
   const controlPlaneActivity = useControlPlaneSessionActivity(
     workspace?.sessionId,
   );
@@ -1359,10 +1360,10 @@ export function ReviewApp({
   const [machineInventories, setMachineInventories] = useState<
     readonly ReviewMachineInventory[]
   >([]);
-  const [startingProjectKey, setStartingProjectKey] = useState<string>();
   const [contextError, setContextError] = useState<string>();
   const [sessionHistory, setSessionHistory] = useState<string[]>([]);
   const sessionListRef = useRef<HTMLDivElement>(null);
+  const projectContextSessionRef = useRef(activeSessionId);
   const observedSessionRef = useRef<string | undefined>(undefined);
   const suppressedHistoryTargetRef = useRef<string | undefined>(undefined);
   const [reviewProgress, setReviewProgress] = useState<ReviewProgress>({});
@@ -1932,11 +1933,12 @@ export function ReviewApp({
     });
   };
   const currentSession = sessions.find((session) =>
-    session.id === workspace?.sessionId
+    session.id === activeSessionId
   );
-  const currentProject = repositoryContext?.project ??
+  const currentProject = projectCodeContext?.project ?? repositoryContext?.project ??
     (currentSession ? reviewSessionProject(currentSession) : undefined);
-  const currentMachineId = currentSession?.machine_id ?? "local";
+  const currentMachineId = projectCodeContext?.machineId ??
+    currentSession?.machine_id ?? "local";
   const currentMachineInventory = machineInventories.find((machine) =>
     machine.id === currentMachineId
   );
@@ -1962,14 +1964,15 @@ export function ReviewApp({
   const sessionById = new Map(sessions.map((session) => [session.id, session]));
   const previousSessionId = previousReviewSessionId(
     sessionHistory,
-    workspace?.sessionId,
+    activeSessionId ?? undefined,
     new Set(sessionById.keys()),
   );
   const previousSession = previousSessionId
     ? sessionById.get(previousSessionId)
     : undefined;
+  const contextReturnSession = projectCodeContext ? currentSession : previousSession;
   useEffect(() => {
-    const next = workspace?.sessionId;
+    const next = activeSessionId;
     const previous = observedSessionRef.current;
     if (!next || next === previous) return;
     if (previous && suppressedHistoryTargetRef.current !== next) {
@@ -1981,17 +1984,17 @@ export function ReviewApp({
       suppressedHistoryTargetRef.current = undefined;
     }
     observedSessionRef.current = next;
-  }, [workspace?.sessionId]);
+  }, [activeSessionId]);
+  useEffect(() => {
+    if (projectContextSessionRef.current !== activeSessionId) {
+      projectContextSessionRef.current = activeSessionId;
+      setProjectCodeContext(undefined);
+    }
+  }, [activeSessionId]);
   useEffect(() => {
     const valid = new Set(sessions.map((session) => session.id));
     setSessionHistory((history) => history.filter((id) => valid.has(id)));
-    if (
-      pendingCreatedSession &&
-      sessions.some((session) => session.id === pendingCreatedSession.id)
-    ) {
-      setPendingCreatedSession(undefined);
-    }
-  }, [pendingCreatedSession, sessions]);
+  }, [sessions]);
   useEffect(() => {
     if (!sessionSwitcherOpen || contextTab !== "projects") return undefined;
     let cancelled = false;
@@ -2042,62 +2045,38 @@ export function ReviewApp({
   }, [contextProjectKey, contextTab, sessionSwitcherOpen]);
   const switchSession = (session: SessionMeta, rememberCurrent = true): void => {
     navigationHaptic();
-    const currentId = workspace?.sessionId;
+    const currentId = activeSessionId;
     if (rememberCurrent && currentId && currentId !== session.id) {
       setSessionHistory((history) => [
         ...pushReviewSessionHistory(history, currentId, session.id),
       ]);
     }
     suppressedHistoryTargetRef.current = session.id;
+    setProjectCodeContext(undefined);
     setActiveSessionId(session.id);
     openSession(session.id);
     setSessionSwitcherOpen(false);
   };
-  const startProjectWorktree = async (
-    project: ReviewContextProject,
-  ): Promise<void> => {
+  const openProjectTarget = (project: ReviewContextProject): void => {
     const registered = project.registeredWorkspace;
-    if (!registered || startingProjectKey) return;
+    if (!registered) return;
     navigationHaptic();
     setContextError(undefined);
-    setStartingProjectKey(project.key);
-    const provider = currentSession?.provider ?? "codex";
-    try {
-      const response = await fetch("/api/sessions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          provider,
-          machine_id: project.machineId,
-          cwd: registered.id,
-          origin: "web",
-        }),
-      });
-      if (!response.ok) throw new Error(await response.text());
-      const value = await response.json() as { session_id?: string };
-      if (!value.session_id) throw new Error("Machine did not return a session id");
-      const created: SessionMeta = {
-        id: value.session_id,
-        provider,
-        machine_id: project.machineId,
-        workspace_id: registered.id,
-        workspace_name: project.label,
-        workspace_source_path: registered.canonicalPath,
-        cwd: registered.canonicalPath,
-        title: `${provider} · ${project.label}`,
-        status: "starting",
-        origin: "web",
-      };
-      setPendingCreatedSession(created);
-      markSessionHydrated(created.id);
-      switchSession(created);
-    } catch (reason) {
-      setContextError(
-        reason instanceof Error ? reason.message : "Could not start session",
-      );
-    } finally {
-      setStartingProjectKey(undefined);
-    }
+    const sessionId = workspaceCodeContextId(project.machineId, registered.id);
+    mutateMobileReview(sessionId, "setMode", { mode: "files" });
+    setProjectCodeContext({
+      sessionId,
+      cwd: registered.canonicalPath,
+      provider: "read-only",
+      title: `Target · ${project.label}`,
+      machineId: project.machineId,
+      workspaceId: registered.id,
+      project: project.label,
+    });
+    setMode("files");
+    setSourceTarget(undefined);
+    setSessionSwitcherOpen(false);
+    setToggleDrawerRequest((value) => value + 1);
   };
   const returnToPreviousSession = (): void => {
     if (!previousSession) return;
@@ -2105,6 +2084,13 @@ export function ReviewApp({
       ...popReviewSessionHistory(history, previousSession.id),
     ]);
     switchSession(previousSession, false);
+  };
+  const returnToSessionContext = (): void => {
+    if (projectCodeContext && currentSession) {
+      switchSession(currentSession, false);
+      return;
+    }
+    returnToPreviousSession();
   };
   const openContextSwitcher = (): void => {
     navigationHaptic();
@@ -2201,7 +2187,9 @@ export function ReviewApp({
                   height: 6,
                   flex: "0 0 auto",
                   borderRadius: "50%",
-                  bgcolor: currentSession
+                  bgcolor: projectCodeContext
+                    ? "primary.main"
+                    : currentSession
                     ? sessionStatusColor(currentSession.status)
                     : "text.disabled",
                 }}
@@ -2214,9 +2202,12 @@ export function ReviewApp({
                     ? "Unstaged · "
                     : "Conflict · "
                   : ""}
-                {currentSession?.title ?? currentProject ??
+                {projectCodeContext
+                  ? `Target · ${projectCodeContext.project}`
+                  : currentSession?.title ?? currentProject ??
                   (workspace ? "Loading session…" : "Choose session")}
-                {currentProject && currentSession?.title !== currentProject
+                {!projectCodeContext && currentProject &&
+                    currentSession?.title !== currentProject
                   ? ` · ${currentProject}`
                   : ""}
                 {repositoryContext?.branch
@@ -2229,10 +2220,10 @@ export function ReviewApp({
               />
             </Box>
           </Box>
-          {previousSession && (
+          {contextReturnSession && (
             <IconButton
-              aria-label={`Back to previous session ${previousSession.title}`}
-              onClick={returnToPreviousSession}
+              aria-label={`Back to session ${contextReturnSession.title}`}
+              onClick={returnToSessionContext}
               sx={{ ml: 0.25 }}
             >
               <Undo />
@@ -2707,10 +2698,11 @@ export function ReviewApp({
                 {contextError}
               </Alert>
             )}
-            {previousSession && (
+            {contextReturnSession && (
               <ContextPreviousSessionRow
-                session={previousSession}
-                onPick={returnToPreviousSession}
+                session={contextReturnSession}
+                label={projectCodeContext ? "Current session" : "Previous session"}
+                onPick={returnToSessionContext}
               />
             )}
             {!selectedContextProject && (
@@ -2819,24 +2811,35 @@ export function ReviewApp({
                 </ListItemButton>
                 {selectedContextProject.registeredWorkspace && (
                   <ListItemButton
-                    disabled={Boolean(startingProjectKey)}
-                    onClick={() => void startProjectWorktree(selectedContextProject)}
+                    selected={projectCodeContext?.workspaceId ===
+                      selectedContextProject.registeredWorkspace.id &&
+                      projectCodeContext.machineId === selectedContextProject.machineId}
+                    onClick={() => openProjectTarget(selectedContextProject)}
                     sx={{
                       minHeight: 64,
                       px: 1.25,
                       borderRadius: 1.5,
-                      bgcolor: (theme) => alpha(theme.palette.primary.main, 0.055),
                     }}
                   >
-                    {startingProjectKey === selectedContextProject.key
-                      ? <CircularProgress size={22} sx={{ mr: 1.25 }} />
-                      : <AddCircleOutline color="primary" sx={{ mr: 1.25 }} />}
+                    <FolderOpenOutlined color="primary" sx={{ mr: 1.25 }} />
                     <Box sx={{ flex: 1, minWidth: 0 }}>
                       <Typography variant="body2" fontWeight={700} noWrap>
-                        New worktree
+                        {projectCodeContext?.workspaceId ===
+                            selectedContextProject.registeredWorkspace.id &&
+                            repositoryContext?.branch
+                          ? `Target · ${repositoryContext.branch}`
+                          : "Target branch"}
                       </Typography>
                       <Typography variant="caption" color="text.secondary" noWrap>
-                        Start from origin&apos;s default branch
+                        Browse the registered project checkout
+                      </Typography>
+                      <Typography
+                        variant="caption"
+                        color="text.disabled"
+                        sx={{ display: "block" }}
+                        noWrap
+                      >
+                        {selectedContextProject.registeredWorkspace.canonicalPath}
                       </Typography>
                     </Box>
                     <ChevronRight color="disabled" fontSize="small" />

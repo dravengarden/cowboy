@@ -4479,24 +4479,17 @@ async fn zed_adapter_request_for_session(
 
 async fn remote_code_request(
     state: &AppState,
-    session_id: &str,
+    machine_id: &str,
     cwd: &str,
     operation: serde_json::Value,
 ) -> anyhow::Result<Option<crate::code_adapter::CodeAdapterResponse>> {
-    let machine_id = state
-        .hub
-        .session_list()
-        .into_iter()
-        .find(|meta| meta.id == session_id)
-        .map(|meta| meta.machine_id)
-        .context("unknown session")?;
     if machine_id == "local" {
         return Ok(None);
     }
-    let colocated = match state.machine_control.is_colocated(&machine_id) {
+    let colocated = match state.machine_control.is_colocated(machine_id) {
         Some(value) => value,
         None => match state.store.as_ref() {
-            Some(store) => store.machine_is_local(&machine_id).await.unwrap_or(false),
+            Some(store) => store.machine_is_local(machine_id).await.unwrap_or(false),
             None => false,
         },
     };
@@ -4510,7 +4503,7 @@ async fn remote_code_request(
         .insert("root".to_owned(), serde_json::Value::String(cwd.to_owned()));
     let value = state
         .machine_control
-        .adapter_request(&machine_id, "code", request)
+        .adapter_request(machine_id, "code", request)
         .await
         .map_err(anyhow::Error::msg)?;
     Ok(Some(serde_json::from_value(value)?))
@@ -4643,19 +4636,14 @@ async fn api_search_files(
     Path(session_id): Path<String>,
     Query(query): Query<FileSearchQuery>,
 ) -> Response {
-    let Some(cwd) = state
-        .hub
-        .session_list()
-        .into_iter()
-        .find(|m| m.id == session_id)
-        .map(|m| m.cwd)
-    else {
+    let Some(context) = resolve_code_context(&state, &session_id).await else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
+    let cwd = context.cwd;
     let limit = query.limit.clamp(1, 100);
     let files = match remote_code_request(
         &state,
-        &session_id,
+        &context.machine_id,
         &cwd,
         serde_json::json!({ "type": "search", "query": query.q, "limit": limit }),
     )
@@ -4679,13 +4667,14 @@ async fn api_code_search(
     Path(session_id): Path<String>,
     Query(query): Query<FileSearchQuery>,
 ) -> Response {
-    let Some(cwd) = session_cwd(&state, &session_id) else {
-        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    let Some(context) = resolve_code_context(&state, &session_id).await else {
+        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
     };
+    let cwd = context.cwd;
     let limit = query.limit.clamp(1, 100);
     let files = match remote_code_request(
         &state,
-        &session_id,
+        &context.machine_id,
         &cwd,
         serde_json::json!({ "type": "search", "query": query.q, "limit": limit }),
     )
@@ -4720,21 +4709,16 @@ async fn api_file_tree(
     Query(query): Query<FileTreeQuery>,
     headers: HeaderMap,
 ) -> Response {
-    let Some(cwd) = state
-        .hub
-        .session_list()
-        .into_iter()
-        .find(|m| m.id == session_id)
-        .map(|m| m.cwd)
-    else {
-        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    let Some(context) = resolve_code_context(&state, &session_id).await else {
+        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
     };
+    let cwd = context.cwd;
     let limit = query.limit.clamp(20, 500);
     let path = query.path;
     let requested_path = path.clone();
     let remote_page = match remote_code_request(
         &state,
-        &session_id,
+        &context.machine_id,
         &cwd,
         serde_json::json!({ "type": "directory", "path": path.clone(), "limit": limit }),
     )
@@ -4837,6 +4821,73 @@ async fn api_file_tree(
     file_tree_http_response(&headers, &revision, body)
 }
 
+const WORKSPACE_CODE_CONTEXT_PREFIX: &str = "workspace::";
+
+struct ResolvedCodeContext {
+    machine_id: String,
+    cwd: String,
+    session_id: Option<String>,
+}
+
+fn parse_workspace_code_context(value: &str) -> Option<(&str, &str)> {
+    let value = value.strip_prefix(WORKSPACE_CODE_CONTEXT_PREFIX)?;
+    let (machine_id, workspace_id) = value.split_once("::")?;
+    (!machine_id.is_empty() && !workspace_id.is_empty() && !workspace_id.contains("::"))
+        .then_some((machine_id, workspace_id))
+}
+
+#[cfg(test)]
+mod workspace_code_context_tests {
+    use super::parse_workspace_code_context;
+
+    #[test]
+    fn only_explicit_machine_workspace_pairs_are_code_contexts() {
+        assert_eq!(
+            parse_workspace_code_context("workspace::hawk::cowboy"),
+            Some(("hawk", "cowboy"))
+        );
+        assert_eq!(parse_workspace_code_context("sess-123"), None);
+        assert_eq!(parse_workspace_code_context("workspace::::cowboy"), None);
+        assert_eq!(
+            parse_workspace_code_context("workspace::hawk::cowboy::extra"),
+            None
+        );
+    }
+}
+
+async fn resolve_code_context(state: &AppState, id: &str) -> Option<ResolvedCodeContext> {
+    if let Some((machine_id, workspace_id)) = parse_workspace_code_context(id) {
+        let store = state.store.as_ref()?;
+        let machines = store.list_machines().await.ok()?;
+        let machine = machines
+            .into_iter()
+            .find(|machine| machine.id == machine_id && !machine.revoked)?;
+        let workspaces: Vec<crate::machine_protocol::MachineWorkspace> = machine
+            .inventory
+            .get("workspaces")
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok())?;
+        let workspace = workspaces
+            .into_iter()
+            .find(|workspace| workspace.id == workspace_id)?;
+        return Some(ResolvedCodeContext {
+            machine_id: machine.id,
+            cwd: workspace.canonical_path,
+            session_id: None,
+        });
+    }
+    state
+        .hub
+        .session_list()
+        .into_iter()
+        .find(|meta| meta.id == id)
+        .map(|meta| ResolvedCodeContext {
+            machine_id: meta.machine_id,
+            cwd: meta.cwd,
+            session_id: Some(meta.id),
+        })
+}
+
 fn session_cwd(state: &AppState, session_id: &str) -> Option<String> {
     state
         .hub
@@ -4851,19 +4902,24 @@ async fn api_code_manifest(
     Path(session_id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    let Some(cwd) = session_cwd(&state, &session_id) else {
-        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    let Some(context) = resolve_code_context(&state, &session_id).await else {
+        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
     };
-    let language_ready = match ensure_zed_worktree_for_session(&state, &session_id, &cwd).await {
-        Ok(ready) => ready,
-        Err(error) => {
-            tracing::warn!(session = %session_id, %error, "Zed adapter unavailable");
-            false
+    let cwd = context.cwd;
+    let language_ready = if context.session_id.is_some() {
+        match ensure_zed_worktree_for_session(&state, &session_id, &cwd).await {
+            Ok(ready) => ready,
+            Err(error) => {
+                tracing::warn!(session = %session_id, %error, "Zed adapter unavailable");
+                false
+            }
         }
+    } else {
+        false
     };
     let manifest = match remote_code_request(
         &state,
-        &session_id,
+        &context.machine_id,
         &cwd,
         serde_json::json!({ "type": "manifest" }),
     )
@@ -4946,12 +5002,13 @@ async fn api_code_changes(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
 ) -> Response {
-    let Some(cwd) = session_cwd(&state, &session_id) else {
-        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    let Some(context) = resolve_code_context(&state, &session_id).await else {
+        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
     };
+    let cwd = context.cwd;
     let result = match remote_code_request(
         &state,
-        &session_id,
+        &context.machine_id,
         &cwd,
         serde_json::json!({ "type": "changes" }),
     )
@@ -5004,12 +5061,13 @@ async fn api_code_repository(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
 ) -> Response {
-    let Some(cwd) = session_cwd(&state, &session_id) else {
-        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    let Some(context) = resolve_code_context(&state, &session_id).await else {
+        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
     };
+    let cwd = context.cwd;
     let result = match remote_code_request(
         &state,
-        &session_id,
+        &context.machine_id,
         &cwd,
         serde_json::json!({ "type": "repository" }),
     )
@@ -5045,13 +5103,14 @@ async fn api_code_commit(
     Path(session_id): Path<String>,
     Query(query): Query<CodeCommitQuery>,
 ) -> Response {
-    let Some(cwd) = session_cwd(&state, &session_id) else {
-        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    let Some(context) = resolve_code_context(&state, &session_id).await else {
+        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
     };
+    let cwd = context.cwd;
     let oid = query.oid;
     let result = match remote_code_request(
         &state,
-        &session_id,
+        &context.machine_id,
         &cwd,
         serde_json::json!({ "type": "commit", "oid": oid.clone() }),
     )
@@ -5084,14 +5143,15 @@ async fn api_code_commit_diff(
     Path(session_id): Path<String>,
     Query(query): Query<CodeCommitDiffQuery>,
 ) -> Response {
-    let Some(cwd) = session_cwd(&state, &session_id) else {
-        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    let Some(context) = resolve_code_context(&state, &session_id).await else {
+        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
     };
+    let cwd = context.cwd;
     let oid = query.oid;
     let path = query.path;
     let result = match remote_code_request(
         &state,
-        &session_id,
+        &context.machine_id,
         &cwd,
         serde_json::json!({ "type": "commit_diff", "oid": oid.clone(), "path": path.clone() }),
     )
@@ -5154,9 +5214,10 @@ async fn api_code_diff(
             Err(error) => (StatusCode::BAD_REQUEST, error).into_response(),
         };
     }
-    let Some(cwd) = session_cwd(&state, &session_id) else {
-        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    let Some(context) = resolve_code_context(&state, &session_id).await else {
+        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
     };
+    let cwd = context.cwd;
     let Some(path) = query.path else {
         return (StatusCode::BAD_REQUEST, "path is required").into_response();
     };
@@ -5175,7 +5236,7 @@ async fn api_code_diff(
     };
     let remote_document = match remote_code_request(
         &state,
-        &session_id,
+        &context.machine_id,
         &cwd,
         serde_json::json!({
             "type": "diff",
@@ -5234,12 +5295,13 @@ async fn api_code_file(
     Query(query): Query<CodeFileQuery>,
     headers: HeaderMap,
 ) -> Response {
-    let Some(cwd) = session_cwd(&state, &session_id) else {
-        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    let Some(context) = resolve_code_context(&state, &session_id).await else {
+        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
     };
+    let cwd = context.cwd;
     let result = match remote_code_request(
         &state,
-        &session_id,
+        &context.machine_id,
         &cwd,
         serde_json::json!({ "type": "file", "path": query.path.clone(), "cursor": query.cursor.clone() }),
     )

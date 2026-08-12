@@ -23,6 +23,10 @@ export interface ReviewRegisteredWorkspace {
   readonly canonicalPath: string;
 }
 
+export function workspaceCodeContextId(machineId: string, workspaceId: string): string {
+  return `workspace::${machineId}::${workspaceId}`;
+}
+
 function fallbackProject(session: SessionMeta): string {
   const normalized = session.cwd.replace(/\/+$/, "");
   return normalized.split("/").at(-1) || session.cwd;

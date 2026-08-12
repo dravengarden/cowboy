@@ -6,8 +6,13 @@ import {
   popReviewSessionHistory,
   previousReviewSessionId,
   pushReviewSessionHistory,
+  workspaceCodeContextId,
   worktreeLabel,
 } from "./reviewContextModel";
+
+Deno.test("registered workspaces use an explicit non-session code context id", () => {
+  assertEquals(workspaceCodeContextId("hawk", "cowboy"), "workspace::hawk::cowboy");
+});
 
 function session(
   id: string,
