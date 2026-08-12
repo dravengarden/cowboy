@@ -19,6 +19,7 @@ import {
   WrapText,
 } from "@mui/icons-material";
 import {
+  Alert,
   Badge,
   Box,
   Button,
@@ -44,6 +45,7 @@ import {
 } from "react";
 import {
   setActiveSessionId,
+  useActiveSessionId,
   useActiveWorkspaceBinding,
   useControlPlaneSessionActivity,
 } from "../../controlPlane";
@@ -52,6 +54,7 @@ import { Markdown } from "../../Markdown";
 import { Sheet } from "../../Sheet";
 import {
   mutateMobileReview,
+  markSessionHydrated,
   openSession,
   useMobileReviewState,
   useStoreSelector,
@@ -101,6 +104,8 @@ import {
   popReviewSessionHistory,
   previousReviewSessionId,
   pushReviewSessionHistory,
+  type ReviewContextProject,
+  type ReviewContextWorktree,
   reviewSessionProject,
 } from "./reviewContextModel";
 import {
@@ -117,6 +122,17 @@ import {
 } from "./reviewTabs";
 
 const CodeViewer = lazy(() => import("./CodeViewer"));
+
+type ReviewMachineInventory = {
+  id: string;
+  status: string;
+  workspace_revision?: string;
+  workspaces: readonly {
+    id: string;
+    display_name: string;
+    canonical_path: string;
+  }[];
+};
 
 function sessionStatusColor(status: SessionMeta["status"]): string {
   switch (status) {
@@ -1293,8 +1309,21 @@ export function ReviewApp({
   active: boolean;
   onDrawerOpenChange: (open: boolean) => void;
 }): React.JSX.Element {
-  const workspace = useActiveWorkspaceBinding();
+  const boundWorkspace = useActiveWorkspaceBinding();
+  const activeSessionId = useActiveSessionId();
   const sessions = useStoreSelector((snapshot) => snapshot.sessions);
+  const [pendingCreatedSession, setPendingCreatedSession] = useState<
+    SessionMeta | undefined
+  >();
+  const workspace = pendingCreatedSession?.id === activeSessionId &&
+      !sessions.some((session) => session.id === pendingCreatedSession.id)
+    ? {
+      sessionId: pendingCreatedSession.id,
+      cwd: pendingCreatedSession.cwd,
+      provider: pendingCreatedSession.provider,
+      title: pendingCreatedSession.title,
+    }
+    : boundWorkspace;
   const controlPlaneActivity = useControlPlaneSessionActivity(
     workspace?.sessionId,
   );
@@ -1317,6 +1346,11 @@ export function ReviewApp({
   const [sessionSwitcherOpen, setSessionSwitcherOpen] = useState(false);
   const [contextTab, setContextTab] = useState<"recent" | "projects">("recent");
   const [contextProjectKey, setContextProjectKey] = useState<string>();
+  const [machineInventories, setMachineInventories] = useState<
+    readonly ReviewMachineInventory[]
+  >([]);
+  const [startingWorkspaceKey, setStartingWorkspaceKey] = useState<string>();
+  const [contextError, setContextError] = useState<string>();
   const [sessionHistory, setSessionHistory] = useState<string[]>([]);
   const sessionListRef = useRef<HTMLDivElement>(null);
   const observedSessionRef = useRef<string | undefined>(undefined);
@@ -1892,13 +1926,25 @@ export function ReviewApp({
   );
   const currentProject = repositoryContext?.project ??
     (currentSession ? reviewSessionProject(currentSession) : undefined);
+  const currentMachineId = currentSession?.machine_id ?? "local";
+  const currentMachineInventory = machineInventories.find((machine) =>
+    machine.id === currentMachineId
+  );
   const contextProjects = useMemo(
     () => orderReviewContextProjects(
-      buildReviewContextProjects(sessions),
+      buildReviewContextProjects(
+        sessions,
+        currentMachineId,
+        (currentMachineInventory?.workspaces ?? []).map((registered) => ({
+          id: registered.id,
+          displayName: registered.display_name,
+          canonicalPath: registered.canonical_path,
+        })),
+      ),
       currentProject,
-      currentSession?.machine_id,
+      currentMachineId,
     ),
-    [currentProject, currentSession?.machine_id, sessions],
+    [currentMachineId, currentMachineInventory?.workspaces, currentProject, sessions],
   );
   const selectedContextProject = contextProjects.find((project) =>
     project.key === contextProjectKey
@@ -1929,7 +1975,51 @@ export function ReviewApp({
   useEffect(() => {
     const valid = new Set(sessions.map((session) => session.id));
     setSessionHistory((history) => history.filter((id) => valid.has(id)));
-  }, [sessions]);
+    if (
+      pendingCreatedSession &&
+      sessions.some((session) => session.id === pendingCreatedSession.id)
+    ) {
+      setPendingCreatedSession(undefined);
+    }
+  }, [pendingCreatedSession, sessions]);
+  useEffect(() => {
+    if (!sessionSwitcherOpen || contextTab !== "projects") return undefined;
+    let cancelled = false;
+    let settleTimer: number | undefined;
+    let refreshing = false;
+    const load = async (): Promise<void> => {
+      try {
+        const response = await fetch("/api/machines", { cache: "no-store" });
+        if (!response.ok) return;
+        const value = await response.json() as ReviewMachineInventory[];
+        if (!cancelled && Array.isArray(value)) setMachineInventories(value);
+      } catch {
+        // Retain the last good inventory while the control plane reconnects.
+      }
+    };
+    const refresh = async (): Promise<void> => {
+      if (refreshing || cancelled || currentMachineId === "local") return;
+      refreshing = true;
+      try {
+        await fetch(
+          `/api/machines/${encodeURIComponent(currentMachineId)}/refresh`,
+          { method: "POST" },
+        );
+      } catch {
+        // GET below remains useful with the last Machine-published revision.
+      } finally {
+        refreshing = false;
+      }
+      settleTimer = globalThis.setTimeout(() => void load(), 400);
+    };
+    void load().then(refresh);
+    const interval = globalThis.setInterval(refresh, 5_000);
+    return () => {
+      cancelled = true;
+      globalThis.clearInterval(interval);
+      if (settleTimer !== undefined) globalThis.clearTimeout(settleTimer);
+    };
+  }, [contextTab, currentMachineId, sessionSwitcherOpen]);
   useEffect(() => {
     if (!sessionSwitcherOpen) return undefined;
     let frame = requestAnimationFrame(() => {
@@ -1952,6 +2042,57 @@ export function ReviewApp({
     setActiveSessionId(session.id);
     openSession(session.id);
     setSessionSwitcherOpen(false);
+  };
+  const openWorktree = async (
+    project: ReviewContextProject,
+    worktree: ReviewContextWorktree,
+  ): Promise<void> => {
+    const latest = worktree.sessions[0];
+    if (latest) {
+      switchSession(latest);
+      return;
+    }
+    if (!worktree.workspaceId || startingWorkspaceKey) return;
+    navigationHaptic();
+    setContextError(undefined);
+    setStartingWorkspaceKey(worktree.key);
+    const provider = currentSession?.provider ?? "codex";
+    try {
+      const response = await fetch("/api/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider,
+          machine_id: project.machineId,
+          cwd: worktree.workspaceId,
+          origin: "web",
+        }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const value = await response.json() as { session_id?: string };
+      if (!value.session_id) throw new Error("Machine did not return a session id");
+      const created: SessionMeta = {
+        id: value.session_id,
+        provider,
+        machine_id: project.machineId,
+        workspace_id: worktree.workspaceId,
+        workspace_name: project.label,
+        workspace_source_path: worktree.path,
+        cwd: worktree.path,
+        title: `${provider} · ${project.label}`,
+        status: "starting",
+        origin: "web",
+      };
+      setPendingCreatedSession(created);
+      markSessionHydrated(created.id);
+      switchSession(created);
+    } catch (reason) {
+      setContextError(
+        reason instanceof Error ? reason.message : "Could not start session",
+      );
+    } finally {
+      setStartingWorkspaceKey(undefined);
+    }
   };
   const returnToPreviousSession = (): void => {
     if (!previousSession) return;
@@ -2556,6 +2697,11 @@ export function ReviewApp({
               pb: "calc(88px + env(safe-area-inset-bottom, 0px))",
             }}
           >
+            {contextError && (
+              <Alert severity="error" onClose={() => setContextError(undefined)}>
+                {contextError}
+              </Alert>
+            )}
             {previousSession && (
               <ContextPreviousSessionRow
                 session={previousSession}
@@ -2622,13 +2768,13 @@ export function ReviewApp({
                   color="text.secondary"
                   sx={{ px: 1.25, fontWeight: 700, letterSpacing: "0.09em" }}
                 >
-                  Projects with sessions
+                  Registered projects
                 </Typography>
                 <Stack divider={<Divider flexItem />}>
                   {contextProjects.map((project) => {
                     const selected = project.label === currentProject &&
                       project.machineId ===
-                        (currentSession?.machine_id ?? "local");
+                        currentMachineId;
                     return (
                       <ListItemButton
                         key={project.key}
@@ -2677,13 +2823,19 @@ export function ReviewApp({
                   return (
                     <Stack key={worktree.key} spacing={0.375}>
                       <ListItemButton
-                        onClick={() => {
-                          const latest = worktree.sessions[0];
-                          if (latest) switchSession(latest);
-                        }}
+                        disabled={Boolean(
+                          startingWorkspaceKey &&
+                            startingWorkspaceKey !== worktree.key
+                        )}
+                        onClick={() => void openWorktree(
+                          selectedContextProject,
+                          worktree,
+                        )}
                         sx={{ minHeight: 64, px: 1.25, borderRadius: 1.5 }}
                       >
-                        <AccountTreeOutlined color="primary" sx={{ mr: 1.25 }} />
+                        {startingWorkspaceKey === worktree.key
+                          ? <CircularProgress size={22} sx={{ mr: 1.25 }} />
+                          : <AccountTreeOutlined color="primary" sx={{ mr: 1.25 }} />}
                         <Box sx={{ flex: 1, minWidth: 0 }}>
                           <Typography variant="body2" fontWeight={700} noWrap>
                             {label}
@@ -2691,7 +2843,9 @@ export function ReviewApp({
                           <Typography variant="caption" color="text.secondary" noWrap>
                             {onlySession
                               ? `Open worktree · ${onlySession.title}`
-                              : `Open worktree · ${worktree.sessions.length} sessions`}
+                              : worktree.sessions.length > 1
+                              ? `Open worktree · ${worktree.sessions.length} sessions`
+                              : "Start session in this worktree"}
                           </Typography>
                           <Typography
                             variant="caption"
@@ -2725,7 +2879,7 @@ export function ReviewApp({
                 })}
               </Stack>
             )}
-            {sessions.length === 0 && (
+            {contextTab === "recent" && sessions.length === 0 && (
               <Typography
                 color="text.secondary"
                 variant="body2"

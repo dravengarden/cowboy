@@ -33,7 +33,7 @@ Deno.test("review contexts group newest-first sessions by project and worktree",
     session("old", "/worktrees/cowboy/feature", "cowboy"),
     session("main", "/home/draven/columbus/projects/cowboy", "cowboy"),
     session("stormbird", "/worktrees/stormbird/fix", "stormbird"),
-  ]);
+  ], "hawk");
 
   assertEquals(projects.map((project) => project.label), ["cowboy", "stormbird"]);
   assertEquals(projects[0]?.worktrees.map((worktree) => worktree.label), [
@@ -46,12 +46,37 @@ Deno.test("review contexts group newest-first sessions by project and worktree",
   ]);
 });
 
-Deno.test("review contexts keep same-named projects on different machines distinct", () => {
+Deno.test("review contexts expose every registered project without a session", () => {
   const projects = buildReviewContextProjects([
     session("hawk", "/hawk/cowboy", "cowboy", "hawk"),
     session("falcon", "/falcon/cowboy", "cowboy", "falcon"),
-  ]);
-  assertEquals(projects.map((project) => project.machineId), ["hawk", "falcon"]);
+  ], "hawk", [{
+    id: "skydriver",
+    displayName: "skydriver",
+    canonicalPath: "/home/draven/columbus/projects/skydriver",
+  }]);
+  assertEquals(projects.map((project) => project.label), ["skydriver", "cowboy"]);
+  assertEquals(projects[0]?.sessions, []);
+  assertEquals(projects[0]?.worktrees, [{
+    key: "hawk\u0000/home/draven/columbus/projects/skydriver",
+    path: "/home/draven/columbus/projects/skydriver",
+    label: "Stable checkout",
+    workspaceId: "skydriver",
+    sessions: [],
+  }]);
+});
+
+Deno.test("review contexts merge a stable-checkout session into inventory", () => {
+  const projects = buildReviewContextProjects([
+    session("main", "/home/draven/columbus/projects/cowboy", "cowboy"),
+  ], "hawk", [{
+    id: "cowboy",
+    displayName: "cowboy",
+    canonicalPath: "/home/draven/columbus/projects/cowboy",
+  }]);
+  assertEquals(projects[0]?.worktrees.length, 1);
+  assertEquals(projects[0]?.worktrees[0]?.workspaceId, "cowboy");
+  assertEquals(projects[0]?.worktrees[0]?.sessions.map((value) => value.id), ["main"]);
 });
 
 Deno.test("current review project sorts first without disturbing alphabetical peers", () => {
@@ -59,7 +84,7 @@ Deno.test("current review project sorts first without disturbing alphabetical pe
     session("z", "/z", "zeta"),
     session("a", "/a", "alpha"),
     session("c", "/c", "cowboy"),
-  ]);
+  ], "hawk");
   assertEquals(
     orderReviewContextProjects(projects, "cowboy", "hawk").map((project) =>
       project.label
