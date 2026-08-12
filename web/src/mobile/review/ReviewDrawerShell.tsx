@@ -1,5 +1,6 @@
 import { Box } from "@mui/material";
 import { useEffect, useRef, useState } from "react";
+import { mobileSpatialDrawerShadow } from "../../mobileDrawerDepth";
 import { bindMobileSpatialDrawer } from "../../mobileSpatialDrawer";
 import { holdStorePresentation } from "../../store";
 
@@ -103,7 +104,7 @@ export function ReviewDrawerShell({
           zIndex: 0,
           inset: 0,
           bgcolor: "background.default",
-          boxShadow: open ? "-18px 0 42px rgba(0,0,0,0.16)" : "none",
+          boxShadow: open ? mobileSpatialDrawerShadow("right") : "none",
           pointerEvents: "none",
           backfaceVisibility: "hidden",
           willChange: "transform",

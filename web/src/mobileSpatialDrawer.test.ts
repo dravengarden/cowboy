@@ -1,4 +1,5 @@
 import { assert, assertEquals } from "jsr:@std/assert";
+import { mobileSpatialDrawerShadow } from "./mobileDrawerDepth.ts";
 
 const drawerSource = await Deno.readTextFile(
   new URL("./mobileSpatialDrawer.ts", import.meta.url),
@@ -18,6 +19,17 @@ Deno.test("mobile drawer keeps clipping and shadows off the heavy surface", () =
   assertEquals(drawerSource.includes("surface.style.boxShadow"), false);
   assert(drawerSource.includes("drawerMask.style.boxShadow"));
   assert(drawerSource.includes('surface.style.willChange = "transform"'));
+});
+
+Deno.test("drawer shadows project back toward each revealed drawer", () => {
+  assertEquals(
+    mobileSpatialDrawerShadow("left"),
+    "-18px 0 42px rgba(0,0,0,0.16)",
+  );
+  assertEquals(
+    mobileSpatialDrawerShadow("right"),
+    "18px 0 42px rgba(0,0,0,0.16)",
+  );
 });
 
 Deno.test("Agent drawer publishes pager ownership synchronously", () => {
@@ -42,13 +54,13 @@ Deno.test("settled drawers retain declarative depth and pager ownership", () => 
     'data-mobile-drawer-presented={mobile && drawerOpen ? "true" : undefined}',
   ));
   assert(appSource.includes(
-    'boxShadow: drawerOpen\n                            ? "18px 0 42px rgba(0,0,0,0.16)"',
+    'boxShadow: drawerOpen\n                            ? mobileSpatialDrawerShadow("left")',
   ));
   assert(reviewDrawerSource.includes(
     'data-mobile-drawer-presented={open ? "true" : undefined}',
   ));
   assert(reviewDrawerSource.includes(
-    'boxShadow: open ? "-18px 0 42px rgba(0,0,0,0.16)" : "none"',
+    'boxShadow: open ? mobileSpatialDrawerShadow("right") : "none"',
   ));
   assert(productShellSource.includes(
     '"[data-mobile-drawer-presented=\'true\']',

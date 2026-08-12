@@ -110,6 +110,7 @@ import {
 import { useSortable } from "./useSortable";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 import { bindMobileSpatialDrawer } from "./mobileSpatialDrawer";
+import { mobileSpatialDrawerShadow } from "./mobileDrawerDepth";
 import { sessionDrawerTargetScroll } from "./mobileDrawerMotion";
 import { setNotifySetting, setVibrateSetting, useNotifySetting, useVibrateSetting } from "./turnNotify";
 import {
@@ -2456,7 +2457,7 @@ export function App({
                         // cleanup must never make an already-open drawer look
                         // closed or release the outer product pager.
                         boxShadow: drawerOpen
-                            ? "18px 0 42px rgba(0,0,0,0.16)"
+                            ? mobileSpatialDrawerShadow("left")
                             : "none",
                         pointerEvents: "none",
                         backfaceVisibility: "hidden",
