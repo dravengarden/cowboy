@@ -143,6 +143,13 @@ Deno.test("context management commands do not create question pages", () => {
   assertEquals(pages[0]?.itemKeys, ["1", "2", "3", "4"]);
 });
 
+Deno.test("a cleared empty transcript is not a provisional question page", () => {
+  assertEquals(
+    deriveQuestionPages([{ key: "9", kind: "cleared", at: 123 }]),
+    [],
+  );
+});
+
 Deno.test("question title is compact and strips common markdown wrappers", () => {
   assertEquals(
     questionTitle(user("1", "## [Prompt caching](https://example.test)\nDetails"), 1),
