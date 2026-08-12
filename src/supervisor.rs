@@ -326,6 +326,10 @@ impl Supervisor {
         }
         let runtime = self.runtime_for_session(session_id)?;
         if runtime.has_worker(session_id) {
+            if meta.status != Status::Busy && !runtime.worker_matches_cwd(session_id, &meta.cwd) {
+                self.recycle_session_inner(session_id)?;
+                return Ok(true);
+            }
             return Ok(false);
         }
         runtime.ensure(self.start_session(session_id)?);
@@ -837,6 +841,57 @@ mod tests {
                 .iter()
                 .any(|command| matches!(command, CoreCommand::StopSession { .. }))
         );
+    }
+
+    #[tokio::test]
+    async fn opening_idle_session_repairs_a_stale_worker_cwd() {
+        let root = TestDir::new();
+        let source = root.path().join("columbus");
+        let prepared = root.path().join("worktrees/s");
+        std::fs::create_dir_all(&source).expect("source");
+        std::fs::create_dir_all(&prepared).expect("prepared");
+        let hub = Hub::new();
+        preparing_web_session(&hub, source.to_string_lossy().as_ref());
+        hub.update_session_cwd("s", prepared.display().to_string())
+            .expect("prepared cwd");
+        hub.set_status("s", Status::Running, None);
+        let mut worker = worker_snapshot(source.to_string_lossy().as_ref());
+        worker.state = WorkerState::Running;
+        let runtime = RemoteRuntime::for_test(hub.clone(), vec![worker]);
+        let supervisor = remote_supervisor(hub, runtime.clone(), root.0.clone());
+
+        assert!(supervisor.ensure_alive("s").expect("open stale worker"));
+
+        let pending = runtime.pending_for_test();
+        assert!(pending.iter().any(|command| {
+            matches!(command, CoreCommand::EnsureSession { session } if session.cwd == prepared.to_string_lossy())
+        }));
+        assert!(
+            pending
+                .iter()
+                .any(|command| matches!(command, CoreCommand::StopSession { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn opening_busy_session_defers_stale_worker_repair() {
+        let root = TestDir::new();
+        let source = root.path().join("columbus");
+        let prepared = root.path().join("worktrees/s");
+        std::fs::create_dir_all(&source).expect("source");
+        std::fs::create_dir_all(&prepared).expect("prepared");
+        let hub = Hub::new();
+        preparing_web_session(&hub, source.to_string_lossy().as_ref());
+        hub.update_session_cwd("s", prepared.display().to_string())
+            .expect("prepared cwd");
+        hub.set_status("s", Status::Busy, None);
+        let mut worker = worker_snapshot(source.to_string_lossy().as_ref());
+        worker.state = WorkerState::Busy;
+        let runtime = RemoteRuntime::for_test(hub.clone(), vec![worker]);
+        let supervisor = remote_supervisor(hub, runtime.clone(), root.0.clone());
+
+        assert!(!supervisor.ensure_alive("s").expect("open busy worker"));
+        assert!(runtime.pending_for_test().is_empty());
     }
 
     #[tokio::test]
