@@ -1334,20 +1334,18 @@ Desktop Vim + IME checks:
     touch marker. Do not intercept the touch sequence or disable ripple/selection
     semantics to repair paint.
 
-63. **A focused native textarea must fill its writing canvas, not sit above
-    inert flex space.** At fractional reading sizes MUI can report
-    `scrollHeight` one CSS pixel above a short autosized `clientHeight` while the
-    complete text is visible. Hiding the scrollbar is insufficient: the
-    textarea still owns a scrollable `WKChildScrollView`, and iOS renders its
-    caret in a UIKit selection overlay. A trailing Return can change the child
-    offset without invalidating that overlay, leaving the visible caret one line
-    above the logical selection until the next character. While the
-    keyboard-focused Composer already owns a writing canvas, stretch the real
-    textarea (not MUI's hidden measurement mirror) to its full height. Keep the
-    idle Composer content-sized, and enable native scrolling only when long
-    content genuinely exceeds the focused canvas. MUI's TextareaAutosize also
-    rewrites an end selection after a trailing newline, so an actual internal
-    scroll range must not remain during that input transaction. Do not repair
-    this with a zero-width sentinel, another selection rewrite, blur/refocus, a
-    fake caret, or a transform/repaint nudge; each competes with native IME and
-    Paste/Select ownership.
+63. **The touch editor must be a literal textarea, not MUI
+    TextareaAutosize.** iOS renders a textarea caret as a UIKit-owned selection
+    overlay. MUI 7's TextareaAutosize wraps every input event and, when the value
+    ends in a newline, calls `setSelectionRange(end, end)` even though the native
+    selection is already there. That workaround was added for a Chromium paste
+    bug; on a physical iPhone it races UIKit after Return and leaves the painted
+    caret on the previous line until an ordinary character causes another native
+    update. `overflow:hidden` and making `clientHeight === scrollHeight` do not
+    remove this second selection transaction. Render the touch editor directly
+    as `<textarea>` and use MUI Box only for theme-aware styling. Keep it
+    uncontrolled during typing, use one static `rows` value, and let the focused
+    writing canvas provide its height. External document replacement and explicit
+    toolbar edits may still map a selection synchronously; ordinary keyboard
+    input must never call `setSelectionRange`, resize the DOM from an input
+    callback, insert a zero-width sentinel, blur/refocus, or draw a fake caret.

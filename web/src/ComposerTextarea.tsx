@@ -6,7 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Box, Paper, TextField, Typography } from "@mui/material";
+import { Box, Paper, Typography } from "@mui/material";
 import type {
   ComposerEditorHandle,
   ComposerEditorSelection,
@@ -725,8 +725,11 @@ export const ComposerTextarea = forwardRef<
       }}
     >
       {popup}
-      <TextField
-        inputRef={inputRef}
+      <Box
+        component="textarea"
+        ref={inputRef}
+        data-mobile-native-textarea="true"
+        aria-label={placeholder ?? "Message the agent"}
         // The native textarea owns its live value/selection on touch surfaces.
         // React still receives every change through onChange, while the layout
         // effect above handles only genuine external value transitions.
@@ -789,62 +792,43 @@ export const ComposerTextarea = forwardRef<
         placeholder={placeholder}
         disabled={disabled}
         autoFocus={autoFocus}
-        multiline
-        minRows={expanded ? 10 : 1}
-        maxRows={expanded ? 30 : 10}
-        slotProps={{
-          htmlInput: { "data-mobile-native-textarea": "true" },
-        }}
-        size="small"
-        fullWidth
+        rows={1}
         sx={{
-          // `expanded` fills the sheet. The real textarea gets the height below;
-          // do not apply it to MUI's hidden autosize mirror or its measurement
-          // feeds back into a multi-thousand-pixel inline height.
-          ...(expanded && { flex: 1, minHeight: 0, display: "flex" }),
-          // Keep a usable tap target even when a small font scale shrinks the
-          // text. The textarea still grows from here as you type (top-aligned).
-          "& .MuiInputBase-root": {
-            minHeight: 44,
-            // MUI normally keeps multiline padding on this non-editable DIV,
-            // leaving only the 14px glyph line as the native textarea. A long
-            // press in the visible top/bottom inset then lands outside the
-            // editor and can dismiss UIKit's keyboard/menu. Put all hit area
-            // padding on the textarea itself, matching the CM6 path.
-            p: 0,
-            alignItems: expanded ? "stretch" : "flex-start",
-            ...(expanded && { height: "100%" }),
-          },
-          // `1rem` so the input tracks the reading font-size setting both up and
-          // down; line-height follows the reading line-height var. No 16px floor
-          // — the installed PWA disables focus-zoom via the viewport meta.
-          "& .MuiInputBase-input": {
-            boxSizing: "border-box",
-            minHeight: 44,
-            padding: "8.5px 14px",
-            fontSize: "1rem",
-            lineHeight: "var(--cowboy-reading-line-height, 1.5)",
-            // Clear the overlaid send/kebab buttons at the bottom-right.
-            ...(endInset > 0 && { paddingRight: `${String(14 + endInset)}px` }),
-          },
-          "& [data-mobile-native-textarea='true']": {
-            ...(expanded && { minHeight: "100% !important" }),
-            // Keep fitted textareas out of WebKit's subscroller caret path.
-            // MUI may leave a 1px scrollHeight residue at fractional reading
-            // sizes; only genuine clipping enables the internal scroller.
-            overflowY: nativeScrollable
-              ? "auto !important"
-              : "hidden !important",
-          },
-          // Inside the composer's outlined Paper card the card draws the box, so
-          // drop the TextField's own outline in all three states (rest/hover/focus).
-          ...(borderless && {
-            "& .MuiOutlinedInput-notchedOutline": { border: "none" },
-            "&:hover .MuiOutlinedInput-notchedOutline": { border: "none" },
-            "& .Mui-focused .MuiOutlinedInput-notchedOutline": {
-              border: "none",
-            },
-          }),
+          // This must remain a literal native textarea. MUI TextareaAutosize's
+          // input wrapper calls setSelectionRange after every trailing newline
+          // (a Chromium workaround), which races iOS's UIKit-owned caret overlay
+          // and leaves it painted on the previous line. Styling through Box is
+          // safe: Box does not wrap or replace the textarea's input transaction.
+          boxSizing: "border-box",
+          display: "block",
+          flex: expanded ? 1 : undefined,
+          width: "100%",
+          minWidth: 0,
+          minHeight: expanded ? "100%" : 48,
+          height: expanded ? "100%" : 48,
+          maxHeight: "100%",
+          m: 0,
+          padding: "8.5px 14px",
+          ...(endInset > 0 && { paddingRight: `${String(14 + endInset)}px` }),
+          resize: "none",
+          appearance: "none",
+          WebkitAppearance: "none",
+          outline: "none",
+          border: borderless ? 0 : "1px solid",
+          borderColor: borderless ? "transparent" : "divider",
+          borderRadius: borderless ? 0 : 1,
+          bgcolor: "transparent",
+          color: disabled ? "text.disabled" : "text.primary",
+          WebkitTextFillColor: disabled ? "text.disabled" : "currentColor",
+          fontFamily: "inherit",
+          fontSize: "1rem",
+          fontWeight: "inherit",
+          lineHeight: "var(--cowboy-reading-line-height, 1.5)",
+          overflowX: "hidden",
+          overflowY: nativeScrollable ? "auto" : "hidden",
+          caretColor: "primary.main",
+          "&::placeholder": { color: "text.secondary", opacity: 1 },
+          "&:focus": borderless ? undefined : { borderColor: "primary.main" },
         }}
       />
     </Box>
