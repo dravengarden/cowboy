@@ -38,6 +38,8 @@ import {
     Snackbar,
     Stack,
     Switch,
+    Tab,
+    Tabs,
     TextField,
     Toolbar,
     Tooltip,
@@ -190,6 +192,12 @@ import { defaultNewSessionWorkspace } from "./newSessionWorkspace";
 import { resolveActiveSession } from "./sessionSelection";
 import { DesktopShortcutBar } from "./desktop/DesktopShortcutBar";
 import { DesktopModal as DesktopModalShell } from "./desktop/DesktopModal";
+import {
+    adjacentControlCenterTab,
+    controlCenterTabForShortcut,
+    CONTROL_CENTER_TABS,
+    type ControlCenterTab,
+} from "./desktop/controlCenterTabs";
 import { useOptionalDesktopWorkspace } from "./desktop/DesktopWorkspaceController";
 import {
     DESKTOP_SPLITTER_ADJUST_EVENT,
@@ -1145,19 +1153,7 @@ function SessionList({
                         title="Session"
                         description={`${menuAnchor?.row.title ?? ""} · ${menuAnchor?.row.cwd ?? ""}`}
                         width={920}
-                        shortcutGroups={[
-                            {
-                                label: "Navigate",
-                                slots: [
-                                    { shortcut: "J/K", label: "Move" },
-                                    { shortcut: "Enter", label: "Select" },
-                                ],
-                            },
-                            { slots: [{ shortcut: "Esc", label: "Close" }] },
-                        ]}
-                    >
-                        <Box
-                            onKeyDown={(event): void => {
+                        onShortcutKeyDown={(event): void => {
                             if (
                                 desktopImeOwnsKey(event.nativeEvent) ||
                                 event.metaKey || event.ctrlKey || event.altKey || event.shiftKey
@@ -1184,7 +1180,19 @@ function SessionList({
                                 ? 0
                                 : Math.max(0, Math.min(items.length - 1, current + (key === "j" ? 1 : -1)));
                             items[next]?.focus();
-                            }}
+                        }}
+                        shortcutGroups={[
+                            {
+                                label: "Navigate",
+                                slots: [
+                                    { shortcut: "J/K", label: "Move" },
+                                    { shortcut: "Enter", label: "Select" },
+                                ],
+                            },
+                            { slots: [{ shortcut: "Esc", label: "Close" }] },
+                        ]}
+                    >
+                        <Box
                             sx={{ p: 2 }}
                         >
                             <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1.2fr) minmax(280px, 0.8fr)", gap: 2.5 }}>
@@ -3567,62 +3575,31 @@ function DesktopSettingsRow({
     );
 }
 
-// Desktop modal primitive: a dense, keyboard-addressable block with one visual
-// boundary, an optional mnemonic, and a stable landmark for jump navigation.
-// Desktop settings, information, and logs deliberately share this shape so a
-// modal reads as one workbench rather than a collection of unrelated sheets.
+// Dense visual grouping used inside the Settings tab. Runtime information,
+// Machines, and Logs own separate top-level tabs rather than nesting here.
 function DesktopModalBlock({
     label,
-    title,
-    shortcut,
-    shortcutAvailable = true,
-    section,
     children,
     sx,
 }: {
     label: string;
-    title?: string;
-    shortcut?: string;
-    shortcutAvailable?: boolean;
-    section?: "machines" | "info" | "logs";
     children: React.ReactNode;
     sx?: SxProps<Theme>;
 }): React.JSX.Element {
-    const focusable = section !== undefined;
     return (
         <Box
-            {...(section === "machines" ? { "data-settings-machines": true } : {})}
-            {...(section === "info" ? { "data-settings-info": true } : {})}
-            {...(section === "logs" ? { "data-settings-logs": true } : {})}
-            tabIndex={focusable ? 0 : undefined}
-            role={focusable ? "region" : undefined}
-            aria-label={focusable ? `${label} ${title ?? ""}`.trim() : undefined}
             sx={[
                 {
                     border: 1,
                     borderColor: "divider",
                     borderRadius: 2,
-                    p: section ? 2 : 1,
-                    scrollMarginTop: 76,
-                    "&:focus-visible": {
-                        outline: (theme) => `2px solid ${desktopFocusBoundary(theme)}`,
-                        outlineOffset: 2,
-                    },
+                    p: 1,
                 },
                 ...(Array.isArray(sx) ? sx : sx ? [sx] : []),
             ]}
         >
-            <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px: section ? 0 : 1.5, mb: title ? 1 : 0 }}>
-                <Box>
-                    <Typography variant="overline" color="text.secondary">{label}</Typography>
-                    {title && <Typography variant="body2" fontWeight={750}>{title}</Typography>}
-                </Box>
-                {shortcut && (
-                    <Kbd
-                        keys={shortcut}
-                        availability={shortcutAvailable ? "available" : "inactive"}
-                    />
-                )}
+            <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px: 1.5 }}>
+                <Typography variant="overline" color="text.secondary">{label}</Typography>
             </Stack>
             {children}
         </Box>
@@ -4694,11 +4671,11 @@ function SettingsShell({
     themeMode: ThemeMode;
     onSetThemeMode: (m: ThemeMode) => void;
 }): React.JSX.Element {
-    // Merged sheet: a Settings / Info segmented switch in the header. Each open
-    // lands on the tab whose button was tapped (gear → settings, ℹ️ → info).
-    const [tab, setTab] = useState<"settings" | "machines" | "info" | "logs">(initialTab);
+    // One tab model is shared by the touch segmented control and Desktop's
+    // semantic tablist. Each entry remains independently addressable by key.
+    const [tab, setTab] = useState<ControlCenterTab>(initialTab);
     const [tabContentReady, setTabContentReady] = useState(true);
-    const changeTab = useCallback((next: "settings" | "machines" | "info" | "logs"): void => {
+    const changeTab = useCallback((next: ControlCenterTab): void => {
         if (next === tab) return;
         // Remove the old panel synchronously, then mount the selected heavy
         // panel after two frames. The segmented control remains responsive
@@ -4790,7 +4767,7 @@ function SettingsShell({
                     event.stopPropagation();
                     target.blur();
                     const returnTarget = target.closest<HTMLElement>(
-                        "[data-settings-row], [data-settings-machines], [data-settings-info], [data-settings-logs]",
+                        "[data-settings-row]",
                     );
                     requestAnimationFrame(() =>
                         (returnTarget ?? settingsPanelRef.current)?.focus({ preventScroll: true }));
@@ -4798,11 +4775,12 @@ function SettingsShell({
                 return;
             }
             const key = workspaceCommandKey(event).toLowerCase();
-            const tabs = ["settings", "machines", "info", "logs"] as const;
             const panel = settingsPanelRef.current;
-            if (!panel) return;
-            const scrollSurface = closestScrollableSettingsSurface(panel);
+            const scrollSurface = panel === null
+                ? null
+                : closestScrollableSettingsSurface(panel);
             if (event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && ["d", "u", "f", "b"].includes(key)) {
+                if (!scrollSurface) return;
                 event.preventDefault();
                 event.stopPropagation();
                 setGoPending(false);
@@ -4825,10 +4803,11 @@ function SettingsShell({
                 event.stopPropagation();
                 const goTop = !event.shiftKey && key === "g";
                 setGoPending(false);
-                if (goTop) scrollSurface.scrollTo({ top: 0, behavior: "auto" });
+                if (goTop) scrollSurface?.scrollTo({ top: 0, behavior: "auto" });
                 return;
             }
             if (event.shiftKey && key === "g") {
+                if (!scrollSurface) return;
                 event.preventDefault();
                 event.stopPropagation();
                 setGoPending(false);
@@ -4836,32 +4815,30 @@ function SettingsShell({
                 return;
             }
             if (!event.shiftKey && key === "g") {
+                if (!scrollSurface) return;
                 event.preventDefault();
                 event.stopPropagation();
                 setGoPending(true);
                 return;
             }
-            if (!desktop && (key === "[" || key === "]")) {
+            const directTab = !event.shiftKey
+                ? controlCenterTabForShortcut(key)
+                : null;
+            if (directTab) {
                 event.preventDefault();
-                const index = tabs.indexOf(tab);
-                changeTab(tabs[(index + (key === "]" ? 1 : tabs.length - 1)) % tabs.length] ?? "settings");
+                event.stopPropagation();
+                setGoPending(false);
+                changeTab(directTab);
                 return;
             }
-            if (desktop && ["n", "i", "o"].includes(key)) {
-                const section = panel.querySelector<HTMLElement>(
-                    key === "n"
-                        ? "[data-settings-machines]"
-                        : key === "i"
-                        ? "[data-settings-info]"
-                        : "[data-settings-logs]",
-                );
-                if (section) {
-                    event.preventDefault();
-                    section.scrollIntoView({ block: "start", behavior: "auto" });
-                    section.focus({ preventScroll: true });
-                }
+            if (!event.shiftKey && (key === "[" || key === "]")) {
+                event.preventDefault();
+                event.stopPropagation();
+                setGoPending(false);
+                changeTab(adjacentControlCenterTab(tab, key === "]" ? 1 : -1));
                 return;
             }
+            if (!panel) return;
             if (!desktop && tab !== "settings") return;
             const rows = [...panel.querySelectorAll<HTMLElement>("[data-settings-row]")];
             const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -4931,8 +4908,8 @@ function SettingsShell({
             cover
             desktopMaxWidth={1440}
         >
-            {/* Mobile keeps progressive-disclosure tabs. Desktop is one visible
-                keyboard workbench, so no information is hidden behind a tab. */}
+            {/* Touch keeps its compact segmented control. Desktop uses native
+                tabs so the active section is visible, focusable, and keyable. */}
             <Box
                 sx={{
                     position: desktop ? "sticky" : "static",
@@ -4993,12 +4970,55 @@ function SettingsShell({
                     </Box>
                 </Box>}
             </Box>
+            {desktop && (
+                <Tabs
+                    value={tab}
+                    onChange={(_event, next): void => changeTab(next as ControlCenterTab)}
+                    selectionFollowsFocus
+                    variant="fullWidth"
+                    aria-label="Control center sections"
+                    sx={{
+                        minHeight: 42,
+                        borderBottom: 1,
+                        borderColor: "divider",
+                        "& .MuiTab-root": {
+                            minHeight: 42,
+                            minWidth: 0,
+                            py: 0.5,
+                            textTransform: "none",
+                        },
+                    }}
+                >
+                    {CONTROL_CENTER_TABS.map(({ value, label, shortcut }) => (
+                        <Tab
+                            key={value}
+                            value={value}
+                            id={`control-center-tab-${value}`}
+                            aria-controls={`control-center-panel-${value}`}
+                            aria-keyshortcuts={shortcut}
+                            label={
+                                <Stack component="span" direction="row" spacing={0.75} alignItems="center">
+                                    <Box component="span">{label}</Box>
+                                    <Kbd
+                                        keys={shortcut}
+                                        availability={settingsShortcutsAvailable ? "available" : "inactive"}
+                                    />
+                                </Stack>
+                            }
+                        />
+                    ))}
+                </Tabs>
+            )}
             </Box>
             {tabContentReady && (
             desktop ? (
                 <Box
                     ref={settingsPanelRef}
                     data-desktop-settings-workbench
+                    data-control-center-tab={tab}
+                    role="tabpanel"
+                    id={`control-center-panel-${tab}`}
+                    aria-labelledby={`control-center-tab-${tab}`}
                     tabIndex={-1}
                     onFocusCapture={(event): void => {
                         setSettingsEditableFocus(isSettingsEditableTarget(event.target));
@@ -5016,51 +5036,18 @@ function SettingsShell({
                         flex: 1,
                         minHeight: 0,
                         overflowY: "auto",
-                        display: "grid",
-                        gridTemplateColumns: "minmax(0, 1fr)",
-                        gap: 2,
-                        alignItems: "start",
+                        pt: 1.5,
                         pr: 0.75,
                         pb: 2,
-                        "@media (max-width: 1279px)": { gridTemplateColumns: "1fr" },
                     }}
                 >
-                    <DesktopSettingsContent
+                    {tab === "settings" ? <DesktopSettingsContent
                         themeMode={themeMode}
                         onSetThemeMode={onSetThemeMode}
                         shortcutsAvailable={settingsShortcutsAvailable}
-                    />
-                    <DesktopModalBlock
-                        label="Remote runtimes & credentials"
-                        title="Machines"
-                        shortcut="N"
-                        shortcutAvailable={settingsShortcutsAvailable}
-                        section="machines"
-                    >
-                        <MachinesContent />
-                    </DesktopModalBlock>
-                    <DesktopModalBlock
-                        label="Runtime, usage & audit"
-                        title="Info"
-                        shortcut="I"
-                        shortcutAvailable={settingsShortcutsAvailable}
-                        section="info"
-                    >
-                        <InfoContent
-                            desktop
-                            aside={
-                                <DesktopModalBlock
-                                    label="Audit trail"
-                                    title="Logs"
-                                    shortcut="O"
-                                    shortcutAvailable={settingsShortcutsAvailable}
-                                    section="logs"
-                                >
-                                    <UsageLogs dense />
-                                </DesktopModalBlock>
-                            }
-                        />
-                    </DesktopModalBlock>
+                    /> : tab === "machines" ? <MachinesContent /> : tab === "info" ? (
+                        <InfoContent desktop />
+                    ) : <UsageLogs />}
                 </Box>
             ) : tab === "machines" ? <MachinesContent /> : tab === "info" ? <InfoContent /> : tab === "logs" ? <UsageLogs /> : (
             <Stack spacing={3}>
@@ -5346,10 +5333,14 @@ function SettingsShell({
                             groups={[
                                 {
                                     label: "Navigate",
-                                    slots: [
+                                    slots: tab === "settings" ? [
                                         { shortcut: "J/K", label: "Field", availability: settingsShortcutsAvailable ? "available" : "inactive" },
                                         { shortcut: "H/L", label: "Choice", availability: settingsShortcutsAvailable ? "available" : "inactive" },
                                         { shortcut: ENTER_LABEL, label: "Apply", availability: settingsShortcutsAvailable ? "available" : "inactive" },
+                                    ] : [
+                                        { shortcut: "H/K", label: "Previous", availability: settingsShortcutsAvailable ? "available" : "inactive" },
+                                        { shortcut: "J/L", label: "Next", availability: settingsShortcutsAvailable ? "available" : "inactive" },
+                                        { shortcut: ENTER_LABEL, label: "Activate", availability: settingsShortcutsAvailable ? "available" : "inactive" },
                                     ],
                                 },
                                 {
@@ -5389,15 +5380,18 @@ function SettingsShell({
                                         ] as const).map(([shortcut, title]) => ({
                                             shortcut,
                                             title,
-                                            availability: settingsShortcutsAvailable ? "available" as const : "inactive" as const,
+                                            availability: settingsShortcutsAvailable && tab === "settings" ? "available" as const : "inactive" as const,
                                         })),
                                 },
                                 {
-                                    label: "Sections",
+                                    label: "Tabs",
                                     slots: [
-                                        { shortcut: "N", label: "Machines", availability: settingsShortcutsAvailable ? "available" : "inactive" },
-                                        { shortcut: "I", label: "Info", availability: settingsShortcutsAvailable ? "available" : "inactive" },
-                                        { shortcut: "O", label: "Logs", availability: settingsShortcutsAvailable ? "available" : "inactive" },
+                                        ...CONTROL_CENTER_TABS.map(({ shortcut, label }) => ({
+                                            shortcut,
+                                            label,
+                                            availability: settingsShortcutsAvailable ? "available" as const : "inactive" as const,
+                                        })),
+                                        { shortcut: "[/]", label: "Cycle", availability: settingsShortcutsAvailable ? "available" : "inactive" },
                                         {
                                             shortcut: "Esc",
                                             label: settingsGoPrefix

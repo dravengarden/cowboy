@@ -9,7 +9,7 @@ import {
   Typography,
 } from "@mui/material";
 import { Close } from "@mui/icons-material";
-import type { ReactNode } from "react";
+import type { KeyboardEventHandler, ReactNode } from "react";
 import { isImeKeyEvent } from "../imeKey";
 import { DESKTOP_SURFACE_RADIUS } from "./DesktopEmbeddedControl";
 import {
@@ -26,6 +26,7 @@ export function DesktopModal({
   children,
   footer,
   shortcutGroups,
+  onShortcutKeyDown,
   width = 920,
 }: {
   open: boolean;
@@ -36,11 +37,13 @@ export function DesktopModal({
   children: ReactNode;
   footer?: ReactNode;
   shortcutGroups?: readonly DesktopShortcutGroup[];
+  onShortcutKeyDown?: KeyboardEventHandler<HTMLDivElement>;
   width?: number;
 }): React.JSX.Element {
   return (
     <Dialog
       open={open}
+      onKeyDown={onShortcutKeyDown}
       onClose={(event, reason): void => {
         if (reason === "escapeKeyDown") {
           const keyEvent = "nativeEvent" in event
