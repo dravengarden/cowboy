@@ -102,13 +102,15 @@ import {
 
 const OPTION_RANK: Record<string, number> = {
   mode: 0,
-  model: 1,
-  deepseek_context: 2,
-  deepseek_cache_protection: 3,
-  effort: 4,
-  reasoning_effort: 4,
-  fast: 5,
-  fast_mode: 5,
+  session_mode: 0,
+  permission_mode: 1,
+  model: 2,
+  deepseek_context: 3,
+  deepseek_cache_protection: 4,
+  effort: 5,
+  reasoning_effort: 5,
+  fast: 6,
+  fast_mode: 6,
 };
 
 const EMPTY_CONFIG_OPTIONS: ConfigOption[] = [];
@@ -116,6 +118,8 @@ const EMPTY_CONFIG_OPTIONS: ConfigOption[] = [];
 function optionLabel(option: ConfigOption): string {
   const name = option.name.toLowerCase();
   if (option.id === "mode") return "Agent mode";
+  if (option.id === "session_mode") return "Session mode";
+  if (option.id === "permission_mode") return "Permission";
   if (option.id === "model") return "Model";
   if (name.includes("reasoning") && name.includes("effort")) {
     return "Reasoning effort";
@@ -127,6 +131,8 @@ function optionLabel(option: ConfigOption): string {
 function optionShortcut(option: ConfigOption): string | undefined {
   const label = optionLabel(option);
   if (label === "Agent mode") return "A";
+  if (label === "Session mode") return "A";
+  if (label === "Permission") return "P";
   if (label === "Model") return "M";
   if (label === "Reasoning effort") return "E";
   if (label === "Collaboration mode") return "C";

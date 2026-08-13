@@ -558,9 +558,12 @@ fn default_config_preferences(provider: &str) -> serde_json::Value {
             "agent": "default",
         })
     } else if provider == "grok" {
-        // Follow the strongest effort currently advertised by Grok Build while
-        // leaving the model id dynamic so a CLI update can change its default.
-        serde_json::json!({ "reasoning_effort": "high" })
+        // Keep the model id dynamic so a CLI update can change its catalog,
+        // while making Cowboy's High + full-access defaults durable.
+        serde_json::json!({
+            "permission_mode": "always-approve",
+            "reasoning_effort": "high",
+        })
     } else {
         serde_json::json!({})
     }
@@ -5018,7 +5021,7 @@ mod config_preference_tests {
     }
 
     #[test]
-    fn new_grok_sessions_start_with_high_reasoning_without_pinning_a_model() {
+    fn new_grok_sessions_start_with_high_reasoning_and_full_access_without_pinning_a_model() {
         let hub = Hub::new();
         hub.create_local_session(
             "grok-session".to_owned(),
@@ -5031,7 +5034,10 @@ mod config_preference_tests {
 
         assert_eq!(
             hub.config_preferences("grok-session"),
-            Some(serde_json::json!({ "reasoning_effort": "high" }))
+            Some(serde_json::json!({
+                "permission_mode": "always-approve",
+                "reasoning_effort": "high",
+            }))
         );
     }
 

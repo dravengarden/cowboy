@@ -66,6 +66,45 @@ Deno.test("Claude and Codex DeepSeek expose provider-native Flash Max presets", 
   });
 });
 
+Deno.test("Grok exposes its live model with High and Always Approve as the default", () => {
+  const grok = [
+    selectOption("model", "grok-4.6", ["grok-4.5", "grok-4.6"]),
+    selectOption("reasoning_effort", "xhigh", [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]),
+    selectOption("permission_mode", "default", [
+      "default",
+      "auto",
+      "always-approve",
+    ]),
+  ];
+  const presets = runConfigPresets("grok", grok);
+  assertEquals(presets.map((preset) => [preset.id, preset.isDefault]), [
+    ["grok-high", true],
+  ]);
+  assertEquals(presets[0]?.values, {
+    model: "grok-4.6",
+    reasoning_effort: "high",
+    permission_mode: "always-approve",
+  });
+  assertEquals(runConfigPresetChanges(presets[0], grok), [
+    { configId: "reasoning_effort", value: "high" },
+    { configId: "permission_mode", value: "always-approve" },
+  ]);
+  const active = grok.map((option) => ({
+    ...option,
+    currentValue: option.id === "reasoning_effort"
+      ? "high"
+      : option.id === "permission_mode"
+      ? "always-approve"
+      : option.currentValue,
+  }));
+  assertEquals(activeRunConfigPreset(presets, active)?.id, "grok-high");
+});
+
 Deno.test("presets require every live provider value", () => {
   assertEquals(runConfigPresets("codex", openAiOptions.slice(0, 1)), []);
   assertEquals(runConfigPresets("claude-code", openAiOptions), []);
