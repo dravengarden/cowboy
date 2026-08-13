@@ -198,14 +198,16 @@ Grok's current ACP compatibility surface returns model and reasoning choices in
 with `_meta.reasoningEffort`. Cowboy maps those values to ordinary `model` and
 `reasoning_effort` config controls, while leaving the selected model dynamic so
 a Grok CLI update can replace the default catalog. Cowboy also projects Grok's
-`x.ai/yolo_mode_changed` extension as a `permission_mode` selector with
-Default, Auto, and Always Approve choices. New sessions use the live model,
-`high` effort, and Always Approve as their durable default combination. Native
-session modes remain a separate `session_mode` control.
+logical `x.ai/yolo_mode_changed` extension (wire
+`_x.ai/yolo_mode_changed`) as a `permission_mode` selector with Default, Auto,
+and Always Approve choices. New sessions use the live model, `high` effort,
+and Always Approve as their durable default combination. Native session modes
+remain a separate `session_mode` control.
 
 Grok does not emit ACP's standard `usage_update`. Cowboy reads the current
 session's exact context snapshot from the adapter-local `x.ai/session/info`
-extension after startup, successful turns, and model/effort changes, then maps
+extension (wire `_x.ai/session/info`) after startup, successful turns, and
+model/effort changes, then maps
 `context.used` / `context.total` into the ordinary session usage channel. The
 request is local session inspection and does not run a model turn. Missing or
 older extension support degrades to unavailable usage without a user-facing

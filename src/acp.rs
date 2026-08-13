@@ -70,7 +70,7 @@ const GROK_MODEL_CONFIG_ID: &str = "model";
 const GROK_REASONING_CONFIG_ID: &str = "reasoning_effort";
 const GROK_SESSION_MODE_CONFIG_ID: &str = "session_mode";
 const GROK_PERMISSION_CONFIG_ID: &str = "permission_mode";
-const GROK_PERMISSION_NOTIFICATION: &str = "x.ai/yolo_mode_changed";
+const GROK_PERMISSION_NOTIFICATION: &str = "_x.ai/yolo_mode_changed";
 const GROK_SESSION_INFO_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -158,11 +158,12 @@ struct GrokSetSessionModelResponse {
     meta: Option<Meta>,
 }
 
-// Grok Build does not emit ACP's standard `usage_update`. Its local
+// Grok Build does not emit ACP's standard `usage_update`. The logical
 // `x.ai/session/info` extension exposes the authoritative context snapshot
-// without running a model turn, so keep the compatibility wire types here.
+// without running a model turn. ACP v1 prefixes extension methods with `_` on
+// the wire, so keep that compatibility detail local here.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, JsonRpcRequest)]
-#[request(method = "x.ai/session/info", response = GrokSessionInfoResponse)]
+#[request(method = "_x.ai/session/info", response = GrokSessionInfoResponse)]
 #[serde(rename_all = "camelCase")]
 struct GrokSessionInfoRequest {
     session_id: SessionId,
@@ -993,7 +994,7 @@ mod startup_mode_tests {
             ),
         ] {
             let notification = grok_permission_notification(mode);
-            assert_eq!(notification.method(), "x.ai/yolo_mode_changed");
+            assert_eq!(notification.method(), "_x.ai/yolo_mode_changed");
             assert_eq!(
                 serde_json::to_value(notification).expect("serialize notification"),
                 expected
@@ -1126,7 +1127,7 @@ mod startup_mode_tests {
         let request = GrokSessionInfoRequest {
             session_id: SessionId::new("grok-session"),
         };
-        assert_eq!(request.method(), "x.ai/session/info");
+        assert_eq!(request.method(), "_x.ai/session/info");
         assert_eq!(
             serde_json::to_value(request).expect("serialize Grok session info request"),
             serde_json::json!({ "sessionId": "grok-session" })
