@@ -2,16 +2,44 @@ import { assertEquals } from "jsr:@std/assert";
 import {
   historyPrefetchTransition,
   magneticHapticTransition,
+  scrollbackBoundaryRequestKey,
   scrollbackFillRemaining,
   scrollbackReplacementFromTop,
   shouldBackfillTranscriptViewport,
   shouldContinueScrollbackFill,
+  shouldMagnetizeTranscript,
   shouldPrefetchVisibleScrollbackBoundary,
   shouldRecoverUnrenderableHistory,
-  shouldShowFreshSessionEmptyState,
   shouldShowClearedConversationEmptyState,
-  shouldMagnetizeTranscript,
+  shouldShowFreshSessionEmptyState,
 } from "./transcriptViewport.ts";
+
+Deno.test("visible scrollback bootstrap rearms when the cursor advances", () => {
+  const current = scrollbackBoundaryRequestKey({
+    sessionId: "sess-1",
+    managed: true,
+    pageId: null,
+    beforeSeq: 80_000,
+  });
+  assertEquals(
+    scrollbackBoundaryRequestKey({
+      sessionId: "sess-1",
+      managed: true,
+      pageId: null,
+      beforeSeq: 80_000,
+    }),
+    current,
+  );
+  assertEquals(
+    scrollbackBoundaryRequestKey({
+      sessionId: "sess-1",
+      managed: true,
+      pageId: null,
+      beforeSeq: 79_000,
+    }) === current,
+    false,
+  );
+});
 
 Deno.test("a visible scrollback boundary prefetches once after restoration", () => {
   const visible = {
@@ -142,8 +170,14 @@ Deno.test("scrollback heuristic fills only a nearby unfinished skeleton", () => 
     shouldContinueScrollbackFill({ ...base, remaining: 20, loadedRows: 9 }),
     true,
   );
-  assertEquals(shouldContinueScrollbackFill({ ...base, fromTop: 2_500 }), false);
-  assertEquals(shouldContinueScrollbackFill({ ...base, reachedStart: true }), false);
+  assertEquals(
+    shouldContinueScrollbackFill({ ...base, fromTop: 2_500 }),
+    false,
+  );
+  assertEquals(
+    shouldContinueScrollbackFill({ ...base, reachedStart: true }),
+    false,
+  );
 });
 
 Deno.test("mobile transcript refills when an iPad viewport grows", () => {

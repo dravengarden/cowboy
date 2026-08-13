@@ -778,7 +778,10 @@ here says otherwise.
     viewport; after that, expose an explicit Retry action. Do not leave the
     threshold consumed with an inert loading-shaped block. A request uses compact
     thought-plus-tool rows; mounted content consumes the expansion back to the
-    next quiet page-head group. A failure replaces the skeleton with a
+    next quiet page-head group. Automatic visible-boundary requests are guarded
+    once per `beforeSeq`, not once per session: advancing the cursor must re-arm
+    the guard so a newly visible skeleton converges without requiring a scroll.
+    A failure replaces the skeleton with a
     visible Retry row rather than clipping the action above placeholder cards.
 
 35. **Desktop inline expansion is not a cross-surface preference.** The
