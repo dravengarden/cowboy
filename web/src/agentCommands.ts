@@ -3,7 +3,7 @@
 // the ACP boundary:
 //
 //   • "compact" is an AGENT operation — the agent summarises its own context.
-//     Claude/Codex/Gemini expose it as a real slash-command, so we resolve the
+//     Claude/Codex/Gemini/Grok expose it as a real slash-command, so we resolve the
 //     concrete `/command` and send it as a prompt (kind: "slash"). The spelling
 //     differs per CLI, so we resolve it from (1) what the agent advertises over
 //     ACP (`available_commands_update`, authoritative — matched by an alias set),
@@ -59,6 +59,7 @@ const COMPACT_DEFAULT: Record<string, string> = {
   "codex": "compact",
   "codex-deepseek": "compact",
   "gemini": "compress",
+  "grok": "compact",
 };
 
 function resolveCompact(

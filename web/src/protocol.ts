@@ -407,4 +407,5 @@ export const PROVIDERS = [
   "claude-code",
   "claude-deepseek",
   "gemini",
+  "grok",
 ] as const;

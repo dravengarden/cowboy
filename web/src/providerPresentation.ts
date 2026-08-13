@@ -36,6 +36,12 @@ const PRESENTATIONS: Readonly<Record<string, ProviderPresentation>> = {
     detail: "Standard Gemini CLI configuration",
     isolated: false,
   },
+  grok: {
+    agent: "Grok Build",
+    modelProvider: "xAI",
+    detail: "Official Grok Build CLI and standard Grok account configuration",
+    isolated: false,
+  },
 };
 
 export function providerPresentation(provider: string): ProviderPresentation {

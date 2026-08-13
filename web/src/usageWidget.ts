@@ -9,9 +9,10 @@ import {
 
 export type UsageWidgetProvider =
   | {
-    kind: "openai";
-    label: "OpenAI";
+    kind: "openai" | "xai";
+    label: "OpenAI" | "xAI";
     remaining: number;
+    periodLabel: string;
     resetsAt?: number;
   }
   | {
@@ -75,7 +76,20 @@ function openAiWidget(usage: ProviderUsage): UsageWidgetProvider | undefined {
     kind: "openai",
     label: "OpenAI",
     remaining: weekly.remaining,
+    periodLabel: weekly.label,
     ...(weekly.resetsAt === undefined ? {} : { resetsAt: weekly.resetsAt }),
+  };
+}
+
+function xAiWidget(usage: ProviderUsage): UsageWidgetProvider | undefined {
+  const included = topBarUsageLimits(usage)[0];
+  if (!included) return undefined;
+  return {
+    kind: "xai",
+    label: "xAI",
+    remaining: included.remaining,
+    periodLabel: included.label,
+    ...(included.resetsAt === undefined ? {} : { resetsAt: included.resetsAt }),
   };
 }
 
@@ -125,6 +139,9 @@ export function usageWidgetProviders(
     byProvider.get("deepseek") &&
       byProvider.get("deepseek")?.status === "available"
       ? deepseekWidget(byProvider.get("deepseek") as ProviderUsage)
+      : undefined,
+    byProvider.get("xai") && byProvider.get("xai")?.status === "available"
+      ? xAiWidget(byProvider.get("xai") as ProviderUsage)
       : undefined,
     // Anthropic is currently session-only and Gemini exposes no account quota.
     // Add their account-level projection here when their provider contracts do.

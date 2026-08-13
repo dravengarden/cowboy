@@ -104,6 +104,7 @@ const ACCOUNT_PROVIDER_NAMES: Record<string, string> = {
   anthropic: "Anthropic",
   deepseek: "DeepSeek",
   gemini: "Gemini",
+  xai: "xAI",
 };
 
 function formatTokens(value: number | undefined): string {

@@ -4,8 +4,8 @@ Zed starts `cowboy serve-acp` as a stdio External Agent. The bridge connects to
 the already-running cowboy daemon (`http://127.0.0.1:3333` by default); it does
 not start another Hub or another copy of a provider session.
 
-Add three custom agents alongside Zed's official Registry agents so native
-Codex/Claude/Gemini remain available and each Cowboy thread stays fixed to its
+Add four custom agents alongside Zed's official Registry agents so native
+Codex/Claude/Gemini/Grok remain available and each Cowboy thread stays fixed to its
 provider:
 
 ```json
@@ -28,13 +28,19 @@ provider:
       "command": "cowboy",
       "args": ["serve-acp", "--provider", "gemini"],
       "env": {}
+    },
+    "cowboy-grok": {
+      "type": "custom",
+      "command": "cowboy",
+      "args": ["serve-acp", "--provider", "grok"],
+      "env": {}
     }
   }
 }
 ```
 
-Do not override the official IDs (`codex-acp`, `claude-acp`, and `gemini`) unless
-replacing the native agents is intentional. Zed's custom-agent settings have no
+Do not override Registry agent IDs (including `codex-acp`, `claude-acp`, and
+`gemini`) unless replacing a native agent is intentional. Zed's custom-agent settings have no
 icon field, so the independent Cowboy entries use its generic sparkle icon.
 Distinct provider icons require separate published ACP Registry entries.
 

@@ -228,11 +228,7 @@ function TranscriptSkeleton({
     return () => globalThis.clearTimeout(timer);
   }, []);
 
-  const agent = provider === "claude-code" || provider === "claude-deepseek"
-    ? "Claude Code"
-    : provider === "gemini"
-    ? "Gemini"
-    : "Codex";
+  const agent = providerPresentation(provider).agent;
 
   return (
     <Stack

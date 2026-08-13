@@ -52,6 +52,7 @@ struct ControllerConfig {
 }
 
 const DEFAULT_WORKSPACE_CONFIG: &str = "/etc/cowboy-machine/workspaces.json";
+const GROK_ACP_ARGS: &str = "--no-auto-update --always-approve agent --no-leader stdio";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WorkspaceSnapshot {
@@ -383,10 +384,13 @@ fn managed_provider_environment(
         "COWBOY_ACP_CLAUDE_CODE_EXECUTABLE",
         "COWBOY_ACP_GEMINI_CMD",
         "COWBOY_ACP_GEMINI_ARGS",
+        "COWBOY_ACP_GROK_CMD",
+        "COWBOY_ACP_GROK_ARGS",
     ] {
         let slot = match key {
             "COWBOY_ACP_CLAUDE_CODE_CMD" | "COWBOY_ACP_CLAUDE_CODE_EXECUTABLE" => "claude",
             "COWBOY_ACP_GEMINI_CMD" | "COWBOY_ACP_GEMINI_ARGS" => "gemini",
+            "COWBOY_ACP_GROK_CMD" | "COWBOY_ACP_GROK_ARGS" => "grok",
             _ => "codex",
         };
         if if slot == "claude" {
@@ -464,6 +468,13 @@ fn managed_provider_environment(
             components.command_path("gemini").display().to_string(),
         );
         environment.insert("COWBOY_ACP_GEMINI_ARGS".to_owned(), "--acp".to_owned());
+    }
+    if has(ComponentKind::ProviderCli, &["grok"]) {
+        environment.insert(
+            "COWBOY_ACP_GROK_CMD".to_owned(),
+            components.command_path("grok").display().to_string(),
+        );
+        environment.insert("COWBOY_ACP_GROK_ARGS".to_owned(), GROK_ACP_ARGS.to_owned());
     }
     Ok(environment)
 }
@@ -898,6 +909,7 @@ async fn collect_inventory(
         ("codex", "codex", &["--version"][..]),
         ("claude", "claude", &["--version"][..]),
         ("gemini", "gemini", &["--version"][..]),
+        ("grok", "grok", &["--version"][..]),
     ] {
         if disabled.iter().any(|disabled| disabled == slot) {
             continue;
@@ -944,6 +956,10 @@ async fn collect_inventory(
             ),
             "gemini" => {
                 let probe = probe_gemini_auth();
+                (probe.state, probe.detail)
+            }
+            "grok" => {
+                let probe = probe_grok_auth();
                 (probe.state, probe.detail)
             }
             _ => (AuthState::Unsupported, None),
@@ -1125,6 +1141,7 @@ const NPM_COMPONENTS: &[(ComponentKind, &str, &str)] = &[
         "@anthropic-ai/claude-code",
     ),
     (ComponentKind::ProviderCli, "gemini", "@google/gemini-cli"),
+    (ComponentKind::ProviderCli, "grok", "@xai-official/grok"),
     (
         ComponentKind::ProviderAdapter,
         "codex",
@@ -1425,6 +1442,104 @@ fn probe_gemini_auth() -> GeminiAuthProbe {
     )
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct GrokAuthProbe {
+    state: AuthState,
+    detail: Option<String>,
+}
+
+fn probe_grok_auth() -> GrokAuthProbe {
+    if [
+        "XAI_API_KEY",
+        "GROK_CODE_XAI_API_KEY",
+        "GROK_DEPLOYMENT_KEY",
+    ]
+    .iter()
+    .any(|key| std::env::var(key).is_ok_and(|value| !value.trim().is_empty()))
+    {
+        return GrokAuthProbe {
+            state: AuthState::SignedIn,
+            detail: Some("xAI credential".to_owned()),
+        };
+    }
+    if std::env::var("GROK_AUTH_PROVIDER_COMMAND").is_ok_and(|value| !value.trim().is_empty()) {
+        return GrokAuthProbe {
+            state: AuthState::SignedIn,
+            detail: Some("Grok external auth provider".to_owned()),
+        };
+    }
+    if let Ok(serialized) = std::env::var("GROK_AUTH")
+        && !serialized.trim().is_empty()
+    {
+        return grok_auth_from_json(serialized.as_bytes(), "Grok account");
+    }
+    let path = std::env::var_os("GROK_AUTH_PATH")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("GROK_HOME").map(|home| PathBuf::from(home).join("auth.json")))
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".grok/auth.json"))
+        });
+    let Some(path) = path else {
+        return GrokAuthProbe {
+            state: AuthState::SignedOut,
+            detail: Some(
+                "HOME is not configured, so Grok credentials cannot be discovered.".to_owned(),
+            ),
+        };
+    };
+    match std::fs::read(path) {
+        Ok(bytes) => grok_auth_from_json(&bytes, "Grok account"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => GrokAuthProbe {
+            state: AuthState::SignedOut,
+            detail: None,
+        },
+        Err(error) => GrokAuthProbe {
+            state: AuthState::SignedOut,
+            detail: Some(format!("Grok credentials could not be read: {error}")),
+        },
+    }
+}
+
+fn grok_auth_from_json(bytes: &[u8], label: &str) -> GrokAuthProbe {
+    let credential = serde_json::from_slice::<serde_json::Value>(bytes)
+        .ok()
+        .is_some_and(|value| grok_json_has_credential(&value));
+    GrokAuthProbe {
+        state: if credential {
+            AuthState::SignedIn
+        } else {
+            AuthState::SignedOut
+        },
+        detail: credential.then(|| label.to_owned()),
+    }
+}
+
+fn grok_json_has_credential(value: &serde_json::Value) -> bool {
+    fn is_official_credential(value: &serde_json::Value) -> bool {
+        let Some(object) = value.as_object() else {
+            return false;
+        };
+        object
+            .get("key")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|key| !key.trim().is_empty())
+            && object
+                .get("auth_mode")
+                .is_some_and(serde_json::Value::is_string)
+            && object
+                .get("create_time")
+                .is_some_and(serde_json::Value::is_string)
+            && object
+                .get("user_id")
+                .is_some_and(serde_json::Value::is_string)
+    }
+
+    is_official_credential(value)
+        || value
+            .as_object()
+            .is_some_and(|store| store.values().any(is_official_credential))
+}
+
 fn gemini_env_configured(root: &Path, key: &str) -> bool {
     gemini_env_value(root, key).is_some_and(|value| !value.trim().is_empty())
 }
@@ -1682,6 +1797,7 @@ fn provider_for_component(id: &ComponentId) -> Option<&'static str> {
         "codex" => Some("codex"),
         "claude" => Some("claude-code"),
         "gemini" => Some("gemini"),
+        "grok" => Some("grok"),
         _ => None,
     }
 }
@@ -1883,6 +1999,33 @@ async fn reconcile_components(
     ]
 }
 
+fn login_challenge_tokens(line: &str) -> (Option<String>, Option<String>) {
+    let mut verification_url = None;
+    let mut user_code = None;
+    for word in line.split_whitespace() {
+        let trimmed = word.trim_matches(|character: char| {
+            matches!(character, '(' | ')' | '[' | ']' | ',' | ':' | ';')
+        });
+        if trimmed.starts_with("https://") {
+            verification_url = Some(trimmed.to_owned());
+            if let Some((_, query)) = trimmed.split_once("user_code=") {
+                let code = query.split(['&', '#']).next().unwrap_or_default();
+                if !code.is_empty() {
+                    user_code = Some(code.to_owned());
+                }
+            }
+        } else if trimmed.len() >= 6
+            && trimmed
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '-')
+            && trimmed.contains('-')
+        {
+            user_code = Some(trimmed.to_owned());
+        }
+    }
+    (verification_url, user_code)
+}
+
 async fn run_login(
     request_id: String,
     provider: String,
@@ -1908,6 +2051,7 @@ async fn run_login(
         "codex" => ("codex", &["login", "--device-auth"]),
         "claude" => ("claude", &["auth", "login"]),
         "gemini" => ("script", &[]),
+        "grok" => ("grok", &["--no-auto-update", "login", "--device-auth"]),
         _ => {
             login.sessions.lock().remove(&request_id);
             let _ = events.send(MachineEvent::CommandResult {
@@ -2043,22 +2187,15 @@ async fn run_login(
             let _ = child.kill().await;
             break;
         }
-        for word in line.split_whitespace() {
-            let trimmed = word.trim_matches(|character: char| {
-                matches!(character, '(' | ')' | '[' | ']' | ',' | ':' | ';')
-            });
-            if trimmed.starts_with("https://") {
-                verification_url = Some(trimmed.to_owned());
-            } else if trimmed.len() >= 6
-                && trimmed
-                    .chars()
-                    .all(|character| character.is_ascii_alphanumeric() || character == '-')
-                && trimmed.contains('-')
-            {
-                user_code = Some(trimmed.to_owned());
-            }
+        let (line_url, line_code) = login_challenge_tokens(&line);
+        if line_url.is_some() {
+            verification_url = line_url;
         }
-        let challenge_ready = provider != "codex" || user_code.is_some();
+        if line_code.is_some() {
+            user_code = line_code;
+        }
+        let browser_device_flow = matches!(provider.as_str(), "codex" | "grok");
+        let challenge_ready = !browser_device_flow || user_code.is_some();
         if !challenge_sent
             && challenge_ready
             && let Some(url) = verification_url.clone()
@@ -2068,7 +2205,7 @@ async fn run_login(
                 provider: provider.clone(),
                 verification_url: url,
                 user_code: user_code.clone(),
-                input_required: provider != "codex",
+                input_required: !browser_device_flow,
                 input_label: None,
                 secret_input: false,
                 expires_at_ms: unix_ms().saturating_add(15 * 60 * 1_000),
@@ -2415,10 +2552,11 @@ mod tests {
     use super::{
         Args, WorkspaceConfig, bootstrap_acp_inventory, claude_runtime_enabled,
         disabled_provider_slots_from, gemini_auth_from_metadata, gemini_env_value_from,
-        load_workspace_snapshot, managed_provider_environment, npm_package_for_component,
-        npm_script_shell_with, npm_update_is_confirmed_by_inventory, parse_workspaces,
-        provider_for_component, reject_untrusted_workspace, selected_zed_pair,
-        send_frame_with_timeout, validate_controller_url, workspace_path_allowed,
+        grok_auth_from_json, load_workspace_snapshot, login_challenge_tokens,
+        managed_provider_environment, npm_package_for_component, npm_script_shell_with,
+        npm_update_is_confirmed_by_inventory, parse_workspaces, provider_for_component,
+        reject_untrusted_workspace, selected_zed_pair, send_frame_with_timeout,
+        validate_controller_url, workspace_path_allowed,
     };
     use crate::machine_components::ComponentStore;
     use crate::machine_protocol::{
@@ -2501,6 +2639,56 @@ mod tests {
     }
 
     #[test]
+    fn grok_auth_probe_recognizes_nested_oauth_without_exposing_tokens() {
+        let signed_in = grok_auth_from_json(
+            br#"{"https://auth.x.ai::client":{"key":"secret","auth_mode":"oidc","create_time":"2026-08-14T00:00:00Z","user_id":"user","refresh_token":"refresh"}}"#,
+            "Grok account",
+        );
+        assert_eq!(
+            signed_in.state,
+            crate::machine_protocol::AuthState::SignedIn
+        );
+        assert_eq!(signed_in.detail.as_deref(), Some("Grok account"));
+
+        let inline = grok_auth_from_json(
+            br#"{"key":"secret","auth_mode":"api_key","create_time":"2026-08-14T00:00:00Z","user_id":""}"#,
+            "Grok account",
+        );
+        assert_eq!(inline.state, crate::machine_protocol::AuthState::SignedIn);
+
+        let signed_out = grok_auth_from_json(
+            br#"{"profile":{"email":"user@example.com"}}"#,
+            "Grok account",
+        );
+        assert_eq!(
+            signed_out.state,
+            crate::machine_protocol::AuthState::SignedOut
+        );
+        assert_eq!(signed_out.detail, None);
+
+        let unrelated_key = grok_auth_from_json(br#"{"profile":{"key":"vim"}}"#, "Grok account");
+        assert_eq!(
+            unrelated_key.state,
+            crate::machine_protocol::AuthState::SignedOut
+        );
+    }
+
+    #[test]
+    fn grok_device_login_url_exposes_the_official_browser_code() {
+        let (url, code) =
+            login_challenge_tokens("https://accounts.x.ai/oauth2/device?user_code=XDR4-AT53");
+        assert_eq!(
+            url.as_deref(),
+            Some("https://accounts.x.ai/oauth2/device?user_code=XDR4-AT53")
+        );
+        assert_eq!(code.as_deref(), Some("XDR4-AT53"));
+
+        let (url, code) = login_challenge_tokens("Confirm this code: XDR4-AT53");
+        assert_eq!(url, None);
+        assert_eq!(code.as_deref(), Some("XDR4-AT53"));
+    }
+
+    #[test]
     fn disabled_provider_aliases_are_normalized() {
         assert_eq!(
             disabled_provider_slots_from("claude-code, claude-deepseek, gemini, codex-deepseek"),
@@ -2548,6 +2736,20 @@ mod tests {
                 slot: "claude".to_owned(),
             }),
             Some("claude-code")
+        );
+        assert_eq!(
+            npm_package_for_component(&ComponentId {
+                kind: ComponentKind::ProviderCli,
+                slot: "grok".to_owned(),
+            }),
+            Some("@xai-official/grok")
+        );
+        assert_eq!(
+            provider_for_component(&ComponentId {
+                kind: ComponentKind::ProviderCli,
+                slot: "grok".to_owned(),
+            }),
+            Some("grok")
         );
     }
 
@@ -2696,6 +2898,10 @@ mod tests {
                 "provider_cli-gemini",
                 component(ComponentKind::ProviderCli, "gemini"),
             ),
+            (
+                "provider_cli-grok",
+                component(ComponentKind::ProviderCli, "grok"),
+            ),
         ] {
             let generation = root.join("test-generations").join(name);
             std::fs::create_dir_all(&generation).expect("generation");
@@ -2725,6 +2931,11 @@ mod tests {
         ));
         assert!(environment["COWBOY_ACP_GEMINI_CMD"].ends_with("commands/gemini"));
         assert_eq!(environment["COWBOY_ACP_GEMINI_ARGS"], "--acp");
+        assert!(environment["COWBOY_ACP_GROK_CMD"].ends_with("commands/grok"));
+        assert_eq!(
+            environment["COWBOY_ACP_GROK_ARGS"],
+            "--no-auto-update --always-approve agent --no-leader stdio"
+        );
         assert_eq!(environment["CODEX_PATH"], proxy.display().to_string());
         std::fs::remove_dir_all(root).expect("cleanup");
     }

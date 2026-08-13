@@ -163,7 +163,9 @@ the small stable host process to be relaunched by launchd/systemd so its worker
 launch environment is rebuilt atomically. Detached worker services and their
 session generations remain alive and are adopted by the new broker.
 
-Codex device login and Claude browser login can be initiated from Machines.
+Codex and Grok Build device login plus Claude browser login can be initiated
+from Machines. Grok credentials remain in the official CLI's `~/.grok/auth.json`
+or configured `GROK_HOME`/`GROK_AUTH_PATH`; Cowboy never copies token material.
 Gemini exposes two explicit Cowboy flows: an API key is submitted directly to
 the target Machine and stored in its CLI-owned `~/.gemini/.env` with mode 0600;
 Standard/Enterprise Google Login is enabled only when that Machine has a
@@ -175,5 +177,5 @@ commands from older Machine hosts that cannot advertise these semantics.
 
 Cowboy-managed Zed payloads and state live under the Machine root. Native Zed
 continues to own `~/.zed_server` and its SSH bootstrap chain. The stable tunnel
-carries Cowboy adapter JSON, never Zed protobuf. Codex, Claude, and Gemini auth
+carries Cowboy adapter JSON, never Zed protobuf. Codex, Claude, Gemini, and Grok auth
 state remains in each official CLI's own state root on that Machine.

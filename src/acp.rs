@@ -40,7 +40,9 @@ use agent_client_protocol::schema::v1::{
     SessionModeId, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
     SetSessionModeRequest,
 };
-use agent_client_protocol::{Agent, ByteStreams, Client, ConnectionTo, Error};
+use agent_client_protocol::{
+    Agent, ByteStreams, Client, ConnectionTo, Error, JsonRpcRequest, JsonRpcResponse,
+};
 use anyhow::{Context, Result};
 use tokio::io::{AsyncBufReadExt as _, BufReader};
 use tokio::process::Command;
@@ -61,6 +63,380 @@ const RESUME_PHASE_TIMEOUT: Duration = Duration::from_mins(4);
 const CODEX_FULL_ACCESS_CONFIG_ID: &str = "mode";
 const CODEX_FULL_ACCESS_CONFIG_VALUE: &str = "agent-full-access";
 const CLAUDE_EMPTY_STREAM_MESSAGE: &str = "API Error: Stream ended without receiving any events";
+const GROK_SESSION_CONFIG_META: &str = "x.ai/sessionConfig";
+const GROK_MODEL_CONFIG_ID: &str = "model";
+const GROK_REASONING_CONFIG_ID: &str = "reasoning_effort";
+const GROK_SESSION_MODE_CONFIG_ID: &str = "session_mode";
+
+// Grok Build shipped model switching before ACP v1 standardized that request.
+// Keep this wire-only compatibility type local so a future schema upgrade can
+// delete it without changing Cowboy's provider-independent command contract.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, JsonRpcRequest)]
+#[request(method = "session/setModel", response = GrokSetSessionModelResponse)]
+#[serde(rename_all = "camelCase")]
+struct GrokSetSessionModelRequest {
+    session_id: SessionId,
+    model_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "_meta")]
+    meta: Option<Meta>,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, JsonRpcResponse)]
+#[serde(rename_all = "camelCase")]
+struct GrokSetSessionModelResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "_meta")]
+    meta: Option<Meta>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GrokRawConfigOption {
+    id: String,
+    category: String,
+    label: String,
+    #[serde(default)]
+    description: Option<String>,
+    selected: bool,
+    #[serde(skip)]
+    wire_value: Option<String>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GrokInitializeModelState {
+    current_model_id: String,
+    available_models: Vec<GrokInitializeModel>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GrokInitializeModel {
+    model_id: String,
+    name: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default, rename = "_meta")]
+    meta: Option<serde_json::Value>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GrokInitializeEffort {
+    id: String,
+    #[serde(default)]
+    value: Option<String>,
+    label: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    default: bool,
+}
+
+#[derive(Clone, Debug)]
+struct GrokSessionConfig {
+    options: Vec<GrokRawConfigOption>,
+    efforts_by_model: HashMap<String, Vec<GrokRawConfigOption>>,
+}
+
+impl GrokSessionConfig {
+    fn from_metadata(session_meta: Option<&Meta>, initialize_meta: Option<&Meta>) -> Option<Self> {
+        let mut session_options = session_meta
+            .and_then(|meta| meta.get(GROK_SESSION_CONFIG_META))
+            .and_then(|config| config.get("options"))
+            .cloned()
+            .and_then(|options| serde_json::from_value::<Vec<GrokRawConfigOption>>(options).ok())
+            .unwrap_or_default();
+        let model_state = initialize_meta
+            .and_then(|meta| meta.get("modelState"))
+            .cloned()
+            .and_then(|state| serde_json::from_value::<GrokInitializeModelState>(state).ok());
+        let mut initialize_options = Vec::new();
+        let mut efforts_by_model = HashMap::new();
+        if let Some(state) = model_state {
+            for model in state.available_models {
+                let selected = model.model_id == state.current_model_id;
+                initialize_options.push(GrokRawConfigOption {
+                    id: model.model_id.clone(),
+                    category: "model".to_owned(),
+                    label: model.name,
+                    description: model.description,
+                    selected,
+                    wire_value: None,
+                });
+                let current_effort = model
+                    .meta
+                    .as_ref()
+                    .and_then(|meta| meta.get("reasoningEffort"))
+                    .and_then(serde_json::Value::as_str);
+                let efforts = model
+                    .meta
+                    .as_ref()
+                    .and_then(|meta| meta.get("reasoningEfforts"))
+                    .cloned()
+                    .and_then(|efforts| {
+                        serde_json::from_value::<Vec<GrokInitializeEffort>>(efforts).ok()
+                    })
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|effort| {
+                        let wire_value = effort.value.unwrap_or_else(|| effort.id.clone());
+                        GrokRawConfigOption {
+                            selected: current_effort == Some(wire_value.as_str())
+                                || (current_effort.is_none() && effort.default),
+                            id: effort.id,
+                            category: "mode".to_owned(),
+                            label: effort.label,
+                            description: effort.description,
+                            wire_value: Some(wire_value),
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                if !efforts.is_empty() {
+                    efforts_by_model.insert(model.model_id, efforts);
+                }
+            }
+        }
+        if session_options.is_empty() {
+            session_options = initialize_options;
+        }
+        let selected_model = session_options
+            .iter()
+            .find(|option| option.category == "model" && option.selected)
+            .map(|option| option.id.clone());
+        if let Some(efforts) = selected_model
+            .as_ref()
+            .and_then(|model| efforts_by_model.get(model))
+        {
+            for option in session_options
+                .iter_mut()
+                .filter(|option| option.category == "mode")
+            {
+                option.wire_value = efforts
+                    .iter()
+                    .find(|effort| effort.id == option.id)
+                    .and_then(|effort| effort.wire_value.clone());
+            }
+        }
+        if !session_options
+            .iter()
+            .any(|option| option.category == "mode")
+            && let Some(efforts) = selected_model
+                .as_ref()
+                .and_then(|model| efforts_by_model.get(model))
+        {
+            session_options.extend(efforts.clone());
+        }
+        (!session_options.is_empty()).then_some(Self {
+            options: session_options,
+            efforts_by_model,
+        })
+    }
+
+    fn selected(&self, category: &str) -> Option<&str> {
+        self.options
+            .iter()
+            .find(|option| option.category == category && option.selected)
+            .map(|option| option.id.as_str())
+    }
+
+    fn selected_wire_value(&self, category: &str) -> Option<&str> {
+        self.options
+            .iter()
+            .find(|option| option.category == category && option.selected)
+            .map(|option| option.wire_value.as_deref().unwrap_or(&option.id))
+    }
+
+    fn select(&mut self, category: &str, id: &str) -> bool {
+        if !self
+            .options
+            .iter()
+            .any(|option| option.category == category && option.id == id)
+        {
+            return false;
+        }
+        for option in &mut self.options {
+            if option.category == category {
+                option.selected = option.id == id;
+            }
+        }
+        true
+    }
+
+    fn select_model(&mut self, id: &str) -> bool {
+        let current_effort = self.selected("mode").map(str::to_owned);
+        if !self.select("model", id) {
+            return false;
+        }
+        let Some(mut efforts) = self.efforts_by_model.get(id).cloned() else {
+            // Reasoning support is model-specific. Never carry the previous
+            // model's menu (or wire value) into a model that advertises none.
+            self.options.retain(|option| option.category != "mode");
+            return true;
+        };
+        let selected = current_effort
+            .as_ref()
+            .filter(|current| efforts.iter().any(|effort| &effort.id == *current))
+            .cloned()
+            .or_else(|| {
+                efforts
+                    .iter()
+                    .find(|effort| effort.selected)
+                    .map(|effort| effort.id.clone())
+            })
+            .or_else(|| efforts.first().map(|effort| effort.id.clone()));
+        for effort in &mut efforts {
+            effort.selected = selected.as_deref() == Some(effort.id.as_str());
+        }
+        self.options.retain(|option| option.category != "mode");
+        self.options.extend(efforts);
+        true
+    }
+
+    fn cowboy_options(&self) -> Vec<SessionConfigOption> {
+        [
+            ("model", GROK_MODEL_CONFIG_ID, "Model"),
+            ("mode", GROK_REASONING_CONFIG_ID, "Reasoning"),
+        ]
+        .into_iter()
+        .filter_map(|(category, config_id, label)| {
+            let choices = self
+                .options
+                .iter()
+                .filter(|option| option.category == category)
+                .map(|option| {
+                    SessionConfigSelectOption::new(option.id.clone(), option.label.clone())
+                        .description(option.description.clone())
+                })
+                .collect::<Vec<_>>();
+            if choices.is_empty() {
+                return None;
+            }
+            let selected = self
+                .selected(category)
+                .map(str::to_owned)
+                .or_else(|| choices.first().map(|choice| choice.value.0.to_string()))?;
+            Some(SessionConfigOption::select(
+                config_id, label, selected, choices,
+            ))
+        })
+        .collect()
+    }
+}
+
+fn grok_model_request(
+    session_id: SessionId,
+    model_id: String,
+    reasoning_effort: Option<&str>,
+) -> GrokSetSessionModelRequest {
+    let meta = reasoning_effort.map(|effort| {
+        let mut meta = Meta::new();
+        meta.insert("reasoningEffort".to_owned(), serde_json::json!(effort));
+        meta
+    });
+    GrokSetSessionModelRequest {
+        session_id,
+        model_id,
+        meta,
+    }
+}
+
+#[derive(Debug)]
+struct GrokConfigChange {
+    config_id: String,
+    requested: String,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_grok_config_queue(
+    cx: ConnectionTo<Agent>,
+    sink: Arc<dyn AgentSink>,
+    session_id: String,
+    acp_id: SessionId,
+    grok_config: Arc<Mutex<Option<GrokSessionConfig>>>,
+    current_session_mode: Arc<Mutex<Option<String>>>,
+    mode_config_id: Option<&'static str>,
+    mode_select: Option<Vec<SessionConfigSelectOption>>,
+    mut changes: mpsc::UnboundedReceiver<GrokConfigChange>,
+) -> Result<(), Error> {
+    // One FIFO owns every Grok model/effort mutation. This keeps the state used
+    // to build request N+1 authoritative after request N and prevents an older
+    // response from overwriting a newer selection in Cowboy's UI.
+    while let Some(change) = changes.recv().await {
+        let (next_config, model_id, reasoning_effort) = {
+            let Some(config) = grok_config.lock().as_ref().cloned() else {
+                sink.broadcast_error(
+                    Some(session_id.clone()),
+                    "Grok did not advertise model configuration for this session".to_owned(),
+                );
+                continue;
+            };
+            let mut next = config;
+            let selected = if change.config_id == GROK_MODEL_CONFIG_ID {
+                next.select_model(&change.requested)
+            } else {
+                next.select("mode", &change.requested)
+            };
+            if !selected {
+                sink.broadcast_error(
+                    Some(session_id.clone()),
+                    format!(
+                        "Grok did not advertise {} value {:?}",
+                        change.config_id, change.requested
+                    ),
+                );
+                continue;
+            }
+            (
+                next.clone(),
+                next.selected("model").map(str::to_owned),
+                next.selected_wire_value("mode").map(str::to_owned),
+            )
+        };
+        let Some(model_id) = model_id else {
+            sink.broadcast_error(
+                Some(session_id.clone()),
+                "Grok did not report a selected model".to_owned(),
+            );
+            continue;
+        };
+        let request = grok_model_request(acp_id.clone(), model_id, reasoning_effort.as_deref());
+        match cx.send_request(request).block_task().await {
+            Ok(_) => {
+                let mut config = grok_config.lock();
+                if let Some(config) = config.as_mut() {
+                    *config = next_config;
+                    let mut published = config.cowboy_options();
+                    if let (Some(config_id), Some(options), Some(current)) = (
+                        mode_config_id,
+                        mode_select.as_ref(),
+                        current_session_mode.lock().clone(),
+                    ) {
+                        published.insert(
+                            0,
+                            SessionConfigOption::select(
+                                config_id,
+                                "Mode",
+                                current,
+                                options.clone(),
+                            ),
+                        );
+                    }
+                    match serde_json::to_value(published) {
+                        Ok(options) => sink.set_config_options(&session_id, options),
+                        Err(error) => {
+                            tracing::warn!(error = %error, "serializing Grok config options");
+                        }
+                    }
+                }
+            }
+            Err(error) => sink.broadcast_error(
+                Some(session_id.clone()),
+                format!("set {}: {error}", change.config_id),
+            ),
+        }
+    }
+    Ok(())
+}
 
 /// Attach a stable, content-free session identity to requests sent through the
 /// local `DeepSeek` gateways. The gateways HMAC this opaque value for telemetry
@@ -190,11 +566,13 @@ fn load_session_request(
 #[cfg(test)]
 mod startup_mode_tests {
     use super::{
-        ActivePrompt, ResumeMethod, StartupPhase, StartupTimeout, codex_full_access_available,
-        codex_full_access_selected, deepseek_session_environment, is_empty_stream_message_update,
-        load_session_request, new_session_request, resume_session_request, select_resume_method,
-        session_config_value, startup_full_access_mode,
+        ActivePrompt, GrokSessionConfig, ResumeMethod, StartupPhase, StartupTimeout,
+        codex_full_access_available, codex_full_access_selected, deepseek_session_environment,
+        grok_model_request, is_empty_stream_message_update, load_session_request,
+        new_session_request, resume_session_request, select_resume_method, session_config_value,
+        startup_full_access_mode,
     };
+    use agent_client_protocol::JsonRpcMessage as _;
     use agent_client_protocol::schema::v1::{
         SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption, SessionId,
     };
@@ -319,6 +697,149 @@ mod startup_mode_tests {
         let enabled = session_config_value(&serde_json::json!(true)).expect("boolean value");
         assert_eq!(enabled, SessionConfigOptionValue::boolean(true));
         assert!(session_config_value(&serde_json::json!(42)).is_err());
+    }
+
+    #[test]
+    fn grok_session_metadata_becomes_standard_model_and_reasoning_options() {
+        let mut meta = agent_client_protocol::schema::v1::Meta::new();
+        meta.insert(
+            "x.ai/sessionConfig".to_owned(),
+            serde_json::json!({ "options": [
+                { "id": "grok-4.5", "category": "model", "label": "Grok 4.5", "selected": true },
+                { "id": "high", "category": "mode", "label": "High Effort", "selected": true },
+                { "id": "medium", "category": "mode", "label": "Medium Effort", "selected": false }
+            ]}),
+        );
+        let config = GrokSessionConfig::from_metadata(Some(&meta), None).expect("Grok config");
+        let value = serde_json::to_value(config.cowboy_options()).expect("serialize options");
+        assert_eq!(value.pointer("/0/id"), Some(&serde_json::json!("model")));
+        assert_eq!(
+            value.pointer("/0/currentValue"),
+            Some(&serde_json::json!("grok-4.5"))
+        );
+        assert_eq!(
+            value.pointer("/1/id"),
+            Some(&serde_json::json!("reasoning_effort"))
+        );
+        assert_eq!(
+            value.pointer("/1/currentValue"),
+            Some(&serde_json::json!("high"))
+        );
+    }
+
+    #[test]
+    fn released_grok_initialize_metadata_supplies_model_and_effort_options() {
+        let mut meta = agent_client_protocol::schema::v1::Meta::new();
+        meta.insert(
+            "modelState".to_owned(),
+            serde_json::json!({
+                "currentModelId": "grok-4.5",
+                "availableModels": [
+                    {
+                        "modelId": "grok-4.5",
+                        "name": "Grok 4.5",
+                        "description": "Frontier model",
+                        "_meta": {
+                            "reasoningEffort": "high",
+                            "reasoningEfforts": [
+                                { "id": "high", "label": "High Effort", "default": true },
+                                { "id": "medium", "label": "Medium Effort", "default": false }
+                            ]
+                        }
+                    },
+                    {
+                        "modelId": "grok-fast",
+                        "name": "Grok Fast",
+                        "_meta": {
+                            "reasoningEffort": "low",
+                            "reasoningEfforts": [
+                                { "id": "low", "label": "Low Effort", "default": true }
+                            ]
+                        }
+                    },
+                    {
+                        "modelId": "grok-direct",
+                        "name": "Grok Direct"
+                    }
+                ]
+            }),
+        );
+        let mut config =
+            GrokSessionConfig::from_metadata(None, Some(&meta)).expect("Grok model state");
+        let value = serde_json::to_value(config.cowboy_options()).expect("serialize options");
+        assert_eq!(
+            value.pointer("/0/currentValue"),
+            Some(&serde_json::json!("grok-4.5"))
+        );
+        assert_eq!(
+            value.pointer("/1/currentValue"),
+            Some(&serde_json::json!("high"))
+        );
+        assert!(config.select_model("grok-fast"));
+        assert_eq!(config.selected("mode"), Some("low"));
+        assert!(config.select_model("grok-direct"));
+        assert_eq!(config.selected("mode"), None);
+        assert_eq!(config.selected_wire_value("mode"), None);
+        assert_eq!(config.cowboy_options().len(), 1);
+    }
+
+    #[test]
+    fn grok_reasoning_menu_id_maps_to_the_canonical_wire_value() {
+        let mut initialize_meta = agent_client_protocol::schema::v1::Meta::new();
+        initialize_meta.insert(
+            "modelState".to_owned(),
+            serde_json::json!({
+                "currentModelId": "grok-4.5",
+                "availableModels": [{
+                    "modelId": "grok-4.5",
+                    "name": "Grok 4.5",
+                    "_meta": {
+                        "reasoningEffort": "xhigh",
+                        "reasoningEfforts": [{
+                            "id": "deep",
+                            "value": "xhigh",
+                            "label": "Deep",
+                            "default": true
+                        }]
+                    }
+                }]
+            }),
+        );
+        let mut session_meta = agent_client_protocol::schema::v1::Meta::new();
+        session_meta.insert(
+            "x.ai/sessionConfig".to_owned(),
+            serde_json::json!({ "options": [
+                { "id": "grok-4.5", "category": "model", "label": "Grok 4.5", "selected": true },
+                { "id": "deep", "category": "mode", "label": "Deep", "selected": true }
+            ]}),
+        );
+
+        let config = GrokSessionConfig::from_metadata(Some(&session_meta), Some(&initialize_meta))
+            .expect("Grok config");
+        assert_eq!(config.selected("mode"), Some("deep"));
+        assert_eq!(config.selected_wire_value("mode"), Some("xhigh"));
+
+        let request = grok_model_request(
+            SessionId::new("grok-session"),
+            config.selected("model").expect("model").to_owned(),
+            config.selected_wire_value("mode"),
+        );
+        let value = serde_json::to_value(request).expect("serialize Grok request");
+        assert_eq!(value["_meta"]["reasoningEffort"], "xhigh");
+    }
+
+    #[test]
+    fn grok_model_switch_carries_reasoning_effort_in_meta() {
+        let request = grok_model_request(
+            SessionId::new("grok-session"),
+            "grok-4.5".to_owned(),
+            Some("high"),
+        );
+        let value = serde_json::to_value(&request).expect("serialize Grok request");
+        assert_eq!(request.method(), "session/setModel");
+        assert_eq!(value["sessionId"], "grok-session");
+        assert_eq!(value["modelId"], "grok-4.5");
+        assert_eq!(value["_meta"]["reasoningEffort"], "high");
     }
 
     #[test]
@@ -1204,6 +1725,7 @@ async fn run_session(
         .send_request(InitializeRequest::new(ProtocolVersion::V1))
         .block_task()
         .await?;
+    let initialize_meta = init.meta.clone();
     let agent_can_load = init.agent_capabilities.load_session;
     let agent_can_resume = init
         .agent_capabilities
@@ -1219,6 +1741,7 @@ async fn run_session(
     // session/new would preserve the Cowboy row while losing the native thread.
     let mut acp_id: Option<SessionId> = None;
     let mut modes = None;
+    let mut session_meta = None;
     // Agents may return their initial config options (mode / model / effort) IN the
     // session-creation response (codex does this) rather than only via a later
     // `config_option_update` notification (claude does that). We capture + surface
@@ -1249,6 +1772,7 @@ async fn run_session(
                         acp_id = Some(resume_id);
                         modes = resp.modes;
                         config_options = resp.config_options;
+                        session_meta = resp.meta;
                     }
                     Err(e) => {
                         tracing::error!(session = %session_id, error = ?e, "session/resume failed; preserving native thread identity");
@@ -1274,6 +1798,7 @@ async fn run_session(
                         acp_id = Some(resume_id);
                         modes = resp.modes;
                         config_options = resp.config_options;
+                        session_meta = resp.meta;
                     }
                     Err(e) => {
                         tracing::error!(session = %session_id, error = ?e, "session/load failed; preserving native thread identity");
@@ -1299,6 +1824,7 @@ async fn run_session(
         tracing::info!(session = %session_id, acp_id = %session.session_id.0, "session created");
         modes = session.modes;
         config_options = session.config_options;
+        session_meta = session.meta;
         session.session_id
     };
     startup_phase.send_replace(StartupPhase::Configure);
@@ -1370,20 +1896,7 @@ async fn run_session(
     // Startup landed — disarm the phase watchdog (see `agent_main`).
     startup_phase.send_replace(StartupPhase::Ready);
 
-    // Surface config options the agent returned IN the session response (codex
-    // ships its Model + approval options this way; claude instead emits a later
-    // `config_option_update` notification, handled separately). Without this codex
-    // sessions showed NO Model/effort chips. The SET path is unchanged — the
-    // composer's `set_config_option` already routes to `session/set_config_option`,
-    // which codex implements (`set_session_config_option`).
-    if let Some(opts) = config_options.filter(|o| !o.is_empty()) {
-        match serde_json::to_value(&opts) {
-            Ok(v) => state.sink.set_config_options(&session_id, v),
-            Err(e) => tracing::warn!(error = %e, "serializing session config_options"),
-        }
-    }
-
-    // gemini (unlike codex) exposes its APPROVAL options as session MODES
+    // Gemini (unlike codex) exposes its APPROVAL options as session MODES
     // (`availableModes` + `session/set_mode`), NOT config_options — so the codex
     // push above renders nothing for it. Translate those modes into a synthetic
     // "mode" select chip (matching Zed, which surfaces `session_modes` as its own
@@ -1393,7 +1906,20 @@ async fn run_session(
     // chip's SET is routed to `session/set_mode` in the command loop below —
     // gemini implements no `session/set_config_option`. `Some` here also marks the
     // session as mode-via-session-modes for that routing.
-    let mode_select: Option<Vec<SessionConfigSelectOption>> = if provider_id == "gemini" {
+    // Grok also has ordinary ACP session modes, but its model + reasoning
+    // choices arrive in `x.ai/sessionConfig`; use a distinct id so both menus
+    // remain independently selectable.
+    let mode_config_id = match provider_id {
+        "gemini" => Some("mode"),
+        "grok" => Some(GROK_SESSION_MODE_CONFIG_ID),
+        _ => None,
+    };
+    let current_session_mode = Arc::new(Mutex::new(
+        modes
+            .as_ref()
+            .map(|mode| mode.current_mode_id.0.to_string()),
+    ));
+    let mode_select: Option<Vec<SessionConfigSelectOption>> = if mode_config_id.is_some() {
         modes
             .as_ref()
             .filter(|m| !m.available_modes.is_empty())
@@ -1406,18 +1932,65 @@ async fn run_session(
     } else {
         None
     };
-    if let (Some(options), Some(m)) = (mode_select.as_ref(), modes.as_ref()) {
+    let grok_config = Arc::new(Mutex::new(
+        (provider_id == "grok")
+            .then(|| {
+                GrokSessionConfig::from_metadata(session_meta.as_ref(), initialize_meta.as_ref())
+            })
+            .flatten(),
+    ));
+    let mut surfaced_options = config_options.unwrap_or_default();
+    if let (Some(config_id), Some(options), Some(m)) =
+        (mode_config_id, mode_select.as_ref(), modes.as_ref())
+    {
         let opt = SessionConfigOption::select(
-            "mode",
+            config_id,
             "Mode",
             m.current_mode_id.0.to_string(),
             options.clone(),
         );
-        match serde_json::to_value([opt]) {
+        surfaced_options.push(opt);
+    }
+    if let Some(config) = grok_config.lock().as_ref() {
+        surfaced_options.extend(config.cowboy_options());
+    }
+    // Surface every startup option in one authoritative array. This includes
+    // standard config options (Codex), synthesized ACP modes (Gemini/Grok), and
+    // Grok's pre-standard model/effort metadata.
+    if !surfaced_options.is_empty() {
+        match serde_json::to_value(&surfaced_options) {
             Ok(v) => state.sink.set_config_options(&session_id, v),
-            Err(e) => tracing::warn!(error = %e, "serializing gemini mode chip"),
+            Err(e) => tracing::warn!(error = %e, "serializing startup config options"),
         }
     }
+
+    let grok_config_tx = if provider_id == "grok" {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let queue_cx = cx.clone();
+        let queue_sink = Arc::clone(&state.sink);
+        let queue_session_id = session_id.clone();
+        let queue_acp_id = acp_id.clone();
+        let queue_config = Arc::clone(&grok_config);
+        let queue_session_mode = Arc::clone(&current_session_mode);
+        let queue_mode_select = mode_select.clone();
+        cx.clone().spawn(async move {
+            run_grok_config_queue(
+                queue_cx,
+                queue_sink,
+                queue_session_id,
+                queue_acp_id,
+                queue_config,
+                queue_session_mode,
+                mode_config_id,
+                queue_mode_select,
+                rx,
+            )
+            .await
+        })?;
+        Some(tx)
+    } else {
+        None
+    };
 
     // Command loop. Prompt work runs in spawned tasks so Cancel and Permission
     // answers remain responsive; `prompt_lock` serializes the actual prompt
@@ -1664,7 +2237,7 @@ async fn run_session(
                 );
             }
             AgentCommand::SetConfigOption { config_id, value }
-                if config_id == "mode" && mode_select.is_some() =>
+                if mode_config_id == Some(config_id.as_str()) && mode_select.is_some() =>
             {
                 // gemini's synthesized "mode" chip maps to ACP `session/set_mode` —
                 // it implements no `session/set_config_option` (it never advertised
@@ -1678,15 +2251,27 @@ async fn run_session(
                 let sid = session_id.clone();
                 let acp = acp_id.clone();
                 let options = mode_select.clone().unwrap_or_default();
+                let grok_config = Arc::clone(&grok_config);
+                let current_session_mode = Arc::clone(&current_session_mode);
+                let mode_config_id = mode_config_id.expect("synthesized mode id");
                 cx.clone().spawn(async move {
                     let req = SetSessionModeRequest::new(acp, SessionModeId::new(mode_id.clone()));
                     match cx.send_request(req).block_task().await {
                         Ok(_) => {
+                            *current_session_mode.lock() = Some(mode_id.clone());
                             // Re-push the chip with the new current so the dropdown
                             // sticks (gemini emits no current_mode_update for an
                             // explicit set).
-                            let opt = SessionConfigOption::select("mode", "Mode", mode_id, options);
-                            match serde_json::to_value([opt]) {
+                            let mut published = vec![SessionConfigOption::select(
+                                mode_config_id,
+                                "Mode",
+                                mode_id,
+                                options,
+                            )];
+                            if let Some(config) = grok_config.lock().as_ref() {
+                                published.extend(config.cowboy_options());
+                            }
+                            match serde_json::to_value(published) {
                                 Ok(v) => sink.set_config_options(&sid, v),
                                 Err(e) => {
                                     tracing::warn!(error = %e, "re-serializing gemini mode chip");
@@ -1697,6 +2282,40 @@ async fn run_session(
                     }
                     Ok(())
                 })?;
+            }
+            AgentCommand::SetConfigOption { config_id, value }
+                if provider_id == "grok"
+                    && matches!(
+                        config_id.as_str(),
+                        GROK_MODEL_CONFIG_ID | GROK_REASONING_CONFIG_ID
+                    ) =>
+            {
+                let Some(requested) = value.as_str().map(str::to_owned) else {
+                    state.sink.broadcast_error(
+                        Some(session_id.clone()),
+                        format!("set {config_id}: configuration value must be a string id"),
+                    );
+                    continue;
+                };
+                let Some(tx) = grok_config_tx.as_ref() else {
+                    state.sink.broadcast_error(
+                        Some(session_id.clone()),
+                        "Grok configuration queue is unavailable".to_owned(),
+                    );
+                    continue;
+                };
+                if tx
+                    .send(GrokConfigChange {
+                        config_id: config_id.clone(),
+                        requested,
+                    })
+                    .is_err()
+                {
+                    state.sink.broadcast_error(
+                        Some(session_id.clone()),
+                        format!("set {config_id}: Grok configuration queue closed"),
+                    );
+                }
             }
             AgentCommand::SetConfigOption { config_id, value } => {
                 // claude-agent-acp ≥ 0.31 handles mode / model / effort all

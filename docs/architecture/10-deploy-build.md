@@ -78,6 +78,7 @@ instance. Register one Zed External Agent entry per provider:
 cowboy serve-acp --provider codex
 cowboy serve-acp --provider claude-code
 cowboy serve-acp --provider gemini
+cowboy serve-acp --provider grok
 ```
 
 Each entry filters `session/list` and `session/load` to that provider, which
@@ -86,8 +87,8 @@ the standard pending-`session/prompt` lifecycle plus the optional
 `_cowboy/session/status` request and `_cowboy/session/status_changed`
 notification for clients that need an out-of-band status snapshot.
 
-Use independent custom IDs (`cowboy-codex`, `cowboy-claude`, and
-`cowboy-gemini`) when the native Registry agents must remain available. Zed
+Use independent custom IDs (`cowboy-codex`, `cowboy-claude`, `cowboy-gemini`,
+and `cowboy-grok`) when the native Registry agents must remain available. Zed
 gives those settings its generic sparkle icon because custom agents have no
 icon field. Reusing the official provider IDs preserves their icons but replaces
 the native agents; distinct Cowboy provider icons require published Registry

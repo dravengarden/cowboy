@@ -12,3 +12,9 @@ Deno.test("DeepSeek runtimes share a provider primary but retain agent identity"
     providerVisual("claude-code", "dark").primary,
   );
 });
+
+Deno.test("Grok has a distinct monochrome xAI visual", () => {
+  const grok = providerVisual("grok", "dark");
+  assertNotEquals(grok.primary, providerVisual("unknown", "dark").primary);
+  assertNotEquals(grok.primary, grok.secondary);
+});

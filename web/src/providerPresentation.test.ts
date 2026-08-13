@@ -34,6 +34,13 @@ Deno.test("provider presentation separates the agent from its model provider", (
   assertEquals(providerAgentFamily("claude-deepseek"), "claude-code");
   assertEquals(providerAgentFamily("codex-deepseek"), "codex");
 
+  const grok = providerPresentation("grok");
+  assertEquals(grok.agent, "Grok Build");
+  assertEquals(grok.modelProvider, "xAI");
+  assertEquals(grok.isolated, false);
+  assertEquals(providerName("grok"), "Grok Build");
+  assertEquals(providerSelectionName("grok"), "Grok Build · xAI");
+
   assertEquals(providerActivityKind("claude-deepseek"), "claude");
   assertEquals(providerActivityKind("codex-deepseek"), "codex");
   assertEquals(providerActivityKind("future-agent"), "default");
