@@ -185,12 +185,12 @@ export function DesktopCommandProvider(
         !(normalCommandSink && workspace.focusedRegion !== "prompt.composer");
       // Composition is an exclusive native-input transaction. `isComposing`
       // is not reliable for every macOS keydown (the first and final events can
-      // straddle compositionstart/end), so consult the shared lifecycle too.
-      // Never let a stale Ctrl-W / gg chord move focus while marked text exists.
-      // A CJK input source can still label a physical Normal-mode key as
-      // `Process`/229 even though the non-editable command sink cannot own a
-      // composition. Let that sink continue through the physical-key command
-      // path; a real shared IME transaction remains exclusive.
+      // straddle compositionstart/end), so consult the shared lifecycle and
+      // native text-service markers too. Those markers remain IME-owned even
+      // when modal focus currently sits on non-editable chrome. Never let a
+      // stale Ctrl-W / gg chord move focus while marked text exists. The sole
+      // exception is the non-editable Vim Normal sink when no real shared
+      // composition exists; it deliberately receives physical Vim commands.
       if (
         desktopImeOwnsKey(event)
       ) {

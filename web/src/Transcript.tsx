@@ -146,6 +146,7 @@ import { Sheet } from "./Sheet";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 import { DesktopShortcutBar } from "./desktop/DesktopShortcutBar";
+import { isImeKeyEvent } from "./imeKey";
 
 const EMPTY_OPTIMISTIC_MESSAGES: QueuedMessage[] = [];
 // A byte-bounded history page can contain only a few tall tool/Markdown rows.
@@ -587,6 +588,7 @@ function ConversationEmptyState({
       onClick={interactive ? focusPrimaryComposer : undefined}
       onKeyDown={interactive
         ? (event): void => {
+          if (isImeKeyEvent(event.nativeEvent)) return;
           if (event.key !== "Enter" && event.key !== " ") return;
           event.preventDefault();
           focusPrimaryComposer();
@@ -1852,6 +1854,7 @@ function ToolCard({
               "aria-expanded": selected,
               "aria-haspopup": "dialog" as const,
               onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>): void => {
+                if (isImeKeyEvent(event.nativeEvent)) return;
                 if (event.key === "Enter" || event.key === " ") {
                   event.preventDefault();
                   openDetail();
@@ -4290,6 +4293,7 @@ export function Transcript({
       pointerScrolling = false;
     };
     const onKeyDown = (event: KeyboardEvent): void => {
+      if (isImeKeyEvent(event)) return;
       // Same boundary rule for keyboard repeat: ArrowDown/PageDown/End/Space
       // may continue firing after reaching the bottom and must not undo the
       // `scroll` handler's automatic re-enable.

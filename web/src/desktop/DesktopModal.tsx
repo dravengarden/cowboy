@@ -10,6 +10,7 @@ import {
 } from "@mui/material";
 import { Close } from "@mui/icons-material";
 import type { ReactNode } from "react";
+import { isImeKeyEvent } from "../imeKey";
 import { DESKTOP_SURFACE_RADIUS } from "./DesktopEmbeddedControl";
 import {
   DesktopShortcutBar,
@@ -40,7 +41,15 @@ export function DesktopModal({
   return (
     <Dialog
       open={open}
-      onClose={onClose}
+      onClose={(event, reason): void => {
+        if (reason === "escapeKeyDown") {
+          const keyEvent = "nativeEvent" in event
+            ? event.nativeEvent as KeyboardEvent
+            : event as KeyboardEvent;
+          if (isImeKeyEvent(keyEvent)) return;
+        }
+        onClose();
+      }}
       fullWidth
       maxWidth={false}
       slotProps={{

@@ -41,6 +41,7 @@ import {
   type DesktopCommand,
   useDesktopCommand,
 } from "../desktop/commands/DesktopCommandProvider";
+import { desktopImeOwnsKey } from "../desktop/commands/imeShortcut";
 import { sequentialShortcutAvailability } from "../desktop/commands/shortcutAvailability";
 import { DesktopModal } from "../desktop/DesktopModal";
 import {
@@ -826,6 +827,7 @@ function PageList({
 
   const onVimKeyDown = (event: React.KeyboardEvent): void => {
     if (!vimNavigation) return;
+    if (desktopImeOwnsKey(event.nativeEvent)) return;
     const target = event.target instanceof HTMLElement ? event.target : null;
     if (
       target?.matches("input, textarea, [contenteditable='true']") ||
@@ -1736,6 +1738,7 @@ export function ExploreTranscript(
     const root = rootRef.current;
     if (!root) return undefined;
     const onKeyDown = (event: KeyboardEvent): void => {
+      if (desktopImeOwnsKey(event)) return;
       if (
         event.metaKey || event.ctrlKey || event.altKey || event.shiftKey
       ) return;

@@ -116,6 +116,7 @@ import { MessagePreview } from "./MessagePreview";
 import { useTouchComposer } from "./ComposerTextarea";
 import { shouldExpandInlineComposer } from "./composer/mobileCompactEditorPolicy";
 import { pendingPanelDisclosureDecision } from "./pendingEditLifecycle";
+import { isImeKeyEvent } from "./imeKey";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { ALT_LABEL, ENTER_LABEL, MOD_LABEL } from "./platform";
 import { ShortcutKeycap } from "./ShortcutKeycap";
@@ -1105,7 +1106,7 @@ export function ComposerWorkspace({
   useEffect(() => {
     if (imgSel === null) return undefined;
     const closeOnEscape = (event: KeyboardEvent): void => {
-      if (event.key !== "Escape" || event.isComposing) return;
+      if (event.key !== "Escape" || isImeKeyEvent(event)) return;
       event.preventDefault();
       event.stopPropagation();
       closeImgSel();
@@ -1129,7 +1130,7 @@ export function ComposerWorkspace({
   useEffect(() => {
     if (clearComposerAnchor === null) return undefined;
     const closeOnEscape = (event: KeyboardEvent): void => {
-      if (event.key !== "Escape" || event.isComposing) return;
+      if (event.key !== "Escape" || isImeKeyEvent(event)) return;
       event.preventDefault();
       event.stopPropagation();
       setClearComposerAnchor(null);
@@ -4819,7 +4820,10 @@ function PendingRow({
           }}
           onKeyDownCapture={desktop
             ? (event): void => {
-              if (event.key !== "Escape" || event.nativeEvent.isComposing) return;
+              if (
+                event.key !== "Escape" ||
+                isImeKeyEvent(event.nativeEvent)
+              ) return;
               // Capture is required because Normal-mode focus lives on the
               // non-editable Vim command sink. It must nevertheless respect
               // the editor's actual mode: Insert/Visual/operator Escape belongs
@@ -6249,7 +6253,10 @@ function SessionInfoSection({
         onKeyDown={(event): void => {
           // Desktop retains its compact field convention. Mobile Enter belongs
           // to the system keyboard and never submits the rename.
-          if (saveOnBlur && event.key === "Enter") {
+          if (
+            saveOnBlur && event.key === "Enter" &&
+            !isImeKeyEvent(event.nativeEvent)
+          ) {
             (event.target as HTMLInputElement).blur();
           }
         }}

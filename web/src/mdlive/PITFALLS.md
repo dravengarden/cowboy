@@ -431,9 +431,11 @@ here says otherwise.
     punctuation, motion, operator, count, and special-key map through
     `event.code` and `vimCommandKey`. Only the runtime's actual
     `compositionstart`/`compositionend` lifecycle (and `EditorView.composing`)
-    may suspend sink commands. Workspace/list/config shortcuts follow the same
-    physical-key rule outside editable targets; real composition inside
-    `.cm-content`, input, or textarea remains exclusively owned by the IME.
+    may suspend sink commands. This exception ends at the Normal sink. Everywhere
+    else, `isComposing`, keyCode 229, and native text-service keys such as
+    `Process` remain exclusively IME-owned even when focus has moved onto a
+    button, list, or modal shell; workspace/list/config shortcuts must ignore
+    them before resolving any physical key.
 
 17. **Queue/Draft disclosure and edit ownership are separate state machines.**
     These panels use the same MUI `Collapse` motion as Plan, and non-editing rows

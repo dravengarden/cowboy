@@ -172,6 +172,7 @@ import { ResourceLightbox } from "./ResourceLightbox";
 import { JudgeInspectorHost } from "./JudgeInspector";
 import { desktopFocusBoundary, desktopFocusFill, type Mode as ThemeMode } from "./theme";
 import { persisted } from "./_store/mod.ts";
+import { desktopImeOwnsKey } from "./desktop/commands/imeShortcut";
 import { workspaceCommandKey } from "./desktop/commands/workspaceCommandKey";
 import { sequentialShortcutAvailability } from "./desktop/commands/shortcutAvailability";
 import {
@@ -673,8 +674,9 @@ function SessionList({
     }, [desktop, menuAnchor?.row.id]);
     const onDesktopListKeyDown = (event: React.KeyboardEvent<HTMLUListElement>): void => {
         if (
-            !desktop || event.metaKey || event.ctrlKey || event.altKey ||
-            event.shiftKey || event.repeat
+            !desktop || desktopImeOwnsKey(event.nativeEvent) ||
+            event.metaKey || event.ctrlKey || event.altKey || event.shiftKey ||
+            event.repeat
         ) return;
         const key = workspaceCommandKey(event.nativeEvent);
         const rows = [...(listRef.current?.querySelectorAll<HTMLElement>(
@@ -1156,7 +1158,10 @@ function SessionList({
                     >
                         <Box
                             onKeyDown={(event): void => {
-                            if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+                            if (
+                                desktopImeOwnsKey(event.nativeEvent) ||
+                                event.metaKey || event.ctrlKey || event.altKey || event.shiftKey
+                            ) return;
                             const key = workspaceCommandKey(event.nativeEvent).toLowerCase();
                             const directAction = event.currentTarget.querySelector<HTMLButtonElement>(
                                 `[data-session-shortcut="${key}"]`,
@@ -2654,7 +2659,10 @@ export function App({
                             if (drawerOpen) settleMobileDrawerRef.current?.(false);
                         }}
                         onKeyDown={(event): void => {
-                            if (event.key === "Enter" || event.key === " ") {
+                            if (
+                                !isImeKeyEvent(event.nativeEvent) &&
+                                (event.key === "Enter" || event.key === " ")
+                            ) {
                                 event.preventDefault();
                                 settleMobileDrawerRef.current?.(false);
                             }
@@ -4545,7 +4553,10 @@ function MachinesContent(): React.JSX.Element {
                                                                                     [loginChallenge.request_id]: event.target.value,
                                                                                 }))}
                                                                                 onKeyDown={(event) => {
-                                                                                    if (event.key === "Enter") submitLoginCode(machine.id, loginChallenge.request_id);
+                                                                                    if (
+                                                                                        event.key === "Enter" &&
+                                                                                        !isImeKeyEvent(event.nativeEvent)
+                                                                                    ) submitLoginCode(machine.id, loginChallenge.request_id);
                                                                                 }}
                                                                             />
                                                                             <Button
@@ -4771,7 +4782,7 @@ function SettingsShell({
             )?.focus();
         });
         const onKeyDown = (event: KeyboardEvent): void => {
-            if (isImeKeyEvent(event)) return;
+            if (desktopImeOwnsKey(event)) return;
             const target = event.target;
             if (isSettingsEditableTarget(target)) {
                 if (event.key === "Escape") {

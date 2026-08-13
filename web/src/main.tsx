@@ -16,6 +16,7 @@ import {
   checkForDeployedUpdate,
   createServiceWorkerUpdateCheck,
 } from "./serviceWorkerUpdates";
+import { isImeKeyEvent } from "./imeKey";
 
 const DesktopApp = lazy(async () => {
   const module = await import("./desktop/DesktopApp");
@@ -40,7 +41,7 @@ function Root(): React.JSX.Element {
     if (surface.kind !== "desktop") return undefined;
     const claimModalEscape = (event: KeyboardEvent): void => {
       if (
-        event.key === "Escape" && !event.isComposing &&
+        event.key === "Escape" && !isImeKeyEvent(event) &&
         document.querySelector(".MuiModal-root") !== null
       ) {
         // MUI Modal stops Escape propagation after running its close handler.
@@ -114,7 +115,7 @@ if (el) {
 // still cancel a pinyin candidate. (Browser Fullscreen-API exit is UA-enforced +
 // uncancelable; the native responder default, unlike it, IS cancelable.)
 globalThis.addEventListener("keydown", (e: KeyboardEvent): void => {
-  if (e.key === "Escape" && !e.isComposing) e.preventDefault();
+  if (e.key === "Escape" && !isImeKeyEvent(e)) e.preventDefault();
 });
 
 // Every production surface compares its loaded Vite entry with the deployed
