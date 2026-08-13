@@ -127,6 +127,34 @@ Deno.test("Grok billing becomes the shared subscription credit window", () => {
   );
 });
 
+Deno.test("Grok unified billing treats an omitted zero percent as unused", () => {
+  assertEquals(
+    usageLimits({
+      provider: "xai",
+      status: "available",
+      source: "Grok Build ACP + xAI account APIs",
+      observed_at_ms: 1,
+      rate_limits: {
+        config: {
+          currentPeriod: {
+            type: "USAGE_PERIOD_TYPE_WEEKLY",
+            start: "2026-08-08T00:00:00Z",
+            end: "2026-08-15T00:00:00Z",
+          },
+          isUnifiedBillingUser: true,
+        },
+      },
+    }),
+    [{
+      id: "xai-included-credits",
+      label: "Weekly",
+      remaining: 100,
+      resetsAt: Date.parse("2026-08-15T00:00:00Z") / 1000,
+      windowMinutes: 10080,
+    }],
+  );
+});
+
 Deno.test("legacy Grok billing auth JSON becomes an actionable sign-in message", () => {
   const usage = {
     provider: "xai",

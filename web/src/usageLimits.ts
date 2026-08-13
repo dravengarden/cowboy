@@ -132,7 +132,16 @@ export function usageLimits(usage: ProviderUsage | undefined): UsageLimit[] {
       const derivedPercent = monthlyLimit !== undefined && monthlyLimit > 0
         ? ((num(used?.val) ?? 0) / monthlyLimit) * 100
         : undefined;
-      const percent = num(config.creditUsagePercent) ?? derivedPercent;
+      // The unified credits response is protobuf-derived, so an exact 0%
+      // scalar is omitted. A current unified period makes that omission an
+      // authoritative zero, not an unavailable usage window.
+      const unifiedZeroPercent = config.isUnifiedBillingUser === true &&
+          typeof period?.end === "string" &&
+          Number.isFinite(Date.parse(period.end))
+        ? 0
+        : undefined;
+      const percent = num(config.creditUsagePercent) ?? derivedPercent ??
+        unifiedZeroPercent;
       if (percent !== undefined) {
         const reset = typeof period?.end === "string"
           ? Date.parse(period.end)
