@@ -404,6 +404,43 @@ impl Supervisor {
         }
     }
 
+    /// Reload one session's runtime while preserving its Cowboy state and
+    /// resumable native agent id. Unlike [`Self::reset_session`], this does not
+    /// clear transcript history or start a fresh agent context. Persisted config
+    /// preferences are replayed by [`RemoteRuntime::reset`] before the replacement
+    /// worker can accept another prompt.
+    pub fn reload_session(&self, session_id: &str) -> Result<(), String> {
+        let _lifecycle = self.lifecycle.lock();
+        let meta = self
+            .hub
+            .session_list()
+            .into_iter()
+            .find(|meta| meta.id == session_id)
+            .ok_or_else(|| format!("unknown session {session_id:?}"))?;
+        if meta.status == Status::Starting
+            && meta.machine_id != "local"
+            && meta.origin == SessionOrigin::Web
+            && meta.workspace_source_path.as_deref() == Some(meta.cwd.as_str())
+        {
+            return Err(
+                "session workspace is still being prepared; reload it after preparation finishes"
+                    .to_owned(),
+            );
+        }
+
+        self.resolve_and_persist_cwd(session_id)?;
+        if matches!(meta.status, Status::Busy | Status::Starting)
+            && self.hub.session_has_in_flight_prompt(session_id)
+        {
+            self.hub.set_status(
+                session_id,
+                Status::Interrupted,
+                Some("current turn stopped by session reload".to_owned()),
+            );
+        }
+        self.recycle_session_inner(session_id)
+    }
+
     /// Fence and replace one session's agent while preserving its resumable ACP
     /// id. Used after a force-cancel grace period expires; no other worker or
     /// session is touched.
@@ -947,6 +984,120 @@ mod tests {
         assert_eq!(meta.id, "s");
         assert_eq!(meta.agent_session_id.as_deref(), Some("codex-thread-1"));
         assert_eq!(meta.status, Status::Starting);
+    }
+
+    #[tokio::test]
+    async fn reload_preserves_history_pending_state_config_and_native_thread() {
+        let root = TestDir::new();
+        let cwd = root.path().join("checkout");
+        std::fs::create_dir_all(&cwd).expect("checkout");
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "codex".to_owned(),
+            cwd.display().to_string(),
+            "keep this title".to_owned(),
+            SessionOrigin::Web,
+            false,
+        );
+        hub.push(
+            "s",
+            crate::core::Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "user_message_chunk",
+                    "content": {"type": "text", "text": "keep this history"},
+                }),
+            },
+        );
+        hub.set_agent_session_id("s", "codex-thread-1".to_owned());
+        hub.set_config_preference("s", "model".to_owned(), serde_json::json!("gpt-test"))
+            .expect("config preference");
+        hub.set_status("s", Status::Running, None);
+        let (dispatch_tx, mut dispatch_rx) = tokio::sync::mpsc::channel(4);
+        hub.set_dispatch_tx(dispatch_tx);
+        hub.submit("s", "active turn".to_owned(), Vec::new(), None);
+        assert_eq!(
+            dispatch_rx.recv().await.expect("active dispatch").text,
+            "active turn"
+        );
+        hub.set_status("s", Status::Busy, None);
+        hub.submit("s", "keep queued".to_owned(), Vec::new(), None);
+        hub.add_draft("s", "keep draft".to_owned(), Vec::new(), None);
+
+        let info_before = hub.session_info("s").expect("session before reload");
+        let (history_before, _) = hub.snapshot("s").expect("history before reload");
+        let history_before = serde_json::to_value(history_before).expect("serialize history");
+        let preferences_before = hub
+            .config_preferences("s")
+            .expect("preferences before reload");
+        let mut worker = worker_snapshot(cwd.to_string_lossy().as_ref());
+        worker.state = WorkerState::Busy;
+        worker.current_turn_id = Some("turn-1".to_owned());
+        let runtime = RemoteRuntime::for_test(hub.clone(), vec![worker]);
+        let supervisor = Supervisor::new_remote(hub.clone(), root.0.clone(), 0, runtime.clone());
+
+        supervisor.reload_session("s").expect("reload session");
+
+        let info_after = hub.session_info("s").expect("session after reload");
+        assert_eq!(info_after.meta.id, info_before.meta.id);
+        assert_eq!(info_after.meta.title, info_before.meta.title);
+        assert_eq!(info_after.meta.cwd, info_before.meta.cwd);
+        assert_eq!(
+            info_after.meta.agent_session_id,
+            info_before.meta.agent_session_id
+        );
+        assert_eq!(info_after.queue_count, info_before.queue_count);
+        assert_eq!(info_after.drafts_count, info_before.drafts_count);
+        assert_eq!(hub.config_preferences("s"), Some(preferences_before));
+        assert_eq!(info_after.meta.status, Status::Starting);
+
+        let (history_after, _) = hub.snapshot("s").expect("history after reload");
+        let retained_event_count =
+            usize::try_from(info_before.event_count).expect("test event count fits in usize");
+        assert!(history_after.len() > retained_event_count);
+        assert_eq!(
+            serde_json::to_value(&history_after[..retained_event_count])
+                .expect("serialize preserved history"),
+            history_before
+        );
+
+        let pending = runtime.pending_for_test();
+        assert!(pending.iter().any(|command| {
+            matches!(
+                command,
+                CoreCommand::EnsureSession { session }
+                    if session.agent_session_id.as_deref() == Some("codex-thread-1")
+            )
+        }));
+        assert!(pending.iter().any(|command| {
+            matches!(
+                command,
+                CoreCommand::SetConfigOption { config_id, value, .. }
+                    if config_id == "model" && value == &serde_json::json!("gpt-test")
+            )
+        }));
+        assert!(pending.iter().any(|command| {
+            matches!(command, CoreCommand::StopSession { command_id, .. } if command_id.starts_with("reset-"))
+        }));
+    }
+
+    #[tokio::test]
+    async fn reload_waits_for_remote_web_workspace_preparation() {
+        let root = TestDir::new();
+        let source = root.path().join("columbus");
+        std::fs::create_dir_all(&source).expect("source");
+        let hub = Hub::new();
+        preparing_web_session(&hub, source.to_string_lossy().as_ref());
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        let supervisor = remote_supervisor(hub.clone(), runtime.clone(), root.0.clone());
+
+        let error = supervisor
+            .reload_session("s")
+            .expect_err("preparing workspace must reject reload");
+
+        assert!(error.contains("workspace is still being prepared"));
+        assert_eq!(hub.status("s"), Some(Status::Starting));
+        assert!(runtime.pending_for_test().is_empty());
     }
 
     #[tokio::test]

@@ -66,6 +66,7 @@ import {
     SystemUpdateAlt,
 } from "@mui/icons-material";
 import { SessionControls } from "./Composer";
+import { SessionReloadDialog } from "./SessionReloadDialog";
 import { MobileComposer } from "./mobile/MobileComposer";
 import { claimKeyboard } from "./keyboardClaim";
 import {
@@ -513,6 +514,7 @@ function SessionList({
     onClose,
     onRequestDelete,
     onRequestInfo,
+    onRequestReload,
     onRequestRename,
     autoResumeDefault,
     loaded,
@@ -528,6 +530,7 @@ function SessionList({
     onClose?: (() => void) | undefined;
     onRequestDelete: (s: SessionMeta) => void;
     onRequestInfo: (s: SessionMeta) => void;
+    onRequestReload: (s: SessionMeta) => void;
     onRequestRename: (s: SessionMeta) => void;
     autoResumeDefault: boolean;
     // True once the first session list has arrived over the WS. Until then the
@@ -1189,6 +1192,10 @@ function SessionList({
                             <Button data-session-shortcut="r" autoFocus fullWidth startIcon={<DriveFileRenameOutline />} onClick={(): void => { if (menuAnchor) onRequestRename(menuAnchor.row); setMenuAnchor(null); }} sx={{ justifyContent: "flex-start" }}>
                                 <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Rename</Box>
                                 <Kbd keys="R" />
+                            </Button>
+                            <Button data-session-shortcut="l" fullWidth startIcon={<RefreshIcon />} onClick={(): void => { if (menuAnchor) onRequestReload(menuAnchor.row); setMenuAnchor(null); }} sx={{ justifyContent: "flex-start" }}>
+                                <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Reload</Box>
+                                <Kbd keys="L" />
                             </Button>
                             <Divider sx={{ my: 0.5 }} />
                             <Typography variant="overline" color="text.secondary" sx={{ px: 1 }}>View mode</Typography>
@@ -2008,6 +2015,9 @@ export function App({
     );
     // Per-session info dialog target (kebab → Info).
     const [pendingInfo, setPendingInfo] = useState<SessionMeta | null>(null);
+    // Runtime reload is deliberately separate from Clear: it keeps the same
+    // native thread and all Cowboy-owned history/config/pending state.
+    const [pendingReload, setPendingReload] = useState<SessionMeta | null>(null);
     // The POST response can beat the independent WS `sessions` broadcast. Keep
     // the created session visible and selected during that gap; once the
     // authoritative row arrives, the projection naturally stops being used.
@@ -2183,6 +2193,7 @@ export function App({
                 : undefined}
             onRequestDelete={(s): void => setPendingDelete(s)}
             onRequestInfo={(s): void => setPendingInfo(s)}
+            onRequestReload={(s): void => setPendingReload(s)}
             onRequestRename={(s): void => {
                 claimKeyboard(); // raise the keyboard in-gesture (iOS)
                 setPendingRename(s);
@@ -3396,6 +3407,10 @@ export function App({
                 }}
             />
             <SessionInfoShell session={pendingInfo} onClose={(): void => setPendingInfo(null)} />
+            <SessionReloadDialog
+                session={pendingReload}
+                onClose={(): void => setPendingReload(null)}
+            />
             <ResourceLightbox />
             <JudgeInspectorHost forceSheet={navbarAtBottom} />
             <SettingsController

@@ -99,6 +99,7 @@ import { useKeyboardOpen } from "./keyboardInset";
 import { attachmentTrayForSurface } from "./composer/attachmentPresentation";
 import type { ComposerWorkspaceProps } from "./composer/contracts";
 import { resolveSessionAction, type SessionAction } from "./agentCommands";
+import { SessionReloadDialog } from "./SessionReloadDialog";
 import { createPortal, flushSync } from "react-dom";
 import { FullscreenComposer } from "./FullscreenComposer";
 import { ComposerToolbarSettings } from "./ComposerToolbarSettings";
@@ -4058,6 +4059,25 @@ function PendingPanel({
             // A LOCAL optimistic draft (carries `status`) renders a lightweight
             // row with no grip / edit / reorder — it isn't a server item yet.
             const optimistic = m.status !== undefined;
+            const leadingHandle = editingId !== m.id && !optimistic && count > 1;
+            const jumpBadgeSx = {
+              position: "absolute",
+              zIndex: 1,
+              pointerEvents: "none",
+              ...(reordering
+                ? { top: 0, right: 0 }
+                : {
+                  top: "50%",
+                  left: "50%",
+                  transform: "translate(-50%, -50%)",
+                }),
+              [ROW_ACTIONS_INLINE]: {
+                top: 0,
+                right: 0,
+                left: "auto",
+                transform: "none",
+              },
+            } as const;
             return (
               <Stack
                 key={m.id}
@@ -4083,60 +4103,60 @@ function PendingPanel({
                   }
                   : undefined}
               >
-                {jumpKey && (
-                  <Suspense
-                    fallback={
-                      <Box
-                        component="span"
-                        sx={{
-                          width: 28,
-                          alignSelf: "stretch",
-                          pt: 0.75,
-                          display: "inline-flex",
-                          justifyContent: "center",
-                          flexShrink: 0,
-                        }}
-                      >
-                        <ShortcutKeycap
-                          keyLabel={jumpKey}
-                          variant="context"
-                          availability="inactive"
-                        />
-                      </Box>
-                    }
-                  >
-                    <DesktopListJumpKeycap
-                      region={`prompt.${kind}`}
-                      keyLabel={jumpKey}
-                      sx={{
-                        width: 28,
-                        alignSelf: "stretch",
-                        pt: 0.75,
-                      }}
-                    />
-                  </Suspense>
-                )}
                 {
-                  /* Leading grip — visibility is ADAPTIVE: on a narrow panel it's
-                    hidden until reorder mode (so rows reclaim ~40px), but on a wide
-                    panel (ROW_ACTIONS_INLINE) it's always shown — there's room, so
-                    no reorder toggle is needed (the toggle hides itself there too).
-                    Always RENDERED when draggable so CSS alone decides; never on the
-                    row being edited (the edit field owns it) nor an optimistic row. */
+                  /* One leading slot owns both reorder and the G+number jump hint.
+                    On wide rows the number overlays the six-dot grip instead of
+                    consuming a separate column. Narrow Desktop rows retain a quiet
+                    28px jump hint until reorder mode reveals the 44px grip; Mobile
+                    still allocates nothing until its reorder mode is active. A
+                    single row needs neither ordering affordance nor ordinal. */
                 }
-                {editingId !== m.id && !optimistic && (
-                  <IconButton
-                    {...sortable.handleProps(m.id)}
-                    aria-label="Drag to reorder"
+                {leadingHandle && (
+                  <Box
                     sx={{
-                      ...TOOLBAR_ICON_BTN,
-                      color: "text.disabled",
-                      display: reordering ? "inline-flex" : "none",
-                      [ROW_ACTIONS_INLINE]: { display: "inline-flex" },
+                      position: "relative",
+                      width: reordering ? 44 : (desktop ? 28 : 44),
+                      height: 44,
+                      flexShrink: 0,
+                      display: reordering || desktop ? "inline-flex" : "none",
+                      [ROW_ACTIONS_INLINE]: { display: "inline-flex", width: 44 },
                     }}
                   >
-                    <DragIndicator fontSize="small" />
-                  </IconButton>
+                    <IconButton
+                      {...sortable.handleProps(m.id)}
+                      aria-label="Drag to reorder"
+                      sx={{
+                        ...TOOLBAR_ICON_BTN,
+                        position: "absolute",
+                        inset: 0,
+                        width: 44,
+                        height: 44,
+                        color: "text.disabled",
+                        display: reordering ? "inline-flex" : "none",
+                        [ROW_ACTIONS_INLINE]: { display: "inline-flex" },
+                      }}
+                    >
+                      <DragIndicator fontSize="small" />
+                    </IconButton>
+                    {jumpKey && (
+                      <Suspense
+                        fallback={
+                          <ShortcutKeycap
+                            keyLabel={jumpKey}
+                            variant="context"
+                            availability="inactive"
+                            sx={jumpBadgeSx}
+                          />
+                        }
+                      >
+                        <DesktopListJumpKeycap
+                          region={`prompt.${kind}`}
+                          keyLabel={jumpKey}
+                          sx={jumpBadgeSx}
+                        />
+                      </Suspense>
+                    )}
+                  </Box>
                 )}
                 <Box sx={{ flex: 1, minWidth: 0 }}>
                   {optimistic
@@ -5735,10 +5755,12 @@ function ComposerSheet({
   const activePreset = activeRunConfigPreset(recommendedPresets, options);
   const [customizeAgent, setCustomizeAgent] = useState(false);
   const [cmdConfirm, setCmdConfirm] = useState<SessionAction | null>(null);
+  const [reloadConfirm, setReloadConfirm] = useState(false);
   useEffect(() => {
     if (open) {
       setCustomizeAgent(false);
       setCmdConfirm(null);
+      setReloadConfirm(false);
     }
   }, [open, session?.id]);
   const showAgentDetails = recommendedPresets.length === 0 || customizeAgent;
@@ -5767,6 +5789,7 @@ function ComposerSheet({
     setTitle(displayTitle);
     setTitleFocused(false);
     setCmdConfirm(null);
+    setReloadConfirm(false);
     onClose();
   };
   const confirmSessionAction = async (): Promise<void> => {
@@ -5849,6 +5872,7 @@ function ComposerSheet({
           compacting={compacting}
           dead={dead}
           onSessionAction={setCmdConfirm}
+          onReload={(): void => setReloadConfirm(true)}
         />
       )}
       {session && <QueueSection session={session} />}
@@ -6033,6 +6057,10 @@ function ComposerSheet({
         onClose={(): void => setCmdConfirm(null)}
         onConfirm={confirmSessionAction}
       />
+      <SessionReloadDialog
+        session={reloadConfirm ? session : null}
+        onClose={(): void => setReloadConfirm(false)}
+      />
     </Sheet>
   );
 }
@@ -6090,6 +6118,7 @@ function SessionInfoSection({
   compacting,
   dead,
   onSessionAction,
+  onReload,
 }: {
   session: SessionMeta;
   title: string;
@@ -6103,6 +6132,7 @@ function SessionInfoSection({
   compacting: boolean;
   dead: boolean;
   onSessionAction: (action: SessionAction) => void;
+  onReload: () => void;
 }): React.JSX.Element {
   // Title is editable right here — this sheet already shows the session's identity,
   // so the rename (edit-title) belongs with it rather than off in app Settings.
@@ -6249,6 +6279,19 @@ function SessionInfoSection({
             {contextUsed.toLocaleString()} / {contextSize.toLocaleString()} tokens
           </Typography>
         )}
+        <Button
+          fullWidth
+          variant="outlined"
+          startIcon={<Refresh />}
+          aria-label="reload session from session settings"
+          onClick={(event): void => {
+            event.currentTarget.blur();
+            onReload();
+          }}
+          sx={{ minHeight: 44, textTransform: "none", mt: 0.5 }}
+        >
+          Reload session
+        </Button>
         <Stack direction="row" spacing={1} sx={{ pt: 0.5 }}>
           {compactAction && (
             <Button

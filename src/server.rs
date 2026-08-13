@@ -1418,6 +1418,7 @@ async fn serve_axum(
             put(api_code_buffer_open).delete(api_code_buffer_close),
         )
         .route("/api/sessions/{id}/info", get(api_session_info))
+        .route("/api/sessions/{id}/reload", post(api_session_reload))
         .route(
             "/api/sessions/{id}/cache-protection",
             get(api_session_cache_protection),
@@ -3415,6 +3416,23 @@ async fn api_session_info(
     match state.hub.session_info(&session_id) {
         Some(info) => Json(info).into_response(),
         None => (StatusCode::NOT_FOUND, "unknown session").into_response(),
+    }
+}
+
+/// Rebuild one session's runtime without clearing its transcript, native agent
+/// id, queue, drafts, title, cwd, or persisted config preferences. The
+/// Supervisor owns the atomic worker fence/replacement and broadcasts the
+/// resulting lifecycle edges to every connected client.
+async fn api_session_reload(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+) -> Response {
+    if state.hub.session_info(&session_id).is_none() {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    }
+    match state.supervisor.reload_session(&session_id) {
+        Ok(()) => (StatusCode::ACCEPTED, "reloading").into_response(),
+        Err(error) => (StatusCode::CONFLICT, error).into_response(),
     }
 }
 
