@@ -35,7 +35,7 @@ import {
 type ComposerEditorProps = ComponentPropsWithoutRef<typeof ComposerEditor>;
 
 export interface PlatformComposerEditorProps
-  extends Omit<ComposerEditorProps, "vim"> {
+  extends Omit<ComposerEditorProps, "vim" | "touchInput"> {
   /** Desktop preference. Touch surfaces always force this off. */
   vim?: boolean;
   /**
@@ -263,6 +263,7 @@ export const PlatformComposerEditor = forwardRef<
       ref={bindEditorRef}
       disabled={props.disabled || policy.awaitingRuntime}
       vim={policy.enableVim}
+      touchInput={surface.kind !== "desktop"}
     />
   );
 });
