@@ -5902,18 +5902,18 @@ function ComposerSheet({
           >
             <Box sx={{ flex: 1, minWidth: 0 }}>
               <Typography variant="body2" sx={{ fontWeight: 650 }}>
-                Question pages
+                Page view
               </Typography>
               <Typography
                 variant="caption"
                 color="text.secondary"
                 sx={{ display: "block", lineHeight: 1.35 }}
               >
-                One question and answer per page
+                One prompt and response per page
               </Typography>
             </Box>
             <Switch
-              inputProps={{ "aria-label": "Question pages" }}
+              inputProps={{ "aria-label": "Page view" }}
               checked={projection === "explore"}
               onChange={(_event, checked): void =>
                 onProjectionChange(checked ? "explore" : "history")}

@@ -72,7 +72,7 @@ const EXPLORE_HINTS: RegionHint[] = [
   { keys: "Ctrl+F/B", label: "Scroll page" },
   { keys: "GG/G", label: "Oldest/latest" },
   { keys: "P", label: "Pages" },
-  { keys: "N", label: "New question" },
+  { keys: "N", label: "New page" },
   { keys: "V", label: "History" },
   { keys: "F", label: "Follow" },
   { keys: "Tab", label: "Widget" },

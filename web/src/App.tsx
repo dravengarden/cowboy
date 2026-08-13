@@ -427,7 +427,7 @@ function SessionProjectionBadge({
         <Chip
             size="small"
             label="PAGE"
-            aria-label="Question page view"
+            aria-label="Page view"
             color="primary"
             sx={{
                 height: "1.65em",
