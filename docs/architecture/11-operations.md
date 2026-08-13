@@ -25,6 +25,12 @@ Large transformations use expand/contract:
 `0012_compact_event_log.sql` predates this rule and demonstrated the failure
 mode by blocking one startup for more than ten minutes. Do not repeat it.
 
+PostgreSQL's published migrations remain byte-for-byte immutable. SQLite has a
+separate migration history under `migrations/sqlite/`; never copy a PostgreSQL
+migration into that directory and assume it is portable. Every new storage
+change must update both histories and pass the shared storage contract against
+both backends.
+
 ## Backups
 
 The NixOS service owns a daily custom-format `pg_dump` timer. Each dump is
@@ -33,10 +39,15 @@ checked with `pg_restore --list` before publication and retained for 14 days in
 operator-level recovery drill; listing a dump only proves archive readability,
 not full restore semantics.
 
+SQLite deployments must create backups through SQLite's online backup API or
+`VACUUM INTO` while the controller is running. Copying only the main database
+file can omit committed WAL contents. A backend backup and the artifacts tree
+form one recovery set.
+
 ## Artifacts
 
 Durable history externalizes large ACP image blocks into the content-addressed
 `$COWBOY_DATA_DIR/artifacts` directory. Live prompts remain inline ACP blocks,
 so providers see the original protocol. History stores immutable HTTP URLs.
-Back up this directory together with PostgreSQL; database-only restores retain
+Back up this directory together with the selected database; database-only restores retain
 the transcript but cannot render externalized images.

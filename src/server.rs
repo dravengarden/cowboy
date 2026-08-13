@@ -123,17 +123,17 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // requeue against the writer closing its receiver.
     let (store_shutdown_tx, store_shutdown_rx) = watch::channel(false);
     let runtime_health = Arc::new(RuntimeHealth::default());
-    // Phase 2: when --postgres-url is supplied, hook in the persistent store.
+    // Phase 2: when --database-url is supplied, hook in the persistent store.
     // Migrations run on every start (sqlx tracks applied versions, so it's
     // idempotent); the in-memory Hub is then warmed from the DB before WS
-    // clients can connect. Without --postgres-url the daemon falls back to
+    // clients can connect. Without a database URL the daemon falls back to
     // pure in-memory mode — same behaviour as before, useful for dev or for
-    // running on a host that doesn't have the cowboy-private postgres yet.
+    // running on a host without durable storage configured.
     let (hub, store, persistence_health, writer_task, purge_task, session_id_floor) =
-        if let Some(url) = args.postgres_url.as_deref() {
+        if let Some(url) = args.database_url() {
             let store = Store::connect(url, args.data_dir.join("artifacts"))
                 .await
-                .context("connecting postgres")?;
+                .context("connecting database")?;
             store.migrate().await.context("running migrations")?;
             let session_id_floor = store
                 .next_session_number()
@@ -176,11 +176,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             // one bounded reconnect window to prove ownership; only then may a
             // missing worker become Interrupted.
             hub.restore_reconciling_runtime(restored);
-            tracing::info!(
-                postgres = url,
-                restored = restored_count,
-                "persistence wired",
-            );
+            tracing::info!(restored = restored_count, "persistence wired",);
             // Background DB writer: dequeues StoreWrite intents and applies them.
             // Errors are logged but don't bring the daemon down — the in-memory
             // state remains authoritative for the current process.
@@ -213,7 +209,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 session_id_floor,
             )
         } else {
-            tracing::info!("no --postgres-url: running in-memory only");
+            tracing::info!("no --database-url: running in-memory only");
             (Hub::new(), None, None, None, None, 1)
         };
     let usage = UsageService::new(args.codex_command.clone(), store.clone());

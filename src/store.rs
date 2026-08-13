@@ -1,8 +1,8 @@
-//! Postgres-backed persistence for cowboy state.
+//! Backend-neutral persistence for Cowboy state.
 //!
-//! [`Store`] is a thin wrapper around an `sqlx::PgPool` exposing the small
-//! surface the [`Hub`] (and one background writer task in
-//! [`crate::server`]) needs:
+//! [`Store`] is the stable storage API consumed by the rest of the controller.
+//! `PostgreSQL` and `SQLite` are private implementations selected from the
+//! connection URL; callers never branch on the database kind.
 //!
 //! - load all sessions + their recent event tails on daemon startup;
 //! - append a new session;
@@ -16,8 +16,8 @@
 //! and drains on graceful shutdown. A hard crash can still lose the current
 //! batch; the alternative couples broadcast latency to DB round-trips.
 //!
-//! Embedded migrations live next to `Cargo.toml` in `./migrations/`. Run
-//! [`Store::migrate`] once on startup.
+//! Backend-specific embedded migrations live next to `Cargo.toml` under
+//! `./migrations/`. Run [`Store::migrate`] once on startup.
 
 #![warn(clippy::pedantic)]
 
@@ -32,6 +32,10 @@ use chrono::{DateTime, Utc};
 use sha2::Digest as _;
 use sqlx::Row as _;
 use sqlx::postgres::{PgPool, PgPoolOptions};
+
+mod sqlite;
+
+use sqlite::SqliteStorage;
 
 use crate::core::{
     Envelope, Event, JudgeRun, QuestionPageSummary, QueuedMessage, SessionMeta, SessionOrigin,
@@ -126,6 +130,17 @@ pub struct LoadedSession {
 
 #[derive(Clone)]
 pub struct Store {
+    backend: StorageBackend,
+}
+
+#[derive(Clone)]
+enum StorageBackend {
+    Postgres(PostgresStorage),
+    Sqlite(SqliteStorage),
+}
+
+#[derive(Clone)]
+struct PostgresStorage {
     pool: PgPool,
     artifacts: crate::artifacts::ArtifactStore,
 }
@@ -495,7 +510,420 @@ struct MachineRow {
     public_key: Option<String>,
 }
 
+macro_rules! dispatch_storage {
+    ($store:expr, $method:ident($($argument:expr),* $(,)?)) => {
+        match &$store.backend {
+            StorageBackend::Postgres(backend) => backend.$method($($argument),*).await,
+            StorageBackend::Sqlite(backend) => backend.$method($($argument),*).await,
+        }
+    };
+}
+
 impl Store {
+    /// Connect to the durable store selected by the URL scheme.
+    ///
+    /// # Errors
+    /// Returns when the URL scheme is unsupported or the selected database
+    /// cannot be opened.
+    pub async fn connect(url: &str, artifact_dir: std::path::PathBuf) -> Result<Self> {
+        let backend = if url.starts_with("postgres://") || url.starts_with("postgresql://") {
+            StorageBackend::Postgres(PostgresStorage::connect(url, artifact_dir).await?)
+        } else if url.starts_with("sqlite:") {
+            StorageBackend::Sqlite(SqliteStorage::connect(url, artifact_dir).await?)
+        } else {
+            anyhow::bail!("unsupported database URL scheme")
+        };
+        Ok(Self { backend })
+    }
+
+    pub async fn migrate(&self) -> Result<()> {
+        dispatch_storage!(self, migrate())
+    }
+
+    pub async fn create_machine_enrollment(
+        &self,
+        machine_id: &str,
+        display_name: &str,
+        ttl_seconds: i64,
+    ) -> Result<String> {
+        dispatch_storage!(
+            self,
+            create_machine_enrollment(machine_id, display_name, ttl_seconds)
+        )
+    }
+
+    pub async fn consume_machine_enrollment(
+        &self,
+        token: &str,
+        public_key: &str,
+    ) -> Result<EnrolledMachine> {
+        dispatch_storage!(self, consume_machine_enrollment(token, public_key))
+    }
+
+    pub async fn machine_public_key(&self, machine_id: &str) -> Result<Option<String>> {
+        dispatch_storage!(self, machine_public_key(machine_id))
+    }
+
+    pub async fn list_machines(&self) -> Result<Vec<MachineRecord>> {
+        dispatch_storage!(self, list_machines())
+    }
+
+    pub async fn machine_is_local(&self, machine_id: &str) -> Result<bool> {
+        dispatch_storage!(self, machine_is_local(machine_id))
+    }
+
+    pub async fn revoke_machine(&self, machine_id: &str) -> Result<()> {
+        dispatch_storage!(self, revoke_machine(machine_id))
+    }
+
+    pub async fn machine_connection_is_current(
+        &self,
+        machine_id: &str,
+        connection_epoch: &str,
+    ) -> Result<bool> {
+        dispatch_storage!(
+            self,
+            machine_connection_is_current(machine_id, connection_epoch)
+        )
+    }
+
+    pub async fn machine_connected(
+        &self,
+        machine_id: &str,
+        connection_epoch: &str,
+        platform: &str,
+        architecture: &str,
+        connection_mode: &str,
+        inventory: &serde_json::Value,
+    ) -> Result<()> {
+        dispatch_storage!(
+            self,
+            machine_connected(
+                machine_id,
+                connection_epoch,
+                platform,
+                architecture,
+                connection_mode,
+                inventory
+            )
+        )
+    }
+
+    pub async fn machine_seen(
+        &self,
+        machine_id: &str,
+        connection_epoch: &str,
+        inventory: Option<&serde_json::Value>,
+    ) -> Result<()> {
+        dispatch_storage!(self, machine_seen(machine_id, connection_epoch, inventory))
+    }
+
+    pub async fn machine_disconnected(
+        &self,
+        machine_id: &str,
+        connection_epoch: &str,
+        grace_seconds: i32,
+    ) -> Result<()> {
+        dispatch_storage!(
+            self,
+            machine_disconnected(machine_id, connection_epoch, grace_seconds)
+        )
+    }
+
+    pub async fn expire_machine_reconnects(&self) -> Result<u64> {
+        dispatch_storage!(self, expire_machine_reconnects())
+    }
+
+    pub async fn upsert_codex_reset(&self, fire_at_ms: i64, idempotency_key: &str) -> Result<()> {
+        dispatch_storage!(self, upsert_codex_reset(fire_at_ms, idempotency_key))
+    }
+
+    pub async fn load_codex_reset(&self) -> Result<Option<ScheduledProviderAction>> {
+        dispatch_storage!(self, load_codex_reset())
+    }
+
+    pub async fn defer_codex_reset(&self, next_attempt_at_ms: i64) -> Result<()> {
+        dispatch_storage!(self, defer_codex_reset(next_attempt_at_ms))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn append_provider_action_log(
+        &self,
+        trigger: &str,
+        status: &str,
+        phase: &str,
+        message: &str,
+        credit_id: Option<&str>,
+        idempotency_key: Option<&str>,
+        created_at_ms: i64,
+    ) -> Result<()> {
+        dispatch_storage!(
+            self,
+            append_provider_action_log(
+                trigger,
+                status,
+                phase,
+                message,
+                credit_id,
+                idempotency_key,
+                created_at_ms
+            )
+        )
+    }
+
+    pub async fn provider_action_logs(&self, limit: i64) -> Result<Vec<ProviderActionLog>> {
+        dispatch_storage!(self, provider_action_logs(limit))
+    }
+
+    pub async fn delete_codex_reset(&self) -> Result<()> {
+        dispatch_storage!(self, delete_codex_reset())
+    }
+
+    pub async fn next_session_number(&self) -> Result<u64> {
+        dispatch_storage!(self, next_session_number())
+    }
+
+    pub async fn load_all(&self) -> Result<Vec<LoadedSession>> {
+        dispatch_storage!(self, load_all())
+    }
+
+    pub async fn history_page(
+        &self,
+        session_id: &str,
+        before_seq: u64,
+        page_size: usize,
+    ) -> Result<(Vec<Envelope>, Option<u64>, bool)> {
+        dispatch_storage!(self, history_page(session_id, before_seq, page_size))
+    }
+
+    pub async fn question_page_before(
+        &self,
+        session_id: &str,
+        before_seq: u64,
+    ) -> Result<(Vec<Envelope>, Option<u64>, bool)> {
+        dispatch_storage!(self, question_page_before(session_id, before_seq))
+    }
+
+    pub async fn question_page_summaries(
+        &self,
+        session_id: &str,
+        before_seq: Option<u64>,
+        limit: usize,
+    ) -> Result<(Vec<QuestionPageSummary>, Option<u64>, u64)> {
+        dispatch_storage!(self, question_page_summaries(session_id, before_seq, limit))
+    }
+
+    pub async fn question_page_at(
+        &self,
+        session_id: &str,
+        root_seq: u64,
+    ) -> Result<Option<Vec<Envelope>>> {
+        dispatch_storage!(self, question_page_at(session_id, root_seq))
+    }
+
+    pub async fn insert_session(&self, meta: &SessionMeta) -> Result<()> {
+        dispatch_storage!(self, insert_session(meta))
+    }
+
+    pub async fn update_status(&self, session_id: &str, status: Status) -> Result<()> {
+        dispatch_storage!(self, update_status(session_id, status))
+    }
+
+    pub async fn update_verdict(
+        &self,
+        session_id: &str,
+        awaiting_user: bool,
+        done: bool,
+    ) -> Result<()> {
+        dispatch_storage!(self, update_verdict(session_id, awaiting_user, done))
+    }
+
+    pub async fn update_agent_session_id(
+        &self,
+        session_id: &str,
+        agent_session_id: Option<&str>,
+    ) -> Result<()> {
+        dispatch_storage!(self, update_agent_session_id(session_id, agent_session_id))
+    }
+
+    pub async fn update_config_options(
+        &self,
+        session_id: &str,
+        options: &serde_json::Value,
+    ) -> Result<()> {
+        dispatch_storage!(self, update_config_options(session_id, options))
+    }
+
+    pub async fn update_config_preferences(
+        &self,
+        session_id: &str,
+        preferences: &serde_json::Value,
+    ) -> Result<()> {
+        dispatch_storage!(self, update_config_preferences(session_id, preferences))
+    }
+
+    pub async fn update_title(&self, session_id: &str, title: &str) -> Result<()> {
+        dispatch_storage!(self, update_title(session_id, title))
+    }
+
+    pub async fn update_cwd(&self, session_id: &str, cwd: &str, title: Option<&str>) -> Result<()> {
+        dispatch_storage!(self, update_cwd(session_id, cwd, title))
+    }
+
+    pub async fn update_auto_resume(&self, session_id: &str, value: Option<bool>) -> Result<()> {
+        dispatch_storage!(self, update_auto_resume(session_id, value))
+    }
+
+    pub async fn load_settings(&self) -> Result<Vec<(String, serde_json::Value)>> {
+        dispatch_storage!(self, load_settings())
+    }
+
+    pub async fn put_setting(&self, key: &str, value: &serde_json::Value) -> Result<()> {
+        dispatch_storage!(self, put_setting(key, value))
+    }
+
+    pub async fn update_mobile_review_state(
+        &self,
+        session_id: &str,
+        value: &serde_json::Value,
+    ) -> Result<()> {
+        dispatch_storage!(self, update_mobile_review_state(session_id, value))
+    }
+
+    pub async fn upsert_event_batch(
+        &self,
+        events: &[Envelope],
+        highwaters: &HashMap<String, u64>,
+    ) -> Result<()> {
+        dispatch_storage!(self, upsert_event_batch(events, highwaters))
+    }
+
+    pub async fn clear_events(&self, session_id: &str) -> Result<()> {
+        dispatch_storage!(self, clear_events(session_id))
+    }
+
+    pub fn artifact_path(&self, name: &str) -> Option<std::path::PathBuf> {
+        match &self.backend {
+            StorageBackend::Postgres(backend) => backend.artifact_path(name),
+            StorageBackend::Sqlite(backend) => backend.artifact_path(name),
+        }
+    }
+
+    pub async fn update_pending(
+        &self,
+        session_id: &str,
+        queue: &[QueuedMessage],
+        drafts: &[QueuedMessage],
+    ) -> Result<()> {
+        dispatch_storage!(self, update_pending(session_id, queue, drafts))
+    }
+
+    pub async fn update_judge_runs(&self, session_id: &str, runs: &[JudgeRun]) -> Result<()> {
+        dispatch_storage!(self, update_judge_runs(session_id, runs))
+    }
+
+    pub async fn upsert_wakeup(
+        &self,
+        session_id: &str,
+        fire_at_ms: i64,
+        prompt: &str,
+    ) -> Result<()> {
+        dispatch_storage!(self, upsert_wakeup(session_id, fire_at_ms, prompt))
+    }
+
+    pub async fn delete_wakeup(&self, session_id: &str) -> Result<()> {
+        dispatch_storage!(self, delete_wakeup(session_id))
+    }
+
+    pub async fn load_wakeups(&self) -> Result<Vec<(String, i64, String)>> {
+        dispatch_storage!(self, load_wakeups())
+    }
+
+    pub async fn update_session_order(&self, order: &[String]) -> Result<()> {
+        dispatch_storage!(self, update_session_order(order))
+    }
+
+    pub async fn delete_session(&self, session_id: &str) -> Result<()> {
+        dispatch_storage!(self, delete_session(session_id))
+    }
+
+    pub async fn purge_deleted(&self, retention_days: i64) -> Result<u64> {
+        dispatch_storage!(self, purge_deleted(retention_days))
+    }
+
+    pub async fn upsert_runtime_incident(&self, incident: &RuntimeIncidentWrite) -> Result<()> {
+        dispatch_storage!(self, upsert_runtime_incident(incident))
+    }
+
+    pub async fn recover_runtime_incident(
+        &self,
+        session_id: &str,
+        recovered_at_ms: i64,
+        outcome: &str,
+    ) -> Result<u64> {
+        dispatch_storage!(
+            self,
+            recover_runtime_incident(session_id, recovered_at_ms, outcome)
+        )
+    }
+
+    pub async fn runtime_incidents(&self, limit: i64) -> Result<Vec<RuntimeIncident>> {
+        dispatch_storage!(self, runtime_incidents(limit))
+    }
+
+    pub async fn diagnostic_logs(
+        &self,
+        filter: &DiagnosticLogFilter,
+    ) -> Result<Vec<DiagnosticLogSummary>> {
+        dispatch_storage!(self, diagnostic_logs(filter))
+    }
+
+    pub async fn diagnostic_log_detail(&self, id: &str) -> Result<Option<DiagnosticLogDetail>> {
+        dispatch_storage!(self, diagnostic_log_detail(id))
+    }
+
+    pub async fn storage_metrics(&self) -> Result<(i64, i64, i64)> {
+        dispatch_storage!(self, storage_metrics())
+    }
+
+    pub async fn ingest_provider_usage(
+        &self,
+        machine_id: &str,
+        producer_id: &str,
+        events: &[crate::machine_protocol::ProviderUsageEvent],
+    ) -> Result<u64> {
+        dispatch_storage!(self, ingest_provider_usage(machine_id, producer_id, events))
+    }
+
+    pub async fn provider_usage_summary(
+        &self,
+        provider: &str,
+        days: i32,
+        retention_days: i32,
+    ) -> Result<serde_json::Value> {
+        dispatch_storage!(self, provider_usage_summary(provider, days, retention_days))
+    }
+
+    pub async fn provider_usage_activity(
+        &self,
+        provider: &str,
+        from_ms: i64,
+        to_ms: i64,
+        agents: &[String],
+        model_families: &[String],
+    ) -> Result<serde_json::Value> {
+        dispatch_storage!(
+            self,
+            provider_usage_activity(provider, from_ms, to_ms, agents, model_families)
+        )
+    }
+
+    pub async fn purge_provider_usage(&self, retention_days: i32) -> Result<u64> {
+        dispatch_storage!(self, purge_provider_usage(retention_days))
+    }
+}
+
+impl PostgresStorage {
     /// Create a short-lived, single-use Machine enrollment secret. Only its
     /// SHA-256 digest is persisted.
     ///
@@ -3113,7 +3541,7 @@ mod provider_usage_validation_tests {
     use super::*;
     use crate::machine_protocol::ProviderUsageEvent;
 
-    fn event() -> ProviderUsageEvent {
+    pub(super) fn event() -> ProviderUsageEvent {
         ProviderUsageEvent {
             schema_version: 3,
             producer_id: "codex-deepseek".to_owned(),
@@ -3945,7 +4373,7 @@ async fn load_filtered_provider_usage_coverage(
     .collect())
 }
 
-impl Store {
+impl PostgresStorage {
     /// Persist one authenticated Machine usage batch idempotently and advance
     /// its producer watermark in the same transaction.
     pub async fn ingest_provider_usage(
@@ -4177,7 +4605,7 @@ impl Store {
     }
 }
 
-#[derive(Default, serde::Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UsageAggregate {
     requests: i64,
@@ -4482,4 +4910,642 @@ struct EventRow {
     seq: i64,
     payload: serde_json::Value,
     total_count: i64,
+}
+
+#[cfg(test)]
+mod storage_contract_tests {
+    use super::*;
+
+    fn session(id: &str) -> SessionMeta {
+        SessionMeta {
+            id: id.to_owned(),
+            provider: "codex".to_owned(),
+            machine_id: "hawk".to_owned(),
+            workspace_id: Some("cowboy".to_owned()),
+            workspace_name: Some("Cowboy".to_owned()),
+            workspace_source_path: Some("/tmp/cowboy".to_owned()),
+            cwd: "/tmp/cowboy-worktree".to_owned(),
+            title: "Storage contract".to_owned(),
+            status: Status::Starting,
+            origin: SessionOrigin::Web,
+            agent_session_id: None,
+            auto_resume: None,
+            awaiting_user: false,
+            done: false,
+            judging: false,
+            paused: false,
+            system: false,
+            context_used: 0,
+            context_size: 0,
+            usage: None,
+            next_schedule_ms: None,
+        }
+    }
+
+    async fn assert_machine_contract(store: &Store) -> Result<()> {
+        assert!(store.machine_is_local("hawk").await?);
+        let token = store
+            .create_machine_enrollment("contract-machine", "Contract Machine", 60)
+            .await?;
+        let enrolled = store
+            .consume_machine_enrollment(&token, "ssh-ed25519 QUJD")
+            .await?;
+        assert_eq!(enrolled.id, "contract-machine");
+        assert_eq!(enrolled.display_name, "Contract Machine");
+        assert!(!enrolled.fingerprint.is_empty());
+        assert_eq!(
+            store
+                .machine_public_key("contract-machine")
+                .await?
+                .as_deref(),
+            Some("ssh-ed25519 QUJD")
+        );
+
+        store
+            .machine_connected(
+                "contract-machine",
+                "contract-epoch",
+                "linux",
+                "x86_64",
+                "outbound_wss",
+                &serde_json::json!([{"component": "worker", "version": "test"}]),
+            )
+            .await?;
+        assert!(
+            store
+                .machine_connection_is_current("contract-machine", "contract-epoch")
+                .await?
+        );
+        store
+            .machine_seen(
+                "contract-machine",
+                "contract-epoch",
+                Some(&serde_json::json!([{"component": "worker", "healthy": true}])),
+            )
+            .await?;
+        let machines = store.list_machines().await?;
+        let remote = machines
+            .iter()
+            .find(|machine| machine.id == "contract-machine")
+            .context("enrolled Machine was not listed")?;
+        assert_eq!(remote.status, "online");
+        assert_eq!(remote.inventory[0]["healthy"], true);
+        assert!(remote.last_seen_at_ms.is_some());
+
+        store
+            .machine_disconnected("contract-machine", "contract-epoch", 0)
+            .await?;
+        assert!(store.expire_machine_reconnects().await? >= 1);
+        store.revoke_machine("contract-machine").await?;
+        assert!(
+            store
+                .machine_public_key("contract-machine")
+                .await?
+                .is_none()
+        );
+        assert!(
+            store
+                .list_machines()
+                .await?
+                .iter()
+                .any(|machine| machine.id == "contract-machine" && machine.revoked)
+        );
+        Ok(())
+    }
+
+    async fn assert_provider_action_contract(store: &Store) -> Result<()> {
+        let fire_at_ms = 1_900_000_000_000;
+        store
+            .upsert_codex_reset(fire_at_ms, "storage-contract-reset")
+            .await?;
+        let scheduled = store
+            .load_codex_reset()
+            .await?
+            .context("scheduled provider action was not restored")?;
+        assert_eq!(scheduled.fire_at_ms, fire_at_ms);
+        assert_eq!(scheduled.idempotency_key, "storage-contract-reset");
+        assert_eq!(scheduled.attempt_count, 0);
+        assert_eq!(scheduled.next_attempt_at_ms, fire_at_ms);
+
+        store.defer_codex_reset(fire_at_ms + 1_000).await?;
+        let deferred = store
+            .load_codex_reset()
+            .await?
+            .context("deferred provider action was not restored")?;
+        assert_eq!(deferred.attempt_count, 1);
+        assert_eq!(deferred.next_attempt_at_ms, fire_at_ms + 1_000);
+        store
+            .append_provider_action_log(
+                "scheduled",
+                "succeeded",
+                "contract",
+                "storage contract action",
+                Some("credit-test"),
+                Some("storage-contract-reset"),
+                fire_at_ms,
+            )
+            .await?;
+        let action_logs = store.provider_action_logs(10).await?;
+        let action = action_logs
+            .first()
+            .context("provider action log was not restored")?;
+        assert_eq!(action.status, "succeeded");
+        assert_eq!(action.idempotency_suffix.as_deref(), Some("ct-reset"));
+        let diagnostic_id = format!("automation:{}", action.id);
+        assert!(store.diagnostic_log_detail(&diagnostic_id).await?.is_some());
+        store.delete_codex_reset().await?;
+        assert!(store.load_codex_reset().await?.is_none());
+        Ok(())
+    }
+
+    async fn assert_cache_lineage_contract(store: &Store) -> Result<()> {
+        let occurred_at_ms = chrono::Utc::now().timestamp_millis();
+        let mut hot = super::provider_usage_validation_tests::event();
+        hot.sequence = 10;
+        hot.occurred_at_ms = occurred_at_ms;
+        hot.input_tokens = Some(10_000);
+        hot.cache_hit_tokens = Some(9_000);
+        hot.cache_miss_tokens = Some(1_000);
+
+        // This healthy but tiny request is outside the diagnostic lineage. It
+        // must not hide the prior eligible hot observation from the next miss.
+        let mut ineligible = super::provider_usage_validation_tests::event();
+        ineligible.sequence = 11;
+        ineligible.occurred_at_ms = occurred_at_ms + 1;
+
+        let mut cold = hot.clone();
+        cold.sequence = 12;
+        cold.occurred_at_ms = occurred_at_ms + 2;
+        cold.cache_hit_tokens = Some(0);
+        cold.cache_miss_tokens = Some(10_000);
+        assert_eq!(
+            store
+                .ingest_provider_usage("hawk", "codex-deepseek", &[hot, ineligible, cold],)
+                .await?,
+            12
+        );
+        let logs = store
+            .diagnostic_logs(&DiagnosticLogFilter {
+                since_ms: occurred_at_ms.saturating_sub(1_000),
+                until_ms: occurred_at_ms.saturating_add(1_000),
+                kinds: vec!["cache_anomaly".to_owned()],
+                severities: Vec::new(),
+                states: Vec::new(),
+                agents: Vec::new(),
+                session_ref: None,
+                cursor_ms: None,
+                cursor_id: None,
+                limit: 20,
+            })
+            .await?;
+        let anomaly = logs
+            .iter()
+            .find(|log| log.id.ends_with(":12"))
+            .context("eligible cache transition was not listed")?;
+        assert_eq!(
+            anomaly.classification.as_deref(),
+            Some("unexpected_exact_prefix_miss")
+        );
+        assert!(store.diagnostic_log_detail(&anomaly.id).await?.is_some());
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_lines)] // one shared end-to-end contract for every storage backend
+    async fn run_storage_contract(store: &Store, session_id: &str) -> Result<()> {
+        store.migrate().await?;
+        assert_machine_contract(store).await?;
+        assert_provider_action_contract(store).await?;
+        store.insert_session(&session(session_id)).await?;
+        let companion_id = format!("{session_id}-artifact");
+        store.insert_session(&session(&companion_id)).await?;
+        let numeric_id = session_id
+            .strip_prefix("sess-")
+            .context("storage contract needs a numeric session id")?
+            .parse::<u64>()?;
+        assert_eq!(store.next_session_number().await?, numeric_id + 1);
+        store.update_status(session_id, Status::Running).await?;
+        store.update_verdict(session_id, true, false).await?;
+        store
+            .update_agent_session_id(session_id, Some("agent-thread"))
+            .await?;
+        store
+            .update_config_options(session_id, &serde_json::json!({"model": "gpt-test"}))
+            .await?;
+        store
+            .update_config_preferences(session_id, &serde_json::json!({"model": "gpt-test"}))
+            .await?;
+        store
+            .update_title(session_id, "Storage contract renamed")
+            .await?;
+        store
+            .update_cwd(
+                session_id,
+                "/tmp/cowboy-retargeted",
+                Some("Storage contract retargeted"),
+            )
+            .await?;
+        store.update_auto_resume(session_id, Some(false)).await?;
+        store
+            .update_mobile_review_state(
+                session_id,
+                &serde_json::json!({"mode": "code", "tabs": ["src/store.rs"]}),
+            )
+            .await?;
+        store
+            .update_pending(
+                session_id,
+                &[QueuedMessage {
+                    id: "queue-1".to_owned(),
+                    text: "queued contract prompt".to_owned(),
+                    content: Vec::new(),
+                    cmid: Some("contract-cmid".to_owned()),
+                    schedule: None,
+                }],
+                &[QueuedMessage {
+                    id: "draft-1".to_owned(),
+                    text: "draft contract prompt".to_owned(),
+                    content: Vec::new(),
+                    cmid: None,
+                    schedule: None,
+                }],
+            )
+            .await?;
+        store
+            .update_judge_runs(
+                session_id,
+                &[JudgeRun {
+                    id: "judge-1".to_owned(),
+                    at: 1_900_000_000_000,
+                    layer: "L2".to_owned(),
+                    awaiting_user: true,
+                    done: false,
+                    confidence: 0.9,
+                    reason: "storage contract".to_owned(),
+                    model: "gpt-test".to_owned(),
+                    input: "input".to_owned(),
+                    output: "output".to_owned(),
+                    cache_hit: 1,
+                    cache_miss: 0,
+                    latency_ms: 12,
+                }],
+            )
+            .await?;
+        store
+            .put_setting("storage.contract", &serde_json::json!({"enabled": true}))
+            .await?;
+        store
+            .upsert_wakeup(session_id, 1_900_000_000_000, "continue")
+            .await?;
+        let events = vec![
+            Envelope {
+                session_id: session_id.to_owned(),
+                seq: 0,
+                event: Event::Update {
+                    update: serde_json::json!({
+                        "sessionUpdate": "user_message_chunk",
+                        "content": {"text": "verify both storage backends"},
+                    }),
+                },
+                cmid: None,
+            },
+            Envelope {
+                session_id: session_id.to_owned(),
+                seq: 1,
+                event: Event::TurnEnd {
+                    stop_reason: "end_turn".to_owned(),
+                },
+                cmid: None,
+            },
+        ];
+        store
+            .upsert_event_batch(&events, &HashMap::from([(session_id.to_owned(), 2)]))
+            .await?;
+
+        let artifact_bytes = vec![7_u8; 40_000];
+        let artifact_name = format!("{}.png", hex_sha256(&artifact_bytes));
+        let artifact_event = Envelope {
+            session_id: companion_id.clone(),
+            seq: 0,
+            event: Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {
+                        "type": "image",
+                        "data": base64::engine::general_purpose::STANDARD.encode(artifact_bytes),
+                        "mimeType": "image/png",
+                    },
+                }),
+            },
+            cmid: None,
+        };
+        store
+            .upsert_event_batch(
+                &[artifact_event],
+                &HashMap::from([(companion_id.clone(), 1)]),
+            )
+            .await?;
+        assert!(store.artifact_path(&artifact_name).is_some());
+        store
+            .update_session_order(&[companion_id.clone(), session_id.to_owned()])
+            .await?;
+
+        let loaded = store.load_all().await?;
+        assert_eq!(
+            loaded.first().map(|loaded| loaded.meta.id.as_str()),
+            Some(companion_id.as_str())
+        );
+        let restored = loaded
+            .iter()
+            .find(|loaded| loaded.meta.id == session_id)
+            .context("storage contract session was not restored")?;
+        assert_eq!(restored.meta.status, Status::Running);
+        assert_eq!(
+            restored.meta.agent_session_id.as_deref(),
+            Some("agent-thread")
+        );
+        assert_eq!(restored.meta.title, "Storage contract retargeted");
+        assert_eq!(restored.meta.cwd, "/tmp/cowboy-retargeted");
+        assert_eq!(restored.meta.auto_resume, Some(false));
+        assert!(restored.meta.awaiting_user);
+        assert!(!restored.meta.done);
+        assert_eq!(restored.events.len(), 2);
+        assert_eq!(restored.next_seq, 2);
+        assert_eq!(restored.queue[0].id, "queue-1");
+        assert_eq!(restored.drafts[0].id, "draft-1");
+        assert_eq!(restored.judge_runs[0].id, "judge-1");
+        assert_eq!(
+            restored.config_options.as_ref().unwrap()["model"],
+            "gpt-test"
+        );
+        assert_eq!(restored.config_preferences["model"], "gpt-test");
+        assert_eq!(restored.mobile_review_state["mode"], "code");
+
+        let (history, _, reached_start) = store.history_page(session_id, 2, 200).await?;
+        assert_eq!(history.len(), 2);
+        assert!(reached_start);
+        let (questions, _, total) = store.question_page_summaries(session_id, None, 20).await?;
+        assert_eq!(total, 1);
+        assert_eq!(questions.len(), 1);
+        assert!(questions[0].title.contains("verify both storage backends"));
+        let page = store
+            .question_page_at(session_id, 0)
+            .await?
+            .context("question page missing")?;
+        assert_eq!(page.len(), 2);
+        let (previous_page, previous_cursor, previous_reached_start) =
+            store.question_page_before(session_id, 2).await?;
+        assert_eq!(previous_page.len(), 2);
+        assert!(previous_cursor.is_none());
+        assert!(previous_reached_start);
+
+        let settings = store.load_settings().await?;
+        assert!(settings.iter().any(|(key, value)| {
+            key == "storage.contract"
+                && value.get("enabled") == Some(&serde_json::Value::Bool(true))
+        }));
+        assert!(
+            store
+                .load_wakeups()
+                .await?
+                .iter()
+                .any(|(id, _, prompt)| id == session_id && prompt == "continue")
+        );
+        store.delete_wakeup(session_id).await?;
+        assert!(
+            store
+                .load_wakeups()
+                .await?
+                .iter()
+                .all(|(id, _, _)| id != session_id)
+        );
+
+        let incident_id = format!("storage-contract:{session_id}");
+        store
+            .upsert_runtime_incident(&RuntimeIncidentWrite {
+                id: incident_id.clone(),
+                occurred_at_ms: 1_900_000_000_000,
+                source: "controller".to_owned(),
+                classification: "storage_contract".to_owned(),
+                severity: "warning".to_owned(),
+                state: "active".to_owned(),
+                summary: "storage contract incident".to_owned(),
+                fingerprint: "contract".to_owned(),
+                session_id: Some(session_id.to_owned()),
+                client_id: None,
+                machine_id: None,
+                trace_id: None,
+                build: Some("test".to_owned()),
+                evidence_start_ms: 1_899_999_999_000,
+                evidence_end_ms: 1_900_000_001_000,
+                detail: serde_json::json!({"contract": true}),
+            })
+            .await?;
+        store
+            .upsert_runtime_incident(&RuntimeIncidentWrite {
+                id: incident_id.clone(),
+                occurred_at_ms: 1_900_000_000_000,
+                source: "controller".to_owned(),
+                classification: "storage_contract".to_owned(),
+                severity: "warning".to_owned(),
+                state: "active".to_owned(),
+                summary: "storage contract incident".to_owned(),
+                fingerprint: "contract".to_owned(),
+                session_id: Some(session_id.to_owned()),
+                client_id: None,
+                machine_id: None,
+                trace_id: None,
+                build: Some("test".to_owned()),
+                evidence_start_ms: 1_899_999_999_000,
+                evidence_end_ms: 1_900_000_002_000,
+                detail: serde_json::json!({"contract": null, "second": true}),
+            })
+            .await?;
+        let incident = store
+            .runtime_incidents(20)
+            .await?
+            .into_iter()
+            .find(|incident| incident.id == incident_id)
+            .context("runtime incident was not restored")?;
+        assert_eq!(
+            incident.detail.get("contract"),
+            Some(&serde_json::Value::Null)
+        );
+        assert_eq!(incident.detail["second"], true);
+        assert_eq!(incident.evidence_end_ms, 1_900_000_002_000);
+        let logs = store
+            .diagnostic_logs(&DiagnosticLogFilter {
+                since_ms: 1_899_999_000_000,
+                until_ms: 1_900_001_000_000,
+                kinds: Vec::new(),
+                severities: Vec::new(),
+                states: Vec::new(),
+                agents: Vec::new(),
+                session_ref: Some(session_id.to_owned()),
+                cursor_ms: None,
+                cursor_id: None,
+                limit: 20,
+            })
+            .await?;
+        let log_id = format!("runtime:{incident_id}");
+        assert!(logs.iter().any(|log| log.id == log_id));
+        assert!(store.diagnostic_log_detail(&log_id).await?.is_some());
+        assert_eq!(
+            store
+                .recover_runtime_incident(session_id, 1_900_000_002_000, "contract complete")
+                .await?,
+            1
+        );
+        let recovered = store
+            .runtime_incidents(20)
+            .await?
+            .into_iter()
+            .find(|incident| incident.id == incident_id)
+            .context("recovered incident was not restored")?;
+        assert_eq!(recovered.state, "recovered");
+        assert_eq!(
+            recovered.recovery_outcome.as_deref(),
+            Some("contract complete")
+        );
+
+        let mut usage = super::provider_usage_validation_tests::event();
+        usage.sequence = 1;
+        usage.occurred_at_ms = chrono::Utc::now().timestamp_millis();
+        store
+            .ingest_provider_usage("hawk", "codex-deepseek", &[usage.clone()])
+            .await?;
+        // Replaying the same producer sequence is idempotent, and the producer
+        // watermark remains monotonic.
+        assert_eq!(
+            store
+                .ingest_provider_usage("hawk", "codex-deepseek", &[usage.clone()])
+                .await?,
+            1
+        );
+        let mut failed_usage = super::provider_usage_validation_tests::event();
+        failed_usage.sequence = 2;
+        failed_usage.occurred_at_ms = usage.occurred_at_ms;
+        failed_usage.status = 401;
+        failed_usage.completed = Some(false);
+        assert_eq!(
+            store
+                .ingest_provider_usage("hawk", "codex-deepseek", &[failed_usage])
+                .await?,
+            2
+        );
+        let usage_summary = store.provider_usage_summary("deepseek", 1, 30).await?;
+        assert_eq!(usage_summary["summary"]["requests"], 2);
+        assert_eq!(usage_summary["summary"]["errors"], 1);
+        assert_eq!(usage_summary["summary"]["inputTokens"], 20);
+        let to_ms = chrono::Utc::now().timestamp_millis().saturating_add(1_000);
+        let usage_activity = store
+            .provider_usage_activity(
+                "deepseek",
+                to_ms.saturating_sub(60_000),
+                to_ms,
+                &["codex".to_owned()],
+                &["flash".to_owned()],
+            )
+            .await?;
+        assert_eq!(usage_activity["summary"]["requests"], 2);
+        let usage_logs = store
+            .diagnostic_logs(&DiagnosticLogFilter {
+                since_ms: to_ms.saturating_sub(60_000),
+                until_ms: to_ms,
+                kinds: vec!["provider_error".to_owned()],
+                severities: Vec::new(),
+                states: Vec::new(),
+                agents: Vec::new(),
+                session_ref: None,
+                cursor_ms: None,
+                cursor_id: None,
+                limit: 20,
+            })
+            .await?;
+        let usage_log = usage_logs
+            .iter()
+            .find(|log| log.kind == "provider_error")
+            .context("provider error diagnostic was not listed")?;
+        assert!(store.diagnostic_log_detail(&usage_log.id).await?.is_some());
+        tokio::time::sleep(Duration::from_millis(2)).await;
+        assert!(store.purge_provider_usage(0).await? >= 2);
+        assert_cache_lineage_contract(store).await?;
+        tokio::time::sleep(Duration::from_millis(2)).await;
+        assert!(store.purge_provider_usage(0).await? >= 3);
+
+        let (_, event_count, _) = store.storage_metrics().await?;
+        assert!(event_count >= 2);
+        store.clear_events(&companion_id).await?;
+        assert!(
+            store
+                .history_page(&companion_id, 1, 200)
+                .await?
+                .0
+                .is_empty()
+        );
+        store.delete_session(session_id).await?;
+        store.delete_session(&companion_id).await?;
+        let (_, _, deleted_count) = store.storage_metrics().await?;
+        assert!(deleted_count >= 2);
+        assert!(
+            store
+                .load_all()
+                .await?
+                .iter()
+                .all(|loaded| loaded.meta.id != session_id)
+        );
+        tokio::time::sleep(Duration::from_millis(2)).await;
+        assert!(store.purge_deleted(0).await? >= 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sqlite_implements_storage_contract() {
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-sqlite-contract-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let url = format!("sqlite://{}", root.join("cowboy.sqlite3").display());
+        let store = Store::connect(&url, root.join("artifacts")).await.unwrap();
+        run_storage_contract(&store, "sess-900000001")
+            .await
+            .unwrap();
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn sqlite_memory_implements_storage_contract() {
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-sqlite-memory-contract-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let store = Store::connect("sqlite::memory:", root.join("artifacts"))
+            .await
+            .unwrap();
+        run_storage_contract(&store, "sess-900000003")
+            .await
+            .unwrap();
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "set COWBOY_TEST_POSTGRES_URL to an isolated empty database"]
+    async fn postgres_implements_storage_contract() {
+        let url = std::env::var("COWBOY_TEST_POSTGRES_URL")
+            .expect("COWBOY_TEST_POSTGRES_URL must name an isolated empty database");
+        let root =
+            std::env::temp_dir().join(format!("cowboy-postgres-contract-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let store = Store::connect(&url, root.join("artifacts")).await.unwrap();
+        run_storage_contract(&store, "sess-900000002")
+            .await
+            .unwrap();
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

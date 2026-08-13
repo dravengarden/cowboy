@@ -43,6 +43,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring"] }
 sqlx = { version = "0.8", default-features = false, features = [
   "runtime-tokio",
   "postgres",
+  "sqlite",
   "macros",
   "chrono",
   "json",

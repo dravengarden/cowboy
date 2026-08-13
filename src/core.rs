@@ -1587,7 +1587,7 @@ struct HubInner {
     /// `broadcast` and simply miss events until their next reconnect snapshot.
     tx: broadcast::Sender<Outbound>,
     /// Optional write-behind channel to the DB writer. `None` ⇒ in-memory
-    /// only (no `--postgres-url` configured).
+    /// only (no `--database-url` configured).
     store_tx: Option<StoreSink>,
     /// Hand-off to the background dispatcher task that owns the `Supervisor`.
     /// Set once at startup via [`Hub::set_dispatch_tx`]; `None` until then (and

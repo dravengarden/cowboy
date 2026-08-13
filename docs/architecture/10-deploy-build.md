@@ -66,8 +66,12 @@ the cleared same-path target took 16.41s with 282 Rust cache hits. The hermetic
 |---|---|---|
 | `--bind` | `127.0.0.1:3333` | listen address |
 | `--workspace-root` | `.` | root the session pickers scope to |
-| `--postgres-url` | — | enable persistence ([Storage](05-storage.md)); in-memory if absent |
+| `--database-url` | — | enable PostgreSQL or SQLite persistence ([Storage](05-storage.md)); in-memory if absent |
 | `--web-root` | `web/dist` | separately deployed SPA directory |
+
+The hidden legacy `--postgres-url` spelling remains accepted for existing
+deployments.
+
 Other subcommands: `serve-acp` (the ACP server face for Zed), `try-agent`
 (one-shot provider smoke test).
 

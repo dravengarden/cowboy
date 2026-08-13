@@ -8,7 +8,7 @@ use sha2::Digest as _;
 /// Every migration that has reached a shared database is immutable. `SQLx`
 /// enforces this at runtime; pinning the source digests here moves the same
 /// failure into `cargo test`, before a Cowboy restart can take the UI down.
-const PUBLISHED_MIGRATIONS: &[(&str, &str)] = &[
+const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
     (
         "0001_init.sql",
         "78a7b726befc410983f29a795ef3e280303022ec61ddb9582da6f7bfe25a9fe9",
@@ -119,9 +119,15 @@ const PUBLISHED_MIGRATIONS: &[(&str, &str)] = &[
     ),
 ];
 
-#[test]
-fn published_migrations_are_immutable() {
-    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[(
+    "0001_baseline.sql",
+    "1a33eb9164240618f168a34ae6d2d2c27d1604dba099d8b263b2eac00dfc1cb3",
+)];
+
+fn assert_published_migrations_are_immutable(
+    directory: &std::path::Path,
+    published: &[(&str, &str)],
+) {
     let mut seen = 0;
     for entry in std::fs::read_dir(directory).expect("read migrations") {
         let entry = entry.expect("migration entry");
@@ -129,7 +135,7 @@ fn published_migrations_are_immutable() {
         if entry.path().extension() != Some(std::ffi::OsStr::new("sql")) {
             continue;
         }
-        let expected = PUBLISHED_MIGRATIONS
+        let expected = published
             .iter()
             .find_map(|(candidate, digest)| (*candidate == name).then_some(*digest))
             .unwrap_or_else(|| {
@@ -140,7 +146,19 @@ fn published_migrations_are_immutable() {
         assert_eq!(actual, expected, "published migration {name} was modified");
         seen += 1;
     }
-    assert_eq!(seen, PUBLISHED_MIGRATIONS.len());
+    assert_eq!(seen, published.len());
+}
+
+#[test]
+fn published_postgres_migrations_are_immutable() {
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+    assert_published_migrations_are_immutable(&directory, PUBLISHED_POSTGRES_MIGRATIONS);
+}
+
+#[test]
+fn published_sqlite_migrations_are_immutable() {
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations/sqlite");
+    assert_published_migrations_are_immutable(&directory, PUBLISHED_SQLITE_MIGRATIONS);
 }
 
 #[test]
@@ -149,6 +167,9 @@ fn new_migrations_do_not_rewrite_the_event_log() {
     for entry in std::fs::read_dir(directory).expect("read migrations") {
         let entry = entry.expect("migration entry");
         let name = entry.file_name().to_string_lossy().into_owned();
+        if entry.path().extension() != Some(std::ffi::OsStr::new("sql")) {
+            continue;
+        }
         if name.as_str() <= "0012_compact_event_log.sql" {
             continue;
         }
