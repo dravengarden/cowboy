@@ -1554,9 +1554,9 @@ function NewSessionDialog({
                                 key={p}
                                 value={p}
                                 disabled={!available}
-                                sx={{ alignItems: "flex-start", py: 1, whiteSpace: "normal" }}
+                                sx={{ alignItems: "center", py: 1, whiteSpace: "normal" }}
                             >
-                                <ListItemIcon sx={{ minWidth: 36, mt: 0.25 }}>
+                                <ListItemIcon sx={{ width: 36, minWidth: 36, justifyContent: "center" }}>
                                     <ProviderIcon provider={p} fontSize="small" />
                                 </ListItemIcon>
                                 <Box sx={{ flex: 1, minWidth: 0 }}>

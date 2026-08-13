@@ -651,12 +651,16 @@ Deno.test("long touch prompts scroll inside the editor without hiding chrome", (
   );
   assertEquals(
     composerSource.includes(
-      "\"&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor] .MuiInputBase-input\"",
+      "\"&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor] [data-mobile-native-textarea='true']\"",
     ),
     true,
   );
   assertEquals(
-    composerSource.includes('overflowY: "auto !important"'),
+    textareaSource.includes("nativeTextareaNeedsScroll"),
+    true,
+  );
+  assertEquals(
+    textareaSource.includes('overflowY: nativeScrollable'),
     true,
   );
   assertEquals(formatRowStart >= 0, true);

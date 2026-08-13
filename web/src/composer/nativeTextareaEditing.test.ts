@@ -5,6 +5,7 @@ import {
   insertNativeCodeBlock,
   insertNativeLink,
   mapNativeSelectionThroughValueChange,
+  nativeTextareaNeedsScroll,
   outdentNativeLines,
   replaceNativeSelection,
   setNativeHeading,
@@ -13,6 +14,14 @@ import {
   toggleNativeWrap,
   wrapNativeSelection,
 } from "./nativeTextareaEditing";
+
+Deno.test("native textarea ignores subpixel overflow before enabling scroll", () => {
+  assertEquals(nativeTextareaNeedsScroll(73, 72), false);
+  assertEquals(nativeTextareaNeedsScroll(74, 72), false);
+  assertEquals(nativeTextareaNeedsScroll(75, 72), true);
+  assertEquals(nativeTextareaNeedsScroll(431, 431), false);
+  assertEquals(nativeTextareaNeedsScroll(1417, 431), true);
+});
 
 Deno.test("native text paste replaces forward or backward selections", () => {
   assertEquals(replaceNativeSelection("before after", 7, 12, "middle"), {

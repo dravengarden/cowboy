@@ -477,7 +477,7 @@ function DeepSeekDetails(
           {String(accountErrors.length)} DeepSeek account lane{accountErrors.length === 1 ? "" : "s"} could not refresh; other available balances are still shown.
         </Typography>
       )}
-      <Stack spacing={0.75}>
+      <Stack spacing={0.75} sx={{ width: "100%", maxWidth: 560 }}>
         <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
           <TimeRangeButton
             value={timeRange}

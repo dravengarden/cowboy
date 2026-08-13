@@ -55,6 +55,13 @@ Deno.test("desktop Info uses independent columns and compact metric tiles", () =
   assertEquals(infoSheetSource.includes('bgcolor: "action.hover"'), true);
 });
 
+Deno.test("DeepSeek usage controls stay readable on tablet and desktop widths", () => {
+  assertEquals(
+    infoSheetSource.includes('spacing={0.75} sx={{ width: "100%", maxWidth: 560 }}'),
+    true,
+  );
+});
+
 Deno.test("diagnostic detail keeps labels and values in a bounded grid", () => {
   assertEquals(
     usageLogsSource.includes('gridTemplateColumns: "repeat(2, minmax(0, 1fr))"'),

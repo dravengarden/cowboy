@@ -1960,17 +1960,16 @@ export function ComposerWorkspace({
               overflow: "hidden",
             },
             // Preserve native autosize for short prompts, but complete the
-            // shrink chain for long ones. Once the keyboard leaves less room
-            // than the textarea's intrinsic maxRows height, only the real
-            // textarea scrolls; both action rows remain fixed and visible.
+            // shrink chain for long ones. ComposerTextarea decides whether the
+            // real textarea meaningfully overflows; do not force a fitted field
+            // into WebKit's stale subscroller-caret path for a 1px rounding gap.
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor], &[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor] > .MuiFormControl-root, &[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor] .MuiInputBase-root": {
               minHeight: 0,
               maxHeight: "100%",
               overflow: "hidden",
             },
-            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor] .MuiInputBase-input": {
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor] [data-mobile-native-textarea='true']": {
               maxHeight: "100%",
-              overflowY: "auto !important",
             },
             // An inline image promotes the compact native textarea to CM6. Keep
             // the complete focused canvas inside the same contenteditable height
@@ -3141,6 +3140,16 @@ export function ComposerWorkspace({
           "& .MuiSnackbarContent-root": {
             width: { xs: "100%", sm: "auto" },
             minWidth: { xs: 0, sm: 288 },
+            color: "text.primary",
+            bgcolor: (theme) =>
+              alpha(theme.palette.background.paper, theme.palette.mode === "dark" ? 0.96 : 0.94),
+            backgroundImage: "none",
+            border: 1,
+            borderColor: "divider",
+            boxShadow: (theme) =>
+              `0 12px 36px ${alpha(theme.palette.common.black, theme.palette.mode === "dark" ? 0.42 : 0.18)}`,
+            backdropFilter: "blur(24px) saturate(160%)",
+            WebkitBackdropFilter: "blur(24px) saturate(160%)",
           },
         }}
         message={moveUndo ? `Moved to ${moveUndo.toTitle}` : ""}
