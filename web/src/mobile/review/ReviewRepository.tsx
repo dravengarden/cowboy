@@ -1,6 +1,5 @@
 import {
   AccountTreeOutlined,
-  ArrowBack,
   CallSplit,
   CommitOutlined,
   DescriptionOutlined,
@@ -20,14 +19,11 @@ import {
   Typography,
 } from "@mui/material";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { MobileSheetActionGroup, MobileSheetDismiss } from "../../_shell";
+import { MobileSheetDismiss } from "../../_shell";
 import { NetworkIconButton } from "../../NetworkActionFeedback";
 import type { GitReviewEntry } from "./gitReviewModel";
 import {
-  fetchGitCommit,
-  fetchGitCommitDiff,
   fetchGitRepository,
-  type GitCommitDetail,
   type GitCommitSummary,
   type GitRepositorySnapshot,
 } from "./codeApi";
@@ -42,13 +38,6 @@ function shortOid(oid: string): string {
   return oid.slice(0, 8);
 }
 
-function commitBody(message: string, subject: string): string {
-  const normalized = message.replaceAll("\r\n", "\n").trim();
-  const [firstLine = "", ...remainingLines] = normalized.split("\n");
-  if (firstLine.trim() !== subject.trim()) return normalized;
-  return remainingLines.join("\n").trim();
-}
-
 function relativeDate(value: string): string {
   const date = new Date(value);
   const delta = Date.now() - date.getTime();
@@ -59,7 +48,9 @@ function relativeDate(value: string): string {
   return new Intl.DateTimeFormat(undefined, {
     month: "short",
     day: "numeric",
-    year: date.getFullYear() === new Date().getFullYear() ? undefined : "numeric",
+    year: date.getFullYear() === new Date().getFullYear()
+      ? undefined
+      : "numeric",
   }).format(date);
 }
 
@@ -75,7 +66,9 @@ function GraphCell({ row }: { row: GitGraphRow }): React.JSX.Element {
         {row.edges.map((edge, index) => (
           <path
             key={`${edge.kind}:${edge.from}:${edge.to}:${index}`}
-            d={`M ${x(edge.from)} 0 C ${x(edge.from)} 29, ${x(edge.to)} 29, ${x(edge.to)} 58`}
+            d={`M ${x(edge.from)} 0 C ${x(edge.from)} 29, ${x(edge.to)} 29, ${
+              x(edge.to)
+            } 58`}
             fill="none"
             stroke={graphColors[edge.to % graphColors.length]}
             strokeWidth="1.6"
@@ -98,219 +91,11 @@ function GraphCell({ row }: { row: GitGraphRow }): React.JSX.Element {
   );
 }
 
-function RepositoryDetailHeader(
-  {
-    title,
-    subtitle,
-  }: {
-    readonly title: string;
-    readonly subtitle: string;
-  },
-): React.JSX.Element {
-  return (
-    <Box
-      sx={{
-        pt: "calc(env(safe-area-inset-top, 0px) + 14px)",
-        px: 2,
-        pb: 1.5,
-        borderBottom: 1,
-        borderColor: "divider",
-      }}
-    >
-      <Typography variant="subtitle1" fontWeight={700} noWrap>{title}</Typography>
-      <Typography variant="caption" color="text.secondary" component="div">
-        {subtitle}
-      </Typography>
-    </Box>
-  );
-}
-
-function RepositoryBackOverlay(
-  { onBack, label }: { readonly onBack: () => void; readonly label: string },
-): React.JSX.Element {
-  return (
-    <Box
-      sx={{
-        position: "absolute",
-        zIndex: 3,
-        left: 0,
-        right: 0,
-        bottom: "max(env(safe-area-inset-bottom, 0px), 12px)",
-        px: 2,
-        pointerEvents: "none",
-      }}
-    >
-      <MobileSheetActionGroup
-        actions={[{
-          key: "back",
-          label,
-          onPress: onBack,
-          icon: (
-            <ArrowBack
-              aria-hidden
-              fontSize="small"
-              sx={{ transform: "translateX(-0.5px)" }}
-            />
-          ),
-        }]}
-      />
-    </Box>
-  );
-}
-
-function CommitPatch({
-  sessionId,
-  oid,
-  path,
-  onBack,
-}: {
-  sessionId: string;
-  oid: string;
-  path: string;
-  onBack: () => void;
-}): React.JSX.Element {
-  const [patch, setPatch] = useState<Awaited<ReturnType<typeof fetchGitCommitDiff>>>();
-  const [error, setError] = useState(false);
-  useEffect(() => {
-    const controller = new AbortController();
-    void fetchGitCommitDiff(sessionId, oid, path, controller.signal)
-      .then(setPatch)
-      .catch((reason) => {
-        if (!(reason instanceof DOMException && reason.name === "AbortError")) setError(true);
-      });
-    return () => controller.abort();
-  }, [oid, path, sessionId]);
-  const allLines = patch?.text.split("\n") ?? [];
-  const lines = allLines.slice(0, 5_000);
-  return (
-    <Stack sx={{ position: "relative", height: 1, minHeight: 0 }}>
-      <RepositoryDetailHeader
-        title={path}
-        subtitle={patch ? `+${patch.added} −${patch.removed}` : "Loading patch…"}
-      />
-      <Box sx={{ flex: 1, minHeight: 0, overflow: "auto", pb: 10, fontFamily: "var(--cowboy-font-mono)", fontSize: "0.72rem", lineHeight: 1.55 }}>
-        {error
-          ? <Alert severity="error">Couldn’t load this patch</Alert>
-          : !patch
-          ? <Box sx={{ display: "grid", placeItems: "center", pt: 8 }}><CircularProgress size={24} /></Box>
-          : lines.map((line, index) => (
-            <Box
-              key={index}
-              component="div"
-              sx={{
-                minWidth: "max-content",
-                px: 1.25,
-                whiteSpace: "pre",
-                color: line.startsWith("+") && !line.startsWith("+++")
-                  ? "success.main"
-                  : line.startsWith("-") && !line.startsWith("---")
-                  ? "error.main"
-                  : line.startsWith("@@")
-                  ? "primary.main"
-                  : "text.secondary",
-              }}
-            >
-              {line || " "}
-            </Box>
-          ))}
-        {patch && (patch.truncated || allLines.length > lines.length) && <Alert severity="info">Large patch preview truncated</Alert>}
-      </Box>
-      <RepositoryBackOverlay onBack={onBack} label="Back to commit" />
-    </Stack>
-  );
-}
-
-function CommitDetail({
-  sessionId,
-  commit,
-  onBack,
-}: {
-  sessionId: string;
-  commit: GitCommitSummary;
-  onBack: () => void;
-}): React.JSX.Element {
-  const [detail, setDetail] = useState<GitCommitDetail>();
-  const [selectedPath, setSelectedPath] = useState<string>();
-  const [error, setError] = useState(false);
-  useEffect(() => {
-    const controller = new AbortController();
-    setDetail(undefined);
-    setError(false);
-    void fetchGitCommit(sessionId, commit.oid, controller.signal)
-      .then(setDetail)
-      .catch((reason) => {
-        if (!(reason instanceof DOMException && reason.name === "AbortError")) {
-          setError(true);
-        }
-      });
-    return () => controller.abort();
-  }, [commit.oid, sessionId]);
-  if (selectedPath) {
-    return <CommitPatch sessionId={sessionId} oid={commit.oid} path={selectedPath} onBack={() => setSelectedPath(undefined)} />;
-  }
-  const body = detail ? commitBody(detail.message, commit.subject) : "";
-  return (
-    <Stack sx={{ position: "relative", height: 1, minHeight: 0 }}>
-      <RepositoryDetailHeader
-        title={commit.subject}
-        subtitle={`${shortOid(commit.oid)} · ${relativeDate(commit.authoredAt)}`}
-      />
-      <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto", px: 2, pb: 10 }}>
-        {error
-          ? <Alert severity="error">Couldn’t load this commit</Alert>
-          : !detail
-          ? <Box sx={{ display: "grid", placeItems: "center", pt: 8 }}><CircularProgress size={24} /></Box>
-          : (
-            <Stack spacing={2}>
-              {body && (
-                <Typography sx={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
-                  {body}
-                </Typography>
-              )}
-              <Stack spacing={0.25}>
-                <Typography variant="caption" color="text.secondary">
-                  {detail.author} · {detail.authorEmail}
-                </Typography>
-                <Typography variant="caption" color="text.secondary">
-                  {new Date(detail.authoredAt).toLocaleString()}
-                </Typography>
-                <Typography variant="caption" color="text.secondary" sx={{ overflowWrap: "anywhere" }}>
-                  {detail.parents.length > 1 ? "Merge parents" : "Parent"}: {detail.parents.map(shortOid).join(" · ") || "Root commit"}
-                </Typography>
-              </Stack>
-              <Box>
-                <Typography variant="overline" color="text.secondary">
-                  {detail.files.length} changed files
-                </Typography>
-                <List disablePadding sx={{ borderTop: 1, borderColor: "divider" }}>
-                  {detail.files.map((file) => (
-                    <ListItemButton
-                      key={`${file.oldPath ?? ""}:${file.path}`}
-                      onClick={() => setSelectedPath(file.path)}
-                      sx={{ minHeight: 48, gap: 1, borderBottom: 1, borderColor: "divider" }}
-                    >
-                      <Chip size="small" label={file.status.slice(0, 1).toUpperCase()} sx={{ minWidth: 28 }} />
-                      <Box sx={{ minWidth: 0 }}>
-                        <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>{file.path}</Typography>
-                        {file.oldPath && <Typography variant="caption" color="text.secondary">from {file.oldPath}</Typography>}
-                      </Box>
-                    </ListItemButton>
-                  ))}
-                </List>
-                {detail.filesTruncated && <Alert severity="info">Showing the first 1,000 files</Alert>}
-              </Box>
-            </Stack>
-          )}
-      </Box>
-      <RepositoryBackOverlay onBack={onBack} label="Back to history" />
-    </Stack>
-  );
-}
-
 export function ReviewRepository({
   sessionId,
   machineLabel,
   onOpenDiff,
+  onOpenCommit,
   reviewed,
   onRevision,
   onClose,
@@ -319,6 +104,7 @@ export function ReviewRepository({
   sessionId: string | undefined;
   machineLabel?: string;
   onOpenDiff: (entry: GitReviewEntry, queue: GitReviewEntry[]) => void;
+  onOpenCommit: (commit: GitCommitSummary) => void;
   reviewed: ReadonlySet<string>;
   onRevision: (revision: string) => void;
   onClose: () => void;
@@ -326,7 +112,6 @@ export function ReviewRepository({
 }): React.JSX.Element {
   const [section, setSection] = useState<RepositorySection>("changes");
   const [repository, setRepository] = useState<GitRepositorySnapshot>();
-  const [selectedCommit, setSelectedCommit] = useState<GitCommitSummary>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
   const graph = useMemo(
@@ -340,7 +125,9 @@ export function ReviewRepository({
     try {
       setRepository(await fetchGitRepository(sessionId, signal));
     } catch (reason) {
-      if (!(reason instanceof DOMException && reason.name === "AbortError")) setError(true);
+      if (!(reason instanceof DOMException && reason.name === "AbortError")) {
+        setError(true);
+      }
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
@@ -351,18 +138,36 @@ export function ReviewRepository({
     return () => controller.abort();
   }, [load, refreshToken]);
 
-  if (selectedCommit && sessionId) {
-    return <CommitDetail sessionId={sessionId} commit={selectedCommit} onBack={() => setSelectedCommit(undefined)} />;
-  }
-
   return (
     <Stack sx={{ position: "relative", height: 1, minHeight: 0 }}>
-      <Box sx={{ pt: "calc(env(safe-area-inset-top, 0px) + 14px)", px: 1.5, pb: 1 }}>
-        <Stack direction="row" alignItems="baseline" spacing={0.75} sx={{ px: 0.5, mb: 1 }}>
-          <Typography variant="subtitle1" fontWeight={700}>Repository</Typography>
-          {machineLabel && <Typography variant="caption" color="text.secondary">on {machineLabel}</Typography>}
+      <Box
+        sx={{
+          pt: "calc(env(safe-area-inset-top, 0px) + 14px)",
+          px: 1.5,
+          pb: 1,
+        }}
+      >
+        <Stack
+          direction="row"
+          alignItems="baseline"
+          spacing={0.75}
+          sx={{ px: 0.5, mb: 1 }}
+        >
+          <Typography variant="subtitle1" fontWeight={700}>
+            Repository
+          </Typography>
+          {machineLabel && (
+            <Typography variant="caption" color="text.secondary">
+              on {machineLabel}
+            </Typography>
+          )}
         </Stack>
-        <Stack direction="row" role="tablist" aria-label="Repository views" spacing={0.5}>
+        <Stack
+          direction="row"
+          role="tablist"
+          aria-label="Repository views"
+          spacing={0.5}
+        >
           {([
             ["changes", "Changes", <DescriptionOutlined key="changes" />],
             ["history", "History", <History key="history" />],
@@ -375,7 +180,13 @@ export function ReviewRepository({
               size="small"
               startIcon={icon}
               onClick={() => setSection(value)}
-              sx={{ flex: 1, minWidth: 0, borderRadius: 2, bgcolor: section === value ? "action.selected" : "transparent", textTransform: "none" }}
+              sx={{
+                flex: 1,
+                minWidth: 0,
+                borderRadius: 2,
+                bgcolor: section === value ? "action.selected" : "transparent",
+                textTransform: "none",
+              }}
             >
               {label}
             </Button>
@@ -394,63 +205,170 @@ export function ReviewRepository({
             />
           )
           : loading
-          ? <Box sx={{ display: "grid", placeItems: "center", pt: 8 }}><CircularProgress size={24} /></Box>
+          ? (
+            <Box sx={{ display: "grid", placeItems: "center", pt: 8 }}>
+              <CircularProgress size={24} />
+            </Box>
+          )
           : error
-          ? <Alert severity="error" action={<NetworkIconButton aria-label="Retry repository history" networkAction={load}><Refresh /></NetworkIconButton>}>Repository history is unavailable</Alert>
+          ? (
+            <Alert
+              severity="error"
+              action={
+                <NetworkIconButton
+                  aria-label="Retry repository history"
+                  networkAction={load}
+                >
+                  <Refresh />
+                </NetworkIconButton>
+              }
+            >
+              Repository history is unavailable
+            </Alert>
+          )
           : section === "history"
           ? (
             <Box sx={{ height: 1, overflowY: "auto", px: 0.75, pb: 10 }}>
               <List disablePadding>
                 {(repository?.commits ?? []).map((commit, index) => (
-                  <ListItemButton key={commit.oid} onClick={() => setSelectedCommit(commit)} sx={{ minHeight: 58, px: 0.5, py: 0 }}>
+                  <ListItemButton
+                    key={commit.oid}
+                    onClick={() => {
+                      onOpenCommit(commit);
+                      onClose();
+                    }}
+                    sx={{ minHeight: 58, px: 0.5, py: 0 }}
+                  >
                     <GraphCell row={graph[index]!} />
                     <ListItemText
-                      primary={(
-                        <Stack direction="row" alignItems="center" spacing={0.5} sx={{ minWidth: 0 }}>
-                          <Typography variant="body2" noWrap sx={{ minWidth: 0 }}>{commit.subject}</Typography>
+                      primary={
+                        <Stack
+                          direction="row"
+                          alignItems="center"
+                          spacing={0.5}
+                          sx={{ minWidth: 0 }}
+                        >
+                          <Typography
+                            variant="body2"
+                            noWrap
+                            sx={{ minWidth: 0 }}
+                          >
+                            {commit.subject}
+                          </Typography>
                           {commit.decorations.slice(0, 1).map((decoration) => (
                             <Chip
                               key={decoration}
                               label={decoration.replace(/^HEAD -> /, "")}
                               size="small"
                               variant="outlined"
-                              sx={{ height: 20, maxWidth: 104, "& .MuiChip-label": { px: 0.75, overflow: "hidden", textOverflow: "ellipsis" } }}
+                              sx={{
+                                height: 20,
+                                maxWidth: 104,
+                                "& .MuiChip-label": {
+                                  px: 0.75,
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                },
+                              }}
                             />
                           ))}
                         </Stack>
-                      )}
-                      secondary={`${commit.author} · ${relativeDate(commit.authoredAt)} · ${shortOid(commit.oid)}`}
-                      secondaryTypographyProps={{ noWrap: true, fontSize: "0.7rem" }}
+                      }
+                      secondary={`${commit.author} · ${
+                        relativeDate(commit.authoredAt)
+                      } · ${shortOid(commit.oid)}`}
+                      secondaryTypographyProps={{
+                        noWrap: true,
+                        fontSize: "0.7rem",
+                      }}
                     />
-                    {commit.parents.length > 1 && <CallSplit color="primary" fontSize="small" />}
+                    {commit.parents.length > 1 && (
+                      <CallSplit color="primary" fontSize="small" />
+                    )}
                   </ListItemButton>
                 ))}
               </List>
-              {repository?.historyTruncated && <Alert severity="info">Showing the newest 128 commits across all refs</Alert>}
+              {repository?.historyTruncated && (
+                <Alert severity="info">
+                  Showing the newest 128 commits across all refs
+                </Alert>
+              )}
             </Box>
           )
           : (
             <Box sx={{ height: 1, overflowY: "auto", px: 1.25, pb: 10 }}>
               <List disablePadding>
                 {(repository?.worktrees ?? []).map((worktree) => (
-                  <Box key={worktree.path} sx={{ py: 1.5, px: 1, borderBottom: 1, borderColor: "divider" }}>
+                  <Box
+                    key={worktree.path}
+                    sx={{
+                      py: 1.5,
+                      px: 1,
+                      borderBottom: 1,
+                      borderColor: "divider",
+                    }}
+                  >
                     <Stack direction="row" alignItems="center" spacing={1}>
-                      <CommitOutlined color={worktree.current ? "primary" : "disabled"} />
+                      <CommitOutlined
+                        color={worktree.current ? "primary" : "disabled"}
+                      />
                       <Box sx={{ minWidth: 0, flex: 1 }}>
-                        <Typography variant="body2" fontWeight={worktree.current ? 700 : 500} noWrap>{worktree.branch ?? (worktree.detached ? "Detached HEAD" : "Worktree")}</Typography>
-                        <Typography variant="caption" color="text.secondary" sx={{ display: "block", overflowWrap: "anywhere" }}>{worktree.path}</Typography>
-                        <Typography variant="caption" color="text.secondary">{worktree.head ? shortOid(worktree.head) : "No HEAD"}</Typography>
+                        <Typography
+                          variant="body2"
+                          fontWeight={worktree.current ? 700 : 500}
+                          noWrap
+                        >
+                          {worktree.branch ??
+                            (worktree.detached ? "Detached HEAD" : "Worktree")}
+                        </Typography>
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          sx={{ display: "block", overflowWrap: "anywhere" }}
+                        >
+                          {worktree.path}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {worktree.head ? shortOid(worktree.head) : "No HEAD"}
+                        </Typography>
                       </Box>
-                      {worktree.current && <Chip size="small" color="primary" variant="outlined" label="Current" />}
+                      {worktree.current && (
+                        <Chip
+                          size="small"
+                          color="primary"
+                          variant="outlined"
+                          label="Current"
+                        />
+                      )}
                     </Stack>
-                    {(worktree.locked || worktree.prunable) && <Alert severity={worktree.prunable ? "warning" : "info"} sx={{ mt: 1 }}>{worktree.prunable ?? `Locked${worktree.locked ? `: ${worktree.locked}` : ""}`}</Alert>}
+                    {(worktree.locked || worktree.prunable) && (
+                      <Alert
+                        severity={worktree.prunable ? "warning" : "info"}
+                        sx={{ mt: 1 }}
+                      >
+                        {worktree.prunable ??
+                          `Locked${
+                            worktree.locked ? `: ${worktree.locked}` : ""
+                          }`}
+                      </Alert>
+                    )}
                   </Box>
                 ))}
               </List>
             </Box>
           )}
       </Box>
-      <Box sx={{ position: "absolute", zIndex: 3, left: 0, right: 0, bottom: "max(env(safe-area-inset-bottom, 0px), 12px)", px: 2, pointerEvents: "none" }}>
+      <Box
+        sx={{
+          position: "absolute",
+          zIndex: 3,
+          left: 0,
+          right: 0,
+          bottom: "max(env(safe-area-inset-bottom, 0px), 12px)",
+          px: 2,
+          pointerEvents: "none",
+        }}
+      >
         <MobileSheetDismiss onClose={onClose} label="Close repository" />
       </Box>
     </Stack>

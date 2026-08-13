@@ -75,6 +75,7 @@ import {
   fetchCodeLanguage,
   fetchCodeManifest,
   fetchCodeNavigation,
+  type GitCommitSummary,
   isTransientCodeApiStatus,
   openCodeBuffer,
   shouldCloseUnavailableSource,
@@ -83,6 +84,7 @@ import { invalidateDiffCache, loadCodeDiff } from "./diffCache";
 import { diffHunkLines, reviewEntryKey } from "./diffNavigationModel";
 import { type ReviewProgress, revisionMatches } from "./reviewProgress";
 import { ReviewRepository } from "./ReviewRepository";
+import { ReviewCommit } from "./ReviewCommit";
 import type { CodeInspectCandidate, CodeRevealRange } from "./CodeViewer";
 import { ReviewDrawerShell } from "./ReviewDrawerShell";
 import { ReviewFileTree } from "./ReviewFileTree";
@@ -1347,6 +1349,10 @@ export function ReviewApp({
   const [diffTarget, setDiffTarget] = useState<
     Extract<ReviewTarget, { kind: "diff" }> | undefined
   >();
+  const [commitTarget, setCommitTarget] = useState<{
+    commit: GitCommitSummary;
+    path?: string;
+  }>();
   const target: ReviewTarget = mode === "files"
     ? sourceTarget ?? { kind: "changes" }
     : diffTarget ?? { kind: "changes" };
@@ -1565,11 +1571,13 @@ export function ReviewApp({
     currentSymbol.current = undefined;
     currentVisibleLine.current = undefined;
     setDiffTarget(undefined);
+    setCommitTarget(undefined);
     setCurrentRevision(undefined);
   }, [workspace?.sessionId]);
 
   useEffect(() => {
     setMode(syncedReview.mode);
+    if (syncedReview.mode === "files") setCommitTarget(undefined);
   }, [syncedReview.mode, workspace?.sessionId]);
 
   useEffect(() => {
@@ -1618,6 +1626,7 @@ export function ReviewApp({
       };
     }
     setCurrentRevision(undefined);
+    setCommitTarget(undefined);
     setMode("files");
     if (workspace?.sessionId) {
       mutateMobileReview(workspace.sessionId, "open", { path });
@@ -1711,6 +1720,7 @@ export function ReviewApp({
     queue: GitReviewEntry[],
   ): void => {
     setCurrentRevision(undefined);
+    setCommitTarget(undefined);
     setMode("git");
     if (workspace?.sessionId) {
       mutateMobileReview(workspace.sessionId, "setMode", { mode: "git" });
@@ -1722,6 +1732,16 @@ export function ReviewApp({
       queue,
     });
     setCloseRequest((value) => value + 1);
+  };
+  const openCommit = (commit: GitCommitSummary): void => {
+    navigationHaptic();
+    setMode("git");
+    setDiffTarget(undefined);
+    setCurrentRevision(undefined);
+    setCommitTarget({ commit });
+    if (workspace?.sessionId) {
+      mutateMobileReview(workspace.sessionId, "setMode", { mode: "git" });
+    }
   };
   const activateTab = (tab: ReviewTab): void => {
     if (tab.kind === "source") {
@@ -2121,6 +2141,7 @@ export function ReviewApp({
             sessionId={workspace?.sessionId}
             machineLabel={currentSession?.machine_id ?? "hawk"}
             onOpenDiff={openDiff}
+            onOpenCommit={openCommit}
             reviewed={new Set(Object.keys(reviewProgress))}
             onRevision={adoptManifestRevision}
             onClose={() => setCloseRequest((value) => value + 1)}
@@ -2153,7 +2174,9 @@ export function ReviewApp({
               fontFamily="var(--cowboy-font-mono)"
               noWrap
             >
-              {target.kind === "changes"
+              {commitTarget
+                ? commitTarget.path ?? commitTarget.commit.subject
+                : target.kind === "changes"
                 ? mode === "files"
                   ? projectCodeContext ? "Project code" : "Worktree"
                   : "Changes"
@@ -2198,7 +2221,9 @@ export function ReviewApp({
                 }}
               />
               <Typography variant="caption" noWrap>
-                {target.kind === "diff"
+                {commitTarget
+                  ? `Commit · ${commitTarget.commit.oid.slice(0, 8)} · `
+                  : target.kind === "diff"
                   ? target.scope === "staged"
                     ? "Staged · "
                     : target.scope === "unstaged"
@@ -2284,6 +2309,18 @@ export function ReviewApp({
                 Select an Agent session to review its worktree
               </Typography>
             </Stack>
+          )
+          : mode === "git" && commitTarget
+          ? (
+            <ReviewCommit
+              sessionId={workspace.sessionId}
+              commit={commitTarget.commit}
+              selectedPath={commitTarget.path}
+              onSelectPath={(path) =>
+                setCommitTarget((current) => current
+                  ? { commit: current.commit, ...(path ? { path } : {}) }
+                  : current)}
+            />
           )
           : target.kind === "changes"
           ? (
@@ -2412,7 +2449,7 @@ export function ReviewApp({
           }}
         >
           <ReviewTabStrip
-            tabs={modeTabs}
+            tabs={mode === "git" && commitTarget ? [] : modeTabs}
             activeKey={activeTabKey}
             onActivate={activateOrCollapseTab}
             onClose={requestCloseTab}
@@ -2489,6 +2526,7 @@ export function ReviewApp({
                   navigationHaptic();
                   const nextMode = mode === "git" ? "files" : "git";
                   setMode(nextMode);
+                  if (nextMode === "files") setCommitTarget(undefined);
                   if (workspace?.sessionId) {
                     mutateMobileReview(workspace.sessionId, "setMode", {
                       mode: nextMode,
