@@ -107,7 +107,7 @@ The loop awaits `cmd_rx` (routed from the supervisor) and translates each
 
 | Command | ACP action |
 |---|---|
-| `Prompt(blocks, cmid)` | echo each block into the timeline (first tagged with `cmid` for optimistic reconcile), then `PromptRequest`. On success push `TurnEnd` + `Running`; on error (incl. subprocess death) push `TurnEnd` + `Crashed`. A live-but-silent turn is recovered manually (see *Turn liveness*). |
+| `Prompt(blocks, cmid)` | echo each block into the timeline (first tagged with `cmid` for optimistic reconcile), then `PromptRequest`. On success push `TurnEnd` + `Running`; Grok additionally queues a local `x.ai/session/info` context refresh. On error (incl. subprocess death) push `TurnEnd` + `Crashed`. A live-but-silent turn is recovered manually (see *Turn liveness*). |
 | `Cancel` | `CancelNotification` |
 | `Permission { request_id, option_id }` | resolve the pending oneshot, push `PermissionResolved` |
 | `SetConfigOption { config_id, value }` | Gemini's synthesized `mode` and Grok's `session_mode` → `SetSessionModeRequest`; Grok `model`/`reasoning_effort` → compatibility `session/set_model`; Grok `permission_mode` → `x.ai/yolo_mode_changed`; otherwise typed `SetSessionConfigOptionRequest` (string ids and booleans), whose refreshed options are pushed back to the Hub |

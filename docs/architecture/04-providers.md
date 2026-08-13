@@ -203,6 +203,14 @@ Default, Auto, and Always Approve choices. New sessions use the live model,
 `high` effort, and Always Approve as their durable default combination. Native
 session modes remain a separate `session_mode` control.
 
+Grok does not emit ACP's standard `usage_update`. Cowboy reads the current
+session's exact context snapshot from the adapter-local `x.ai/session/info`
+extension after startup, successful turns, and model/effort changes, then maps
+`context.used` / `context.total` into the ordinary session usage channel. The
+request is local session inspection and does not run a model turn. Missing or
+older extension support degrades to unavailable usage without a user-facing
+runtime error.
+
 Account usage is queried only through Grok Build's namespaced
 `_x.ai/billing` ACP request. The returned shared weekly/monthly percentage,
 reset time, and subscription tier feed the xAI account card. Older CLI versions

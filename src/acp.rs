@@ -49,7 +49,9 @@ use tokio::process::Command;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
-use crate::agent_model::{AUTO_CONTINUE_PREFIX, Event, SCHED_PREFIX, Status, WAKEUP_PREFIX};
+use crate::agent_model::{
+    AUTO_CONTINUE_PREFIX, Event, SCHED_PREFIX, SessionUsage, Status, WAKEUP_PREFIX,
+};
 use crate::agent_sink::AgentSink;
 use crate::cgroup;
 use crate::provider::LaunchSpec;
@@ -69,6 +71,7 @@ const GROK_REASONING_CONFIG_ID: &str = "reasoning_effort";
 const GROK_SESSION_MODE_CONFIG_ID: &str = "session_mode";
 const GROK_PERMISSION_CONFIG_ID: &str = "permission_mode";
 const GROK_PERMISSION_NOTIFICATION: &str = "x.ai/yolo_mode_changed";
+const GROK_SESSION_INFO_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum GrokPermissionMode {
@@ -153,6 +156,41 @@ struct GrokSetSessionModelRequest {
 struct GrokSetSessionModelResponse {
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "_meta")]
     meta: Option<Meta>,
+}
+
+// Grok Build does not emit ACP's standard `usage_update`. Its local
+// `x.ai/session/info` extension exposes the authoritative context snapshot
+// without running a model turn, so keep the compatibility wire types here.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, JsonRpcRequest)]
+#[request(method = "x.ai/session/info", response = GrokSessionInfoResponse)]
+#[serde(rename_all = "camelCase")]
+struct GrokSessionInfoRequest {
+    session_id: SessionId,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, JsonRpcResponse)]
+#[serde(rename_all = "camelCase")]
+struct GrokSessionInfoResponse {
+    result: Option<GrokSessionInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GrokSessionInfo {
+    context: GrokContextInfo,
+    #[serde(flatten)]
+    extra: HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GrokContextInfo {
+    used: u64,
+    total: u64,
+    #[serde(flatten)]
+    extra: HashMap<String, serde_json::Value>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -432,6 +470,83 @@ fn grok_model_request(
     }
 }
 
+fn observed_at_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| {
+            i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
+        })
+}
+
+fn grok_session_usage(
+    response: &GrokSessionInfoResponse,
+    observed_at_ms: i64,
+) -> Option<SessionUsage> {
+    let info = response.result.as_ref()?;
+    (info.context.total > 0).then(|| SessionUsage {
+        used: info.context.used,
+        size: info.context.total,
+        raw: serde_json::to_value(response).unwrap_or(serde_json::Value::Null),
+        observed_at_ms,
+    })
+}
+
+async fn run_grok_usage_refresh_queue(
+    cx: ConnectionTo<Agent>,
+    sink: Arc<dyn AgentSink>,
+    session_id: String,
+    acp_id: SessionId,
+    mut refreshes: mpsc::UnboundedReceiver<()>,
+) -> Result<(), Error> {
+    // Serialize snapshots so an older request cannot arrive after and replace
+    // a post-turn or post-model-change value. Unsupported/older Grok CLIs are
+    // intentionally a quiet compatibility fallback, never a user-facing turn
+    // or runtime error.
+    while refreshes.recv().await.is_some() {
+        let request = GrokSessionInfoRequest {
+            session_id: acp_id.clone(),
+        };
+        match tokio::time::timeout(
+            GROK_SESSION_INFO_TIMEOUT,
+            cx.send_request(request).block_task(),
+        )
+        .await
+        {
+            Ok(Ok(response)) => {
+                if response.error.is_some() {
+                    tracing::debug!(
+                        session = %session_id,
+                        error = ?response.error,
+                        "Grok session info returned an extension error"
+                    );
+                } else if let Some(usage) = grok_session_usage(&response, observed_at_ms()) {
+                    sink.set_session_usage(&session_id, usage);
+                } else {
+                    tracing::debug!(
+                        session = %session_id,
+                        "Grok session info did not include a usable context window"
+                    );
+                }
+            }
+            Ok(Err(error)) => {
+                tracing::debug!(
+                    session = %session_id,
+                    error = ?error,
+                    "Grok session info is unavailable"
+                );
+            }
+            Err(_) => {
+                tracing::debug!(
+                    session = %session_id,
+                    timeout_seconds = GROK_SESSION_INFO_TIMEOUT.as_secs(),
+                    "Grok session info timed out"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 struct GrokConfigChange {
     config_id: String,
@@ -449,6 +564,7 @@ async fn run_grok_config_queue(
     current_session_mode: Arc<Mutex<Option<String>>>,
     mode_config_id: Option<&'static str>,
     mode_select: Option<Vec<SessionConfigSelectOption>>,
+    usage_refresh: mpsc::UnboundedSender<()>,
     mut changes: mpsc::UnboundedReceiver<GrokConfigChange>,
 ) -> Result<(), Error> {
     // One FIFO owns every Grok model/effort mutation. This keeps the state used
@@ -511,6 +627,12 @@ async fn run_grok_config_queue(
                     Err(error) => {
                         tracing::warn!(error = %error, "serializing Grok config options");
                     }
+                }
+                if usage_refresh.send(()).is_err() {
+                    tracing::debug!(
+                        session = %session_id,
+                        "Grok usage refresh queue closed after configuration change"
+                    );
                 }
             }
             Err(error) => sink.broadcast_error(
@@ -650,11 +772,12 @@ fn load_session_request(
 #[cfg(test)]
 mod startup_mode_tests {
     use super::{
-        ActivePrompt, GrokPermissionMode, GrokSessionConfig, ResumeMethod, StartupPhase,
-        StartupTimeout, codex_full_access_available, codex_full_access_selected,
-        deepseek_session_environment, grok_cowboy_options, grok_model_request,
-        grok_permission_notification, is_empty_stream_message_update, load_session_request,
-        new_session_request, resume_session_request, select_resume_method, session_config_value,
+        ActivePrompt, GrokPermissionMode, GrokSessionConfig, GrokSessionInfoRequest,
+        GrokSessionInfoResponse, ResumeMethod, StartupPhase, StartupTimeout,
+        codex_full_access_available, codex_full_access_selected, deepseek_session_environment,
+        grok_cowboy_options, grok_model_request, grok_permission_notification, grok_session_usage,
+        is_empty_stream_message_update, load_session_request, new_session_request,
+        resume_session_request, select_resume_method, session_config_value,
         startup_full_access_mode,
     };
     use agent_client_protocol::JsonRpcMessage as _;
@@ -996,6 +1119,47 @@ mod startup_mode_tests {
         assert_eq!(value["sessionId"], "grok-session");
         assert_eq!(value["modelId"], "grok-4.5");
         assert_eq!(value["_meta"]["reasoningEffort"], "high");
+    }
+
+    #[test]
+    fn grok_session_info_becomes_standard_context_usage() {
+        let request = GrokSessionInfoRequest {
+            session_id: SessionId::new("grok-session"),
+        };
+        assert_eq!(request.method(), "x.ai/session/info");
+        assert_eq!(
+            serde_json::to_value(request).expect("serialize Grok session info request"),
+            serde_json::json!({ "sessionId": "grok-session" })
+        );
+
+        let response: GrokSessionInfoResponse = serde_json::from_value(serde_json::json!({
+            "result": {
+                "sessionId": "grok-session",
+                "cwd": "/workspace",
+                "model": "grok-4.6",
+                "context": {
+                    "used": 12_345,
+                    "total": 131_072,
+                    "usagePct": 9,
+                    "freeTokens": 118_727
+                }
+            }
+        }))
+        .expect("deserialize released Grok session info response");
+        let usage = grok_session_usage(&response, 1_234).expect("Grok context usage");
+        assert_eq!(usage.used, 12_345);
+        assert_eq!(usage.size, 131_072);
+        assert_eq!(usage.observed_at_ms, 1_234);
+        assert_eq!(
+            usage.raw.pointer("/result/context/usagePct"),
+            Some(&serde_json::json!(9))
+        );
+
+        let no_window: GrokSessionInfoResponse = serde_json::from_value(serde_json::json!({
+            "result": { "context": { "used": 0, "total": 0 } }
+        }))
+        .expect("deserialize empty Grok session info response");
+        assert!(grok_session_usage(&no_window, 1_234).is_none());
     }
 
     #[test]
@@ -1779,13 +1943,11 @@ fn handle_session_notification(state: &ClientState, notif: &SessionNotification)
         let raw = serde_json::to_value(&notif.update).unwrap_or(serde_json::Value::Null);
         state.sink.set_session_usage(
             &state.session_id,
-            crate::agent_model::SessionUsage {
+            SessionUsage {
                 used: usage.used,
                 size: usage.size,
                 raw,
-                observed_at_ms: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX)),
+                observed_at_ms: observed_at_ms(),
             },
         );
         return;
@@ -2130,6 +2292,24 @@ async fn run_session(
         }
     }
 
+    let grok_usage_tx = if provider_id == "grok" {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let usage_cx = cx.clone();
+        let usage_sink = Arc::clone(&state.sink);
+        let usage_session_id = session_id.clone();
+        let usage_acp_id = acp_id.clone();
+        cx.clone().spawn(async move {
+            run_grok_usage_refresh_queue(usage_cx, usage_sink, usage_session_id, usage_acp_id, rx)
+                .await
+        })?;
+        // Populate a resumed/new session without waiting for another model
+        // turn. The request is adapter-local and does not consume quota.
+        let _ = tx.send(());
+        Some(tx)
+    } else {
+        None
+    };
+
     let grok_config_tx = if provider_id == "grok" {
         let (tx, rx) = mpsc::unbounded_channel();
         let queue_cx = cx.clone();
@@ -2140,6 +2320,10 @@ async fn run_session(
         let queue_permission_mode = Arc::clone(&current_permission_mode);
         let queue_session_mode = Arc::clone(&current_session_mode);
         let queue_mode_select = mode_select.clone();
+        let queue_usage_refresh = grok_usage_tx
+            .as_ref()
+            .expect("Grok usage queue initialized")
+            .clone();
         cx.clone().spawn(async move {
             run_grok_config_queue(
                 queue_cx,
@@ -2151,6 +2335,7 @@ async fn run_session(
                 queue_session_mode,
                 mode_config_id,
                 queue_mode_select,
+                queue_usage_refresh,
                 rx,
             )
             .await
@@ -2204,6 +2389,7 @@ async fn run_session(
                 let acp = acp_id.clone();
                 let state = Arc::clone(state);
                 let provider = provider_id.to_owned();
+                let usage_refresh = grok_usage_tx.clone();
                 let capture_completion = completion.is_some();
                 let mut cancellation = state.prompt_cancellation.subscribe();
                 let cancellation_generation = *cancellation.borrow_and_update();
@@ -2328,6 +2514,15 @@ async fn run_session(
                                 },
                             );
                             sink.set_status(&sid, Status::Running, None);
+                            if usage_refresh
+                                .as_ref()
+                                .is_some_and(|refresh| refresh.send(()).is_err())
+                            {
+                                tracing::debug!(
+                                    session = %sid,
+                                    "Grok usage refresh queue closed after prompt"
+                                );
+                            }
                         }
                         Err(e) => {
                             let detail = e.to_string();
