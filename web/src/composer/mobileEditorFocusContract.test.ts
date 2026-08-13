@@ -656,6 +656,16 @@ Deno.test("long touch prompts scroll inside the editor without hiding chrome", (
     true,
   );
   assertEquals(
+    composerSource.includes('height: "100% !important"'),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      'flex: "1 1 auto",\n              minHeight: 0,\n              height: "100%"',
+    ),
+    true,
+  );
+  assertEquals(
     textareaSource.includes("nativeTextareaNeedsScroll"),
     true,
   );

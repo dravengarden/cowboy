@@ -1954,21 +1954,28 @@ export function ComposerWorkspace({
               ...mobileFocusedComposerSurfaceSx,
             },
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area]": {
-              flex: "0 1 auto",
+              flex: "1 1 auto",
               minHeight: MOBILE_COMPOSER_INPUT_EDITOR_MIN_H,
               maxHeight: "100%",
               overflow: "hidden",
             },
-            // Preserve native autosize for short prompts, but complete the
-            // shrink chain for long ones. ComposerTextarea decides whether the
-            // real textarea meaningfully overflows; do not force a fitted field
-            // into WebKit's stale subscroller-caret path for a 1px rounding gap.
+            // The focused touch composer already owns a writing canvas. Make
+            // the REAL textarea fill that canvas instead of leaving a short
+            // MUI-autosized textarea above inert flex space. Besides keeping
+            // every visible writing pixel selectable, this removes the tiny
+            // internal WKChildScrollView range that makes UIKit retain a stale
+            // caret overlay after a trailing Return. Closed-keyboard composers
+            // remain content-sized because this rule is focus-gated.
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor], &[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor] > .MuiFormControl-root, &[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor] .MuiInputBase-root": {
+              flex: "1 1 auto",
               minHeight: 0,
+              height: "100%",
               maxHeight: "100%",
               overflow: "hidden",
             },
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor] [data-mobile-native-textarea='true']": {
+              height: "100% !important",
+              minHeight: "100% !important",
               maxHeight: "100%",
             },
             // An inline image promotes the compact native textarea to CM6. Keep
@@ -1984,12 +1991,8 @@ export function ComposerWorkspace({
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-content": {
               minHeight: "100%",
             },
-            // The token-free touch editor remains content-sized. MUI's textarea
-            // autosizer grows it with the text (up to maxRows), so a short prompt
-            // does not manufacture a large inert-looking blank canvas. The
-            // surrounding editor area has no independent height: every visible
-            // pixel is still backed by the real native textarea and therefore
-            // remains a valid UIKit tap/long-press target.
+            // The native editor expands only inside the focused writing canvas;
+            // the same element remains MUI-autosized in the compact idle card.
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor]": {
               display: "flex",
               flexDirection: "column",

@@ -1334,16 +1334,20 @@ Desktop Vim + IME checks:
     touch marker. Do not intercept the touch sequence or disable ripple/selection
     semantics to repair paint.
 
-63. **A fitted native textarea must not become a scroll container because of a
-    one-pixel rounding residue.** At fractional reading sizes MUI can report
-    `scrollHeight` one CSS pixel above `clientHeight` while the complete text is
-    visible. The focused Composer used to force `overflow-y:auto !important`, so
-    even that fitted control entered WebKit's iOS subscroller selection path.
-    Pressing Return twice could then leave UIKit's painted caret one line behind
-    the correct collapsed DOM selection until the next character forced a fresh
-    geometry update. Let `ComposerTextarea` enable native scrolling only when
-    overflow exceeds the two-pixel rounding tolerance, and target fullscreen
-    height rules at the real textarea rather than MUI's hidden autosize mirror.
-    Do not repair this with blur/focus, a repeated `setSelectionRange`, a fake
-    caret, or a transform/repaint nudge; each competes with native IME and
+63. **A focused native textarea must fill its writing canvas, not sit above
+    inert flex space.** At fractional reading sizes MUI can report
+    `scrollHeight` one CSS pixel above a short autosized `clientHeight` while the
+    complete text is visible. Hiding the scrollbar is insufficient: the
+    textarea still owns a scrollable `WKChildScrollView`, and iOS renders its
+    caret in a UIKit selection overlay. A trailing Return can change the child
+    offset without invalidating that overlay, leaving the visible caret one line
+    above the logical selection until the next character. While the
+    keyboard-focused Composer already owns a writing canvas, stretch the real
+    textarea (not MUI's hidden measurement mirror) to its full height. Keep the
+    idle Composer content-sized, and enable native scrolling only when long
+    content genuinely exceeds the focused canvas. MUI's TextareaAutosize also
+    rewrites an end selection after a trailing newline, so an actual internal
+    scroll range must not remain during that input transaction. Do not repair
+    this with a zero-width sentinel, another selection rewrite, blur/refocus, a
+    fake caret, or a transform/repaint nudge; each competes with native IME and
     Paste/Select ownership.
