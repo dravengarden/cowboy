@@ -1,4 +1,4 @@
-import { lazy, StrictMode, Suspense, useEffect } from "react";
+import { lazy, StrictMode, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import { CssBaseline, ThemeProvider } from "@mui/material";
 import { AppErrorBoundary } from "./AppErrorBoundary";
@@ -37,24 +37,6 @@ function Root(): React.JSX.Element {
   // the keyboard + its iOS-native accessory bar.
   useKeyboardInset();
   const surface = useSurfaceProfile();
-  useEffect(() => {
-    if (surface.kind !== "desktop") return undefined;
-    const claimModalEscape = (event: KeyboardEvent): void => {
-      if (
-        event.key === "Escape" && !isImeKeyEvent(event) &&
-        document.querySelector(".MuiModal-root") !== null
-      ) {
-        // MUI Modal stops Escape propagation after running its close handler.
-        // Claim the native default in capture without stopping propagation, so
-        // the modal still closes but AppKit never interprets the same key as
-        // "leave native fullscreen". Outside a modal the later bubble guard
-        // remains authoritative, preserving CodeMirror/Vim Escape handling.
-        event.preventDefault();
-      }
-    };
-    globalThis.addEventListener("keydown", claimModalEscape, true);
-    return (): void => globalThis.removeEventListener("keydown", claimModalEscape, true);
-  }, [surface.kind]);
   const app = surface.kind === "desktop"
     ? <DesktopApp themeMode={mode} onSetThemeMode={setMode} />
     : <MobileApp themeMode={mode} onSetThemeMode={setMode} />;

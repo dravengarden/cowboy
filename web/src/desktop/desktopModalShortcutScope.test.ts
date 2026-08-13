@@ -6,6 +6,9 @@ const modalSource = await Deno.readTextFile(
 const appSource = await Deno.readTextFile(
   new URL("../App.tsx", import.meta.url),
 );
+const mainSource = await Deno.readTextFile(
+  new URL("../main.tsx", import.meta.url),
+);
 
 Deno.test("DesktopModal owns shortcuts across its complete dialog root", () => {
   assert(
@@ -27,6 +30,20 @@ Deno.test("desktop Session actions use the modal-wide shortcut scope", () => {
   assert(
     sessionModal.includes(
       "event.currentTarget.querySelector<HTMLButtonElement>",
+    ),
+  );
+});
+
+Deno.test("modal Escape reaches MUI before the native fullscreen guard", () => {
+  assert(!mainSource.includes("claimModalEscape"));
+  assert(!mainSource.includes('addEventListener("keydown", claimModalEscape, true)'));
+  const bubbleGuard = mainSource.indexOf(
+    'globalThis.addEventListener("keydown", (e: KeyboardEvent): void =>',
+  );
+  assert(bubbleGuard >= 0);
+  assert(
+    mainSource.slice(bubbleGuard).includes(
+      'if (e.key === "Escape" && !isImeKeyEvent(e)) e.preventDefault();',
     ),
   );
 });
