@@ -6,11 +6,60 @@ import {
   scrollbackReplacementFromTop,
   shouldBackfillTranscriptViewport,
   shouldContinueScrollbackFill,
+  shouldPrefetchVisibleScrollbackBoundary,
   shouldRecoverUnrenderableHistory,
   shouldShowFreshSessionEmptyState,
   shouldShowClearedConversationEmptyState,
   shouldMagnetizeTranscript,
 } from "./transcriptViewport.ts";
+
+Deno.test("a visible scrollback boundary prefetches once after restoration", () => {
+  const visible = {
+    managed: true,
+    restoring: false,
+    requested: false,
+    busy: false,
+    reachedStart: false,
+    beforeSeq: 80_000,
+    viewportTop: 100,
+    viewportBottom: 900,
+    boundaryTop: 108,
+    boundaryBottom: 240,
+  };
+  assertEquals(shouldPrefetchVisibleScrollbackBoundary(visible), true);
+  assertEquals(
+    shouldPrefetchVisibleScrollbackBoundary({
+      ...visible,
+      boundaryTop: 899,
+      boundaryBottom: 1_031,
+    }),
+    false,
+  );
+  assertEquals(
+    shouldPrefetchVisibleScrollbackBoundary({
+      ...visible,
+      boundaryTop: -31,
+      boundaryBottom: 101,
+    }),
+    false,
+  );
+  assertEquals(
+    shouldPrefetchVisibleScrollbackBoundary({ ...visible, restoring: true }),
+    false,
+  );
+  assertEquals(
+    shouldPrefetchVisibleScrollbackBoundary({ ...visible, requested: true }),
+    false,
+  );
+  assertEquals(
+    shouldPrefetchVisibleScrollbackBoundary({ ...visible, busy: true }),
+    false,
+  );
+  assertEquals(
+    shouldPrefetchVisibleScrollbackBoundary({ ...visible, reachedStart: true }),
+    false,
+  );
+});
 
 Deno.test("scrollback skeleton is replaced by measured older content", () => {
   assertEquals(

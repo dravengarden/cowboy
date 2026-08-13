@@ -22,3 +22,15 @@ Deno.test("the growing row stays in the scroller paint flow", () => {
     ),
   );
 });
+
+Deno.test("restored visible scrollback resumes without a touch gesture", () => {
+  assert(
+    transcriptSource.includes("shouldPrefetchVisibleScrollbackBoundary({"),
+  );
+  assertEquals(
+    transcriptSource.match(
+      /viewportRestoreActiveRef\.current = false;\s*requestVisibleScrollbackBoundaryRef\.current\(\);/g,
+    )?.length,
+    2,
+  );
+});

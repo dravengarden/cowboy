@@ -126,6 +126,7 @@ import {
   scrollbackReplacementFromTop,
   shouldBackfillTranscriptViewport,
   shouldContinueScrollbackFill,
+  shouldPrefetchVisibleScrollbackBoundary,
   shouldRecoverUnrenderableHistory,
   shouldShowFreshSessionEmptyState,
   shouldShowClearedConversationEmptyState,
@@ -3482,10 +3483,21 @@ export function Transcript({
   const scrollbackRetryTimerRef = useRef<number | null>(null);
   const scrollbackFillActiveRef = useRef(false);
   const scrollbackFillRunRef = useRef(0);
+  const scrollbackBoundaryBootstrapKeyRef = useRef("");
+  const scrollbackBoundaryBootstrapRequestedRef = useRef(false);
+  const visibleScrollbackBoundaryRafRef = useRef(0);
   const requestOlderPageRef = useRef<() => void>(() => undefined);
+  const requestVisibleScrollbackBoundaryRef = useRef<() => void>(() => undefined);
   const requestViewportBackfillRef = useRef<
     (fromResize: boolean) => void
   >(() => undefined);
+  const scrollbackBoundaryBootstrapKey = `${sessionId}:${
+    managesScrollHistory ? "history" : `page:${pageId ?? ""}`
+  }`;
+  if (scrollbackBoundaryBootstrapKeyRef.current !== scrollbackBoundaryBootstrapKey) {
+    scrollbackBoundaryBootstrapKeyRef.current = scrollbackBoundaryBootstrapKey;
+    scrollbackBoundaryBootstrapRequestedRef.current = false;
+  }
   reportScrollableRef.current = (): void => {
     const el = parentRef.current;
     if (!el) return;
@@ -3566,6 +3578,7 @@ export function Transcript({
       !managesScrollHistoryRef.current || !el ||
       scrollbackFillActiveRef.current
     ) return;
+    scrollbackBoundaryBootstrapRequestedRef.current = true;
     const run = ++scrollbackFillRunRef.current;
     scrollbackFillActiveRef.current = true;
     setScrollbackFailed(false);
@@ -3944,6 +3957,56 @@ export function Transcript({
   const pageIdRef = useRef(pageId);
   pageIdRef.current = pageId;
   const viewportRestoreActiveRef = useRef(false);
+  requestVisibleScrollbackBoundaryRef.current = (): void => {
+    if (visibleScrollbackBoundaryRafRef.current !== 0) return;
+    const requestedKey = scrollbackBoundaryBootstrapKeyRef.current;
+    visibleScrollbackBoundaryRafRef.current = requestAnimationFrame(() => {
+      visibleScrollbackBoundaryRafRef.current = 0;
+      if (requestedKey !== scrollbackBoundaryBootstrapKeyRef.current) return;
+      const el = parentRef.current;
+      const currentPaging = pagingRef.current;
+      const boundary = el?.querySelector<HTMLElement>(
+        "[data-transcript-scrollback-fill]",
+      );
+      if (!el || !currentPaging || !boundary) return;
+      const viewportRect = el.getBoundingClientRect();
+      const boundaryRect = boundary.getBoundingClientRect();
+      if (!shouldPrefetchVisibleScrollbackBoundary({
+        managed: managesScrollHistoryRef.current,
+        restoring: viewportRestoreActiveRef.current,
+        requested: scrollbackBoundaryBootstrapRequestedRef.current,
+        busy: scrollbackFillActiveRef.current || currentPaging.loadingOlder,
+        reachedStart: currentPaging.reachedStart,
+        beforeSeq: currentPaging.beforeSeq,
+        viewportTop: viewportRect.top,
+        viewportBottom: viewportRect.bottom,
+        boundaryTop: boundaryRect.top,
+        boundaryBottom: boundaryRect.bottom,
+      })) return;
+      scrollbackBoundaryBootstrapRequestedRef.current = true;
+      requestOlderPageRef.current();
+    });
+  };
+  useLayoutEffect(() => {
+    // Bootstrap can receive pagination after the viewport restoration effect
+    // has already settled. Re-measure on either side of that race; the request
+    // guard permits only one automatic fill for this History entry.
+    requestVisibleScrollbackBoundaryRef.current();
+  }, [
+    items.length,
+    paging?.beforeSeq,
+    paging?.loadingOlder,
+    paging?.reachedStart,
+    sessionId,
+  ]);
+  useEffect(() => {
+    return () => {
+      if (visibleScrollbackBoundaryRafRef.current !== 0) {
+        cancelAnimationFrame(visibleScrollbackBoundaryRafRef.current);
+        visibleScrollbackBoundaryRafRef.current = 0;
+      }
+    };
+  }, []);
   const pageWorkingRef = useRef({
     key: `${sessionId}:${pageId ?? ""}`,
     working,
@@ -4556,6 +4619,7 @@ export function Transcript({
       stick.current = false;
       setSticky(sessionId, false);
       viewportRestoreActiveRef.current = false;
+      requestVisibleScrollbackBoundaryRef.current();
       return undefined;
     }
     const mode = managesScrollHistory ? "history" : "page";
@@ -4615,6 +4679,7 @@ export function Transcript({
         raf = requestAnimationFrame(position);
       } else {
         viewportRestoreActiveRef.current = false;
+        requestVisibleScrollbackBoundaryRef.current();
       }
     };
     raf = requestAnimationFrame(position);
