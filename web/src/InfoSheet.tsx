@@ -1700,33 +1700,51 @@ function StorageInfoSection(): React.JSX.Element {
       </Typography>
     );
   }
+  const metrics = [
+    ["Database", formatBytes(m.db_bytes)],
+    ["Event rows", m.events_rows.toLocaleString()],
+    ["Live sessions", String(m.sessions_live)],
+    ["Deleted · purge ≤3d", String(m.sessions_deleted)],
+    ["Daemon memory", formatBytes(m.daemon_rss_bytes)],
+    ["Telemetry pending", m.observability_pending.toLocaleString()],
+    ["Telemetry accepted", m.observability_accepted_batches.toLocaleString()],
+    ["Telemetry dropped", m.observability_dropped_batches.toLocaleString()],
+    [
+      "Victoria failures",
+      String(
+        m.observability_failed_log_batches +
+          m.observability_failed_metric_batches,
+      ),
+    ],
+  ] as const;
   return (
-    <Stack spacing={1}>
-      <InfoRow k="Database" v={formatBytes(m.db_bytes)} />
-      <InfoRow k="Event rows" v={m.events_rows.toLocaleString()} />
-      <InfoRow k="Live sessions" v={String(m.sessions_live)} />
-      <InfoRow k="Deleted (purge ≤3d)" v={String(m.sessions_deleted)} />
-      <InfoRow k="Daemon memory" v={formatBytes(m.daemon_rss_bytes)} />
-      <InfoRow
-        k="Telemetry pending"
-        v={m.observability_pending.toLocaleString()}
-      />
-      <InfoRow
-        k="Telemetry accepted"
-        v={m.observability_accepted_batches.toLocaleString()}
-      />
-      <InfoRow
-        k="Telemetry dropped"
-        v={m.observability_dropped_batches.toLocaleString()}
-      />
-      <InfoRow
-        k="Victoria write failures"
-        v={String(
-          m.observability_failed_log_batches +
-            m.observability_failed_metric_batches,
-        )}
-      />
-    </Stack>
+    <Box
+      sx={{
+        display: "grid",
+        gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+        gap: 0.75,
+      }}
+    >
+      {metrics.map(([label, value]) => (
+        <Box
+          key={label}
+          sx={{
+            minWidth: 0,
+            px: 1,
+            py: 0.8,
+            borderRadius: 1.25,
+            bgcolor: "action.hover",
+          }}
+        >
+          <Typography variant="caption" color="text.secondary" display="block">
+            {label}
+          </Typography>
+          <Typography variant="body2" fontWeight={700} sx={{ mt: 0.2 }}>
+            {value}
+          </Typography>
+        </Box>
+      ))}
+    </Box>
   );
 }
 
@@ -1753,36 +1771,37 @@ export function InfoContent({
         }
         : { mt: 1, display: "flex", flexDirection: "column", gap: 2.5 }}
     >
-      <Box sx={desktop ? { gridRow: "1 / span 4" } : undefined}>
+      <Box>
         <UsageInfoSection />
       </Box>
       {!desktop && <Divider />}
-      <Box
-        sx={desktop
-          ? { p: 1.5, border: 1, borderColor: "divider", borderRadius: 2 }
-          : undefined}
-      >
-        <Typography variant="overline" color="text.secondary">
-          Turn classifier
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-          Normal turn endings use isolated Codex Luna threads on one shared
-          app-server; deterministic stop reasons need no model call.
-        </Typography>
-        <InfoRow k="Runtime" v="Codex app-server" />
-        <InfoRow k="Model" v="gpt-5.6-luna" />
-      </Box>
+      <Stack spacing={desktop ? 1.25 : 2.5}>
+        <Box
+          sx={desktop
+            ? { p: 1.5, border: 1, borderColor: "divider", borderRadius: 2 }
+            : undefined}
+        >
+          <Typography variant="overline" color="text.secondary">
+            Turn classifier
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+            Normal turn endings use isolated Codex Luna threads on one shared
+            app-server; deterministic stop reasons need no model call.
+          </Typography>
+          <InfoRow k="Runtime" v="Codex app-server" />
+          <InfoRow k="Model" v="gpt-5.6-luna" />
+        </Box>
 
-      {
-        /* Skills — provider-agnostic capability units run at turn-end. Each is
+        {
+          /* Skills — provider-agnostic capability units run at turn-end. Each is
             expandable to show the exact prompt + how the output is extracted, so
             the judgment logic is inspectable (not a black box). */
-      }
-      <Box
-        sx={desktop
-          ? { p: 1.5, border: 1, borderColor: "divider", borderRadius: 2 }
-          : undefined}
-      >
+        }
+        <Box
+          sx={desktop
+            ? { p: 1.5, border: 1, borderColor: "divider", borderRadius: 2 }
+            : undefined}
+        >
         <Typography variant="overline" color="text.secondary">
           Skills
         </Typography>
@@ -1799,7 +1818,16 @@ export function InfoContent({
             <Accordion
               key={sk.id}
               disableGutters
-              sx={{ borderRadius: 2, "&:before": { display: "none" } }}
+              elevation={0}
+              sx={{
+                border: 1,
+                borderColor: "divider",
+                borderRadius: "10px !important",
+                bgcolor: "transparent",
+                "&:before": { display: "none" },
+                "& .MuiAccordionSummary-root": { minHeight: 52 },
+                "& .MuiAccordionSummary-content": { my: 1 },
+              }}
             >
               <AccordionSummary expandIcon={<ExpandMore />}>
                 <Box>
@@ -1857,36 +1885,36 @@ export function InfoContent({
             </Accordion>
           ))}
         </Stack>
-      </Box>
+        </Box>
 
-      {!desktop && <Divider />}
-      <Stack
-        spacing={1}
-        sx={desktop
-          ? { p: 1.5, border: 1, borderColor: "divider", borderRadius: 2 }
-          : undefined}
-      >
-        <Typography variant="overline" color="text.secondary">
-          Storage
-        </Typography>
-        <StorageInfoSection />
+        {!desktop && <Divider />}
+        <Stack
+          spacing={1}
+          sx={desktop
+            ? { p: 1.5, border: 1, borderColor: "divider", borderRadius: 2 }
+            : undefined}
+        >
+          <Typography variant="overline" color="text.secondary">
+            Storage
+          </Typography>
+          <StorageInfoSection />
+        </Stack>
+        {!desktop && <Divider />}
+        <Stack
+          spacing={0.5}
+          sx={desktop
+            ? { p: 1.5, border: 1, borderColor: "divider", borderRadius: 2 }
+            : undefined}
+        >
+          <Typography variant="overline" color="text.secondary">
+            About
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            cowboy v0.1 — multi-agent panel driving Claude Code / Codex over ACP.
+          </Typography>
+        </Stack>
+        {aside}
       </Stack>
-
-      {!desktop && <Divider />}
-      <Stack
-        spacing={0.5}
-        sx={desktop
-          ? { p: 1.5, border: 1, borderColor: "divider", borderRadius: 2 }
-          : undefined}
-      >
-        <Typography variant="overline" color="text.secondary">
-          About
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          cowboy v0.1 — multi-agent panel driving Claude Code / Codex over ACP.
-        </Typography>
-      </Stack>
-      {aside}
     </Box>
   );
 }
