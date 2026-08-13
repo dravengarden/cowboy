@@ -27,3 +27,34 @@ Deno.test("session settings exposes confirmed compact and clear actions", () => 
     true,
   );
 });
+
+Deno.test("session actions default collapsed and expand as full-width rows", () => {
+  assertEquals(
+    composerSource.includes(
+      "const [sessionActionsExpanded, setSessionActionsExpanded] = useState(false);",
+    ),
+    true,
+  );
+  assertEquals(composerSource.includes("setSessionActionsExpanded(false);"), true);
+  assertEquals(
+    composerSource.includes(
+      'aria-label={actionsExpanded ? "Collapse session actions" : "Expand session actions"}',
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "<Collapse id={actionsPanelId} in={actionsExpanded} unmountOnExit>",
+    ),
+    true,
+  );
+
+  const disclosureStart = composerSource.indexOf(
+    'aria-label={actionsExpanded ? "Collapse session actions" : "Expand session actions"}',
+  );
+  const disclosureEnd = composerSource.indexOf("</Collapse>", disclosureStart);
+  const disclosureSource = composerSource.slice(disclosureStart, disclosureEnd);
+  assertEquals(disclosureStart >= 0 && disclosureEnd > disclosureStart, true);
+  assertEquals(disclosureSource.includes('direction="row"'), false);
+  assertEquals(disclosureSource.match(/\bfullWidth\b/g)?.length, 3);
+});

@@ -6,6 +6,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -5756,11 +5757,13 @@ function ComposerSheet({
   const recommendedPresets = runConfigPresets(session?.provider, options);
   const activePreset = activeRunConfigPreset(recommendedPresets, options);
   const [customizeAgent, setCustomizeAgent] = useState(false);
+  const [sessionActionsExpanded, setSessionActionsExpanded] = useState(false);
   const [cmdConfirm, setCmdConfirm] = useState<SessionAction | null>(null);
   const [reloadConfirm, setReloadConfirm] = useState(false);
   useEffect(() => {
     if (open) {
       setCustomizeAgent(false);
+      setSessionActionsExpanded(false);
       setCmdConfirm(null);
       setReloadConfirm(false);
     }
@@ -5790,6 +5793,7 @@ function ComposerSheet({
   const close = (): void => {
     setTitle(displayTitle);
     setTitleFocused(false);
+    setSessionActionsExpanded(false);
     setCmdConfirm(null);
     setReloadConfirm(false);
     onClose();
@@ -5873,6 +5877,8 @@ function ComposerSheet({
           clearAction={clearAction}
           compacting={compacting}
           dead={dead}
+          actionsExpanded={sessionActionsExpanded}
+          onActionsExpandedChange={setSessionActionsExpanded}
           onSessionAction={setCmdConfirm}
           onReload={(): void => setReloadConfirm(true)}
         />
@@ -6119,6 +6125,8 @@ function SessionInfoSection({
   clearAction,
   compacting,
   dead,
+  actionsExpanded,
+  onActionsExpandedChange,
   onSessionAction,
   onReload,
 }: {
@@ -6133,6 +6141,8 @@ function SessionInfoSection({
   clearAction: SessionAction | null;
   compacting: boolean;
   dead: boolean;
+  actionsExpanded: boolean;
+  onActionsExpandedChange: (expanded: boolean) => void;
   onSessionAction: (action: SessionAction) => void;
   onReload: () => void;
 }): React.JSX.Element {
@@ -6201,6 +6211,7 @@ function SessionInfoSection({
     DEEPSEEK_CACHE_BASE_INTERVAL_LABEL;
   const cacheAdaptiveInterval = compactCacheDuration(cacheProtection?.adaptive_interval_ms);
   const cacheScheduledInterval = compactCacheDuration(cacheProtection?.scheduled_interval_ms);
+  const actionsPanelId = useId();
   const cacheIntervalDetail = cacheProtection?.state === "protected"
     ? `Base ${cacheBaseInterval} · next ${cacheScheduledInterval || cacheAdaptiveInterval || "learning"}`
     : `Base ${cacheBaseInterval} · adaptive target ${cacheAdaptiveInterval || "learning"}`;
@@ -6281,54 +6292,6 @@ function SessionInfoSection({
             {contextUsed.toLocaleString()} / {contextSize.toLocaleString()} tokens
           </Typography>
         )}
-        <Button
-          fullWidth
-          variant="outlined"
-          startIcon={<Refresh />}
-          aria-label="reload session from session settings"
-          onClick={(event): void => {
-            event.currentTarget.blur();
-            onReload();
-          }}
-          sx={{ minHeight: 44, textTransform: "none", mt: 0.5 }}
-        >
-          Reload session
-        </Button>
-        <Stack direction="row" spacing={1} sx={{ pt: 0.5 }}>
-          {compactAction && (
-            <Button
-              fullWidth
-              variant="outlined"
-              startIcon={<Compress />}
-              disabled={dead || compacting}
-              aria-label="compact conversation from session settings"
-              onClick={(event): void => {
-                event.currentTarget.blur();
-                onSessionAction(compactAction);
-              }}
-              sx={{ minHeight: 44, textTransform: "none" }}
-            >
-              {compacting ? "Compacting…" : "Compact"}
-            </Button>
-          )}
-          {clearAction && (
-            <Button
-              fullWidth
-              variant="outlined"
-              color="error"
-              startIcon={<CleaningServices />}
-              disabled={dead}
-              aria-label="clear conversation from session settings"
-              onClick={(event): void => {
-                event.currentTarget.blur();
-                onSessionAction(clearAction);
-              }}
-              sx={{ minHeight: 44, textTransform: "none" }}
-            >
-              Clear
-            </Button>
-          )}
-        </Stack>
         {cacheProtectionVisible &&
           (cacheProtection || cacheProtectionUnavailable) && (
           <Stack spacing={0.35} alignItems="flex-start">
@@ -6374,6 +6337,88 @@ function SessionInfoSection({
             )}
           </Stack>
         )}
+        <Box sx={{ pt: 0.5 }}>
+          <ButtonBase
+            aria-label={actionsExpanded ? "Collapse session actions" : "Expand session actions"}
+            aria-expanded={actionsExpanded}
+            aria-controls={actionsPanelId}
+            onClick={(): void => {
+              haptic();
+              onActionsExpandedChange(!actionsExpanded);
+            }}
+            sx={{
+              width: "100%",
+              minHeight: 44,
+              px: 0.5,
+              borderRadius: 1.5,
+              justifyContent: "space-between",
+              color: "text.secondary",
+              textAlign: "left",
+              "&:active": { bgcolor: "action.hover" },
+            }}
+          >
+            <Typography variant="body2" sx={{ fontWeight: 650 }}>
+              Session actions
+            </Typography>
+            <ExpandMore
+              fontSize="small"
+              sx={{
+                transform: actionsExpanded ? "rotate(180deg)" : "none",
+                transition: (theme) => theme.transitions.create("transform"),
+              }}
+            />
+          </ButtonBase>
+          <Collapse id={actionsPanelId} in={actionsExpanded} unmountOnExit>
+            <Stack spacing={1} sx={{ pt: 0.75 }}>
+              <Button
+                fullWidth
+                variant="outlined"
+                startIcon={<Refresh />}
+                aria-label="reload session from session settings"
+                onClick={(event): void => {
+                  event.currentTarget.blur();
+                  onReload();
+                }}
+                sx={{ minHeight: 44, textTransform: "none" }}
+              >
+                Reload session
+              </Button>
+              {compactAction && (
+                <Button
+                  fullWidth
+                  variant="outlined"
+                  startIcon={<Compress />}
+                  disabled={dead || compacting}
+                  aria-label="compact conversation from session settings"
+                  onClick={(event): void => {
+                    event.currentTarget.blur();
+                    onSessionAction(compactAction);
+                  }}
+                  sx={{ minHeight: 44, textTransform: "none" }}
+                >
+                  {compacting ? "Compacting…" : "Compact"}
+                </Button>
+              )}
+              {clearAction && (
+                <Button
+                  fullWidth
+                  variant="outlined"
+                  color="error"
+                  startIcon={<CleaningServices />}
+                  disabled={dead}
+                  aria-label="clear conversation from session settings"
+                  onClick={(event): void => {
+                    event.currentTarget.blur();
+                    onSessionAction(clearAction);
+                  }}
+                  sx={{ minHeight: 44, textTransform: "none" }}
+                >
+                  Clear
+                </Button>
+              )}
+            </Stack>
+          </Collapse>
+        </Box>
       </Stack>
     </>
   );
