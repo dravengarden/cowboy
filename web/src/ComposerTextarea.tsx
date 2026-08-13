@@ -22,6 +22,7 @@ import {
   insertNativeCodeBlock,
   insertNativeLink,
   mapNativeSelectionThroughValueChange,
+  nativeTextareaNeedsScroll,
   type NativeTextEdit,
   outdentNativeLines,
   replaceNativeSelection,
@@ -200,6 +201,12 @@ export const ComposerTextarea = forwardRef<
   const selectedSlashCommandRef = useRef<string | null>(null);
   const [trigger, setTrigger] = useState<Trigger | null>(null);
   const [options, setOptions] = useState<PickerOption[]>([]);
+  // A fitted MUI textarea commonly reports scrollHeight one CSS pixel taller
+  // than clientHeight due to line-height rounding. Promoting that residue to an
+  // iOS scroll container makes UIKit keep a stale caret rect after Return. Only
+  // enable native scrolling for meaningful overflow; this state changes at the
+  // fit/overflow boundary, not on every keystroke.
+  const [nativeScrollable, setNativeScrollable] = useState(false);
   // Top edge (viewport px) of the input the picker is anchored to. The picker
   // opens UPWARD (bottom:100%), so the space above the input is its ceiling —
   // and that space SHRINKS when the keyboard is up. We cap the popup to it (see
@@ -226,6 +233,25 @@ export const ComposerTextarea = forwardRef<
   }, [pickerOpen, value]);
   const commandsRef = useRef(commands);
   commandsRef.current = commands;
+
+  const measureNativeOverflow = (): void => {
+    const ta = inputRef.current;
+    if (!ta) return;
+    const next = nativeTextareaNeedsScroll(ta.scrollHeight, ta.clientHeight);
+    setNativeScrollable((current) => current === next ? current : next);
+  };
+
+  useLayoutEffect(() => {
+    measureNativeOverflow();
+  }, [value, expanded]);
+
+  useEffect(() => {
+    const ta = inputRef.current;
+    if (!ta || typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(measureNativeOverflow);
+    observer.observe(ta);
+    return () => observer.disconnect();
+  }, []);
 
   const rememberSelection = (
     ta: HTMLTextAreaElement,
@@ -766,11 +792,15 @@ export const ComposerTextarea = forwardRef<
         multiline
         minRows={expanded ? 10 : 1}
         maxRows={expanded ? 30 : 10}
+        slotProps={{
+          htmlInput: { "data-mobile-native-textarea": "true" },
+        }}
         size="small"
         fullWidth
         sx={{
-          // `expanded` fills the sheet; the textarea is forced to 100% height (the
-          // !important overrides MUI's autosize inline height) and scrolls within.
+          // `expanded` fills the sheet. The real textarea gets the height below;
+          // do not apply it to MUI's hidden autosize mirror or its measurement
+          // feeds back into a multi-thousand-pixel inline height.
           ...(expanded && { flex: 1, minHeight: 0, display: "flex" }),
           // Keep a usable tap target even when a small font scale shrinks the
           // text. The textarea still grows from here as you type (top-aligned).
@@ -796,8 +826,15 @@ export const ComposerTextarea = forwardRef<
             lineHeight: "var(--cowboy-reading-line-height, 1.5)",
             // Clear the overlaid send/kebab buttons at the bottom-right.
             ...(endInset > 0 && { paddingRight: `${String(14 + endInset)}px` }),
-            ...(expanded &&
-              { height: "100% !important", overflowY: "auto !important" }),
+          },
+          "& [data-mobile-native-textarea='true']": {
+            ...(expanded && { minHeight: "100% !important" }),
+            // Keep fitted textareas out of WebKit's subscroller caret path.
+            // MUI may leave a 1px scrollHeight residue at fractional reading
+            // sizes; only genuine clipping enables the internal scroller.
+            overflowY: nativeScrollable
+              ? "auto !important"
+              : "hidden !important",
           },
           // Inside the composer's outlined Paper card the card draws the box, so
           // drop the TextField's own outline in all three states (rest/hover/focus).

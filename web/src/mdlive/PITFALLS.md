@@ -1333,3 +1333,17 @@ Desktop Vim + IME checks:
     hover, and keyboard focus. A real mouse enter or keyboard event clears the
     touch marker. Do not intercept the touch sequence or disable ripple/selection
     semantics to repair paint.
+
+63. **A fitted native textarea must not become a scroll container because of a
+    one-pixel rounding residue.** At fractional reading sizes MUI can report
+    `scrollHeight` one CSS pixel above `clientHeight` while the complete text is
+    visible. The focused Composer used to force `overflow-y:auto !important`, so
+    even that fitted control entered WebKit's iOS subscroller selection path.
+    Pressing Return twice could then leave UIKit's painted caret one line behind
+    the correct collapsed DOM selection until the next character forced a fresh
+    geometry update. Let `ComposerTextarea` enable native scrolling only when
+    overflow exceeds the two-pixel rounding tolerance, and target fullscreen
+    height rules at the real textarea rather than MUI's hidden autosize mirror.
+    Do not repair this with blur/focus, a repeated `setSelectionRange`, a fake
+    caret, or a transform/repaint nudge; each competes with native IME and
+    Paste/Select ownership.

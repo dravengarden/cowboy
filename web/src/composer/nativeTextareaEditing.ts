@@ -4,6 +4,18 @@ export interface NativeTextEdit {
   to: number;
 }
 
+/**
+ * Ignore the subpixel scrollHeight drift WebKit reports for a fitted textarea.
+ * Turning that one-pixel rounding residue into a real scroll container sends
+ * iOS caret geometry through its stale subscroll-offset path after Return.
+ */
+export function nativeTextareaNeedsScroll(
+  scrollHeight: number,
+  clientHeight: number,
+): boolean {
+  return scrollHeight - clientHeight > 2;
+}
+
 function orderedSelection(
   value: string,
   from: number,
