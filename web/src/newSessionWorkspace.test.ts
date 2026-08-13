@@ -78,3 +78,14 @@ Deno.test("new session workspace falls back to the first available choice", () =
 
   assertEquals(defaultNewSessionWorkspace(choices)?.value, "remote-root");
 });
+
+Deno.test("new session provider marks are centred in their leading column", () => {
+  assertEquals(
+    appSource.includes('sx={{ alignItems: "center", py: 1, whiteSpace: "normal" }}'),
+    true,
+  );
+  assertEquals(
+    appSource.includes('sx={{ width: 36, minWidth: 36, justifyContent: "center" }}'),
+    true,
+  );
+});
