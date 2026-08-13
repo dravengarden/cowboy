@@ -30,7 +30,7 @@ Deno.test("control center bracket navigation wraps across tabs", () => {
   assertEquals(adjacentControlCenterTab("logs", 1), "settings");
 });
 
-Deno.test("desktop control center renders one semantic active tab panel", () => {
+Deno.test("desktop control center keeps one stable semantic tab panel", () => {
   assertEquals(appSource.includes("<Tabs"), true);
   assertEquals(appSource.includes("selectionFollowsFocus"), true);
   assertEquals(
@@ -42,4 +42,14 @@ Deno.test("desktop control center renders one semantic active tab panel", () => 
   assertEquals(appSource.includes("controlCenterTabForShortcut(key)"), true);
   assertEquals(appSource.includes("adjacentControlCenterTab(tab"), true);
   assertEquals(appSource.includes("data-control-center-tab={tab}"), true);
+  assertEquals(
+    appSource.includes("data-control-center-panel-content"),
+    true,
+  );
+  assertEquals(
+    appSource.includes("data-control-center-rendered-tab={renderedTab}"),
+    true,
+  );
+  assertEquals(appSource.includes("aria-busy={!tabPanelVisible}"), true);
+  assertEquals(appSource.includes("{tabContentReady && ("), false);
 });

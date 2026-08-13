@@ -198,6 +198,10 @@ import {
     CONTROL_CENTER_TABS,
     type ControlCenterTab,
 } from "./desktop/controlCenterTabs";
+import {
+    CONTROL_CENTER_PANEL_EXIT_MS,
+    controlCenterPanelMotionSx,
+} from "./desktop/controlCenterMotion";
 import { useOptionalDesktopWorkspace } from "./desktop/DesktopWorkspaceController";
 import {
     DESKTOP_SPLITTER_ADJUST_EVENT,
@@ -4674,31 +4678,26 @@ function SettingsShell({
     // One tab model is shared by the touch segmented control and Desktop's
     // semantic tablist. Each entry remains independently addressable by key.
     const [tab, setTab] = useState<ControlCenterTab>(initialTab);
-    const [tabContentReady, setTabContentReady] = useState(true);
+    const [renderedTab, setRenderedTab] = useState<ControlCenterTab>(initialTab);
+    const [tabPanelVisible, setTabPanelVisible] = useState(true);
+    // Vim and animated workbench tabs are desktop-only: both require a fine
+    // pointer/physical-keyboard surface rather than the touch sheet.
+    const desktop = useMediaQuery("(pointer: fine) and (hover: hover)");
+    const settingsPanelRef = useRef<HTMLDivElement>(null);
     const changeTab = useCallback((next: ControlCenterTab): void => {
         if (next === tab) return;
-        // Remove the old panel synchronously, then mount the selected heavy
-        // panel after two frames. The segmented control remains responsive
-        // while Machines/Info/Logs construct their large DOM trees.
-        setTabContentReady(false);
+        // Move the tab indicator immediately, then let the old content leave.
+        // The persistent panel shell keeps its geometry while the selected
+        // heavy tree is mounted invisibly between the exit and enter phases.
+        setTabPanelVisible(false);
         setTab(next);
     }, [tab]);
     useEffect(() => {
-        if (open) setTab(initialTab);
+        if (!open) return;
+        setTab(initialTab);
+        setRenderedTab(initialTab);
+        setTabPanelVisible(true);
     }, [open, initialTab]);
-    useEffect(() => {
-        if (!open || tabContentReady) return undefined;
-        let secondFrame = 0;
-        const firstFrame = globalThis.requestAnimationFrame(() => {
-            secondFrame = globalThis.requestAnimationFrame(() => setTabContentReady(true));
-        });
-        return () => {
-            globalThis.cancelAnimationFrame(firstFrame);
-            if (secondFrame !== 0) {
-                globalThis.cancelAnimationFrame(secondFrame);
-            }
-        };
-    }, [open, tabContentReady]);
     const vim = useVimSetting();
     const notify = useNotifySetting();
     const vibrate = useVibrateSetting();
@@ -4732,10 +4731,45 @@ function SettingsShell({
     const useSheetSurface = useMediaQuery(
         "(max-width: 767.95px), (min-width: 768px) and (max-width: 1023.95px) and (pointer: coarse)",
     );
-    // Vim is desktop-only (ComposerEditor won't load it on touch), so the
-    // toggle only appears where a physical keyboard exists.
-    const desktop = useMediaQuery("(pointer: fine) and (hover: hover)");
-    const settingsPanelRef = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        if (!open || tabPanelVisible) return undefined;
+        const reducedMotion = globalThis.matchMedia(
+            "(prefers-reduced-motion: reduce)",
+        ).matches;
+        let firstFrame = 0;
+        let secondFrame = 0;
+        let swapTimer: number | null = null;
+        const mountSelectedPanel = (): void => {
+            settingsPanelRef.current?.scrollTo({ top: 0, behavior: "auto" });
+            setRenderedTab(tab);
+            firstFrame = globalThis.requestAnimationFrame(() => {
+                secondFrame = globalThis.requestAnimationFrame(() => {
+                    setTabPanelVisible(true);
+                });
+            });
+        };
+        if (desktop && !reducedMotion) {
+            swapTimer = globalThis.setTimeout(
+                mountSelectedPanel,
+                CONTROL_CENTER_PANEL_EXIT_MS,
+            );
+        } else {
+            // Touch and reduced-motion surfaces keep the existing two-frame
+            // deferral, but do not wait for or render an animation.
+            firstFrame = globalThis.requestAnimationFrame(() => {
+                secondFrame = globalThis.requestAnimationFrame(() => {
+                    settingsPanelRef.current?.scrollTo({ top: 0, behavior: "auto" });
+                    setRenderedTab(tab);
+                    setTabPanelVisible(true);
+                });
+            });
+        }
+        return () => {
+            if (swapTimer !== null) globalThis.clearTimeout(swapTimer);
+            if (firstFrame !== 0) globalThis.cancelAnimationFrame(firstFrame);
+            if (secondFrame !== 0) globalThis.cancelAnimationFrame(secondFrame);
+        };
+    }, [desktop, open, tab, tabPanelVisible]);
     const [settingsGoPrefix, setSettingsGoPrefix] = useState(false);
     const [settingsEditableFocus, setSettingsEditableFocus] = useState(false);
     useEffect(() => {
@@ -5010,8 +5044,7 @@ function SettingsShell({
                 </Tabs>
             )}
             </Box>
-            {tabContentReady && (
-            desktop ? (
+            {desktop ? (
                 <Box
                     ref={settingsPanelRef}
                     data-desktop-settings-workbench
@@ -5019,6 +5052,7 @@ function SettingsShell({
                     role="tabpanel"
                     id={`control-center-panel-${tab}`}
                     aria-labelledby={`control-center-tab-${tab}`}
+                    aria-busy={!tabPanelVisible}
                     tabIndex={-1}
                     onFocusCapture={(event): void => {
                         setSettingsEditableFocus(isSettingsEditableTarget(event.target));
@@ -5041,15 +5075,22 @@ function SettingsShell({
                         pb: 2,
                     }}
                 >
-                    {tab === "settings" ? <DesktopSettingsContent
-                        themeMode={themeMode}
-                        onSetThemeMode={onSetThemeMode}
-                        shortcutsAvailable={settingsShortcutsAvailable}
-                    /> : tab === "machines" ? <MachinesContent /> : tab === "info" ? (
-                        <InfoContent desktop />
-                    ) : <UsageLogs />}
+                    <Box
+                        key={renderedTab}
+                        data-control-center-panel-content
+                        data-control-center-rendered-tab={renderedTab}
+                        sx={controlCenterPanelMotionSx(tabPanelVisible)}
+                    >
+                        {renderedTab === "settings" ? <DesktopSettingsContent
+                            themeMode={themeMode}
+                            onSetThemeMode={onSetThemeMode}
+                            shortcutsAvailable={settingsShortcutsAvailable}
+                        /> : renderedTab === "machines" ? <MachinesContent /> : renderedTab === "info" ? (
+                            <InfoContent desktop />
+                        ) : <UsageLogs />}
+                    </Box>
                 </Box>
-            ) : tab === "machines" ? <MachinesContent /> : tab === "info" ? <InfoContent /> : tab === "logs" ? <UsageLogs /> : (
+            ) : !tabPanelVisible ? null : renderedTab === "machines" ? <MachinesContent /> : renderedTab === "info" ? <InfoContent /> : renderedTab === "logs" ? <UsageLogs /> : (
             <Stack spacing={3}>
                 <ThemeModeControl value={themeMode} onChange={onSetThemeMode} />
 
@@ -5326,7 +5367,7 @@ function SettingsShell({
                 {/* Daemon system info (Storage metrics + About) lives in the Info
                     tab — Settings holds user preferences only. */}
             </Stack>
-            ))}
+            )}
             {desktop && (
                 <Box sx={{ flex: "0 0 auto", mx: -3 }}>
                     <DesktopShortcutBar
