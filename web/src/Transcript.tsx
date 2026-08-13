@@ -122,6 +122,7 @@ import { markTranscriptScrollActivity } from "./transcriptRenderPacing";
 import {
   historyPrefetchTransition,
   magneticHapticTransition,
+  scrollbackBoundaryRequestKey,
   scrollbackFillRemaining,
   scrollbackReplacementFromTop,
   shouldBackfillTranscriptViewport,
@@ -3494,13 +3495,6 @@ export function Transcript({
   const requestViewportBackfillRef = useRef<
     (fromResize: boolean) => void
   >(() => undefined);
-  const scrollbackBoundaryBootstrapKey = `${sessionId}:${
-    managesScrollHistory ? "history" : `page:${pageId ?? ""}`
-  }`;
-  if (scrollbackBoundaryBootstrapKeyRef.current !== scrollbackBoundaryBootstrapKey) {
-    scrollbackBoundaryBootstrapKeyRef.current = scrollbackBoundaryBootstrapKey;
-    scrollbackBoundaryBootstrapRequestedRef.current = false;
-  }
   reportScrollableRef.current = (): void => {
     const el = parentRef.current;
     if (!el) return;
@@ -3525,6 +3519,16 @@ export function Transcript({
   );
   const pagingRef = useRef(paging);
   pagingRef.current = paging;
+  const scrollbackBoundaryBootstrapKey = scrollbackBoundaryRequestKey({
+    sessionId,
+    managed: managesScrollHistory,
+    pageId: pageId ?? null,
+    beforeSeq: paging?.beforeSeq ?? null,
+  });
+  if (scrollbackBoundaryBootstrapKeyRef.current !== scrollbackBoundaryBootstrapKey) {
+    scrollbackBoundaryBootstrapKeyRef.current = scrollbackBoundaryBootstrapKey;
+    scrollbackBoundaryBootstrapRequestedRef.current = false;
+  }
   const renderableItemCountRef = useRef(items.length);
   renderableItemCountRef.current = items.length;
   const timelineEventCountRef = useRef(timeline.length);
@@ -3898,6 +3902,7 @@ export function Transcript({
     paging?.beforeSeq,
     paging?.loadingOlder,
     paging?.reachedStart,
+    scrollbackLoading,
     sessionId,
   ]);
   // Large generated images and rich Markdown can initially reserve enough
@@ -3992,8 +3997,9 @@ export function Transcript({
   };
   useLayoutEffect(() => {
     // Bootstrap can receive pagination after the viewport restoration effect
-    // has already settled. Re-measure on either side of that race; the request
-    // guard permits only one automatic fill for this History entry.
+    // has already settled. Re-measure on either side of that race. The request
+    // guard is cursor-scoped: once a page advances beforeSeq, a newly visible
+    // boundary may continue converging without waiting for a touch gesture.
     requestVisibleScrollbackBoundaryRef.current();
   }, [
     items.length,

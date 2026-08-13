@@ -45,7 +45,8 @@ export function shouldRecoverUnrenderableHistory(input: {
   loadingOlder: boolean;
   beforeSeq: number | null;
 }): boolean {
-  return input.managed && input.itemCount === 0 && input.timelineEventCount > 0 &&
+  return input.managed && input.itemCount === 0 &&
+    input.timelineEventCount > 0 &&
     !input.reachedStart && !input.loadingOlder && input.beforeSeq !== null;
 }
 
@@ -81,6 +82,17 @@ export interface VisibleScrollbackBoundaryPrefetchInput {
   viewportBottom: number;
   boundaryTop: number;
   boundaryBottom: number;
+}
+
+export function scrollbackBoundaryRequestKey(input: {
+  sessionId: string;
+  managed: boolean;
+  pageId: string | null;
+  beforeSeq: number | null;
+}): string {
+  return input.managed
+    ? `${input.sessionId}:history:${input.beforeSeq ?? "none"}`
+    : `${input.sessionId}:page:${input.pageId ?? ""}`;
 }
 
 export function shouldPrefetchVisibleScrollbackBoundary(

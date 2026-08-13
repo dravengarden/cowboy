@@ -17,15 +17,24 @@ Deno.test("the growing row stays in the scroller paint flow", () => {
   assertEquals(transcriptRowContainment(true), "none");
   assertEquals(transcriptRowContainment(false), "layout paint");
   assert(
-    /contain:\s*transcriptRowContainment\(\s*item\.key === streamingRowKey/.test(
-      transcriptSource,
-    ),
+    /contain:\s*transcriptRowContainment\(\s*item\.key === streamingRowKey/
+      .test(
+        transcriptSource,
+      ),
   );
 });
 
-Deno.test("restored visible scrollback resumes without a touch gesture", () => {
+Deno.test("restored visible scrollback resumes for each advanced cursor", () => {
   assert(
     transcriptSource.includes("shouldPrefetchVisibleScrollbackBoundary({"),
+  );
+  assert(
+    transcriptSource.includes("scrollbackBoundaryRequestKey({"),
+  );
+  assert(
+    /paging\?\.reachedStart,\s*scrollbackLoading,\s*sessionId,/.test(
+      transcriptSource,
+    ),
   );
   assertEquals(
     transcriptSource.match(
