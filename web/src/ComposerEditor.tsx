@@ -60,6 +60,7 @@ import {
   vimEscapeBelongsToApp,
 } from "./desktop/vim/vimEscapeOwnership";
 import { inlineImageInsertion } from "./inlineImageSelection";
+import { mobileEmptyLineCaret } from "./composer/mobileEmptyLineCaret";
 
 export interface ComposerEditorSelection {
   anchor: number;
@@ -245,6 +246,8 @@ export const ComposerEditor = forwardRef<
     autoFocus?: boolean;
     /** Initial caret for the one native-textarea -> CM6 promotion mount. */
     initialSelection?: number;
+    /** Touch CM6 exists only for inline-image widgets; enables iOS caret repair. */
+    touchInput?: boolean;
     vim?: boolean;
     /// Called when the vim mode changes (normal / insert / visual). Drives the
     /// NORMAL/INSERT hint in the composer card. Only wired when vim is on.
@@ -298,6 +301,7 @@ export const ComposerEditor = forwardRef<
     disabled,
     autoFocus = false,
     initialSelection,
+    touchInput = false,
     vim,
     onVimMode,
     onEscape,
@@ -770,6 +774,7 @@ export const ComposerEditor = forwardRef<
       // Keep a trailing image from being the doc's last line (atomic block traps
       // the caret — "图片在最后一行,无法开启新的一行"). See inlineImages.ts.
       inlineImageTrailingLine,
+      ...(touchInput ? [mobileEmptyLineCaret] : []),
       autocompletion({
         override: [
           fileCompletionSource(sessionId),
@@ -892,7 +897,7 @@ export const ComposerEditor = forwardRef<
       ...livePreviewExtensions(),
       ...(vimExt ? [vimExt] : []),
     ],
-    [theme, sessionId, placeholder, vim, vimExt, aboveCursor],
+    [theme, sessionId, placeholder, vim, vimExt, aboveCursor, touchInput],
   );
 
   // Pixel-exact MUI `OutlinedInput` (no-label, size="small"), replicated rather

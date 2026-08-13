@@ -1349,3 +1349,18 @@ Desktop Vim + IME checks:
     toolbar edits may still map a selection synchronously; ordinary keyboard
     input must never call `setSelectionRange`, resize the DOM from an input
     callback, insert a zero-width sentinel, blur/refocus, or draw a fake caret.
+
+64. **An inline image changes the touch caret problem from textarea to CM6.**
+    Touch documents with an image token intentionally promote to CM6 so the
+    block thumbnail can stay in the writing flow. After Return creates one or
+    more empty lines below that block decoration, CM6's document selection and
+    `.cm-activeLine` may advance while iOS WebKit leaves the native Selection on
+    `.cm-content` offset 0. UIKit then paints the caret on the first empty line
+    until ordinary text creates a new DOM text node. The touch-only
+    `mobileEmptyLineCaret` extension coalesces the line-break `beforeinput` and
+    `input` events into the next animation frame, then repairs only this exact
+    invalid state: focused editor,
+    empty logical line, both Selection ends on `contentDOM`, and no composition.
+    Collapse onto the existing `.cm-line`; never dispatch another CM6 selection,
+    refocus, insert sentinel text, or run during IME composition. Token-free
+    touch documents remain on the literal textarea path from pitfall #63.
