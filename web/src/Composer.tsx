@@ -3141,6 +3141,16 @@ export function ComposerWorkspace({
           "& .MuiSnackbarContent-root": {
             width: { xs: "100%", sm: "auto" },
             minWidth: { xs: 0, sm: 288 },
+            color: "text.primary",
+            bgcolor: (theme) =>
+              alpha(theme.palette.background.paper, theme.palette.mode === "dark" ? 0.96 : 0.94),
+            backgroundImage: "none",
+            border: 1,
+            borderColor: "divider",
+            boxShadow: (theme) =>
+              `0 12px 36px ${alpha(theme.palette.common.black, theme.palette.mode === "dark" ? 0.42 : 0.18)}`,
+            backdropFilter: "blur(24px) saturate(160%)",
+            WebkitBackdropFilter: "blur(24px) saturate(160%)",
           },
         }}
         message={moveUndo ? `Moved to ${moveUndo.toTitle}` : ""}
