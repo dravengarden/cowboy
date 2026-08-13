@@ -20,7 +20,8 @@ pub(crate) async fn collect(spec: &LaunchSpec) -> Result<ProviderUsage> {
 
 fn from_billing(billing: Value) -> ProviderUsage {
     let tier = billing
-        .get("subscriptionTier")
+        .get("subscription_tier")
+        .or_else(|| billing.get("subscriptionTier"))
         .and_then(Value::as_str)
         .filter(|tier| !tier.trim().is_empty());
     ProviderUsage {
@@ -183,7 +184,7 @@ mod tests {
                     "end": "2026-08-17T00:00:00Z"
                 }
             },
-            "subscriptionTier": "SuperGrok Heavy"
+            "subscription_tier": "SuperGrok Heavy"
         }));
         assert_eq!(usage.provider, "xai");
         assert_eq!(usage.status, "available");
@@ -200,6 +201,18 @@ mod tests {
                 .as_ref()
                 .and_then(|value| value.pointer("/config/creditUsagePercent")),
             Some(&json!(37.5))
+        );
+    }
+
+    #[test]
+    fn billing_accepts_the_legacy_camel_case_subscription_tier() {
+        let usage = from_billing(json!({ "subscriptionTier": "SuperGrok" }));
+        assert_eq!(
+            usage
+                .account
+                .as_ref()
+                .and_then(|value| value.pointer("/account/planType")),
+            Some(&json!("SuperGrok"))
         );
     }
 
