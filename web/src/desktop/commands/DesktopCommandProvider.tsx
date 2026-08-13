@@ -220,6 +220,17 @@ export function DesktopCommandProvider(
           )?.focus({ preventScroll: true })
         );
       };
+      const selectAndAdjustSplitter = (
+        splitter: DesktopSplitterId | null,
+        delta: number,
+      ): void => {
+        if (splitter === null) return;
+        selectSplitter(splitter);
+        globalThis.dispatchEvent(new CustomEvent(
+          DESKTOP_SPLITTER_ADJUST_EVENT,
+          { detail: { splitter, delta } },
+        ));
+      };
       if (workspace.selectedSplitter !== null) {
         const visible = visibleDesktopSplitterIds();
         const splitter = document.querySelector<HTMLElement>(
@@ -333,15 +344,18 @@ export function DesktopCommandProvider(
         if (windowChord.current !== null) {
           globalThis.clearTimeout(windowChord.current);
           windowChord.current = null;
-          if (key.toLowerCase() === "r") {
+          if (key === "<" || key === ">") {
             event.preventDefault();
             event.stopPropagation();
             const visible = visibleDesktopSplitterIds();
-            selectSplitter(preferredDesktopSplitter(
-              visible,
-              workspace.focusedPane,
-              workspace.productMode,
-            ));
+            selectAndAdjustSplitter(
+              preferredDesktopSplitter(
+                visible,
+                workspace.focusedPane,
+                workspace.productMode,
+              ),
+              key === "<" ? -DESKTOP_SPLITTER_STEP : DESKTOP_SPLITTER_STEP,
+            );
             return;
           }
         }
@@ -456,26 +470,36 @@ export function DesktopCommandProvider(
       }
       // Standard Vim window navigation. The first Ctrl-W arms a short chord;
       // the following h/l moves panes, j/k moves vertical regions in the current
-      // pane, and w cycles every visible region. Capture-phase handling keeps the
-      // same contract while the CM6 editor owns keyboard focus.
+      // pane, w cycles every visible region, and </> resizes the nearest vertical
+      // boundary. Capture-phase handling keeps the same contract while the CM6
+      // editor owns keyboard focus.
       if (windowChord.current !== null) {
         globalThis.clearTimeout(windowChord.current);
         windowChord.current = null;
-        const key = workspaceCommandKey(event).toLowerCase();
-        if (["h", "j", "k", "l", "r", "w"].includes(key)) {
+        const commandKey = workspaceCommandKey(event);
+        const key = commandKey.toLowerCase();
+        if (
+          ["h", "j", "k", "l", "w"].includes(key) ||
+          commandKey === "<" || commandKey === ">"
+        ) {
           event.preventDefault();
           event.stopPropagation();
           if (key === "h") workspace.focusAdjacentPane(-1);
           else if (key === "l") workspace.focusAdjacentPane(1);
           else if (key === "j") workspace.focusAdjacentRegion(1);
           else if (key === "k") workspace.focusAdjacentRegion(-1);
-          else if (key === "r") {
+          else if (commandKey === "<" || commandKey === ">") {
             const visible = visibleDesktopSplitterIds();
-            selectSplitter(preferredDesktopSplitter(
-              visible,
-              workspace.focusedPane,
-              workspace.productMode,
-            ));
+            selectAndAdjustSplitter(
+              preferredDesktopSplitter(
+                visible,
+                workspace.focusedPane,
+                workspace.productMode,
+              ),
+              commandKey === "<"
+                ? -DESKTOP_SPLITTER_STEP
+                : DESKTOP_SPLITTER_STEP,
+            );
           }
           else workspace.cycleRegion();
           return;

@@ -203,7 +203,7 @@ export function DesktopStatusLine({
         document.querySelector("[data-desktop-permission-action='reject']")
       ? [{ keys: "R", label: "Reject" }]
       : []),
-    { keys: "Ctrl+W R", label: "Resize" },
+    { keys: "Ctrl+W+</>", label: "Resize" },
   ];
   const hints = resizingLayout
     ? [

@@ -15,6 +15,8 @@ export function workspaceCommandKey(event: {
     const key = match[1].toLowerCase();
     return event.shiftKey ? key.toUpperCase() : key;
   }
+  if (event.code === "Comma") return event.shiftKey ? "<" : ",";
+  if (event.code === "Period") return event.shiftKey ? ">" : ".";
   const physical = ({
     BracketLeft: "[",
     BracketRight: "]",
