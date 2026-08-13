@@ -1961,17 +1961,19 @@ export function ComposerWorkspace({
             },
             // The focused touch composer already owns a writing canvas. Make
             // the REAL textarea fill that canvas instead of leaving a short
-            // MUI-autosized textarea above inert flex space. Besides keeping
+            // native textarea above inert flex space. Besides keeping
             // every visible writing pixel selectable, this removes the tiny
             // internal WKChildScrollView range that makes UIKit retain a stale
             // caret overlay after a trailing Return. Closed-keyboard composers
             // remain content-sized because this rule is focus-gated.
-            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor], &[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor] > .MuiFormControl-root, &[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor] .MuiInputBase-root": {
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor]": {
               flex: "1 1 auto",
               minHeight: 0,
               height: "100%",
               maxHeight: "100%",
               overflow: "hidden",
+              display: "flex",
+              flexDirection: "column",
             },
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor] [data-mobile-native-textarea='true']": {
               height: "100% !important",
@@ -1990,12 +1992,6 @@ export function ComposerWorkspace({
             },
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-content": {
               minHeight: "100%",
-            },
-            // The native editor expands only inside the focused writing canvas;
-            // the same element remains MUI-autosized in the compact idle card.
-            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor]": {
-              display: "flex",
-              flexDirection: "column",
             },
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-focus-format-row]": {
               maxHeight: 48,

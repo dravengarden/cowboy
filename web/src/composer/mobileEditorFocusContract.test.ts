@@ -224,7 +224,8 @@ Deno.test("native textarea owns a content-sized mobile canvas", () => {
     false,
   );
   assertEquals(composerSource.includes('"& > *": { flex: 1 }'), false);
-  assertEquals(textareaSource.includes("maxRows={expanded ? 30 : 10}"), true);
+  assertEquals(textareaSource.includes('component="textarea"'), true);
+  assertEquals(textareaSource.includes("<TextField"), false);
 });
 
 Deno.test("mobile pending edit exits when a third-party IME never reports an open frame", () => {

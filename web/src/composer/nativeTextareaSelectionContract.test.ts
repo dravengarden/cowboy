@@ -8,6 +8,9 @@ const editorSource = await Deno.readTextFile(
 );
 
 Deno.test("native textarea keeps React rerenders from replacing iOS selection", () => {
+  assertEquals(textareaSource.includes('<TextField'), false);
+  assertEquals(textareaSource.includes('component="textarea"'), true);
+  assertEquals(textareaSource.includes('rows={1}'), true);
   assertEquals(textareaSource.includes("defaultValue={value}"), true);
   assertEquals(textareaSource.includes("        value={value}\n"), false);
   assertEquals(
@@ -18,6 +21,16 @@ Deno.test("native textarea keeps React rerenders from replacing iOS selection", 
     textareaSource.includes("mapNativeSelectionThroughValueChange"),
     true,
   );
+});
+
+Deno.test("ordinary native input bypasses MUI trailing-newline selection rewrites", () => {
+  const inputStart = textareaSource.indexOf('defaultValue={value}');
+  const inputEnd = textareaSource.indexOf('onSelect=', inputStart);
+  const ordinaryInput = textareaSource.slice(inputStart, inputEnd);
+  assertEquals(inputStart >= 0, true);
+  assertEquals(inputEnd > inputStart, true);
+  assertEquals(ordinaryInput.includes("setSelectionRange"), false);
+  assertEquals(ordinaryInput.includes("TextareaAutosize"), false);
 });
 
 Deno.test("native textarea and CM6 expose the same logical selection handoff", () => {
