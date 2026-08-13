@@ -25,6 +25,8 @@ Deno.test("every Desktop vertical boundary exposes the shared splitter contract"
 
 Deno.test("Ctrl-W angle brackets resize immediately and own an exclusive H/L mode", () => {
   assert(commandsSource.includes('commandKey === "<" || commandKey === ">"'));
+  assert(commandsSource.includes("if (isModifierKey(commandKey)) return"));
+  assert(commandsSource.includes("if (isModifierKey(key)) return"));
   assert(!commandsSource.includes('key.toLowerCase() === "r"'));
   assert(commandsSource.includes("selectAndAdjustSplitter("));
   assert(commandsSource.includes("-DESKTOP_SPLITTER_STEP"));

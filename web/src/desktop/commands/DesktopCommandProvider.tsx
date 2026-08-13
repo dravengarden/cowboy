@@ -104,6 +104,19 @@ function nearestConversationWidget(
   });
 }
 
+function isModifierKey(key: string): boolean {
+  return [
+    "Alt",
+    "AltGraph",
+    "CapsLock",
+    "Control",
+    "Fn",
+    "FnLock",
+    "Meta",
+    "Shift",
+  ].includes(key);
+}
+
 export function DesktopCommandProvider(
   { children }: { children: React.ReactNode },
 ): React.JSX.Element {
@@ -306,16 +319,7 @@ export function DesktopCommandProvider(
           clearPendingJumpChord();
         } else {
           const key = workspaceCommandKey(event);
-          const modifierOnly = [
-            "Alt",
-            "AltGraph",
-            "CapsLock",
-            "Control",
-            "Fn",
-            "FnLock",
-            "Meta",
-            "Shift",
-          ].includes(key);
+          const modifierOnly = isModifierKey(key);
           if (modifierOnly) return;
           const modified = event.metaKey || event.ctrlKey || event.altKey ||
             event.shiftKey;
@@ -342,6 +346,7 @@ export function DesktopCommandProvider(
       if (workspace.productMode === "reading") {
         const key = workspaceCommandKey(event);
         if (windowChord.current !== null) {
+          if (isModifierKey(key)) return;
           globalThis.clearTimeout(windowChord.current);
           windowChord.current = null;
           if (key === "<" || key === ">") {
@@ -474,9 +479,10 @@ export function DesktopCommandProvider(
       // boundary. Capture-phase handling keeps the same contract while the CM6
       // editor owns keyboard focus.
       if (windowChord.current !== null) {
+        const commandKey = workspaceCommandKey(event);
+        if (isModifierKey(commandKey)) return;
         globalThis.clearTimeout(windowChord.current);
         windowChord.current = null;
-        const commandKey = workspaceCommandKey(event);
         const key = commandKey.toLowerCase();
         if (
           ["h", "j", "k", "l", "w"].includes(key) ||
