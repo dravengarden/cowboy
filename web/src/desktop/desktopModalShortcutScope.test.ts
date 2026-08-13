@@ -16,7 +16,8 @@ Deno.test("DesktopModal owns shortcuts across its complete dialog root", () => {
       "onShortcutKeyDown?: KeyboardEventHandler<HTMLDivElement>",
     ),
   );
-  assert(modalSource.includes("onKeyDown={onShortcutKeyDown}"));
+  assert(!modalSource.includes("onKeyDown={onShortcutKeyDown}"));
+  assert(modalSource.includes("root: { onKeyDown: onShortcutKeyDown }"));
 });
 
 Deno.test("desktop Session actions use the modal-wide shortcut scope", () => {

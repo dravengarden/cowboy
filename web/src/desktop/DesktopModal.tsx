@@ -43,7 +43,6 @@ export function DesktopModal({
   return (
     <Dialog
       open={open}
-      onKeyDown={onShortcutKeyDown}
       onClose={(event, reason): void => {
         if (reason === "escapeKeyDown") {
           const keyEvent = "nativeEvent" in event
@@ -56,6 +55,9 @@ export function DesktopModal({
       fullWidth
       maxWidth={false}
       slotProps={{
+        ...(onShortcutKeyDown
+          ? { root: { onKeyDown: onShortcutKeyDown } }
+          : {}),
         paper: {
           sx: {
             width: `min(${width}px, calc(100vw - 64px))`,
