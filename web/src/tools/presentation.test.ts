@@ -12,9 +12,10 @@ function assertEquals(actual: unknown, expected: unknown): void {
   if (actual !== expected) throw new Error(`Expected ${String(expected)}, got ${String(actual)}`);
 }
 
-Deno.test("tool presentation names Codex and Claude Code", () => {
+Deno.test("tool presentation names the built-in agents", () => {
   assertEquals(providerName("codex"), "Codex");
   assertEquals(providerName("claude-code"), "Claude Code");
+  assertEquals(providerName("grok"), "Grok Build");
 });
 
 Deno.test("MCP identity normalizes Codex fields and Claude tool names", () => {

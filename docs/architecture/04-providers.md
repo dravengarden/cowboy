@@ -1,9 +1,10 @@
 # Providers
 
 A **provider** is the recipe for launching one agent CLI's ACP adapter. All
-providers share the single `src/acp.rs` client backend; a provider only declares
-**how to spawn its adapter binary**. Adding one is a registry entry plus, where
-needed, hand-coded confirm-detection rules — the core never changes.
+providers share the single `src/acp.rs` client backend; a provider declares
+**how to spawn its adapter binary**. Narrow compatibility mappings stay in that
+backend only when an official agent shipped an ACP extension before the stable
+schema gained the same operation.
 
 ## Registry
 
@@ -16,6 +17,7 @@ needed, hand-coded confirm-detection rules — the core never changes.
 | `codex` | `npx -y @agentclientprotocol/codex-acp` plus full-access defaults | adapter over Codex App Server |
 | `codex-deepseek` | the same Codex ACP adapter with an isolated provider-owned `CODEX_HOME` | Codex over the independent local DeepSeek Responses gateway |
 | `gemini` | `npx -y @google/gemini-cli --acp` | Gemini's native ACP mode |
+| `grok` | `npx -y @xai-official/grok --no-auto-update --always-approve agent --no-leader stdio` | Grok Build's native ACP stdio agent |
 
 Each entry is a **`LaunchSpec`**: `id` + `command` + `args` + scoped environment.
 That's the whole contract a provider must satisfy to start; everything downstream
@@ -184,6 +186,26 @@ Personal, Google AI Pro, and AI Ultra accounts belong to Antigravity;
 Antigravity CLI is not a drop-in Cowboy provider until it publishes an ACP
 server mode.
 
+Grok uses the official Grok Build CLI as both provider CLI and ACP agent; there
+is no second adapter package. Cowboy starts one non-leader process per session,
+disables its process-local updater, and leaves installation/update ownership to
+the Machine `provider-cli:grok` component. Machine login runs
+`grok login --device-auth`; Cowboy records only signed-in/out inventory and
+never stores the OAuth token.
+
+Grok's current ACP compatibility surface returns model and reasoning choices in
+`_meta["x.ai/sessionConfig"]` and changes either through `session/setModel`
+with `_meta.reasoningEffort`. Cowboy maps those values to ordinary `model` and
+`reasoning_effort` config controls, while leaving the selected model dynamic so
+a Grok CLI update can replace the default catalog. The default effort is
+`high`. Native session modes remain a separate `session_mode` control.
+
+Account usage is queried only through Grok Build's namespaced
+`_x.ai/billing` ACP request. The returned shared weekly/monthly percentage,
+reset time, and subscription tier feed the xAI account card. Older CLI versions
+that return JSON-RPC `Method not found` show billing as unavailable; Cowboy does
+not import browser cookies or call an undocumented web endpoint as a fallback.
+
 ## Resume is discovered, not declared
 
 There is **no static resume flag**. A provider gains resume support purely by the
@@ -221,10 +243,12 @@ flowchart LR
     CC["claude-code"] --> CFG1["config via<br/>notification"]
     CX["codex"] --> CFG2["config in<br/>session resp"]
     GM["gemini"] --> MODE["session MODES<br/>→ mode chip"]
+    GR["grok"] --> XCFG["x.ai/sessionConfig<br/>→ model + effort chips"]
 
     style CC fill:#eef2ff,stroke:#6366f1
     style CX fill:#dcfce7,stroke:#16a34a
     style GM fill:#fef9c3,stroke:#ca8a04
+    style GR fill:#f3e8ff,stroke:#9333ea
 ```
 
 - **claude-code** sends its config options (mode / model) *after* the session is
@@ -234,6 +258,10 @@ flowchart LR
   **modes**. cowboy synthesizes a `"mode"` config chip so the UI presents one
   uniform control, and routes a change to `SetSessionModeRequest` instead of the
   `session/set_config_option` ext method.
+- **grok** exposes model and reasoning selectors in `x.ai/sessionConfig`; both
+  map to the pre-standard `session/setModel` request, with effort carried in
+  request metadata. Its ordinary ACP session modes stay independently routed to
+  `session/set_mode`.
 
 ## L1 confirm detection
 

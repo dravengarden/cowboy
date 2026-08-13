@@ -77,6 +77,21 @@ Deno.test("usage widget aggregates supported providers and drops unsupported pla
         source: "test",
         observed_at_ms: 1,
       },
+      {
+        provider: "xai",
+        status: "available",
+        source: "test",
+        observed_at_ms: 1,
+        rate_limits: {
+          config: {
+            creditUsagePercent: 25,
+            currentPeriod: {
+              type: "USAGE_PERIOD_TYPE_MONTHLY",
+              end: "2026-09-01T00:00:00Z",
+            },
+          },
+        },
+      },
     ],
   });
   assertEquals(providers, [
@@ -84,6 +99,7 @@ Deno.test("usage widget aggregates supported providers and drops unsupported pla
       kind: "openai",
       label: "OpenAI",
       remaining: 94,
+      periodLabel: "Weekly",
       resetsAt: 123,
     },
     {
@@ -95,6 +111,13 @@ Deno.test("usage widget aggregates supported providers and drops unsupported pla
       cacheHitRate: 90,
       cacheMissRate: 10,
       blockingErrors: 1,
+    },
+    {
+      kind: "xai",
+      label: "xAI",
+      remaining: 75,
+      periodLabel: "Monthly",
+      resetsAt: Date.parse("2026-09-01T00:00:00Z") / 1000,
     },
   ]);
 });

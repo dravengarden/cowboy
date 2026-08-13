@@ -167,7 +167,7 @@ function UsageProviderSummary(
         provider.spend24hPriceCoverage >= 99.999
       ? `24h ${compactCny(provider.spend24hCny)} · Miss ${provider.cacheMissRate.toFixed(1)}% · ${provider.blockingErrors.toLocaleString()} blocked`
       : `24h ≥${compactCny(provider.spend24hCny)} · ${provider.spend24hPriceCoverage?.toFixed(0) ?? "0"}% priced · Miss ${provider.cacheMissRate.toFixed(1)}% · ${provider.blockingErrors.toLocaleString()} blocked`
-    : `Weekly · resets ${shortResetTime(provider.resetsAt)}`;
+    : `${provider.periodLabel} · resets ${shortResetTime(provider.resetsAt)}`;
   return (
     <Box
       data-usage-provider={provider.kind}

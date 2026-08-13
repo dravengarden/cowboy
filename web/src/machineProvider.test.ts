@@ -111,3 +111,22 @@ Deno.test("requires an active and confirmed signed-in provider", () => {
     true,
   );
 });
+
+Deno.test("Grok Build CLI is the authenticated ACP entrypoint", () => {
+  assertEquals(
+    machineProviderAvailable("grok", [{
+      id: { kind: "provider_cli", slot: "grok" },
+      state: "active",
+      auth: "signed_in",
+    }]),
+    true,
+  );
+  assertEquals(
+    machineProviderAvailable("grok", [{
+      id: { kind: "provider_cli", slot: "grok" },
+      state: "active",
+      auth: "signed_out",
+    }]),
+    false,
+  );
+});

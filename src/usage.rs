@@ -77,6 +77,7 @@ impl std::error::Error for CodexResetError {}
 #[derive(Clone)]
 pub struct UsageService {
     codex_command: String,
+    grok_spec: Option<crate::provider::LaunchSpec>,
     store: Option<crate::store::Store>,
     snapshot: Arc<Mutex<UsageSnapshot>>,
     refresh_lock: Arc<Mutex<()>>,
@@ -86,8 +87,16 @@ pub struct UsageService {
 
 impl UsageService {
     pub fn new(codex_command: String, store: Option<crate::store::Store>) -> Self {
+        // Never let an account-card refresh cold-install a provider through
+        // npx. Production Machine configuration supplies the managed command;
+        // local development simply reports Grok billing as unavailable.
+        let grok_spec = std::env::var("COWBOY_ACP_GROK_CMD")
+            .ok()
+            .filter(|command| !command.trim().is_empty())
+            .and_then(|_| crate::provider::lookup("grok"));
         Self {
             codex_command,
+            grok_spec,
             store,
             snapshot: Arc::new(Mutex::new(UsageSnapshot {
                 refreshed_at_ms: 0,
@@ -118,7 +127,35 @@ impl UsageService {
         if current.refreshed_at_ms > 0 && now_ms().saturating_sub(current.refreshed_at_ms) < 3_000 {
             return current;
         }
-        let (openai, deepseek) = tokio::join!(
+        let grok_spec = self.grok_spec.clone();
+        let xai = async move {
+            let Some(spec) = grok_spec else {
+                return crate::provider_info::unavailable(
+                    "xai",
+                    crate::provider_info::XAI_SOURCE,
+                    "Managed Grok Build CLI is not configured",
+                );
+            };
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(12),
+                crate::provider_info::collect_xai(&spec),
+            )
+            .await
+            {
+                Ok(Ok(value)) => value,
+                Ok(Err(error)) => crate::provider_info::error(
+                    "xai",
+                    crate::provider_info::XAI_SOURCE,
+                    error.to_string(),
+                ),
+                Err(_) => crate::provider_info::error(
+                    "xai",
+                    crate::provider_info::XAI_SOURCE,
+                    "refresh timed out".to_owned(),
+                ),
+            }
+        };
+        let (openai, deepseek, xai) = tokio::join!(
             tokio::time::timeout(
                 std::time::Duration::from_secs(12),
                 crate::provider_info::collect_openai(&self.codex_command),
@@ -127,6 +164,7 @@ impl UsageService {
                 std::time::Duration::from_secs(12),
                 crate::provider_info::collect_deepseek(self.store.as_ref()),
             ),
+            xai,
         );
         let openai = match openai {
             Ok(Ok(value)) => value,
@@ -173,6 +211,7 @@ impl UsageService {
                     "Gemini ACP",
                     "Provider does not expose account limits over ACP",
                 ),
+                xai,
             ],
             codex_reset_schedule: self.reset_schedule.lock().await.clone(),
         };
@@ -198,6 +237,18 @@ impl UsageService {
             )
             .await
             .context("DeepSeek provider refresh timed out")??,
+            "xai" => {
+                let spec = self
+                    .grok_spec
+                    .as_ref()
+                    .context("managed Grok Build CLI is not configured")?;
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(12),
+                    crate::provider_info::collect_xai(spec),
+                )
+                .await
+                .context("xAI provider refresh timed out")??
+            }
             "anthropic" | "gemini" => {
                 let snapshot = self.snapshot.lock().await.clone();
                 return Ok(snapshot);
@@ -474,7 +525,7 @@ mod tests {
     #[test]
     fn unavailable_snapshot_is_explicit() {
         let providers = unavailable_providers();
-        assert_eq!(providers.len(), 4);
+        assert_eq!(providers.len(), 5);
         assert_eq!(providers[0].provider, "deepseek");
         assert_eq!(providers[1].provider, "openai");
         assert!(

@@ -9,6 +9,7 @@ mod deepseek;
 mod deepseek_pricing;
 mod gemini;
 mod openai;
+mod xai;
 
 use serde_json::{Value, json};
 
@@ -18,8 +19,9 @@ use crate::usage::ProviderUsage;
 pub(crate) use deepseek::collect as collect_deepseek;
 pub(crate) use deepseek_pricing::decorate_activity as decorate_deepseek_activity;
 pub(crate) use openai::collect as collect_openai;
+pub(crate) use xai::{SOURCE as XAI_SOURCE, collect as collect_xai};
 
-pub(crate) const PROVIDERS: [&str; 4] = ["deepseek", "openai", "anthropic", "gemini"];
+pub(crate) const PROVIDERS: [&str; 5] = ["deepseek", "openai", "anthropic", "gemini", "xai"];
 
 pub(crate) fn account_provider(agent: &str) -> Option<&'static str> {
     match agent {
@@ -27,6 +29,7 @@ pub(crate) fn account_provider(agent: &str) -> Option<&'static str> {
         "claude" | "claude-code" => Some("anthropic"),
         "codex-deepseek" | "claude-deepseek" => Some("deepseek"),
         "gemini" => Some("gemini"),
+        "grok" => Some("xai"),
         _ => None,
     }
 }
@@ -108,5 +111,6 @@ mod tests {
         assert_eq!(account_provider("codex-deepseek"), Some("deepseek"));
         assert_eq!(account_provider("claude-deepseek"), Some("deepseek"));
         assert_eq!(account_provider("gemini"), Some("gemini"));
+        assert_eq!(account_provider("grok"), Some("xai"));
     }
 }

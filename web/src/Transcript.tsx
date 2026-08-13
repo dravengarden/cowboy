@@ -232,11 +232,7 @@ function TranscriptSkeleton({
     return () => globalThis.clearTimeout(timer);
   }, []);
 
-  const agent = provider === "claude-code" || provider === "claude-deepseek"
-    ? "Claude Code"
-    : provider === "gemini"
-    ? "Gemini"
-    : "Codex";
+  const agent = providerPresentation(provider).agent;
 
   return (
     <Stack
@@ -3902,7 +3898,6 @@ export function Transcript({
     paging?.beforeSeq,
     paging?.loadingOlder,
     paging?.reachedStart,
-    scrollbackLoading,
     sessionId,
   ]);
   // Large generated images and rich Markdown can initially reserve enough
@@ -4006,6 +4001,7 @@ export function Transcript({
     paging?.beforeSeq,
     paging?.loadingOlder,
     paging?.reachedStart,
+    scrollbackLoading,
     sessionId,
   ]);
   useEffect(() => {

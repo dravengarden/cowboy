@@ -96,6 +96,33 @@ Deno.test("Claude ACP rate-limit events become account limit rows", () => {
   );
 });
 
+Deno.test("Grok billing becomes the shared subscription credit window", () => {
+  assertEquals(
+    usageLimits({
+      provider: "xai",
+      status: "available",
+      source: "Grok Build ACP _x.ai/billing",
+      observed_at_ms: 1,
+      rate_limits: {
+        config: {
+          creditUsagePercent: 37.5,
+          currentPeriod: {
+            type: "USAGE_PERIOD_TYPE_WEEKLY",
+            end: "2026-08-17T00:00:00Z",
+          },
+        },
+      },
+    }),
+    [{
+      id: "xai-included-credits",
+      label: "Weekly",
+      remaining: 63,
+      resetsAt: Date.parse("2026-08-17T00:00:00Z") / 1000,
+      windowMinutes: 10080,
+    }],
+  );
+});
+
 Deno.test("desktop summary excludes model buckets and keeps provider account order", () => {
   const usage = {
     provider: "openai",
@@ -169,6 +196,12 @@ Deno.test("agent shells resolve to account-provider cards", () => {
         source: "test",
         observed_at_ms: 1,
       },
+      {
+        provider: "xai",
+        status: "available",
+        source: "test",
+        observed_at_ms: 1,
+      },
     ],
   };
   assertEquals(providerUsage(snapshot, "codex")?.provider, "openai");
@@ -178,6 +211,7 @@ Deno.test("agent shells resolve to account-provider cards", () => {
     providerUsage(snapshot, "claude-deepseek")?.provider,
     "deepseek",
   );
+  assertEquals(providerUsage(snapshot, "grok")?.provider, "xai");
 });
 
 Deno.test("only the earliest-expiring available reset is actionable", () => {

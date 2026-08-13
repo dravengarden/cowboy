@@ -60,8 +60,8 @@ live in independently versioned payloads:
 | Payload domain | Contents | Roll trigger |
 |---|---|---|
 | `acp-runtime` | ACP SDK, worker, provider launch policy | ACP SDK/worker change |
-| `provider-adapter:<id>` | `codex-acp`, `claude-agent-acp`, or native Gemini ACP entry | adapter release |
-| `provider-cli:<id>` | Codex, Claude Code, or Gemini CLI | provider release |
+| `provider-adapter:<id>` | `codex-acp`, `claude-agent-acp`, or a native CLI ACP entry | adapter release |
+| `provider-cli:<id>` | Codex, Claude Code, Gemini CLI, or Grok Build | provider release |
 | `zed-adapter:<abi>` | Cowboy's GPL-isolated stable product adapter | adapter contract change |
 | `zed-server:<zed-version>` | official server matching one Zed revision | matching Zed client/update |
 
@@ -449,5 +449,6 @@ machine or silently runs its session on Hawk.
   and [App Server account/login API](https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md)
 - [Claude Code setup and update channels](https://docs.anthropic.com/en/docs/claude-code/getting-started)
 - [Gemini CLI releases and authentication](https://github.com/google-gemini/gemini-cli)
+- [Grok Build source and ACP entrypoint](https://github.com/xai-org/grok-build)
 - [Zed remote development and exact server matching](https://zed.dev/docs/remote-development)
 - [Zed release artifacts](https://github.com/zed-industries/zed/releases)

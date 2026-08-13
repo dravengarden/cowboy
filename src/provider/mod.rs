@@ -63,6 +63,17 @@ const CODEX_RUNTIME_ARGS: &[&str] = &[
     "model_auto_compact_token_limit_scope=\"body_after_prefix\"",
 ];
 
+// Grok Build is itself an ACP agent. Keep every Cowboy session in its own
+// process instead of joining the CLI's optional shared leader, leave component
+// updates to Cowboy Machine, and match Cowboy's unrestricted agent posture.
+const GROK_RUNTIME_ARGS: &[&str] = &[
+    "--no-auto-update",
+    "--always-approve",
+    "agent",
+    "--no-leader",
+    "stdio",
+];
+
 // DeepSeek's Anthropic-compatible 1M lane counts the requested completion
 // against the same context budget as the prompt. Claude Code otherwise waits
 // until roughly the end of the advertised window before compacting, after
@@ -100,6 +111,9 @@ const CODEX_DEEPSEEK_AUTO_COMPACT_TOKEN_LIMIT: &str = "646000";
 ///   Login with `GOOGLE_CLOUD_PROJECT`. Consumer Google Login is retired and
 ///   belongs to Antigravity, which does not currently expose Cowboy's ACP
 ///   session transport.
+/// - `grok`: the official Grok Build CLI's own ACP stdio agent —
+///   `@xai-official/grok agent stdio`. Requires a prior `grok login` or
+///   `XAI_API_KEY`.
 #[must_use]
 pub fn builtin() -> HashMap<&'static str, LaunchSpec> {
     builtin_with_env(|key| std::env::var(key).ok())
@@ -343,6 +357,16 @@ fn builtin_with_env_and_shell(
             "gemini",
             "npx",
             &["-y", "@google/gemini-cli", "--acp"],
+            &get_env,
+        ),
+    );
+    m.insert(
+        "grok",
+        spec_with_custom_default_args(
+            "grok",
+            "npx",
+            &concat_slices(&["-y", "@xai-official/grok"], GROK_RUNTIME_ARGS),
+            GROK_RUNTIME_ARGS,
             &get_env,
         ),
     );
@@ -807,6 +831,20 @@ mod tests {
             lookup_with(&[], "gemini").map(|s| s.command),
             Some("npx".to_owned())
         );
+        let grok = lookup_with(&[], "grok").expect("grok registered");
+        assert_eq!(grok.command, "npx");
+        assert_eq!(
+            grok.args,
+            [
+                "-y",
+                "@xai-official/grok",
+                "--no-auto-update",
+                "--always-approve",
+                "agent",
+                "--no-leader",
+                "stdio",
+            ]
+        );
         assert!(lookup_with(&[], "nope").is_none());
 
         let deepseek = lookup_with(
@@ -907,6 +945,22 @@ mod tests {
                 "sandbox_mode=\"danger-full-access\"",
                 "-c",
                 "model_auto_compact_token_limit_scope=\"body_after_prefix\"",
+            ]
+        );
+        let grok = lookup_with(
+            &[("COWBOY_ACP_GROK_CMD", "/opt/npm-global/bin/grok")],
+            "grok",
+        )
+        .expect("custom grok command");
+        assert_eq!(grok.command, "/opt/npm-global/bin/grok");
+        assert_eq!(
+            grok.args,
+            [
+                "--no-auto-update",
+                "--always-approve",
+                "agent",
+                "--no-leader",
+                "stdio",
             ]
         );
         // Other custom commands still drop the npx-specific default args.

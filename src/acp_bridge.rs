@@ -465,6 +465,7 @@ impl Bridge {
             "claude-code" => "Cowboy · Claude Code",
             "claude-deepseek" => "Cowboy · Claude Code · DeepSeek",
             "gemini" => "Cowboy · Gemini",
+            "grok" => "Cowboy · Grok Build",
             provider => provider,
         }
         .to_owned()

@@ -64,6 +64,45 @@ export function windowLabel(minutes: number | undefined): string {
 }
 
 export function usageLimits(usage: ProviderUsage | undefined): UsageLimit[] {
+  if (usage?.provider === "xai") {
+    const config = record(usage.rate_limits?.config);
+    if (config) {
+      const period = record(config.currentPeriod);
+      const periodType = typeof period?.type === "string"
+        ? period.type.toUpperCase()
+        : "";
+      const monthly = record(config.monthlyLimit);
+      const used = record(config.used);
+      const monthlyLimit = num(monthly?.val);
+      const derivedPercent = monthlyLimit !== undefined && monthlyLimit > 0
+        ? ((num(used?.val) ?? 0) / monthlyLimit) * 100
+        : undefined;
+      const percent = num(config.creditUsagePercent) ?? derivedPercent;
+      if (percent !== undefined) {
+        const reset = typeof period?.end === "string"
+          ? Date.parse(period.end)
+          : typeof config.billingPeriodEnd === "string"
+          ? Date.parse(config.billingPeriodEnd)
+          : Number.NaN;
+        const windowMinutes = periodType.includes("WEEKLY")
+          ? 10080
+          : periodType.includes("MONTHLY")
+          ? 43200
+          : undefined;
+        return [{
+          id: "xai-included-credits",
+          label: windowMinutes === 10080
+            ? "Weekly"
+            : windowMinutes === 43200
+            ? "Monthly"
+            : "Included credits",
+          remaining: Math.round(100 - Math.min(100, Math.max(0, percent))),
+          ...(Number.isFinite(reset) ? { resetsAt: reset / 1000 } : {}),
+          ...(windowMinutes === undefined ? {} : { windowMinutes }),
+        }];
+      }
+    }
+  }
   const rateRoot = record(usage?.rate_limits?.rateLimits);
   if (usage?.provider === "anthropic" && rateRoot) {
     const utilization = num(rateRoot.utilization);
@@ -230,6 +269,7 @@ export function providerUsage(
     "codex-deepseek": "deepseek",
     "claude-deepseek": "deepseek",
     gemini: "gemini",
+    grok: "xai",
   };
   return snapshot?.providers.find((candidate) =>
     candidate.provider === normalized[provider]

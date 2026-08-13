@@ -2755,7 +2755,10 @@ async fn api_machine_login(
     Path(machine_id): Path<String>,
     Json(request): Json<MachineLoginRequest>,
 ) -> Response {
-    if !matches!(request.provider.as_str(), "codex" | "claude" | "gemini") {
+    if !matches!(
+        request.provider.as_str(),
+        "codex" | "claude" | "gemini" | "grok"
+    ) {
         return (StatusCode::BAD_REQUEST, "unknown provider").into_response();
     }
     if request.provider == "gemini"
@@ -3886,6 +3889,11 @@ fn machine_supports_provider(
     if provider == "gemini" {
         return gemini_machine_auth_is_current(components);
     }
+    if provider == "grok" {
+        // Grok Build is the ACP stdio entrypoint; there is no separate adapter
+        // component to install or reconcile.
+        return true;
+    }
     let adapter_active = |slot: &str| {
         components.iter().any(|component| {
             component.id.kind == ComponentKind::ProviderAdapter
@@ -4056,6 +4064,24 @@ mod machine_provider_tests {
             ..cli
         };
         assert!(machine_supports_provider(&[authenticated], "gemini"));
+    }
+
+    #[test]
+    fn grok_cli_is_its_acp_entrypoint_after_login() {
+        let signed_out = component(
+            ComponentKind::ProviderCli,
+            "grok",
+            Some(AuthState::SignedOut),
+        );
+        assert!(!machine_supports_provider(
+            std::slice::from_ref(&signed_out),
+            "grok"
+        ));
+        let signed_in = ComponentInventory {
+            auth: Some(AuthState::SignedIn),
+            ..signed_out
+        };
+        assert!(machine_supports_provider(&[signed_in], "grok"));
     }
 
     #[test]

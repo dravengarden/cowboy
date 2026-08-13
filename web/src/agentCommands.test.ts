@@ -6,7 +6,7 @@ const cmds = (...names: string[]): AvailableCommand[] =>
   names.map((name) => ({ name, description: "" }));
 
 // Compact is a slash-command: per-provider default when nothing is advertised.
-Deno.test("compact defaults: claude/codex use /compact, gemini /compress", () => {
+Deno.test("compact defaults: claude/codex/grok use /compact, gemini /compress", () => {
   assert.equal(resolveSessionAction("compact", "claude-code", [])?.command, "/compact");
   assert.equal(
     resolveSessionAction("compact", "claude-deepseek", [])?.command,
@@ -14,6 +14,7 @@ Deno.test("compact defaults: claude/codex use /compact, gemini /compress", () =>
   );
   assert.equal(resolveSessionAction("compact", "codex", [])?.command, "/compact");
   assert.equal(resolveSessionAction("compact", "gemini", [])?.command, "/compress");
+  assert.equal(resolveSessionAction("compact", "grok", [])?.command, "/compact");
 });
 
 // The advertised list overrides the default, matched by alias, agent's own casing.
@@ -36,7 +37,7 @@ Deno.test("compact hides for an unknown provider with no advertised command", ()
 // Clear is a client-side RESET, not a slash command: always available, no
 // `command`, kind "reset", destructive — regardless of provider or advertised set.
 Deno.test("clear is always a reset action, no slash command", () => {
-  for (const provider of ["claude-code", "codex", "gemini", "mystery"]) {
+  for (const provider of ["claude-code", "codex", "gemini", "grok", "mystery"]) {
     const a = resolveSessionAction("clear", provider, []);
     assert.ok(a, `clear available for ${provider}`);
     assert.equal(a?.kind, "reset");

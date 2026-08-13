@@ -1,6 +1,6 @@
 # cowboy
 
-Drive coding-agent CLIs — **Claude Code, Codex, OpenCode**, and more — from
+Drive coding-agent CLIs — **Claude Code, Codex, Gemini, Grok Build**, and more — from
 anywhere (remote machine, phone browser, PC browser), with **all clients
 sharing one live progress**. Agents run on a remote box under systemd; cowboy
 owns their lifetime; humans drive them from thin web clients.
@@ -11,7 +11,7 @@ is a conduit and control plane, not a reduced reimplementation.
 ## Status
 
 **v1 — working multi-agent panel.** A Rust control plane coordinates detached
-per-session claude-code / codex workers over ACP, normalizes their streams (messages, thinking, tool calls,
+per-session Claude Code / Codex / Gemini / Grok Build workers over ACP, normalizes their streams (messages, thinking, tool calls,
 plan, permissions), and fans them out over one WebSocket to all clients
 equally; the separately deployed React/MUI web UI (responsive for
 iPad/iPhone) lists sessions, shows a live transcript, sends prompts, and

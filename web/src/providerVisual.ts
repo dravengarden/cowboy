@@ -31,6 +31,11 @@ export function providerVisual(
         primary: dark ? "#8FA8FF" : "#4F6BED",
         secondary: dark ? "#62D6BC" : "#168B78",
       };
+    case "grok":
+      return {
+        primary: dark ? "#F1F3F5" : "#18181B",
+        secondary: dark ? "#A1A1AA" : "#52525B",
+      };
     default:
       return {
         primary: dark ? "#A9B4C7" : "#52606D",
