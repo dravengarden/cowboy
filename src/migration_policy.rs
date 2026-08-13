@@ -117,12 +117,22 @@ const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "0027_deepseek_cache_keepalive.sql",
         "f07d7821ab0c58fef0d97204500a092aef64b910ca67dd4a7236be7603b3dd48",
     ),
+    (
+        "0028_xai_provider_actions.sql",
+        "7b4660a9044598f9241d08521c2b5837334c74ec806e403243c42b0b8e7fa353",
+    ),
 ];
 
-const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[(
-    "0001_baseline.sql",
-    "1a33eb9164240618f168a34ae6d2d2c27d1604dba099d8b263b2eac00dfc1cb3",
-)];
+const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
+    (
+        "0001_baseline.sql",
+        "1a33eb9164240618f168a34ae6d2d2c27d1604dba099d8b263b2eac00dfc1cb3",
+    ),
+    (
+        "0002_xai_provider_actions.sql",
+        "c6956075b1b91cd9060bfe5d2c4202bdcbeb8972f48a064d429a5eca5b0fddbf",
+    ),
+];
 
 fn assert_published_migrations_are_immutable(
     directory: &std::path::Path,

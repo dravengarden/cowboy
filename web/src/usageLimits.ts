@@ -17,6 +17,29 @@ export interface UsageSnapshot {
   refresh_interval_ms: number;
   providers: ProviderUsage[];
   codex_reset_schedule?: { fire_at_ms: number };
+  xai_reset_schedule?: { fire_at_ms: number };
+}
+
+export type UsageResetProvider = "codex" | "xai";
+
+export function usageResetProvider(
+  usage: ProviderUsage | undefined,
+): UsageResetProvider | undefined {
+  if (usage?.provider === "openai") return "codex";
+  if (usage?.provider === "xai") return "xai";
+  return undefined;
+}
+
+export function usageResetSchedule(
+  snapshot: UsageSnapshot | null,
+  usage: ProviderUsage | undefined,
+): { fire_at_ms: number } | undefined {
+  const provider = usageResetProvider(usage);
+  return provider === "codex"
+    ? snapshot?.codex_reset_schedule
+    : provider === "xai"
+    ? snapshot?.xai_reset_schedule
+    : undefined;
 }
 
 export function nearestAvailableResetCredit(

@@ -7,6 +7,8 @@ import {
   scheduledResetCountdown,
   topBarUsageLimits,
   usageLimits,
+  usageResetProvider,
+  usageResetSchedule,
   XAI_SIGN_IN_MESSAGE,
 } from "./usageLimits.ts";
 
@@ -262,4 +264,23 @@ Deno.test("only the earliest-expiring available reset is actionable", () => {
     },
   };
   assertEquals(nearestAvailableResetCredit(usage)?.id, "nearest");
+});
+
+Deno.test("xAI reset actions use their own provider schedule", () => {
+  const usage = {
+    provider: "xai",
+    status: "available",
+    source: "test",
+    observed_at_ms: 1,
+  };
+  const snapshot = {
+    refreshed_at_ms: 1,
+    next_refresh_at_ms: 2,
+    refresh_interval_ms: 1,
+    providers: [usage],
+    codex_reset_schedule: { fire_at_ms: 100 },
+    xai_reset_schedule: { fire_at_ms: 200 },
+  };
+  assertEquals(usageResetProvider(usage), "xai");
+  assertEquals(usageResetSchedule(snapshot, usage)?.fire_at_ms, 200);
 });

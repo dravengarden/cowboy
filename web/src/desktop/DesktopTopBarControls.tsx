@@ -69,6 +69,8 @@ import {
   scheduledResetCountdown,
   shortResetTime,
   usageLimits,
+  usageResetProvider,
+  usageResetSchedule,
   type UsageSnapshot,
 } from "../usageLimits";
 import { UsageLogs } from "../UsageLogs";
@@ -228,6 +230,10 @@ function DesktopUsageExtras(
     )
     : [];
   const nearestCreditId = textValue(nearestAvailableResetCredit(usage)?.id);
+  const resetProvider = usageResetProvider(usage);
+  const resetEndpoint = resetProvider === undefined
+    ? undefined
+    : `/api/usage/${resetProvider}/reset`;
   const summary = record(usage.activity?.summary);
   const session = record(usage.activity?.session);
   const cost = record(session?.cost);
@@ -252,10 +258,11 @@ function DesktopUsageExtras(
     setResetError(null);
   };
   const cancelSchedule = async (): Promise<void> => {
+    if (resetEndpoint === undefined) return;
     setResetBusy(true);
     setResetError(null);
     try {
-      const response = await fetch("/api/usage/codex/reset/schedule", { method: "DELETE" });
+      const response = await fetch(`${resetEndpoint}/schedule`, { method: "DELETE" });
       if (!response.ok) throw new Error(await response.text() || `HTTP ${String(response.status)}`);
       await onUsageChanged();
     } catch (cause) {
@@ -265,13 +272,13 @@ function DesktopUsageExtras(
     }
   };
   const submitReset = async (): Promise<void> => {
-    if (resetBusy || confirmText !== "confirm" ||
+    if (resetEndpoint === undefined || resetBusy || confirmText !== "confirm" ||
       (resetMode === "schedule" && !scheduleValid)) return;
     setResetBusy(true);
     setResetError(null);
     try {
       const response = await fetch(
-        resetMode === "schedule" ? "/api/usage/codex/reset/schedule" : "/api/usage/codex/reset",
+        resetMode === "schedule" ? `${resetEndpoint}/schedule` : resetEndpoint,
         {
           method: resetMode === "schedule" ? "PUT" : "POST",
           headers: { "content-type": "application/json" },
@@ -295,7 +302,7 @@ function DesktopUsageExtras(
 
   return (
     <>
-      {usage.provider === "codex" && credits.length > 0 && (
+      {resetProvider !== undefined && credits.length > 0 && (
         <Stack spacing={0.6}>
           <Stack
             direction="row"
@@ -999,10 +1006,15 @@ export function DesktopTopBarControls({
   }, [loadUsage, refreshing, usageAnchor, usagePanel]);
   const widgetProviders = useMemo(() => usageWidgetProviders(snapshot), [snapshot]);
   const sessionUsage = providerUsage(snapshot, session?.provider);
-  const usage = widgetProviders.some((provider) => provider.kind === sessionUsage?.provider)
+  const sessionHasReset = sessionUsage !== undefined &&
+    nearestAvailableResetCredit(sessionUsage) !== undefined;
+  const usage = widgetProviders.some((provider) => provider.kind === sessionUsage?.provider) ||
+      sessionHasReset
     ? sessionUsage
     : snapshot?.providers.find((provider) => provider.provider === widgetProviders[0]?.kind);
   const limits = useMemo(() => usageLimits(usage), [usage]);
+  const hasResetCredit = usage !== undefined &&
+    nearestAvailableResetCredit(usage) !== undefined;
   const updatedAgo = relativeUpdateTime(snapshot?.refreshed_at_ms ?? 0, clock);
   const availableCommands = timelineState.availableCommands;
   const compactAction = useMemo(
@@ -1404,7 +1416,7 @@ export function DesktopTopBarControls({
               </Typography>
             </Stack>
           ))}
-          {limits.length === 0 && (
+          {limits.length === 0 && !hasResetCredit && (
             <Typography variant="body2" color="text.secondary">
               {providerUsageErrorMessage(
                 usage,
@@ -1415,7 +1427,7 @@ export function DesktopTopBarControls({
           {usage && (
             <DesktopUsageExtras
               usage={usage}
-              schedule={snapshot?.codex_reset_schedule}
+              schedule={usageResetSchedule(snapshot, usage)}
               onUsageChanged={() => loadUsage(false)}
             />
           )}

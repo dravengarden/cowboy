@@ -6,6 +6,7 @@
 
 #![warn(clippy::pedantic)]
 
+use std::collections::BTreeMap;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -44,35 +45,39 @@ pub struct UsageSnapshot {
     pub refresh_interval_ms: i64,
     pub providers: Vec<ProviderUsage>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub codex_reset_schedule: Option<CodexResetSchedule>,
+    pub codex_reset_schedule: Option<ResetSchedule>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xai_reset_schedule: Option<ResetSchedule>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CodexResetSchedule {
+pub struct ResetSchedule {
     pub fire_at_ms: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct CodexResetResult {
+pub struct ResetResult {
     pub outcome: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credit_id: Option<String>,
 }
 
 #[derive(Debug)]
-pub struct CodexResetError {
+pub struct ResetError {
     pub call_may_have_reached_provider: bool,
     pub credit_id: Option<String>,
     source: anyhow::Error,
 }
 
-impl std::fmt::Display for CodexResetError {
+impl std::fmt::Display for ResetError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.source.fmt(formatter)
     }
 }
 
-impl std::error::Error for CodexResetError {}
+impl std::error::Error for ResetError {}
+
+pub const RESET_PROVIDERS: [&str; 2] = ["codex", "xai"];
 
 #[derive(Clone)]
 pub struct UsageService {
@@ -82,7 +87,7 @@ pub struct UsageService {
     snapshot: Arc<Mutex<UsageSnapshot>>,
     refresh_lock: Arc<Mutex<()>>,
     reset_lock: Arc<Mutex<()>>,
-    reset_schedule: Arc<Mutex<Option<CodexResetSchedule>>>,
+    reset_schedules: Arc<Mutex<BTreeMap<String, ResetSchedule>>>,
 }
 
 impl UsageService {
@@ -105,17 +110,18 @@ impl UsageService {
                     .unwrap_or(i64::MAX),
                 providers: unavailable_providers(),
                 codex_reset_schedule: None,
+                xai_reset_schedule: None,
             })),
             refresh_lock: Arc::new(Mutex::new(())),
             reset_lock: Arc::new(Mutex::new(())),
-            reset_schedule: Arc::new(Mutex::new(None)),
+            reset_schedules: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 
     pub async fn snapshot(&self) -> UsageSnapshot {
+        let reset_schedules = self.reset_schedules.lock().await.clone();
         let mut snapshot = self.snapshot.lock().await.clone();
-        let reset_schedule = self.reset_schedule.lock().await;
-        snapshot.codex_reset_schedule.clone_from(&reset_schedule);
+        apply_reset_schedules(&mut snapshot, &reset_schedules);
         snapshot
     }
 
@@ -123,8 +129,10 @@ impl UsageService {
     /// an explicit error row; it never makes the whole endpoint fail.
     pub async fn refresh(&self) -> UsageSnapshot {
         let _guard = self.refresh_lock.lock().await;
-        let current = self.snapshot.lock().await.clone();
+        let mut current = self.snapshot.lock().await.clone();
         if current.refreshed_at_ms > 0 && now_ms().saturating_sub(current.refreshed_at_ms) < 3_000 {
+            let reset_schedules = self.reset_schedules.lock().await.clone();
+            apply_reset_schedules(&mut current, &reset_schedules);
             return current;
         }
         let grok_spec = self.grok_spec.clone();
@@ -136,24 +144,7 @@ impl UsageService {
                     "Managed Grok Build CLI is not configured",
                 );
             };
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(12),
-                crate::provider_info::collect_xai(&spec),
-            )
-            .await
-            {
-                Ok(Ok(value)) => value,
-                Ok(Err(error)) => crate::provider_info::error(
-                    "xai",
-                    crate::provider_info::XAI_SOURCE,
-                    error.to_string(),
-                ),
-                Err(_) => crate::provider_info::error(
-                    "xai",
-                    crate::provider_info::XAI_SOURCE,
-                    "refresh timed out".to_owned(),
-                ),
-            }
+            collect_xai_usage(&spec).await
         };
         let (openai, deepseek, xai) = tokio::join!(
             tokio::time::timeout(
@@ -191,7 +182,8 @@ impl UsageService {
             ),
         };
         let refreshed_at_ms = now_ms();
-        let next = UsageSnapshot {
+        let reset_schedules = self.reset_schedules.lock().await.clone();
+        let mut next = UsageSnapshot {
             refreshed_at_ms,
             next_refresh_at_ms: refreshed_at_ms.saturating_add(
                 i64::try_from(AUTO_REFRESH_INTERVAL.as_millis()).unwrap_or(i64::MAX),
@@ -213,8 +205,10 @@ impl UsageService {
                 ),
                 xai,
             ],
-            codex_reset_schedule: self.reset_schedule.lock().await.clone(),
+            codex_reset_schedule: None,
+            xai_reset_schedule: None,
         };
+        apply_reset_schedules(&mut next, &reset_schedules);
         *self.snapshot.lock().await = next.clone();
         next
     }
@@ -241,28 +235,10 @@ impl UsageService {
                 let Some(spec) = self.grok_spec.as_ref() else {
                     return Err(anyhow::anyhow!("managed Grok Build CLI is not configured"));
                 };
-                match tokio::time::timeout(
-                    std::time::Duration::from_secs(12),
-                    crate::provider_info::collect_xai(spec),
-                )
-                .await
-                {
-                    Ok(Ok(value)) => value,
-                    Ok(Err(error)) => crate::provider_info::error(
-                        "xai",
-                        crate::provider_info::XAI_SOURCE,
-                        error.to_string(),
-                    ),
-                    Err(_) => crate::provider_info::error(
-                        "xai",
-                        crate::provider_info::XAI_SOURCE,
-                        "refresh timed out".to_owned(),
-                    ),
-                }
+                collect_xai_usage(spec).await
             }
             "anthropic" | "gemini" => {
-                let snapshot = self.snapshot.lock().await.clone();
-                return Ok(snapshot);
+                return Ok(self.snapshot().await);
             }
             _ => bail!("unknown usage provider"),
         };
@@ -279,11 +255,17 @@ impl UsageService {
         snapshot.next_refresh_at_ms = snapshot
             .refreshed_at_ms
             .saturating_add(i64::try_from(AUTO_REFRESH_INTERVAL.as_millis()).unwrap_or(i64::MAX));
-        Ok(snapshot.clone())
+        drop(snapshot);
+        Ok(self.snapshot().await)
     }
 
-    pub async fn set_reset_schedule(&self, schedule: Option<CodexResetSchedule>) {
-        *self.reset_schedule.lock().await = schedule;
+    pub async fn set_reset_schedule(&self, provider: &str, schedule: Option<ResetSchedule>) {
+        let mut schedules = self.reset_schedules.lock().await;
+        if let Some(schedule) = schedule {
+            schedules.insert(provider.to_owned(), schedule);
+        } else {
+            schedules.remove(provider);
+        }
     }
 
     /// Consume exactly the earliest-expiring available credit. Callers cannot
@@ -291,10 +273,30 @@ impl UsageService {
     /// later credit. The lock serializes the final refresh/select/consume path.
     pub async fn consume_nearest_reset(
         &self,
+        provider: &str,
         idempotency_key: &str,
         expected_credit_id: Option<&str>,
-    ) -> std::result::Result<CodexResetResult, CodexResetError> {
+    ) -> std::result::Result<ResetResult, ResetError> {
         let _guard = self.reset_lock.lock().await;
+        match provider {
+            "codex" => {
+                self.consume_nearest_codex_reset(idempotency_key, expected_credit_id)
+                    .await
+            }
+            "xai" => self.consume_nearest_xai_reset(expected_credit_id).await,
+            _ => Err(ResetError {
+                call_may_have_reached_provider: false,
+                credit_id: None,
+                source: anyhow::anyhow!("provider does not support usage resets"),
+            }),
+        }
+    }
+
+    async fn consume_nearest_codex_reset(
+        &self,
+        idempotency_key: &str,
+        expected_credit_id: Option<&str>,
+    ) -> std::result::Result<ResetResult, ResetError> {
         let usage = tokio::time::timeout(
             std::time::Duration::from_secs(12),
             collect_codex(&self.codex_command),
@@ -302,20 +304,20 @@ impl UsageService {
         .await
         .context("refresh before Codex reset timed out")
         .and_then(|result| result)
-        .map_err(|source| CodexResetError {
+        .map_err(|source| ResetError {
             call_may_have_reached_provider: false,
             credit_id: None,
             source,
         })?;
         let credit_id = nearest_available_credit_id(usage.rate_limits.as_ref())
             .context("no available Codex reset credit")
-            .map_err(|source| CodexResetError {
+            .map_err(|source| ResetError {
                 call_may_have_reached_provider: false,
                 credit_id: None,
                 source,
             })?;
         if expected_credit_id.is_some_and(|expected| expected != credit_id) {
-            return Err(CodexResetError {
+            return Err(ResetError {
                 call_may_have_reached_provider: false,
                 credit_id: Some(credit_id),
                 source: anyhow::anyhow!(
@@ -325,7 +327,7 @@ impl UsageService {
         }
         let mut server = JsonRpcProcess::start(&self.codex_command)
             .await
-            .map_err(|source| CodexResetError {
+            .map_err(|source| ResetError {
                 call_may_have_reached_provider: false,
                 credit_id: Some(credit_id.clone()),
                 source,
@@ -336,7 +338,7 @@ impl UsageService {
                 json!({ "creditId": credit_id, "idempotencyKey": idempotency_key }),
             )
             .await
-            .map_err(|source| CodexResetError {
+            .map_err(|source| ResetError {
                 // Once the consume frame is written, a missing/error response is
                 // ambiguous. Never retry automatically: the provider may have
                 // committed the credit before the transport failed.
@@ -350,7 +352,66 @@ impl UsageService {
             .unwrap_or("unknown")
             .to_owned();
         let _ = self.refresh_force().await;
-        Ok(CodexResetResult {
+        Ok(ResetResult {
+            outcome,
+            credit_id: Some(credit_id),
+        })
+    }
+
+    async fn consume_nearest_xai_reset(
+        &self,
+        expected_credit_id: Option<&str>,
+    ) -> std::result::Result<ResetResult, ResetError> {
+        let Some(spec) = self.grok_spec.as_ref() else {
+            return Err(ResetError {
+                call_may_have_reached_provider: false,
+                credit_id: None,
+                source: anyhow::anyhow!("managed Grok Build CLI is not configured"),
+            });
+        };
+        // The billing ACP request refreshes Grok's OIDC credential before the
+        // account bridge reads reset availability from the same official file.
+        let usage = tokio::time::timeout(
+            std::time::Duration::from_secs(12),
+            crate::provider_info::collect_xai(spec),
+        )
+        .await
+        .context("refresh before xAI reset timed out")
+        .and_then(|result| result)
+        .map_err(|source| ResetError {
+            call_may_have_reached_provider: false,
+            credit_id: None,
+            source,
+        })?;
+        let credit_id = nearest_available_credit_id(usage.rate_limits.as_ref())
+            .context("no available xAI reset")
+            .map_err(|source| ResetError {
+                call_may_have_reached_provider: false,
+                credit_id: None,
+                source,
+            })?;
+        if expected_credit_id.is_some_and(|expected| expected != credit_id) {
+            return Err(ResetError {
+                call_may_have_reached_provider: false,
+                credit_id: Some(credit_id),
+                source: anyhow::anyhow!("nearest xAI reset changed; refresh and confirm again"),
+            });
+        }
+        let remaining = crate::provider_info::redeem_xai_reset(&credit_id)
+            .await
+            .map_err(|source| ResetError {
+                // RedeemReset has no provider idempotency key. Once the HTTP
+                // request is sent, never retry automatically after an error.
+                call_may_have_reached_provider: true,
+                credit_id: Some(credit_id.clone()),
+                source,
+            })?;
+        let outcome = format!(
+            "consumed; {remaining} reset{} remaining",
+            if remaining == 1 { "" } else { "s" }
+        );
+        let _ = self.refresh_force().await;
+        Ok(ResetResult {
             outcome,
             credit_id: Some(credit_id),
         })
@@ -360,6 +421,14 @@ impl UsageService {
         self.snapshot.lock().await.refreshed_at_ms = 0;
         self.refresh().await
     }
+}
+
+fn apply_reset_schedules(
+    snapshot: &mut UsageSnapshot,
+    schedules: &BTreeMap<String, ResetSchedule>,
+) {
+    snapshot.codex_reset_schedule = schedules.get("codex").cloned();
+    snapshot.xai_reset_schedule = schedules.get("xai").cloned();
 }
 
 fn nearest_available_credit_id(rate_limits: Option<&Value>) -> Option<String> {
@@ -405,6 +474,25 @@ fn unavailable_providers() -> Vec<ProviderUsage> {
             crate::provider_info::unavailable(provider, "Provider adapter", "Not refreshed yet")
         })
         .to_vec()
+}
+
+async fn collect_xai_usage(spec: &crate::provider::LaunchSpec) -> ProviderUsage {
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(12),
+        crate::provider_info::collect_xai(spec),
+    )
+    .await
+    {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => {
+            crate::provider_info::error("xai", crate::provider_info::XAI_SOURCE, error.to_string())
+        }
+        Err(_) => crate::provider_info::error(
+            "xai",
+            crate::provider_info::XAI_SOURCE,
+            "refresh timed out".to_owned(),
+        ),
+    }
 }
 
 pub(crate) async fn collect_codex(command: &str) -> Result<ProviderUsage> {
@@ -566,5 +654,33 @@ mod tests {
             nearest_available_credit_id(Some(&limits)).as_deref(),
             Some("nearest")
         );
+    }
+
+    #[tokio::test]
+    async fn reset_schedules_are_isolated_by_provider() {
+        let service = UsageService::new("codex".to_owned(), None);
+        service
+            .set_reset_schedule("codex", Some(ResetSchedule { fire_at_ms: 100 }))
+            .await;
+        service
+            .set_reset_schedule("xai", Some(ResetSchedule { fire_at_ms: 200 }))
+            .await;
+        let snapshot = service.snapshot().await;
+        assert_eq!(
+            snapshot.codex_reset_schedule.map(|value| value.fire_at_ms),
+            Some(100)
+        );
+        assert_eq!(
+            snapshot.xai_reset_schedule.map(|value| value.fire_at_ms),
+            Some(200)
+        );
+
+        service.set_reset_schedule("xai", None).await;
+        let snapshot = service.snapshot().await;
+        assert_eq!(
+            snapshot.codex_reset_schedule.map(|value| value.fire_at_ms),
+            Some(100)
+        );
+        assert!(snapshot.xai_reset_schedule.is_none());
     }
 }
