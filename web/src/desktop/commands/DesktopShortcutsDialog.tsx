@@ -30,6 +30,7 @@ const NAVIGATION: ShortcutRow[] = [
   { keys: ["Mod+T"], title: "Focus Top Bar" },
   { keys: ["R"], title: "Open Run Configuration in Top Bar" },
   { keys: ["U"], title: "Open Usage Limits in Top Bar" },
+  { keys: ["L"], title: "Reload Session Runtime in Top Bar" },
   { keys: ["C"], title: "Compact Conversation in Top Bar" },
   { keys: ["X"], title: "Clear Conversation in Top Bar" },
   { keys: ["S"], title: "Stop Current Turn in Top Bar" },

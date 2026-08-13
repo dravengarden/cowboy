@@ -201,6 +201,7 @@ export function ReviewFileTree({
   currentPath,
   onClose,
   refreshToken,
+  contextLabel = "Worktree",
 }: {
   sessionId: string | undefined;
   cwd: string | undefined;
@@ -208,6 +209,7 @@ export function ReviewFileTree({
   currentPath: string | undefined;
   onClose: () => void;
   refreshToken: number;
+  contextLabel?: string;
 }): React.JSX.Element {
   const [root, setRoot] = useState<DirectoryPage>({
     apiVersion: 1,
@@ -530,7 +532,7 @@ export function ReviewFileTree({
       >
         <Box sx={{ minWidth: 0, flex: 1 }}>
           <Typography variant="subtitle1" fontWeight={700}>
-            Worktree
+            {contextLabel}
           </Typography>
           <Typography variant="caption" color="text.secondary" noWrap>
             {cwd ?? "No active session"}
@@ -682,7 +684,7 @@ export function ReviewFileTree({
           actions={[
             {
               key: "close",
-              label: "Close worktree",
+              label: `Close ${contextLabel.toLowerCase()}`,
               icon: <Close fontSize="small" />,
               onPress: onClose,
             },

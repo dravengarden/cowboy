@@ -21,9 +21,15 @@ import { type Attachment, blocksToAttachments, buildContentBlocks } from "./atta
 import {
   isAppleTouchWebView,
   shouldReconnectOnForeground,
+  shouldStartImmediateReconnect,
 } from "./connectionRecovery.ts";
+import {
+  durableDeliveryAttempt,
+  shouldUseTranscriptDelivery,
+} from "./durableDelivery.ts";
 import { pruneDrafts } from "./draftStore";
 import { linkTimeline } from "./derive";
+import { resetExploreAfterContextClear } from "./explore/exploreStore";
 import { notifyHaptic } from "./haptic";
 import { reportClientLog, reportClientMetric } from "./observability";
 import { newUuid } from "./uuid";
@@ -320,6 +326,16 @@ function startLiveness(ws: WebSocket): void {
 // or network return), so it intentionally bypasses outage backoff.
 function reconnectNow(reason: string): void {
   const stale = socket;
+  if (!shouldStartImmediateReconnect(stale?.readyState)) {
+    reportClientLog("info", "websocket_reconnect_coalesced", "Cowboy WebSocket reconnect coalesced", {
+      reason,
+      ready_state: stale?.readyState ?? -1,
+      visibility: document.visibilityState,
+      network_online: navigator.onLine,
+    });
+    clearReconnectTimer();
+    return;
+  }
   const silenceMs = lastMessageAt > 0 ? Math.max(0, Date.now() - lastMessageAt) : 0;
   reportClientLog("warn", "websocket_reconnect_triggered", "Cowboy WebSocket reconnect triggered", {
     reason,
@@ -990,6 +1006,7 @@ function handle(msg: Outbound): void {
         : state.pagination;
       let optimisticMessages = state.optimisticMessages;
       if (clearsContext) {
+        resetExploreAfterContextClear(env.session_id);
         completeQuestionPages.delete(env.session_id);
         transcriptEpoch.set(
           env.session_id,
@@ -1325,6 +1342,9 @@ function openSocket(): void {
     scheduleReconnect(conn.connectionLost());
   };
   ws.onerror = (): void => {
+    // Closing a superseded socket can emit an error after its replacement has
+    // already connected. It no longer owns global state and is not an outage.
+    if (socket !== ws) return;
     reportClientLog("error", "websocket_error", "Cowboy WebSocket failed", {
       reason: connectReason,
       attempt: reconnecting ? reconnectAttempts : 0,
@@ -1335,9 +1355,8 @@ function openSocket(): void {
   };
 }
 
-/** Returns whether the command actually went out (socket OPEN). The optimistic
- *  draft path uses this: a `false` means the send never left this device, so the
- *  row goes straight to `failed` (retry from here) instead of `sending`. */
+/** Returns whether the command actually went out (socket OPEN). Durable queue
+ *  mutations remain pending on `false`; ephemeral transcript sends fail. */
 export function send(cmd: Inbound): boolean {
   if (socket && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify(cmd));
@@ -1346,9 +1365,6 @@ export function send(cmd: Inbound): boolean {
   return false;
 }
 
-/** Whether a `send` right now would actually leave the device (socket OPEN).
- *  Lets a caller that routes its send through a sync store's `send` callback
- *  still learn the outcome for optimistic status (same check `send` makes). */
 function isConnected(): boolean {
   return socket?.readyState === WebSocket.OPEN;
 }
@@ -1602,6 +1618,26 @@ export function mutateMobileReview<K extends MobileReviewMutation>(
   name: K,
   args: ArgsOf<MobileReviewState, typeof mobileReviewMutators, K>,
 ): void {
+  // Registered project checkouts are read-only code contexts, not agent
+  // sessions. Their tabs and navigation remain local to the mounted Review
+  // surface; sending them through the session sync channel produces an
+  // `unknown mobile review session` warning and can never persist server-side.
+  if (sessionId.startsWith("workspace::")) {
+    const current = state.mobileReviewStates[sessionId] ?? EMPTY_MOBILE_REVIEW_STATE;
+    // `name` and `args` are linked by K at this public boundary. TypeScript
+    // widens an indexed generic function to the intersection of every argument
+    // shape, so narrow only the internal call after that relationship is proven.
+    const mutate = mobileReviewMutators[name] as unknown as (
+      value: MobileReviewState,
+      args: unknown,
+    ) => MobileReviewState;
+    const value = mutate(current, args);
+    setState({
+      ...state,
+      mobileReviewStates: { ...state.mobileReviewStates, [sessionId]: value },
+    });
+    return;
+  }
   mobileReviewClient(sessionId).mutate(name, args);
   commitMobileReview(sessionId);
 }
@@ -1727,7 +1763,7 @@ function qClient(sessionId: string): ReplicatedStore<QValue, typeof qMut> {
       // reconnect resend (via resend).
       send: (m): void => {
         const row = (m.args as { row: QueuedMessage }).row;
-        send(
+        const sent = send(
           m.name === "addDraft"
             ? { type: "add_draft", session_id: sessionId, text: row.text, content: contentOf(row.text, row.attachments), cmid: m.id }
             : {
@@ -1743,6 +1779,9 @@ function qClient(sessionId: string): ReplicatedStore<QValue, typeof qMut> {
               ...(m.name === "frontQueue" && { front: true }),
             },
         );
+        const attempt = durableDeliveryAttempt(sent);
+        qStatus.set(m.id, attempt.status);
+        if (attempt.armConfirmationTimeout) armQTimers(sessionId, m.id);
       },
       onChange: (): void => {
         commitQueue(sessionId);
@@ -1830,9 +1869,9 @@ function qAdd(
   const store = qClient(sessionId);
   // Set status BEFORE mutating: the mutate auto-sends the add_draft/submit frame
   // (the store's `send`) AND fires `onChange` → commitQueue, which reads this
-  // status. `isConnected()` predicts the send's success (same socket check).
-  const sent = isConnected();
-  qStatus.set(cmid, sent ? "pending" : "failed");
+  // status. The mutation is already durable at this point, so a disconnected
+  // transport remains pending and the reconnect path resends it.
+  qStatus.set(cmid, "pending");
   const mutator = target === "drafts"
     ? "addDraft"
     : mode === "force"
@@ -1841,10 +1880,6 @@ function qAdd(
     ? "frontQueue"
     : "addQueue";
   store.mutate(mutator, { row }, cmid);
-  if (sent) armQTimers(sessionId, cmid);
-  if (!sent) {
-    return Promise.reject(new Error("Message is unavailable while reconnecting"));
-  }
   return waitForState(
     () => !store.pending().some((mutation) => mutation.id === cmid),
     target === "drafts" ? "Save draft" : "Send message",
@@ -1864,10 +1899,10 @@ export function retryQueued(sessionId: string, cmid: string): void {
   const cmd: Inbound = inDrafts
     ? { type: "add_draft", session_id: sessionId, text: row.text, content: contentOf(row.text, row.attachments), cmid }
     : { type: "submit", session_id: sessionId, text: row.text, content: contentOf(row.text, row.attachments), cmid };
-  const sent = send(cmd);
-  qStatus.set(cmid, sent ? "pending" : "failed");
+  const attempt = durableDeliveryAttempt(send(cmd));
+  qStatus.set(cmid, attempt.status);
   commitQueue(sessionId);
-  if (sent) armQTimers(sessionId, cmid);
+  if (attempt.armConfirmationTimeout) armQTimers(sessionId, cmid);
 }
 
 /** Discard a (failed) optimistic queue/draft row locally — it never reached the
@@ -2066,7 +2101,7 @@ export function submitPrompt(
   // state.queues already includes optimistic queue rows (merged by commitQueue),
   // so this covers both server + local pending.
   const queueEmpty = (state.queues.get(sessionId)?.length ?? 0) === 0;
-  if (dispatchable && queueEmpty) {
+  if (shouldUseTranscriptDelivery(isConnected(), dispatchable, queueEmpty)) {
     // → dispatch: an optimistic CHAT bubble in the transcript.
     return optimisticMessage(sessionId, trimmed, attachments);
   } else {
@@ -2086,7 +2121,7 @@ export function forcePrompt(sessionId: string, text: string, attachments: Attach
   const dispatchable = sess !== undefined
     && ["running", "exited", "crashed", "interrupted"].includes(sess.status);
   const queueEmpty = (state.queues.get(sessionId)?.length ?? 0) === 0;
-  if (dispatchable && queueEmpty) {
+  if (shouldUseTranscriptDelivery(isConnected(), dispatchable, queueEmpty)) {
     // Idle → nothing to force ahead of; a normal optimistic chat send.
     return optimisticMessage(sessionId, trimmed, attachments);
   } else {
@@ -2108,7 +2143,7 @@ export function frontPrompt(sessionId: string, text: string, attachments: Attach
   const dispatchable = sess !== undefined
     && ["running", "exited", "crashed", "interrupted"].includes(sess.status);
   const queueEmpty = (state.queues.get(sessionId)?.length ?? 0) === 0;
-  if (dispatchable && queueEmpty) {
+  if (shouldUseTranscriptDelivery(isConnected(), dispatchable, queueEmpty)) {
     return optimisticMessage(sessionId, trimmed, attachments);
   } else {
     return qAdd("queue", sessionId, trimmed, attachments, "front");
@@ -2246,7 +2281,8 @@ export function setQueueEditing(sessionId: string, id: string | null): void {
 
 // Park the composer's content as a new draft (the "Draft" button). Shows the
 // draft INSTANTLY (optimistic), then sends. WS open → `pending` (no shimmer yet,
-// see SHIMMER_DELAY_MS); WS down → straight to `failed`. Empty is ignored.
+// see SHIMMER_DELAY_MS); WS down → pending in the durable outbox until reconnect.
+// Empty is ignored.
 export function addDraft(sessionId: string, text: string, attachments: Attachment[]): Promise<void> {
   const trimmed = text.trimEnd();
   if (!trimmed.trim() && attachments.length === 0) return Promise.resolve();

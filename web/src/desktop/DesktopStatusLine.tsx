@@ -91,6 +91,7 @@ function regionHints(
         { keys: "Enter", label: "Open" },
         { keys: "R", label: "Config" },
         { keys: "U", label: "Usage" },
+        { keys: "L", label: "Reload" },
         { keys: "C", label: "Compact" },
         { keys: "X", label: "Clear" },
         ...(status === "busy" ? [{ keys: "S", label: "Stop" }] : []),
@@ -202,7 +203,7 @@ export function DesktopStatusLine({
         document.querySelector("[data-desktop-permission-action='reject']")
       ? [{ keys: "R", label: "Reject" }]
       : []),
-    { keys: "Ctrl+W R", label: "Resize" },
+    { keys: "Ctrl+W+</>", label: "Resize" },
   ];
   const hints = resizingLayout
     ? [

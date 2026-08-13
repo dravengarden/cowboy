@@ -2,13 +2,16 @@ import { assertEquals } from "jsr:@std/assert";
 import {
   isAppleTouchWebView,
   shouldReconnectOnForeground,
+  shouldStartImmediateReconnect,
 } from "./connectionRecovery.ts";
 
-Deno.test("foreground recovery replaces every non-open socket", () => {
+Deno.test("foreground recovery preserves an in-flight replacement", () => {
   assertEquals(shouldReconnectOnForeground(undefined, 0, 30_000), true);
-  assertEquals(shouldReconnectOnForeground(0, 0, 30_000), true);
+  assertEquals(shouldReconnectOnForeground(0, 0, 30_000), false);
   assertEquals(shouldReconnectOnForeground(2, 0, 30_000), true);
   assertEquals(shouldReconnectOnForeground(3, 0, 30_000), true);
+  assertEquals(shouldStartImmediateReconnect(0), false);
+  assertEquals(shouldStartImmediateReconnect(1), true);
 });
 
 Deno.test("foreground recovery preserves a fresh open socket", () => {
@@ -18,6 +21,7 @@ Deno.test("foreground recovery preserves a fresh open socket", () => {
 
 Deno.test("Apple touch foreground recovery replaces even a fresh open socket", () => {
   assertEquals(shouldReconnectOnForeground(1, 0, 30_000, true), true);
+  assertEquals(shouldReconnectOnForeground(0, 0, 30_000, true), false);
 });
 
 Deno.test("Apple touch WebView detection covers iPhone and desktop-UA iPad", () => {

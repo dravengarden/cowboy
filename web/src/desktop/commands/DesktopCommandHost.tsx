@@ -22,6 +22,7 @@ import {
 } from "./workspaceShortcuts";
 import { DESKTOP_INSET_RADIUS } from "../DesktopEmbeddedControl";
 import { DesktopModal } from "../DesktopModal";
+import { desktopImeOwnsKey } from "./imeShortcut";
 
 function DesktopCommandRegistration(
   { command }: { command: DesktopCommand },
@@ -360,6 +361,7 @@ export function DesktopCommandHost({
             value={query}
             onChange={(event): void => setQuery(event.target.value)}
             onKeyDown={(event): void => {
+              if (desktopImeOwnsKey(event.nativeEvent)) return;
               if (event.key === "ArrowDown") {
                 event.preventDefault();
                 setSelected((value) =>

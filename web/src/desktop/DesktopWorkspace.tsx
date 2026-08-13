@@ -64,16 +64,58 @@ function PaneHeader({
       <Typography
         variant="overline"
         color="inherit"
-        sx={{ fontWeight: 700, letterSpacing: "0.09em", lineHeight: 1 }}
+        sx={{
+          fontWeight: 700,
+          letterSpacing: "0.09em",
+          lineHeight: 1,
+          flexShrink: 0,
+        }}
       >
         {children}
       </Typography>
-      <Box sx={{ flex: 1 }} />
-      {actions}
+      {actions
+        ? (
+          <Box
+            data-desktop-pane-action-rail
+            role="toolbar"
+            aria-label={`${pane} pane actions`}
+            sx={{
+              flex: "1 1 auto",
+              minWidth: 0,
+              ml: 1,
+              overflowX: "auto",
+              overflowY: "hidden",
+              overscrollBehaviorX: "contain",
+              WebkitOverflowScrolling: "touch",
+              scrollbarWidth: "thin",
+              "&::-webkit-scrollbar": { height: 4 },
+              "&::-webkit-scrollbar-thumb": {
+                bgcolor: "action.disabled",
+                borderRadius: 99,
+              },
+            }}
+          >
+            <Box
+              data-desktop-pane-action-track
+              sx={{
+                width: "max-content",
+                minWidth: "100%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "flex-end",
+                "& > *": { flexShrink: 0 },
+              }}
+            >
+              {actions}
+            </Box>
+          </Box>
+        )
+        : <Box sx={{ flex: 1 }} />}
       <DesktopRegionShortcut
         shortcut={shortcut.value}
         title={shortcut.title}
         singleKeycap={`${MOD_LABEL}${shortcut.value.slice(-1)}`}
+        sx={{ ml: 0.5 }}
       />
     </Box>
   );
@@ -280,7 +322,7 @@ export function DesktopWorkspace({
               role="separator"
               aria-orientation="vertical"
               aria-label="Resize question directory"
-              title="Resize layout · Ctrl+W R"
+              title="Resize layout · Ctrl+W </>"
               aria-valuemin={READING_QUESTIONS_MIN}
               aria-valuemax={READING_QUESTIONS_MAX}
               aria-valuenow={Math.round(questionsWidth)}
@@ -381,7 +423,7 @@ export function DesktopWorkspace({
         role="separator"
         aria-orientation="vertical"
         aria-label="Resize composer column"
-        title="Resize layout · Ctrl+W R"
+        title="Resize layout · Ctrl+W </>"
         aria-valuemin={COMPOSER_COL_MIN}
         aria-valuemax={COMPOSER_COL_MAX}
         aria-valuenow={Math.round(promptWidth)}

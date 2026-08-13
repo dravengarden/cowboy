@@ -16,6 +16,7 @@ import type { JudgeRun } from "./protocol";
 import { clearJudgeRuns, removeJudgeRun, useJudgeRuns } from "./store";
 import { Sheet } from "./Sheet";
 import { Kbd } from "./Kbd";
+import { isImeKeyEvent } from "./imeKey";
 import { MOD_LABEL } from "./platform";
 
 // The judge-run inspector: long-press the turn-status pill opens this. It lists
@@ -197,7 +198,7 @@ function JudgeInspector({
         event.key !== "Backspace" ||
         (!event.metaKey && !event.ctrlKey) ||
         event.repeat ||
-        event.isComposing
+        isImeKeyEvent(event)
       ) return;
       event.preventDefault();
       event.stopPropagation();

@@ -70,6 +70,36 @@ export function shouldBackfillTranscriptViewport(
   return input.scrollHeight <= input.clientHeight + 1;
 }
 
+export interface VisibleScrollbackBoundaryPrefetchInput {
+  managed: boolean;
+  restoring: boolean;
+  requested: boolean;
+  busy: boolean;
+  reachedStart: boolean;
+  beforeSeq: number | null;
+  viewportTop: number;
+  viewportBottom: number;
+  boundaryTop: number;
+  boundaryBottom: number;
+}
+
+export function shouldPrefetchVisibleScrollbackBoundary(
+  input: VisibleScrollbackBoundaryPrefetchInput,
+): boolean {
+  if (
+    !input.managed || input.restoring || input.requested || input.busy ||
+    input.reachedStart || input.beforeSeq === null
+  ) {
+    return false;
+  }
+  // A rendered loading boundary is a promise that more history is on its way.
+  // Fulfil it once it occupies real reading space, including after a saved
+  // viewport is restored without producing reader-owned scroll events.
+  return input.boundaryBottom > input.viewportTop + 1 &&
+    input.boundaryTop < input.viewportBottom - 1 &&
+    input.boundaryBottom - input.boundaryTop > 1;
+}
+
 export interface HistoryPrefetchInput {
   managed: boolean;
   detached: boolean;

@@ -1,9 +1,12 @@
 # Storage
 
 cowboy is an **event-sourced stateful daemon**: growing event logs, mobile
-pagination, restart recovery. Persistence is **Postgres** (optional — passed via
-`--postgres-url`); with no URL the daemon runs fully in-memory and forgets on
-restart. The deployed service uses the host's service-private Postgres.
+pagination, restart recovery. Persistence is optional and selected by
+`--database-url`: PostgreSQL (`postgresql://...`) and SQLite (`sqlite://...`)
+implement the same stable `Store` API. With no URL the daemon runs fully
+in-memory and forgets on restart. The deployed Hawk service continues to use
+its service-private PostgreSQL database. The legacy `--postgres-url` and
+`COWBOY_POSTGRES_URL` spellings remain accepted for deployment compatibility.
 
 Regenerable Code review data is intentionally separate from durable product
 state. Saved files and lazy directory pages use the bounded Hawk-local
@@ -23,23 +26,28 @@ persistence degraded through `/healthz` and `/api/metrics`.
 flowchart TB
     HUB["Hub.push(Event)"] --> CH["StoreWrite channel<br/>(bounded: 8,192)"]
     CH --> WR["batch + reduce + retry"]
-    WR --> PG[("Postgres")]
+    WR --> STORE{"Store facade"}
+    STORE --> PG[("PostgreSQL")]
+    STORE --> SQ[("SQLite")]
     PG --> RST["load_all() on boot"]
+    SQ --> RST
     RST --> HUB
 
     style HUB fill:#eef2ff,stroke:#6366f1
     style PG fill:#fef9c3,stroke:#ca8a04
+    style SQ fill:#fef9c3,stroke:#ca8a04
     style RST fill:#dcfce7,stroke:#16a34a
 ```
 
 Writes normally land within milliseconds. On SIGTERM the HTTP/WS server closes
 connections and waits up to ten seconds for the writer to drain. A hard crash can
 still lose the latest in-memory batch; synchronous token-path writes would couple
-live fan-out latency to Postgres, so cowboy keeps that window observable and bounded.
+live fan-out latency to storage, so cowboy keeps that window observable and bounded.
 
 ## Schema
 
-Built incrementally by the `migrations/*.sql` files (sqlx applies them on boot):
+PostgreSQL is built incrementally by the immutable `migrations/*.sql` history
+(SQLx applies it on boot):
 
 | Migration | Adds |
 |---|---|
@@ -71,7 +79,17 @@ Native Postgres fits this better than a Timescale hypertable: reads and
 uniqueness are keyed by `(session_id, seq)`, while the actual cost was redundant
 large JSON payloads rather than time-range scans.
 
+SQLite starts from the equivalent current schema in
+`migrations/sqlite/0001_baseline.sql`. Its timestamps are Unix milliseconds and
+JSON is validated TEXT. WAL, foreign keys, a five-second busy timeout, and a
+small connection pool make it suitable for one Cowboy controller. A SQLite file
+must never be shared by multiple controllers or placed on a network filesystem.
+
 ## Store API surface
+
+The rest of Cowboy calls only the backend-neutral `Store`; its private enum
+dispatches to `PostgresStorage` or `SqliteStorage`. `StoreWrite`, the reducer,
+retry behavior, DTOs, pagination, and error contracts do not expose the backend.
 
 `load_all()` returns every session's metadata + hot event tail + total event
 count + queue/drafts/judge runs in one restore. Mutations mirror the `StoreWrite`
@@ -100,13 +118,15 @@ omega is a near-stateless config panel, so file-only fits it. cowboy's
 access pattern — high-rate streaming appends, paginated reads, search, restart
 recovery — is exactly a database's job. A pure-file fallback (`events.jsonl` +
 `meta.json` per session) is possible, but pagination and search would then be
-hand-rolled. Postgres earns its place here.
+hand-rolled. A relational backend earns its place here; PostgreSQL remains the
+production default, while SQLite removes that operational dependency for a
+single-controller deployment.
 
 Provider usage rows are the durable, queryable product ledger for both
 interactive DeepSeek requests and cache-protection attempts. The
 `request_purpose` column keeps those populations disjoint in every aggregate;
 background attempts have their own token, outcome, duration, and cost fields.
-PostgreSQL stores only content-free dimensions and keyed fingerprints. Exact
+Both backends store only content-free dimensions and keyed fingerprints. Exact
 request snapshots remain bounded gateway memory and are lost deliberately on
 gateway restart. VictoriaLogs continues to own high-volume process evidence,
 while the Logs UI derives compact cache-protection audit rows from the durable

@@ -3,6 +3,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
+use anyhow::Context as _;
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser)]
@@ -36,8 +37,12 @@ enum Command {
 
 #[derive(Args)]
 pub struct MachineEnrollArgs {
-    #[arg(long, env = "COWBOY_POSTGRES_URL")]
-    postgres_url: String,
+    #[arg(long, env = "COWBOY_DATABASE_URL")]
+    database_url: Option<String>,
+    /// Legacy PostgreSQL-only spelling. Kept for deployed callers while the
+    /// backend-neutral flag becomes canonical.
+    #[arg(long, env = "COWBOY_POSTGRES_URL", hide = true)]
+    postgres_url: Option<String>,
     #[arg(long, env = "COWBOY_DATA_DIR", default_value = "/var/lib/cowboy")]
     data_dir: PathBuf,
     #[arg(long)]
@@ -50,8 +55,12 @@ pub struct MachineEnrollArgs {
 
 #[derive(Args)]
 pub struct MachineRevokeArgs {
-    #[arg(long, env = "COWBOY_POSTGRES_URL")]
-    postgres_url: String,
+    #[arg(long, env = "COWBOY_DATABASE_URL")]
+    database_url: Option<String>,
+    /// Legacy PostgreSQL-only spelling. Kept for deployed callers while the
+    /// backend-neutral flag becomes canonical.
+    #[arg(long, env = "COWBOY_POSTGRES_URL", hide = true)]
+    postgres_url: Option<String>,
     #[arg(long, env = "COWBOY_DATA_DIR", default_value = "/var/lib/cowboy")]
     data_dir: PathBuf,
     #[arg(long)]
@@ -97,7 +106,7 @@ pub struct ServeArgs {
     pub workspace_root: PathBuf,
 
     /// State/data directory (config + secrets; transcript log persists in
-    /// `--postgres-url` when set).
+    /// `--database-url` when set).
     #[arg(long, env = "COWBOY_DATA_DIR", default_value = "/var/lib/cowboy")]
     pub data_dir: PathBuf,
 
@@ -127,12 +136,13 @@ pub struct ServeArgs {
     #[arg(long, env = "COWBOY_MACHINE_COMPONENTS_MANIFEST")]
     pub machine_components_manifest: Option<PathBuf>,
 
-    /// `PostgreSQL` connection URL for persistent sessions + events. When
-    /// absent the daemon runs in pure in-memory mode (v0 fallback, no
-    /// restart recovery). The hawk-provisioned cowboy-private cluster
-    /// listens on 127.0.0.1:5433 with DB `cowboy` and trust-auth role
-    /// `cowboy`; that's the production URL.
-    #[arg(long, env = "COWBOY_POSTGRES_URL")]
+    /// `PostgreSQL` or `SQLite` URL for durable Cowboy state. When absent the
+    /// daemon runs in pure in-memory mode without restart recovery.
+    #[arg(long, env = "COWBOY_DATABASE_URL")]
+    pub database_url: Option<String>,
+
+    /// Legacy PostgreSQL-only spelling retained for existing deployments.
+    #[arg(long, env = "COWBOY_POSTGRES_URL", hide = true)]
     pub postgres_url: Option<String>,
 
     /// `VictoriaLogs` base URL used by the bounded client observability relay.
@@ -189,11 +199,14 @@ impl Cli {
                     .await
             }
             Command::MachineEnroll(args) => {
-                let store = crate::store::Store::connect(
-                    &args.postgres_url,
-                    args.data_dir.join("artifacts"),
-                )
-                .await?;
+                let database_url = args
+                    .database_url
+                    .as_deref()
+                    .or(args.postgres_url.as_deref())
+                    .context("--database-url is required")?;
+                let store =
+                    crate::store::Store::connect(database_url, args.data_dir.join("artifacts"))
+                        .await?;
                 store.migrate().await?;
                 let token = store
                     .create_machine_enrollment(
@@ -206,14 +219,54 @@ impl Cli {
                 Ok(())
             }
             Command::MachineRevoke(args) => {
-                let store = crate::store::Store::connect(
-                    &args.postgres_url,
-                    args.data_dir.join("artifacts"),
-                )
-                .await?;
+                let database_url = args
+                    .database_url
+                    .as_deref()
+                    .or(args.postgres_url.as_deref())
+                    .context("--database-url is required")?;
+                let store =
+                    crate::store::Store::connect(database_url, args.data_dir.join("artifacts"))
+                        .await?;
                 store.migrate().await?;
                 store.revoke_machine(&args.machine_id).await
             }
         }
+    }
+}
+
+impl ServeArgs {
+    #[must_use]
+    pub fn database_url(&self) -> Option<&str> {
+        self.database_url
+            .as_deref()
+            .or(self.postgres_url.as_deref())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser as _;
+
+    use super::{Cli, Command};
+
+    #[test]
+    fn serve_accepts_backend_neutral_database_url() {
+        let cli =
+            Cli::try_parse_from(["cowboy", "serve", "--database-url", "sqlite::memory:"]).unwrap();
+        let Command::Serve(args) = cli.command else {
+            panic!("expected serve command");
+        };
+        assert_eq!(args.database_url(), Some("sqlite::memory:"));
+    }
+
+    #[test]
+    fn serve_keeps_legacy_postgres_url_compatible() {
+        let cli =
+            Cli::try_parse_from(["cowboy", "serve", "--postgres-url", "postgresql:///cowboy"])
+                .unwrap();
+        let Command::Serve(args) = cli.command else {
+            panic!("expected serve command");
+        };
+        assert_eq!(args.database_url(), Some("postgresql:///cowboy"));
     }
 }

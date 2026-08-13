@@ -20,7 +20,7 @@ for the implementation architecture; [design.md](design.md) records the
 original design direction.
 
 Auth/token pairing remains deliberately out of process (the deployment VPN is
-the boundary). Postgres persistence, restart resume, history pagination, queue /
+the boundary). PostgreSQL/SQLite persistence, restart resume, history pagination, queue /
 draft sync, and the CodeMirror composer are implemented. Code-editor / file-tree
 / git views remain intentionally out of scope — cowboy is the agent panel only.
 
@@ -30,7 +30,7 @@ A Rust HTTP control plane plus a stable local broker and one detached systemd
 worker per session. Workers are the **ACP clients** (via the official
 `agent-client-protocol` crate — no Zed fork). They spawn each agent over
 ACP/stdio, normalize the stream into a provider-agnostic
-event/command model, persists it in Postgres, and fans it out over
+event/command model, persist it through a backend-neutral storage API, and fan it out over
 WebSocket to all connected web clients equally. The web UI (React/MUI/Vite,
 served from an independently switched immutable output) is one responsive app:
 incrementally paged transcript, and a CodeMirror 6 composer with vim support.
@@ -38,12 +38,14 @@ incrementally paged transcript, and a CodeMirror 6 composer with vim support.
 ## Stack
 
 - **Backend**: Rust — axum + tokio (WS/HTTP), `agent-client-protocol` (pinned),
-  sqlx/Postgres, clap, and a versioned local runtime protocol.
+  sqlx/PostgreSQL/SQLite, clap, and a versioned local runtime protocol.
 - **Frontend**: React 19, MUI 7, Vite 7,
   TypeScript (strictest); built by Deno, linted by oxlint.
 - **Providers**: pluggable (trait + registry), all over ACP; Claude Code and
   Codex use maintained ACP adapters, while Gemini uses its native ACP mode.
-- **Storage**: service-private Postgres (sessions, canonical events, settings, secrets).
+- **Storage**: PostgreSQL or SQLite behind one stable API (sessions, canonical
+  events, settings, machines, incidents, and provider usage). Hawk uses its
+  service-private PostgreSQL database.
 - **Deploy**: NixOS systemd units: system `cowboy`, user `cowboy-machine`, and
   transient per-session workers. See
   [zero-interruption rolling updates](docs/architecture/12-rolling-updates.md).
@@ -51,7 +53,7 @@ incrementally paged transcript, and a CodeMirror 6 composer with vim support.
 ## Two subcommands, one source of truth (design §13a)
 
 cowboy is **one** long-running daemon. `cowboy serve` on `:3333` owns the
-`Hub`, supervisor, and Postgres write-behind — that's the source of truth. Every
+`Hub`, supervisor, and database write-behind — that's the source of truth. Every
 other surface is a *client* of it:
 
 | Subcommand | Transport | Run by | When to use |
@@ -75,6 +77,8 @@ sidebar.
 ```sh
 just build               # deno + cargo
 ./target/release/cowboy serve            # the daemon on :3333 (systemd in prod)
+./target/release/cowboy serve \
+  --database-url sqlite:///tmp/cowboy.sqlite3  # durable single-node setup
 
 # Run cowboy's quality gates
 just check               # fmt + clippy + tsc + cargo build

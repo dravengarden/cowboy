@@ -3,6 +3,7 @@ import { App } from "../App";
 import type { Mode as ThemeMode } from "../theme";
 import { DesktopCommandProvider } from "./commands/DesktopCommandProvider";
 import { DesktopWorkspaceProvider } from "./DesktopWorkspaceController";
+import { installDesktopNativeEscapeGuard } from "./desktopNativeEscapeGuard";
 
 export function DesktopApp({
   themeMode,
@@ -16,6 +17,7 @@ export function DesktopApp({
       __cowboyDesktopBootReady?: () => void;
     }).__cowboyDesktopBootReady?.();
   }, []);
+  useEffect(() => installDesktopNativeEscapeGuard(), []);
   return (
     <DesktopWorkspaceProvider>
       <DesktopCommandProvider>

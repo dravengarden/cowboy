@@ -6,6 +6,11 @@ import { alpha, type Theme } from "@mui/material";
  * intentionally owns a separate touch language. */
 export const DESKTOP_SURFACE_RADIUS = 10;
 export const DESKTOP_INSET_RADIUS = 6;
+/** Shared top-bar control geometry. Keep every first-level control on the
+ * same baseline, including the nested session lifecycle cluster. */
+export const DESKTOP_TOPBAR_CONTROL_HEIGHT = 38;
+export const DESKTOP_TOPBAR_CONTROL_GAP = 0.75;
+export const DESKTOP_TOPBAR_CONTROL_GAP_PX = 6;
 
 export function desktopSurfaceSx({
   active = false,
@@ -51,6 +56,30 @@ export function desktopSurfaceSx({
 /** Compact action/state control containing its visible shortcut. */
 export function desktopEmbeddedControlSx(options: Parameters<typeof desktopSurfaceSx>[0] = {}) {
   return desktopSurfaceSx(options);
+}
+
+/** Shared geometry for the compact session-lifecycle cluster in Desktop's top
+ * bar. Keep every action mounted at the same height so state changes only
+ * affect availability, never the toolbar's silhouette. */
+export function desktopSessionActionSx({
+  active = false,
+  open = false,
+  minWidth = 80,
+}: {
+  active?: boolean;
+  open?: boolean;
+  minWidth?: number;
+} = {}) {
+  return {
+    ...desktopEmbeddedControlSx({ active, open }),
+    height: DESKTOP_TOPBAR_CONTROL_HEIGHT,
+    minWidth,
+    px: 0.75,
+    flexShrink: 0,
+    textTransform: "none",
+    whiteSpace: "nowrap",
+    "& .MuiButton-startIcon": { mr: 0.5 },
+  };
 }
 
 /** Repeated Desktop rows are intentionally quieter than standalone controls.

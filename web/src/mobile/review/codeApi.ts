@@ -211,6 +211,25 @@ export class CodeApiError extends Error {
   }
 }
 
+export function isTransientCodeApiStatus(
+  status: number | undefined,
+): boolean {
+  return status === undefined ||
+    status === 304 ||
+    status === 409 ||
+    status === 410 ||
+    status === 502 ||
+    status === 503 ||
+    status === 504;
+}
+
+export function shouldCloseUnavailableSource(
+  kind: "source" | "diff",
+  status: number | undefined,
+): boolean {
+  return kind === "source" && status === 404;
+}
+
 async function codeFetch<T>(
   url: string,
   signal?: AbortSignal,

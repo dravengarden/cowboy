@@ -25,6 +25,13 @@ Deno.test("mobile Page Dock retains disabled previous and next slots", () => {
   );
 });
 
+Deno.test("mobile question pages do not duplicate Page Dock navigation in the transcript", () => {
+  assertEquals(
+    exploreSurfaceSource.includes("pageFooter={current && props.desktop"),
+    true,
+  );
+});
+
 Deno.test("question rows use the shared Cowboy list selection language", () => {
   assertEquals(exploreSurfaceSource.includes("desktopListItemSx()"), true);
   assertEquals(
@@ -134,6 +141,13 @@ Deno.test("context management commands do not create question pages", () => {
 
   assertEquals(pages.map((page) => page.id), ["1", "5"]);
   assertEquals(pages[0]?.itemKeys, ["1", "2", "3", "4"]);
+});
+
+Deno.test("a cleared empty transcript is not a provisional question page", () => {
+  assertEquals(
+    deriveQuestionPages([{ key: "9", kind: "cleared", at: 123 }]),
+    [],
+  );
 });
 
 Deno.test("question title is compact and strips common markdown wrappers", () => {

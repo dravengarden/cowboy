@@ -1329,9 +1329,8 @@ pub enum StoreWrite {
         session_id: String,
         status: Status,
     },
-    /// Persist one session-scoped error that is surfaced outside the lifecycle
-    /// stream (for example, a rejected runtime command or a dispatch failure).
-    /// The transcript remains reserved for conversation facts.
+    /// Persist one session-scoped error independently of the lifecycle stream
+    /// (for example, a rejected command or an ACP failure reported as text).
     RecordSessionError {
         id: String,
         session_id: String,
@@ -1592,7 +1591,7 @@ struct HubInner {
     /// `broadcast` and simply miss events until their next reconnect snapshot.
     tx: broadcast::Sender<Outbound>,
     /// Optional write-behind channel to the DB writer. `None` ⇒ in-memory
-    /// only (no `--postgres-url` configured).
+    /// only (no `--database-url` configured).
     store_tx: Option<StoreSink>,
     /// Hand-off to the background dispatcher task that owns the `Supervisor`.
     /// Set once at startup via [`Hub::set_dispatch_tx`]; `None` until then (and
@@ -3874,29 +3873,37 @@ impl Hub {
         });
     }
 
+    /// Record a session-scoped failure without changing the transcript or
+    /// emitting another client notification. Some ACP agents report failures
+    /// as ordinary message chunks, so their original transcript event remains
+    /// visible while this durable incident feeds the diagnostic log.
+    pub(crate) fn record_session_error(&self, session_id: &str, message: &str) {
+        let occurred_at_ms = now_ms();
+        let suffix = self.inner.next_error_id.fetch_add(1, Ordering::Relaxed);
+        let incident_id = format!("session-error:{session_id}:{occurred_at_ms}:{suffix}");
+        let mut message_end = message.len().min(4 * 1024);
+        while !message.is_char_boundary(message_end) {
+            message_end = message_end.saturating_sub(1);
+        }
+        let persisted_message = message[..message_end].to_owned();
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::RecordSessionError {
+                id: incident_id.clone(),
+                session_id: session_id.to_owned(),
+                occurred_at_ms,
+                message: persisted_message,
+            });
+        }
+        tracing::error!(incident_id, session = %session_id, error = %message, "session error recorded");
+    }
+
     /// Surface a command failure to every connected client so the UI can show
     /// a toast. Replaces the previous behaviour of silently logging to
     /// `tracing::warn` — that left the user staring at an unchanged page
     /// wondering why nothing happened.
     pub fn broadcast_error(&self, session_id: Option<String>, message: String) {
         if let Some(session_id) = session_id.as_ref() {
-            let occurred_at_ms = now_ms();
-            let suffix = self.inner.next_error_id.fetch_add(1, Ordering::Relaxed);
-            let incident_id = format!("session-error:{session_id}:{occurred_at_ms}:{suffix}");
-            let mut message_end = message.len().min(4 * 1024);
-            while !message.is_char_boundary(message_end) {
-                message_end = message_end.saturating_sub(1);
-            }
-            let persisted_message = message[..message_end].to_owned();
-            if let Some(tx) = self.inner.store_tx.as_ref() {
-                let _ = tx.send(StoreWrite::RecordSessionError {
-                    id: incident_id.clone(),
-                    session_id: session_id.clone(),
-                    occurred_at_ms,
-                    message: persisted_message,
-                });
-            }
-            tracing::error!(incident_id, session = %session_id, error = %message, "session error surfaced");
+            self.record_session_error(session_id, &message);
         }
         let _ = self.inner.tx.send(Outbound::Error {
             session_id,

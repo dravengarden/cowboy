@@ -1,4 +1,5 @@
 import { navigationHaptic, prepareNavigationHaptic } from "./haptic";
+import { mobileSpatialDrawerShadow } from "./mobileDrawerDepth";
 import { mobileDrawerProgress, predictDrawerOffset } from "./mobileDrawerMotion";
 import {
   expandedSelection,
@@ -83,9 +84,7 @@ export function bindMobileSpatialDrawer({
     // so its narrow shadow preserves the depth cue without touching the heavy
     // foreground raster. iPad usually has enough GPU headroom to hide the
     // mistake, but keeping both sizes on the cheap path is more predictable.
-    drawerMask.style.boxShadow = `${
-      side === "left" ? "-" : ""
-    }18px 0 42px rgba(0,0,0,0.16)`;
+    drawerMask.style.boxShadow = mobileSpatialDrawerShadow(side);
   };
   const clearOpenDepth = (): void => {
     drawerMask.style.removeProperty("box-shadow");

@@ -13,6 +13,7 @@ import type {
 } from "./ComposerEditor";
 import { type Attachment, clipboardFiles } from "./attachments";
 import { hasDraftMod, hasSendMod } from "./platform";
+import { isImeKeyEvent } from "./imeKey";
 import type { AvailableCommand } from "./protocol";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 import {
@@ -730,6 +731,7 @@ export const ComposerTextarea = forwardRef<
           publishSelection(ta);
         }}
         onKeyDown={(e): void => {
+          if (isImeKeyEvent(e.nativeEvent)) return;
           if (e.key === "Escape" && trigger) {
             e.preventDefault();
             setTrigger(null);

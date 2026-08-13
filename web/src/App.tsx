@@ -11,6 +11,7 @@ import {
     useState,
 } from "react";
 import type { ComponentPropsWithoutRef } from "react";
+import { flushSync } from "react-dom";
 import {
     Alert,
     alpha,
@@ -24,6 +25,7 @@ import {
     DialogContent,
     DialogTitle,
     Divider,
+    GlobalStyles,
     IconButton,
     List,
     ListItemButton,
@@ -38,6 +40,8 @@ import {
     Snackbar,
     Stack,
     Switch,
+    Tab,
+    Tabs,
     TextField,
     Toolbar,
     Tooltip,
@@ -66,6 +70,7 @@ import {
     SystemUpdateAlt,
 } from "@mui/icons-material";
 import { SessionControls } from "./Composer";
+import { SessionReloadDialog } from "./SessionReloadDialog";
 import { MobileComposer } from "./mobile/MobileComposer";
 import { claimKeyboard } from "./keyboardClaim";
 import {
@@ -110,6 +115,7 @@ import {
 import { useSortable } from "./useSortable";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 import { bindMobileSpatialDrawer } from "./mobileSpatialDrawer";
+import { mobileSpatialDrawerShadow } from "./mobileDrawerDepth";
 import { sessionDrawerTargetScroll } from "./mobileDrawerMotion";
 import { setNotifySetting, setVibrateSetting, useNotifySetting, useVibrateSetting } from "./turnNotify";
 import {
@@ -170,6 +176,7 @@ import { ResourceLightbox } from "./ResourceLightbox";
 import { JudgeInspectorHost } from "./JudgeInspector";
 import { desktopFocusBoundary, desktopFocusFill, type Mode as ThemeMode } from "./theme";
 import { persisted } from "./_store/mod.ts";
+import { desktopImeOwnsKey } from "./desktop/commands/imeShortcut";
 import { workspaceCommandKey } from "./desktop/commands/workspaceCommandKey";
 import { sequentialShortcutAvailability } from "./desktop/commands/shortcutAvailability";
 import {
@@ -187,6 +194,17 @@ import { defaultNewSessionWorkspace } from "./newSessionWorkspace";
 import { resolveActiveSession } from "./sessionSelection";
 import { DesktopShortcutBar } from "./desktop/DesktopShortcutBar";
 import { DesktopModal as DesktopModalShell } from "./desktop/DesktopModal";
+import {
+    adjacentControlCenterTab,
+    controlCenterTabForShortcut,
+    CONTROL_CENTER_TABS,
+    type ControlCenterTab,
+} from "./desktop/controlCenterTabs";
+import {
+    CONTROL_CENTER_PANEL_EXIT_MS,
+    controlCenterViewTransitionStyles,
+    controlCenterPanelMotionSx,
+} from "./desktop/controlCenterMotion";
 import { useOptionalDesktopWorkspace } from "./desktop/DesktopWorkspaceController";
 import {
     DESKTOP_SPLITTER_ADJUST_EVENT,
@@ -436,6 +454,7 @@ const ReliableListItemButton = forwardRef<
     {
         onActivate,
         sx,
+        onPointerDownCapture,
         onPointerDown,
         onPointerEnter,
         onKeyDown,
@@ -447,12 +466,18 @@ const ReliableListItemButton = forwardRef<
     return (
         <ListItemButton
             {...props}
-            onPointerDown={(event): void => {
+            onPointerDownCapture={(event): void => {
+                // A grip touch stops propagation before the row's bubble
+                // handler. Mark touch in capture so iOS cannot leave the
+                // ancestor ListItemButton's synthetic :hover latched.
                 if (event.pointerType === "touch") {
                     event.currentTarget.dataset.touchActivated = "true";
                 } else if (event.pointerType === "mouse") {
                     delete event.currentTarget.dataset.touchActivated;
                 }
+                onPointerDownCapture?.(event);
+            }}
+            onPointerDown={(event): void => {
                 onPointerDown?.(event);
                 tap.onPointerDown(event);
             }}
@@ -505,6 +530,7 @@ function SessionList({
     onClose,
     onRequestDelete,
     onRequestInfo,
+    onRequestReload,
     onRequestRename,
     autoResumeDefault,
     loaded,
@@ -520,6 +546,7 @@ function SessionList({
     onClose?: (() => void) | undefined;
     onRequestDelete: (s: SessionMeta) => void;
     onRequestInfo: (s: SessionMeta) => void;
+    onRequestReload: (s: SessionMeta) => void;
     onRequestRename: (s: SessionMeta) => void;
     autoResumeDefault: boolean;
     // True once the first session list has arrived over the WS. Until then the
@@ -662,8 +689,9 @@ function SessionList({
     }, [desktop, menuAnchor?.row.id]);
     const onDesktopListKeyDown = (event: React.KeyboardEvent<HTMLUListElement>): void => {
         if (
-            !desktop || event.metaKey || event.ctrlKey || event.altKey ||
-            event.shiftKey || event.repeat
+            !desktop || desktopImeOwnsKey(event.nativeEvent) ||
+            event.metaKey || event.ctrlKey || event.altKey || event.shiftKey ||
+            event.repeat
         ) return;
         const key = workspaceCommandKey(event.nativeEvent);
         const rows = [...(listRef.current?.querySelectorAll<HTMLElement>(
@@ -1132,20 +1160,11 @@ function SessionList({
                         title="Session"
                         description={`${menuAnchor?.row.title ?? ""} · ${menuAnchor?.row.cwd ?? ""}`}
                         width={920}
-                        shortcutGroups={[
-                            {
-                                label: "Navigate",
-                                slots: [
-                                    { shortcut: "J/K", label: "Move" },
-                                    { shortcut: "Enter", label: "Select" },
-                                ],
-                            },
-                            { slots: [{ shortcut: "Esc", label: "Close" }] },
-                        ]}
-                    >
-                        <Box
-                            onKeyDown={(event): void => {
-                            if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+                        onShortcutKeyDown={(event): void => {
+                            if (
+                                desktopImeOwnsKey(event.nativeEvent) ||
+                                event.metaKey || event.ctrlKey || event.altKey || event.shiftKey
+                            ) return;
                             const key = workspaceCommandKey(event.nativeEvent).toLowerCase();
                             const directAction = event.currentTarget.querySelector<HTMLButtonElement>(
                                 `[data-session-shortcut="${key}"]`,
@@ -1168,7 +1187,19 @@ function SessionList({
                                 ? 0
                                 : Math.max(0, Math.min(items.length - 1, current + (key === "j" ? 1 : -1)));
                             items[next]?.focus();
-                            }}
+                        }}
+                        shortcutGroups={[
+                            {
+                                label: "Navigate",
+                                slots: [
+                                    { shortcut: "J/K", label: "Move" },
+                                    { shortcut: "Enter", label: "Select" },
+                                ],
+                            },
+                            { slots: [{ shortcut: "Esc", label: "Close" }] },
+                        ]}
+                    >
+                        <Box
                             sx={{ p: 2 }}
                         >
                             <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1.2fr) minmax(280px, 0.8fr)", gap: 2.5 }}>
@@ -1181,6 +1212,10 @@ function SessionList({
                             <Button data-session-shortcut="r" autoFocus fullWidth startIcon={<DriveFileRenameOutline />} onClick={(): void => { if (menuAnchor) onRequestRename(menuAnchor.row); setMenuAnchor(null); }} sx={{ justifyContent: "flex-start" }}>
                                 <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Rename</Box>
                                 <Kbd keys="R" />
+                            </Button>
+                            <Button data-session-shortcut="l" fullWidth startIcon={<RefreshIcon />} onClick={(): void => { if (menuAnchor) onRequestReload(menuAnchor.row); setMenuAnchor(null); }} sx={{ justifyContent: "flex-start" }}>
+                                <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Reload</Box>
+                                <Kbd keys="L" />
                             </Button>
                             <Divider sx={{ my: 0.5 }} />
                             <Typography variant="overline" color="text.secondary" sx={{ px: 1 }}>View mode</Typography>
@@ -1708,6 +1743,19 @@ const StoreTranscript = memo(function StoreTranscript({
 
 type SettingsTab = "settings" | "info";
 
+type ControlCenterViewTransition = {
+    finished: Promise<void>;
+    ready: Promise<void>;
+    skipTransition: () => void;
+    updateCallbackDone: Promise<void>;
+};
+
+type ControlCenterViewTransitionDocument = Document & {
+    startViewTransition?: (
+        update: () => void,
+    ) => ControlCenterViewTransition;
+};
+
 type SettingsControllerHandle = {
     open: (tab: SettingsTab) => void;
 };
@@ -2000,6 +2048,9 @@ export function App({
     );
     // Per-session info dialog target (kebab → Info).
     const [pendingInfo, setPendingInfo] = useState<SessionMeta | null>(null);
+    // Runtime reload is deliberately separate from Clear: it keeps the same
+    // native thread and all Cowboy-owned history/config/pending state.
+    const [pendingReload, setPendingReload] = useState<SessionMeta | null>(null);
     // The POST response can beat the independent WS `sessions` broadcast. Keep
     // the created session visible and selected during that gap; once the
     // authoritative row arrives, the projection naturally stops being used.
@@ -2175,6 +2226,7 @@ export function App({
                 : undefined}
             onRequestDelete={(s): void => setPendingDelete(s)}
             onRequestInfo={(s): void => setPendingInfo(s)}
+            onRequestReload={(s): void => setPendingReload(s)}
             onRequestRename={(s): void => {
                 claimKeyboard(); // raise the keyboard in-gesture (iOS)
                 setPendingRename(s);
@@ -2376,6 +2428,7 @@ export function App({
             )}
             <Box
                 ref={mobileShellRef}
+                data-mobile-drawer-presented={mobile && drawerOpen ? "true" : undefined}
                 sx={{
                     display: "flex",
                     flex: 1,
@@ -2443,8 +2496,16 @@ export function App({
                         zIndex: 0,
                         inset: 0,
                         bgcolor: "background.default",
+                        // React owns the settled depth cue. The gesture binding
+                        // may add the same inline shadow while opening, but its
+                        // cleanup must never make an already-open drawer look
+                        // closed or release the outer product pager.
+                        boxShadow: drawerOpen
+                            ? mobileSpatialDrawerShadow("left")
+                            : "none",
                         pointerEvents: "none",
                         backfaceVisibility: "hidden",
+                        willChange: "transform",
                     }}
                 />
             )}
@@ -2505,7 +2566,7 @@ export function App({
                         role="separator"
                         aria-orientation="vertical"
                         aria-label="Resize sidebar"
-                        title="Resize layout · Ctrl+W R"
+                        title="Resize layout · Ctrl+W </>"
                         aria-valuemin={SIDEBAR_MIN}
                         aria-valuemax={SIDEBAR_MAX}
                         aria-valuenow={Math.round(sidebarWidth)}
@@ -2626,7 +2687,10 @@ export function App({
                             if (drawerOpen) settleMobileDrawerRef.current?.(false);
                         }}
                         onKeyDown={(event): void => {
-                            if (event.key === "Enter" || event.key === " ") {
+                            if (
+                                !isImeKeyEvent(event.nativeEvent) &&
+                                (event.key === "Enter" || event.key === " ")
+                            ) {
                                 event.preventDefault();
                                 settleMobileDrawerRef.current?.(false);
                             }
@@ -3379,6 +3443,10 @@ export function App({
                 }}
             />
             <SessionInfoShell session={pendingInfo} onClose={(): void => setPendingInfo(null)} />
+            <SessionReloadDialog
+                session={pendingReload}
+                onClose={(): void => setPendingReload(null)}
+            />
             <ResourceLightbox />
             <JudgeInspectorHost forceSheet={navbarAtBottom} />
             <SettingsController
@@ -3527,62 +3595,31 @@ function DesktopSettingsRow({
     );
 }
 
-// Desktop modal primitive: a dense, keyboard-addressable block with one visual
-// boundary, an optional mnemonic, and a stable landmark for jump navigation.
-// Desktop settings, information, and logs deliberately share this shape so a
-// modal reads as one workbench rather than a collection of unrelated sheets.
+// Dense visual grouping used inside the Settings tab. Runtime information,
+// Machines, and Logs own separate top-level tabs rather than nesting here.
 function DesktopModalBlock({
     label,
-    title,
-    shortcut,
-    shortcutAvailable = true,
-    section,
     children,
     sx,
 }: {
     label: string;
-    title?: string;
-    shortcut?: string;
-    shortcutAvailable?: boolean;
-    section?: "machines" | "info" | "logs";
     children: React.ReactNode;
     sx?: SxProps<Theme>;
 }): React.JSX.Element {
-    const focusable = section !== undefined;
     return (
         <Box
-            {...(section === "machines" ? { "data-settings-machines": true } : {})}
-            {...(section === "info" ? { "data-settings-info": true } : {})}
-            {...(section === "logs" ? { "data-settings-logs": true } : {})}
-            tabIndex={focusable ? 0 : undefined}
-            role={focusable ? "region" : undefined}
-            aria-label={focusable ? `${label} ${title ?? ""}`.trim() : undefined}
             sx={[
                 {
                     border: 1,
                     borderColor: "divider",
                     borderRadius: 2,
-                    p: section ? 2 : 1,
-                    scrollMarginTop: 76,
-                    "&:focus-visible": {
-                        outline: (theme) => `2px solid ${desktopFocusBoundary(theme)}`,
-                        outlineOffset: 2,
-                    },
+                    p: 1,
                 },
                 ...(Array.isArray(sx) ? sx : sx ? [sx] : []),
             ]}
         >
-            <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px: section ? 0 : 1.5, mb: title ? 1 : 0 }}>
-                <Box>
-                    <Typography variant="overline" color="text.secondary">{label}</Typography>
-                    {title && <Typography variant="body2" fontWeight={750}>{title}</Typography>}
-                </Box>
-                {shortcut && (
-                    <Kbd
-                        keys={shortcut}
-                        availability={shortcutAvailable ? "available" : "inactive"}
-                    />
-                )}
+            <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px: 1.5 }}>
+                <Typography variant="overline" color="text.secondary">{label}</Typography>
             </Stack>
             {children}
         </Box>
@@ -4514,7 +4551,10 @@ function MachinesContent(): React.JSX.Element {
                                                                                     [loginChallenge.request_id]: event.target.value,
                                                                                 }))}
                                                                                 onKeyDown={(event) => {
-                                                                                    if (event.key === "Enter") submitLoginCode(machine.id, loginChallenge.request_id);
+                                                                                    if (
+                                                                                        event.key === "Enter" &&
+                                                                                        !isImeKeyEvent(event.nativeEvent)
+                                                                                    ) submitLoginCode(machine.id, loginChallenge.request_id);
                                                                                 }}
                                                                             />
                                                                             <Button
@@ -4652,34 +4692,80 @@ function SettingsShell({
     themeMode: ThemeMode;
     onSetThemeMode: (m: ThemeMode) => void;
 }): React.JSX.Element {
-    // Merged sheet: a Settings / Info segmented switch in the header. Each open
-    // lands on the tab whose button was tapped (gear → settings, ℹ️ → info).
-    const [tab, setTab] = useState<"settings" | "machines" | "info" | "logs">(initialTab);
-    const [tabContentReady, setTabContentReady] = useState(true);
-    const changeTab = useCallback((next: "settings" | "machines" | "info" | "logs"): void => {
+    // One tab model is shared by the touch segmented control and Desktop's
+    // semantic tablist. Each entry remains independently addressable by key.
+    const [tab, setTab] = useState<ControlCenterTab>(initialTab);
+    const [renderedTab, setRenderedTab] = useState<ControlCenterTab>(initialTab);
+    const [tabPanelVisible, setTabPanelVisible] = useState(true);
+    // Vim and animated workbench tabs are desktop-only: both require a fine
+    // pointer/physical-keyboard surface rather than the touch sheet.
+    const desktop = useMediaQuery("(pointer: fine) and (hover: hover)");
+    const settingsPanelRef = useRef<HTMLDivElement>(null);
+    const viewTransitionRef = useRef<ControlCenterViewTransition | null>(null);
+    const changeTab = useCallback((next: ControlCenterTab): void => {
         if (next === tab) return;
-        // Remove the old panel synchronously, then mount the selected heavy
-        // panel after two frames. The segmented control remains responsive
-        // while Machines/Info/Logs construct their large DOM trees.
-        setTabContentReady(false);
-        setTab(next);
-    }, [tab]);
-    useEffect(() => {
-        if (open) setTab(initialTab);
-    }, [open, initialTab]);
-    useEffect(() => {
-        if (!open || tabContentReady) return undefined;
-        let secondFrame = 0;
-        const firstFrame = globalThis.requestAnimationFrame(() => {
-            secondFrame = globalThis.requestAnimationFrame(() => setTabContentReady(true));
-        });
-        return () => {
-            globalThis.cancelAnimationFrame(firstFrame);
-            if (secondFrame !== 0) {
-                globalThis.cancelAnimationFrame(secondFrame);
+        const reducedMotion = globalThis.matchMedia(
+            "(prefers-reduced-motion: reduce)",
+        ).matches;
+        const transitionDocument = globalThis.document as
+            ControlCenterViewTransitionDocument;
+        const startViewTransition = transitionDocument.startViewTransition;
+        if (desktop && !reducedMotion && startViewTransition !== undefined) {
+            viewTransitionRef.current?.skipTransition();
+            // The active indicator can move immediately. The browser captures
+            // the old panel before React mounts the next heavy tree, keeping
+            // useful content visible throughout that synchronous render.
+            flushSync(() => {
+                setTabPanelVisible(true);
+                setTab(next);
+            });
+            try {
+                const transition = startViewTransition.call(
+                    transitionDocument,
+                    () => {
+                        flushSync(() => {
+                            settingsPanelRef.current?.scrollTo({
+                                top: 0,
+                                behavior: "auto",
+                            });
+                            setRenderedTab(next);
+                        });
+                    },
+                );
+                viewTransitionRef.current = transition;
+                // `skipTransition()` intentionally rejects `ready` when a
+                // second tab wins the race. Consume every native lifecycle
+                // promise so rapid navigation remains console-clean.
+                void transition.ready.catch(() => undefined);
+                void transition.updateCallbackDone.catch(() => undefined);
+                void transition.finished
+                    .catch(() => undefined)
+                    .finally(() => {
+                        if (viewTransitionRef.current === transition) {
+                            viewTransitionRef.current = null;
+                        }
+                    });
+                return;
+            } catch {
+                // Fall through to the persistent-panel CSS transition when a
+                // browser advertises the API but cannot start this transition.
             }
-        };
-    }, [open, tabContentReady]);
+        }
+        // Compatibility path: move the indicator immediately, then let the old
+        // content exit before the selected panel mounts.
+        setTabPanelVisible(false);
+        setTab(next);
+    }, [desktop, tab]);
+    useEffect(() => {
+        if (!open) {
+            viewTransitionRef.current?.skipTransition();
+            viewTransitionRef.current = null;
+            return;
+        }
+        setTab(initialTab);
+        setRenderedTab(initialTab);
+        setTabPanelVisible(true);
+    }, [open, initialTab]);
     const vim = useVimSetting();
     const notify = useNotifySetting();
     const vibrate = useVibrateSetting();
@@ -4713,10 +4799,45 @@ function SettingsShell({
     const useSheetSurface = useMediaQuery(
         "(max-width: 767.95px), (min-width: 768px) and (max-width: 1023.95px) and (pointer: coarse)",
     );
-    // Vim is desktop-only (ComposerEditor won't load it on touch), so the
-    // toggle only appears where a physical keyboard exists.
-    const desktop = useMediaQuery("(pointer: fine) and (hover: hover)");
-    const settingsPanelRef = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        if (!open || tabPanelVisible) return undefined;
+        const reducedMotion = globalThis.matchMedia(
+            "(prefers-reduced-motion: reduce)",
+        ).matches;
+        let firstFrame = 0;
+        let secondFrame = 0;
+        let swapTimer: number | null = null;
+        const mountSelectedPanel = (): void => {
+            settingsPanelRef.current?.scrollTo({ top: 0, behavior: "auto" });
+            setRenderedTab(tab);
+            firstFrame = globalThis.requestAnimationFrame(() => {
+                secondFrame = globalThis.requestAnimationFrame(() => {
+                    setTabPanelVisible(true);
+                });
+            });
+        };
+        if (desktop && !reducedMotion) {
+            swapTimer = globalThis.setTimeout(
+                mountSelectedPanel,
+                CONTROL_CENTER_PANEL_EXIT_MS,
+            );
+        } else {
+            // Touch and reduced-motion surfaces keep the existing two-frame
+            // deferral, but do not wait for or render an animation.
+            firstFrame = globalThis.requestAnimationFrame(() => {
+                secondFrame = globalThis.requestAnimationFrame(() => {
+                    settingsPanelRef.current?.scrollTo({ top: 0, behavior: "auto" });
+                    setRenderedTab(tab);
+                    setTabPanelVisible(true);
+                });
+            });
+        }
+        return () => {
+            if (swapTimer !== null) globalThis.clearTimeout(swapTimer);
+            if (firstFrame !== 0) globalThis.cancelAnimationFrame(firstFrame);
+            if (secondFrame !== 0) globalThis.cancelAnimationFrame(secondFrame);
+        };
+    }, [desktop, open, tab, tabPanelVisible]);
     const [settingsGoPrefix, setSettingsGoPrefix] = useState(false);
     const [settingsEditableFocus, setSettingsEditableFocus] = useState(false);
     useEffect(() => {
@@ -4740,7 +4861,7 @@ function SettingsShell({
             )?.focus();
         });
         const onKeyDown = (event: KeyboardEvent): void => {
-            if (isImeKeyEvent(event)) return;
+            if (desktopImeOwnsKey(event)) return;
             const target = event.target;
             if (isSettingsEditableTarget(target)) {
                 if (event.key === "Escape") {
@@ -4748,7 +4869,7 @@ function SettingsShell({
                     event.stopPropagation();
                     target.blur();
                     const returnTarget = target.closest<HTMLElement>(
-                        "[data-settings-row], [data-settings-machines], [data-settings-info], [data-settings-logs]",
+                        "[data-settings-row]",
                     );
                     requestAnimationFrame(() =>
                         (returnTarget ?? settingsPanelRef.current)?.focus({ preventScroll: true }));
@@ -4756,11 +4877,12 @@ function SettingsShell({
                 return;
             }
             const key = workspaceCommandKey(event).toLowerCase();
-            const tabs = ["settings", "machines", "info", "logs"] as const;
             const panel = settingsPanelRef.current;
-            if (!panel) return;
-            const scrollSurface = closestScrollableSettingsSurface(panel);
+            const scrollSurface = panel === null
+                ? null
+                : closestScrollableSettingsSurface(panel);
             if (event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && ["d", "u", "f", "b"].includes(key)) {
+                if (!scrollSurface) return;
                 event.preventDefault();
                 event.stopPropagation();
                 setGoPending(false);
@@ -4783,10 +4905,11 @@ function SettingsShell({
                 event.stopPropagation();
                 const goTop = !event.shiftKey && key === "g";
                 setGoPending(false);
-                if (goTop) scrollSurface.scrollTo({ top: 0, behavior: "auto" });
+                if (goTop) scrollSurface?.scrollTo({ top: 0, behavior: "auto" });
                 return;
             }
             if (event.shiftKey && key === "g") {
+                if (!scrollSurface) return;
                 event.preventDefault();
                 event.stopPropagation();
                 setGoPending(false);
@@ -4794,32 +4917,30 @@ function SettingsShell({
                 return;
             }
             if (!event.shiftKey && key === "g") {
+                if (!scrollSurface) return;
                 event.preventDefault();
                 event.stopPropagation();
                 setGoPending(true);
                 return;
             }
-            if (!desktop && (key === "[" || key === "]")) {
+            const directTab = !event.shiftKey
+                ? controlCenterTabForShortcut(key)
+                : null;
+            if (directTab) {
                 event.preventDefault();
-                const index = tabs.indexOf(tab);
-                changeTab(tabs[(index + (key === "]" ? 1 : tabs.length - 1)) % tabs.length] ?? "settings");
+                event.stopPropagation();
+                setGoPending(false);
+                changeTab(directTab);
                 return;
             }
-            if (desktop && ["n", "i", "o"].includes(key)) {
-                const section = panel.querySelector<HTMLElement>(
-                    key === "n"
-                        ? "[data-settings-machines]"
-                        : key === "i"
-                        ? "[data-settings-info]"
-                        : "[data-settings-logs]",
-                );
-                if (section) {
-                    event.preventDefault();
-                    section.scrollIntoView({ block: "start", behavior: "auto" });
-                    section.focus({ preventScroll: true });
-                }
+            if (!event.shiftKey && (key === "[" || key === "]")) {
+                event.preventDefault();
+                event.stopPropagation();
+                setGoPending(false);
+                changeTab(adjacentControlCenterTab(tab, key === "]" ? 1 : -1));
                 return;
             }
+            if (!panel) return;
             if (!desktop && tab !== "settings") return;
             const rows = [...panel.querySelectorAll<HTMLElement>("[data-settings-row]")];
             const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -4889,8 +5010,9 @@ function SettingsShell({
             cover
             desktopMaxWidth={1440}
         >
-            {/* Mobile keeps progressive-disclosure tabs. Desktop is one visible
-                keyboard workbench, so no information is hidden behind a tab. */}
+            <GlobalStyles styles={controlCenterViewTransitionStyles} />
+            {/* Touch keeps its compact segmented control. Desktop uses native
+                tabs so the active section is visible, focusable, and keyable. */}
             <Box
                 sx={{
                     position: desktop ? "sticky" : "static",
@@ -4951,12 +5073,55 @@ function SettingsShell({
                     </Box>
                 </Box>}
             </Box>
+            {desktop && (
+                <Tabs
+                    value={tab}
+                    onChange={(_event, next): void => changeTab(next as ControlCenterTab)}
+                    selectionFollowsFocus
+                    variant="fullWidth"
+                    aria-label="Control center sections"
+                    sx={{
+                        minHeight: 42,
+                        borderBottom: 1,
+                        borderColor: "divider",
+                        "& .MuiTab-root": {
+                            minHeight: 42,
+                            minWidth: 0,
+                            py: 0.5,
+                            textTransform: "none",
+                        },
+                    }}
+                >
+                    {CONTROL_CENTER_TABS.map(({ value, label, shortcut }) => (
+                        <Tab
+                            key={value}
+                            value={value}
+                            id={`control-center-tab-${value}`}
+                            aria-controls={`control-center-panel-${value}`}
+                            aria-keyshortcuts={shortcut}
+                            label={
+                                <Stack component="span" direction="row" spacing={0.75} alignItems="center">
+                                    <Box component="span">{label}</Box>
+                                    <Kbd
+                                        keys={shortcut}
+                                        availability={settingsShortcutsAvailable ? "available" : "inactive"}
+                                    />
+                                </Stack>
+                            }
+                        />
+                    ))}
+                </Tabs>
+            )}
             </Box>
-            {tabContentReady && (
-            desktop ? (
+            {desktop ? (
                 <Box
                     ref={settingsPanelRef}
                     data-desktop-settings-workbench
+                    data-control-center-tab={tab}
+                    role="tabpanel"
+                    id={`control-center-panel-${tab}`}
+                    aria-labelledby={`control-center-tab-${tab}`}
+                    aria-busy={!tabPanelVisible}
                     tabIndex={-1}
                     onFocusCapture={(event): void => {
                         setSettingsEditableFocus(isSettingsEditableTarget(event.target));
@@ -4974,53 +5139,27 @@ function SettingsShell({
                         flex: 1,
                         minHeight: 0,
                         overflowY: "auto",
-                        display: "grid",
-                        gridTemplateColumns: "minmax(0, 1fr)",
-                        gap: 2,
-                        alignItems: "start",
+                        pt: 1.5,
                         pr: 0.75,
                         pb: 2,
-                        "@media (max-width: 1279px)": { gridTemplateColumns: "1fr" },
                     }}
                 >
-                    <DesktopSettingsContent
-                        themeMode={themeMode}
-                        onSetThemeMode={onSetThemeMode}
-                        shortcutsAvailable={settingsShortcutsAvailable}
-                    />
-                    <DesktopModalBlock
-                        label="Remote runtimes & credentials"
-                        title="Machines"
-                        shortcut="N"
-                        shortcutAvailable={settingsShortcutsAvailable}
-                        section="machines"
+                    <Box
+                        key={renderedTab}
+                        data-control-center-panel-content
+                        data-control-center-rendered-tab={renderedTab}
+                        sx={controlCenterPanelMotionSx(tabPanelVisible)}
                     >
-                        <MachinesContent />
-                    </DesktopModalBlock>
-                    <DesktopModalBlock
-                        label="Runtime, usage & audit"
-                        title="Info"
-                        shortcut="I"
-                        shortcutAvailable={settingsShortcutsAvailable}
-                        section="info"
-                    >
-                        <InfoContent
-                            desktop
-                            aside={
-                                <DesktopModalBlock
-                                    label="Audit trail"
-                                    title="Logs"
-                                    shortcut="O"
-                                    shortcutAvailable={settingsShortcutsAvailable}
-                                    section="logs"
-                                >
-                                    <UsageLogs dense />
-                                </DesktopModalBlock>
-                            }
-                        />
-                    </DesktopModalBlock>
+                        {renderedTab === "settings" ? <DesktopSettingsContent
+                            themeMode={themeMode}
+                            onSetThemeMode={onSetThemeMode}
+                            shortcutsAvailable={settingsShortcutsAvailable}
+                        /> : renderedTab === "machines" ? <MachinesContent /> : renderedTab === "info" ? (
+                            <InfoContent desktop />
+                        ) : <UsageLogs />}
+                    </Box>
                 </Box>
-            ) : tab === "machines" ? <MachinesContent /> : tab === "info" ? <InfoContent /> : tab === "logs" ? <UsageLogs /> : (
+            ) : !tabPanelVisible ? null : renderedTab === "machines" ? <MachinesContent /> : renderedTab === "info" ? <InfoContent /> : renderedTab === "logs" ? <UsageLogs /> : (
             <Stack spacing={3}>
                 <ThemeModeControl value={themeMode} onChange={onSetThemeMode} />
 
@@ -5297,17 +5436,21 @@ function SettingsShell({
                 {/* Daemon system info (Storage metrics + About) lives in the Info
                     tab — Settings holds user preferences only. */}
             </Stack>
-            ))}
+            )}
             {desktop && (
                 <Box sx={{ flex: "0 0 auto", mx: -3 }}>
                     <DesktopShortcutBar
                             groups={[
                                 {
                                     label: "Navigate",
-                                    slots: [
+                                    slots: tab === "settings" ? [
                                         { shortcut: "J/K", label: "Field", availability: settingsShortcutsAvailable ? "available" : "inactive" },
                                         { shortcut: "H/L", label: "Choice", availability: settingsShortcutsAvailable ? "available" : "inactive" },
                                         { shortcut: ENTER_LABEL, label: "Apply", availability: settingsShortcutsAvailable ? "available" : "inactive" },
+                                    ] : [
+                                        { shortcut: "H/K", label: "Previous", availability: settingsShortcutsAvailable ? "available" : "inactive" },
+                                        { shortcut: "J/L", label: "Next", availability: settingsShortcutsAvailable ? "available" : "inactive" },
+                                        { shortcut: ENTER_LABEL, label: "Activate", availability: settingsShortcutsAvailable ? "available" : "inactive" },
                                     ],
                                 },
                                 {
@@ -5347,15 +5490,18 @@ function SettingsShell({
                                         ] as const).map(([shortcut, title]) => ({
                                             shortcut,
                                             title,
-                                            availability: settingsShortcutsAvailable ? "available" as const : "inactive" as const,
+                                            availability: settingsShortcutsAvailable && tab === "settings" ? "available" as const : "inactive" as const,
                                         })),
                                 },
                                 {
-                                    label: "Sections",
+                                    label: "Tabs",
                                     slots: [
-                                        { shortcut: "N", label: "Machines", availability: settingsShortcutsAvailable ? "available" : "inactive" },
-                                        { shortcut: "I", label: "Info", availability: settingsShortcutsAvailable ? "available" : "inactive" },
-                                        { shortcut: "O", label: "Logs", availability: settingsShortcutsAvailable ? "available" : "inactive" },
+                                        ...CONTROL_CENTER_TABS.map(({ shortcut, label }) => ({
+                                            shortcut,
+                                            label,
+                                            availability: settingsShortcutsAvailable ? "available" as const : "inactive" as const,
+                                        })),
+                                        { shortcut: "[/]", label: "Cycle", availability: settingsShortcutsAvailable ? "available" : "inactive" },
                                         {
                                             shortcut: "Esc",
                                             label: settingsGoPrefix

@@ -123,17 +123,17 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // requeue against the writer closing its receiver.
     let (store_shutdown_tx, store_shutdown_rx) = watch::channel(false);
     let runtime_health = Arc::new(RuntimeHealth::default());
-    // Phase 2: when --postgres-url is supplied, hook in the persistent store.
+    // Phase 2: when --database-url is supplied, hook in the persistent store.
     // Migrations run on every start (sqlx tracks applied versions, so it's
     // idempotent); the in-memory Hub is then warmed from the DB before WS
-    // clients can connect. Without --postgres-url the daemon falls back to
+    // clients can connect. Without a database URL the daemon falls back to
     // pure in-memory mode — same behaviour as before, useful for dev or for
-    // running on a host that doesn't have the cowboy-private postgres yet.
+    // running on a host without durable storage configured.
     let (hub, store, persistence_health, writer_task, purge_task, session_id_floor) =
-        if let Some(url) = args.postgres_url.as_deref() {
+        if let Some(url) = args.database_url() {
             let store = Store::connect(url, args.data_dir.join("artifacts"))
                 .await
-                .context("connecting postgres")?;
+                .context("connecting database")?;
             store.migrate().await.context("running migrations")?;
             let session_id_floor = store
                 .next_session_number()
@@ -176,11 +176,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             // one bounded reconnect window to prove ownership; only then may a
             // missing worker become Interrupted.
             hub.restore_reconciling_runtime(restored);
-            tracing::info!(
-                postgres = url,
-                restored = restored_count,
-                "persistence wired",
-            );
+            tracing::info!(restored = restored_count, "persistence wired",);
             // Background DB writer: dequeues StoreWrite intents and applies them.
             // Errors are logged but don't bring the daemon down — the in-memory
             // state remains authoritative for the current process.
@@ -213,7 +209,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 session_id_floor,
             )
         } else {
-            tracing::info!("no --postgres-url: running in-memory only");
+            tracing::info!("no --database-url: running in-memory only");
             (Hub::new(), None, None, None, None, 1)
         };
     let usage = UsageService::new(args.codex_command.clone(), store.clone());
@@ -817,6 +813,8 @@ fn classify_crash_detail(detail: Option<&str>) -> &'static str {
     {
         "protocol_failure"
     } else if detail.contains("connection")
+        || detail.contains("disconnected")
+        || detail.contains("network error")
         || detail.contains("socket")
         || detail.contains("timed out")
     {
@@ -921,6 +919,12 @@ mod incident_classification_tests {
             "transport_failure"
         );
         assert_eq!(
+            classify_session_error(
+                "Error running remote compact task: stream disconnected before completion: Transport error: network error: error decoding response body"
+            ),
+            "transport_failure"
+        );
+        assert_eq!(
             classify_session_error("runtime rejected command"),
             "session_command_error"
         );
@@ -987,7 +991,7 @@ async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyhow::Result<
                     build: Some(env!("CARGO_PKG_VERSION").to_owned()),
                     evidence_start_ms: occurred_at_ms.saturating_sub(30_000),
                     evidence_end_ms: occurred_at_ms.saturating_add(30_000),
-                    detail: serde_json::json!({ "source": "outbound_error" }),
+                    detail: serde_json::json!({ "source": "session_error" }),
                 })
                 .await
         }
@@ -1414,6 +1418,7 @@ async fn serve_axum(
             put(api_code_buffer_open).delete(api_code_buffer_close),
         )
         .route("/api/sessions/{id}/info", get(api_session_info))
+        .route("/api/sessions/{id}/reload", post(api_session_reload))
         .route(
             "/api/sessions/{id}/cache-protection",
             get(api_session_cache_protection),
@@ -3417,6 +3422,23 @@ async fn api_session_info(
     }
 }
 
+/// Rebuild one session's runtime without clearing its transcript, native agent
+/// id, queue, drafts, title, cwd, or persisted config preferences. The
+/// Supervisor owns the atomic worker fence/replacement and broadcasts the
+/// resulting lifecycle edges to every connected client.
+async fn api_session_reload(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+) -> Response {
+    if state.hub.session_info(&session_id).is_none() {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    }
+    match state.supervisor.reload_session(&session_id) {
+        Ok(()) => (StatusCode::ACCEPTED, "reloading").into_response(),
+        Err(error) => (StatusCode::CONFLICT, error).into_response(),
+    }
+}
+
 async fn api_session_cache_protection(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
@@ -4497,24 +4519,17 @@ async fn zed_adapter_request_for_session(
 
 async fn remote_code_request(
     state: &AppState,
-    session_id: &str,
+    machine_id: &str,
     cwd: &str,
     operation: serde_json::Value,
 ) -> anyhow::Result<Option<crate::code_adapter::CodeAdapterResponse>> {
-    let machine_id = state
-        .hub
-        .session_list()
-        .into_iter()
-        .find(|meta| meta.id == session_id)
-        .map(|meta| meta.machine_id)
-        .context("unknown session")?;
     if machine_id == "local" {
         return Ok(None);
     }
-    let colocated = match state.machine_control.is_colocated(&machine_id) {
+    let colocated = match state.machine_control.is_colocated(machine_id) {
         Some(value) => value,
         None => match state.store.as_ref() {
-            Some(store) => store.machine_is_local(&machine_id).await.unwrap_or(false),
+            Some(store) => store.machine_is_local(machine_id).await.unwrap_or(false),
             None => false,
         },
     };
@@ -4528,7 +4543,7 @@ async fn remote_code_request(
         .insert("root".to_owned(), serde_json::Value::String(cwd.to_owned()));
     let value = state
         .machine_control
-        .adapter_request(&machine_id, "code", request)
+        .adapter_request(machine_id, "code", request)
         .await
         .map_err(anyhow::Error::msg)?;
     Ok(Some(serde_json::from_value(value)?))
@@ -4661,19 +4676,14 @@ async fn api_search_files(
     Path(session_id): Path<String>,
     Query(query): Query<FileSearchQuery>,
 ) -> Response {
-    let Some(cwd) = state
-        .hub
-        .session_list()
-        .into_iter()
-        .find(|m| m.id == session_id)
-        .map(|m| m.cwd)
-    else {
+    let Some(context) = resolve_code_context(&state, &session_id).await else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
+    let cwd = context.cwd;
     let limit = query.limit.clamp(1, 100);
     let files = match remote_code_request(
         &state,
-        &session_id,
+        &context.machine_id,
         &cwd,
         serde_json::json!({ "type": "search", "query": query.q, "limit": limit }),
     )
@@ -4697,13 +4707,14 @@ async fn api_code_search(
     Path(session_id): Path<String>,
     Query(query): Query<FileSearchQuery>,
 ) -> Response {
-    let Some(cwd) = session_cwd(&state, &session_id) else {
-        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    let Some(context) = resolve_code_context(&state, &session_id).await else {
+        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
     };
+    let cwd = context.cwd;
     let limit = query.limit.clamp(1, 100);
     let files = match remote_code_request(
         &state,
-        &session_id,
+        &context.machine_id,
         &cwd,
         serde_json::json!({ "type": "search", "query": query.q, "limit": limit }),
     )
@@ -4738,21 +4749,16 @@ async fn api_file_tree(
     Query(query): Query<FileTreeQuery>,
     headers: HeaderMap,
 ) -> Response {
-    let Some(cwd) = state
-        .hub
-        .session_list()
-        .into_iter()
-        .find(|m| m.id == session_id)
-        .map(|m| m.cwd)
-    else {
-        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    let Some(context) = resolve_code_context(&state, &session_id).await else {
+        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
     };
+    let cwd = context.cwd;
     let limit = query.limit.clamp(20, 500);
     let path = query.path;
     let requested_path = path.clone();
     let remote_page = match remote_code_request(
         &state,
-        &session_id,
+        &context.machine_id,
         &cwd,
         serde_json::json!({ "type": "directory", "path": path.clone(), "limit": limit }),
     )
@@ -4855,6 +4861,73 @@ async fn api_file_tree(
     file_tree_http_response(&headers, &revision, body)
 }
 
+const WORKSPACE_CODE_CONTEXT_PREFIX: &str = "workspace::";
+
+struct ResolvedCodeContext {
+    machine_id: String,
+    cwd: String,
+    session_id: Option<String>,
+}
+
+fn parse_workspace_code_context(value: &str) -> Option<(&str, &str)> {
+    let value = value.strip_prefix(WORKSPACE_CODE_CONTEXT_PREFIX)?;
+    let (machine_id, workspace_id) = value.split_once("::")?;
+    (!machine_id.is_empty() && !workspace_id.is_empty() && !workspace_id.contains("::"))
+        .then_some((machine_id, workspace_id))
+}
+
+#[cfg(test)]
+mod workspace_code_context_tests {
+    use super::parse_workspace_code_context;
+
+    #[test]
+    fn only_explicit_machine_workspace_pairs_are_code_contexts() {
+        assert_eq!(
+            parse_workspace_code_context("workspace::hawk::cowboy"),
+            Some(("hawk", "cowboy"))
+        );
+        assert_eq!(parse_workspace_code_context("sess-123"), None);
+        assert_eq!(parse_workspace_code_context("workspace::::cowboy"), None);
+        assert_eq!(
+            parse_workspace_code_context("workspace::hawk::cowboy::extra"),
+            None
+        );
+    }
+}
+
+async fn resolve_code_context(state: &AppState, id: &str) -> Option<ResolvedCodeContext> {
+    if let Some((machine_id, workspace_id)) = parse_workspace_code_context(id) {
+        let store = state.store.as_ref()?;
+        let machines = store.list_machines().await.ok()?;
+        let machine = machines
+            .into_iter()
+            .find(|machine| machine.id == machine_id && !machine.revoked)?;
+        let workspaces: Vec<crate::machine_protocol::MachineWorkspace> = machine
+            .inventory
+            .get("workspaces")
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok())?;
+        let workspace = workspaces
+            .into_iter()
+            .find(|workspace| workspace.id == workspace_id)?;
+        return Some(ResolvedCodeContext {
+            machine_id: machine.id,
+            cwd: workspace.canonical_path,
+            session_id: None,
+        });
+    }
+    state
+        .hub
+        .session_list()
+        .into_iter()
+        .find(|meta| meta.id == id)
+        .map(|meta| ResolvedCodeContext {
+            machine_id: meta.machine_id,
+            cwd: meta.cwd,
+            session_id: Some(meta.id),
+        })
+}
+
 fn session_cwd(state: &AppState, session_id: &str) -> Option<String> {
     state
         .hub
@@ -4869,19 +4942,24 @@ async fn api_code_manifest(
     Path(session_id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    let Some(cwd) = session_cwd(&state, &session_id) else {
-        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    let Some(context) = resolve_code_context(&state, &session_id).await else {
+        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
     };
-    let language_ready = match ensure_zed_worktree_for_session(&state, &session_id, &cwd).await {
-        Ok(ready) => ready,
-        Err(error) => {
-            tracing::warn!(session = %session_id, %error, "Zed adapter unavailable");
-            false
+    let cwd = context.cwd;
+    let language_ready = if context.session_id.is_some() {
+        match ensure_zed_worktree_for_session(&state, &session_id, &cwd).await {
+            Ok(ready) => ready,
+            Err(error) => {
+                tracing::warn!(session = %session_id, %error, "Zed adapter unavailable");
+                false
+            }
         }
+    } else {
+        false
     };
     let manifest = match remote_code_request(
         &state,
-        &session_id,
+        &context.machine_id,
         &cwd,
         serde_json::json!({ "type": "manifest" }),
     )
@@ -4964,12 +5042,13 @@ async fn api_code_changes(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
 ) -> Response {
-    let Some(cwd) = session_cwd(&state, &session_id) else {
-        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    let Some(context) = resolve_code_context(&state, &session_id).await else {
+        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
     };
+    let cwd = context.cwd;
     let result = match remote_code_request(
         &state,
-        &session_id,
+        &context.machine_id,
         &cwd,
         serde_json::json!({ "type": "changes" }),
     )
@@ -5022,12 +5101,13 @@ async fn api_code_repository(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
 ) -> Response {
-    let Some(cwd) = session_cwd(&state, &session_id) else {
-        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    let Some(context) = resolve_code_context(&state, &session_id).await else {
+        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
     };
+    let cwd = context.cwd;
     let result = match remote_code_request(
         &state,
-        &session_id,
+        &context.machine_id,
         &cwd,
         serde_json::json!({ "type": "repository" }),
     )
@@ -5063,13 +5143,14 @@ async fn api_code_commit(
     Path(session_id): Path<String>,
     Query(query): Query<CodeCommitQuery>,
 ) -> Response {
-    let Some(cwd) = session_cwd(&state, &session_id) else {
-        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    let Some(context) = resolve_code_context(&state, &session_id).await else {
+        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
     };
+    let cwd = context.cwd;
     let oid = query.oid;
     let result = match remote_code_request(
         &state,
-        &session_id,
+        &context.machine_id,
         &cwd,
         serde_json::json!({ "type": "commit", "oid": oid.clone() }),
     )
@@ -5102,14 +5183,15 @@ async fn api_code_commit_diff(
     Path(session_id): Path<String>,
     Query(query): Query<CodeCommitDiffQuery>,
 ) -> Response {
-    let Some(cwd) = session_cwd(&state, &session_id) else {
-        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    let Some(context) = resolve_code_context(&state, &session_id).await else {
+        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
     };
+    let cwd = context.cwd;
     let oid = query.oid;
     let path = query.path;
     let result = match remote_code_request(
         &state,
-        &session_id,
+        &context.machine_id,
         &cwd,
         serde_json::json!({ "type": "commit_diff", "oid": oid.clone(), "path": path.clone() }),
     )
@@ -5172,9 +5254,10 @@ async fn api_code_diff(
             Err(error) => (StatusCode::BAD_REQUEST, error).into_response(),
         };
     }
-    let Some(cwd) = session_cwd(&state, &session_id) else {
-        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    let Some(context) = resolve_code_context(&state, &session_id).await else {
+        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
     };
+    let cwd = context.cwd;
     let Some(path) = query.path else {
         return (StatusCode::BAD_REQUEST, "path is required").into_response();
     };
@@ -5193,7 +5276,7 @@ async fn api_code_diff(
     };
     let remote_document = match remote_code_request(
         &state,
-        &session_id,
+        &context.machine_id,
         &cwd,
         serde_json::json!({
             "type": "diff",
@@ -5252,12 +5335,13 @@ async fn api_code_file(
     Query(query): Query<CodeFileQuery>,
     headers: HeaderMap,
 ) -> Response {
-    let Some(cwd) = session_cwd(&state, &session_id) else {
-        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    let Some(context) = resolve_code_context(&state, &session_id).await else {
+        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
     };
+    let cwd = context.cwd;
     let result = match remote_code_request(
         &state,
-        &session_id,
+        &context.machine_id,
         &cwd,
         serde_json::json!({ "type": "file", "path": query.path.clone(), "cursor": query.cursor.clone() }),
     )
@@ -5300,7 +5384,7 @@ async fn api_code_file(
         Err(error) if error == "file snapshot changed" => {
             return (StatusCode::CONFLICT, error).into_response();
         }
-        Err(_) => return (StatusCode::BAD_REQUEST, "file unavailable").into_response(),
+        Err(error) => return code_file_error_response(&error),
     };
     let etag = format!("\"{}\"", result.revision);
     const FILE_CACHE_CONTROL: &str = "private, max-age=0, must-revalidate";
@@ -5337,6 +5421,18 @@ async fn api_code_file(
         header::HeaderValue::from_static(FILE_CACHE_CONTROL),
     );
     response
+}
+
+fn code_file_error_response(error: &str) -> Response {
+    match error {
+        "file not found" => (StatusCode::NOT_FOUND, "file not found").into_response(),
+        "binary file" | "file is not UTF-8" => (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "file is not previewable text",
+        )
+            .into_response(),
+        _ => (StatusCode::BAD_REQUEST, "file unavailable").into_response(),
+    }
 }
 
 async fn api_code_buffer_open(
@@ -5594,6 +5690,12 @@ async fn api_code_buffer_lease(
     {
         return (StatusCode::BAD_REQUEST, "invalid buffer lease").into_response();
     }
+    if open && !local_buffer_file_exists(&cwd, &request.path) {
+        // Aggregate-project files are a read-only Code projection and cannot be
+        // registered with a Zed worktree rooted at this session. Missing and
+        // projected paths are deterministic lease misses, not adapter outages.
+        return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable").into_response();
+    }
     if open
         && ensure_zed_worktree_for_session(&state, &session_id, &cwd)
             .await
@@ -5646,6 +5748,24 @@ async fn api_code_buffer_lease(
                 .into_response()
         }
     }
+}
+
+fn local_buffer_file_exists(cwd: &str, relative: &str) -> bool {
+    let relative = FsPath::new(relative);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return false;
+    }
+    let Ok(root) = FsPath::new(cwd).canonicalize() else {
+        return false;
+    };
+    let Ok(file) = root.join(relative).canonicalize() else {
+        return false;
+    };
+    file.starts_with(&root) && file.is_file()
 }
 
 #[derive(Debug, Serialize)]
@@ -6706,6 +6826,52 @@ where
         .await
         .map_err(|_| ())?
         .map_err(|_| ())
+}
+
+#[cfg(test)]
+mod code_file_policy_tests {
+    use super::{code_file_error_response, local_buffer_file_exists};
+    use axum::http::StatusCode;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn file_errors_distinguish_missing_binary_and_invalid_requests() {
+        assert_eq!(
+            code_file_error_response("file not found").status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            code_file_error_response("binary file").status(),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE
+        );
+        assert_eq!(
+            code_file_error_response("file is not UTF-8").status(),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE
+        );
+        assert_eq!(
+            code_file_error_response("invalid file cursor").status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[test]
+    fn buffer_leases_require_a_real_file_inside_the_session_worktree() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cowboy-buffer-policy-{unique}"));
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let root_text = root.to_string_lossy();
+        assert!(local_buffer_file_exists(&root_text, "src/main.rs"));
+        assert!(!local_buffer_file_exists(&root_text, "src/missing.rs"));
+        assert!(!local_buffer_file_exists(&root_text, "../outside.rs"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[cfg(test)]

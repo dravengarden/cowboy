@@ -31,6 +31,7 @@ import {
 import { cmTheme } from "./cmTheme";
 import { livePreviewExtensions } from "./composerExtensions";
 import { hasDraftMod, hasSendMod } from "./platform";
+import { isImeKeyEvent } from "./imeKey";
 import {
   deleteEmptyCodeFenceBackward,
   deleteTokenBackward,
@@ -793,7 +794,9 @@ export const ComposerEditor = forwardRef<
       Prec.highest(
         EditorView.domEventHandlers({
           keydown: (e): boolean => {
-            if (e.key !== "Enter" || e.shiftKey || e.isComposing) return false;
+            if (
+              e.key !== "Enter" || e.shiftKey || isImeKeyEvent(e)
+            ) return false;
             if (hasDraftMod(e)) {
               e.preventDefault();
               onSaveDraftRef.current?.();

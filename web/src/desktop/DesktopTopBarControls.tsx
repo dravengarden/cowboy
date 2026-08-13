@@ -54,6 +54,7 @@ import {
 import { resetSession, send, submitPrompt, useStoreSelector } from "../store";
 import { useCompactionContext } from "../useCompactionContext";
 import { NetworkButton } from "../NetworkActionFeedback";
+import { SessionReloadDialog } from "../SessionReloadDialog";
 import {
   acceptedScheduleTime,
   fullResetTime,
@@ -74,7 +75,11 @@ import { type UsageWidgetProvider, usageWidgetProviders } from "../usageWidget";
 import { DesktopModal } from "./DesktopModal";
 import {
   DESKTOP_INSET_RADIUS,
+  DESKTOP_TOPBAR_CONTROL_GAP,
+  DESKTOP_TOPBAR_CONTROL_GAP_PX,
+  DESKTOP_TOPBAR_CONTROL_HEIGHT,
   desktopEmbeddedControlSx,
+  desktopSessionActionSx,
 } from "./DesktopEmbeddedControl";
 import { desktopEmbeddedControlIconSx } from "./DesktopEmbeddedIcon";
 import { useDesktopWorkspace } from "./DesktopWorkspaceController";
@@ -767,6 +772,8 @@ export function DesktopTopBarControls({
   const [snapshot, setSnapshot] = useState<UsageSnapshot | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [clock, setClock] = useState(() => Date.now());
+  const [reloadTargetId, setReloadTargetId] = useState<string | null>(null);
+  const reloadTarget = reloadTargetId === session?.id ? session : null;
   const [compactConfirm, setCompactConfirm] = useState(false);
   const [clearConfirm, setClearConfirm] = useState(false);
   const dead = status === "exited" || status === "crashed" ||
@@ -1047,9 +1054,6 @@ export function DesktopTopBarControls({
   useConfirmEnter(clearConfirm, () => {
     void confirmClear();
   });
-  const contextPercent = contextSize > 0
-    ? Math.round(Math.min(100, (contextUsed / contextSize) * 100))
-    : null;
   const topbarCommands = useMemo<DesktopCommand[]>(() => [
     {
       id: "topbar.runConfiguration",
@@ -1075,6 +1079,21 @@ export function DesktopTopBarControls({
       run: () =>
         document.querySelector<HTMLButtonElement>(
           "[data-desktop-topbar-action='usage']",
+        )?.click(),
+    },
+    {
+      id: "topbar.reload",
+      title: "Reload Session Runtime",
+      group: "Top Bar",
+      shortcut: "L",
+      regions: ["topbar.controls"],
+      when: () =>
+        document.querySelector(
+          "[data-desktop-topbar-action='reload']:not(:disabled)",
+        ) !== null,
+      run: () =>
+        document.querySelector<HTMLButtonElement>(
+          "[data-desktop-topbar-action='reload']",
         )?.click(),
     },
     {
@@ -1114,7 +1133,9 @@ export function DesktopTopBarControls({
       shortcut: "S",
       regions: ["topbar.controls"],
       when: () =>
-        document.querySelector("[data-desktop-topbar-action='stop']") !== null,
+        document.querySelector(
+          "[data-desktop-topbar-action='stop']:not(:disabled)",
+        ) !== null,
       run: () =>
         document.querySelector<HTMLButtonElement>(
           "[data-desktop-topbar-action='stop']",
@@ -1126,6 +1147,7 @@ export function DesktopTopBarControls({
   useDesktopCommand(topbarCommands[2] as DesktopCommand);
   useDesktopCommand(topbarCommands[3] as DesktopCommand);
   useDesktopCommand(topbarCommands[4] as DesktopCommand);
+  useDesktopCommand(topbarCommands[5] as DesktopCommand);
   // Lower bound for the complete session-control strip. Provider summaries own
   // their intrinsic compact width, and run configuration / session actions keep
   // their full touch targets. Auto margin restores the spacious, trailing
@@ -1138,16 +1160,19 @@ export function DesktopTopBarControls({
       (width, provider) => width + (provider.kind === "deepseek" ? 164 : 156),
       0,
     ) + Math.max(0, widgetProviders.length - 1) * 4 + 44;
-  const controlsMinWidth = 190 + usageMinWidth +
-    (compactAction ? 126 : 0) + (clearAction ? 96 : 0) +
-    (compactAction || clearAction ? 18 : 6);
+  const sessionActionsMinWidth = 90 + (compactAction ? 96 : 0) +
+    (clearAction ? 80 : 0) + 80 +
+    (2 + Number(Boolean(compactAction)) + Number(Boolean(clearAction))) *
+      DESKTOP_TOPBAR_CONTROL_GAP_PX;
+  const controlsMinWidth = 190 + usageMinWidth + sessionActionsMinWidth +
+    2 * DESKTOP_TOPBAR_CONTROL_GAP_PX;
 
   return (
     <Stack
       data-desktop-topbar-controls
       direction="row"
       alignItems="center"
-      spacing={0.75}
+      spacing={DESKTOP_TOPBAR_CONTROL_GAP}
       sx={{
         flex: "0 0 auto",
         minWidth: controlsMinWidth,
@@ -1156,8 +1181,12 @@ export function DesktopTopBarControls({
       }}
     >
       {options.length === 0 && !dead &&
-          (status === "starting" || status === "running")
-        ? <Skeleton variant="rounded" width={300} height={34} />
+        (status === "starting" || status === "running")
+        ? <Skeleton
+            variant="rounded"
+            width={300}
+            height={DESKTOP_TOPBAR_CONTROL_HEIGHT}
+          />
         : (
           <Tooltip title={configSummary || "Run configuration"}>
               <Button
@@ -1182,7 +1211,7 @@ export function DesktopTopBarControls({
                     open: configAnchor !== null,
                   }),
                   width: "clamp(190px, 18vw, 260px)",
-                  height: 34,
+                  height: DESKTOP_TOPBAR_CONTROL_HEIGHT,
                   px: 1.15,
                   justifyContent: "flex-start",
                   textTransform: "none",
@@ -1274,7 +1303,7 @@ export function DesktopTopBarControls({
               active: shortcutsActive,
               open: usageAnchor !== null,
             }),
-            height: 38,
+            height: DESKTOP_TOPBAR_CONTROL_HEIGHT,
             px: 0.75,
             gap: 0.65,
             flexShrink: 0,
@@ -1390,9 +1419,64 @@ export function DesktopTopBarControls({
         </Stack>
       </DesktopModal>
 
-      {compactAction && (
-        <Tooltip
-            title={compacting
+      <Stack
+        data-desktop-session-actions
+        direction="row"
+        spacing={DESKTOP_TOPBAR_CONTROL_GAP}
+        alignItems="center"
+        sx={{ flexShrink: 0 }}
+      >
+        <Tooltip title="Reload session runtime · keep history, queue, drafts, and configuration">
+          <span>
+            <Button
+              data-desktop-item="topbar-reload"
+              data-desktop-topbar-action="reload"
+              data-desktop-reload
+              size="small"
+              color="inherit"
+              variant="outlined"
+              startIcon={
+                <Refresh
+                  sx={{
+                    ...desktopEmbeddedControlIconSx(),
+                    color: "text.secondary",
+                  }}
+                />
+              }
+              disabled={session === undefined}
+              onClick={(): void => {
+                if (session) setReloadTargetId(session.id);
+              }}
+              sx={desktopSessionActionSx({
+                active: shortcutsActive,
+                open: reloadTarget !== null,
+                minWidth: 90,
+              })}
+            >
+              <Stack direction="row" spacing={0.5} alignItems="center" sx={{ width: "100%" }}>
+                <Typography variant="caption" fontWeight={750}>
+                  Reload
+                </Typography>
+                <ShortcutKeycap
+                  keyLabel="L"
+                  variant="global"
+                  accent={shortcutsActive || reloadTarget !== null}
+                  availability={shortcutAvailability(
+                    shortcutsActive && session !== undefined,
+                    reloadTarget !== null,
+                  )}
+                  sx={{ flexShrink: 0, ml: "auto !important" }}
+                />
+              </Stack>
+            </Button>
+          </span>
+        </Tooltip>
+
+        {compactAction && (
+          <Tooltip
+            title={contextRefreshing
+              ? "Updating context usage…"
+              : compacting
               ? "Compacting…"
               : compactTooltip(contextUsed, contextSize)}
           >
@@ -1411,41 +1495,21 @@ export function DesktopTopBarControls({
                     active={compacting}
                   />
                 }
+                aria-label={contextRefreshing
+                  ? "Compact conversation, context usage updating"
+                  : compactTooltip(contextUsed, contextSize)}
                 disabled={dead || compacting}
                 onClick={(): void => setCompactConfirm(true)}
-                sx={{
-                  ...desktopEmbeddedControlSx({ active: shortcutsActive }),
-                  height: 36,
-                  px: 1.1,
-                  minWidth: 126,
-                  flexShrink: 0,
-                  textTransform: "none",
-                  "& .MuiButton-startIcon": { mr: 0.75 },
-                }}
+                sx={desktopSessionActionSx({
+                  active: shortcutsActive,
+                  open: compactConfirm,
+                  minWidth: 96,
+                })}
               >
-                <Stack direction="row" spacing={0.65} alignItems="center" sx={{ width: "100%" }}>
+                <Stack direction="row" spacing={0.5} alignItems="center" sx={{ width: "100%" }}>
                   <Typography variant="caption" fontWeight={750}>
                     Compact
                   </Typography>
-                  {contextRefreshing
-                    ? (
-                      <Typography
-                        variant="caption"
-                        color="text.secondary"
-                        fontWeight={650}
-                      >
-                        Updating…
-                      </Typography>
-                    )
-                    : contextPercent !== null && (
-                      <Typography
-                        variant="caption"
-                        color="text.secondary"
-                        fontWeight={650}
-                      >
-                        {contextPercent}%
-                      </Typography>
-                    )}
                   <ShortcutKeycap
                     keyLabel="C"
                     variant="global"
@@ -1460,61 +1524,72 @@ export function DesktopTopBarControls({
               </Button>
             </span>
           </Tooltip>
-      )}
+        )}
 
-      {clearAction && (
-        <Tooltip title="Clear conversation · start with a fresh context">
-          <span>
-            <Button
-              data-desktop-item="topbar-clear"
-              data-desktop-topbar-action="clear"
-              data-desktop-clear
-              size="small"
-              color="inherit"
-              variant="outlined"
-              startIcon={
-                <CleaningServices
-                  sx={{
-                    ...desktopEmbeddedControlIconSx(),
-                    color: "text.secondary",
-                  }}
-                />
-              }
-              disabled={dead}
-              onClick={(): void => setClearConfirm(true)}
-              sx={{
-                ...desktopEmbeddedControlSx({ active: shortcutsActive }),
-                height: 36,
-                px: 1.1,
-                minWidth: 96,
-                flexShrink: 0,
-                textTransform: "none",
-                "& .MuiButton-startIcon": { mr: 0.75 },
-                "&:hover": {
-                  borderColor: "error.main",
-                  color: "error.main",
-                },
-              }}
-            >
-              <Stack direction="row" spacing={0.65} alignItems="center" sx={{ width: "100%" }}>
-                <Typography variant="caption" fontWeight={750}>
-                  Clear
-                </Typography>
-                <ShortcutKeycap
-                  keyLabel="X"
-                  variant="global"
-                  accent={shortcutsActive || clearConfirm}
-                  availability={shortcutAvailability(
-                    shortcutsActive && !dead,
-                    clearConfirm,
-                  )}
-                  sx={{ flexShrink: 0, ml: "auto !important" }}
-                />
-              </Stack>
-            </Button>
-          </span>
-        </Tooltip>
-      )}
+        {clearAction && (
+          <Tooltip title="Clear conversation · start with a fresh context">
+            <span>
+              <Button
+                data-desktop-item="topbar-clear"
+                data-desktop-topbar-action="clear"
+                data-desktop-clear
+                size="small"
+                color="inherit"
+                variant="outlined"
+                startIcon={
+                  <CleaningServices
+                    sx={{
+                      ...desktopEmbeddedControlIconSx(),
+                      color: "text.secondary",
+                    }}
+                  />
+                }
+                disabled={dead}
+                onClick={(): void => setClearConfirm(true)}
+                sx={{
+                  ...desktopSessionActionSx({
+                    active: shortcutsActive,
+                    open: clearConfirm,
+                    minWidth: 80,
+                  }),
+                  "&:hover": {
+                    borderColor: "error.main",
+                    color: "error.main",
+                  },
+                }}
+              >
+                <Stack direction="row" spacing={0.5} alignItems="center" sx={{ width: "100%" }}>
+                  <Typography variant="caption" fontWeight={750}>
+                    Clear
+                  </Typography>
+                  <ShortcutKeycap
+                    keyLabel="X"
+                    variant="global"
+                    accent={shortcutsActive || clearConfirm}
+                    availability={shortcutAvailability(
+                      shortcutsActive && !dead,
+                      clearConfirm,
+                    )}
+                    sx={{ flexShrink: 0, ml: "auto !important" }}
+                  />
+                </Stack>
+              </Button>
+            </span>
+          </Tooltip>
+        )}
+
+        <AutoScrollAndStop
+          sessionId={sessionId}
+          status={status}
+          presentation="desktop-toolbar"
+          desktopShortcutActive={shortcutsActive}
+        />
+      </Stack>
+
+      <SessionReloadDialog
+        session={reloadTarget}
+        onClose={(): void => setReloadTargetId(null)}
+      />
 
       <Dialog
         open={compactConfirm}
@@ -1603,13 +1678,6 @@ export function DesktopTopBarControls({
         </DialogActions>
       </Dialog>
 
-      <Box sx={{ flex: 1, minWidth: 4 }} />
-      <AutoScrollAndStop
-        sessionId={sessionId}
-        status={status}
-        presentation="desktop-toolbar"
-        desktopShortcutActive={shortcutsActive}
-      />
     </Stack>
   );
 }

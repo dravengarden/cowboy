@@ -104,6 +104,19 @@ function nearestConversationWidget(
   });
 }
 
+function isModifierKey(key: string): boolean {
+  return [
+    "Alt",
+    "AltGraph",
+    "CapsLock",
+    "Control",
+    "Fn",
+    "FnLock",
+    "Meta",
+    "Shift",
+  ].includes(key);
+}
+
 export function DesktopCommandProvider(
   { children }: { children: React.ReactNode },
 ): React.JSX.Element {
@@ -185,12 +198,12 @@ export function DesktopCommandProvider(
         !(normalCommandSink && workspace.focusedRegion !== "prompt.composer");
       // Composition is an exclusive native-input transaction. `isComposing`
       // is not reliable for every macOS keydown (the first and final events can
-      // straddle compositionstart/end), so consult the shared lifecycle too.
-      // Never let a stale Ctrl-W / gg chord move focus while marked text exists.
-      // A CJK input source can still label a physical Normal-mode key as
-      // `Process`/229 even though the non-editable command sink cannot own a
-      // composition. Let that sink continue through the physical-key command
-      // path; a real shared IME transaction remains exclusive.
+      // straddle compositionstart/end), so consult the shared lifecycle and
+      // native text-service markers too. Those markers remain IME-owned even
+      // when modal focus currently sits on non-editable chrome. Never let a
+      // stale Ctrl-W / gg chord move focus while marked text exists. The sole
+      // exception is the non-editable Vim Normal sink when no real shared
+      // composition exists; it deliberately receives physical Vim commands.
       if (
         desktopImeOwnsKey(event)
       ) {
@@ -219,6 +232,17 @@ export function DesktopCommandProvider(
             `[data-desktop-splitter="${CSS.escape(splitter)}"]`,
           )?.focus({ preventScroll: true })
         );
+      };
+      const selectAndAdjustSplitter = (
+        splitter: DesktopSplitterId | null,
+        delta: number,
+      ): void => {
+        if (splitter === null) return;
+        selectSplitter(splitter);
+        globalThis.dispatchEvent(new CustomEvent(
+          DESKTOP_SPLITTER_ADJUST_EVENT,
+          { detail: { splitter, delta } },
+        ));
       };
       if (workspace.selectedSplitter !== null) {
         const visible = visibleDesktopSplitterIds();
@@ -295,16 +319,7 @@ export function DesktopCommandProvider(
           clearPendingJumpChord();
         } else {
           const key = workspaceCommandKey(event);
-          const modifierOnly = [
-            "Alt",
-            "AltGraph",
-            "CapsLock",
-            "Control",
-            "Fn",
-            "FnLock",
-            "Meta",
-            "Shift",
-          ].includes(key);
+          const modifierOnly = isModifierKey(key);
           if (modifierOnly) return;
           const modified = event.metaKey || event.ctrlKey || event.altKey ||
             event.shiftKey;
@@ -331,17 +346,21 @@ export function DesktopCommandProvider(
       if (workspace.productMode === "reading") {
         const key = workspaceCommandKey(event);
         if (windowChord.current !== null) {
+          if (isModifierKey(key)) return;
           globalThis.clearTimeout(windowChord.current);
           windowChord.current = null;
-          if (key.toLowerCase() === "r") {
+          if (key === "<" || key === ">") {
             event.preventDefault();
             event.stopPropagation();
             const visible = visibleDesktopSplitterIds();
-            selectSplitter(preferredDesktopSplitter(
-              visible,
-              workspace.focusedPane,
-              workspace.productMode,
-            ));
+            selectAndAdjustSplitter(
+              preferredDesktopSplitter(
+                visible,
+                workspace.focusedPane,
+                workspace.productMode,
+              ),
+              key === "<" ? -DESKTOP_SPLITTER_STEP : DESKTOP_SPLITTER_STEP,
+            );
             return;
           }
         }
@@ -456,26 +475,37 @@ export function DesktopCommandProvider(
       }
       // Standard Vim window navigation. The first Ctrl-W arms a short chord;
       // the following h/l moves panes, j/k moves vertical regions in the current
-      // pane, and w cycles every visible region. Capture-phase handling keeps the
-      // same contract while the CM6 editor owns keyboard focus.
+      // pane, w cycles every visible region, and </> resizes the nearest vertical
+      // boundary. Capture-phase handling keeps the same contract while the CM6
+      // editor owns keyboard focus.
       if (windowChord.current !== null) {
+        const commandKey = workspaceCommandKey(event);
+        if (isModifierKey(commandKey)) return;
         globalThis.clearTimeout(windowChord.current);
         windowChord.current = null;
-        const key = workspaceCommandKey(event).toLowerCase();
-        if (["h", "j", "k", "l", "r", "w"].includes(key)) {
+        const key = commandKey.toLowerCase();
+        if (
+          ["h", "j", "k", "l", "w"].includes(key) ||
+          commandKey === "<" || commandKey === ">"
+        ) {
           event.preventDefault();
           event.stopPropagation();
           if (key === "h") workspace.focusAdjacentPane(-1);
           else if (key === "l") workspace.focusAdjacentPane(1);
           else if (key === "j") workspace.focusAdjacentRegion(1);
           else if (key === "k") workspace.focusAdjacentRegion(-1);
-          else if (key === "r") {
+          else if (commandKey === "<" || commandKey === ">") {
             const visible = visibleDesktopSplitterIds();
-            selectSplitter(preferredDesktopSplitter(
-              visible,
-              workspace.focusedPane,
-              workspace.productMode,
-            ));
+            selectAndAdjustSplitter(
+              preferredDesktopSplitter(
+                visible,
+                workspace.focusedPane,
+                workspace.productMode,
+              ),
+              commandKey === "<"
+                ? -DESKTOP_SPLITTER_STEP
+                : DESKTOP_SPLITTER_STEP,
+            );
           }
           else workspace.cycleRegion();
           return;

@@ -9,6 +9,7 @@ import {
 } from "@mui/material";
 import { useEffect, useRef, useState } from "react";
 import { navigationHaptic } from "../../haptic";
+import { isImeKeyEvent } from "../../imeKey";
 import { type ReviewTab, reviewTabKey } from "./reviewTabs";
 
 function basename(path: string): string {
@@ -144,7 +145,10 @@ export function ReviewTabStrip({
                 onActivate(tab);
               }}
               onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
+                if (
+                  !isImeKeyEvent(event.nativeEvent) &&
+                  (event.key === "Enter" || event.key === " ")
+                ) {
                   event.preventDefault();
                   onActivate(tab);
                 }

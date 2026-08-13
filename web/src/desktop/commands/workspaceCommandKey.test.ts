@@ -55,3 +55,14 @@ Deno.test("workspace Vim motions preserve shifted G and native non-letter keys",
     "Escape",
   );
 });
+
+Deno.test("workspace resize commands use physical angle-bracket keys", () => {
+  assert.equal(
+    workspaceCommandKey({ code: "Comma", key: "Process", shiftKey: true }),
+    "<",
+  );
+  assert.equal(
+    workspaceCommandKey({ code: "Period", key: "Process", shiftKey: true }),
+    ">",
+  );
+});

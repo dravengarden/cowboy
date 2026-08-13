@@ -198,6 +198,16 @@ impl RemoteRuntime {
     }
 
     #[must_use]
+    pub fn worker_matches_cwd(&self, session_id: &str, cwd: &str) -> bool {
+        self.shared
+            .workers
+            .lock()
+            .get(session_id)
+            .and_then(|worker| worker.launch.as_ref())
+            .is_some_and(|session| session.cwd == cwd)
+    }
+
+    #[must_use]
     pub fn stats(&self) -> RemoteRuntimeStats {
         let workers = self.shared.workers.lock();
         RemoteRuntimeStats {
@@ -1310,7 +1320,11 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
             hub.set_status(session_id, status, detail);
         }
         RuntimeEvent::Update { update, cmid } => {
+            let compact_failure = remote_compact_failure(hub, session_id, &update);
             hub.push_tagged(session_id, Event::Update { update }, cmid);
+            if let Some(message) = compact_failure {
+                hub.record_session_error(session_id, &message);
+            }
         }
         RuntimeEvent::ConfigOptions { options } => hub.set_config_options(session_id, options),
         RuntimeEvent::ContextUsage {
@@ -1378,6 +1392,59 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
             hub.broadcast_error(Some(session_id.to_owned()), message);
         }
     }
+}
+
+const REMOTE_COMPACT_FAILURE_PREFIX: &str = "Error running remote compact task:";
+
+/// Codex ACP currently reports a failed remote `/compact` as an ordinary
+/// assistant message rather than a runtime error. Promote only the documented
+/// compact sequence; arbitrary assistant text containing "Error" must remain
+/// conversation content and must not create diagnostic incidents.
+fn remote_compact_failure(
+    hub: &Hub,
+    session_id: &str,
+    update: &serde_json::Value,
+) -> Option<String> {
+    if update
+        .get("sessionUpdate")
+        .and_then(serde_json::Value::as_str)
+        != Some("agent_message_chunk")
+    {
+        return None;
+    }
+    let message = update
+        .pointer("/content/text")
+        .and_then(serde_json::Value::as_str)?;
+    if !message.starts_with(REMOTE_COMPACT_FAILURE_PREFIX) {
+        return None;
+    }
+
+    let (events, _) = hub.snapshot(session_id)?;
+    let active_compaction = events
+        .iter()
+        .rev()
+        .take(16)
+        .find_map(|envelope| match &envelope.event {
+            Event::Update { update }
+                if update
+                    .get("sessionUpdate")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("tool_call")
+                    && update
+                        .pointer("/_meta/contextCompaction")
+                        .and_then(serde_json::Value::as_bool)
+                        == Some(true) =>
+            {
+                Some(
+                    update.get("status").and_then(serde_json::Value::as_str) == Some("in_progress"),
+                )
+            }
+            Event::TurnEnd { .. } => Some(false),
+            _ => None,
+        })
+        .unwrap_or(false);
+
+    active_compaction.then(|| message.trim_end().to_owned())
 }
 
 fn handle_rejected_command(
@@ -1452,6 +1519,106 @@ fn reset_after_workspace_replacement(shared: &Shared, session_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn compaction_started() -> RuntimeEvent {
+        RuntimeEvent::Update {
+            update: serde_json::json!({
+                "_meta": { "contextCompaction": true },
+                "title": "Context compacting",
+                "status": "in_progress",
+                "toolCallId": "compact-1",
+                "sessionUpdate": "tool_call"
+            }),
+            cmid: None,
+        }
+    }
+
+    fn assistant_chunk(text: &str) -> RuntimeEvent {
+        RuntimeEvent::Update {
+            update: serde_json::json!({
+                "content": { "text": text, "type": "text" },
+                "sessionUpdate": "agent_message_chunk"
+            }),
+            cmid: None,
+        }
+    }
+
+    #[test]
+    fn remote_compact_failure_requires_the_active_compaction_sequence() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        let failure = serde_json::json!({
+            "content": {
+                "text": "Error running remote compact task: transport disconnected\n\n",
+                "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+        });
+
+        assert_eq!(remote_compact_failure(&hub, "s", &failure), None);
+        apply_event(&hub, "s", compaction_started());
+        assert_eq!(
+            remote_compact_failure(&hub, "s", &failure).as_deref(),
+            Some("Error running remote compact task: transport disconnected")
+        );
+        assert_eq!(
+            remote_compact_failure(
+                &hub,
+                "s",
+                &serde_json::json!({
+                    "content": { "text": "Error in a code example", "type": "text" },
+                    "sessionUpdate": "agent_message_chunk"
+                })
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn compact_failure_is_recorded_and_kept_in_the_transcript() {
+        let (tx, mut rx) = mpsc::channel(16);
+        let health = Arc::new(crate::core::PersistenceHealth::default());
+        let hub = Hub::with_store(Some(crate::core::StoreSink::new(tx, health)));
+        hub.create_local_session(
+            "s".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        let message = "Error running remote compact task: stream disconnected before completion: Transport error: network error: error decoding response body\n\n";
+
+        apply_event(&hub, "s", compaction_started());
+        apply_event(&hub, "s", assistant_chunk(message));
+
+        let recorded = std::iter::from_fn(|| rx.try_recv().ok()).find_map(|write| match write {
+            crate::core::StoreWrite::RecordSessionError {
+                session_id,
+                message,
+                ..
+            } => Some((session_id, message)),
+            _ => None,
+        });
+        assert_eq!(
+            recorded,
+            Some(("s".to_owned(), message.trim_end().to_owned()))
+        );
+        let (events, _) = hub.snapshot("s").expect("session snapshot");
+        assert!(events.iter().any(|envelope| matches!(
+            &envelope.event,
+            Event::Update { update }
+                if update.pointer("/content/text").and_then(serde_json::Value::as_str)
+                    == Some(message)
+        )));
+    }
 
     fn snapshot(session_id: &str) -> WorkerSnapshot {
         WorkerSnapshot {

@@ -14,10 +14,12 @@ import {
   KeyboardArrowDown,
   KeyboardArrowUp,
   Refresh,
+  Undo,
   VisibilityOutlined,
   WrapText,
 } from "@mui/icons-material";
 import {
+  Alert,
   Badge,
   Box,
   Button,
@@ -37,11 +39,13 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
 import {
   setActiveSessionId,
+  useActiveSessionId,
   useActiveWorkspaceBinding,
   useControlPlaneSessionActivity,
 } from "../../controlPlane";
@@ -55,7 +59,6 @@ import {
   useStoreSelector,
 } from "../../store";
 import type { SessionMeta } from "../../protocol";
-import { sessionProjectLabel } from "../../sessionProject";
 import { useSurfaceProfile } from "../../surface/SurfaceProfile";
 import { newUuid } from "../../uuid";
 import {
@@ -72,7 +75,9 @@ import {
   fetchCodeLanguage,
   fetchCodeManifest,
   fetchCodeNavigation,
+  isTransientCodeApiStatus,
   openCodeBuffer,
+  shouldCloseUnavailableSource,
 } from "./codeApi";
 import { invalidateDiffCache, loadCodeDiff } from "./diffCache";
 import { diffHunkLines, reviewEntryKey } from "./diffNavigationModel";
@@ -93,6 +98,16 @@ import type { GitReviewEntry } from "./gitReviewModel";
 import { groupGitChanges, reviewQueue } from "./gitReviewModel";
 import { ReviewTabStrip } from "./ReviewTabStrip";
 import {
+  buildReviewContextProjects,
+  orderReviewContextProjects,
+  popReviewSessionHistory,
+  previousReviewSessionId,
+  pushReviewSessionHistory,
+  type ReviewContextProject,
+  reviewSessionProject,
+  workspaceCodeContextId,
+} from "./reviewContextModel";
+import {
   adjacentReviewTabAfterClose,
   closeAllReviewTabs,
   closeOtherReviewTabs,
@@ -107,12 +122,16 @@ import {
 
 const CodeViewer = lazy(() => import("./CodeViewer"));
 
-function sessionProject(session: SessionMeta): string {
-  const stableProject = sessionProjectLabel(session);
-  if (stableProject) return stableProject;
-  const normalized = session.cwd.replace(/\/+$/, "");
-  return normalized.split("/").at(-1) || session.cwd;
-}
+type ReviewMachineInventory = {
+  id: string;
+  status: string;
+  workspace_revision?: string;
+  workspaces: readonly {
+    id: string;
+    display_name: string;
+    canonical_path: string;
+  }[];
+};
 
 function sessionStatusColor(status: SessionMeta["status"]): string {
   switch (status) {
@@ -126,6 +145,116 @@ function sessionStatusColor(status: SessionMeta["status"]): string {
     default:
       return "text.disabled";
   }
+}
+
+function ContextSessionRow({
+  session,
+  selected,
+  onPick,
+  showWorktree = true,
+}: {
+  session: SessionMeta;
+  selected: boolean;
+  onPick: () => void;
+  showWorktree?: boolean;
+}): React.JSX.Element {
+  return (
+    <ListItemButton
+      selected={selected}
+      onClick={onPick}
+      sx={{
+        minHeight: 64,
+        px: 1.25,
+        py: 0.75,
+        borderRadius: 1.5,
+        gap: 1.25,
+      }}
+    >
+      <Box
+        aria-label={`${session.status} session`}
+        sx={{
+          width: 8,
+          height: 8,
+          flex: "0 0 auto",
+          borderRadius: "50%",
+          bgcolor: sessionStatusColor(session.status),
+        }}
+      />
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Stack direction="row" spacing={0.75} alignItems="baseline">
+          <Typography
+            variant="body2"
+            fontWeight={selected ? 700 : 600}
+            noWrap
+          >
+            {session.title}
+          </Typography>
+          {selected && (
+            <Typography variant="caption" color="primary.main">
+              Current
+            </Typography>
+          )}
+        </Stack>
+        <Typography variant="caption" color="text.secondary" noWrap>
+          {session.machine_id ?? "local"} · {session.provider} ·{" "}
+          {reviewSessionProject(session)}
+        </Typography>
+        {showWorktree && (
+          <Typography
+            variant="caption"
+            color="text.disabled"
+            sx={{ display: "block" }}
+            noWrap
+          >
+            {session.cwd.replace(/\/+$/, "").split("/").at(-1) || session.cwd}
+          </Typography>
+        )}
+      </Box>
+      <ChevronRight color="disabled" fontSize="small" />
+    </ListItemButton>
+  );
+}
+
+function ContextPreviousSessionRow({
+  session,
+  label = "Previous session",
+  onPick,
+}: {
+  session: SessionMeta;
+  label?: string;
+  onPick: () => void;
+}): React.JSX.Element {
+  return (
+    <ListItemButton
+      onClick={onPick}
+      sx={{
+        mx: 0.75,
+        height: 52,
+        minHeight: 52,
+        flex: "0 0 52px",
+        px: 1.5,
+        borderRadius: 1.5,
+        border: 1,
+        borderColor: "divider",
+        bgcolor: "transparent",
+      }}
+    >
+      <Undo color="primary" fontSize="small" sx={{ mr: 1.25 }} />
+      <Box sx={{ minWidth: 0, flex: 1 }}>
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ display: "block", lineHeight: 1.2 }}
+        >
+          {label}
+        </Typography>
+        <Typography variant="body2" fontWeight={600} noWrap>
+          {session.title}
+        </Typography>
+      </Box>
+      <ChevronRight color="disabled" fontSize="small" />
+    </ListItemButton>
+  );
 }
 
 type ReviewTarget =
@@ -466,13 +595,11 @@ function DocumentView({
         fileRetry.current = { key: requestKey, count: 0 };
       }
       const status = reason instanceof CodeApiError ? reason.status : undefined;
-      const transient = status === undefined ||
-        status === 304 ||
-        status === 409 ||
-        status === 410 ||
-        status === 502 ||
-        status === 503 ||
-        status === 504;
+      if (shouldCloseUnavailableSource(target.kind, status)) {
+        mutateMobileReview(sessionId, "close", { path: target.path });
+        return;
+      }
+      const transient = isTransientCodeApiStatus(status);
       if (transient && fileRetry.current.count < 2) {
         const delay = fileRetry.current.count === 0 ? 400 : 1_200;
         fileRetry.current.count += 1;
@@ -579,6 +706,9 @@ function DocumentView({
   }
   if (error) {
     const missing = error === 404;
+    const unsupported = error === 415;
+    const invalid = error === 400;
+    const retryable = !missing && !unsupported && !invalid;
     return (
       <Box
         role="alert"
@@ -612,6 +742,10 @@ function DocumentView({
           <Typography variant="subtitle1" fontWeight={750}>
             {missing
               ? "This file is no longer available"
+              : unsupported
+              ? "This is a binary file"
+              : invalid
+              ? "This file can’t be opened"
               : target.kind === "diff"
               ? "Couldn’t load this diff"
               : "Couldn’t load this file"}
@@ -619,20 +753,26 @@ function DocumentView({
           <Typography variant="body2" color="text.secondary">
             {missing
               ? "It may have been moved or deleted in the worktree."
+              : unsupported
+              ? "Cowboy can preview UTF-8 text files, but not compiled programs or other binary data."
+              : invalid
+              ? "The saved path or file snapshot is no longer valid."
               : "The connection may have been interrupted. Your tabs and reading position are preserved."}
           </Typography>
-          <Button
-            variant="contained"
-            startIcon={<Refresh />}
-            onClick={() => {
-              fileRetry.current.count = 0;
-              setError(undefined);
-              setReloadKey((value) => value + 1);
-            }}
-            sx={{ mt: 0.75, textTransform: "none", borderRadius: 2 }}
-          >
-            Try again
-          </Button>
+          {retryable && (
+            <Button
+              variant="contained"
+              startIcon={<Refresh />}
+              onClick={() => {
+                fileRetry.current.count = 0;
+                setError(undefined);
+                setReloadKey((value) => value + 1);
+              }}
+              sx={{ mt: 0.75, textTransform: "none", borderRadius: 2 }}
+            >
+              Try again
+            </Button>
+          )}
         </Stack>
       </Box>
     );
@@ -1180,8 +1320,21 @@ export function ReviewApp({
   active: boolean;
   onDrawerOpenChange: (open: boolean) => void;
 }): React.JSX.Element {
-  const workspace = useActiveWorkspaceBinding();
+  const boundWorkspace = useActiveWorkspaceBinding();
+  const activeSessionId = useActiveSessionId();
   const sessions = useStoreSelector((snapshot) => snapshot.sessions);
+  const [projectCodeContext, setProjectCodeContext] = useState<
+    {
+      sessionId: string;
+      cwd: string;
+      provider: string;
+      title: string;
+      machineId: string;
+      workspaceId: string;
+      project: string;
+    } | undefined
+  >();
+  const workspace = projectCodeContext ?? boundWorkspace;
   const controlPlaneActivity = useControlPlaneSessionActivity(
     workspace?.sessionId,
   );
@@ -1202,7 +1355,17 @@ export function ReviewApp({
   const [toggleDrawerRequest, setToggleDrawerRequest] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [sessionSwitcherOpen, setSessionSwitcherOpen] = useState(false);
+  const [contextTab, setContextTab] = useState<"recent" | "projects">("recent");
+  const [contextProjectKey, setContextProjectKey] = useState<string>();
+  const [machineInventories, setMachineInventories] = useState<
+    readonly ReviewMachineInventory[]
+  >([]);
+  const [contextError, setContextError] = useState<string>();
+  const [sessionHistory, setSessionHistory] = useState<string[]>([]);
   const sessionListRef = useRef<HTMLDivElement>(null);
+  const projectContextSessionRef = useRef(activeSessionId);
+  const observedSessionRef = useRef<string | undefined>(undefined);
+  const suppressedHistoryTargetRef = useRef<string | undefined>(undefined);
   const [reviewProgress, setReviewProgress] = useState<ReviewProgress>({});
   const [currentRevision, setCurrentRevision] = useState<string>();
   const [dataRevision, setDataRevision] = useState(0);
@@ -1298,8 +1461,14 @@ export function ReviewApp({
           retryTimers.push(globalThis.setTimeout(loadLanguage, 8_000));
           retryTimers.push(globalThis.setTimeout(loadLanguage, 30_000));
         })
-        .catch(() => {
-          if (released || attempt >= 3) return;
+        .catch((reason) => {
+          const status = reason instanceof CodeApiError
+            ? reason.status
+            : undefined;
+          if (
+            released || attempt >= 3 ||
+            !isTransientCodeApiStatus(status)
+          ) return;
           const delay = [1_000, 4_000, 12_000][attempt] ?? 12_000;
           retryTimers.push(globalThis.setTimeout(acquire, delay));
         });
@@ -1764,35 +1933,169 @@ export function ReviewApp({
     });
   };
   const currentSession = sessions.find((session) =>
-    session.id === workspace?.sessionId
+    session.id === activeSessionId
   );
-  const currentProject = repositoryContext?.project ??
-    (currentSession ? sessionProject(currentSession) : undefined);
-  // Match the primary mobile Sessions rail: server order is newest-first, while
-  // the physical list reads oldest-to-newest from top to bottom and opens at
-  // its live edge. Users move upward to older sessions.
-  const displayedSessions = [...sessions].reverse();
-  const projectSessions = displayedSessions.filter((session) =>
-    sessionProject(session) === currentProject
+  const currentProject = projectCodeContext?.project ?? repositoryContext?.project ??
+    (currentSession ? reviewSessionProject(currentSession) : undefined);
+  const currentMachineId = projectCodeContext?.machineId ??
+    currentSession?.machine_id ?? "local";
+  const currentMachineInventory = machineInventories.find((machine) =>
+    machine.id === currentMachineId
   );
-  const otherSessions = displayedSessions.filter((session) =>
-    sessionProject(session) !== currentProject
+  const contextProjects = useMemo(
+    () => orderReviewContextProjects(
+      buildReviewContextProjects(
+        sessions,
+        currentMachineId,
+        (currentMachineInventory?.workspaces ?? []).map((registered) => ({
+          id: registered.id,
+          displayName: registered.display_name,
+          canonicalPath: registered.canonical_path,
+        })),
+      ),
+      currentProject,
+      currentMachineId,
+    ),
+    [currentMachineId, currentMachineInventory?.workspaces, currentProject, sessions],
   );
+  const selectedContextProject = contextProjects.find((project) =>
+    project.key === contextProjectKey
+  );
+  const sessionById = new Map(sessions.map((session) => [session.id, session]));
+  const previousSessionId = previousReviewSessionId(
+    sessionHistory,
+    activeSessionId ?? undefined,
+    new Set(sessionById.keys()),
+  );
+  const previousSession = previousSessionId
+    ? sessionById.get(previousSessionId)
+    : undefined;
+  const contextReturnSession = projectCodeContext ? currentSession : previousSession;
+  useEffect(() => {
+    const next = activeSessionId;
+    const previous = observedSessionRef.current;
+    if (!next || next === previous) return;
+    if (previous && suppressedHistoryTargetRef.current !== next) {
+      setSessionHistory((history) => [
+        ...pushReviewSessionHistory(history, previous, next),
+      ]);
+    }
+    if (suppressedHistoryTargetRef.current === next) {
+      suppressedHistoryTargetRef.current = undefined;
+    }
+    observedSessionRef.current = next;
+  }, [activeSessionId]);
+  useEffect(() => {
+    if (projectContextSessionRef.current !== activeSessionId) {
+      projectContextSessionRef.current = activeSessionId;
+      setProjectCodeContext(undefined);
+    }
+  }, [activeSessionId]);
+  useEffect(() => {
+    const valid = new Set(sessions.map((session) => session.id));
+    setSessionHistory((history) => history.filter((id) => valid.has(id)));
+  }, [sessions]);
+  useEffect(() => {
+    if (!sessionSwitcherOpen || contextTab !== "projects") return undefined;
+    let cancelled = false;
+    let settleTimer: number | undefined;
+    let refreshing = false;
+    const load = async (): Promise<void> => {
+      try {
+        const response = await fetch("/api/machines", { cache: "no-store" });
+        if (!response.ok) return;
+        const value = await response.json() as ReviewMachineInventory[];
+        if (!cancelled && Array.isArray(value)) setMachineInventories(value);
+      } catch {
+        // Retain the last good inventory while the control plane reconnects.
+      }
+    };
+    const refresh = async (): Promise<void> => {
+      if (refreshing || cancelled || currentMachineId === "local") return;
+      refreshing = true;
+      try {
+        await fetch(
+          `/api/machines/${encodeURIComponent(currentMachineId)}/refresh`,
+          { method: "POST" },
+        );
+      } catch {
+        // GET below remains useful with the last Machine-published revision.
+      } finally {
+        refreshing = false;
+      }
+      settleTimer = globalThis.setTimeout(() => void load(), 400);
+    };
+    void load().then(refresh);
+    const interval = globalThis.setInterval(refresh, 5_000);
+    return () => {
+      cancelled = true;
+      globalThis.clearInterval(interval);
+      if (settleTimer !== undefined) globalThis.clearTimeout(settleTimer);
+    };
+  }, [contextTab, currentMachineId, sessionSwitcherOpen]);
   useEffect(() => {
     if (!sessionSwitcherOpen) return undefined;
     let frame = requestAnimationFrame(() => {
       frame = requestAnimationFrame(() => {
         const list = sessionListRef.current;
-        if (list) list.scrollTop = list.scrollHeight - list.clientHeight;
+        if (list) list.scrollTop = 0;
       });
     });
     return () => cancelAnimationFrame(frame);
-  }, [sessionSwitcherOpen]);
-  const switchSession = (session: SessionMeta): void => {
+  }, [contextProjectKey, contextTab, sessionSwitcherOpen]);
+  const switchSession = (session: SessionMeta, rememberCurrent = true): void => {
     navigationHaptic();
+    const currentId = activeSessionId;
+    if (rememberCurrent && currentId && currentId !== session.id) {
+      setSessionHistory((history) => [
+        ...pushReviewSessionHistory(history, currentId, session.id),
+      ]);
+    }
+    suppressedHistoryTargetRef.current = session.id;
+    setProjectCodeContext(undefined);
     setActiveSessionId(session.id);
     openSession(session.id);
     setSessionSwitcherOpen(false);
+  };
+  const openProjectTarget = (project: ReviewContextProject): void => {
+    const registered = project.registeredWorkspace;
+    if (!registered) return;
+    navigationHaptic();
+    setContextError(undefined);
+    const sessionId = workspaceCodeContextId(project.machineId, registered.id);
+    mutateMobileReview(sessionId, "setMode", { mode: "files" });
+    setProjectCodeContext({
+      sessionId,
+      cwd: registered.canonicalPath,
+      provider: "read-only",
+      title: `Project code · ${project.label}`,
+      machineId: project.machineId,
+      workspaceId: registered.id,
+      project: project.label,
+    });
+    setMode("files");
+    setSourceTarget(undefined);
+    setSessionSwitcherOpen(false);
+    setToggleDrawerRequest((value) => value + 1);
+  };
+  const returnToPreviousSession = (): void => {
+    if (!previousSession) return;
+    setSessionHistory((history) => [
+      ...popReviewSessionHistory(history, previousSession.id),
+    ]);
+    switchSession(previousSession, false);
+  };
+  const returnToSessionContext = (): void => {
+    if (projectCodeContext && currentSession) {
+      switchSession(currentSession, false);
+      return;
+    }
+    returnToPreviousSession();
+  };
+  const openContextSwitcher = (): void => {
+    navigationHaptic();
+    setContextProjectKey(undefined);
+    setSessionSwitcherOpen(true);
   };
 
   return (
@@ -1809,6 +2112,7 @@ export function ReviewApp({
             currentPath={sourceTarget?.path}
             onClose={() => setCloseRequest((value) => value + 1)}
             refreshToken={dataRevision}
+            contextLabel={projectCodeContext ? "Project code" : "Worktree"}
           />
         )
         : (
@@ -1850,19 +2154,18 @@ export function ReviewApp({
               noWrap
             >
               {target.kind === "changes"
-                ? mode === "files" ? "Worktree" : "Changes"
+                ? mode === "files"
+                  ? projectCodeContext ? "Project code" : "Worktree"
+                  : "Changes"
                 : target.path}
             </Typography>
             <Box
               component="button"
               type="button"
-              aria-label={`Switch session. Current session ${
-                currentSession?.title ?? "none"
-              }`}
-              onClick={() => {
-                navigationHaptic();
-                setSessionSwitcherOpen(true);
-              }}
+              aria-label={projectCodeContext
+                ? `Open context. Current project code ${projectCodeContext.project}`
+                : `Switch session. Current session ${currentSession?.title ?? "none"}`}
+              onClick={openContextSwitcher}
               sx={{
                 display: "flex",
                 alignItems: "center",
@@ -1887,7 +2190,9 @@ export function ReviewApp({
                   height: 6,
                   flex: "0 0 auto",
                   borderRadius: "50%",
-                  bgcolor: currentSession
+                  bgcolor: projectCodeContext
+                    ? "primary.main"
+                    : currentSession
                     ? sessionStatusColor(currentSession.status)
                     : "text.disabled",
                 }}
@@ -1900,12 +2205,15 @@ export function ReviewApp({
                     ? "Unstaged · "
                     : "Conflict · "
                   : ""}
-                {currentSession?.title ?? currentProject ??
+                {projectCodeContext
+                  ? `Project code · ${projectCodeContext.project}`
+                  : currentSession?.title ?? currentProject ??
                   (workspace ? "Loading session…" : "Choose session")}
-                {currentProject && currentSession?.title !== currentProject
+                {!projectCodeContext && currentProject &&
+                    currentSession?.title !== currentProject
                   ? ` · ${currentProject}`
                   : ""}
-                {repositoryContext?.branch
+                {!projectCodeContext && repositoryContext?.branch
                   ? ` · ${repositoryContext.branch}`
                   : ""}
               </Typography>
@@ -1915,6 +2223,15 @@ export function ReviewApp({
               />
             </Box>
           </Box>
+          {contextReturnSession && (
+            <IconButton
+              aria-label={`Back to session ${contextReturnSession.title}`}
+              onClick={returnToSessionContext}
+              sx={{ ml: 0.25 }}
+            >
+              <Undo />
+            </IconButton>
+          )}
           {mode === "files" &&
             (navigationHistory.length > 0 ||
               navigationForwardHistory.length > 0) &&
@@ -1983,6 +2300,8 @@ export function ReviewApp({
               <Typography color="text.secondary">
                 {mode === "git"
                   ? "Select a changed file from Git review"
+                  : projectCodeContext
+                  ? "Select a file from the registered project checkout"
                   : "Select a file from the Worktree"}
               </Typography>
             </Stack>
@@ -2364,7 +2683,7 @@ export function ReviewApp({
           onClose={() => {
             setSessionSwitcherOpen(false);
           }}
-          title="Sessions"
+          title={selectedContextProject?.label ?? "Context"}
           forceSheet
           cover
         >
@@ -2379,101 +2698,229 @@ export function ReviewApp({
               pb: "calc(88px + env(safe-area-inset-bottom, 0px))",
             }}
           >
-            {[
-              { label: "Other sessions", sessions: otherSessions },
-              { label: "Current project", sessions: projectSessions },
-            ].map((section) =>
-              section.sessions.length > 0 && (
-                <Stack key={section.label} spacing={0.5}>
+            {contextError && (
+              <Alert severity="error" onClose={() => setContextError(undefined)}>
+                {contextError}
+              </Alert>
+            )}
+            {contextReturnSession && (
+              <ContextPreviousSessionRow
+                session={contextReturnSession}
+                label={projectCodeContext ? "Current session" : "Previous session"}
+                onPick={returnToSessionContext}
+              />
+            )}
+            {!selectedContextProject && (
+              <Stack
+                direction="row"
+                role="tablist"
+                aria-label="Context views"
+                spacing={0.5}
+                sx={{ px: 0.75 }}
+              >
+                {(["recent", "projects"] as const).map((value) => (
+                  <Button
+                    key={value}
+                    role="tab"
+                    aria-selected={contextTab === value}
+                    onClick={() => setContextTab(value)}
+                    sx={{
+                      flex: 1,
+                      minHeight: 40,
+                      borderRadius: 2,
+                      bgcolor: contextTab === value
+                        ? "action.selected"
+                        : "transparent",
+                      color: contextTab === value
+                        ? "text.primary"
+                        : "text.secondary",
+                      textTransform: "none",
+                    }}
+                  >
+                    {value === "recent" ? "Recent" : "Projects"}
+                  </Button>
+                ))}
+              </Stack>
+            )}
+            {!selectedContextProject && contextTab === "recent" && (
+              <Stack spacing={0.5}>
+                <Typography
+                  variant="overline"
+                  color="text.secondary"
+                  sx={{ px: 1.25, fontWeight: 700, letterSpacing: "0.09em" }}
+                >
+                  Recent sessions
+                </Typography>
+                <Stack divider={<Divider flexItem />}>
+                  {sessions.map((session) => (
+                    <ContextSessionRow
+                      key={session.id}
+                      session={session}
+                      selected={session.id === workspace?.sessionId}
+                      onPick={() => switchSession(session)}
+                    />
+                  ))}
+                </Stack>
+              </Stack>
+            )}
+            {!selectedContextProject && contextTab === "projects" && (
+              <Stack spacing={0.5}>
+                <Typography
+                  variant="overline"
+                  color="text.secondary"
+                  sx={{ px: 1.25, fontWeight: 700, letterSpacing: "0.09em" }}
+                >
+                  Registered projects
+                </Typography>
+                <Stack divider={<Divider flexItem />}>
+                  {contextProjects.map((project) => {
+                    const selected = project.label === currentProject &&
+                      project.machineId ===
+                        currentMachineId;
+                    return (
+                      <ListItemButton
+                        key={project.key}
+                        selected={selected}
+                        onClick={() => setContextProjectKey(project.key)}
+                        sx={{ minHeight: 64, px: 1.25, borderRadius: 1.5 }}
+                      >
+                        <FolderOutlined
+                          color={selected ? "primary" : "disabled"}
+                          sx={{ mr: 1.25 }}
+                        />
+                        <Box sx={{ flex: 1, minWidth: 0 }}>
+                          <Typography variant="body2" fontWeight={650} noWrap>
+                            {project.label}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary" noWrap>
+                            {project.machineId} · {project.worktrees.length}{" "}
+                            worktree{project.worktrees.length === 1 ? "" : "s"} ·{" "}
+                            {project.sessions.length} session{project.sessions.length === 1 ? "" : "s"}
+                          </Typography>
+                        </Box>
+                        <ChevronRight color="disabled" fontSize="small" />
+                      </ListItemButton>
+                    );
+                  })}
+                </Stack>
+              </Stack>
+            )}
+            {selectedContextProject && (
+              <Stack spacing={1.25}>
+                <ListItemButton
+                  onClick={() => setContextProjectKey(undefined)}
+                  sx={{ alignSelf: "flex-start", minHeight: 44, borderRadius: 2 }}
+                >
+                  <ChevronLeft sx={{ mr: 0.75 }} />
+                  <Typography variant="body2" fontWeight={650}>All projects</Typography>
+                </ListItemButton>
+                {selectedContextProject.registeredWorkspace && (
+                  <ListItemButton
+                    selected={projectCodeContext?.workspaceId ===
+                      selectedContextProject.registeredWorkspace.id &&
+                      projectCodeContext.machineId === selectedContextProject.machineId}
+                    onClick={() => openProjectTarget(selectedContextProject)}
+                    sx={{
+                      minHeight: 64,
+                      px: 1.25,
+                      borderRadius: 1.5,
+                    }}
+                  >
+                    <FolderOpenOutlined color="primary" sx={{ mr: 1.25 }} />
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                      <Typography variant="body2" fontWeight={700} noWrap>
+                        Project code
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" noWrap>
+                        Browse the current merged checkout
+                      </Typography>
+                      <Typography
+                        variant="caption"
+                        color="text.disabled"
+                        sx={{ display: "block" }}
+                        noWrap
+                      >
+                        {selectedContextProject.registeredWorkspace.canonicalPath}
+                      </Typography>
+                    </Box>
+                    <ChevronRight color="disabled" fontSize="small" />
+                  </ListItemButton>
+                )}
+                {selectedContextProject.worktrees.length > 0 && (
                   <Typography
                     variant="overline"
                     color="text.secondary"
                     sx={{ px: 1.25, fontWeight: 700, letterSpacing: "0.09em" }}
                   >
-                    {section.label}
+                    Session worktrees
                   </Typography>
-                  <Stack divider={<Divider flexItem />}>
-                    {section.sessions.map((session) => {
-                      const selected = session.id === workspace?.sessionId;
-                      const project = sessionProject(session);
-                      return (
-                        <ListItemButton
-                          key={session.id}
-                          selected={selected}
-                          onClick={() => switchSession(session)}
-                          sx={{
-                            minHeight: 68,
-                            px: 1.25,
-                            py: 0.75,
-                            borderRadius: 1.5,
-                            gap: 1.25,
-                          }}
+                )}
+                {selectedContextProject.worktrees.map((worktree) => {
+                  const currentWorktree = worktree.path === currentSession?.cwd;
+                  const label = currentWorktree && repositoryContext?.branch
+                    ? repositoryContext.branch
+                    : worktree.label;
+                  const onlySession = worktree.sessions.length === 1
+                    ? worktree.sessions[0]
+                    : undefined;
+                  return (
+                    <Stack key={worktree.key} spacing={0.375}>
+                      <ListItemButton
+                        onClick={() => {
+                          const latest = worktree.sessions[0];
+                          if (latest) switchSession(latest);
+                        }}
+                        sx={{ minHeight: 64, px: 1.25, borderRadius: 1.5 }}
+                      >
+                        <AccountTreeOutlined color="primary" sx={{ mr: 1.25 }} />
+                        <Box sx={{ flex: 1, minWidth: 0 }}>
+                          <Typography variant="body2" fontWeight={700} noWrap>
+                            {label}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary" noWrap>
+                            {onlySession
+                              ? `Open worktree · ${onlySession.title}`
+                              : `Open worktree · ${worktree.sessions.length} sessions`}
+                          </Typography>
+                          <Typography
+                            variant="caption"
+                            color="text.disabled"
+                            sx={{ display: "block" }}
+                            noWrap
+                          >
+                            {worktree.path}
+                          </Typography>
+                        </Box>
+                        <ChevronRight color="disabled" fontSize="small" />
+                      </ListItemButton>
+                      {worktree.sessions.length > 1 && (
+                        <Stack
+                          sx={{ ml: 2.25, borderLeft: 1, borderColor: "divider" }}
+                          divider={<Divider flexItem />}
                         >
-                          <Box
-                            aria-label={`${session.status} session`}
-                            sx={{
-                              width: 8,
-                              height: 8,
-                              flex: "0 0 auto",
-                              borderRadius: "50%",
-                              bgcolor: sessionStatusColor(session.status),
-                            }}
-                          />
-                          <Box sx={{ flex: 1, minWidth: 0 }}>
-                            <Stack
-                              direction="row"
-                              spacing={0.75}
-                              alignItems="baseline"
-                            >
-                              <Typography
-                                variant="body2"
-                                fontWeight={selected ? 700 : 600}
-                                noWrap
-                              >
-                                {session.title}
-                              </Typography>
-                              {selected && (
-                                <Typography
-                                  variant="caption"
-                                  color="primary.main"
-                                >
-                                  Current
-                                </Typography>
-                              )}
-                            </Stack>
-                            <Stack spacing={0.125} sx={{ mt: 0.125 }}>
-                              <Typography
-                                variant="caption"
-                                color="text.secondary"
-                                noWrap
-                              >
-                                {session.machine_id ?? "local"} ·{" "}
-                                {session.provider} · {project}
-                              </Typography>
-                              <Typography
-                                variant="caption"
-                                color="text.disabled"
-                                noWrap
-                              >
-                                {session.cwd}
-                              </Typography>
-                            </Stack>
-                          </Box>
-                          <ChevronRight color="disabled" fontSize="small" />
-                        </ListItemButton>
-                      );
-                    })}
-                  </Stack>
-                </Stack>
-              )
+                          {worktree.sessions.map((session) => (
+                            <ContextSessionRow
+                              key={session.id}
+                              session={session}
+                              selected={session.id === workspace?.sessionId}
+                              showWorktree={false}
+                              onPick={() => switchSession(session)}
+                            />
+                          ))}
+                        </Stack>
+                      )}
+                    </Stack>
+                  );
+                })}
+              </Stack>
             )}
-            {displayedSessions.length === 0 && (
+            {contextTab === "recent" && sessions.length === 0 && (
               <Typography
                 color="text.secondary"
                 variant="body2"
                 sx={{ py: 3, textAlign: "center" }}
               >
-                No matching sessions
+                No sessions yet
               </Typography>
             )}
           </Stack>

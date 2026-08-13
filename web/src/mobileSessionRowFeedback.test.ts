@@ -30,3 +30,16 @@ Deno.test("touch session rows do not retain synthetic hover or focus paint", () 
     3,
   );
 });
+
+Deno.test("session rows mark grip touches before propagation is stopped", () => {
+  const capture = rowSource.indexOf("onPointerDownCapture={(event)");
+  const bubble = rowSource.indexOf("onPointerDown={(event)");
+  assertEquals(capture >= 0, true);
+  assertEquals(bubble > capture, true);
+  assertEquals(
+    rowSource.slice(capture, bubble).includes(
+      'event.currentTarget.dataset.touchActivated = "true"',
+    ),
+    true,
+  );
+});

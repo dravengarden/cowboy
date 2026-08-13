@@ -8,7 +8,9 @@ import {
   fetchCodeOutline,
   fetchCodeSearch,
   fetchCodeTree,
+  isTransientCodeApiStatus,
   openCodeBuffer,
+  shouldCloseUnavailableSource,
 } from "./codeApi.ts";
 
 Deno.test("tree requests preserve paths and explicit refresh bypasses caches", async () => {
@@ -278,4 +280,19 @@ Deno.test("buffer leases use an idempotent stable Code contract", async () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+Deno.test("Code API retries only transient failures", () => {
+  for (const status of [undefined, 304, 409, 410, 502, 503, 504]) {
+    assertEquals(isTransientCodeApiStatus(status), true);
+  }
+  for (const status of [400, 404, 415, 422]) {
+    assertEquals(isTransientCodeApiStatus(status), false);
+  }
+});
+
+Deno.test("missing source files close stale tabs without hiding missing diffs", () => {
+  assertEquals(shouldCloseUnavailableSource("source", 404), true);
+  assertEquals(shouldCloseUnavailableSource("source", 415), false);
+  assertEquals(shouldCloseUnavailableSource("diff", 404), false);
 });

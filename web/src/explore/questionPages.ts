@@ -160,6 +160,11 @@ export function deriveQuestionPages(items: RenderItem[]): QuestionPage[] {
       continue;
     }
 
+    // Clear starts a new transcript epoch and cannot belong to an older
+    // question. Leaving its divider as a provisional page makes an empty Page
+    // View try to restore the divider as question history forever.
+    if (!current && item.kind === "cleared") continue;
+
     // A bounded history snapshot can begin in the middle of an answer while its
     // root user prompt is still on the next older HTTP page. Keep those leading
     // rows addressable as a provisional page instead of dropping them. When the

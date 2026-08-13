@@ -17,6 +17,7 @@ the same binary is both frontend and backend.
 | `GET /api/workspaces` | selectable session roots plus matching central Columbus work items |
 | `GET /api/sessions/{id}/files?q&limit` | the composer `@` picker (gitignore-aware fuzzy search) |
 | `GET /api/sessions/{id}/info` | metadata + event / queue / draft counts |
+| `POST /api/sessions/{id}/reload` | atomically rebuild the worker while preserving the Cowboy/native session, transcript, pending state, and saved config |
 | `POST /api/sessions` | create a session, returns the cowboy `session_id` |
 | `POST /api/sessions/{id}/prompt` | machine-driven session wake |
 | `GET /api/history/{id}/{page}` | fixed-size, seq-aligned history page (`immutable` once the next page exists) |

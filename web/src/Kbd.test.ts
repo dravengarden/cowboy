@@ -29,4 +29,5 @@ Deno.test("confirm modals accept only the platform Command chord", () => {
   assertEquals(confirmEnterIntent(event), "confirm");
   assertEquals(confirmEnterIntent(keyEvent({ shiftKey: true })), "ignore");
   assertEquals(confirmEnterIntent(keyEvent({ isComposing: true })), "ignore");
+  assertEquals(confirmEnterIntent(keyEvent({ keyCode: 229 })), "ignore");
 });

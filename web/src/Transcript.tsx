@@ -117,6 +117,7 @@ import {
   transcriptScrollHasReaderIntent,
   wheelLeavesLatest,
 } from "./transcriptFollowIntent";
+import { transcriptRowContainment } from "./transcriptMotion";
 import { markTranscriptScrollActivity } from "./transcriptRenderPacing";
 import {
   historyPrefetchTransition,
@@ -125,6 +126,7 @@ import {
   scrollbackReplacementFromTop,
   shouldBackfillTranscriptViewport,
   shouldContinueScrollbackFill,
+  shouldPrefetchVisibleScrollbackBoundary,
   shouldRecoverUnrenderableHistory,
   shouldShowFreshSessionEmptyState,
   shouldShowClearedConversationEmptyState,
@@ -144,6 +146,7 @@ import { Sheet } from "./Sheet";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 import { DesktopShortcutBar } from "./desktop/DesktopShortcutBar";
+import { isImeKeyEvent } from "./imeKey";
 
 const EMPTY_OPTIMISTIC_MESSAGES: QueuedMessage[] = [];
 // A byte-bounded history page can contain only a few tall tool/Markdown rows.
@@ -581,6 +584,7 @@ function ConversationEmptyState({
       onClick={interactive ? focusPrimaryComposer : undefined}
       onKeyDown={interactive
         ? (event): void => {
+          if (isImeKeyEvent(event.nativeEvent)) return;
           if (event.key !== "Enter" && event.key !== " ") return;
           event.preventDefault();
           focusPrimaryComposer();
@@ -1846,6 +1850,7 @@ function ToolCard({
               "aria-expanded": selected,
               "aria-haspopup": "dialog" as const,
               onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>): void => {
+                if (isImeKeyEvent(event.nativeEvent)) return;
                 if (event.key === "Enter" || event.key === " ") {
                   event.preventDefault();
                   openDetail();
@@ -3427,6 +3432,7 @@ export function Transcript({
     !!lastItem &&
     ((lastItem.kind === "message" && lastItem.role === "assistant") ||
       lastItem.kind === "thought");
+  const streamingRowKey = lastIsStreamingAssistant ? lastItem.key : null;
   const compacting = working && isCompactingTail(timeline);
   const showLiveCompactionRequest = working &&
     isCompactionRequestTail(timeline);
@@ -3476,10 +3482,21 @@ export function Transcript({
   const scrollbackRetryTimerRef = useRef<number | null>(null);
   const scrollbackFillActiveRef = useRef(false);
   const scrollbackFillRunRef = useRef(0);
+  const scrollbackBoundaryBootstrapKeyRef = useRef("");
+  const scrollbackBoundaryBootstrapRequestedRef = useRef(false);
+  const visibleScrollbackBoundaryRafRef = useRef(0);
   const requestOlderPageRef = useRef<() => void>(() => undefined);
+  const requestVisibleScrollbackBoundaryRef = useRef<() => void>(() => undefined);
   const requestViewportBackfillRef = useRef<
     (fromResize: boolean) => void
   >(() => undefined);
+  const scrollbackBoundaryBootstrapKey = `${sessionId}:${
+    managesScrollHistory ? "history" : `page:${pageId ?? ""}`
+  }`;
+  if (scrollbackBoundaryBootstrapKeyRef.current !== scrollbackBoundaryBootstrapKey) {
+    scrollbackBoundaryBootstrapKeyRef.current = scrollbackBoundaryBootstrapKey;
+    scrollbackBoundaryBootstrapRequestedRef.current = false;
+  }
   reportScrollableRef.current = (): void => {
     const el = parentRef.current;
     if (!el) return;
@@ -3560,6 +3577,7 @@ export function Transcript({
       !managesScrollHistoryRef.current || !el ||
       scrollbackFillActiveRef.current
     ) return;
+    scrollbackBoundaryBootstrapRequestedRef.current = true;
     const run = ++scrollbackFillRunRef.current;
     scrollbackFillActiveRef.current = true;
     setScrollbackFailed(false);
@@ -3938,6 +3956,56 @@ export function Transcript({
   const pageIdRef = useRef(pageId);
   pageIdRef.current = pageId;
   const viewportRestoreActiveRef = useRef(false);
+  requestVisibleScrollbackBoundaryRef.current = (): void => {
+    if (visibleScrollbackBoundaryRafRef.current !== 0) return;
+    const requestedKey = scrollbackBoundaryBootstrapKeyRef.current;
+    visibleScrollbackBoundaryRafRef.current = requestAnimationFrame(() => {
+      visibleScrollbackBoundaryRafRef.current = 0;
+      if (requestedKey !== scrollbackBoundaryBootstrapKeyRef.current) return;
+      const el = parentRef.current;
+      const currentPaging = pagingRef.current;
+      const boundary = el?.querySelector<HTMLElement>(
+        "[data-transcript-scrollback-fill]",
+      );
+      if (!el || !currentPaging || !boundary) return;
+      const viewportRect = el.getBoundingClientRect();
+      const boundaryRect = boundary.getBoundingClientRect();
+      if (!shouldPrefetchVisibleScrollbackBoundary({
+        managed: managesScrollHistoryRef.current,
+        restoring: viewportRestoreActiveRef.current,
+        requested: scrollbackBoundaryBootstrapRequestedRef.current,
+        busy: scrollbackFillActiveRef.current || currentPaging.loadingOlder,
+        reachedStart: currentPaging.reachedStart,
+        beforeSeq: currentPaging.beforeSeq,
+        viewportTop: viewportRect.top,
+        viewportBottom: viewportRect.bottom,
+        boundaryTop: boundaryRect.top,
+        boundaryBottom: boundaryRect.bottom,
+      })) return;
+      scrollbackBoundaryBootstrapRequestedRef.current = true;
+      requestOlderPageRef.current();
+    });
+  };
+  useLayoutEffect(() => {
+    // Bootstrap can receive pagination after the viewport restoration effect
+    // has already settled. Re-measure on either side of that race; the request
+    // guard permits only one automatic fill for this History entry.
+    requestVisibleScrollbackBoundaryRef.current();
+  }, [
+    items.length,
+    paging?.beforeSeq,
+    paging?.loadingOlder,
+    paging?.reachedStart,
+    sessionId,
+  ]);
+  useEffect(() => {
+    return () => {
+      if (visibleScrollbackBoundaryRafRef.current !== 0) {
+        cancelAnimationFrame(visibleScrollbackBoundaryRafRef.current);
+        visibleScrollbackBoundaryRafRef.current = 0;
+      }
+    };
+  }, []);
   const pageWorkingRef = useRef({
     key: `${sessionId}:${pageId ?? ""}`,
     working,
@@ -4221,6 +4289,7 @@ export function Transcript({
       pointerScrolling = false;
     };
     const onKeyDown = (event: KeyboardEvent): void => {
+      if (isImeKeyEvent(event)) return;
       // Same boundary rule for keyboard repeat: ArrowDown/PageDown/End/Space
       // may continue firing after reaching the bottom and must not undo the
       // `scroll` handler's automatic re-enable.
@@ -4550,6 +4619,7 @@ export function Transcript({
       stick.current = false;
       setSticky(sessionId, false);
       viewportRestoreActiveRef.current = false;
+      requestVisibleScrollbackBoundaryRef.current();
       return undefined;
     }
     const mode = managesScrollHistory ? "history" : "page";
@@ -4609,6 +4679,7 @@ export function Transcript({
         raf = requestAnimationFrame(position);
       } else {
         viewportRestoreActiveRef.current = false;
+        requestVisibleScrollbackBoundaryRef.current();
       }
     };
     raf = requestAnimationFrame(position);
@@ -4947,12 +5018,15 @@ export function Transcript({
                   </Box>
                 ))}
               {items
-                .map((item, i) => ({ item, i }))
+                .slice()
                 .reverse()
-                .map(({ item, i }) => (
+                .map((item) => (
                   <Box
                     key={item.key}
                     data-key={item.key}
+                    data-streaming-row={item.key === streamingRowKey
+                      ? "true"
+                      : undefined}
                     {...(desktopNavigation
                       ? {
                         "data-desktop-item": item.key,
@@ -4963,14 +5037,14 @@ export function Transcript({
                       py: 0.625,
                       display: "flex",
                       flexDirection: "column",
-                      // Give every timeline row an independent paint boundary.
-                      // WebKit can otherwise retain a previous composited tool
-                      // card for one frame while a streamed sibling thought is
-                      // inserted/reflowed, visibly drawing the two rows on top of
-                      // each other even though their layout boxes do not overlap.
-                      // This does not size-contain the row: intrinsic Markdown and
-                      // tool height still contribute normally to scrollHeight.
-                      contain: "layout paint",
+                      // Settled rows stay independently painted so a streamed
+                      // sibling cannot expose a stale tool-card layer. Keep the
+                      // actively growing row in the scroller's paint flow so
+                      // WebKit commits its new raster and column-reverse scroll
+                      // compensation in the same frame.
+                      contain: transcriptRowContainment(
+                        item.key === streamingRowKey,
+                      ),
                       color: locatedToolKey === item.key ? "primary.main" : undefined,
                       animation: locatedToolKey === item.key
                         ? `${toolLocateFlash} 1.4s ease-out`
@@ -4985,7 +5059,7 @@ export function Transcript({
                   >
                     <ItemView
                       item={item}
-                      streaming={working && i === lastIdx}
+                      streaming={item.key === streamingRowKey}
                       provider={provider}
                       desktop={desktopNavigation}
                       selectedToolKey={selectedToolKey}

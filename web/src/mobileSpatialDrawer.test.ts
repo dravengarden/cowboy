@@ -1,4 +1,5 @@
 import { assert, assertEquals } from "jsr:@std/assert";
+import { mobileSpatialDrawerShadow } from "./mobileDrawerDepth.ts";
 
 const drawerSource = await Deno.readTextFile(
   new URL("./mobileSpatialDrawer.ts", import.meta.url),
@@ -6,12 +7,29 @@ const drawerSource = await Deno.readTextFile(
 const appSource = await Deno.readTextFile(
   new URL("./App.tsx", import.meta.url),
 );
+const productShellSource = await Deno.readTextFile(
+  new URL("./mobile/shell/MobileProductShell.tsx", import.meta.url),
+);
+const reviewDrawerSource = await Deno.readTextFile(
+  new URL("./mobile/review/ReviewDrawerShell.tsx", import.meta.url),
+);
 
 Deno.test("mobile drawer keeps clipping and shadows off the heavy surface", () => {
   assertEquals(drawerSource.includes("surface.style.borderRadius"), false);
   assertEquals(drawerSource.includes("surface.style.boxShadow"), false);
   assert(drawerSource.includes("drawerMask.style.boxShadow"));
   assert(drawerSource.includes('surface.style.willChange = "transform"'));
+});
+
+Deno.test("drawer shadows project back toward each revealed drawer", () => {
+  assertEquals(
+    mobileSpatialDrawerShadow("left"),
+    "-18px 0 42px rgba(0,0,0,0.16)",
+  );
+  assertEquals(
+    mobileSpatialDrawerShadow("right"),
+    "18px 0 42px rgba(0,0,0,0.16)",
+  );
 });
 
 Deno.test("Agent drawer publishes pager ownership synchronously", () => {
@@ -29,4 +47,22 @@ Deno.test("Agent drawer publishes pager ownership synchronously", () => {
     appSource.includes("onMobileDrawerOpenChange?.(drawerOpen)"),
     false,
   );
+});
+
+Deno.test("settled drawers retain declarative depth and pager ownership", () => {
+  assert(appSource.includes(
+    'data-mobile-drawer-presented={mobile && drawerOpen ? "true" : undefined}',
+  ));
+  assert(appSource.includes(
+    'boxShadow: drawerOpen\n                            ? mobileSpatialDrawerShadow("left")',
+  ));
+  assert(reviewDrawerSource.includes(
+    'data-mobile-drawer-presented={open ? "true" : undefined}',
+  ));
+  assert(reviewDrawerSource.includes(
+    'boxShadow: open ? mobileSpatialDrawerShadow("right") : "none"',
+  ));
+  assert(productShellSource.includes(
+    '"[data-mobile-drawer-presented=\'true\']',
+  ));
 });
