@@ -188,7 +188,7 @@ pub(crate) fn question_summary_title(text: &str, ordinal: u64) -> String {
         ) || character.is_ascii_digit()
     });
     if trimmed.is_empty() {
-        return format!("Question {ordinal}");
+        return format!("Page {ordinal}");
     }
     let mut chars = trimmed.chars();
     let title = chars.by_ref().take(72).collect::<String>();
@@ -196,6 +196,17 @@ pub(crate) fn question_summary_title(text: &str, ordinal: u64) -> String {
         format!("{}…", title.trim_end())
     } else {
         title
+    }
+}
+
+#[cfg(test)]
+mod question_summary_title_tests {
+    use super::question_summary_title;
+
+    #[test]
+    fn empty_page_titles_use_page_view_terminology() {
+        assert_eq!(question_summary_title("7", 7), "Page 7");
+        assert_eq!(question_summary_title("###", 12), "Page 12");
     }
 }
 

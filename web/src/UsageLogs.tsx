@@ -129,30 +129,66 @@ function LogDetail({
     return <Typography variant="caption" color="error.main">{state.error ?? "Detail unavailable"}</Typography>;
   }
   return (
-    <Stack spacing={1} sx={{ pt: 1 }}>
+    <Stack spacing={1.25} sx={{ pt: 1.15 }}>
       {state.value.sections.map((section) => (
-        <Box key={section.title}>
-          <Typography variant="caption" color="text.secondary" fontWeight={700}>
+        <Box
+          key={section.title}
+          sx={{
+            border: 1,
+            borderColor: "divider",
+            borderRadius: 1.5,
+            overflow: "hidden",
+            bgcolor: (theme) => alpha(theme.palette.background.paper, 0.42),
+          }}
+        >
+          <Typography
+            variant="overline"
+            color="text.secondary"
+            sx={{ display: "block", px: 1.25, py: 0.55, borderBottom: 1, borderColor: "divider" }}
+          >
             {section.title}
           </Typography>
-          <Stack spacing={0.35} sx={{ mt: 0.4 }}>
+          <Box
+            sx={{
+              display: "grid",
+              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+              gap: 0.75,
+              px: 1.25,
+              py: 0.85,
+              "@media (max-width: 720px)": { gridTemplateColumns: "minmax(0, 1fr)" },
+            }}
+          >
             {section.fields.map((field) => {
               const copyKey = `${state.value?.id ?? "detail"}:${section.title}:${field.label}`;
               return (
-                <Stack
+                <Box
                   key={`${section.title}:${field.label}`}
-                  direction="row"
-                  spacing={1}
-                  alignItems="flex-start"
-                  justifyContent="space-between"
+                  sx={{
+                    minWidth: 0,
+                    px: 0.9,
+                    py: 0.7,
+                    borderRadius: 1,
+                    bgcolor: "action.hover",
+                  }}
                 >
-                  <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
+                  <Typography variant="caption" color="text.secondary" display="block">
                     {field.label}
                   </Typography>
-                  <Stack direction="row" spacing={0.25} alignItems="flex-start" sx={{ minWidth: 0 }}>
+                  <Stack
+                    direction="row"
+                    spacing={0.5}
+                    alignItems="flex-start"
+                    sx={{ minWidth: 0, mt: 0.2 }}
+                  >
                     <Typography
                       variant="caption"
-                      sx={{ textAlign: "right", overflowWrap: "anywhere", fontFamily: field.copyable ? "monospace" : undefined }}
+                      sx={{
+                        minWidth: 0,
+                        flex: 1,
+                        overflowWrap: "anywhere",
+                        fontFamily: field.copyable ? "monospace" : undefined,
+                        lineHeight: 1.55,
+                      }}
                     >
                       {field.value}
                     </Typography>
@@ -162,17 +198,17 @@ function LogDetail({
                           size="small"
                           aria-label={`Copy ${field.label}`}
                           onClick={() => onCopy(copyKey, field.value)}
-                          sx={{ p: 0.25 }}
+                          sx={{ width: 24, height: 24, p: 0, mt: -0.35, flexShrink: 0 }}
                         >
                           {copiedKey === copyKey ? <Check sx={{ fontSize: 14 }} /> : <ContentCopy sx={{ fontSize: 13 }} />}
                         </IconButton>
                       </Tooltip>
                     )}
                   </Stack>
-                </Stack>
+                </Box>
               );
             })}
-          </Stack>
+          </Box>
         </Box>
       ))}
       {state.value.evidence !== undefined && (
@@ -182,7 +218,7 @@ function LogDetail({
           </Typography>
           <Box
             component="pre"
-            sx={{ m: 0, mt: 0.6, p: 0.8, maxHeight: 280, overflow: "auto", borderRadius: 1, bgcolor: "action.hover", fontSize: "0.68rem", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
+            sx={{ m: 0, mt: 0.6, p: 1.25, maxHeight: 280, overflow: "auto", border: 1, borderColor: "divider", borderRadius: 1.5, bgcolor: "action.hover", fontSize: "0.68rem", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
           >
             {detailEvidence(state.value.evidence)}
           </Box>

@@ -15,14 +15,42 @@ import {
 const exploreSurfaceSource = await Deno.readTextFile(
   new URL("./ExploreSurface.tsx", import.meta.url),
 );
+const composerSource = await Deno.readTextFile(
+  new URL("../Composer.tsx", import.meta.url),
+);
+const appSource = await Deno.readTextFile(
+  new URL("../App.tsx", import.meta.url),
+);
+const desktopWorkspaceSource = await Deno.readTextFile(
+  new URL("../desktop/DesktopWorkspace.tsx", import.meta.url),
+);
 
 Deno.test("mobile Page Dock retains disabled previous and next slots", () => {
   assertEquals(exploreSurfaceSource.includes("onlyCompletePage"), false);
   assertEquals(exploreSurfaceSource.includes('aria-label="Next page"'), true);
   assertEquals(
-    exploreSurfaceSource.includes('? "Load earlier questions"\n                      : "Previous page"'),
+    exploreSurfaceSource.includes('? "Load earlier pages"\n                      : "Previous page"'),
     true,
   );
+});
+
+Deno.test("Page view terminology is consistent across user-facing surfaces", () => {
+  const surfaces = appSource + composerSource + exploreSurfaceSource +
+    desktopWorkspaceSource;
+  assertEquals(composerSource.includes("Page view"), true);
+  assertEquals(exploreSurfaceSource.includes('title="Page Index"'), true);
+  assertEquals(exploreSurfaceSource.includes("            Pages\n"), true);
+  assertEquals(desktopWorkspaceSource.includes("Pages"), true);
+  for (const retired of [
+    "Question pages",
+    "Question Navigator",
+    "Question directory",
+    "Search questions",
+    "Loading earlier questions",
+    "Open question pages",
+  ]) {
+    assertEquals(surfaces.includes(retired), false, retired);
+  }
 });
 
 Deno.test("mobile question pages do not duplicate Page Dock navigation in the transcript", () => {
@@ -196,7 +224,7 @@ Deno.test("a partial history tail keeps leading answer rows addressable", () => 
     assistant("next-answer", "Next answer"),
   ]);
 
-  assertEquals(pages[0]?.title, "Earlier question");
+  assertEquals(pages[0]?.title, "Earlier page");
   assertEquals(pages[0]?.itemKeys, ["answer-tail"]);
   assertEquals(pageContainingItemKey(pages, "answer-tail")?.id, "answer-tail");
 });

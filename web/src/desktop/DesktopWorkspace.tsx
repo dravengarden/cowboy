@@ -272,7 +272,7 @@ export function DesktopWorkspace({
               "& .MuiButton-startIcon": { mr: 0 },
             }}
           >
-            Questions
+            Pages
             <ShortcutKeycap keyLabel="P" variant="global" accent sx={{ ml: 0.15 }} />
           </Button>
           <Box sx={{ flex: 1 }} />
@@ -321,7 +321,7 @@ export function DesktopWorkspace({
             <Box
               role="separator"
               aria-orientation="vertical"
-              aria-label="Resize question directory"
+              aria-label="Resize page index"
               title="Resize layout · Ctrl+W </>"
               aria-valuemin={READING_QUESTIONS_MIN}
               aria-valuemax={READING_QUESTIONS_MAX}

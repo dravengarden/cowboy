@@ -175,7 +175,7 @@ function PageTurnFooter({
             component="span"
             variant="caption"
             color="text.secondary"
-            title={question ?? "Untitled question"}
+            title={question ?? "Untitled page"}
             sx={{
               display: "-webkit-box",
               overflow: "hidden",
@@ -185,7 +185,7 @@ function PageTurnFooter({
               lineHeight: 1.25,
             }}
           >
-            {question ?? "Untitled question"}
+            {question ?? "Untitled page"}
           </Typography>
         </Box>
         {desktop && (
@@ -241,7 +241,7 @@ function PageTurnFooter({
         ? <Box aria-hidden />
         : (
           <Button
-            aria-label={`Previous question: ${previousQuestion ?? "Untitled question"}`}
+            aria-label={`Previous page: ${previousQuestion ?? "Untitled page"}`}
             disabled={loadingPrevious || loadingNext}
             onClick={onPrevious}
             sx={{ ...actionSx, justifySelf: "stretch", minWidth: 0, width: "100%" }}
@@ -267,7 +267,7 @@ function PageTurnFooter({
         ? <Box aria-hidden />
         : (
           <Button
-            aria-label={`Next question: ${nextQuestion ?? "Untitled question"}`}
+            aria-label={`Next page: ${nextQuestion ?? "Untitled page"}`}
             disabled={loadingPrevious || loadingNext}
             onClick={onNext}
             sx={{ ...actionSx, justifySelf: "stretch", minWidth: 0, width: "100%" }}
@@ -299,13 +299,13 @@ function DesktopQuestionDirectoryCommand({
 }): null {
   const command = useMemo<DesktopCommand>(() => ({
     id: "conversation.toggleQuestionDirectory",
-    title: "Toggle Question Navigator",
-    description: "Find and jump to a question page",
+    title: "Toggle Page Index",
+    description: "Find and jump to a page",
     group: "Conversation",
     shortcut: "P",
     contexts: ["conversation"],
     when: () => available,
-    disabledReason: "No question pages are available",
+    disabledReason: "No pages are available",
     run: toggle,
   }), [available, toggle]);
   useDesktopCommand(command);
@@ -687,7 +687,7 @@ function PageList({
           list.scrollTop = rowBottom - list.clientHeight;
         }
         const close = list
-          .closest<HTMLElement>('[role="dialog"][aria-label="Question pages"]')
+          .closest<HTMLElement>('[role="dialog"][aria-label="Page index"]')
           ?.querySelector<HTMLElement>('button[aria-label="Close"]');
         if (close) {
           const overlap = selected.getBoundingClientRect().bottom -
@@ -969,7 +969,7 @@ function PageList({
             onSearchFocusChange?.(true);
           }}
           onBlur={(): void => onSearchFocusChange?.(false)}
-          placeholder="Search questions"
+          placeholder="Search pages"
           slotProps={{
             input: {
               startAdornment: (
@@ -996,7 +996,7 @@ function PageList({
           role={showEarlierLoading && !query.trim() ? "status" : undefined}
           aria-live={showEarlierLoading && !query.trim() ? "polite" : undefined}
           aria-label={showEarlierLoading && !query.trim()
-            ? "Loading earlier questions"
+            ? "Loading earlier pages"
             : undefined}
           aria-hidden={!showEarlierLoading || !!query.trim()}
           sx={{
@@ -1025,7 +1025,7 @@ function PageList({
         >
           <CircularProgress size={15} thickness={5} color="inherit" />
           <Typography variant="caption" sx={{ fontWeight: 650, whiteSpace: "nowrap" }}>
-            Loading earlier questions
+            Loading earlier pages
           </Typography>
         </Box>
         <List
@@ -1126,7 +1126,7 @@ function PageList({
                 />
                 {loadingPageId === page.id && (
                   <CircularProgress
-                    aria-label="Loading question"
+                    aria-label="Loading page"
                     size={17}
                     thickness={5}
                     color="inherit"
@@ -1293,7 +1293,7 @@ export function DesktopReadingQuestionDirectory({
   return (
     <Box
       component="aside"
-      aria-label="Question directory"
+      aria-label="Page index"
       data-reading-question-sidebar
       data-desktop-region="conversation.questions"
       sx={{
@@ -1314,7 +1314,7 @@ export function DesktopReadingQuestionDirectory({
         <ListAltOutlined color="primary" sx={{ fontSize: "1.1rem" }} />
         <Box sx={{ minWidth: 0, flex: 1 }}>
           <Typography variant="subtitle2" sx={{ fontWeight: 750, lineHeight: 1.2 }}>
-            Questions
+            Pages
           </Typography>
           <Typography variant="caption" color="text.secondary">
             Latest first · {projection === "explore" ? "Page" : "History"}
@@ -1330,7 +1330,7 @@ export function DesktopReadingQuestionDirectory({
             : `${String(total)}${pageIndex.data?.exact === false ? "+" : ""}`}
         </Typography>
       </Stack>
-      <Box component="nav" aria-label="Questions" sx={{ flex: 1, minHeight: 0 }}>
+      <Box component="nav" aria-label="Page index" sx={{ flex: 1, minHeight: 0 }}>
         <PageList
           active
           dense
@@ -1808,9 +1808,9 @@ export function ExploreTranscript(
         spacing={1}
         sx={{ flex: 1, color: "text.secondary" }}
       >
-        <Typography variant="h6">No question pages yet</Typography>
+        <Typography variant="h6">No pages yet</Typography>
         <Typography variant="body2">
-          Ask the first question below to begin.
+          Send the first prompt below to begin.
         </Typography>
       </Stack>
     );
@@ -1838,8 +1838,8 @@ export function ExploreTranscript(
         <DesktopModal
           open={desktopDirectoryOpen}
           onClose={closeDesktopDirectory}
-          title="Question Navigator"
-          description={`${String(total)} questions · newest first · j/k move · l/Enter open`}
+          title="Page Index"
+          description={`${String(total)} pages · newest first · j/k move · l/Enter open`}
           icon={<ListAltOutlined color="primary" />}
           width={620}
           shortcutGroups={[
@@ -1932,7 +1932,7 @@ export function ExploreTranscript(
         >
           <Box
             component="nav"
-            aria-label="Question pages"
+            aria-label="Page index"
             data-desktop-region="conversation.questions"
             sx={{ height: "min(640px, calc(100vh - 190px))", minHeight: 320 }}
           >
@@ -1961,7 +1961,7 @@ export function ExploreTranscript(
           ? (
             <Stack
               role="status"
-              aria-label="Loading question history"
+              aria-label="Loading page history"
               spacing={2.25}
               sx={{
                 flex: 1,
@@ -2284,7 +2284,7 @@ export function MobilePageDock({
     <Box data-mobile-page-dock="true">
       <Paper
         component="nav"
-        aria-label="Question pages"
+        aria-label="Page view navigation"
         variant="outlined"
         elevation={0}
         sx={{
@@ -2312,13 +2312,13 @@ export function MobilePageDock({
           }}
         >
           <Tooltip title={hasEarlierHistory && !indexedPrevious && !previous
-                ? "Load earlier questions"
+                ? "Load earlier pages"
                 : "Previous page"}
               >
                 <span>
                   <IconButton
                     aria-label={hasEarlierHistory && !indexedPrevious && !previous
-                      ? "Load earlier questions"
+                      ? "Load earlier pages"
                       : "Previous page"}
                     disabled={(!indexedPrevious && !previous && !hasEarlierHistory) ||
                       loadingPrevious || loadingNext}
@@ -2378,7 +2378,7 @@ export function MobilePageDock({
           </Tooltip>
         </Stack>
         <Button
-          aria-label="Open question pages"
+          aria-label="Open page index"
           onClick={(): void => setOpen(true)}
           startIcon={<ListAltOutlined />}
           sx={{
@@ -2457,10 +2457,10 @@ export function MobilePageDock({
               </IconButton>
             </span>
           </Tooltip>
-          <Tooltip title={composeOpen ? "Close question editor" : "Open question editor"}>
+          <Tooltip title={composeOpen ? "Close page editor" : "Open page editor"}>
             <IconButton
               color="primary"
-              aria-label={composeOpen ? "Close question editor" : "Open question editor"}
+              aria-label={composeOpen ? "Close page editor" : "Open page editor"}
               aria-pressed={composeOpen}
               {...composeToggleTap}
               sx={{
@@ -2483,7 +2483,7 @@ export function MobilePageDock({
       <DetentSheet
         open={open}
         onClose={closePageDirectory}
-        ariaLabel="Question pages"
+        ariaLabel="Page index"
         frosted
         cover
         footer={
@@ -2497,7 +2497,7 @@ export function MobilePageDock({
               },
               {
                 key: "latest",
-                label: "Scroll to latest question",
+                label: "Scroll to latest page",
                 onPress: scrollPageDirectoryToLatest,
                 visible: pageDirectoryAwayFromBottom,
                 icon: <ArrowDownward aria-hidden sx={{ fontSize: "1.25em" }} />,

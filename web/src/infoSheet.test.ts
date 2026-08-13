@@ -48,3 +48,19 @@ Deno.test("nested observability sheets portal their scrims above the iOS safe ar
     true,
   );
 });
+
+Deno.test("desktop Info uses independent columns and compact metric tiles", () => {
+  assertEquals(infoSheetSource.includes('gridRow: "1 / span 4"'), false);
+  assertEquals(infoSheetSource.includes("repeat(2, minmax(0, 1fr))"), true);
+  assertEquals(infoSheetSource.includes('bgcolor: "action.hover"'), true);
+});
+
+Deno.test("diagnostic detail keeps labels and values in a bounded grid", () => {
+  assertEquals(
+    usageLogsSource.includes('gridTemplateColumns: "repeat(2, minmax(0, 1fr))"'),
+    true,
+  );
+  assertEquals(usageLogsSource.includes('"@media (max-width: 720px)"'), true);
+  assertEquals(usageLogsSource.includes('textAlign: "right"'), false);
+  assertEquals(usageLogsSource.includes('borderColor: "divider"'), true);
+});

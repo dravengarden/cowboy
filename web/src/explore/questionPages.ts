@@ -125,7 +125,7 @@ export function questionTitle(item: RenderItem, ordinal: number): string {
     .replace(/^[#>*+\-\d.\s`]+/, "")
     .replace(/\s+/g, " ")
     .trim();
-  if (!text) return `Question ${String(ordinal)}`;
+  if (!text) return `Page ${String(ordinal)}`;
   return text.length > 72 ? `${text.slice(0, 69).trimEnd()}…` : text;
 }
 
@@ -173,7 +173,7 @@ export function deriveQuestionPages(items: RenderItem[]): QuestionPage[] {
     if (!current) {
       current = {
         id: item.key,
-        title: "Earlier question",
+        title: "Earlier page",
         itemKeys: [item.key],
         questionCount: 0,
         startsAt: index,

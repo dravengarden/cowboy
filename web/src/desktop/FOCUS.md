@@ -153,7 +153,7 @@ session state, not a global top-bar action. While Conversation is focused:
 
 - Page View's question navigator is transient rather than a permanent column:
   `p` opens it as a modal without resizing or covering one side of the reader,
-  presents newest questions first, and uses Vim list navigation: `j/k` moves
+  presents newest pages first, and uses Vim list navigation: `j/k` moves
   the cursor, `l`/`Enter` opens, `h`/`Escape` closes, `Ctrl-d/u` and
   `Ctrl-f/b` scroll, `gg/G` jumps to the first/last row, and `/` focuses
   search. The global status line replaces ordinary reader shortcuts with
@@ -347,7 +347,7 @@ window movement never collapses or selects them as an intermediate stop.
 
 `Ctrl-W <` and `Ctrl-W >` shrink or grow the nearest visible vertical boundary
 by 16px and enter layout Resize mode: Sessions / Prompt from Sessions, Prompt /
-Conversation from either work pane, or Questions / Page in Reading mode. This
+Conversation from either work pane, or Page index / Page in Reading mode. This
 matches Vim's window-width vocabulary and leaves `Ctrl-W R` available for its
 standard rotate meaning. The selected bar uses the shared accent and keycap
 language; `H/L` moves it by 16px, `Shift-H/L` moves it by 48px, `Tab` cycles
