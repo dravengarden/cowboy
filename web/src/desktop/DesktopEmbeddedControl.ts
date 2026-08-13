@@ -6,6 +6,11 @@ import { alpha, type Theme } from "@mui/material";
  * intentionally owns a separate touch language. */
 export const DESKTOP_SURFACE_RADIUS = 10;
 export const DESKTOP_INSET_RADIUS = 6;
+/** Shared top-bar control geometry. Keep every first-level control on the
+ * same baseline, including the nested session lifecycle cluster. */
+export const DESKTOP_TOPBAR_CONTROL_HEIGHT = 38;
+export const DESKTOP_TOPBAR_CONTROL_GAP = 0.75;
+export const DESKTOP_TOPBAR_CONTROL_GAP_PX = 6;
 
 export function desktopSurfaceSx({
   active = false,
@@ -67,7 +72,7 @@ export function desktopSessionActionSx({
 } = {}) {
   return {
     ...desktopEmbeddedControlSx({ active, open }),
-    height: 36,
+    height: DESKTOP_TOPBAR_CONTROL_HEIGHT,
     minWidth,
     px: 0.75,
     flexShrink: 0,

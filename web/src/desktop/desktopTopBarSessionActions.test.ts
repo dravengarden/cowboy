@@ -45,7 +45,21 @@ Deno.test("desktop session actions share compact geometry without duplicate cont
   assert(
     embeddedControlSource.includes("export function desktopSessionActionSx"),
   );
-  assert(embeddedControlSource.includes("height: 36"));
+  assert(
+    embeddedControlSource.includes(
+      "export const DESKTOP_TOPBAR_CONTROL_HEIGHT = 38",
+    ),
+  );
+  assert(
+    embeddedControlSource.includes("height: DESKTOP_TOPBAR_CONTROL_HEIGHT"),
+  );
+});
+
+Deno.test("desktop top-bar controls share height and spacing vocabulary", () => {
+  assert(topBarSource.includes("DESKTOP_TOPBAR_CONTROL_HEIGHT"));
+  assert(topBarSource.includes("DESKTOP_TOPBAR_CONTROL_GAP"));
+  assert(topBarSource.includes("DESKTOP_TOPBAR_CONTROL_GAP_PX"));
+  assert(topBarSource.includes("spacing={DESKTOP_TOPBAR_CONTROL_GAP}"));
 });
 
 Deno.test("desktop Stop remains mounted and becomes disabled while idle", () => {

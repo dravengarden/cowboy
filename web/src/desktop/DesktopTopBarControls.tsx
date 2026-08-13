@@ -75,6 +75,9 @@ import { type UsageWidgetProvider, usageWidgetProviders } from "../usageWidget";
 import { DesktopModal } from "./DesktopModal";
 import {
   DESKTOP_INSET_RADIUS,
+  DESKTOP_TOPBAR_CONTROL_GAP,
+  DESKTOP_TOPBAR_CONTROL_GAP_PX,
+  DESKTOP_TOPBAR_CONTROL_HEIGHT,
   desktopEmbeddedControlSx,
   desktopSessionActionSx,
 } from "./DesktopEmbeddedControl";
@@ -1159,15 +1162,17 @@ export function DesktopTopBarControls({
     ) + Math.max(0, widgetProviders.length - 1) * 4 + 44;
   const sessionActionsMinWidth = 90 + (compactAction ? 96 : 0) +
     (clearAction ? 80 : 0) + 80 +
-    (2 + Number(Boolean(compactAction)) + Number(Boolean(clearAction))) * 3;
-  const controlsMinWidth = 190 + usageMinWidth + sessionActionsMinWidth + 12;
+    (2 + Number(Boolean(compactAction)) + Number(Boolean(clearAction))) *
+      DESKTOP_TOPBAR_CONTROL_GAP_PX;
+  const controlsMinWidth = 190 + usageMinWidth + sessionActionsMinWidth +
+    2 * DESKTOP_TOPBAR_CONTROL_GAP_PX;
 
   return (
     <Stack
       data-desktop-topbar-controls
       direction="row"
       alignItems="center"
-      spacing={0.75}
+      spacing={DESKTOP_TOPBAR_CONTROL_GAP}
       sx={{
         flex: "0 0 auto",
         minWidth: controlsMinWidth,
@@ -1176,8 +1181,12 @@ export function DesktopTopBarControls({
       }}
     >
       {options.length === 0 && !dead &&
-          (status === "starting" || status === "running")
-        ? <Skeleton variant="rounded" width={300} height={34} />
+        (status === "starting" || status === "running")
+        ? <Skeleton
+            variant="rounded"
+            width={300}
+            height={DESKTOP_TOPBAR_CONTROL_HEIGHT}
+          />
         : (
           <Tooltip title={configSummary || "Run configuration"}>
               <Button
@@ -1202,7 +1211,7 @@ export function DesktopTopBarControls({
                     open: configAnchor !== null,
                   }),
                   width: "clamp(190px, 18vw, 260px)",
-                  height: 34,
+                  height: DESKTOP_TOPBAR_CONTROL_HEIGHT,
                   px: 1.15,
                   justifyContent: "flex-start",
                   textTransform: "none",
@@ -1294,7 +1303,7 @@ export function DesktopTopBarControls({
               active: shortcutsActive,
               open: usageAnchor !== null,
             }),
-            height: 38,
+            height: DESKTOP_TOPBAR_CONTROL_HEIGHT,
             px: 0.75,
             gap: 0.65,
             flexShrink: 0,
@@ -1413,7 +1422,7 @@ export function DesktopTopBarControls({
       <Stack
         data-desktop-session-actions
         direction="row"
-        spacing={0.375}
+        spacing={DESKTOP_TOPBAR_CONTROL_GAP}
         alignItems="center"
         sx={{ flexShrink: 0 }}
       >
