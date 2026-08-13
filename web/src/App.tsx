@@ -1745,7 +1745,9 @@ type SettingsTab = "settings" | "info";
 
 type ControlCenterViewTransition = {
     finished: Promise<void>;
+    ready: Promise<void>;
     skipTransition: () => void;
+    updateCallbackDone: Promise<void>;
 };
 
 type ControlCenterViewTransitionDocument = Document & {
@@ -4730,6 +4732,11 @@ function SettingsShell({
                     },
                 );
                 viewTransitionRef.current = transition;
+                // `skipTransition()` intentionally rejects `ready` when a
+                // second tab wins the race. Consume every native lifecycle
+                // promise so rapid navigation remains console-clean.
+                void transition.ready.catch(() => undefined);
+                void transition.updateCallbackDone.catch(() => undefined);
                 void transition.finished
                     .catch(() => undefined)
                     .finally(() => {
