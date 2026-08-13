@@ -48,6 +48,8 @@ import {
   scheduledResetCountdown,
   type UsageLimit,
   usageLimits,
+  usageResetProvider,
+  usageResetSchedule,
   type UsageSnapshot,
 } from "./usageLimits";
 import {
@@ -1186,6 +1188,10 @@ function ProviderUsageCard({
     : [];
   const nearestCredit = nearestAvailableResetCredit(usage);
   const nearestCreditId = str(nearestCredit?.id);
+  const resetProvider = usageResetProvider(usage);
+  const resetEndpoint = resetProvider === undefined
+    ? undefined
+    : `/api/usage/${resetProvider}/reset`;
   const summary = record(usage.activity?.summary);
   const title = ACCOUNT_PROVIDER_NAMES[usage.provider] ?? usage.provider;
   const statusLabel = plan
@@ -1215,10 +1221,11 @@ function ProviderUsageCard({
     setResetError(null);
   };
   const cancelSchedule = async (): Promise<void> => {
+    if (resetEndpoint === undefined) return;
     setResetBusy(true);
     setResetError(null);
     try {
-      const response = await fetch("/api/usage/codex/reset/schedule", {
+      const response = await fetch(`${resetEndpoint}/schedule`, {
         method: "DELETE",
       });
       if (!response.ok) {
@@ -1237,14 +1244,14 @@ function ProviderUsageCard({
   };
   const submitReset = async (): Promise<void> => {
     if (
-      resetBusy || confirmText !== "confirm" ||
+      resetEndpoint === undefined || resetBusy || confirmText !== "confirm" ||
       (resetMode === "schedule" && !scheduleValid)
     ) return;
     setResetBusy(true);
     setResetError(null);
     try {
       const response = resetMode === "schedule"
-        ? await fetch("/api/usage/codex/reset/schedule", {
+        ? await fetch(`${resetEndpoint}/schedule`, {
           method: "PUT",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
@@ -1252,7 +1259,7 @@ function ProviderUsageCard({
             confirm: confirmText,
           }),
         })
-        : await fetch("/api/usage/codex/reset", {
+        : await fetch(resetEndpoint, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
@@ -1336,7 +1343,7 @@ function ProviderUsageCard({
           </Stack>
         </Stack>
         {limits.map((limit) => <LimitRow key={limit.id} limit={limit} />)}
-        {usage.provider === "openai" && credits.length > 0 && (
+        {resetProvider !== undefined && credits.length > 0 && (
           <Accordion
             disableGutters
             elevation={0}
@@ -1480,7 +1487,8 @@ function ProviderUsageCard({
           </Accordion>
         )}
         {usage.provider === "deepseek" && <DeepSeekDetails usage={usage} />}
-        {limits.length === 0 && usage.provider !== "deepseek" && (
+        {limits.length === 0 && credits.length === 0 &&
+          usage.provider !== "deepseek" && (
           <Typography variant="body2" color="text.secondary">
             {usage.status === "unavailable"
               ? usage.provider === "anthropic"
@@ -1667,7 +1675,7 @@ function UsageInfoSection(): React.JSX.Element {
         <ProviderUsageCard
           key={provider.provider}
           usage={provider}
-          schedule={snapshot.codex_reset_schedule}
+          schedule={usageResetSchedule(snapshot, provider)}
           now={clock}
           onUsageChanged={() => load(false)}
           onRefresh={() => loadProvider(provider.provider)}

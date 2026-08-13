@@ -8,28 +8,58 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use crate::provider::LaunchSpec;
 use crate::usage::ProviderUsage;
 
+use super::xai_account::AccountSnapshot;
+
 const BILLING_METHOD: &str = "_x.ai/billing";
 const SIGN_IN_MESSAGE: &str = "Sign in to Grok Build in Machines, then refresh xAI usage.";
-pub(crate) const SOURCE: &str = "Grok Build ACP _x.ai/billing";
+pub(crate) const SOURCE: &str = "Grok Build ACP + xAI account APIs";
 
 pub(crate) async fn collect(spec: &LaunchSpec) -> Result<ProviderUsage> {
     let mut server = GrokRpcProcess::start(spec).await?;
     let billing = server.request(BILLING_METHOD, json!({})).await?;
-    Ok(from_billing(billing))
+    let account = match super::xai_account::collect().await {
+        Ok(account) => Some(account),
+        Err(error) => {
+            tracing::warn!(provider = "xai", %error, "reading xAI account metadata");
+            None
+        }
+    };
+    Ok(from_billing(billing, account.as_ref()))
 }
 
-fn from_billing(billing: Value) -> ProviderUsage {
+fn from_billing(mut billing: Value, account: Option<&AccountSnapshot>) -> ProviderUsage {
     let tier = billing
         .get("subscription_tier")
         .or_else(|| billing.get("subscriptionTier"))
         .and_then(Value::as_str)
         .filter(|tier| !tier.trim().is_empty());
+    let plan = account
+        .and_then(|account| account.plan.as_deref())
+        .or(tier)
+        .map(str::to_owned);
+    if let Some(resets) = account.and_then(|account| account.resets.as_ref())
+        && let Some(root) = billing.as_object_mut()
+    {
+        root.insert(
+            "rateLimitResetCredits".to_owned(),
+            json!({
+                "availableCount": resets.len(),
+                "credits": resets.iter().map(|reset| json!({
+                    "id": reset.id,
+                    "status": "available",
+                    "title": "Usage reset",
+                    "grantedAt": reset.granted_at,
+                    "expiresAt": reset.expires_at,
+                })).collect::<Vec<_>>(),
+            }),
+        );
+    }
     ProviderUsage {
         provider: "xai",
         status: "available",
         source: SOURCE,
         observed_at_ms: crate::usage::now_ms(),
-        account: tier.map(|tier| json!({ "account": { "planType": tier } })),
+        account: plan.map(|plan| json!({ "account": { "planType": plan } })),
         rate_limits: Some(billing),
         activity: None,
         error: None,
@@ -167,6 +197,7 @@ impl Drop for GrokRpcProcess {
 #[cfg(test)]
 mod tests {
     use super::{BILLING_METHOD, SIGN_IN_MESSAGE, from_billing, rpc_error_message};
+    use crate::provider_info::xai_account::{AccountSnapshot, ResetCredit};
     use serde_json::json;
 
     #[test]
@@ -176,16 +207,19 @@ mod tests {
 
     #[test]
     fn billing_keeps_the_official_shape_and_surfaces_the_tier() {
-        let usage = from_billing(json!({
-            "config": {
-                "creditUsagePercent": 37.5,
-                "currentPeriod": {
-                    "type": "USAGE_PERIOD_TYPE_WEEKLY",
-                    "end": "2026-08-17T00:00:00Z"
-                }
-            },
-            "subscription_tier": "SuperGrok Heavy"
-        }));
+        let usage = from_billing(
+            json!({
+                "config": {
+                    "creditUsagePercent": 37.5,
+                    "currentPeriod": {
+                        "type": "USAGE_PERIOD_TYPE_WEEKLY",
+                        "end": "2026-08-17T00:00:00Z"
+                    }
+                },
+                "subscription_tier": "SuperGrok Heavy"
+            }),
+            None,
+        );
         assert_eq!(usage.provider, "xai");
         assert_eq!(usage.status, "available");
         assert_eq!(
@@ -206,13 +240,53 @@ mod tests {
 
     #[test]
     fn billing_accepts_the_legacy_camel_case_subscription_tier() {
-        let usage = from_billing(json!({ "subscriptionTier": "SuperGrok" }));
+        let usage = from_billing(json!({ "subscriptionTier": "SuperGrok" }), None);
         assert_eq!(
             usage
                 .account
                 .as_ref()
                 .and_then(|value| value.pointer("/account/planType")),
             Some(&json!("SuperGrok"))
+        );
+    }
+
+    #[test]
+    fn authoritative_subscription_and_reset_fix_the_free_tier() {
+        let account = AccountSnapshot {
+            plan: Some("SuperGrok".to_owned()),
+            resets: Some(vec![ResetCredit {
+                id: "reset-a".to_owned(),
+                granted_at: Some(100),
+                expires_at: Some(200),
+            }]),
+        };
+        let usage = from_billing(
+            json!({
+                "config": { "isUnifiedBillingUser": true },
+                "subscription_tier": "Free"
+            }),
+            Some(&account),
+        );
+        assert_eq!(
+            usage
+                .account
+                .as_ref()
+                .and_then(|value| value.pointer("/account/planType")),
+            Some(&json!("SuperGrok"))
+        );
+        assert_eq!(
+            usage
+                .rate_limits
+                .as_ref()
+                .and_then(|value| value.pointer("/rateLimitResetCredits/availableCount")),
+            Some(&json!(1))
+        );
+        assert_eq!(
+            usage
+                .rate_limits
+                .as_ref()
+                .and_then(|value| value.pointer("/rateLimitResetCredits/credits/0/expiresAt")),
+            Some(&json!(200))
         );
     }
 

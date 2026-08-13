@@ -10,6 +10,7 @@ mod deepseek_pricing;
 mod gemini;
 mod openai;
 mod xai;
+mod xai_account;
 
 use serde_json::{Value, json};
 
@@ -20,6 +21,7 @@ pub(crate) use deepseek::collect as collect_deepseek;
 pub(crate) use deepseek_pricing::decorate_activity as decorate_deepseek_activity;
 pub(crate) use openai::collect as collect_openai;
 pub(crate) use xai::{SOURCE as XAI_SOURCE, collect as collect_xai};
+pub(crate) use xai_account::redeem_reset as redeem_xai_reset;
 
 pub(crate) const PROVIDERS: [&str; 5] = ["deepseek", "openai", "anthropic", "gemini", "xai"];
 

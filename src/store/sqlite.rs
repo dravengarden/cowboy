@@ -1657,36 +1657,42 @@ impl SqliteStorage {
         Ok(result.rows_affected())
     }
 
-    pub(super) async fn upsert_codex_reset(
+    pub(super) async fn upsert_provider_reset(
         &self,
+        provider: &str,
         fire_at_ms: i64,
         idempotency_key: &str,
     ) -> Result<()> {
         sqlx::query(
             "INSERT INTO scheduled_provider_actions \
              (provider, action, fire_at_ms, idempotency_key) \
-             VALUES ('codex', 'rate_limit_reset', ?1, ?2) \
+             VALUES (?1, 'rate_limit_reset', ?2, ?3) \
              ON CONFLICT (provider) DO UPDATE SET action = excluded.action, \
              fire_at_ms = excluded.fire_at_ms, idempotency_key = excluded.idempotency_key, \
              attempt_count = 0, next_attempt_at_ms = excluded.fire_at_ms",
         )
+        .bind(provider)
         .bind(fire_at_ms)
         .bind(idempotency_key)
         .execute(&self.pool)
         .await
-        .context("UPSERT scheduled Codex reset")?;
+        .with_context(|| format!("UPSERT scheduled {provider} reset"))?;
         Ok(())
     }
 
-    pub(super) async fn load_codex_reset(&self) -> Result<Option<ScheduledProviderAction>> {
+    pub(super) async fn load_provider_reset(
+        &self,
+        provider: &str,
+    ) -> Result<Option<ScheduledProviderAction>> {
         let row: Option<(i64, String, i32, Option<i64>)> = sqlx::query_as(
             "SELECT fire_at_ms, idempotency_key, attempt_count, next_attempt_at_ms \
              FROM scheduled_provider_actions \
-             WHERE provider = 'codex' AND action = 'rate_limit_reset'",
+             WHERE provider = ?1 AND action = 'rate_limit_reset'",
         )
+        .bind(provider)
         .fetch_optional(&self.pool)
         .await
-        .context("SELECT scheduled Codex reset")?;
+        .with_context(|| format!("SELECT scheduled {provider} reset"))?;
         Ok(row.map(
             |(fire_at_ms, idempotency_key, attempt_count, next_attempt_at_ms)| {
                 ScheduledProviderAction {
@@ -1699,21 +1705,30 @@ impl SqliteStorage {
         ))
     }
 
-    pub(super) async fn defer_codex_reset(&self, next_attempt_at_ms: i64) -> Result<()> {
+    pub(super) async fn defer_provider_reset(
+        &self,
+        provider: &str,
+        idempotency_key: &str,
+        next_attempt_at_ms: i64,
+    ) -> Result<()> {
         sqlx::query(
             "UPDATE scheduled_provider_actions SET attempt_count = attempt_count + 1, \
-             next_attempt_at_ms = ?1 WHERE provider = 'codex' AND action = 'rate_limit_reset'",
+             next_attempt_at_ms = ?3 WHERE provider = ?1 AND action = 'rate_limit_reset' \
+             AND idempotency_key = ?2",
         )
+        .bind(provider)
+        .bind(idempotency_key)
         .bind(next_attempt_at_ms)
         .execute(&self.pool)
         .await
-        .context("defer scheduled Codex reset")?;
+        .with_context(|| format!("defer scheduled {provider} reset"))?;
         Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn append_provider_action_log(
         &self,
+        provider: &str,
         trigger: &str,
         status: &str,
         phase: &str,
@@ -1734,8 +1749,9 @@ impl SqliteStorage {
         sqlx::query(
             "INSERT INTO provider_action_logs \
              (provider, action, trigger, status, phase, message, credit_id, idempotency_suffix, created_at_ms) \
-             VALUES ('codex', 'rate_limit_reset', ?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             VALUES (?1, 'rate_limit_reset', ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )
+        .bind(provider)
         .bind(trigger)
         .bind(status)
         .bind(phase)
@@ -1790,12 +1806,30 @@ impl SqliteStorage {
             .collect())
     }
 
-    pub(super) async fn delete_codex_reset(&self) -> Result<()> {
-        sqlx::query("DELETE FROM scheduled_provider_actions WHERE provider = 'codex'")
+    pub(super) async fn delete_provider_reset(&self, provider: &str) -> Result<()> {
+        sqlx::query("DELETE FROM scheduled_provider_actions WHERE provider = ?1")
+            .bind(provider)
             .execute(&self.pool)
             .await
-            .context("DELETE scheduled Codex reset")?;
+            .with_context(|| format!("DELETE scheduled {provider} reset"))?;
         Ok(())
+    }
+
+    pub(super) async fn claim_provider_reset(
+        &self,
+        provider: &str,
+        idempotency_key: &str,
+    ) -> Result<bool> {
+        let result = sqlx::query(
+            "DELETE FROM scheduled_provider_actions \
+             WHERE provider = ?1 AND idempotency_key = ?2",
+        )
+        .bind(provider)
+        .bind(idempotency_key)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("claim scheduled {provider} reset"))?;
+        Ok(result.rows_affected() == 1)
     }
 }
 

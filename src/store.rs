@@ -50,6 +50,14 @@ fn valid_machine_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
+fn ensure_reset_provider(provider: &str) -> Result<()> {
+    anyhow::ensure!(
+        matches!(provider, "codex" | "xai"),
+        "unsupported reset provider"
+    );
+    Ok(())
+}
+
 fn hex_sha256(value: &[u8]) -> String {
     let digest = sha2::Sha256::digest(value);
     digest
@@ -293,6 +301,9 @@ fn optional_diagnostic_field(
 }
 
 fn diagnostic_title(value: &str) -> String {
+    if value == "xai" {
+        return "xAI".to_owned();
+    }
     let mut words = value.split('_').filter(|word| !word.is_empty());
     let Some(first) = words.next() else {
         return "Diagnostic event".to_owned();
@@ -634,21 +645,44 @@ impl Store {
         dispatch_storage!(self, expire_machine_reconnects())
     }
 
-    pub async fn upsert_codex_reset(&self, fire_at_ms: i64, idempotency_key: &str) -> Result<()> {
-        dispatch_storage!(self, upsert_codex_reset(fire_at_ms, idempotency_key))
+    pub async fn upsert_provider_reset(
+        &self,
+        provider: &str,
+        fire_at_ms: i64,
+        idempotency_key: &str,
+    ) -> Result<()> {
+        ensure_reset_provider(provider)?;
+        dispatch_storage!(
+            self,
+            upsert_provider_reset(provider, fire_at_ms, idempotency_key)
+        )
     }
 
-    pub async fn load_codex_reset(&self) -> Result<Option<ScheduledProviderAction>> {
-        dispatch_storage!(self, load_codex_reset())
+    pub async fn load_provider_reset(
+        &self,
+        provider: &str,
+    ) -> Result<Option<ScheduledProviderAction>> {
+        ensure_reset_provider(provider)?;
+        dispatch_storage!(self, load_provider_reset(provider))
     }
 
-    pub async fn defer_codex_reset(&self, next_attempt_at_ms: i64) -> Result<()> {
-        dispatch_storage!(self, defer_codex_reset(next_attempt_at_ms))
+    pub async fn defer_provider_reset(
+        &self,
+        provider: &str,
+        idempotency_key: &str,
+        next_attempt_at_ms: i64,
+    ) -> Result<()> {
+        ensure_reset_provider(provider)?;
+        dispatch_storage!(
+            self,
+            defer_provider_reset(provider, idempotency_key, next_attempt_at_ms)
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
     pub async fn append_provider_action_log(
         &self,
+        provider: &str,
         trigger: &str,
         status: &str,
         phase: &str,
@@ -657,9 +691,11 @@ impl Store {
         idempotency_key: Option<&str>,
         created_at_ms: i64,
     ) -> Result<()> {
+        ensure_reset_provider(provider)?;
         dispatch_storage!(
             self,
             append_provider_action_log(
+                provider,
                 trigger,
                 status,
                 phase,
@@ -675,8 +711,18 @@ impl Store {
         dispatch_storage!(self, provider_action_logs(limit))
     }
 
-    pub async fn delete_codex_reset(&self) -> Result<()> {
-        dispatch_storage!(self, delete_codex_reset())
+    pub async fn delete_provider_reset(&self, provider: &str) -> Result<()> {
+        ensure_reset_provider(provider)?;
+        dispatch_storage!(self, delete_provider_reset(provider))
+    }
+
+    pub async fn claim_provider_reset(
+        &self,
+        provider: &str,
+        idempotency_key: &str,
+    ) -> Result<bool> {
+        ensure_reset_provider(provider)?;
+        dispatch_storage!(self, claim_provider_reset(provider, idempotency_key))
     }
 
     pub async fn next_session_number(&self) -> Result<u64> {
@@ -1270,30 +1316,40 @@ impl PostgresStorage {
         Ok(result.rows_affected())
     }
 
-    pub async fn upsert_codex_reset(&self, fire_at_ms: i64, idempotency_key: &str) -> Result<()> {
+    pub async fn upsert_provider_reset(
+        &self,
+        provider: &str,
+        fire_at_ms: i64,
+        idempotency_key: &str,
+    ) -> Result<()> {
         sqlx::query(
             "INSERT INTO scheduled_provider_actions (provider, action, fire_at_ms, idempotency_key) \
-             VALUES ('codex', 'rate_limit_reset', $1, $2) \
+             VALUES ($1, 'rate_limit_reset', $2, $3) \
              ON CONFLICT (provider) DO UPDATE SET action = EXCLUDED.action, \
              fire_at_ms = EXCLUDED.fire_at_ms, idempotency_key = EXCLUDED.idempotency_key, \
              attempt_count = 0, next_attempt_at_ms = EXCLUDED.fire_at_ms",
         )
+        .bind(provider)
         .bind(fire_at_ms)
         .bind(idempotency_key)
         .execute(&self.pool)
         .await
-        .context("UPSERT scheduled Codex reset")?;
+        .with_context(|| format!("UPSERT scheduled {provider} reset"))?;
         Ok(())
     }
 
-    pub async fn load_codex_reset(&self) -> Result<Option<ScheduledProviderAction>> {
+    pub async fn load_provider_reset(
+        &self,
+        provider: &str,
+    ) -> Result<Option<ScheduledProviderAction>> {
         let row: Option<(i64, String, i32, Option<i64>)> = sqlx::query_as(
             "SELECT fire_at_ms, idempotency_key, attempt_count, next_attempt_at_ms FROM scheduled_provider_actions \
-             WHERE provider = 'codex' AND action = 'rate_limit_reset'",
+             WHERE provider = $1 AND action = 'rate_limit_reset'",
         )
+        .bind(provider)
         .fetch_optional(&self.pool)
         .await
-        .context("SELECT scheduled Codex reset")?;
+        .with_context(|| format!("SELECT scheduled {provider} reset"))?;
         Ok(row.map(
             |(fire_at_ms, idempotency_key, attempt_count, next_attempt_at_ms)| {
                 ScheduledProviderAction {
@@ -1306,21 +1362,30 @@ impl PostgresStorage {
         ))
     }
 
-    pub async fn defer_codex_reset(&self, next_attempt_at_ms: i64) -> Result<()> {
+    pub async fn defer_provider_reset(
+        &self,
+        provider: &str,
+        idempotency_key: &str,
+        next_attempt_at_ms: i64,
+    ) -> Result<()> {
         sqlx::query(
             "UPDATE scheduled_provider_actions SET attempt_count = attempt_count + 1, \
-             next_attempt_at_ms = $1 WHERE provider = 'codex' AND action = 'rate_limit_reset'",
+             next_attempt_at_ms = $3 WHERE provider = $1 AND action = 'rate_limit_reset' \
+             AND idempotency_key = $2",
         )
+        .bind(provider)
+        .bind(idempotency_key)
         .bind(next_attempt_at_ms)
         .execute(&self.pool)
         .await
-        .context("defer scheduled Codex reset")?;
+        .with_context(|| format!("defer scheduled {provider} reset"))?;
         Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
     pub async fn append_provider_action_log(
         &self,
+        provider: &str,
         trigger: &str,
         status: &str,
         phase: &str,
@@ -1341,8 +1406,9 @@ impl PostgresStorage {
         sqlx::query(
             "INSERT INTO provider_action_logs \
              (provider, action, trigger, status, phase, message, credit_id, idempotency_suffix, created_at_ms) \
-             VALUES ('codex', 'rate_limit_reset', $1, $2, $3, $4, $5, $6, $7)",
+             VALUES ($1, 'rate_limit_reset', $2, $3, $4, $5, $6, $7, $8)",
         )
+        .bind(provider)
         .bind(trigger)
         .bind(status)
         .bind(phase)
@@ -1398,12 +1464,30 @@ impl PostgresStorage {
         })
     }
 
-    pub async fn delete_codex_reset(&self) -> Result<()> {
-        sqlx::query("DELETE FROM scheduled_provider_actions WHERE provider = 'codex'")
+    pub async fn delete_provider_reset(&self, provider: &str) -> Result<()> {
+        sqlx::query("DELETE FROM scheduled_provider_actions WHERE provider = $1")
+            .bind(provider)
             .execute(&self.pool)
             .await
-            .context("DELETE scheduled Codex reset")?;
+            .with_context(|| format!("DELETE scheduled {provider} reset"))?;
         Ok(())
+    }
+
+    pub async fn claim_provider_reset(
+        &self,
+        provider: &str,
+        idempotency_key: &str,
+    ) -> Result<bool> {
+        let result = sqlx::query(
+            "DELETE FROM scheduled_provider_actions \
+             WHERE provider = $1 AND idempotency_key = $2",
+        )
+        .bind(provider)
+        .bind(idempotency_key)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("claim scheduled {provider} reset"))?;
+        Ok(result.rows_affected() == 1)
     }
     /// Open a pool against `url`.
     ///
@@ -2622,7 +2706,8 @@ impl PostgresStorage {
                 log.status AS state,
                 initcap(log.provider) || ' ' || replace(log.action, '_', ' ') AS title,
                 log.message AS summary, NULL::text AS session_ref, log.provider,
-                'codex'::text AS agent, NULL::text AS model,
+                CASE WHEN log.provider = 'codex' THEN 'codex'::text ELSE NULL::text END AS agent,
+                NULL::text AS model,
                 'provider_automation'::text AS classification
               FROM provider_action_logs log
               WHERE log.created_at_ms >= $1 AND log.created_at_ms <= $2
@@ -5016,10 +5101,10 @@ mod storage_contract_tests {
     async fn assert_provider_action_contract(store: &Store) -> Result<()> {
         let fire_at_ms = 1_900_000_000_000;
         store
-            .upsert_codex_reset(fire_at_ms, "storage-contract-reset")
+            .upsert_provider_reset("codex", fire_at_ms, "storage-contract-reset")
             .await?;
         let scheduled = store
-            .load_codex_reset()
+            .load_provider_reset("codex")
             .await?
             .context("scheduled provider action was not restored")?;
         assert_eq!(scheduled.fire_at_ms, fire_at_ms);
@@ -5027,15 +5112,18 @@ mod storage_contract_tests {
         assert_eq!(scheduled.attempt_count, 0);
         assert_eq!(scheduled.next_attempt_at_ms, fire_at_ms);
 
-        store.defer_codex_reset(fire_at_ms + 1_000).await?;
+        store
+            .defer_provider_reset("codex", "storage-contract-reset", fire_at_ms + 1_000)
+            .await?;
         let deferred = store
-            .load_codex_reset()
+            .load_provider_reset("codex")
             .await?
             .context("deferred provider action was not restored")?;
         assert_eq!(deferred.attempt_count, 1);
         assert_eq!(deferred.next_attempt_at_ms, fire_at_ms + 1_000);
         store
             .append_provider_action_log(
+                "codex",
                 "scheduled",
                 "succeeded",
                 "contract",
@@ -5053,8 +5141,47 @@ mod storage_contract_tests {
         assert_eq!(action.idempotency_suffix.as_deref(), Some("ct-reset"));
         let diagnostic_id = format!("automation:{}", action.id);
         assert!(store.diagnostic_log_detail(&diagnostic_id).await?.is_some());
-        store.delete_codex_reset().await?;
-        assert!(store.load_codex_reset().await?.is_none());
+        store.delete_provider_reset("codex").await?;
+        assert!(store.load_provider_reset("codex").await?.is_none());
+
+        store
+            .upsert_provider_reset("xai", fire_at_ms + 2_000, "storage-contract-xai-reset")
+            .await?;
+        let xai = store
+            .load_provider_reset("xai")
+            .await?
+            .context("scheduled xAI provider action was not restored")?;
+        assert_eq!(xai.fire_at_ms, fire_at_ms + 2_000);
+        assert!(
+            !store
+                .claim_provider_reset("xai", "stale-storage-contract-key")
+                .await?
+        );
+        store
+            .append_provider_action_log(
+                "xai",
+                "scheduled",
+                "scheduled",
+                "contract",
+                "xAI storage contract action",
+                None,
+                Some("storage-contract-xai-reset"),
+                fire_at_ms + 2_000,
+            )
+            .await?;
+        let xai_log = store
+            .provider_action_logs(10)
+            .await?
+            .into_iter()
+            .find(|log| log.provider == "xai")
+            .context("xAI provider action log was not restored")?;
+        assert_eq!(xai_log.status, "scheduled");
+        assert!(
+            store
+                .claim_provider_reset("xai", "storage-contract-xai-reset")
+                .await?
+        );
+        assert!(store.load_provider_reset("xai").await?.is_none());
         Ok(())
     }
 

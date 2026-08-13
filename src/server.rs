@@ -232,19 +232,24 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         tokio::spawn(run_machine_presence_sweeper(store, shutdown))
     });
     let runtime_router = RuntimeRouter::new();
-    // Reset credits belong to the Codex account, not a session. Restore one
-    // shared provider-level timer and keep it independent from session queues.
+    // Reset credits belong to provider accounts, not sessions. Restore one
+    // shared timer per provider and keep them independent from session queues.
     if let Some(store) = store.as_ref() {
-        match store.load_codex_reset().await {
-            Ok(Some(action)) => {
-                usage
-                    .set_reset_schedule(Some(crate::usage::CodexResetSchedule {
-                        fire_at_ms: action.fire_at_ms,
-                    }))
-                    .await;
+        for provider in crate::usage::RESET_PROVIDERS {
+            match store.load_provider_reset(provider).await {
+                Ok(Some(action)) => {
+                    usage
+                        .set_reset_schedule(
+                            provider,
+                            Some(crate::usage::ResetSchedule {
+                                fire_at_ms: action.fire_at_ms,
+                            }),
+                        )
+                        .await;
+                }
+                Ok(None) => {}
+                Err(error) => tracing::warn!(%error, %provider, "loading scheduled provider reset"),
             }
-            Ok(None) => {}
-            Err(error) => tracing::warn!(%error, "loading scheduled Codex reset"),
         }
     }
     let reset_task = {
@@ -253,107 +258,181 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         let mut shutdown = shutdown_rx.clone();
         tokio::spawn(async move {
             loop {
-                let action = match store.as_ref() {
-                    Some(store) => store.load_codex_reset().await.ok().flatten(),
-                    None => None,
-                };
-                if let Some(action) = action.filter(|item| item.next_attempt_at_ms <= now_ms()) {
-                    let key = action.idempotency_key;
-                    if let Some(store) = store.as_ref() {
-                        let _ = store
-                            .append_provider_action_log(
-                                "scheduled",
-                                "started",
-                                "preflight",
-                                "Scheduled reset attempt started",
-                                None,
-                                Some(&key),
-                                now_ms(),
-                            )
-                            .await;
-                    }
-                    match usage.consume_nearest_reset(&key, None).await {
-                        Ok(result) => {
-                            tracing::info!(outcome = %result.outcome, "scheduled Codex reset finished");
-                            if let Some(store) = store.as_ref() {
-                                let _ = store
-                                    .append_provider_action_log(
-                                        "scheduled",
-                                        "succeeded",
-                                        "provider_response",
-                                        &result.outcome,
-                                        result.credit_id.as_deref(),
-                                        Some(&key),
-                                        now_ms(),
-                                    )
-                                    .await;
+                for provider in crate::usage::RESET_PROVIDERS {
+                    let action = match store.as_ref() {
+                        Some(store) => store.load_provider_reset(provider).await.ok().flatten(),
+                        None => None,
+                    };
+                    if let Some(action) = action.filter(|item| item.next_attempt_at_ms <= now_ms())
+                    {
+                        let key = action.idempotency_key;
+                        // xAI does not accept an idempotency key. Claim its
+                        // one-shot timer before any provider call so a crash or
+                        // ambiguous response cannot consume a later reset on
+                        // an automatic retry.
+                        if provider == "xai" {
+                            let Some(store) = store.as_ref() else {
+                                continue;
+                            };
+                            match store.claim_provider_reset(provider, &key).await {
+                                Ok(true) => {}
+                                Ok(false) => continue,
+                                Err(error) => {
+                                    tracing::error!(%error, %provider, "claiming scheduled provider reset");
+                                    continue;
+                                }
                             }
-                            if let Some(store) = store.as_ref()
-                                && let Err(error) = store.delete_codex_reset().await
-                            {
-                                tracing::warn!(%error, "clearing scheduled Codex reset");
-                            }
-                            usage.set_reset_schedule(None).await;
+                            usage.set_reset_schedule(provider, None).await;
                         }
-                        Err(error) => {
-                            if scheduled_reset_failure_policy(
-                                error.call_may_have_reached_provider,
-                                action.attempt_count,
-                            ) == ScheduledResetFailurePolicy::StopUnknown
-                            {
-                                tracing::error!(%error, "scheduled Codex reset outcome unknown; automatic retry disabled");
+                        if let Some(store) = store.as_ref() {
+                            let _ = store
+                                .append_provider_action_log(
+                                    provider,
+                                    "scheduled",
+                                    "started",
+                                    "preflight",
+                                    "Scheduled reset attempt started",
+                                    None,
+                                    Some(&key),
+                                    now_ms(),
+                                )
+                                .await;
+                        }
+                        match usage.consume_nearest_reset(provider, &key, None).await {
+                            Ok(result) => {
+                                tracing::info!(%provider, outcome = %result.outcome, "scheduled provider reset finished");
                                 if let Some(store) = store.as_ref() {
                                     let _ = store
                                         .append_provider_action_log(
+                                            provider,
                                             "scheduled",
-                                            "unknown",
-                                            "consume",
-                                            &error.to_string(),
-                                            error.credit_id.as_deref(),
+                                            "succeeded",
+                                            "provider_response",
+                                            &result.outcome,
+                                            result.credit_id.as_deref(),
                                             Some(&key),
                                             now_ms(),
                                         )
                                         .await;
-                                    let _ = store.delete_codex_reset().await;
                                 }
-                                usage.set_reset_schedule(None).await;
-                            } else if scheduled_reset_failure_policy(false, action.attempt_count)
-                                == ScheduledResetFailurePolicy::RetryPreflight
-                            {
-                                tracing::warn!(%error, "scheduled Codex reset preflight failed; retrying safely");
-                                if let Some(store) = store.as_ref() {
-                                    let _ = store
-                                        .append_provider_action_log(
-                                            "scheduled",
-                                            "retrying",
-                                            "preflight",
-                                            &error.to_string(),
-                                            error.credit_id.as_deref(),
-                                            Some(&key),
-                                            now_ms(),
-                                        )
-                                        .await;
-                                    let _ = store
-                                        .defer_codex_reset(now_ms().saturating_add(60_000))
-                                        .await;
+                                if provider != "xai"
+                                    && let Some(store) = store.as_ref()
+                                {
+                                    match store.claim_provider_reset(provider, &key).await {
+                                        Ok(true) => usage.set_reset_schedule(provider, None).await,
+                                        Ok(false) => {}
+                                        Err(error) => {
+                                            tracing::warn!(%error, %provider, "clearing scheduled provider reset");
+                                        }
+                                    }
                                 }
-                            } else {
-                                tracing::error!(%error, "scheduled Codex reset preflight retry limit reached");
-                                if let Some(store) = store.as_ref() {
-                                    let _ = store
-                                        .append_provider_action_log(
-                                            "scheduled",
-                                            "failed",
-                                            "preflight",
-                                            &error.to_string(),
-                                            error.credit_id.as_deref(),
-                                            Some(&key),
-                                            now_ms(),
-                                        )
-                                        .await;
-                                    let _ = store.delete_codex_reset().await;
+                            }
+                            Err(error) => {
+                                if provider == "xai" {
+                                    let (status, phase) = if error.call_may_have_reached_provider {
+                                        ("unknown", "consume")
+                                    } else {
+                                        ("failed", "preflight")
+                                    };
+                                    tracing::error!(%error, %provider, "scheduled one-shot provider reset stopped without retry");
+                                    if let Some(store) = store.as_ref() {
+                                        let _ = store
+                                            .append_provider_action_log(
+                                                provider,
+                                                "scheduled",
+                                                status,
+                                                phase,
+                                                &error.to_string(),
+                                                error.credit_id.as_deref(),
+                                                Some(&key),
+                                                now_ms(),
+                                            )
+                                            .await;
+                                    }
+                                    continue;
                                 }
-                                usage.set_reset_schedule(None).await;
+                                if scheduled_reset_failure_policy(
+                                    error.call_may_have_reached_provider,
+                                    action.attempt_count,
+                                ) == ScheduledResetFailurePolicy::StopUnknown
+                                {
+                                    tracing::error!(%error, %provider, "scheduled provider reset outcome unknown; automatic retry disabled");
+                                    if let Some(store) = store.as_ref() {
+                                        let _ = store
+                                            .append_provider_action_log(
+                                                provider,
+                                                "scheduled",
+                                                "unknown",
+                                                "consume",
+                                                &error.to_string(),
+                                                error.credit_id.as_deref(),
+                                                Some(&key),
+                                                now_ms(),
+                                            )
+                                            .await;
+                                        match store.claim_provider_reset(provider, &key).await {
+                                            Ok(true) => {
+                                                usage.set_reset_schedule(provider, None).await;
+                                            }
+                                            Ok(false) => {}
+                                            Err(clear_error) => {
+                                                tracing::warn!(%clear_error, %provider, "clearing scheduled provider reset");
+                                            }
+                                        }
+                                    }
+                                } else if scheduled_reset_failure_policy(
+                                    false,
+                                    action.attempt_count,
+                                ) == ScheduledResetFailurePolicy::RetryPreflight
+                                {
+                                    tracing::warn!(%error, %provider, "scheduled provider reset preflight failed; retrying safely");
+                                    if let Some(store) = store.as_ref() {
+                                        let _ = store
+                                            .append_provider_action_log(
+                                                provider,
+                                                "scheduled",
+                                                "retrying",
+                                                "preflight",
+                                                &error.to_string(),
+                                                error.credit_id.as_deref(),
+                                                Some(&key),
+                                                now_ms(),
+                                            )
+                                            .await;
+                                        let _ = store
+                                            .defer_provider_reset(
+                                                provider,
+                                                &key,
+                                                now_ms().saturating_add(60_000),
+                                            )
+                                            .await;
+                                    }
+                                } else {
+                                    tracing::error!(%error, %provider, "scheduled provider reset preflight retry limit reached");
+                                    if let Some(store) = store.as_ref() {
+                                        let _ = store
+                                            .append_provider_action_log(
+                                                provider,
+                                                "scheduled",
+                                                "failed",
+                                                "preflight",
+                                                &error.to_string(),
+                                                error.credit_id.as_deref(),
+                                                Some(&key),
+                                                now_ms(),
+                                            )
+                                            .await;
+                                        match store.claim_provider_reset(provider, &key).await {
+                                            Ok(true) => {
+                                                usage.set_reset_schedule(provider, None).await;
+                                            }
+                                            Ok(false) => {}
+                                            Err(clear_error) => {
+                                                tracing::warn!(%clear_error, %provider, "clearing scheduled provider reset");
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -1344,10 +1423,10 @@ async fn serve_axum(
         )
         .route("/api/usage/{provider}", post(api_usage_provider_refresh))
         .route("/api/usage/logs", get(api_usage_logs))
-        .route("/api/usage/codex/reset", post(api_codex_reset))
+        .route("/api/usage/{provider}/reset", post(api_provider_reset))
         .route(
-            "/api/usage/codex/reset/schedule",
-            put(api_codex_reset_schedule).delete(api_codex_reset_cancel),
+            "/api/usage/{provider}/reset/schedule",
+            put(api_provider_reset_schedule).delete(api_provider_reset_cancel),
         )
         .route("/metrics", get(prometheus_metrics))
         .route("/api/workspaces", get(api_workspaces))
@@ -1885,13 +1964,13 @@ mod deepseek_activity_filter_tests {
 }
 
 #[derive(Deserialize)]
-struct CodexResetScheduleRequest {
+struct ResetScheduleRequest {
     fire_at_ms: i64,
     confirm: String,
 }
 
 #[derive(Deserialize)]
-struct CodexResetRequest {
+struct ResetRequest {
     confirm: String,
     expected_credit_id: String,
 }
@@ -1916,10 +1995,22 @@ fn new_reset_idempotency_key() -> String {
     )
 }
 
-async fn api_codex_reset(
+fn reset_provider_supported(provider: &str) -> bool {
+    crate::usage::RESET_PROVIDERS.contains(&provider)
+}
+
+async fn api_provider_reset(
     State(state): State<Arc<AppState>>,
-    Json(request): Json<CodexResetRequest>,
+    Path(provider): Path<String>,
+    Json(request): Json<ResetRequest>,
 ) -> Response {
+    if !reset_provider_supported(&provider) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "provider does not support usage resets",
+        )
+            .into_response();
+    }
     if request.confirm != "confirm" {
         return (StatusCode::BAD_REQUEST, "confirmation must be confirm").into_response();
     }
@@ -1927,6 +2018,7 @@ async fn api_codex_reset(
     if let Some(store) = state.store.as_ref() {
         let _ = store
             .append_provider_action_log(
+                &provider,
                 "manual",
                 "started",
                 "preflight",
@@ -1939,13 +2031,14 @@ async fn api_codex_reset(
     }
     match state
         .usage
-        .consume_nearest_reset(&key, Some(&request.expected_credit_id))
+        .consume_nearest_reset(&provider, &key, Some(&request.expected_credit_id))
         .await
     {
         Ok(result) => {
             if let Some(store) = state.store.as_ref() {
                 let _ = store
                     .append_provider_action_log(
+                        &provider,
                         "manual",
                         "succeeded",
                         "provider_response",
@@ -1972,6 +2065,7 @@ async fn api_codex_reset(
                 };
                 let _ = store
                     .append_provider_action_log(
+                        &provider,
                         "manual",
                         status,
                         phase,
@@ -1987,10 +2081,18 @@ async fn api_codex_reset(
     }
 }
 
-async fn api_codex_reset_schedule(
+async fn api_provider_reset_schedule(
     State(state): State<Arc<AppState>>,
-    Json(request): Json<CodexResetScheduleRequest>,
+    Path(provider): Path<String>,
+    Json(request): Json<ResetScheduleRequest>,
 ) -> Response {
+    if !reset_provider_supported(&provider) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "provider does not support usage resets",
+        )
+            .into_response();
+    }
     if request.confirm != "confirm" {
         return (StatusCode::BAD_REQUEST, "confirmation must be confirm").into_response();
     }
@@ -2009,11 +2111,15 @@ async fn api_codex_reset_schedule(
             .into_response();
     };
     let key = new_reset_idempotency_key();
-    if let Err(error) = store.upsert_codex_reset(request.fire_at_ms, &key).await {
+    if let Err(error) = store
+        .upsert_provider_reset(&provider, request.fire_at_ms, &key)
+        .await
+    {
         return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
     }
     let _ = store
         .append_provider_action_log(
+            &provider,
             "scheduled",
             "scheduled",
             "timer",
@@ -2025,14 +2131,27 @@ async fn api_codex_reset_schedule(
         .await;
     state
         .usage
-        .set_reset_schedule(Some(crate::usage::CodexResetSchedule {
-            fire_at_ms: request.fire_at_ms,
-        }))
+        .set_reset_schedule(
+            &provider,
+            Some(crate::usage::ResetSchedule {
+                fire_at_ms: request.fire_at_ms,
+            }),
+        )
         .await;
     Json(state.usage.snapshot().await).into_response()
 }
 
-async fn api_codex_reset_cancel(State(state): State<Arc<AppState>>) -> Response {
+async fn api_provider_reset_cancel(
+    State(state): State<Arc<AppState>>,
+    Path(provider): Path<String>,
+) -> Response {
+    if !reset_provider_supported(&provider) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "provider does not support usage resets",
+        )
+            .into_response();
+    }
     let Some(store) = state.store.as_ref() else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -2040,11 +2159,12 @@ async fn api_codex_reset_cancel(State(state): State<Arc<AppState>>) -> Response 
         )
             .into_response();
     };
-    if let Err(error) = store.delete_codex_reset().await {
+    if let Err(error) = store.delete_provider_reset(&provider).await {
         return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
     }
     let _ = store
         .append_provider_action_log(
+            &provider,
             "scheduled",
             "cancelled",
             "timer",
@@ -2054,7 +2174,7 @@ async fn api_codex_reset_cancel(State(state): State<Arc<AppState>>) -> Response 
             now_ms(),
         )
         .await;
-    state.usage.set_reset_schedule(None).await;
+    state.usage.set_reset_schedule(&provider, None).await;
     StatusCode::NO_CONTENT.into_response()
 }
 
