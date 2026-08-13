@@ -68,11 +68,12 @@ const GROK_MODEL_CONFIG_ID: &str = "model";
 const GROK_REASONING_CONFIG_ID: &str = "reasoning_effort";
 const GROK_SESSION_MODE_CONFIG_ID: &str = "session_mode";
 
-// Grok Build shipped model switching before ACP v1 standardized that request.
-// Keep this wire-only compatibility type local so a future schema upgrade can
-// delete it without changing Cowboy's provider-independent command contract.
+// Grok Build exposes the unstable ACP model-switch request as
+// `session/set_model`. Keep this wire-only compatibility type local so a future
+// schema upgrade can delete it without changing Cowboy's provider-independent
+// command contract.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, JsonRpcRequest)]
-#[request(method = "session/setModel", response = GrokSetSessionModelResponse)]
+#[request(method = "session/set_model", response = GrokSetSessionModelResponse)]
 #[serde(rename_all = "camelCase")]
 struct GrokSetSessionModelRequest {
     session_id: SessionId,
@@ -829,14 +830,14 @@ mod startup_mode_tests {
     }
 
     #[test]
-    fn grok_model_switch_carries_reasoning_effort_in_meta() {
+    fn grok_model_switch_uses_upstream_wire_method_and_carries_reasoning_effort() {
         let request = grok_model_request(
             SessionId::new("grok-session"),
             "grok-4.5".to_owned(),
             Some("high"),
         );
         let value = serde_json::to_value(&request).expect("serialize Grok request");
-        assert_eq!(request.method(), "session/setModel");
+        assert_eq!(request.method(), "session/set_model");
         assert_eq!(value["sessionId"], "grok-session");
         assert_eq!(value["modelId"], "grok-4.5");
         assert_eq!(value["_meta"]["reasoningEffort"], "high");
