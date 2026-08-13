@@ -781,6 +781,9 @@ here says otherwise.
     next quiet page-head group. Automatic visible-boundary requests are guarded
     once per `beforeSeq`, not once per session: advancing the cursor must re-arm
     the guard so a newly visible skeleton converges without requiring a scroll.
+    Retained projections apply their saved offset after the first layout pass,
+    so boundary detection must converge across the bounded viewport-restoration
+    window rather than trusting one `requestAnimationFrame` measurement.
     A failure replaces the skeleton with a
     visible Retry row rather than clipping the action above placeholder cards.
 

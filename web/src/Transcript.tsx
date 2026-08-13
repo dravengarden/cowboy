@@ -172,6 +172,10 @@ const SCROLLBACK_FILL_PAGE_LIMIT = 10;
 const SCROLLBACK_FILL_SETTLE_MS = 96;
 const SCROLLBACK_IDLE_BOUNDARY_HEIGHT = 132;
 const SCROLLBACK_MOUNT_WAIT_MS = 900;
+// Retained session projections can apply their saved scroll offset after the
+// first boundary measurement. Converge through the same bounded restoration
+// window instead of requiring a user scroll to produce another measurement.
+const VISIBLE_SCROLLBACK_SETTLE_FRAME_LIMIT = 120;
 
 async function waitForScrollbackMount(
   el: HTMLElement,
@@ -3963,7 +3967,8 @@ export function Transcript({
   requestVisibleScrollbackBoundaryRef.current = (): void => {
     if (visibleScrollbackBoundaryRafRef.current !== 0) return;
     const requestedKey = scrollbackBoundaryBootstrapKeyRef.current;
-    visibleScrollbackBoundaryRafRef.current = requestAnimationFrame(() => {
+    let attempts = 0;
+    const measure = (): void => {
       visibleScrollbackBoundaryRafRef.current = 0;
       if (requestedKey !== scrollbackBoundaryBootstrapKeyRef.current) return;
       const el = parentRef.current;
@@ -3971,24 +3976,36 @@ export function Transcript({
       const boundary = el?.querySelector<HTMLElement>(
         "[data-transcript-scrollback-fill]",
       );
-      if (!el || !currentPaging || !boundary) return;
-      const viewportRect = el.getBoundingClientRect();
-      const boundaryRect = boundary.getBoundingClientRect();
-      if (!shouldPrefetchVisibleScrollbackBoundary({
-        managed: managesScrollHistoryRef.current,
-        restoring: viewportRestoreActiveRef.current,
-        requested: scrollbackBoundaryBootstrapRequestedRef.current,
-        busy: scrollbackFillActiveRef.current || currentPaging.loadingOlder,
-        reachedStart: currentPaging.reachedStart,
-        beforeSeq: currentPaging.beforeSeq,
-        viewportTop: viewportRect.top,
-        viewportBottom: viewportRect.bottom,
-        boundaryTop: boundaryRect.top,
-        boundaryBottom: boundaryRect.bottom,
-      })) return;
-      scrollbackBoundaryBootstrapRequestedRef.current = true;
-      requestOlderPageRef.current();
-    });
+      if (el && currentPaging && boundary) {
+        const viewportRect = el.getBoundingClientRect();
+        const boundaryRect = boundary.getBoundingClientRect();
+        if (shouldPrefetchVisibleScrollbackBoundary({
+          managed: managesScrollHistoryRef.current,
+          restoring: viewportRestoreActiveRef.current,
+          requested: scrollbackBoundaryBootstrapRequestedRef.current,
+          busy: scrollbackFillActiveRef.current || currentPaging.loadingOlder,
+          reachedStart: currentPaging.reachedStart,
+          beforeSeq: currentPaging.beforeSeq,
+          viewportTop: viewportRect.top,
+          viewportBottom: viewportRect.bottom,
+          boundaryTop: boundaryRect.top,
+          boundaryBottom: boundaryRect.bottom,
+        })) {
+          scrollbackBoundaryBootstrapRequestedRef.current = true;
+          requestOlderPageRef.current();
+          return;
+        }
+      }
+      const terminal = !managesScrollHistoryRef.current ||
+        scrollbackBoundaryBootstrapRequestedRef.current ||
+        scrollbackFillActiveRef.current || currentPaging?.loadingOlder ||
+        currentPaging?.reachedStart || currentPaging?.beforeSeq === null;
+      attempts += 1;
+      if (!terminal && attempts < VISIBLE_SCROLLBACK_SETTLE_FRAME_LIMIT) {
+        visibleScrollbackBoundaryRafRef.current = requestAnimationFrame(measure);
+      }
+    };
+    visibleScrollbackBoundaryRafRef.current = requestAnimationFrame(measure);
   };
   useLayoutEffect(() => {
     // Bootstrap can receive pagination after the viewport restoration effect

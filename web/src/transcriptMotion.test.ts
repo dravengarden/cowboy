@@ -36,6 +36,14 @@ Deno.test("restored visible scrollback resumes for each advanced cursor", () => 
       transcriptSource,
     ),
   );
+  assert(
+    transcriptSource.includes("VISIBLE_SCROLLBACK_SETTLE_FRAME_LIMIT = 120"),
+  );
+  assert(
+    transcriptSource.includes(
+      "visibleScrollbackBoundaryRafRef.current = requestAnimationFrame(measure)",
+    ),
+  );
   assertEquals(
     transcriptSource.match(
       /viewportRestoreActiveRef\.current = false;\s*requestVisibleScrollbackBoundaryRef\.current\(\);/g,
