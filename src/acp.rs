@@ -32,9 +32,9 @@ use std::time::Duration;
 // version-agnostic schema root and the `Agent`/`Client` traits at the crate root.
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ContentBlock, InitializeRequest, LoadSessionRequest, Meta,
-    NewSessionRequest, PermissionOptionId, PermissionOptionKind, PromptRequest,
-    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    CancelNotification, ClientNotification, ContentBlock, ExtNotification, InitializeRequest,
+    LoadSessionRequest, Meta, NewSessionRequest, PermissionOptionId, PermissionOptionKind,
+    PromptRequest, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
     ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption,
     SessionConfigOptionValue, SessionConfigSelectOption, SessionConfigSelectOptions, SessionId,
     SessionModeId, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
@@ -67,6 +67,72 @@ const GROK_SESSION_CONFIG_META: &str = "x.ai/sessionConfig";
 const GROK_MODEL_CONFIG_ID: &str = "model";
 const GROK_REASONING_CONFIG_ID: &str = "reasoning_effort";
 const GROK_SESSION_MODE_CONFIG_ID: &str = "session_mode";
+const GROK_PERMISSION_CONFIG_ID: &str = "permission_mode";
+const GROK_PERMISSION_NOTIFICATION: &str = "x.ai/yolo_mode_changed";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GrokPermissionMode {
+    Default,
+    Auto,
+    AlwaysApprove,
+}
+
+impl GrokPermissionMode {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "default" | "ask" => Some(Self::Default),
+            "auto" => Some(Self::Auto),
+            "always-approve" => Some(Self::AlwaysApprove),
+            _ => None,
+        }
+    }
+
+    const fn id(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Auto => "auto",
+            Self::AlwaysApprove => "always-approve",
+        }
+    }
+
+    const fn yolo_mode(self) -> bool {
+        matches!(self, Self::AlwaysApprove)
+    }
+
+    const fn auto_mode(self) -> bool {
+        matches!(self, Self::Auto)
+    }
+}
+
+fn grok_permission_option(current: GrokPermissionMode) -> SessionConfigOption {
+    SessionConfigOption::select(
+        GROK_PERMISSION_CONFIG_ID,
+        "Permission",
+        current.id(),
+        vec![
+            SessionConfigSelectOption::new("default", "Default (Ask)")
+                .description("Ask before sensitive tool calls"),
+            SessionConfigSelectOption::new("auto", "Auto")
+                .description("Automatically approve safe actions"),
+            SessionConfigSelectOption::new("always-approve", "Always Approve")
+                .description("Run tools without ordinary permission prompts"),
+        ],
+    )
+}
+
+fn grok_permission_notification(mode: GrokPermissionMode) -> ClientNotification {
+    let params = serde_json::json!({
+        "yolo_mode": mode.yolo_mode(),
+        "auto_mode": mode.auto_mode(),
+        "permission_mode": mode.id(),
+    });
+    ClientNotification::ExtNotification(ExtNotification::new(
+        GROK_PERMISSION_NOTIFICATION,
+        serde_json::value::to_raw_value(&params)
+            .expect("serialize Grok permission mode notification")
+            .into(),
+    ))
+}
 
 // Grok Build exposes the unstable ACP model-switch request as
 // `session/set_model`. Keep this wire-only compatibility type local so a future
@@ -324,6 +390,31 @@ impl GrokSessionConfig {
     }
 }
 
+fn grok_cowboy_options(
+    config: Option<&GrokSessionConfig>,
+    permission_mode: GrokPermissionMode,
+    mode_config_id: Option<&'static str>,
+    mode_select: Option<&[SessionConfigSelectOption]>,
+    current_session_mode: Option<&str>,
+) -> Vec<SessionConfigOption> {
+    let mut options = Vec::new();
+    if let (Some(config_id), Some(choices), Some(current)) =
+        (mode_config_id, mode_select, current_session_mode)
+    {
+        options.push(SessionConfigOption::select(
+            config_id,
+            "Mode",
+            current.to_owned(),
+            choices.to_vec(),
+        ));
+    }
+    options.push(grok_permission_option(permission_mode));
+    if let Some(config) = config {
+        options.extend(config.cowboy_options());
+    }
+    options
+}
+
 fn grok_model_request(
     session_id: SessionId,
     model_id: String,
@@ -354,6 +445,7 @@ async fn run_grok_config_queue(
     session_id: String,
     acp_id: SessionId,
     grok_config: Arc<Mutex<Option<GrokSessionConfig>>>,
+    current_permission_mode: Arc<Mutex<GrokPermissionMode>>,
     current_session_mode: Arc<Mutex<Option<String>>>,
     mode_config_id: Option<&'static str>,
     mode_select: Option<Vec<SessionConfigSelectOption>>,
@@ -403,30 +495,21 @@ async fn run_grok_config_queue(
         let request = grok_model_request(acp_id.clone(), model_id, reasoning_effort.as_deref());
         match cx.send_request(request).block_task().await {
             Ok(_) => {
-                let mut config = grok_config.lock();
-                if let Some(config) = config.as_mut() {
-                    *config = next_config;
-                    let mut published = config.cowboy_options();
-                    if let (Some(config_id), Some(options), Some(current)) = (
-                        mode_config_id,
-                        mode_select.as_ref(),
-                        current_session_mode.lock().clone(),
-                    ) {
-                        published.insert(
-                            0,
-                            SessionConfigOption::select(
-                                config_id,
-                                "Mode",
-                                current,
-                                options.clone(),
-                            ),
-                        );
-                    }
-                    match serde_json::to_value(published) {
-                        Ok(options) => sink.set_config_options(&session_id, options),
-                        Err(error) => {
-                            tracing::warn!(error = %error, "serializing Grok config options");
-                        }
+                *grok_config.lock() = Some(next_config);
+                let config = grok_config.lock().clone();
+                let permission_mode = *current_permission_mode.lock();
+                let session_mode = current_session_mode.lock().clone();
+                let published = grok_cowboy_options(
+                    config.as_ref(),
+                    permission_mode,
+                    mode_config_id,
+                    mode_select.as_deref(),
+                    session_mode.as_deref(),
+                );
+                match serde_json::to_value(published) {
+                    Ok(options) => sink.set_config_options(&session_id, options),
+                    Err(error) => {
+                        tracing::warn!(error = %error, "serializing Grok config options");
                     }
                 }
             }
@@ -567,9 +650,10 @@ fn load_session_request(
 #[cfg(test)]
 mod startup_mode_tests {
     use super::{
-        ActivePrompt, GrokSessionConfig, ResumeMethod, StartupPhase, StartupTimeout,
-        codex_full_access_available, codex_full_access_selected, deepseek_session_environment,
-        grok_model_request, is_empty_stream_message_update, load_session_request,
+        ActivePrompt, GrokPermissionMode, GrokSessionConfig, ResumeMethod, StartupPhase,
+        StartupTimeout, codex_full_access_available, codex_full_access_selected,
+        deepseek_session_environment, grok_cowboy_options, grok_model_request,
+        grok_permission_notification, is_empty_stream_message_update, load_session_request,
         new_session_request, resume_session_request, select_resume_method, session_config_value,
         startup_full_access_mode,
     };
@@ -726,6 +810,77 @@ mod startup_mode_tests {
             value.pointer("/1/currentValue"),
             Some(&serde_json::json!("high"))
         );
+
+        let surfaced = serde_json::to_value(grok_cowboy_options(
+            Some(&config),
+            GrokPermissionMode::AlwaysApprove,
+            None,
+            None,
+            None,
+        ))
+        .expect("serialize surfaced Grok options");
+        assert_eq!(
+            surfaced.pointer("/0/id"),
+            Some(&serde_json::json!("permission_mode"))
+        );
+        assert_eq!(
+            surfaced.pointer("/0/currentValue"),
+            Some(&serde_json::json!("always-approve"))
+        );
+        assert_eq!(
+            surfaced.pointer("/0/options/0/value"),
+            Some(&serde_json::json!("default"))
+        );
+        assert_eq!(
+            surfaced.pointer("/0/options/1/value"),
+            Some(&serde_json::json!("auto"))
+        );
+        assert_eq!(
+            surfaced.pointer("/0/options/2/value"),
+            Some(&serde_json::json!("always-approve"))
+        );
+    }
+
+    #[test]
+    fn grok_permission_modes_use_the_native_extension_notification() {
+        for (mode, expected) in [
+            (
+                GrokPermissionMode::Default,
+                serde_json::json!({
+                    "yolo_mode": false,
+                    "auto_mode": false,
+                    "permission_mode": "default",
+                }),
+            ),
+            (
+                GrokPermissionMode::Auto,
+                serde_json::json!({
+                    "yolo_mode": false,
+                    "auto_mode": true,
+                    "permission_mode": "auto",
+                }),
+            ),
+            (
+                GrokPermissionMode::AlwaysApprove,
+                serde_json::json!({
+                    "yolo_mode": true,
+                    "auto_mode": false,
+                    "permission_mode": "always-approve",
+                }),
+            ),
+        ] {
+            let notification = grok_permission_notification(mode);
+            assert_eq!(notification.method(), "x.ai/yolo_mode_changed");
+            assert_eq!(
+                serde_json::to_value(notification).expect("serialize notification"),
+                expected
+            );
+        }
+        assert_eq!(
+            GrokPermissionMode::parse("ask"),
+            Some(GrokPermissionMode::Default)
+        );
+        assert_eq!(GrokPermissionMode::parse("plan"), None);
     }
 
     #[test]
@@ -1920,6 +2075,10 @@ async fn run_session(
             .as_ref()
             .map(|mode| mode.current_mode_id.0.to_string()),
     ));
+    // Grok workers launch with `--always-approve`; persisted Cowboy
+    // preferences replay after this option is surfaced and can narrow the
+    // resident session to Auto or Default without restarting the process.
+    let current_permission_mode = Arc::new(Mutex::new(GrokPermissionMode::AlwaysApprove));
     let mode_select: Option<Vec<SessionConfigSelectOption>> = if mode_config_id.is_some() {
         modes
             .as_ref()
@@ -1941,19 +2100,25 @@ async fn run_session(
             .flatten(),
     ));
     let mut surfaced_options = config_options.unwrap_or_default();
-    if let (Some(config_id), Some(options), Some(m)) =
+    if provider_id == "grok" {
+        let config = grok_config.lock().clone();
+        let session_mode = current_session_mode.lock().clone();
+        surfaced_options.extend(grok_cowboy_options(
+            config.as_ref(),
+            *current_permission_mode.lock(),
+            mode_config_id,
+            mode_select.as_deref(),
+            session_mode.as_deref(),
+        ));
+    } else if let (Some(config_id), Some(options), Some(m)) =
         (mode_config_id, mode_select.as_ref(), modes.as_ref())
     {
-        let opt = SessionConfigOption::select(
+        surfaced_options.push(SessionConfigOption::select(
             config_id,
             "Mode",
             m.current_mode_id.0.to_string(),
             options.clone(),
-        );
-        surfaced_options.push(opt);
-    }
-    if let Some(config) = grok_config.lock().as_ref() {
-        surfaced_options.extend(config.cowboy_options());
+        ));
     }
     // Surface every startup option in one authoritative array. This includes
     // standard config options (Codex), synthesized ACP modes (Gemini/Grok), and
@@ -1972,6 +2137,7 @@ async fn run_session(
         let queue_session_id = session_id.clone();
         let queue_acp_id = acp_id.clone();
         let queue_config = Arc::clone(&grok_config);
+        let queue_permission_mode = Arc::clone(&current_permission_mode);
         let queue_session_mode = Arc::clone(&current_session_mode);
         let queue_mode_select = mode_select.clone();
         cx.clone().spawn(async move {
@@ -1981,6 +2147,7 @@ async fn run_session(
                 queue_session_id,
                 queue_acp_id,
                 queue_config,
+                queue_permission_mode,
                 queue_session_mode,
                 mode_config_id,
                 queue_mode_select,
@@ -2253,8 +2420,10 @@ async fn run_session(
                 let acp = acp_id.clone();
                 let options = mode_select.clone().unwrap_or_default();
                 let grok_config = Arc::clone(&grok_config);
+                let current_permission_mode = Arc::clone(&current_permission_mode);
                 let current_session_mode = Arc::clone(&current_session_mode);
                 let mode_config_id = mode_config_id.expect("synthesized mode id");
+                let is_grok = provider_id == "grok";
                 cx.clone().spawn(async move {
                     let req = SetSessionModeRequest::new(acp, SessionModeId::new(mode_id.clone()));
                     match cx.send_request(req).block_task().await {
@@ -2263,19 +2432,27 @@ async fn run_session(
                             // Re-push the chip with the new current so the dropdown
                             // sticks (gemini emits no current_mode_update for an
                             // explicit set).
-                            let mut published = vec![SessionConfigOption::select(
-                                mode_config_id,
-                                "Mode",
-                                mode_id,
-                                options,
-                            )];
-                            if let Some(config) = grok_config.lock().as_ref() {
-                                published.extend(config.cowboy_options());
-                            }
+                            let config = grok_config.lock().clone();
+                            let published = if is_grok {
+                                grok_cowboy_options(
+                                    config.as_ref(),
+                                    *current_permission_mode.lock(),
+                                    Some(mode_config_id),
+                                    Some(&options),
+                                    Some(&mode_id),
+                                )
+                            } else {
+                                vec![SessionConfigOption::select(
+                                    mode_config_id,
+                                    "Mode",
+                                    mode_id,
+                                    options,
+                                )]
+                            };
                             match serde_json::to_value(published) {
                                 Ok(v) => sink.set_config_options(&sid, v),
                                 Err(e) => {
-                                    tracing::warn!(error = %e, "re-serializing gemini mode chip");
+                                    tracing::warn!(error = %e, "re-serializing synthesized mode options");
                                 }
                             }
                         }
@@ -2283,6 +2460,48 @@ async fn run_session(
                     }
                     Ok(())
                 })?;
+            }
+            AgentCommand::SetConfigOption { config_id, value }
+                if provider_id == "grok" && config_id == GROK_PERMISSION_CONFIG_ID =>
+            {
+                let Some(requested) = value.as_str() else {
+                    state.sink.broadcast_error(
+                        Some(session_id.clone()),
+                        format!("set {config_id}: configuration value must be a string id"),
+                    );
+                    continue;
+                };
+                let Some(permission_mode) = GrokPermissionMode::parse(requested) else {
+                    state.sink.broadcast_error(
+                        Some(session_id.clone()),
+                        format!("set {config_id}: unsupported Grok permission mode {requested:?}"),
+                    );
+                    continue;
+                };
+                match cx.send_notification(grok_permission_notification(permission_mode)) {
+                    Ok(()) => {
+                        *current_permission_mode.lock() = permission_mode;
+                        let config = grok_config.lock().clone();
+                        let session_mode = current_session_mode.lock().clone();
+                        let published = grok_cowboy_options(
+                            config.as_ref(),
+                            permission_mode,
+                            mode_config_id,
+                            mode_select.as_deref(),
+                            session_mode.as_deref(),
+                        );
+                        match serde_json::to_value(published) {
+                            Ok(options) => state.sink.set_config_options(&session_id, options),
+                            Err(error) => {
+                                tracing::warn!(error = %error, "serializing Grok permission options");
+                            }
+                        }
+                    }
+                    Err(error) => state.sink.broadcast_error(
+                        Some(session_id.clone()),
+                        format!("set {config_id}: {error}"),
+                    ),
+                }
             }
             AgentCommand::SetConfigOption { config_id, value }
                 if provider_id == "grok"

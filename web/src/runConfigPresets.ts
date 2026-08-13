@@ -1,7 +1,12 @@
 import type { ConfigOption } from "./protocol";
 
 export interface RunConfigPreset {
-  id: "luna-max" | "sol-medium" | "sol-max" | "deepseek-flash-max";
+  id:
+    | "luna-max"
+    | "sol-medium"
+    | "sol-max"
+    | "deepseek-flash-max"
+    | "grok-high";
   name: string;
   detail: string;
   isDefault: boolean;
@@ -53,6 +58,26 @@ export function runConfigPresets(
     return OPENAI_CODEX_PRESETS.filter((preset) =>
       supportsPreset(preset, optionById)
     );
+  }
+  if (provider === "grok") {
+    const model = optionById.get("model");
+    const modelId = model && String(model.currentValue);
+    const modelName = model?.options.find((candidate) =>
+      String(candidate.value) === modelId
+    )?.name;
+    if (!modelId || !modelName) return [];
+    const preset: RunConfigPreset = {
+      id: "grok-high",
+      name: `${modelName} · High`,
+      detail: `${modelName} · High reasoning · Always approve`,
+      isDefault: true,
+      values: {
+        model: modelId,
+        reasoning_effort: "high",
+        permission_mode: "always-approve",
+      },
+    };
+    return supportsPreset(preset, optionById) ? [preset] : [];
   }
   if (provider !== "claude-deepseek" && provider !== "codex-deepseek") {
     return [];

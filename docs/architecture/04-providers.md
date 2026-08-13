@@ -194,11 +194,14 @@ the Machine `provider-cli:grok` component. Machine login runs
 never stores the OAuth token.
 
 Grok's current ACP compatibility surface returns model and reasoning choices in
-`_meta["x.ai/sessionConfig"]` and changes either through `session/setModel`
+`_meta["x.ai/sessionConfig"]` and changes either through `session/set_model`
 with `_meta.reasoningEffort`. Cowboy maps those values to ordinary `model` and
 `reasoning_effort` config controls, while leaving the selected model dynamic so
-a Grok CLI update can replace the default catalog. The default effort is
-`high`. Native session modes remain a separate `session_mode` control.
+a Grok CLI update can replace the default catalog. Cowboy also projects Grok's
+`x.ai/yolo_mode_changed` extension as a `permission_mode` selector with
+Default, Auto, and Always Approve choices. New sessions use the live model,
+`high` effort, and Always Approve as their durable default combination. Native
+session modes remain a separate `session_mode` control.
 
 Account usage is queried only through Grok Build's namespaced
 `_x.ai/billing` ACP request. The returned shared weekly/monthly percentage,

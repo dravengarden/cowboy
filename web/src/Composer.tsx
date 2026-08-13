@@ -5616,6 +5616,8 @@ export function SessionControls({
   const options = useMemo(() => {
     const order = [
       "mode",
+      "session_mode",
+      "permission_mode",
       "model",
       "deepseek_context",
       "deepseek_cache_protection",
