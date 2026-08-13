@@ -11,6 +11,7 @@ import {
     useState,
 } from "react";
 import type { ComponentPropsWithoutRef } from "react";
+import { flushSync } from "react-dom";
 import {
     Alert,
     alpha,
@@ -24,6 +25,7 @@ import {
     DialogContent,
     DialogTitle,
     Divider,
+    GlobalStyles,
     IconButton,
     List,
     ListItemButton,
@@ -200,6 +202,7 @@ import {
 } from "./desktop/controlCenterTabs";
 import {
     CONTROL_CENTER_PANEL_EXIT_MS,
+    controlCenterViewTransitionStyles,
     controlCenterPanelMotionSx,
 } from "./desktop/controlCenterMotion";
 import { useOptionalDesktopWorkspace } from "./desktop/DesktopWorkspaceController";
@@ -1739,6 +1742,17 @@ const StoreTranscript = memo(function StoreTranscript({
 });
 
 type SettingsTab = "settings" | "info";
+
+type ControlCenterViewTransition = {
+    finished: Promise<void>;
+    skipTransition: () => void;
+};
+
+type ControlCenterViewTransitionDocument = Document & {
+    startViewTransition?: (
+        update: () => void,
+    ) => ControlCenterViewTransition;
+};
 
 type SettingsControllerHandle = {
     open: (tab: SettingsTab) => void;
@@ -4684,16 +4698,62 @@ function SettingsShell({
     // pointer/physical-keyboard surface rather than the touch sheet.
     const desktop = useMediaQuery("(pointer: fine) and (hover: hover)");
     const settingsPanelRef = useRef<HTMLDivElement>(null);
+    const viewTransitionRef = useRef<ControlCenterViewTransition | null>(null);
     const changeTab = useCallback((next: ControlCenterTab): void => {
         if (next === tab) return;
-        // Move the tab indicator immediately, then let the old content leave.
-        // The persistent panel shell keeps its geometry while the selected
-        // heavy tree is mounted invisibly between the exit and enter phases.
+        const reducedMotion = globalThis.matchMedia(
+            "(prefers-reduced-motion: reduce)",
+        ).matches;
+        const transitionDocument = globalThis.document as
+            ControlCenterViewTransitionDocument;
+        const startViewTransition = transitionDocument.startViewTransition;
+        if (desktop && !reducedMotion && startViewTransition !== undefined) {
+            viewTransitionRef.current?.skipTransition();
+            // The active indicator can move immediately. The browser captures
+            // the old panel before React mounts the next heavy tree, keeping
+            // useful content visible throughout that synchronous render.
+            flushSync(() => {
+                setTabPanelVisible(true);
+                setTab(next);
+            });
+            try {
+                const transition = startViewTransition.call(
+                    transitionDocument,
+                    () => {
+                        flushSync(() => {
+                            settingsPanelRef.current?.scrollTo({
+                                top: 0,
+                                behavior: "auto",
+                            });
+                            setRenderedTab(next);
+                        });
+                    },
+                );
+                viewTransitionRef.current = transition;
+                void transition.finished
+                    .catch(() => undefined)
+                    .finally(() => {
+                        if (viewTransitionRef.current === transition) {
+                            viewTransitionRef.current = null;
+                        }
+                    });
+                return;
+            } catch {
+                // Fall through to the persistent-panel CSS transition when a
+                // browser advertises the API but cannot start this transition.
+            }
+        }
+        // Compatibility path: move the indicator immediately, then let the old
+        // content exit before the selected panel mounts.
         setTabPanelVisible(false);
         setTab(next);
-    }, [tab]);
+    }, [desktop, tab]);
     useEffect(() => {
-        if (!open) return;
+        if (!open) {
+            viewTransitionRef.current?.skipTransition();
+            viewTransitionRef.current = null;
+            return;
+        }
         setTab(initialTab);
         setRenderedTab(initialTab);
         setTabPanelVisible(true);
@@ -4942,6 +5002,7 @@ function SettingsShell({
             cover
             desktopMaxWidth={1440}
         >
+            <GlobalStyles styles={controlCenterViewTransitionStyles} />
             {/* Touch keeps its compact segmented control. Desktop uses native
                 tabs so the active section is visible, focusable, and keyable. */}
             <Box

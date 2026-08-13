@@ -51,5 +51,8 @@ Deno.test("desktop control center keeps one stable semantic tab panel", () => {
     true,
   );
   assertEquals(appSource.includes("aria-busy={!tabPanelVisible}"), true);
+  assertEquals(appSource.includes("startViewTransition.call("), true);
+  assertEquals(appSource.includes("viewTransitionRef.current?.skipTransition()"), true);
+  assertEquals(appSource.includes("flushSync(() =>"), true);
   assertEquals(appSource.includes("{tabContentReady && ("), false);
 });
