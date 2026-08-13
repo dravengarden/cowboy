@@ -151,11 +151,11 @@ function LogDetail({
           <Box
             sx={{
               display: "grid",
-              gridTemplateColumns: "minmax(110px, 0.34fr) minmax(0, 1fr)",
-              columnGap: 1.5,
+              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+              gap: 0.75,
               px: 1.25,
-              py: 0.65,
-              "& > :not(:first-of-type)": { borderTop: 1, borderColor: "divider" },
+              py: 0.85,
+              "@media (max-width: 720px)": { gridTemplateColumns: "minmax(0, 1fr)" },
             }}
           >
             {section.fields.map((field) => {
@@ -164,18 +164,22 @@ function LogDetail({
                 <Box
                   key={`${section.title}:${field.label}`}
                   sx={{
-                    gridColumn: "1 / -1",
-                    display: "grid",
-                    gridTemplateColumns: "subgrid",
-                    alignItems: "start",
                     minWidth: 0,
-                    py: 0.65,
+                    px: 0.9,
+                    py: 0.7,
+                    borderRadius: 1,
+                    bgcolor: "action.hover",
                   }}
                 >
-                  <Typography variant="caption" color="text.secondary" sx={{ pt: 0.15 }}>
+                  <Typography variant="caption" color="text.secondary" display="block">
                     {field.label}
                   </Typography>
-                  <Stack direction="row" spacing={0.5} alignItems="flex-start" sx={{ minWidth: 0 }}>
+                  <Stack
+                    direction="row"
+                    spacing={0.5}
+                    alignItems="flex-start"
+                    sx={{ minWidth: 0, mt: 0.2 }}
+                  >
                     <Typography
                       variant="caption"
                       sx={{
@@ -194,7 +198,7 @@ function LogDetail({
                           size="small"
                           aria-label={`Copy ${field.label}`}
                           onClick={() => onCopy(copyKey, field.value)}
-                          sx={{ p: 0.25, mt: -0.2, flexShrink: 0 }}
+                          sx={{ width: 24, height: 24, p: 0, mt: -0.35, flexShrink: 0 }}
                         >
                           {copiedKey === copyKey ? <Check sx={{ fontSize: 14 }} /> : <ContentCopy sx={{ fontSize: 13 }} />}
                         </IconButton>

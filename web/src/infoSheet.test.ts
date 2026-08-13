@@ -56,7 +56,11 @@ Deno.test("desktop Info uses independent columns and compact metric tiles", () =
 });
 
 Deno.test("diagnostic detail keeps labels and values in a bounded grid", () => {
-  assertEquals(usageLogsSource.includes('gridTemplateColumns: "subgrid"'), true);
+  assertEquals(
+    usageLogsSource.includes('gridTemplateColumns: "repeat(2, minmax(0, 1fr))"'),
+    true,
+  );
+  assertEquals(usageLogsSource.includes('"@media (max-width: 720px)"'), true);
   assertEquals(usageLogsSource.includes('textAlign: "right"'), false);
   assertEquals(usageLogsSource.includes('borderColor: "divider"'), true);
 });
