@@ -63,6 +63,7 @@ import {
   num,
   type ProviderUsage,
   providerUsage,
+  providerUsageErrorMessage,
   record,
   relativeUpdateTime,
   scheduledResetCountdown,
@@ -1405,7 +1406,10 @@ export function DesktopTopBarControls({
           ))}
           {limits.length === 0 && (
             <Typography variant="body2" color="text.secondary">
-              {usage?.error ?? "This provider has not exposed account limits."}
+              {providerUsageErrorMessage(
+                usage,
+                "This provider has not exposed account limits.",
+              )}
             </Typography>
           )}
           {usage && (

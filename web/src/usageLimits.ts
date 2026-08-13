@@ -43,6 +43,38 @@ export interface UsageLimit {
   windowMinutes?: number;
 }
 
+export const XAI_SIGN_IN_MESSAGE =
+  "Sign in to Grok Build in Machines, then refresh xAI usage.";
+
+export function providerUsageErrorMessage(
+  usage: ProviderUsage | undefined,
+  fallback: string,
+): string {
+  const error = usage?.error?.trim();
+  if (!error) return fallback;
+  if (usage?.provider !== "xai" || !error.startsWith("_x.ai/billing:")) {
+    return error;
+  }
+
+  const encoded = error.slice("_x.ai/billing:".length).trim();
+  try {
+    const rpcError = record(JSON.parse(encoded));
+    const detail = typeof rpcError?.data === "string"
+      ? rpcError.data.trim()
+      : typeof rpcError?.message === "string"
+      ? rpcError.message.trim()
+      : "";
+    if (detail.toLowerCase().includes("authentication required")) {
+      return XAI_SIGN_IN_MESSAGE;
+    }
+    return detail
+      ? `Grok Build could not fetch xAI usage: ${detail}`
+      : "Grok Build could not fetch xAI usage.";
+  } catch {
+    return "Grok Build could not fetch xAI usage.";
+  }
+}
+
 export function record(value: unknown): JsonRecord | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as JsonRecord

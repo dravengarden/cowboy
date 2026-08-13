@@ -2,10 +2,12 @@ import { assertEquals } from "jsr:@std/assert";
 import {
   acceptedScheduleTime,
   nearestAvailableResetCredit,
+  providerUsageErrorMessage,
   providerUsage,
   scheduledResetCountdown,
   topBarUsageLimits,
   usageLimits,
+  XAI_SIGN_IN_MESSAGE,
 } from "./usageLimits.ts";
 
 Deno.test("datetime picker ignores iOS current-minute provisional values", () => {
@@ -120,6 +122,35 @@ Deno.test("Grok billing becomes the shared subscription credit window", () => {
       resetsAt: Date.parse("2026-08-17T00:00:00Z") / 1000,
       windowMinutes: 10080,
     }],
+  );
+});
+
+Deno.test("legacy Grok billing auth JSON becomes an actionable sign-in message", () => {
+  const usage = {
+    provider: "xai",
+    status: "unavailable",
+    source: "Grok Build ACP _x.ai/billing",
+    observed_at_ms: 1,
+    error:
+      '_x.ai/billing: {"code":-32000,"message":"Authentication required","data":"Authentication required to fetch billing data"}',
+  };
+  const message = providerUsageErrorMessage(usage, "Waiting for usage data.");
+  assertEquals(message, XAI_SIGN_IN_MESSAGE);
+  assertEquals(message.includes("{"), false);
+});
+
+Deno.test("legacy Grok billing errors preserve useful text without RPC JSON", () => {
+  const message = providerUsageErrorMessage({
+    provider: "xai",
+    status: "unavailable",
+    source: "Grok Build ACP _x.ai/billing",
+    observed_at_ms: 1,
+    error:
+      '_x.ai/billing: {"code":-32001,"message":"Billing is temporarily unavailable"}',
+  }, "Waiting for usage data.");
+  assertEquals(
+    message,
+    "Grok Build could not fetch xAI usage: Billing is temporarily unavailable",
   );
 });
 

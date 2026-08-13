@@ -42,6 +42,7 @@ import {
   nearestAvailableResetCredit,
   num,
   type ProviderUsage,
+  providerUsageErrorMessage,
   record,
   relativeUpdateTime,
   scheduledResetCountdown,
@@ -1486,8 +1487,11 @@ function ProviderUsageCard({
                 ? "Waiting for Claude Code session activity. Plan limits appear after the Agent SDK reports them."
                 : usage.provider === "gemini"
                 ? "Waiting for Gemini session activity. Account quota is not exposed by Gemini ACP."
-                : usage.error ?? "Waiting for usage data."
-              : usage.error ?? "Account quota is not exposed for this session."}
+                : providerUsageErrorMessage(usage, "Waiting for usage data.")
+              : providerUsageErrorMessage(
+                usage,
+                "Account quota is not exposed for this session.",
+              )}
           </Typography>
         )}
         <Typography variant="caption" color="text.secondary">

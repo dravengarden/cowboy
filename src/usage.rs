@@ -238,16 +238,27 @@ impl UsageService {
             .await
             .context("DeepSeek provider refresh timed out")??,
             "xai" => {
-                let spec = self
-                    .grok_spec
-                    .as_ref()
-                    .context("managed Grok Build CLI is not configured")?;
-                tokio::time::timeout(
+                let Some(spec) = self.grok_spec.as_ref() else {
+                    return Err(anyhow::anyhow!("managed Grok Build CLI is not configured"));
+                };
+                match tokio::time::timeout(
                     std::time::Duration::from_secs(12),
                     crate::provider_info::collect_xai(spec),
                 )
                 .await
-                .context("xAI provider refresh timed out")??
+                {
+                    Ok(Ok(value)) => value,
+                    Ok(Err(error)) => crate::provider_info::error(
+                        "xai",
+                        crate::provider_info::XAI_SOURCE,
+                        error.to_string(),
+                    ),
+                    Err(_) => crate::provider_info::error(
+                        "xai",
+                        crate::provider_info::XAI_SOURCE,
+                        "refresh timed out".to_owned(),
+                    ),
+                }
             }
             "anthropic" | "gemini" => {
                 let snapshot = self.snapshot.lock().await.clone();

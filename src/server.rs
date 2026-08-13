@@ -2734,6 +2734,23 @@ fn apply_workspace_inventory(
     }
 }
 
+fn usage_provider_after_login(
+    event: &crate::machine_protocol::MachineEvent,
+    local_machine: bool,
+) -> Option<&'static str> {
+    match event {
+        crate::machine_protocol::MachineEvent::LoginState {
+            provider, state, ..
+        } if local_machine
+            && provider == "grok"
+            && *state == crate::machine_protocol::AuthState::SignedIn =>
+        {
+            Some("xai")
+        }
+        _ => None,
+    }
+}
+
 async fn api_machine_refresh(
     State(state): State<Arc<AppState>>,
     Path(machine_id): Path<String>,
@@ -3371,7 +3388,20 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                 }
             }
             crate::machine_protocol::MachineFrame::Event { event } => {
+                let usage_provider = usage_provider_after_login(&event, connection_mode == "local");
                 state.machine_control.record(&hello.machine_id, event);
+                if let Some(provider) = usage_provider {
+                    let usage = state.usage.clone();
+                    tokio::spawn(async move {
+                        if let Err(error) = usage.refresh_provider(provider).await {
+                            tracing::warn!(
+                                %error,
+                                provider,
+                                "refreshing provider usage after Machine login"
+                            );
+                        }
+                    });
+                }
                 store
                     .machine_seen(&hello.machine_id, &challenge_id, None)
                     .await
@@ -3924,7 +3954,7 @@ fn gemini_machine_auth_is_current(
 mod machine_provider_tests {
     use super::{
         apply_workspace_inventory, machine_supports_provider, resolve_machine_workspace,
-        web_session_is_missing_machine,
+        usage_provider_after_login, web_session_is_missing_machine,
     };
     use crate::core::SessionOrigin;
     use crate::machine_protocol::{
@@ -4082,6 +4112,28 @@ mod machine_provider_tests {
             ..signed_out
         };
         assert!(machine_supports_provider(&[signed_in], "grok"));
+    }
+
+    #[test]
+    fn local_grok_login_refreshes_xai_usage_without_crossing_machine_boundaries() {
+        let signed_in = crate::machine_protocol::MachineEvent::LoginState {
+            request_id: "login-1".to_owned(),
+            provider: "grok".to_owned(),
+            state: AuthState::SignedIn,
+            account_label: None,
+            detail: None,
+        };
+        assert_eq!(usage_provider_after_login(&signed_in, true), Some("xai"));
+        assert_eq!(usage_provider_after_login(&signed_in, false), None);
+
+        let signed_out = crate::machine_protocol::MachineEvent::LoginState {
+            request_id: "login-2".to_owned(),
+            provider: "grok".to_owned(),
+            state: AuthState::SignedOut,
+            account_label: None,
+            detail: None,
+        };
+        assert_eq!(usage_provider_after_login(&signed_out, true), None);
     }
 
     #[test]
