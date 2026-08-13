@@ -6,20 +6,66 @@ const topBarSource = await Deno.readTextFile(
 const composerSource = await Deno.readTextFile(
   new URL("../Composer.tsx", import.meta.url),
 );
+const embeddedControlSource = await Deno.readTextFile(
+  new URL("./DesktopEmbeddedControl.ts", import.meta.url),
+);
 
-Deno.test("desktop Clear follows Compact with a matching labelled control", () => {
+Deno.test("desktop session actions form one reload-to-stop cluster", () => {
+  const reload = topBarSource.indexOf('data-desktop-item="topbar-reload"');
   const compact = topBarSource.indexOf('data-desktop-item="topbar-compact"');
   const clear = topBarSource.indexOf('data-desktop-item="topbar-clear"');
   const stop = topBarSource.indexOf("<AutoScrollAndStop");
 
-  assert(compact >= 0);
+  assert(reload >= 0);
+  assert(compact > reload);
   assert(clear > compact);
   assert(stop > clear);
+  assert(topBarSource.includes("<SessionReloadDialog"));
+  assert(topBarSource.includes('keyLabel="L"'));
+  assert(topBarSource.includes('shortcut: "L"'));
   assert(topBarSource.includes("data-desktop-clear"));
   assert(topBarSource.includes("<CleaningServices"));
   assert(topBarSource.includes('keyLabel="X"'));
   assert(topBarSource.includes('shortcut: "X"'));
   assert(topBarSource.includes("await resetSession(sessionId)"));
+});
+
+Deno.test("desktop session actions share compact geometry without duplicate context text", () => {
+  const start = topBarSource.indexOf("data-desktop-session-actions");
+  const end = topBarSource.indexOf("<SessionReloadDialog", start);
+  const actions = topBarSource.slice(start, end);
+
+  assert(start >= 0);
+  assert(end > start);
+  assert(actions.includes("desktopSessionActionSx"));
+  assert(actions.includes("minWidth: 90"));
+  assert(actions.includes("minWidth: 96"));
+  assert(actions.includes("minWidth: 80"));
+  assertEquals(actions.includes("contextPercent"), false);
+  assert(
+    embeddedControlSource.includes("export function desktopSessionActionSx"),
+  );
+  assert(embeddedControlSource.includes("height: 36"));
+});
+
+Deno.test("desktop Stop remains mounted and becomes disabled while idle", () => {
+  const start = composerSource.indexOf(
+    'if (presentation === "desktop-toolbar")',
+  );
+  const end = composerSource.indexOf("{/* Auto-scroll / follow toggle", start);
+  const desktopStop = composerSource.slice(start, end);
+
+  assert(start >= 0);
+  assert(end > start);
+  assert(desktopStop.includes('data-desktop-topbar-action="stop"'));
+  assert(desktopStop.includes("disabled={!busy}"));
+  assert(
+    desktopStop.includes(
+      'title={busy ? "Stop current turn" : "No turn is running"}',
+    ),
+  );
+  assert(desktopStop.includes("desktopSessionActionSx"));
+  assertEquals(desktopStop.includes("const stopButton = busy"), false);
 });
 
 Deno.test("desktop composer no longer owns the icon-only Clear action", () => {

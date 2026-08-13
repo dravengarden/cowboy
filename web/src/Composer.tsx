@@ -155,8 +155,8 @@ import {
   useExploreAtTail,
 } from "./explore/exploreStore";
 import {
-  desktopEmbeddedControlSx,
   desktopListItemSx,
+  desktopSessionActionSx,
   desktopSurfaceSx,
 } from "./desktop/DesktopEmbeddedControl";
 import {
@@ -5411,6 +5411,8 @@ function StopConfirmDialog({
 // Mobile keeps the combined auto-scroll + Stop controls. Desktop moves Following
 // into the Conversation header, where the state belongs; this branch retains only
 // Stop so a destructive turn action stays globally visible in the top toolbar.
+// It remains mounted while idle and changes only to a disabled state, keeping
+// the action cluster stable as turns start and finish.
 export function AutoScrollAndStop({
   sessionId,
   status,
@@ -5435,39 +5437,39 @@ export function AutoScrollAndStop({
     : sticky && exploreAtTail && busy;
   const size = dense ? "small" : "medium";
   if (presentation === "desktop-toolbar") {
-    const stopButton = busy
-      ? (
-        <Button
-          data-desktop-item="topbar-stop"
-          data-desktop-topbar-action="stop"
-          size="small"
-          color="error"
-          variant="text"
-          startIcon={<Stop fontSize="small" />}
-          onClick={(): void => setCancelOpen(true)}
-          sx={{
-            ...desktopEmbeddedControlSx({ active: desktopShortcutActive }),
-            minWidth: 92,
-            minHeight: 36,
-            textTransform: "none",
-            whiteSpace: "nowrap",
-            "& .MuiButton-startIcon": { mr: 0.65 },
-          }}
-        >
-          <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Stop</Box>
-          <ShortcutKeycap
-            keyLabel="S"
-            variant="global"
-            accent={desktopShortcutActive || cancelOpen}
-            availability={shortcutAvailability(Boolean(desktopShortcutActive), cancelOpen)}
-            sx={{ flexShrink: 0, ml: 0.65 }}
-          />
-        </Button>
-      )
-      : null;
     return (
       <>
-        {stopButton}
+        <Tooltip title={busy ? "Stop current turn" : "No turn is running"}>
+          <span>
+            <Button
+              data-desktop-item="topbar-stop"
+              data-desktop-topbar-action="stop"
+              size="small"
+              color="error"
+              variant="text"
+              startIcon={<Stop fontSize="small" />}
+              disabled={!busy}
+              onClick={(): void => setCancelOpen(true)}
+              sx={desktopSessionActionSx({
+                active: desktopShortcutActive,
+                open: cancelOpen,
+                minWidth: 80,
+              })}
+            >
+              <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Stop</Box>
+              <ShortcutKeycap
+                keyLabel="S"
+                variant="global"
+                accent={desktopShortcutActive || cancelOpen}
+                availability={shortcutAvailability(
+                  Boolean(desktopShortcutActive && busy),
+                  cancelOpen,
+                )}
+                sx={{ flexShrink: 0, ml: 0.5 }}
+              />
+            </Button>
+          </span>
+        </Tooltip>
         <StopConfirmDialog
           open={cancelOpen}
           onClose={(): void => setCancelOpen(false)}

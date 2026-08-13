@@ -91,6 +91,7 @@ function regionHints(
         { keys: "Enter", label: "Open" },
         { keys: "R", label: "Config" },
         { keys: "U", label: "Usage" },
+        { keys: "L", label: "Reload" },
         { keys: "C", label: "Compact" },
         { keys: "X", label: "Clear" },
         ...(status === "busy" ? [{ keys: "S", label: "Stop" }] : []),

@@ -53,6 +53,30 @@ export function desktopEmbeddedControlSx(options: Parameters<typeof desktopSurfa
   return desktopSurfaceSx(options);
 }
 
+/** Shared geometry for the compact session-lifecycle cluster in Desktop's top
+ * bar. Keep every action mounted at the same height so state changes only
+ * affect availability, never the toolbar's silhouette. */
+export function desktopSessionActionSx({
+  active = false,
+  open = false,
+  minWidth = 80,
+}: {
+  active?: boolean;
+  open?: boolean;
+  minWidth?: number;
+} = {}) {
+  return {
+    ...desktopEmbeddedControlSx({ active, open }),
+    height: 36,
+    minWidth,
+    px: 0.75,
+    flexShrink: 0,
+    textTransform: "none",
+    whiteSpace: "nowrap",
+    "& .MuiButton-startIcon": { mr: 0.5 },
+  };
+}
+
 /** Repeated Desktop rows are intentionally quieter than standalone controls.
  * Keep 1px geometry stable, but reveal the boundary only for selection,
  * keyboard focus, and hover so long lists do not become a wall of capsules. */
