@@ -47,7 +47,6 @@ import {
   registerInlineAttachment,
   refreshInlineImages,
   removeImageTokenById,
-  touchInlineImageField,
 } from "./inlineImages";
 import { clipboardFiles, type Attachment } from "./attachments";
 import {
@@ -779,7 +778,7 @@ export const ComposerEditor = forwardRef<
       // Obsidian-style inline images: render `![](cowboy-att:id)` tokens as atomic
       // thumbnails in the text flow (click → lightbox). Atomic + read-only, so
       // IME-safe like the @-chip. See inlineImages.ts.
-      touchInput ? touchInlineImageField : inlineImageField,
+      inlineImageField,
       inlineImageTheme,
       // Keep a trailing image from being the doc's last line (the atomic image
       // line otherwise traps the caret — "图片在最后一行,无法开启新的一行").

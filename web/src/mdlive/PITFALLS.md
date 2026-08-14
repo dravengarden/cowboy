@@ -1389,26 +1389,22 @@ Desktop Vim + IME checks:
     lifecycle, its `touchstart`/`pointerdown`/`blur` cleanup, or any other
     ordinary-input Selection write.
 
-    The replacement is a **static** touch image field, not a Facet and not a
-    reconfigure-aware StateField. Desktop keeps `createInlineImageField(true)`
-    — the proven root-level `Decoration.replace({ block: true })` plus the
-    Vim-only measurement node. Touch mounts `createInlineImageField(false)`
-    for the editor's whole lifetime so the same atomic thumbnail stays inside
-    a real `.cm-line` and CSS (`display:block` plus a zero strut on that line)
-    keeps adjacent carets text-height. Touch omits the hidden measurement
-    node. The previous paste regression survived even after the experimental
-    facet was flipped back to `block: true`; the incomplete rollback left
-    `tr.reconfigured` rebuilding decorations during `@uiw` extension updates
-    and destroyed widgets mid-paste. This field must never listen to
-    `tr.reconfigured` or expose a presentation facet.
+    A follow-up attempt to keep the thumbnail inside an ordinary `.cm-line`
+    (`block: false`, no presentation facet) failed on Simulator before any
+    physical claim: HID Return while the atomic image line owned selection
+    inserted empty lines *before* the image and left `.cm-activeLine` on the
+    88px thumbnail line. Keep the proven root-level
+    `Decoration.replace({ block: true })` on touch and Desktop. Do not revive
+    a presentation facet, a reconfigure-driven rebuild, or another Selection
+    widget.
 
     `mobileLineBreakCaretTelemetry` stays read-only. Native long-press paste
     now also emits `mobile_native_paste_event` (file/item counts and focus
     owner only) so physical WKWebView can be distinguished from the accessory
     Paste bridge. Token-free touch documents remain on the literal textarea
-    path from pitfall #63. This image-structure change is not accepted until
-    the complete physical iPhone sequence passes; Simulator evidence cannot
-    close it.
+    path from pitfall #63. The empty-line native caret after a block image
+    remains an open physical-iPhone defect; Simulator evidence cannot close
+    it.
 
 65. **A reliable touch action must pair `pointerup` with its actual synthetic
     `click`, never a timeout guess.** Mobile Safari can omit a click after
