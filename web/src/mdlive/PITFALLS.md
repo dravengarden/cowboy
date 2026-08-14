@@ -1396,3 +1396,17 @@ Desktop Vim + IME checks:
     event remain bounded and content-free so physical acceptance can compare the
     logical line with WKWebView's native Range. Token-free touch documents remain
     on the literal textarea path from pitfall #63.
+
+65. **A reliable touch action must pair `pointerup` with its actual synthetic
+    `click`, never a timeout guess.** Mobile Safari can omit a click after
+    stopping scroll momentum, so Cowboy commits stationary touch actions on
+    `pointerup`. It can also delay the eventual synthetic click for longer than
+    the old 700ms suppression timer while WKWebView scroll, keyboard, or layout
+    work settles. Letting that timer expire turns one physical Send into two
+    activations with different cmids and therefore two identical user bubbles.
+    Keep the suppression claim until the next touch-owned or non-zero-detail
+    click actually consumes it; a new pointerdown resets the claim, while
+    keyboard and assistive clicks (`detail === 0`) remain native. The Composer draft
+    controller also claims a commit synchronously for the current browser task
+    so its editor-submit and toolbar-submit entry points cannot both mint a
+    message before React applies the clear.

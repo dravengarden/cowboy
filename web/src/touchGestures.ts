@@ -12,6 +12,21 @@ export interface HorizontalSwipe {
 export const RELIABLE_TOUCH_TAP_MOVE_SLOP_PX = 10;
 export const MOBILE_DRAWER_DIRECTION_LOCK_PX = 12;
 
+/**
+ * A click synthesized from a completed touch reports touch pointer ownership or
+ * a non-zero click count. Keep the pairing pending until that click actually
+ * arrives: iOS WebKit may delay it well past a fixed suppression timeout.
+ * Keyboard and assistive activations use detail=0 and must remain native even
+ * if no paired click ever arrived.
+ */
+export function isPairedTouchClick(
+  pendingTouchClick: boolean,
+  clickDetail: number,
+  pointerType = "",
+): boolean {
+  return pendingTouchClick && (pointerType === "touch" || clickDetail !== 0);
+}
+
 /** Lock a touch gesture to the horizontal axis only after intent is clear. */
 export function horizontalSwipe(
   deltaX: number,
