@@ -12,6 +12,7 @@ import type {
   ComposerEditorSelection,
 } from "./ComposerEditor";
 import { type Attachment, clipboardFiles } from "./attachments";
+import { attachComposerInputDebug } from "./composer/composerInputDebug";
 import { reportMobileNativePasteEvent } from "./composer/mobileNativePasteTelemetry";
 import { hasDraftMod, hasSendMod } from "./platform";
 import { isImeKeyEvent } from "./imeKey";
@@ -252,6 +253,12 @@ export const ComposerTextarea = forwardRef<
     const observer = new ResizeObserver(measureNativeOverflow);
     observer.observe(ta);
     return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const ta = inputRef.current;
+    if (!ta) return undefined;
+    return attachComposerInputDebug(ta);
   }, []);
 
   const rememberSelection = (

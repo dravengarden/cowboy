@@ -1458,3 +1458,12 @@ Desktop Vim + IME checks:
     therefore not evidence. The device-faithful signal is
     `caret_height=0` plus the user's painted caret. Do not treat
     Simulator HID Return as acceptance for this bug.
+
+68. **Composer debug mode is the physical-input flight recorder.** Settings
+    → Debug mode (Desktop and Mobile) turns on `composer_input_debug`
+    samples. They ride the existing `/api/observability/batches` path into
+    VictoriaLogs. Samples record CM6/DOM geometry, `inputType`, target
+    relation, and viewport height — never document text, key characters,
+    clipboard contents, or attachment ids. Off by default. Query
+    `event_name:="composer_input_debug"` or `event_name:="composer_debug_mode"`.
+    This does not make Simulator match a physical caret.

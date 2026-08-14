@@ -64,6 +64,7 @@ import { moveCaretOffImageLine } from "./composer/inlineImageCaretPolicy";
 import { mobileEmptyLineCaretRepair } from "./composer/mobileEmptyLineCaret";
 import { mobileLineBreakCaretTelemetry } from "./composer/mobileLineBreakCaretTelemetry";
 import { reportMobileNativePasteEvent } from "./composer/mobileNativePasteTelemetry";
+import { composerInputDebugExtension } from "./composer/composerInputDebug";
 
 export interface ComposerEditorSelection {
   anchor: number;
@@ -788,6 +789,7 @@ export const ComposerEditor = forwardRef<
       ...(touchInput
         ? [mobileEmptyLineCaretRepair, mobileLineBreakCaretTelemetry]
         : []),
+      composerInputDebugExtension(touchInput ? "mobile" : "desktop"),
       autocompletion({
         override: [
           fileCompletionSource(sessionId),

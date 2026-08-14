@@ -124,6 +124,11 @@ import {
 } from "./desktopLayout";
 import { setVimSetting, useVimSetting } from "./vimSetting";
 import {
+    setComposerDebugSetting,
+    useComposerDebugSetting,
+} from "./composerDebugSetting";
+import { reportComposerDebugModeChanged } from "./composer/composerInputDebug";
+import {
     FONT_SCALE_PRESETS,
     LINE_HEIGHT_PRESETS,
     nearestPreset,
@@ -3638,6 +3643,7 @@ function DesktopSettingsContent({
     const vim = useVimSetting();
     const notify = useNotifySetting();
     const vibrate = useVibrateSetting();
+    const composerDebug = useComposerDebugSetting();
     const reading = useReadingSettings();
     const selectedFont = getFontPreset(reading.fontVariant);
     const settings = useStoreSelector((snapshot) => snapshot.settings);
@@ -3733,6 +3739,9 @@ function DesktopSettingsContent({
                     </DesktopSettingsRow>
                     <DesktopSettingsRow shortcut="A" shortcutAvailable={shortcutsAvailable} label="Auto-resume" description="Continue interrupted turns after restart">
                         <DesktopSettingsChoice active={autoResume} onClick={() => setSetting(AUTO_RESUME_DEFAULT_KEY, !autoResume)} ariaLabel="Toggle automatic turn resume">{autoResume ? "On" : "Off"}</DesktopSettingsChoice>
+                    </DesktopSettingsRow>
+                    <DesktopSettingsRow shortcut="D" shortcutAvailable={shortcutsAvailable} label="Debug mode" description="Verbose composer input logs for agents">
+                        <DesktopSettingsChoice active={composerDebug} onClick={() => { const next = !composerDebug; setComposerDebugSetting(next); reportComposerDebugModeChanged(next); }} ariaLabel="Toggle composer debug mode">{composerDebug ? "On" : "Off"}</DesktopSettingsChoice>
                     </DesktopSettingsRow>
                 </Box>
                 <Divider sx={{ my: 1 }} />
@@ -4769,6 +4778,7 @@ function SettingsShell({
     const vim = useVimSetting();
     const notify = useNotifySetting();
     const vibrate = useVibrateSetting();
+    const composerDebug = useComposerDebugSetting();
     const reading = useReadingSettings();
     // Font picker is collapsed by default (the 7 preview cards otherwise fill the
     // screen); the collapsed summary still shows the current face. Resets to
@@ -5399,6 +5409,34 @@ function SettingsShell({
                         checked={vibrate}
                         onChange={(e): void => setVibrateSetting(e.target.checked)}
                         inputProps={{ "aria-label": "Vibration alert" }}
+                    />
+                </Stack>
+                <Divider />
+                <Stack
+                    direction="row"
+                    alignItems="center"
+                    justifyContent="space-between"
+                    spacing={2}
+                >
+                    <Stack>
+                        <Typography variant="body2">
+                            Debug mode
+                        </Typography>
+                        <Typography
+                            variant="caption"
+                            color="text.secondary"
+                        >
+                            Send verbose composer input logs so an agent can
+                            diagnose caret, IME, and Return on this device
+                        </Typography>
+                    </Stack>
+                    <Switch
+                        checked={composerDebug}
+                        onChange={(e): void => {
+                            setComposerDebugSetting(e.target.checked);
+                            reportComposerDebugModeChanged(e.target.checked);
+                        }}
+                        inputProps={{ "aria-label": "Composer debug mode" }}
                     />
                 </Stack>
                 {desktop && (
