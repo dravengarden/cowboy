@@ -7,6 +7,7 @@ import {
 } from "./inlineImageCaretPolicy";
 import {
   isMobileEmptyLineCaretState,
+  landingAnchorPositions,
   landingAnchorsForEmptyLinesAfterImages,
   landingSelectionAlreadyPlaced,
   shouldPreventNativeMobileLineBreak,
@@ -41,7 +42,8 @@ Deno.test("landing anchors sit only on empty lines after images", () => {
   assertEquals(emptyLinePositionsAfterImages(laterEmpty), [28]);
   assertEquals(selectionOnEmptyLineAfterImage(laterEmpty), false);
   assertEquals(selectionOnEmptyLineInImageChain(laterEmpty), true);
-  assertEquals(landingAnchorsForEmptyLinesAfterImages(laterEmpty).size, 1);
+  assertEquals(landingAnchorPositions(laterEmpty), [28, 29]);
+  assertEquals(landingAnchorsForEmptyLinesAfterImages(laterEmpty).size, 2);
 
   const noImage = EditorState.create({
     doc: "hello\n\n",
@@ -60,18 +62,19 @@ Deno.test("two images expose a landing position under each thumbnail", () => {
     firstLanding,
     secondLanding,
   ]);
-  assertEquals(landingAnchorsForEmptyLinesAfterImages(state).size, 0);
+  assertEquals(landingAnchorPositions(state), [firstLanding, secondLanding]);
+  assertEquals(landingAnchorsForEmptyLinesAfterImages(state).size, 2);
   assertEquals(
     landingAnchorsForEmptyLinesAfterImages(
       EditorState.create({ doc, selection: { anchor: firstLanding } }),
     ).size,
-    1,
+    2,
   );
   assertEquals(
     landingAnchorsForEmptyLinesAfterImages(
       EditorState.create({ doc, selection: { anchor: secondLanding } }),
     ).size,
-    1,
+    2,
   );
 });
 
@@ -155,6 +158,8 @@ Deno.test("mobile caret landing anchor is document-neutral and not late-mounted"
   assertEquals(source.includes("selectionOnEmptyLineInImageChain"), true);
   assertEquals(source.includes("beforeinput.target is always .cm-content"), true);
   assertEquals(source.includes("Let that single"), true);
+  assertEquals(source.includes("caret_height 12 → 0"), true);
+  assertEquals(source.includes("return true"), true);
   assertEquals(source.includes("materializeLineBreak"), false);
   assertEquals(source.includes("placeLandingSelection"), true);
   assertEquals(source.includes("touchstart"), false);

@@ -37,17 +37,19 @@ const setHideMobileEmptyLineCaretForIme = StateEffect.define<boolean>();
  * A block image is not a `.cm-line`. The trailing landing line is a second
  * document line that looks like part of the thumbnail. Put a U+200B on that
  * landing line only while the caret is actually there — including paste —
- * so the first Return has a native text node. Leave the line, drop the
- * widget; keeping it after the caret moved let v1251 stack native <br>
- * tags inside the same landing node (line_height 14→28→42, document_lines
- * still 2). Mapping the DOM selection into a newly appeared landing node
- * only routes the next key; it is not the Return/Backspace animation.
+ * so the first Return has a native text node. Keep that landing node after
+ * the caret leaves so the line does not collapse to height 0 and reflow.
+ * v1251 stacked native <br> tags in an abandoned node; insertLineBreak is
+ * now preventDefaulted, so the magnet is gone. Mapping the DOM selection
+ * into a newly appeared landing node only routes the next key; it is not
+ * the Return/Backspace animation.
  */
 class MobileEmptyLineCaretAnchorWidget extends WidgetType {
   override eq(): boolean {
-    // Never reuse a landing node. A native Return can leave a <br> inside the
-    // previous span; keeping that DOM would stack a visual line on the image.
-    return false;
+    // Physical v1258: rebuilding this node after Return killed the native
+    // Range (caret_height 12 → 0, caret_top -260) while the CM6 line moved.
+    // Native insertLineBreak is preventDefaulted, so reuse is safe.
+    return true;
   }
 
   toDOM(): HTMLElement {
@@ -74,17 +76,27 @@ class MobileEmptyLineCaretAnchorWidget extends WidgetType {
   }
 }
 
+export function landingAnchorPositions(state: EditorState): number[] {
+  const positions = new Set(emptyLinePositionsAfterImages(state));
+  if (selectionOnEmptyLineInImageChain(state)) {
+    positions.add(state.doc.lineAt(state.selection.main.head).from);
+  }
+  return [...positions].sort((a, b) => a - b);
+}
+
 export function landingAnchorsForEmptyLinesAfterImages(
   state: EditorState,
 ): DecorationSet {
-  if (!selectionOnEmptyLineInImageChain(state)) return Decoration.none;
-  const line = state.doc.lineAt(state.selection.main.head);
-  return Decoration.set([
-    Decoration.widget({
-      widget: new MobileEmptyLineCaretAnchorWidget(),
-      side: 1,
-    }).range(line.from),
-  ]);
+  const positions = landingAnchorPositions(state);
+  if (positions.length === 0) return Decoration.none;
+  return Decoration.set(
+    positions.map((from) =>
+      Decoration.widget({
+        widget: new MobileEmptyLineCaretAnchorWidget(),
+        side: 1,
+      }).range(from)
+    ),
+  );
 }
 
 export function shouldPreventNativeMobileLineBreak(

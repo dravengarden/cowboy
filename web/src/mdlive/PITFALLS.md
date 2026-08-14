@@ -1439,6 +1439,13 @@ Desktop Vim + IME checks:
     keyboard Enter after we already inserted on `beforeinput`. Do not
     write `\n` from `beforeinput`. PreventDefault the native `<br>`
     only, and let that single later Enter insert the line.
+    Physical v1258 logs were enough: one keydown Enter = one `cm6_doc`.
+    First Return stayed `caret_height=12` at the old `line_top`. Then
+    the abandoned landing line grew 14px (`96.5→110.5`) and the native
+    Range died (`caret_height=0`, `caret_top=-260`) while later Returns
+    still advanced `.cm-activeLine`. Keep the landing U+200B after the
+    caret leaves so that line never collapses, and reuse the widget DOM
+    (`eq()` true) so a rebuild does not destroy the Range.
 
 
 65. **A reliable touch action must pair `pointerup` with its actual synthetic
