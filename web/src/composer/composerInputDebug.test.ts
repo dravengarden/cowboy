@@ -46,6 +46,8 @@ Deno.test("composer input debug never writes the native selection", () => {
   assertEquals(source.includes("addRange"), false);
   assertEquals(source.includes("drawSelection"), false);
   assertEquals(source.includes("composer_input_debug"), true);
+  assertEquals(source.includes("input.inputType ?? keyEvent.key"), false);
+  assertEquals(source.includes("input?.inputType ?? keyEvent?.key"), false);
 });
 
 Deno.test("desktop and mobile settings expose the same debug mode toggle", async () => {
