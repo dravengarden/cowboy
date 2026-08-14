@@ -406,6 +406,7 @@ fn managed_provider_environment(
             environment.insert(key.to_owned(), value);
         }
     }
+    pin_grok_runtime_args(&mut environment, &disabled);
     if !disabled.iter().any(|slot| slot == "claude-deepseek")
         && let Some(shell) = crate::claude_shell::resolve(&|key| std::env::var(key).ok())
     {
@@ -474,9 +475,20 @@ fn managed_provider_environment(
             "COWBOY_ACP_GROK_CMD".to_owned(),
             components.command_path("grok").display().to_string(),
         );
-        environment.insert("COWBOY_ACP_GROK_ARGS".to_owned(), GROK_ACP_ARGS.to_owned());
     }
     Ok(environment)
+}
+
+fn pin_grok_runtime_args(environment: &mut BTreeMap<String, String>, disabled: &[String]) {
+    if disabled.iter().any(|slot| slot == "grok") {
+        environment.remove("COWBOY_ACP_GROK_ARGS");
+    } else {
+        // The bootstrap CLI is inherited from the host service, while signed
+        // provider components are resolved above. Keep both paths on the same
+        // app-owned argument contract so a stale unit environment cannot put
+        // this agent-only flag before the `agent` subcommand.
+        environment.insert("COWBOY_ACP_GROK_ARGS".to_owned(), GROK_ACP_ARGS.to_owned());
+    }
 }
 
 fn command_on_path(command: &str) -> Option<PathBuf> {
@@ -2544,6 +2556,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::path::PathBuf;
     use std::time::Duration;
 
@@ -2554,9 +2567,9 @@ mod tests {
         disabled_provider_slots_from, gemini_auth_from_metadata, gemini_env_value_from,
         grok_auth_from_json, load_workspace_snapshot, login_challenge_tokens,
         managed_provider_environment, npm_package_for_component, npm_script_shell_with,
-        npm_update_is_confirmed_by_inventory, parse_workspaces, provider_for_component,
-        reject_untrusted_workspace, selected_zed_pair, send_frame_with_timeout,
-        validate_controller_url, workspace_path_allowed,
+        npm_update_is_confirmed_by_inventory, parse_workspaces, pin_grok_runtime_args,
+        provider_for_component, reject_untrusted_workspace, selected_zed_pair,
+        send_frame_with_timeout, validate_controller_url, workspace_path_allowed,
     };
     use crate::machine_components::ComponentStore;
     use crate::machine_protocol::{
@@ -2694,6 +2707,22 @@ mod tests {
             disabled_provider_slots_from("claude-code, claude-deepseek, gemini, codex-deepseek"),
             ["claude", "claude-deepseek", "gemini", "codex-deepseek"]
         );
+    }
+
+    #[test]
+    fn grok_runtime_args_override_a_stale_bootstrap_environment() {
+        let mut environment = BTreeMap::from([(
+            "COWBOY_ACP_GROK_ARGS".to_owned(),
+            "--no-auto-update --always-approve agent --no-leader stdio".to_owned(),
+        )]);
+        pin_grok_runtime_args(&mut environment, &[]);
+        assert_eq!(
+            environment["COWBOY_ACP_GROK_ARGS"],
+            "--no-auto-update agent --always-approve --no-leader stdio"
+        );
+
+        pin_grok_runtime_args(&mut environment, &["grok".to_owned()]);
+        assert!(!environment.contains_key("COWBOY_ACP_GROK_ARGS"));
     }
 
     #[test]
