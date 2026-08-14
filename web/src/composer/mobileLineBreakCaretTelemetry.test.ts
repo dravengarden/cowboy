@@ -22,7 +22,7 @@ Deno.test("touch and desktop keep the proven literal CM6 block image field", () 
   );
   assertEquals(
     editorSource.includes(
-      "...(touchInput ? [mobileLineBreakCaretTelemetry] : [])",
+      "[mobileEmptyLineCaretRepair, mobileLineBreakCaretTelemetry]",
     ),
     true,
   );
