@@ -4,15 +4,10 @@ import { mobileComposerPanelFrameSx } from "./mobileComposerPrimitives";
 /** The focused Mobile writing material shared by the primary input and
  * Queue/Draft row editors. Keeping it shared prevents pending edits from
  * falling back to a transparent panel that lets transcript text show through.
- * The near-opaque base is intentional: dense transcript glyphs are not a
- * decorative backdrop while the user is writing, even though the surface keeps
- * its blur for the surrounding frosted-material treatment. */
-/** Near-opaque paper fill shared by the focused card and its CM6 layer. */
+ * The fill is fully opaque: iOS composites CodeMirror onto its own layer, so
+ * any alpha still samples the transcript and reads as a hole. */
 export function mobileFocusedComposerFill(theme: Theme): string {
-  return alpha(
-    theme.palette.background.paper,
-    theme.palette.mode === "dark" ? 0.96 : 0.94,
-  );
+  return theme.palette.background.paper;
 }
 
 export const mobileFocusedComposerSurfaceSx = {

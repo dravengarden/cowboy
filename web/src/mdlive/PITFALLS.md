@@ -1179,11 +1179,12 @@ Desktop Vim + IME checks:
     looked like editor text colliding with the conversation even though DOM
     geometry was correct. Keep the focused background, border, radius, blur, and
     shadow in `mobileFocusedComposerSurfaceSx` and apply that primitive to both
-    the primary input and pending-row editor. Its base is deliberately near-opaque
-    (light 0.94, dark 0.96) so dense transcript glyphs cannot remain readable
-    through the writing surface. This is a paint-only alignment: do
-    not add focus handlers, editor remounts, controlled values, or custom touch
-    handling.
+    the primary input and pending-row editor. The fill is fully opaque paper:
+    CodeMirror's scroller is a separate iOS compositor layer, so any alpha
+    still samples the transcript. Apply the same fill whenever the software
+    keyboard is open, not only while `:focus-within` holds. This is a
+    paint-only alignment: do not add focus handlers, editor remounts,
+    controlled values, or custom touch handling.
 
 52. **Touch-only pointers must not retain synthetic-hover tooltips.** MUI's
     `disableTouchListener` prevents its long-press path, but iOS WebKit can still

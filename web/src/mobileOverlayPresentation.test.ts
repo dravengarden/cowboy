@@ -10,8 +10,7 @@ const composerSurfaceSource = await Deno.readTextFile(
 Deno.test("draft move snackbar consumes the active light or dark theme", () => {
   assertStringIncludes(composerSource, 'color: "text.primary"');
   assert(
-    /alpha\(\s*theme\.palette\.background\.paper,\s*theme\.palette\.mode === "dark" \? 0\.96 : 0\.94,?\s*\)/
-      .test(composerSurfaceSource),
+    composerSurfaceSource.includes("return theme.palette.background.paper;"),
   );
   assertStringIncludes(composerSource, 'borderColor: "divider"');
   assertStringIncludes(composerSource, 'backgroundImage: "none"');

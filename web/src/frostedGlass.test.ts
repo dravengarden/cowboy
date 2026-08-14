@@ -137,7 +137,13 @@ Deno.test("transient activity is transcript-owned with a zero-jump pill handoff"
 Deno.test("focused mobile composer owns a real frosted material", () => {
   assertEquals(
     composerSurfaceSource.includes(
-      'theme.palette.mode === "dark" ? 0.96 : 0.94',
+      "return theme.palette.background.paper;",
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      '"&[data-mobile-keyboard-open=\'true\'] [data-mobile-editor-area], &[data-mobile-keyboard-open=\'true\'] [data-mobile-action-row]',
     ),
     true,
   );

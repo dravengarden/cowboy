@@ -872,8 +872,10 @@ Deno.test("mobile keyboard dismissal belongs to the fixed lower editing rail", (
     '<Tooltip title={expanded ? "Collapse editor"',
     utilityStart,
   );
-  const actionStart = composerSource.indexOf("data-mobile-action-row");
-  const editingStart = composerSource.indexOf("data-mobile-focus-format-row");
+  const actionStart = composerSource.indexOf(
+    "data-mobile-action-row={touchInput",
+  );
+  const editingStart = composerSource.indexOf("data-mobile-focus-format-row\n");
   const actionEnd = composerSource.indexOf(
     "<ComposerToolbarSettings",
     actionStart,

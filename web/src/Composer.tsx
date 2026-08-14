@@ -1950,6 +1950,19 @@ export function ComposerWorkspace({
             // editor-focus rule below still owns expansion geometry.
             "&[data-mobile-keyboard-open='true']": {
               ...mobileFocusedComposerSurfaceSx,
+              backgroundImage: "none",
+            },
+            // Do not gate this fill on :focus-within. iOS can move DOM focus to
+            // body while the keyboard stays up; the CM6 scroller would then
+            // become a transparent hole over the transcript.
+            "&[data-mobile-keyboard-open='true'] [data-mobile-editor-area], &[data-mobile-keyboard-open='true'] [data-mobile-action-row], &[data-mobile-keyboard-open='true'] [data-mobile-focus-format-row]": {
+              bgcolor: mobileFocusedComposerFill,
+              backgroundImage: "none",
+            },
+            "&[data-mobile-keyboard-open='true'] [data-mobile-editor-area] .cm-theme-none, &[data-mobile-keyboard-open='true'] [data-mobile-editor-area] .cm-editor, &[data-mobile-keyboard-open='true'] [data-mobile-editor-area] .cm-scroller, &[data-mobile-keyboard-open='true'] [data-mobile-editor-area] .cm-content": {
+              bgcolor: mobileFocusedComposerFill,
+              backgroundImage: "none",
+              WebkitOverflowScrolling: "auto",
             },
             // Only the editor is allowed to promote the compact card. Utility
             // buttons also live inside this Paper, so plain :focus-within can
@@ -1971,8 +1984,6 @@ export function ComposerWorkspace({
               minHeight: MOBILE_COMPOSER_INPUT_EDITOR_MIN_H,
               maxHeight: "100%",
               overflow: "hidden",
-              bgcolor: mobileFocusedComposerFill,
-              backgroundImage: "none",
             },
             // Keep the compact native field content-tight. Filling leftover
             // viewport with height 100% left a blank band under short text
@@ -2000,17 +2011,10 @@ export function ComposerWorkspace({
               flex: "0 1 auto",
               minHeight: 0,
               height: "auto",
-              // iOS promotes `.cm-scroller` to its own layer. A transparent
-              // layer composites against the transcript, so the image field
-              // looked like a darker hole while the action row kept the
-              // frosted card. Paint the same fill on that layer.
-              bgcolor: mobileFocusedComposerFill,
-              backgroundImage: "none",
               overflow: "hidden",
             },
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-content": {
               minHeight: 0,
-              bgcolor: "transparent",
             },
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-focus-format-row]": {
               maxHeight: 48,
