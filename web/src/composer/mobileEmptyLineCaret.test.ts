@@ -91,6 +91,8 @@ Deno.test("mobile caret anchor stays until the next real input", () => {
   assertEquals(source.includes("transaction.docChanged"), true);
   assertEquals(source.includes("touchstart"), false);
   assertEquals(source.includes("pointerdown"), false);
+  assertEquals(source.includes("keydown"), false);
+  assertEquals(source.includes("flushObservability"), false);
   assertEquals(source.includes("setSelectionRange"), false);
   assertEquals(source.includes("drawSelection"), false);
   assertEquals(source.includes(".focus()"), false);
