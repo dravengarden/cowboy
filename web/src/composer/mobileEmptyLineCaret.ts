@@ -1,6 +1,5 @@
 import {
   type EditorState,
-  Prec,
   StateEffect,
   StateField,
 } from "@codemirror/state";
@@ -8,7 +7,6 @@ import {
   Decoration,
   type DecorationSet,
   EditorView,
-  keymap,
   ViewPlugin,
   type ViewUpdate,
   WidgetType,
@@ -89,16 +87,12 @@ export function landingAnchorsForEmptyLinesAfterImages(
   ]);
 }
 
-export function landingLineBreakSpec(state: EditorState): {
-  from: number;
-  insert: string;
-  anchor: number;
-} | null {
-  if (!state.selection.main.empty || !selectionOnEmptyLineInImageChain(state)) {
-    return null;
-  }
-  const head = state.selection.main.head;
-  return { from: head, insert: "\n", anchor: head + 1 };
+export function shouldPreventNativeMobileLineBreak(
+  inputType: string | undefined,
+  state: EditorState,
+): boolean {
+  return (inputType === "insertLineBreak" || inputType === "insertParagraph") &&
+    selectionOnEmptyLineInImageChain(state);
 }
 
 const hideMobileEmptyLineCaretForIme = StateField.define<boolean>({
@@ -137,41 +131,6 @@ const mobileEmptyLineCaretAnchorField = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field),
 });
 
-export function shouldMaterializeMobileEmptyLineBreak(
-  inputType: string | undefined,
-  state: EditorState,
-): boolean {
-  return (inputType === "insertLineBreak" || inputType === "insertParagraph") &&
-    selectionOnEmptyLineInImageChain(state);
-}
-
-/** Physical v1255: iOS fires beforeinput, then a later keydown Enter. */
-export const MOBILE_LINE_BREAK_ENTER_CONSUME_MS = 500;
-export const MOBILE_LINE_BREAK_USER_EVENT = "input.newline";
-
-const setMobileEnterConsumeUntil = StateEffect.define<number>();
-
-const mobileEnterConsumeUntil = StateField.define<number>({
-  create: () => 0,
-  update(until, transaction) {
-    for (const effect of transaction.effects) {
-      if (effect.is(setMobileEnterConsumeUntil)) return effect.value;
-    }
-    return until;
-  },
-});
-
-export function consumeUntilAfterMaterializedLineBreak(nowMs: number): number {
-  return nowMs + MOBILE_LINE_BREAK_ENTER_CONSUME_MS;
-}
-
-export function shouldConsumeTrailingMobileEnter(
-  nowMs: number,
-  consumeUntilMs: number,
-): boolean {
-  return consumeUntilMs > 0 && nowMs < consumeUntilMs;
-}
-
 export function landingSelectionAlreadyPlaced(
   selection: { anchorNode: Node | null; isCollapsed: boolean } | null,
   text: Node | null,
@@ -184,25 +143,13 @@ export function landingSelectionAlreadyPlaced(
   );
 }
 
-function consumeTrailingMobileEnter(view: EditorView): boolean {
-  if (
-    !shouldConsumeTrailingMobileEnter(
-      Date.now(),
-      view.state.field(mobileEnterConsumeUntil),
-    )
-  ) {
-    return false;
-  }
-  reportClientLog(
-    "info",
-    "mobile_caret_line_break_consumed",
-    "Mobile composer consumed the trailing iOS Enter after a materialized line break",
-    {
-      document_lines: view.state.doc.lines,
-      state_line: view.state.doc.lineAt(view.state.selection.main.head).number,
-    },
-  );
-  return true;
+export function updateInsertedLineBreak(update: ViewUpdate): boolean {
+  if (!update.docChanged) return false;
+  let found = false;
+  update.changes.iterChanges((_fromA, _toA, _fromB, _toB, inserted) => {
+    if (inserted.toString().includes("\n")) found = true;
+  });
+  return found;
 }
 
 export function isMobileEmptyLineCaretState(state: EditorState): boolean {
@@ -256,10 +203,6 @@ function reportAnchorGeometry(view: EditorView, sequence: number): void {
 export const mobileEmptyLineCaretRepair = [
   hideMobileEmptyLineCaretForIme,
   mobileEmptyLineCaretAnchorField,
-  mobileEnterConsumeUntil,
-  Prec.highest(
-    keymap.of([{ key: "Enter", run: consumeTrailingMobileEnter }]),
-  ),
   ViewPlugin.fromClass(
     class {
       placeTimer = 0;
@@ -298,9 +241,6 @@ export const mobileEmptyLineCaretRepair = [
         const text = anchor?.firstChild;
         const selection = this.view.contentDOM.ownerDocument.getSelection();
         if (!text || text.nodeType !== Node.TEXT_NODE || !selection) return;
-        // Physical v1256: after a materialized Return the CM6 selection is
-        // already inside the new landing node. removeAllRanges here is the
-        // second bounce (~27ms after cm6_doc).
         if (landingSelectionAlreadyPlaced(selection, text)) return;
         // Route the next key into the landing text node. This does not move
         // the UIKit caret by itself — first Return / Backspace still have to
@@ -327,30 +267,14 @@ export const mobileEmptyLineCaretRepair = [
         }, 0);
       }
 
-      materializeLineBreak(): boolean {
-        const spec = landingLineBreakSpec(this.view.state);
-        if (!spec) return false;
-        this.view.dispatch({
-          changes: { from: spec.from, insert: spec.insert },
-          selection: { anchor: spec.anchor },
-          userEvent: MOBILE_LINE_BREAK_USER_EVENT,
-          effects: setMobileEnterConsumeUntil.of(
-            consumeUntilAfterMaterializedLineBreak(Date.now()),
-          ),
-        });
-        return true;
-      }
-
       update(update: ViewUpdate): void {
         const has = update.state.field(mobileEmptyLineCaretAnchorField).size;
         if (has === 0) return;
-        if (
-          update.transactions.some((transaction) =>
-            transaction.isUserEvent(MOBILE_LINE_BREAK_USER_EVENT)
-          )
-        ) {
-          return;
-        }
+        // Physical v1257: inserting on beforeinput then consuming Enter still
+        // bounced twice. The first motion was our newline; the second was
+        // UIKit moving on the delayed keydown. Do not write a newline here,
+        // and do not remap after any newline.
+        if (updateInsertedLineBreak(update)) return;
         if (update.docChanged || update.selectionSet) this.schedulePlace();
       }
 
@@ -380,21 +304,18 @@ export const mobileEmptyLineCaretRepair = [
             return;
           }
           if (
-            !shouldMaterializeMobileEmptyLineBreak(
+            !shouldPreventNativeMobileLineBreak(
               event.inputType,
               this.view.state,
             )
           ) {
             return;
           }
-          // Physical v1253: beforeinput.target is always .cm-content, so
-          // event.target cannot decide this. A native Return then inserts
-          // <br> into the landing node (line_height 14→28, still 2 lines).
-          // Use the CM6 selection and write a real newline. Never dispatch
-          // from update().
-          // Physical v1255: iOS still fires keydown Enter ~250ms later.
-          // That second event must not insert another newline.
-          if (!this.materializeLineBreak()) return;
+          // Physical v1253: beforeinput.target is always .cm-content.
+          // Prevent the native <br> only. v1255–v1257 wrote `\n` here and
+          // then either accepted or consumed the later keydown Enter —
+          // one Return became two visual caret moves. Let that single
+          // keydown insert the document line.
           event.preventDefault();
           return true;
         },

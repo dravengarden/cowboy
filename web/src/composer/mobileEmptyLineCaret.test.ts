@@ -6,15 +6,11 @@ import {
   selectionOnEmptyLineInImageChain,
 } from "./inlineImageCaretPolicy";
 import {
-  consumeUntilAfterMaterializedLineBreak,
   isMobileEmptyLineCaretState,
   landingAnchorsForEmptyLinesAfterImages,
-  landingLineBreakSpec,
   landingSelectionAlreadyPlaced,
-  MOBILE_LINE_BREAK_ENTER_CONSUME_MS,
-  MOBILE_LINE_BREAK_USER_EVENT,
-  shouldConsumeTrailingMobileEnter,
-  shouldMaterializeMobileEmptyLineBreak,
+  shouldPreventNativeMobileLineBreak,
+  updateInsertedLineBreak,
 } from "./mobileEmptyLineCaret";
 
 const source = await Deno.readTextFile(
@@ -79,7 +75,7 @@ Deno.test("two images expose a landing position under each thumbnail", () => {
   );
 });
 
-Deno.test("Return inside a landing anchor becomes a document line break", () => {
+Deno.test("image-chain Return only blocks the native break", () => {
   const landing = EditorState.create({
     doc: "![shot](cowboy-att:image-1)\n",
     selection: { anchor: 28 },
@@ -93,47 +89,25 @@ Deno.test("Return inside a landing anchor becomes a document line break", () => 
     selection: { anchor: 7 },
   });
   assertEquals(
-    shouldMaterializeMobileEmptyLineBreak("insertLineBreak", landing),
+    shouldPreventNativeMobileLineBreak("insertLineBreak", landing),
     true,
   );
   assertEquals(
-    shouldMaterializeMobileEmptyLineBreak("insertParagraph", landing),
+    shouldPreventNativeMobileLineBreak("insertParagraph", landing),
     true,
   );
   assertEquals(
-    shouldMaterializeMobileEmptyLineBreak("insertLineBreak", laterEmpty),
+    shouldPreventNativeMobileLineBreak("insertLineBreak", laterEmpty),
     true,
   );
   assertEquals(
-    shouldMaterializeMobileEmptyLineBreak("insertLineBreak", typed),
+    shouldPreventNativeMobileLineBreak("insertLineBreak", typed),
     false,
   );
   assertEquals(
-    shouldMaterializeMobileEmptyLineBreak("insertText", landing),
+    shouldPreventNativeMobileLineBreak("insertText", landing),
     false,
   );
-
-  assertEquals(landingLineBreakSpec(landing), {
-    from: 28,
-    insert: "\n",
-    anchor: 29,
-  });
-  assertEquals(landingLineBreakSpec(laterEmpty), {
-    from: 29,
-    insert: "\n",
-    anchor: 30,
-  });
-  assertEquals(landingLineBreakSpec(typed), null);
-});
-
-Deno.test("materialized Return consumes only the trailing iOS Enter", () => {
-  const now = 1_000_000;
-  const until = consumeUntilAfterMaterializedLineBreak(now);
-  assertEquals(until, now + MOBILE_LINE_BREAK_ENTER_CONSUME_MS);
-  assertEquals(shouldConsumeTrailingMobileEnter(now + 244, until), true);
-  assertEquals(shouldConsumeTrailingMobileEnter(now + 499, until), true);
-  assertEquals(shouldConsumeTrailingMobileEnter(now + 500, until), false);
-  assertEquals(shouldConsumeTrailingMobileEnter(now, 0), false);
 });
 
 Deno.test("landing remap is skipped when the caret is already in the widget", () => {
@@ -153,7 +127,7 @@ Deno.test("landing remap is skipped when the caret is already in the widget", ()
     false,
   );
   assertEquals(landingSelectionAlreadyPlaced(null, text), false);
-  assertEquals(MOBILE_LINE_BREAK_USER_EVENT, "input.newline");
+  assertEquals(typeof updateInsertedLineBreak, "function");
 });
 
 Deno.test("mobile caret repair requires a collapsed empty line", () => {
@@ -180,10 +154,8 @@ Deno.test("mobile caret landing anchor is document-neutral and not late-mounted"
   assertEquals(source.includes('anchor.textContent = "\\u200b"'), true);
   assertEquals(source.includes("selectionOnEmptyLineInImageChain"), true);
   assertEquals(source.includes("beforeinput.target is always .cm-content"), true);
-  assertEquals(source.includes("keydown Enter ~250ms later"), true);
-  assertEquals(source.includes("second bounce"), true);
-  assertEquals(source.includes("key: \"Enter\""), true);
-  assertEquals(source.includes('userEvent: MOBILE_LINE_BREAK_USER_EVENT'), true);
+  assertEquals(source.includes("Let that single"), true);
+  assertEquals(source.includes("materializeLineBreak"), false);
   assertEquals(source.includes("placeLandingSelection"), true);
   assertEquals(source.includes("touchstart"), false);
   assertEquals(source.includes("pointerdown"), false);

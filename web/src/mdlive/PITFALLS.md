@@ -1433,6 +1433,12 @@ Desktop Vim + IME checks:
     `placeLandingSelection` called `removeAllRanges`. Skip that remap
     after our own newline, and no-op when the caret is already in the
     widget.
+    Physical v1257 still bounced twice with no extra remap. Sequence:
+    `cm6_doc` 2→3, then 242ms later `consumed` with no second document
+    line. The second motion is UIKit moving on the delayed software-
+    keyboard Enter after we already inserted on `beforeinput`. Do not
+    write `\n` from `beforeinput`. PreventDefault the native `<br>`
+    only, and let that single later Enter insert the line.
 
 
 65. **A reliable touch action must pair `pointerup` with its actual synthetic
