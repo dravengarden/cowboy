@@ -41,6 +41,7 @@ import {
   deleteImageTokenBackward,
   ensureTrailingImageLine,
   inlineImageField,
+  inlineImagePresentation,
   inlineImageTheme,
   inlineImageTrailingLine,
   insertImageToken,
@@ -60,7 +61,7 @@ import {
   vimEscapeBelongsToApp,
 } from "./desktop/vim/vimEscapeOwnership";
 import { inlineImageInsertion } from "./inlineImageSelection";
-import { mobileEmptyLineCaret } from "./composer/mobileEmptyLineCaret";
+import { mobileLineBreakCaretTelemetry } from "./composer/mobileLineBreakCaretTelemetry";
 
 export interface ComposerEditorSelection {
   anchor: number;
@@ -769,12 +770,13 @@ export const ComposerEditor = forwardRef<
       // Obsidian-style inline images: render `![](cowboy-att:id)` tokens as atomic
       // thumbnails in the text flow (click → lightbox). Atomic + read-only, so
       // IME-safe like the @-chip. See inlineImages.ts.
+      inlineImagePresentation(touchInput),
       inlineImageField,
       inlineImageTheme,
-      // Keep a trailing image from being the doc's last line (atomic block traps
-      // the caret — "图片在最后一行,无法开启新的一行"). See inlineImages.ts.
+      // Keep a trailing image from being the doc's last line (the atomic image
+      // line otherwise traps the caret — "图片在最后一行,无法开启新的一行").
       inlineImageTrailingLine,
-      ...(touchInput ? [mobileEmptyLineCaret] : []),
+      ...(touchInput ? [mobileLineBreakCaretTelemetry] : []),
       autocompletion({
         override: [
           fileCompletionSource(sessionId),
