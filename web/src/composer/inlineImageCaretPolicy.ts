@@ -29,6 +29,27 @@ export function selectionOnEmptyLineAfterImage(state: EditorState): boolean {
     isLoneImageTokenLine(state.doc.line(line.number - 1).text);
 }
 
+export function documentHasLoneImageLine(state: EditorState): boolean {
+  for (let i = 1; i <= state.doc.lines; i++) {
+    if (isLoneImageTokenLine(state.doc.line(i).text)) return true;
+  }
+  return false;
+}
+
+/**
+ * Empty lines that sit in the chain under a block image: the landing line
+ * itself, or a later empty line whose previous line is also empty.
+ */
+export function selectionOnEmptyLineInImageChain(state: EditorState): boolean {
+  const selection = state.selection.main;
+  if (!selection.empty) return false;
+  const line = state.doc.lineAt(selection.head);
+  if (line.length > 0 || !documentHasLoneImageLine(state)) return false;
+  if (line.number <= 1) return false;
+  const previous = state.doc.line(line.number - 1);
+  return previous.length === 0 || isLoneImageTokenLine(previous.text);
+}
+
 /** True when a collapsed caret is on a lone image token line. */
 export function selectionOnLoneImageLine(state: EditorState): boolean {
   const selection = state.selection.main;

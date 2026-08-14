@@ -14,6 +14,7 @@ import {
 import {
   emptyLinePositionsAfterImages,
   selectionOnEmptyLineAfterImage,
+  selectionOnEmptyLineInImageChain,
 } from "./inlineImageCaretPolicy";
 import { reportClientLog } from "../observability";
 
@@ -76,7 +77,7 @@ class MobileEmptyLineCaretAnchorWidget extends WidgetType {
 export function landingAnchorsForEmptyLinesAfterImages(
   state: EditorState,
 ): DecorationSet {
-  if (!selectionOnEmptyLineAfterImage(state)) return Decoration.none;
+  if (!selectionOnEmptyLineInImageChain(state)) return Decoration.none;
   const line = state.doc.lineAt(state.selection.main.head);
   return Decoration.set([
     Decoration.widget({
@@ -91,7 +92,7 @@ export function landingLineBreakSpec(state: EditorState): {
   insert: string;
   anchor: number;
 } | null {
-  if (!state.selection.main.empty || !selectionOnEmptyLineAfterImage(state)) {
+  if (!state.selection.main.empty || !selectionOnEmptyLineInImageChain(state)) {
     return null;
   }
   const head = state.selection.main.head;
@@ -136,10 +137,10 @@ const mobileEmptyLineCaretAnchorField = StateField.define<DecorationSet>({
 
 export function shouldMaterializeMobileEmptyLineBreak(
   inputType: string | undefined,
-  insideLandingAnchor: boolean,
+  state: EditorState,
 ): boolean {
-  return insideLandingAnchor &&
-    (inputType === "insertLineBreak" || inputType === "insertParagraph");
+  return (inputType === "insertLineBreak" || inputType === "insertParagraph") &&
+    selectionOnEmptyLineInImageChain(state);
 }
 
 export function isMobileEmptyLineCaretState(state: EditorState): boolean {
@@ -177,10 +178,11 @@ function reportAnchorGeometry(view: EditorView, sequence: number): void {
       state_line: view.state.doc.lineAt(stateSelection.head).number,
       document_lines: view.state.doc.lines,
       after_image: selectionOnEmptyLineAfterImage(view.state),
+      image_chain: selectionOnEmptyLineInImageChain(view.state),
       active_line_empty: activeLine?.textContent === "\u200b",
       anchor_dom_only: true,
       persistent_until_input: false,
-      landing_only: true,
+      landing_only: false,
       line_top: lineRect ? rounded(lineRect.top - contentRect.top) : -1,
       line_height: lineRect ? rounded(lineRect.height) : -1,
       caret_top: rangeRect ? rounded(rangeRect.top - contentRect.top) : -1,
@@ -213,13 +215,6 @@ export const mobileEmptyLineCaretRepair = [
         this.placeFrame = 0;
       }
 
-      insideLandingAnchor(target: EventTarget | null): boolean {
-        if (!(target instanceof Node)) return false;
-        const element = target instanceof Element ? target : target.parentElement;
-        return element?.closest(`.${MOBILE_EMPTY_LINE_CARET_ANCHOR_CLASS}`) !=
-          null;
-      }
-
       setImeHidden(hidden: boolean): void {
         if (this.view.state.field(hideMobileEmptyLineCaretForIme) === hidden) {
           return;
@@ -230,7 +225,7 @@ export const mobileEmptyLineCaretRepair = [
       }
 
       placeLandingSelection(): void {
-        if (!selectionOnEmptyLineAfterImage(this.view.state)) return;
+        if (!selectionOnEmptyLineInImageChain(this.view.state)) return;
         const anchor = this.view.contentDOM.querySelector<HTMLElement>(
           `.cm-line.cm-activeLine .${MOBILE_EMPTY_LINE_CARET_ANCHOR_CLASS}`,
         );
@@ -274,9 +269,10 @@ export const mobileEmptyLineCaretRepair = [
       }
 
       update(update: ViewUpdate): void {
-        const had = update.startState.field(mobileEmptyLineCaretAnchorField).size;
         const has = update.state.field(mobileEmptyLineCaretAnchorField).size;
-        if (has > 0 && had === 0) this.schedulePlace();
+        if (has > 0 && (update.docChanged || update.selectionSet)) {
+          this.schedulePlace();
+        }
       }
 
       destroy(): void {
@@ -293,7 +289,7 @@ export const mobileEmptyLineCaretRepair = [
           if (
             event.inputType === "insertText" &&
             event.data &&
-            this.insideLandingAnchor(event.target)
+            selectionOnEmptyLineInImageChain(this.view.state)
           ) {
             event.preventDefault();
             const head = this.view.state.selection.main.head;
@@ -307,15 +303,16 @@ export const mobileEmptyLineCaretRepair = [
           if (
             !shouldMaterializeMobileEmptyLineBreak(
               event.inputType,
-              this.insideLandingAnchor(event.target),
+              this.view.state,
             )
           ) {
             return;
           }
-          // A native Return inside the landing node only inserts <br> into
-          // that same line. Prevent it and write a real document line so
-          // the caret leaves the image-adjacent landing line. Never
-          // dispatch from update().
+          // Physical v1253: beforeinput.target is always .cm-content, so
+          // event.target cannot decide this. A native Return then inserts
+          // <br> into the landing node (line_height 14→28, still 2 lines).
+          // Use the CM6 selection and write a real newline. Never dispatch
+          // from update().
           if (this.materializeLineBreak()) event.preventDefault();
         },
         compositionstart(): void {

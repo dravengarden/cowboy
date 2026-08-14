@@ -4,6 +4,7 @@ import {
   caretOffImageLineSpec,
   emptyLinePositionsAfterImages,
   selectionOnEmptyLineAfterImage,
+  selectionOnEmptyLineInImageChain,
   selectionOnLoneImageLine,
 } from "./inlineImageCaretPolicy";
 
@@ -31,5 +32,13 @@ Deno.test("Return on an image line moves to the trailing empty line", () => {
   assertEquals(selectionOnLoneImageLine(emptyAfter), false);
   assertEquals(caretOffImageLineSpec(emptyAfter), null);
   assertEquals(selectionOnEmptyLineAfterImage(emptyAfter), true);
+  assertEquals(selectionOnEmptyLineInImageChain(emptyAfter), true);
   assertEquals(emptyLinePositionsAfterImages(emptyAfter), [28]);
+
+  const laterEmpty = EditorState.create({
+    doc: "![shot](cowboy-att:image-1)\n\n",
+    selection: { anchor: 29 },
+  });
+  assertEquals(selectionOnEmptyLineAfterImage(laterEmpty), false);
+  assertEquals(selectionOnEmptyLineInImageChain(laterEmpty), true);
 });

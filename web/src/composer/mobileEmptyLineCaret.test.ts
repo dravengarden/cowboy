@@ -3,6 +3,7 @@ import { EditorSelection, EditorState } from "@codemirror/state";
 import {
   emptyLinePositionsAfterImages,
   selectionOnEmptyLineAfterImage,
+  selectionOnEmptyLineInImageChain,
 } from "./inlineImageCaretPolicy";
 import {
   isMobileEmptyLineCaretState,
@@ -38,7 +39,8 @@ Deno.test("landing anchors sit only on empty lines after images", () => {
   });
   assertEquals(emptyLinePositionsAfterImages(laterEmpty), [28]);
   assertEquals(selectionOnEmptyLineAfterImage(laterEmpty), false);
-  assertEquals(landingAnchorsForEmptyLinesAfterImages(laterEmpty).size, 0);
+  assertEquals(selectionOnEmptyLineInImageChain(laterEmpty), true);
+  assertEquals(landingAnchorsForEmptyLinesAfterImages(laterEmpty).size, 1);
 
   const noImage = EditorState.create({
     doc: "hello\n\n",
@@ -73,37 +75,50 @@ Deno.test("two images expose a landing position under each thumbnail", () => {
 });
 
 Deno.test("Return inside a landing anchor becomes a document line break", () => {
-  assertEquals(
-    shouldMaterializeMobileEmptyLineBreak("insertLineBreak", true),
-    true,
-  );
-  assertEquals(
-    shouldMaterializeMobileEmptyLineBreak("insertParagraph", true),
-    true,
-  );
-  assertEquals(
-    shouldMaterializeMobileEmptyLineBreak("insertLineBreak", false),
-    false,
-  );
-  assertEquals(
-    shouldMaterializeMobileEmptyLineBreak("insertText", true),
-    false,
-  );
-
   const landing = EditorState.create({
     doc: "![shot](cowboy-att:image-1)\n",
     selection: { anchor: 28 },
-  });
-  assertEquals(landingLineBreakSpec(landing), {
-    from: 28,
-    insert: "\n",
-    anchor: 29,
   });
   const laterEmpty = EditorState.create({
     doc: "![shot](cowboy-att:image-1)\n\n",
     selection: { anchor: 29 },
   });
-  assertEquals(landingLineBreakSpec(laterEmpty), null);
+  const typed = EditorState.create({
+    doc: "hello\n\n",
+    selection: { anchor: 7 },
+  });
+  assertEquals(
+    shouldMaterializeMobileEmptyLineBreak("insertLineBreak", landing),
+    true,
+  );
+  assertEquals(
+    shouldMaterializeMobileEmptyLineBreak("insertParagraph", landing),
+    true,
+  );
+  assertEquals(
+    shouldMaterializeMobileEmptyLineBreak("insertLineBreak", laterEmpty),
+    true,
+  );
+  assertEquals(
+    shouldMaterializeMobileEmptyLineBreak("insertLineBreak", typed),
+    false,
+  );
+  assertEquals(
+    shouldMaterializeMobileEmptyLineBreak("insertText", landing),
+    false,
+  );
+
+  assertEquals(landingLineBreakSpec(landing), {
+    from: 28,
+    insert: "\n",
+    anchor: 29,
+  });
+  assertEquals(landingLineBreakSpec(laterEmpty), {
+    from: 29,
+    insert: "\n",
+    anchor: 30,
+  });
+  assertEquals(landingLineBreakSpec(typed), null);
 });
 
 Deno.test("mobile caret repair requires a collapsed empty line", () => {
@@ -128,10 +143,9 @@ Deno.test("mobile caret repair requires a collapsed empty line", () => {
 
 Deno.test("mobile caret landing anchor is document-neutral and not late-mounted", () => {
   assertEquals(source.includes('anchor.textContent = "\\u200b"'), true);
-  assertEquals(source.includes("landing_only"), true);
-  assertEquals(source.includes("emptyLinePositionsAfterImages"), true);
+  assertEquals(source.includes("selectionOnEmptyLineInImageChain"), true);
+  assertEquals(source.includes("beforeinput.target is always .cm-content"), true);
   assertEquals(source.includes("placeLandingSelection"), true);
-  assertEquals(source.includes("has > 0 && had === 0"), true);
   assertEquals(source.includes("touchstart"), false);
   assertEquals(source.includes("pointerdown"), false);
   assertEquals(source.includes("keydown"), false);

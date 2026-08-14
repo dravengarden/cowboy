@@ -1415,6 +1415,13 @@ Desktop Vim + IME checks:
     probe must stay non-selectable. This is not accepted until physical
     first and second Return after paste, Backspace-up onto the landing
     line, second paste, long-press menu, and IME all pass.
+    Physical v1253 debug proved `beforeinput.target` is `.cm-content`
+    (`content_root`), so an `event.target` closest-to-widget check never
+    preventDefaults. First Return then inserts a native `<br>`
+    (`line_height` 14→28, still two lines). The next Return advances CM6
+    while `caret_height` stays 0. Decide from EditorState — empty line in
+    the image chain — and write a real CM6 newline with a destination
+    U+200B in that same transaction.
 
 65. **A reliable touch action must pair `pointerup` with its actual synthetic
     `click`, never a timeout guess.** Mobile Safari can omit a click after
