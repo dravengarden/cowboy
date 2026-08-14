@@ -151,69 +151,38 @@ class InlineImageWidget extends WidgetType {
   }
 }
 
-// Obsidian / atomic-editor image-blocks: the token stays on a real `.cm-line`.
-// The thumbnail hangs below that line (`widget`, `block: true`, `side: 1` at
-// `line.to`). Hide the raw token only while the caret is on another line.
-// A whole-line block replace took the token out of flow and forced a fake
-// landing line, so text after an image was not a real line break.
+// Physical v1263: hanging a block widget at line.to still put the caret on a
+// visual break that was not a document newline. iOS insertLineBreak then
+// wrote <br> into the source line (height 14→28→42) and the native caret
+// died. Keep the token on a real `.cm-line` and replace only the token with
+// an inline widget, the same class as `@` chips. Never show cowboy-att
+// markdown in the chat composer.
 const LONE_TOKEN_RE = /^\s*!\[([^\]]*)\]\(cowboy-att:([^)]+)\)\s*$/;
 const IMG_TOKEN_RE = /!\[([^\]]*)\]\(cowboy-att:([^)]+)\)/g;
-
-function lineIsActive(
-  line: { from: number; to: number; number: number },
-  sel: { empty: boolean; from: number; to: number; head: number },
-  headLineNumber: number,
-): boolean {
-  return sel.empty
-    ? headLineNumber === line.number
-    : sel.from <= line.to && sel.to >= line.from;
-}
 
 function buildImageDecorations(state: EditorState): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
   const { doc } = state;
   const sel = state.selection.main;
-  const headLineNumber = doc.lineAt(sel.head).number;
   for (let i = 1; i <= doc.lines; i++) {
     const line = doc.line(i);
-    const tokens: {
-      from: number;
-      to: number;
-      id: string;
-      alt: string;
-    }[] = [];
     IMG_TOKEN_RE.lastIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = IMG_TOKEN_RE.exec(line.text)) !== null) {
       if (match[2] === undefined) continue;
-      tokens.push({
-        from: line.from + match.index,
-        to: line.from + match.index + match[0].length,
-        id: match[2],
-        alt: match[1] ?? "",
-      });
-    }
-    if (tokens.length === 0) continue;
-    const active = lineIsActive(line, sel, headLineNumber);
-    if (!active) {
-      for (const token of tokens) {
-        builder.add(token.from, token.to, Decoration.replace({}));
-      }
-    }
-    for (const token of tokens) {
-      const selected = !sel.empty && sel.from <= token.from && sel.to >= token.to;
+      const from = line.from + match.index;
+      const to = from + match[0].length;
+      const selected = !sel.empty && sel.from <= from && sel.to >= to;
       builder.add(
-        line.to,
-        line.to,
-        Decoration.widget({
+        from,
+        to,
+        Decoration.replace({
           widget: new InlineImageWidget(
-            token.id,
-            token.alt,
+            match[2],
+            match[1] ?? "",
             selected,
-            registry.get(token.id)?.previewUrl,
+            registry.get(match[2])?.previewUrl,
           ),
-          block: true,
-          side: 1,
         }),
       );
     }
@@ -227,13 +196,24 @@ export const inlineImageField = StateField.define<DecorationSet>({
     tr.docChanged || tr.selection || tr.effects.some((effect) => effect.is(refreshInlineImages))
       ? buildImageDecorations(tr.state)
       : value,
-  provide: (f) => EditorView.decorations.from(f),
+  provide: (f) => [
+    EditorView.decorations.from(f),
+    EditorView.atomicRanges.of(
+      (view) => view.state.field(f, false) ?? Decoration.none,
+    ),
+  ],
 });
 
-/// Identity: the image source line is a real `.cm-line`, so a trailing
-/// empty landing line is no longer required to untrap the caret.
+function lastLineIsImageToken(text: string): boolean {
+  const nl = text.lastIndexOf("\n");
+  const last = nl === -1 ? text : text.slice(nl + 1);
+  return last.length > 0 && LONE_TOKEN_RE.test(last);
+}
+
+/// Seed-only: a document that ends on an image token opens with a real
+/// following line so the caret is not left on the thumbnail.
 export function ensureTrailingImageLine(text: string): string {
-  return text;
+  return lastLineIsImageToken(text) ? `${text}\n` : text;
 }
 
 /// No-op filter kept so ComposerEditor imports stay stable.
@@ -244,19 +224,15 @@ export const inlineImageTrailingLine = EditorState.transactionFilter.of(
 /// Thumbnail sizing/look. Kept here so any host of `inlineImagePlugin` gets it.
 export const inlineImageTheme = EditorView.theme({
   ".cm-inline-image-widget": {
-    display: "block",
+    display: "inline-block",
+    verticalAlign: "bottom",
     fontSize: "0",
     lineHeight: "0",
     userSelect: "none",
   },
-  // Physical v1261: a .cm-widgetBuffer sits between the block image and
-  // the landing .cm-line, so `widget + .cm-line` never matched. The
-  // landing row still collapsed. Include the buffer sibling.
-  ".cm-content > .cm-inline-image-widget + .cm-line, .cm-content > .cm-inline-image-widget + .cm-widgetBuffer + .cm-line": {
-    minHeight: "14px",
-  },
   ".cm-inline-image": {
-    display: "block",
+    display: "inline-block",
+    verticalAlign: "bottom",
     // A SMALL tap-to-open thumbnail, not a full inline preview: the token is a
     // placeholder you tap to open the lightbox (full image), so it only needs to
     // be big enough to recognize + tap — a large inline image otherwise ate most

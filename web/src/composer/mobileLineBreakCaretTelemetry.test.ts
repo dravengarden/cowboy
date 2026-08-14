@@ -30,12 +30,7 @@ Deno.test("touch keeps hanging image widgets without a presentation branch", () 
     true,
   );
   assertEquals(imageSource.includes("createInlineImageField"), false);
-  assertEquals(imageSource.includes("block: true"), true);
-  assertEquals(
-    imageSource.includes(
-      ".cm-inline-image-widget + .cm-widgetBuffer + .cm-line",
-    ),
-    true,
-  );
+  assertEquals(imageSource.includes("block: true"), false);
+  assertEquals(imageSource.includes("inline-block"), true);
   assertEquals(imageSource.includes("tr.reconfigured"), false);
 });
