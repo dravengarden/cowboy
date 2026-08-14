@@ -3,6 +3,9 @@
 Status: target architecture; the current in-tree `LaunchSpec` registry remains
 the transitional implementation.
 
+This design implements the normative ownership rules in
+[Cowboy core requirements](requirements.md).
+
 ## Product boundary
 
 A Provider is the smallest unit that a Cowboy user can discover, install,
@@ -23,11 +26,12 @@ immutable `(provider_id, provider_version, artifact_digest)` identified by that
 slot. The same release may be installed on Hawk, Falcon, both, or neither.
 
 Cowboy's ordinary UI exposes the Provider name, artwork, Provider version,
-capabilities, health, authentication state, and Provider-owned surfaces. It does
-not expose ACP, an adapter package, a gateway, a model wire protocol, or any
-other transport implementation as a separately selectable product concept.
-Developer diagnostics may reveal those facts only through an explicitly scoped
-diagnostic surface.
+capabilities, Machine installation health, the Cowboy Service's single
+Provider-authentication state, and Provider-owned surfaces. Authentication is
+not nested under a Machine. The UI does not expose ACP, an adapter package, a
+gateway, a model wire protocol, or any other transport implementation as a
+separately selectable product concept. Developer diagnostics may reveal those
+facts only through an explicitly scoped diagnostic surface.
 
 `claude-code`, `codex`, `grok`, `claude-deepseek`, and `codex-deepseek` are each
 independent Provider packages and installation units. A Machine may deduplicate
@@ -46,6 +50,8 @@ Cowboy Provider SDK and contract bundle. Its artifact owns:
 - exact internal executable and protocol dependency pins;
 - platform-specific payloads;
 - Provider-state schemas and migrations;
+- its typed Service login, credential, Machine projection, refresh, revocation,
+  and wipe contract;
 - contract requirements and fingerprints;
 - SBOM, build provenance, publisher identity, and signature.
 
@@ -109,12 +115,14 @@ state-machine matching is exhaustive. Effects cannot access credentials,
 network, files, processes, or Cowboy state directly; the host mediates a
 declared capability and validates both request and result.
 
-For example, a Provider card may derive `canAuthenticate` from typed auth and
-Machine-health fields, dispatch `Authenticate { method }`, show a typed progress
-surface, and reduce the driver's result into `signed_in` or `error`. The same
-message and state schemas are used by the compiler, conformance tests, package
-linker, and runtime validator, so the relationship is checked instead of being
-encoded as stringly typed event names.
+For example, a Provider card may derive `canAuthenticate` from the typed Cowboy
+Service auth state, dispatch `Authenticate { method }`, show a typed progress
+surface, and reduce the Service driver's result into `ready` or `error`. A
+Machine card may consume only typed replica-convergence and installation health;
+it cannot dispatch a login message. The same message and state schemas are used
+by the compiler, conformance tests, package linker, and runtime validator, so
+the relationship is checked instead of being encoded as stringly typed event
+names.
 
 The declarative expression language should cover ordinary cross-field behavior.
 If a Provider needs more complex pure computation, it may include a WebAssembly
@@ -168,12 +176,83 @@ Provider-independent host error surface; untrusted Provider UI never renders an
 installation failure that occurred before activation.
 
 An incompatible package remains quarantined and never enters the Machine's
-active Provider inventory. Authentication absence is an
-`installed-needs-auth` state, not an interface failure.
+active Provider inventory. A Service being signed out does not make an artifact
+incompatible and does not change the Machine installation state. A missing or
+incompatible authentication contract does.
 
 Compatibility is bidirectional. Provider installation checks the current
 Cowboy contracts, while a Cowboy Web, Controller, or Machine candidate must
 check every installed and staged Provider generation before activation.
+
+## Service-scoped authentication
+
+Provider installation and Provider authentication are orthogonal:
+
+```text
+ProviderAuthentication {
+  cowboy_service_id
+  provider_id
+  auth_generation
+  auth_contract_fingerprint
+  auth_state
+  distribution_state
+}
+
+ProviderAuthReplica {
+  machine_id
+  provider_id
+  auth_generation
+  replica_state
+  materialization_state
+}
+```
+
+Cowboy performs the Provider's login flow once at Service scope. The resulting
+portable credential bundle is encrypted in a Service-owned vault and assigned a
+monotonic `auth_generation`. Ordinary database rows contain only redacted state,
+account labels, schema fingerprints, generation numbers, and convergence
+receipts; the vault key and plaintext credential do not enter the database.
+
+The Service automatically distributes the current generation to every enrolled,
+authorized, non-revoked Machine. A bundle is sealed to that Machine's enrollment
+public key and stored under a private Service-managed replica root. Every
+Machine verifies and acknowledges the signed envelope and generation without
+requiring the Provider to be installed. A Machine with the Provider installed
+also validates the typed projection schema, atomically materializes the official
+runtime state, probes it, and acknowledges materialization. Neither receipt can
+become an independent account or login state.
+
+Online Machines reconcile as part of login. Offline Machines retain `pending`
+convergence and reconcile immediately after reconnect. New Machines receive the
+current generation after enrollment. Installing a Provider on a Machine that
+already has the sealed replica automatically materializes and probes it; no
+second login is shown.
+
+The Service owns auth `signed_out`, `authenticating`, `ready`, `expired`, or
+`error`, plus aggregate distribution `idle`, `distributing`, `converged`,
+`degraded`, or `revoking`. Machine diagnostics separate replica `pending`,
+`storing`, `current`, `failed`, or `revoking` from materialization
+`not-installed`, `applying`, `current`, or `failed`. An offline Machine degrades
+distribution without changing the Service's authenticated state. A Provider
+that requires auth is schedulable on a Machine only when Service auth is ready
+and that Machine has materialized and probed the current generation.
+
+The package authentication contract must make refresh deterministic. It either
+keeps refresh in the Service and issues bounded Machine projections, or returns
+a sealed candidate through a generation compare-and-swap. Cowboy validates the
+candidate, commits one next generation, and redistributes it. Two Machine
+replicas may never silently become different accounts.
+
+When an upstream credential is non-exportable or device-bound, the Provider
+must supply a safe Service broker or token-exchange projection. Otherwise the
+Provider is incompatible with the Service-auth contract. Cowboy does not expose
+a per-Machine login escape hatch.
+
+Service logout immediately blocks new matching sessions, invalidates the active
+generation, and distributes a signed wipe or revocation generation. Offline
+Machines apply it on reconnect and cannot start new work while stale. Uninstall
+on one Machine removes its materialized Provider credential state but preserves
+the Service login and other Machine replicas.
 
 ## Catalog and Machine installation
 
@@ -192,8 +271,10 @@ The Catalog records releases; it does not imply installation. The Controller
 joins Catalog releases with each Machine's platform, contract inventory, active
 installation, and health. The UI therefore presents Provider versions inside a
 specific Machine context and reports `available`, `installing`, `active`,
-`upgrade-available`, `incompatible`, `needs-auth`, or `uninstalling` without
-exposing the internal transport.
+`upgrade-available`, `incompatible`, or `uninstalling` without exposing the
+internal transport. Provider authentication appears once at Service scope;
+replica lag is installation health or developer diagnostics, never a Machine
+login control.
 
 The UI submits an immutable Catalog reference or uploads an artifact. It never
 supplies an arbitrary Machine download URL. Installation follows a durable
@@ -207,6 +288,10 @@ resolving -> quarantined -> verified -> interface-checked
 Failure before `active` leaves the prior generation unchanged. A Provider
 upgrade installs side by side; existing sessions stay pinned to their original
 Provider generation, while new sessions use the newly active generation.
+Activation always links the authentication projection contract. When a current
+Service auth generation exists, staging also materializes and probes it; a
+signed-out Service does not block installation. Scheduling waits for the current
+generation's materialization acknowledgement when auth is required.
 
 ## Sessions and uninstall
 
@@ -221,6 +306,13 @@ On confirmation Cowboy atomically blocks new sessions, soft-deletes the impact
 set, removes it from ordinary UI, drains workers, and releases the installation
 lease. Session records use an absolute `purge_after_at` so later policy changes
 cannot move an already confirmed deadline.
+
+Uninstall wipes that Machine's materialized Provider credential state after the
+worker leases drain. Its Service-managed sealed replica remains synchronized but
+cannot be opened by an absent Provider; this lets reinstall consume the current
+generation without another login. Only Service logout, Machine revocation, or
+credential-generation retirement wipes the sealed replica. Uninstall does not
+log the Cowboy Service out or affect another Machine's replica.
 
 The confirmation modal names the Machine and Provider, separates sessions that
 are idle from turns that must drain or be cancelled, states that source projects
@@ -255,14 +347,17 @@ The current implementation still defines Provider launch recipes in
 agent packages at worker launch. Migration should proceed without pretending
 the target package model already exists:
 
-1. publish the Provider SDK, package schema, trusted verifier, and Catalog
-   contract;
-2. add persistent Machine-scoped Provider installations and generation-pinned
+1. publish the Provider SDK, package schema, authentication contract, trusted
+   verifier, and Catalog contract;
+2. add Service-owned auth generations and automatic replica reconciliation,
+   then retire Machine login UI after end-to-end convergence;
+3. add persistent Machine-scoped Provider installations and generation-pinned
    session identity;
-3. convert one Provider to a fully pinned package and prove install, upgrade,
-   rollback, uninstall, and session retention end to end;
-4. migrate the remaining Providers independently;
-5. remove static Provider UI tables and in-tree launch ownership only after the
+4. convert one Provider to a fully pinned package and prove install, Service
+   login synchronization, refresh, upgrade, rollback, uninstall, logout, and
+   session retention end to end;
+5. migrate the remaining Providers independently;
+6. remove static Provider UI tables and in-tree launch ownership only after the
    final built-in generation has drained.
 
 Until those prerequisites exist, editing an in-tree `LaunchSpec` or releasing a

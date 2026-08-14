@@ -13,6 +13,7 @@ material, operational guidance, research evidence, and historical notes.
 ## Reading order
 
 - [`architecture/00-overview.md`](architecture/00-overview.md) — 00 Overview
+- [`requirements.md`](requirements.md) — Normative target contract for the Provider platform
 
 ## Documents
 
@@ -38,6 +39,7 @@ material, operational guidance, research evidence, and historical notes.
 
 ### Core documents
 
+- [`requirements.md`](requirements.md) — Cowboy core requirements and state-ownership contract
 - [`desktop-efficiency-redesign.md`](desktop-efficiency-redesign.md) — Desktop Efficiency Redesign, including the no page-wide target overlay contract
 - [`explore-transcript-design.md`](explore-transcript-design.md) — Explore Transcript Design
 - [`ios-simulator.md`](ios-simulator.md) — Ios Simulator

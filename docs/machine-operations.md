@@ -1,9 +1,17 @@
 # Cowboy Machine operations
 
+> **Current transition:** this runbook documents the deployed Machine-scoped
+> Provider login implementation. The target contract performs login once at
+> Cowboy Service scope and automatically reconciles a credential generation to
+> every enrolled Machine. See [Cowboy core requirements](requirements.md) and
+> [Service-scoped authentication](provider-packages.md#service-scoped-authentication).
+
 `cowboy-machine` is an outbound-only macOS/Linux host agent. It owns machine
-identity, the detached ACP broker, signed component activation, provider login
-orchestration, trusted workspace roots, and stable product-adapter tunnelling.
-Cowboy remains the controller and never receives provider credentials.
+identity, the detached ACP broker, signed component activation, transitional
+Provider login orchestration, trusted workspace roots, and stable
+product-adapter tunnelling. In the deployed transition Cowboy remains the
+controller and does not receive Provider credentials; this is not the target
+Service-auth ownership model.
 
 For a new Git-backed session, the host fetches the advertised repository's
 remote default branch and creates a worktree on the task-owned
@@ -163,6 +171,8 @@ the small stable host process to be relaunched by launchd/systemd so its worker
 launch environment is rebuilt atomically. Detached worker services and their
 session generations remain alive and are adopted by the new broker.
 
+### Transitional Machine login
+
 Codex and Grok Build device login plus Claude browser login can be initiated
 from Machines. Grok credentials remain in the official CLI's `~/.grok/auth.json`
 or configured `GROK_HOME`/`GROK_AUTH_PATH`; Cowboy never copies token material.
@@ -173,9 +183,15 @@ Standard/Enterprise Google Login is enabled only when that Machine has a
 retired and never make the provider ready. A controller refuses Gemini login
 commands from older Machine hosts that cannot advertise these semantics.
 
+These commands remain necessary only until the Service auth vault, typed
+Provider auth projection, generation reconciliation, and wipe acknowledgement
+are deployed. New product work must not add another Machine-specific login flow.
+
 ## Ownership
 
 Cowboy-managed Zed payloads and state live under the Machine root. Native Zed
 continues to own `~/.zed_server` and its SSH bootstrap chain. The stable tunnel
-carries Cowboy adapter JSON, never Zed protobuf. Codex, Claude, Gemini, and Grok auth
-state remains in each official CLI's own state root on that Machine.
+carries Cowboy adapter JSON, never Zed protobuf. In the deployed transition,
+Codex, Claude, Gemini, and Grok auth state remains in each official CLI's own
+state root on that Machine. The target replaces this ownership with
+Service-issued, versioned Machine replicas.

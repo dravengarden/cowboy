@@ -10,7 +10,12 @@ adapter, gateway, model client, and other implementation dependencies private
 to the package; Cowboy users install only a named Provider version on a named
 Machine.
 
+Keep this skill canonical in the Cowboy repository at
+`.agents/skills/release-cowboy-provider`. Update and review it with the Provider
+contracts; never fork it into a user-home skill.
+
 Before changing a Provider, read
+[`docs/requirements.md`](../../../docs/requirements.md) and
 [`docs/provider-packages.md`](../../../docs/provider-packages.md) completely.
 Then resolve the Provider's source checkout and read its nearest `AGENTS.md`,
 manifest, lock, and repository-owned build and release entrypoints. Never invent
@@ -32,11 +37,17 @@ a command that the Provider repository does not own.
   Machine-wide package. A required core contract change is a separate task.
 - Keep release and installation separate. Publishing makes a version available
   in the Catalog; it never installs or upgrades that version on a Machine.
+- Keep Provider authentication Cowboy Service-scoped. A release must not add a
+  Machine login control, perform login, or mutate the active Service credential.
+- Treat Machine credentials only as versioned replicas of the Service auth
+  generation. Never let a Provider dependency create an independent Machine
+  account, updater, refresh lineage, or credential store.
 
 ## Audit candidates
 
 1. Capture the Provider ID, current Provider version and digest, supported
-   platforms, public contract versions, and every private dependency pin.
+   platforms, public contract versions, authentication-contract fingerprint,
+   and every private dependency pin.
 2. Query authoritative upstream release and security sources for each pin.
    Record the newest candidate, release date, relevant changes, license or
    platform changes, and whether the current pin is already preferred.
@@ -58,8 +69,10 @@ a command that the Provider repository does not own.
    runtime dependency resolution or self-update.
 4. Inspect all ordinary user-facing surfaces. Present the Provider name and
    Provider version; reject accidental ACP, adapter, gateway, or internal
-   dependency controls. Developer-only diagnostics may identify internals only
-   when the package contract explicitly marks that surface as diagnostic.
+   dependency controls. Reject Machine-specific login, logout, account, or
+   credential controls. Developer-only diagnostics may identify internals or
+   auth-replica convergence only when the package contract explicitly marks
+   that surface as diagnostic.
 5. Bump the Provider version. Use a patch for a dependency-only compatible
    release, and a minor or major when the public Provider contract requires it.
    Never republish different bytes under an existing version.
@@ -79,6 +92,11 @@ In addition, require all applicable Provider gates below:
   Provider's conformance harness without exposing the transport in the UI.
 - Run unit, integration, failure-path, authentication-state, and upgrade tests.
   Never put real credentials in fixtures or logs.
+- Run the typed Service authentication conformance suite. Prove one login
+  generation stores on every Machine, materializes on every installed supported
+  platform, offline and newly enrolled Machines converge later, refresh cannot
+  fork generations, logout distributes wipe/revocation, and Provider uninstall
+  does not log out the Service or affect another Machine.
 - Prove every declared OS and architecture has a matching artifact. Test each
   supported target or use the repository's accepted cross-platform evidence.
 - Dry-run every required Provider-state migration from each supported installed
@@ -111,16 +129,23 @@ release authority permits it.
    a Machine installation or upgrade endpoint unless the user separately asks
    to install it on a specific Machine.
 
+Do not perform or refresh a Cowboy Service login as release verification. Use
+hermetic auth fixtures unless the Provider's repository gate explicitly
+requires an authorized smoke test, and never publish the resulting credential
+state.
+
 Return an upgrade and release receipt containing the Provider ID, old and new
 Provider versions, old and new dependency pins, source commit, artifact digest,
 signature identity, contract fingerprints, platform matrix, gates run, Catalog
-observation, and any blocked Machine targets.
+observation, authentication-contract fingerprint and conformance result, and any
+blocked Machine targets.
 
 ## Fail closed during migration
 
 The current Cowboy in-tree `LaunchSpec` registry predates installable Provider
 packages. If the selected Provider does not yet have a package manifest, exact
-private lock, trusted verifier, repository-owned quality gate, or publish
-command, report the missing prerequisite. Do not simulate a Provider release by
-editing `src/provider/mod.rs`, changing an unpinned `npx` launch, or publishing a
-Cowboy Controller or Machine release.
+private lock, typed Service authentication contract, trusted verifier,
+repository-owned quality gate, or publish command, report the missing
+prerequisite. Do not simulate a Provider release by editing
+`src/provider/mod.rs`, changing an unpinned `npx` launch, adding per-Machine
+login, or publishing a Cowboy Controller or Machine release.

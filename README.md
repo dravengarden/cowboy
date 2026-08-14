@@ -19,8 +19,16 @@ answers permission requests. See **[docs/architecture/](docs/architecture/)**
 for the implementation architecture; [design.md](design.md) records the
 original design direction.
 
-Auth/token pairing remains deliberately out of process (the deployment VPN is
-the boundary). PostgreSQL/SQLite persistence, restart resume, history pagination, queue /
+The normative target contract for independently built Provider packages,
+typed Provider UI, dynamic per-Machine installation, Service-scoped login, and
+bounded uninstall cleanup is [Cowboy core requirements](docs/requirements.md).
+The numbered architecture chapters continue to describe the running system
+during migration.
+
+End-user access pairing for the Cowboy application remains deliberately out of
+process (the deployment VPN is the boundary); this is separate from the target
+Service-owned Provider authentication contract. PostgreSQL/SQLite persistence,
+restart resume, history pagination, queue /
 draft sync, and the CodeMirror composer are implemented. Code-editor / file-tree
 / git views remain intentionally out of scope — cowboy is the agent panel only.
 

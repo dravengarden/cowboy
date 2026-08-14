@@ -3,7 +3,11 @@
 > **Current implementation:** this document describes the transitional in-tree
 > launch registry. The target product boundary is an independently built,
 > Machine-scoped Provider package; ACP and adapter details become private
-> implementation dependencies rather than ordinary UI concepts. See
+> implementation dependencies rather than ordinary UI concepts. Provider login
+> becomes Cowboy Service-scoped and automatically synchronizes versioned
+> credential replicas to Machines. All Machine login details below are current
+> transition behavior, not the target ownership contract. See
+> [Cowboy core requirements](../requirements.md) and
 > [Installable Provider packages](../provider-packages.md).
 
 A **provider** is the recipe for launching one agent CLI's ACP adapter. All
@@ -186,8 +190,8 @@ spend.
 
 Gemini CLI stopped accepting Google Login for consumer, Google AI Pro, and AI
 Ultra accounts on 2026-06-18. Its ACP mode remains usable with a Gemini API key
-or Code Assist Standard/Enterprise credentials. Machine authentication therefore
-has two explicit paths:
+or Code Assist Standard/Enterprise credentials. The current transitional
+Machine authentication therefore has two explicit paths:
 
 - **Gemini API key** writes `GEMINI_API_KEY` to the target user's
   `~/.gemini/.env` with user-only permissions and selects `gemini-api-key` in
@@ -208,9 +212,9 @@ server mode.
 Grok uses the official Grok Build CLI as both provider CLI and ACP agent; there
 is no second adapter package. Cowboy starts one non-leader process per session,
 disables its process-local updater, and leaves installation/update ownership to
-the Machine `provider-cli:grok` component. Machine login runs
-`grok login --device-auth`; Cowboy records only signed-in/out inventory and
-never stores the OAuth token.
+the Machine `provider-cli:grok` component. The current transitional Machine
+login runs `grok login --device-auth`; Cowboy records only signed-in/out
+inventory and never stores the OAuth token.
 
 Grok's current ACP compatibility surface returns model and reasoning choices in
 `_meta["x.ai/sessionConfig"]` and changes either through `session/set_model`

@@ -38,6 +38,10 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
   (memories: cowboy-switch-restarts-approval-channel, cowboy-v1-deploy)
 
 ## Architecture gotchas
+- The normative Provider-platform contract is `docs/requirements.md`. The
+  canonical dependency-audit and release workflow is the repository-owned
+  `.agents/skills/release-cowboy-provider/`; keep it versioned with Cowboy and
+  do not fork it into a user-home skill.
 - **One process serves frontend + backend** → daemon-down = white screen. The
   robustness layers (SW shell cache, AppErrorBoundary, ConnectionBanner, store
   NUL-strip / skip-bad-row, parking_lot mutex) exist to catch that — keep them.
