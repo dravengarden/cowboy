@@ -109,7 +109,21 @@ function user(key: string, text: string, autoResumed = false): RenderItem {
     kind: "message",
     role: "user",
     chunks: [{ type: "text", text }],
+    origin: autoResumed
+      ? { actor: "cowboy", source: "auto-resume" }
+      : { actor: "human", source: "composer" },
     autoResumed,
+  };
+}
+
+function agentRuntime(key: string, text: string): RenderItem {
+  return {
+    key,
+    kind: "message",
+    role: "user",
+    chunks: [{ type: "text", text }],
+    origin: { actor: "agent", source: "runtime", provider: "grok" },
+    autoResumed: true,
   };
 }
 
@@ -165,6 +179,19 @@ Deno.test("context management commands do not create question pages", () => {
     },
     user("5", "The next real question"),
     assistant("6", "The next answer"),
+  ]);
+
+  assertEquals(pages.map((page) => page.id), ["1", "5"]);
+  assertEquals(pages[0]?.itemKeys, ["1", "2", "3", "4"]);
+});
+
+Deno.test("agent runtime prompts do not create question pages", () => {
+  const pages = deriveQuestionPages([
+    user("1", "A real question"),
+    assistant("2", "A real answer"),
+    agentRuntime("3", "<system-reminder>Background task completed.</system-reminder>"),
+    assistant("4", "The search finished."),
+    user("5", "The next real question"),
   ]);
 
   assertEquals(pages.map((page) => page.id), ["1", "5"]);

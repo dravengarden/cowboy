@@ -49,9 +49,7 @@ use tokio::process::Command;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
-use crate::agent_model::{
-    AUTO_CONTINUE_PREFIX, Event, SCHED_PREFIX, SessionUsage, Status, WAKEUP_PREFIX,
-};
+use crate::agent_model::{Event, SessionUsage, Status};
 use crate::agent_sink::AgentSink;
 use crate::cgroup;
 use crate::provider::LaunchSpec;
@@ -2071,7 +2069,7 @@ fn handle_session_notification(state: &ClientState, notif: &SessionNotification)
         );
         return;
     }
-    let update = match serde_json::to_value(&notif.update) {
+    let mut update = match serde_json::to_value(&notif.update) {
         Ok(update) => update,
         Err(e) => {
             tracing::warn!(error = %e, "serializing session update");
@@ -2091,6 +2089,7 @@ fn handle_session_notification(state: &ClientState, notif: &SessionNotification)
     // verbatim (timeline/UI unchanged); this just adds the side effect of
     // actually firing the wakeup, which the ACP runtime otherwise drops.
     maybe_arm_wakeup(state, &update);
+    crate::prompt_origin::annotate_inbound_user_prompt(&mut update, &state.provider_id);
     state.sink.push(&state.session_id, Event::Update { update });
 }
 
@@ -2483,11 +2482,7 @@ async fn run_session(
                 // distinct "↻ resumed turn" note: it isn't something the user
                 // typed, so it must never look like a user bubble (e.g. a wakeup
                 // re-issues a self-check prompt the user never sent).
-                let auto_resumed = cmid.as_deref().is_some_and(|c| {
-                    c.starts_with(AUTO_CONTINUE_PREFIX)
-                        || c.starts_with(WAKEUP_PREFIX)
-                        || c.starts_with(SCHED_PREFIX)
-                });
+                let origin = crate::prompt_origin::origin_from_cmid(cmid.as_deref());
                 for (i, block) in blocks.iter().enumerate() {
                     let content = serde_json::to_value(block).unwrap_or(serde_json::Value::Null);
                     let tag = if i == 0 { cmid.clone() } else { None };
@@ -2495,9 +2490,7 @@ async fn run_session(
                         "sessionUpdate": "user_message_chunk",
                         "content": content,
                     });
-                    if auto_resumed {
-                        update["autoResumed"] = serde_json::Value::Bool(true);
-                    }
+                    crate::prompt_origin::apply_prompt_origin(&mut update, &origin);
                     state
                         .sink
                         .push_tagged(&session_id, Event::Update { update }, tag);

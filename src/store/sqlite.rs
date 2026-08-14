@@ -1970,6 +1970,8 @@ impl SqliteStorage {
              WHERE json_extract(payload, '$.kind') = 'update' \
                AND json_extract(payload, '$.update.sessionUpdate') = 'user_message_chunk' \
                AND COALESCE(json_extract(payload, '$.update.autoResumed'), 0) <> 1 \
+               AND COALESCE(json_extract(payload, '$.update.promptOrigin.actor'), 'human') = 'human' \
+               AND instr(lower(COALESCE(json_extract(payload, '$.update.content.text'), '')), '<system-reminder') = 0 \
                AND trim(COALESCE(json_extract(payload, '$.update.content.text'), '')) \
                    NOT IN ('/compact', '/compress') \
                AND previous_update IS NOT 'user_message_chunk'",
@@ -2018,6 +2020,8 @@ impl SqliteStorage {
                WHERE json_extract(payload, '$.kind') = 'update' \
                  AND json_extract(payload, '$.update.sessionUpdate') = 'user_message_chunk' \
                  AND COALESCE(json_extract(payload, '$.update.autoResumed'), 0) <> 1 \
+                 AND COALESCE(json_extract(payload, '$.update.promptOrigin.actor'), 'human') = 'human' \
+                 AND instr(lower(COALESCE(json_extract(payload, '$.update.content.text'), '')), '<system-reminder') = 0 \
                  AND trim(COALESCE(json_extract(payload, '$.update.content.text'), '')) \
                      NOT IN ('/compact', '/compress') \
                  AND previous_update IS NOT 'user_message_chunk')",
@@ -2051,6 +2055,8 @@ impl SqliteStorage {
                FROM ordered WHERE json_extract(payload, '$.kind') = 'update' \
                  AND json_extract(payload, '$.update.sessionUpdate') = 'user_message_chunk' \
                  AND COALESCE(json_extract(payload, '$.update.autoResumed'), 0) <> 1 \
+                 AND COALESCE(json_extract(payload, '$.update.promptOrigin.actor'), 'human') = 'human' \
+                 AND instr(lower(COALESCE(json_extract(payload, '$.update.content.text'), '')), '<system-reminder') = 0 \
                  AND trim(COALESCE(json_extract(payload, '$.update.content.text'), '')) \
                      NOT IN ('/compact', '/compress') \
                  AND previous_update IS NOT 'user_message_chunk' \
@@ -2102,6 +2108,8 @@ impl SqliteStorage {
                SELECT seq FROM ordered WHERE json_extract(payload, '$.kind') = 'update' \
                  AND json_extract(payload, '$.update.sessionUpdate') = 'user_message_chunk' \
                  AND COALESCE(json_extract(payload, '$.update.autoResumed'), 0) <> 1 \
+                 AND COALESCE(json_extract(payload, '$.update.promptOrigin.actor'), 'human') = 'human' \
+                 AND instr(lower(COALESCE(json_extract(payload, '$.update.content.text'), '')), '<system-reminder') = 0 \
                  AND trim(COALESCE(json_extract(payload, '$.update.content.text'), '')) \
                      NOT IN ('/compact', '/compress') \
                  AND previous_update IS NOT 'user_message_chunk' \
