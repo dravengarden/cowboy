@@ -1,5 +1,11 @@
 # Providers
 
+> **Current implementation:** this document describes the transitional in-tree
+> launch registry. The target product boundary is an independently built,
+> Machine-scoped Provider package; ACP and adapter details become private
+> implementation dependencies rather than ordinary UI concepts. See
+> [Installable Provider packages](../provider-packages.md).
+
 A **provider** is the recipe for launching one agent CLI's ACP adapter. All
 providers share the single `src/acp.rs` client backend; a provider declares
 **how to spawn its adapter binary**. Narrow compatibility mappings stay in that

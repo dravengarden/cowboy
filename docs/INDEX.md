@@ -42,6 +42,7 @@ material, operational guidance, research evidence, and historical notes.
 - [`explore-transcript-design.md`](explore-transcript-design.md) — Explore Transcript Design
 - [`ios-simulator.md`](ios-simulator.md) — Ios Simulator
 - [`machine-operations.md`](machine-operations.md) — Machine Operations
+- [`provider-packages.md`](provider-packages.md) — Target design for independently released, Machine-scoped Provider packages
 
 ### Integrations
 
