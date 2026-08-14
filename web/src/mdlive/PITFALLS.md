@@ -1,5 +1,13 @@
 # mdlive — iOS / CM6 pitfalls & the Obsidian-alignment contract
 
+> **OPEN TODO — pitfall #69 (end of this file).** Physical iPhone Return
+> after a pasted composer image still fails: CM6 / `.cm-activeLine` move,
+> the painted UIKit caret does not. Do **not** claim this fixed. Do **not**
+> re-ship Obsidian token reveal. Do **not** start another beforeinput /
+> U+200B / Selection-remap patch. Canonical ledger (symptom, diagnosis,
+> v1240–v1269 failed attempts, do-not-retry): **#69** below. Debug mode is
+> pitfall #68. Simulator CSS caret is not evidence (pitfall #67).
+
 > **RESOLVED ARCHITECTURE CHANGE — task `cowboy-composer-drop-pwa-hacks`.** The
 > whole PWA iOS hack tower documented below is **REMOVED IN CURRENT CODE**: the
 > composer now runs one native-shell-oriented code path in normal flow.
@@ -1004,6 +1012,9 @@ fullscreen editor:
 - [ ] Paste a photo in the middle of text — the image lands at the caret and the
       caret resumes immediately after the image, before the original trailing
       text; the keyboard stays visible.
+- [ ] **OPEN (pitfall #69):** after a pasted image, software-keyboard Return
+      (and Backspace back onto the image) must move the *painted* iPhone
+      caret with CM6. Not accepted. Simulator CSS caret is not evidence.
 - [ ] With an empty clipboard, the Paste accessory is visibly disabled. Copy
       text and it becomes enabled, replaces the exact current range, leaves the
       caret after the inserted text, and keeps the keyboard open. Copy a photo
@@ -1352,6 +1363,8 @@ Desktop Vim + IME checks:
 
 64. **Do not change touch image decoration structure without physical paste
     acceptance.**
+    **OPEN TODO: the current ledger is pitfall #69.** The paragraphs below
+    are historical session notes, not a plan to re-apply.
     Touch documents with an image token intentionally promote to CM6 so the
     thumbnail stays in the writing flow. A `Decoration.replace({ block: true })`
     removes that document line's ordinary `.cm-line` and places the image widget
@@ -1570,3 +1583,184 @@ Desktop Vim + IME checks:
     clipboard contents, or attachment ids. Off by default. Query
     `event_name:="composer_input_debug"` or `event_name:="composer_debug_mode"`.
     This does not make Simulator match a physical caret.
+
+69. **TODO (OPEN): physical iPhone caret after a pasted composer image.**
+    **Do not claim this fixed.** Status is OPEN as of cowboy-v1269 /
+    `a9aaa415` (2026-08-15). Physical iPhone acceptance only. Simulator
+    CSS caret and HID Return are not evidence (pitfall #67). Debug mode
+    (pitfall #68) is the flight recorder. Historical session notes that
+    led here live in pitfall #64; they are not a plan to re-apply.
+
+    ### Reproduction (physical iPhone only)
+    1. Mobile composer, software keyboard visible, Debug mode on.
+    2. Long-press paste a photo (not a Mac / HID paste).
+    3. Tap Return on the software keyboard (换行), not a hardware key.
+    4. Repeat Return. Type a letter. Backspace back onto the image.
+    Expected: the *painted* caret moves with CM6 on every Return and
+    Backspace. Actual: CM6 selection / `.cm-activeLine` advance, the
+    UIKit caret stays on the thumbnail or the last measurable rect
+    until a normal character. The image is required; text-only Return
+    is fine. `@` chips are fine.
+
+    User-reported shapes of the same bug (all still this item):
+    first Return bad / second good; first good / second bad; one
+    Return bounces twice; Return lags; only text at the end of an
+    image; Backspace will not walk the caret back up onto the image.
+
+    ### Current code (cowboy-v1269 / `a9aaa415`)
+    Token is `![name](cowboy-att:<id>)`. Touch promotes to CM6 on the
+    first token. The token is replaced by an inline thumbnail widget
+    (not `block: true`). Paste inserts a real following line with a
+    trailing space and lands the caret there:
+
+    ```
+    lead + token(s) + "\\n " + optional trail
+    caret = after the space on the next line
+    ```
+
+    Image-adjacent `insertLineBreak` is preventDefaulted; landing
+    U+200B widgets are inert. Obsidian source-line reveal (`v1268`)
+    was withdrawn because flashing `![](cowboy-att:…)` is too clumsy
+    for chat.
+
+    Primary files: `web/src/inlineImages.ts`,
+    `web/src/inlineImageSelection.ts`,
+    `web/src/composer/inlineImageCaretPolicy.ts`,
+    `web/src/composer/mobileEmptyLineCaret.ts`,
+    `web/src/composer/mobileLineBreakCaretTelemetry.ts`,
+    `web/src/composer/composerInputDebug.ts`,
+    `web/src/ComposerEditor.tsx`,
+    `web/src/composer/PlatformComposerEditor.tsx`.
+
+    ### Hard constraints
+    No sentinel in EditorState / React / history / persistence /
+    messages. No fake caret / `drawSelection`. No ordinary
+    `setSelectionRange` / focus / blur loops. Keep iOS native paste,
+    selection, long-press, and IME. Desktop must stay usable. Do not
+    treat Simulator HID Return as acceptance.
+
+    ### Proven facts (physical Debug logs + user)
+    - After paste+Return, JS Selection can already be collapsed at
+      offset 0 of the correct active `.cm-line` while the native
+      Range has `caret_height=0` and a negative `caret_top`.
+    - Software-keyboard Return is `beforeinput insertLineBreak` then
+      a delayed `keydown Enter` (~250ms). HID / Simulator hardware
+      Return is only `keydown Enter`.
+    - When `insertLineBreak` is not preventDefaulted, `line_height`
+      grows 14→28 or 88→102 (`<br>` in the current node) while
+      `document_lines` stays put until CM6 later writes `\n`.
+    - `beforeinput.target` is always `.cm-content`, never the widget.
+    - A landing U+200B measures `caret_height=12` only while it is
+      mounted; after removal the Range returns to height 0.
+    - Nesting the image in an ordinary `.cm-line` (`block: false`)
+      does not by itself give UIKit a live caret.
+    - A touch-only decoration facet passed Simulator and broke
+      physical paste. Facet was removed.
+    - Writing `\n` from `beforeinput` double-inserts when the delayed
+      Enter arrives. Consuming that Enter makes the document 1:1;
+      UIKit still bounces.
+    - `eq()`-always-true landing widgets migrate onto the new line.
+    - Trailing space *on the image line* paints an 88px caret bar.
+    - Obsidian reveal shows the raw token; user rejected it.
+    - Simulator can match document telemetry and still paint a
+      purple CSS caret. That is not the physical bug.
+
+    ### Best current diagnosis (not a shipped fix)
+    Physical iPhone paints `UITextSelectionView` from
+    `caretRect(for:)`. After an image widget (a replaced `<img>`, plus
+    CM6's empty `<img class="cm-widgetBuffer">`), that rect binds to
+    the last measurable replaced box. Software-keyboard
+    `insertLineBreak` writes a native `<br>` into the current
+    contenteditable node. CM6 then writes a document `\n` and remaps
+    JS Selection. UIKit does not remount onto the new `.cm-line`
+    until a real character creates a text node (`caret_height`
+    returns to 12). Simulator still paints CSS `caret-color` from the
+    JS Selection, so it looks fine.
+
+    `@` chips work because they are text-height, not a tall `<img>`.
+
+    The user's guess ("the image looks like a line but is not") was
+    half-right for the old `Decoration.replace({ block: true })` path,
+    which lifted the token out of `.cm-line`. After v1264 the token
+    is a real source line with an inline widget, and the caret still
+    dies. The remaining mismatch is UIKit geometry vs replaced
+    `<img>` / `cm-widgetBuffer`, not "missing `\n` in the document".
+
+    ### What others do
+    Obsidian (same CM6 stack) hits the same bug. Staff called it an
+    upstream CodeMirror problem. Their workarounds: Source mode, tap
+    the image to reveal `![]()` then Return from that text, toolbar
+    "move line". Changelog 1.4.12 only says it was "sometimes" fixed.
+    Chat apps (iMessage / Slack) keep images *outside* the text field.
+    CM6's recommended escape is `drawSelection`, which Cowboy cannot
+    use (it kills the iOS long-press paste menu). No public write-up
+    shows a working native caret next to an in-flow CM6 image widget
+    on physical iOS.
+
+    ### Debug
+    Settings → Debug mode. VictoriaLogs:
+    `event_name:composer_input_debug`. Useful fields: `build`,
+    `input_type`, `document_lines`, `state_line`, `line_height`,
+    `caret_height`, `caret_top`, `default_prevented`,
+    `previous_line_is_image`, `has_image_widget`, `software_keyboard`,
+    `enter_path`. Reject a Simulator run when `enter_path` is
+    `hardware_or_hid` or `software_keyboard` is false on Return.
+
+    Signature that the bug is still open: after software-keyboard
+    Return next to an image, `state_line` advanced (or
+    `.cm-activeLine` moved) and `caret_height` is 0 or `caret_top`
+    is stuck / negative, while the user still sees the caret on the
+    thumbnail. A log with `caret_height=12` is not acceptance if the
+    user says the painted caret did not move.
+
+    ### Failed attempts (do not repeat without new physical evidence)
+
+    | Ship | Attempt | Physical result |
+    |---|---|---|
+    | ~v1240 | Treat paste/caret as already fixed | User: not fixed |
+    | v1243–v1247 | Transient editable U+200B; nest widget in `.cm-line` | Measures only while mounted; Return/Backspace still `caret_height=0` |
+    | facet / `inlineImagePresentation` | Touch vs Desktop decoration branch | Physical paste broke; Simulator passed. Branch removed |
+    | v1250 | Late-mount landing U+200B | First Return still on thumbnail; second Return ate `<br>` |
+    | v1251 | Persistent landing U+200B | First Return moved only via native `<br>` (`14→28`); second stacked `<br>` (`42`) |
+    | v1253 | preventDefault from `event.target` closest-to-widget | `target` is always `.cm-content`; never fired |
+    | v1255 | Write `\n` from `beforeinput` | One Return → two `cm6_doc` (beforeinput + delayed keydown Enter) |
+    | v1256 | Consume trailing Enter 500ms | Document 1:1; remaining bounce was `removeAllRanges` remap |
+    | v1257 | Skip remap after our newline | Bounce remained: UIKit still moves on delayed Enter |
+    | v1258 | preventDefault `<br>` only; let later Enter insert | First Return `caret_height=12` at old `line_top`; abandoned line grew; Range died |
+    | v1259 | Keep U+200B after leave; `eq()` always true | Second Return: widget moved onto new line; landing collapsed |
+    | v1260 | Position-keyed `eq()` + `Selection.collapse` | Late second widget 1.3s later; Range died |
+    | v1261 | CSS min-height on `widget + .cm-line` | Selector missed `.cm-widgetBuffer`; stutter was native `<br>` |
+    | v1262 | Capture-phase preventDefault + buffer sibling CSS | First Return still 2→3 with `line_top` stuck |
+    | v1263 | Hang block widget at `line.to`; show token when active | Raw token visible; Return wrote `<br>` into source line `14→28→42` |
+    | v1264 | Inline replace; caret on following empty line | Caret already dead after paste; Return `<br>` `14→28` |
+    | v1265 | Trailing space on the image line | 88px caret bar; Return `<br>` `88→102`; then `caret_height=0` |
+    | v1266 | Space on the *next* line + preventDefault adjacent Return | Telemetry sometimes kept `caret_height=12`; user: Return still wrong |
+    | v1268 | Full Obsidian source-line reveal | User: too clumsy for chat. Withdrawn in v1269 |
+    | event patches in general | consume Enter, remap DOM Selection, focus/blur | Double bounce, dead Range, or paste-menu regressions |
+
+    ### Do not retry
+    `drawSelection` / fake caret. Sentinels in EditorState. Ordinary
+    `setSelectionRange` / focus / blur. Claiming Simulator HID Return
+    as success. Re-shipping Obsidian token reveal. Another
+    beforeinput/`<br>` intercept without a new structural reason.
+    Another landing U+200B `eq()` / remap tweak. Another
+    "already fixed" close-out without physical user confirmation.
+
+    ### Next candidates if this is reopened
+    1. Keep images *out* of contenteditable on iPhone (attachment
+       row / tray; textarea stays the editor). This is what native
+       chat composers do.
+    2. A widget that is not an in-flow `<img>` (and that does not
+       leave `cm-widgetBuffer` as the UIKit caret box), only if a
+       new physical probe shows `caretRect` bound to that `<img>`.
+    3. Do not start another input-event patch.
+
+    Re-open only with a new structural hypothesis and a physical
+    iPhone probe. Rebase `origin/main` before any next caret change.
+
+    ### Acceptance (unchanged)
+    Physical iPhone, Debug mode on: paste image, first and second
+    Return, type after the image, Backspace onto the image, second
+    paste, long-press menu, IME. All must pass. User confirmation
+    required. Never close this item from Simulator, telemetry
+    alone, or an agent "it should be fixed now".

@@ -89,3 +89,7 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
 Composer (mdlive / CM6), optimistic-send, transcript (column-reverse scroll),
 confirm-detection, the Tauri native shell — see `web/AGENTS.md` and the
 `cowboy-*` memories.
+
+**OPEN TODO:** physical iPhone caret after a pasted composer image is
+unsolved. Ledger, failed attempts, and what not to retry:
+`web/src/mdlive/PITFALLS.md` pitfall **#69**. Do not claim it fixed.

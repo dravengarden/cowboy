@@ -1,3 +1,6 @@
+// TODO(pitfall #69): physical iPhone caret after paste+Return is OPEN.
+// Do not claim it fixed. Ledger: mdlive/PITFALLS.md #69.
+//
 // Obsidian/Zed-style INLINE images for the composer. A pasted/attached image is
 // written into the literal doc as a token `![name](cowboy-att:<id>)` at the caret
 // (see attachments.ts `IMG_TOKEN_RE`); this module renders that token as an
