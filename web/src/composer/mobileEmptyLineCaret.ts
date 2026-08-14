@@ -159,12 +159,17 @@ export const mobileEmptyLineCaretRepair = [
   mobileEmptyLineCaretAnchorField,
   ViewPlugin.fromClass(
     class {
+      private mountTimer = 0;
       private placeFrame = 0;
       private reportSequence = 0;
 
       constructor(readonly view: EditorView) {}
 
       private cancelFrames(): void {
+        if (this.mountTimer !== 0) {
+          globalThis.clearTimeout(this.mountTimer);
+          this.mountTimer = 0;
+        }
         if (this.placeFrame !== 0) cancelAnimationFrame(this.placeFrame);
         this.placeFrame = 0;
       }
@@ -217,25 +222,30 @@ export const mobileEmptyLineCaretRepair = [
 
       private schedule(): void {
         this.cancelFrames();
-        if (!this.eligible()) return;
-        const expectedHead = this.view.state.selection.main.head;
-        const anchors = this.view.state.field(
-          mobileEmptyLineCaretAnchorField,
-          false,
-        );
-        if (!anchors || anchors.size === 0) {
-          this.view.dispatch({
-            effects: setMobileEmptyLineCaretAnchor.of(true),
-          });
-        }
-        this.placeFrame = requestAnimationFrame(() => {
-          this.placeFrame = 0;
-          if (!this.eligible(expectedHead)) {
-            this.disableAnchor();
-            return;
+        // Never dispatch from `update()`: CodeMirror rejects nested updates,
+        // which is why v1249 mounted zero anchors on the physical phone.
+        this.mountTimer = globalThis.setTimeout(() => {
+          this.mountTimer = 0;
+          if (!this.eligible()) return;
+          const expectedHead = this.view.state.selection.main.head;
+          const anchors = this.view.state.field(
+            mobileEmptyLineCaretAnchorField,
+            false,
+          );
+          if (!anchors || anchors.size === 0) {
+            this.view.dispatch({
+              effects: setMobileEmptyLineCaretAnchor.of(true),
+            });
           }
-          this.placeNativeCaret();
-        });
+          this.placeFrame = requestAnimationFrame(() => {
+            this.placeFrame = 0;
+            if (!this.eligible(expectedHead)) {
+              this.disableAnchor();
+              return;
+            }
+            this.placeNativeCaret();
+          });
+        }, 0);
       }
 
       update(update: ViewUpdate): void {
