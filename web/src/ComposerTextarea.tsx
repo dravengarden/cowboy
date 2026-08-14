@@ -12,6 +12,7 @@ import type {
   ComposerEditorSelection,
 } from "./ComposerEditor";
 import { type Attachment, clipboardFiles } from "./attachments";
+import { reportMobileNativePasteEvent } from "./composer/mobileNativePasteTelemetry";
 import { hasDraftMod, hasSendMod } from "./platform";
 import { isImeKeyEvent } from "./imeKey";
 import type { AvailableCommand } from "./protocol";
@@ -784,6 +785,12 @@ export const ComposerTextarea = forwardRef<
         }}
         onPaste={(e): void => {
           const files = clipboardFiles(e.clipboardData);
+          reportMobileNativePasteEvent({
+            surface: "textarea",
+            clipboard: e.clipboardData,
+            fileCount: files.length,
+            consumed: files.length > 0 && !!onPasteFiles,
+          });
           if (files.length > 0 && onPasteFiles) {
             e.preventDefault();
             onPasteFiles(files);

@@ -1379,23 +1379,36 @@ Desktop Vim + IME checks:
     is already mounted, permission-alert return, and trailing Return before any
     typing.
 
-    The component-level repair keeps that literal block image field. Only after
-    a direct keyboard transaction adds a line and leaves a collapsed caret on an
-    empty line, the touch editor mounts a CM6-owned zero-length widget containing
-    one measurable zero-width character, collapses the native Range inside it on
-    the next animation frame, and removes the complete decoration one paint
-    later. The character exists only in widget DOM: it never enters EditorState,
-    React value, undo history, persistence, or a message. The repair dispatches
-    no document change and does not focus, blur, prevent input, draw a caret, or
-    change image presentation. A keydown, composition start, touch/pointer down,
-    or blur cancels the three-frame lifecycle before the widget can overlap the
-    next user interaction. This bounded post-transaction geometry write is the
-    sole exception to the ordinary-input Selection-write prohibition in pitfall
-    #63; never turn it into a persistent sentinel, an input callback rewrite, or
-    a fake painted caret. `mobileLineBreakCaretTelemetry` and the anchor geometry
-    event remain bounded and content-free so physical acceptance can compare the
-    logical line with WKWebView's native Range. Token-free touch documents remain
-    on the literal textarea path from pitfall #63.
+    The v1240 transient editable widget is withdrawn. Physical v1243 telemetry
+    showed the one-paint hypothesis is false on real WKWebView: while the
+    widget owned Selection, `caret_height` was 12 and `caret_top` matched the
+    new line; after the widget was removed, settled `caret_height` returned to
+    0 and `caret_top` went negative again. Writing native Selection into an
+    editable widget, then tearing it down, also leaves the long-press Paste
+    menu without a durable caret anchor. Do not restore that three-frame
+    lifecycle, its `touchstart`/`pointerdown`/`blur` cleanup, or any other
+    ordinary-input Selection write.
+
+    The replacement is a **static** touch image field, not a Facet and not a
+    reconfigure-aware StateField. Desktop keeps `createInlineImageField(true)`
+    — the proven root-level `Decoration.replace({ block: true })` plus the
+    Vim-only measurement node. Touch mounts `createInlineImageField(false)`
+    for the editor's whole lifetime so the same atomic thumbnail stays inside
+    a real `.cm-line` and CSS (`display:block` plus a zero strut on that line)
+    keeps adjacent carets text-height. Touch omits the hidden measurement
+    node. The previous paste regression survived even after the experimental
+    facet was flipped back to `block: true`; the incomplete rollback left
+    `tr.reconfigured` rebuilding decorations during `@uiw` extension updates
+    and destroyed widgets mid-paste. This field must never listen to
+    `tr.reconfigured` or expose a presentation facet.
+
+    `mobileLineBreakCaretTelemetry` stays read-only. Native long-press paste
+    now also emits `mobile_native_paste_event` (file/item counts and focus
+    owner only) so physical WKWebView can be distinguished from the accessory
+    Paste bridge. Token-free touch documents remain on the literal textarea
+    path from pitfall #63. This image-structure change is not accepted until
+    the complete physical iPhone sequence passes; Simulator evidence cannot
+    close it.
 
 65. **A reliable touch action must pair `pointerup` with its actual synthetic
     `click`, never a timeout guess.** Mobile Safari can omit a click after

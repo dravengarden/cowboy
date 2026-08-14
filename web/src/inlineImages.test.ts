@@ -37,6 +37,17 @@ Deno.test("image deletion removes the insertion line breaks", () => {
   assertEquals(imageDeletionRange(7, 21, 30), { from: 6, to: 22 });
 });
 
+Deno.test("touch and desktop image fields are static and do not reconfigure", async () => {
+  const source = await Deno.readTextFile(new URL("./inlineImages.ts", import.meta.url));
+  assertEquals(source.includes("createInlineImageField(true)"), true);
+  assertEquals(source.includes("createInlineImageField(false)"), true);
+  assertEquals(source.includes("export const touchInlineImageField"), true);
+  assertEquals(source.includes("tr.reconfigured"), false);
+  assertEquals(source.includes("Facet.define"), false);
+  assertEquals(source.includes("inlineImagePresentation"), false);
+  assertEquals(source.includes("if (this.includeMeasurementNode)"), true);
+});
+
 Deno.test("image deletion maps carets before, inside, and after the removed block", () => {
   const from = 6;
   const to = 20;
