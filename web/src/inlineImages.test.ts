@@ -10,7 +10,7 @@ Deno.test("inline image paste replaces forward or backward selections and lands 
     from: 6,
     to: 10,
     insert: "\n![shot.png](cowboy-att:image-1)\n",
-    caret: 39,
+    caret: 38,
   };
   assertEquals(
     inlineImageInsertion(
@@ -40,6 +40,10 @@ Deno.test("image deletion removes the insertion line breaks", () => {
 Deno.test("image decorations stay a literal block field without a presentation branch", async () => {
   const source = await Deno.readTextFile(new URL("./inlineImages.ts", import.meta.url));
   assertEquals(source.includes("block: true"), true);
+  assertEquals(source.includes("side: 1"), true);
+  assertEquals(source.includes("Decoration.replace({})"), true);
+  assertEquals(source.includes("replace({ block: true })"), false);
+  assertEquals(source.includes("atomicRanges"), false);
   assertEquals(source.includes('userSelect: "none"'), true);
   assertEquals(source.includes('widget.contentEditable = "false"'), true);
   assertEquals(source.includes("createInlineImageField"), false);

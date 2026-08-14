@@ -19,14 +19,14 @@ const source = await Deno.readTextFile(
   new URL("./mobileEmptyLineCaret.ts", import.meta.url),
 );
 
-Deno.test("landing anchors sit only on empty lines after images", () => {
+Deno.test("image-adjacent empty lines do not mount a landing widget", () => {
   const afterImage = EditorState.create({
     doc: "![shot](cowboy-att:image-1)\n",
     selection: { anchor: 28 },
   });
   assertEquals(emptyLinePositionsAfterImages(afterImage), [28]);
   assertEquals(selectionOnEmptyLineAfterImage(afterImage), true);
-  assertEquals(landingAnchorsForEmptyLinesAfterImages(afterImage).size, 1);
+  assertEquals(landingAnchorsForEmptyLinesAfterImages(afterImage).size, 0);
 
   const typed = EditorState.create({
     doc: "![shot](cowboy-att:image-1)\nhello",
@@ -43,8 +43,8 @@ Deno.test("landing anchors sit only on empty lines after images", () => {
   assertEquals(emptyLinePositionsAfterImages(laterEmpty), [28]);
   assertEquals(selectionOnEmptyLineAfterImage(laterEmpty), false);
   assertEquals(selectionOnEmptyLineInImageChain(laterEmpty), true);
-  assertEquals(landingAnchorPositions(laterEmpty), [29]);
-  assertEquals(landingAnchorsForEmptyLinesAfterImages(laterEmpty).size, 1);
+  assertEquals(landingAnchorPositions(laterEmpty), []);
+  assertEquals(landingAnchorsForEmptyLinesAfterImages(laterEmpty).size, 0);
 
   const noImage = EditorState.create({
     doc: "hello\n\n",
@@ -54,7 +54,7 @@ Deno.test("landing anchors sit only on empty lines after images", () => {
   assertEquals(landingAnchorsForEmptyLinesAfterImages(noImage).size, 0);
 });
 
-Deno.test("two images expose a landing position under each thumbnail", () => {
+Deno.test("two images do not expose landing widgets under thumbnails", () => {
   const doc = "![a](cowboy-att:1)\n\n![b](cowboy-att:2)\n";
   const state = EditorState.create({ doc });
   const firstLanding = state.doc.line(2).from;
@@ -69,17 +69,17 @@ Deno.test("two images expose a landing position under each thumbnail", () => {
     landingAnchorsForEmptyLinesAfterImages(
       EditorState.create({ doc, selection: { anchor: firstLanding } }),
     ).size,
-    1,
+    0,
   );
   assertEquals(
     landingAnchorsForEmptyLinesAfterImages(
       EditorState.create({ doc, selection: { anchor: secondLanding } }),
     ).size,
-    1,
+    0,
   );
 });
 
-Deno.test("image-chain Return only blocks the native break", () => {
+Deno.test("image-adjacent Return is not intercepted", () => {
   const landing = EditorState.create({
     doc: "![shot](cowboy-att:image-1)\n",
     selection: { anchor: 28 },
@@ -94,15 +94,15 @@ Deno.test("image-chain Return only blocks the native break", () => {
   });
   assertEquals(
     shouldPreventNativeMobileLineBreak("insertLineBreak", landing),
-    true,
+    false,
   );
   assertEquals(
     shouldPreventNativeMobileLineBreak("insertParagraph", landing),
-    true,
+    false,
   );
   assertEquals(
     shouldPreventNativeMobileLineBreak("insertLineBreak", laterEmpty),
-    true,
+    false,
   );
   assertEquals(
     shouldPreventNativeMobileLineBreak("insertLineBreak", typed),
@@ -175,13 +175,12 @@ Deno.test("mobile caret repair requires a collapsed empty line", () => {
 Deno.test("mobile caret landing anchor is document-neutral and not late-mounted", () => {
   assertEquals(source.includes('anchor.textContent = "\\u200b"'), true);
   assertEquals(source.includes("selectionOnEmptyLineInImageChain"), true);
-  assertEquals(source.includes("beforeinput.target is always .cm-content"), true);
-  assertEquals(source.includes("Let that single"), true);
   assertEquals(source.includes("landing node onto the new line"), true);
-  assertEquals(source.includes("Only the caret line needs a"), true);
+  assertEquals(source.includes("A U+200B on the"), true);
   assertEquals(source.includes("addEventListener"), true);
   assertEquals(source.includes("onBeforeInputCapture"), true);
   assertEquals(source.includes("other.at === this.at"), true);
+  assertEquals(source.includes("userEvent: \"input.type\""), false);
   assertEquals(source.includes("selection.removeAllRanges"), false);
   assertEquals(source.includes("materializeLineBreak"), false);
   assertEquals(source.includes("placeLandingSelection"), true);

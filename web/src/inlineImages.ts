@@ -95,7 +95,7 @@ class InlineImageWidget extends WidgetType {
       // line above the image. Keep a zero-size text node first: it is inert for
       // layout and accessibility, but gives the upstream measurement a safe
       // terminal node. Mark it non-selectable so physical iOS cannot park the
-      // caret on this probe instead of the landing line under the thumbnail.
+      // caret on this probe instead of the image source line.
       const probe = document.createElement("span");
       probe.setAttribute("aria-hidden", "true");
       probe.style.userSelect = "none";
@@ -144,41 +144,76 @@ class InlineImageWidget extends WidgetType {
     chip.textContent = `🖼 ${this.name || "image"}`;
     return chip;
   }
-  // Self-contained widget: the editor ignores pointer events on it (so a tap
-  // opens the lightbox instead of placing the caret); arrow-key motion is handled
-  // by the atomicRanges provider below.
-  override ignoreEvent(): boolean {
-    return true;
+  // Ignore only pointer activation so a tap opens the popover. Keyboard,
+  // IME, and line-break events stay on the source `.cm-line`.
+  override ignoreEvent(event: Event): boolean {
+    return event.type === "mousedown" || event.type === "click";
   }
 }
 
-// One image == one BLOCK line (Obsidian-style): the token is inserted alone on
-// its own line, and the whole line is replaced by a block widget. Physical
-// v1247 showed that nesting the same widget in a `.cm-line` does not give
-// WKWebView a measurable empty-line caret. Keep the proven block replacement
-// and repair the empty-line caret with a document-neutral DOM anchor instead.
+// Obsidian / atomic-editor image-blocks: the token stays on a real `.cm-line`.
+// The thumbnail hangs below that line (`widget`, `block: true`, `side: 1` at
+// `line.to`). Hide the raw token only while the caret is on another line.
+// A whole-line block replace took the token out of flow and forced a fake
+// landing line, so text after an image was not a real line break.
 const LONE_TOKEN_RE = /^\s*!\[([^\]]*)\]\(cowboy-att:([^)]+)\)\s*$/;
+const IMG_TOKEN_RE = /!\[([^\]]*)\]\(cowboy-att:([^)]+)\)/g;
+
+function lineIsActive(
+  line: { from: number; to: number; number: number },
+  sel: { empty: boolean; from: number; to: number; head: number },
+  headLineNumber: number,
+): boolean {
+  return sel.empty
+    ? headLineNumber === line.number
+    : sel.from <= line.to && sel.to >= line.from;
+}
 
 function buildImageDecorations(state: EditorState): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
   const { doc } = state;
   const sel = state.selection.main;
+  const headLineNumber = doc.lineAt(sel.head).number;
   for (let i = 1; i <= doc.lines; i++) {
     const line = doc.line(i);
-    const m = LONE_TOKEN_RE.exec(line.text);
-    if (m?.[2] !== undefined) {
-      const selected = !sel.empty && sel.from <= line.from && sel.to >= line.to;
+    const tokens: {
+      from: number;
+      to: number;
+      id: string;
+      alt: string;
+    }[] = [];
+    IMG_TOKEN_RE.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = IMG_TOKEN_RE.exec(line.text)) !== null) {
+      if (match[2] === undefined) continue;
+      tokens.push({
+        from: line.from + match.index,
+        to: line.from + match.index + match[0].length,
+        id: match[2],
+        alt: match[1] ?? "",
+      });
+    }
+    if (tokens.length === 0) continue;
+    const active = lineIsActive(line, sel, headLineNumber);
+    if (!active) {
+      for (const token of tokens) {
+        builder.add(token.from, token.to, Decoration.replace({}));
+      }
+    }
+    for (const token of tokens) {
+      const selected = !sel.empty && sel.from <= token.from && sel.to >= token.to;
       builder.add(
-        line.from,
         line.to,
-        Decoration.replace({
+        line.to,
+        Decoration.widget({
           widget: new InlineImageWidget(
-            m[2],
-            m[1] ?? "",
+            token.id,
+            token.alt,
             selected,
-            registry.get(m[2])?.previewUrl,
+            registry.get(token.id)?.previewUrl,
           ),
           block: true,
+          side: 1,
         }),
       );
     }
@@ -192,45 +227,19 @@ export const inlineImageField = StateField.define<DecorationSet>({
     tr.docChanged || tr.selection || tr.effects.some((effect) => effect.is(refreshInlineImages))
       ? buildImageDecorations(tr.state)
       : value,
-  provide: (f) => [
-    EditorView.decorations.from(f),
-    EditorView.atomicRanges.of(
-      (view) => view.state.field(f, false) ?? Decoration.none,
-    ),
-  ],
+  provide: (f) => EditorView.decorations.from(f),
 });
 
-/// True when `text`'s LAST line is a lone block-image token (with no empty line
-/// after it). A block-image decoration replaces its whole line and is atomic, so
-/// as the doc's final line it traps the caret — you can't get below it to add a
-/// line or keep typing. The two guards below keep a trailing newline so there's
-/// always a landing line under a trailing image.
-function lastLineIsBlockImage(text: string): boolean {
-  const nl = text.lastIndexOf("\n");
-  const last = nl === -1 ? text : text.slice(nl + 1);
-  return last.length > 0 && LONE_TOKEN_RE.test(last);
-}
-
-/// Normalise a SEED value: append a newline when it ends with a block-image
-/// token, so a restored draft / handed-off text never opens with the image
-/// trapped as the last line. Idempotent; the extra line is whitespace, trimmed
-/// back off on send (saveDraft/submit use trimEnd).
+/// Identity: the image source line is a real `.cm-line`, so a trailing
+/// empty landing line is no longer required to untrap the caret.
 export function ensureTrailingImageLine(text: string): string {
-  return lastLineIsBlockImage(text) ? `${text}\n` : text;
+  return text;
 }
 
-/// Keep a block image from ever being the doc's LAST line during editing. After
-/// any change that leaves a trailing image token (e.g. the user backspaced the
-/// empty line under it), append a newline so the caret can still land below it
-/// ("图片在最后一行,无法开启新的一行"). Runs in the same transaction — no loop (the
-/// appended newline makes the last line empty, so it won't re-match).
-export const inlineImageTrailingLine = EditorState.transactionFilter.of((tr) => {
-  if (!tr.docChanged) return tr;
-  const last = tr.newDoc.line(tr.newDoc.lines);
-  return last.length > 0 && LONE_TOKEN_RE.test(last.text)
-    ? [tr, { changes: { from: tr.newDoc.length, insert: "\n" }, sequential: true }]
-    : tr;
-});
+/// No-op filter kept so ComposerEditor imports stay stable.
+export const inlineImageTrailingLine = EditorState.transactionFilter.of(
+  (tr) => tr,
+);
 
 /// Thumbnail sizing/look. Kept here so any host of `inlineImagePlugin` gets it.
 export const inlineImageTheme = EditorView.theme({
@@ -310,16 +319,19 @@ export function removeImageTokenById(view: EditorView, id: string): void {
   const { doc } = view.state;
   for (let i = 1; i <= doc.lines; i++) {
     const line = doc.line(i);
-    const m = LONE_TOKEN_RE.exec(line.text);
-    if (m?.[2] === id) {
+    IMG_TOKEN_RE.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = IMG_TOKEN_RE.exec(line.text)) !== null) {
+      if (match[2] !== id) continue;
       forgetInlineAttachment(id);
-      const { from, to } = imageDeletionRange(line.from, line.to, doc.length);
+      const tokenFrom = line.from + match.index;
+      const tokenTo = tokenFrom + match[0].length;
+      const { from, to } = LONE_TOKEN_RE.test(line.text)
+        ? imageDeletionRange(line.from, line.to, doc.length)
+        : { from: tokenFrom, to: tokenTo };
       const current = view.state.selection.main;
       view.dispatch({
         changes: { from, to },
-        // Preserve the active logical caret through the removed block. The old
-        // code always forced the image line's start and left the leading layout
-        // newline behind, turning deletion into a jump across a stale line.
         selection: {
           anchor: mapImageDeletionPosition(current.anchor, from, to),
           head: mapImageDeletionPosition(current.head, from, to),

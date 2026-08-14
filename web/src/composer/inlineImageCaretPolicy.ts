@@ -57,28 +57,16 @@ export function selectionOnLoneImageLine(state: EditorState): boolean {
     isLoneImageTokenLine(state.doc.lineAt(selection.head).text);
 }
 
-export function caretOffImageLineSpec(state: EditorState): {
+export function caretOffImageLineSpec(_state: EditorState): {
   changes?: { from: number; insert: string };
   selection: { anchor: number };
 } | null {
-  if (!selectionOnLoneImageLine(state)) return null;
-  const line = state.doc.lineAt(state.selection.main.head);
-  if (line.number < state.doc.lines) {
-    return { selection: { anchor: state.doc.line(line.number + 1).from } };
-  }
-  return {
-    changes: { from: line.to, insert: "\n" },
-    selection: { anchor: line.to + 1 },
-  };
+  // The image token is a real `.cm-line`. Return must stay a normal
+  // CM6 / iOS line break on that line, not a jump onto a fake landing line.
+  return null;
 }
 
-/**
- * If Return lands on the atomic image line, move onto the existing trailing
- * empty line instead of inserting a newline before the thumbnail.
- */
-export function moveCaretOffImageLine(view: EditorView): boolean {
-  const spec = caretOffImageLineSpec(view.state);
-  if (!spec) return false;
-  view.dispatch({ ...spec, scrollIntoView: true });
-  return true;
+/** Kept so ComposerEditor's Enter binding stays stable. Always a no-op. */
+export function moveCaretOffImageLine(_view: EditorView): boolean {
+  return false;
 }

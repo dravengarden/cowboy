@@ -22,12 +22,15 @@ export function inlineImageInsertion(
   const from = Math.min(clampedAnchor, clampedHead);
   const to = Math.max(clampedAnchor, clampedHead);
   const lineStart = value.lastIndexOf("\n", from - 1) + 1;
-  const insert = attachments.map((attachment, index) => {
-    const lead = index === 0 && from !== lineStart ? "\n" : "";
+  const restOnSameLine = to < value.length && value[to] !== "\n";
+  const lead = from !== lineStart ? "\n" : "";
+  const body = attachments.map((attachment) => {
     const label = attachment.name.replaceAll("]", "");
-    return `${lead}![${label}](cowboy-att:${attachment.id})\n`;
-  }).join("");
-  return { from, to, insert, caret: from + insert.length };
+    return `![${label}](cowboy-att:${attachment.id})`;
+  }).join("\n");
+  const trail = restOnSameLine ? "\n" : "";
+  const insert = `${lead}${body}${trail}`;
+  return { from, to, insert, caret: from + lead.length + body.length };
 }
 
 /** Map a CodeMirror position through removal of one image block. */

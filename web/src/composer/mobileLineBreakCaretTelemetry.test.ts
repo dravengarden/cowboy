@@ -20,7 +20,7 @@ Deno.test("mobile caret telemetry is reserved for native line-break input", () =
   assertEquals(isMobileCaretGeometryInput("insertText"), false);
 });
 
-Deno.test("touch keeps block images and a persistent empty-line caret anchor", () => {
+Deno.test("touch keeps hanging image widgets without a presentation branch", () => {
   assertEquals(editorSource.includes("inlineImagePresentation"), false);
   assertEquals(editorSource.includes("touchInlineImageField"), false);
   assertEquals(

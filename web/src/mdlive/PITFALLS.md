@@ -1465,6 +1465,17 @@ Desktop Vim + IME checks:
     also sits between the block image and the landing line so the CSS
     sibling rule never applied. Prevent the native break on capture,
     and target `widget + .cm-widgetBuffer + .cm-line`.
+    The actual mismatch is the image line itself. Cowboy replaced the
+    token line with `Decoration.replace({ block: true })` and forced a
+    second empty landing line, so a pasted image looked like one line
+    but was two. Text after that thumbnail was therefore not a real
+    line break. Atomic-editor / Obsidian do not replace the source
+    line: they hang the thumbnail below it (`widget`, `block: true`,
+    `side: 1` at `line.to`), hide the raw token only while the caret is
+    on another line, and do not mark the image field atomic. Return on
+    the source line is a normal CM6 / iOS newline. The U+200B landing
+    widget and image-chain `beforeinput` intercepts fought that real
+    line and are inert.
 
 
 65. **A reliable touch action must pair `pointerup` with its actual synthetic

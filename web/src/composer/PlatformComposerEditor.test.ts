@@ -123,7 +123,7 @@ Deno.test("native image promotion carries the caret to the end of the pasted ima
     edit.value,
     "before\n![shot.png](cowboy-att:image-1)\nafter",
   );
-  assertEquals(edit.caret, edit.value.indexOf("after"));
+  assertEquals(edit.caret, edit.value.indexOf("after") - 1);
 });
 
 Deno.test("native batch image promotion replaces selection and lands after every token", () => {
@@ -140,7 +140,7 @@ Deno.test("native batch image promotion replaces selection and lands after every
     edit.value,
     "![one.png](cowboy-att:image-1)\n![two.png](cowboy-att:image-2)\n tail",
   );
-  assertEquals(edit.caret, edit.value.indexOf(" tail"));
+  assertEquals(edit.caret, edit.value.indexOf(" tail") - 1);
 });
 
 Deno.test("replayed native promotion renders retain the image caret until commit", () => {

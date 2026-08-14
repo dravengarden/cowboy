@@ -80,13 +80,10 @@ class MobileEmptyLineCaretAnchorWidget extends WidgetType {
   }
 }
 
-export function landingAnchorPositions(state: EditorState): number[] {
-  // Physical v1260: decorating every landing line mounted a second widget
-  // ~1s later (widgets 1→2). That late node gave the abandoned line its
-  // 14px and killed the native Range. Only the caret line needs a
-  // U+200B. The image-adjacent line keeps height via CSS.
-  if (!selectionOnEmptyLineInImageChain(state)) return [];
-  return [state.doc.lineAt(state.selection.main.head).from];
+export function landingAnchorPositions(_state: EditorState): number[] {
+  // The image source line is a real `.cm-line` again. A U+200B on the
+  // following empty line fought iOS text after that image.
+  return [];
 }
 
 export function landingAnchorsForEmptyLinesAfterImages(
@@ -105,11 +102,10 @@ export function landingAnchorsForEmptyLinesAfterImages(
 }
 
 export function shouldPreventNativeMobileLineBreak(
-  inputType: string | undefined,
-  state: EditorState,
+  _inputType: string | undefined,
+  _state: EditorState,
 ): boolean {
-  return (inputType === "insertLineBreak" || inputType === "insertParagraph") &&
-    selectionOnEmptyLineInImageChain(state);
+  return false;
 }
 
 const hideMobileEmptyLineCaretForIme = StateField.define<boolean>({
@@ -337,37 +333,7 @@ export const mobileEmptyLineCaretRepair = [
         beforeinput(event: InputEvent): boolean | void {
           if (event.inputType === "insertCompositionText") {
             this.setImeHidden(true);
-            return;
           }
-          if (
-            event.inputType === "insertText" &&
-            event.data &&
-            selectionOnEmptyLineInImageChain(this.view.state)
-          ) {
-            event.preventDefault();
-            const head = this.view.state.selection.main.head;
-            this.view.dispatch({
-              changes: { from: head, insert: event.data },
-              selection: { anchor: head + event.data.length },
-              userEvent: "input.type",
-            });
-            return;
-          }
-          if (
-            !shouldPreventNativeMobileLineBreak(
-              event.inputType,
-              this.view.state,
-            )
-          ) {
-            return;
-          }
-          // Physical v1253: beforeinput.target is always .cm-content.
-          // Prevent the native <br> only. v1255–v1257 wrote `\n` here and
-          // then either accepted or consumed the later keydown Enter —
-          // one Return became two visual caret moves. Let that single
-          // keydown insert the document line.
-          event.preventDefault();
-          return true;
         },
         compositionstart(): void {
           this.setImeHidden(true);

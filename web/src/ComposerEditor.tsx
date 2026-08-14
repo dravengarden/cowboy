@@ -778,13 +778,10 @@ export const ComposerEditor = forwardRef<
       // a dep of this memo, so toggling vim rebuilds the theme.
       cmTheme(theme, !!vimExt),
       tokenChipPlugin,
-      // Obsidian-style inline images: render `![](cowboy-att:id)` tokens as atomic
-      // thumbnails in the text flow (click → lightbox). Atomic + read-only, so
-      // IME-safe like the @-chip. See inlineImages.ts.
+      // Obsidian-style images: token stays on a real `.cm-line`; thumbnail
+      // hangs below it. See inlineImages.ts.
       inlineImageField,
       inlineImageTheme,
-      // Keep a trailing image from being the doc's last line (the atomic image
-      // line otherwise traps the caret — "图片在最后一行,无法开启新的一行").
       inlineImageTrailingLine,
       ...(touchInput
         ? [mobileEmptyLineCaretRepair, mobileLineBreakCaretTelemetry]
@@ -1020,10 +1017,6 @@ export const ComposerEditor = forwardRef<
       )}
       <CodeMirror
         ref={cmRef}
-        // Normalise the SEED so a value that ends with a block-image token opens
-        // with a landing line below it (the transactionFilter keeps it that way
-        // during edits). Idempotent + stable for a stable seed, so @uiw doesn't
-        // re-apply it. See inlineImages.ts (ensureTrailingImageLine).
         value={ensureTrailingImageLine(value)}
         {...(initialSelection !== undefined
           ? {
