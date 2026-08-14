@@ -17,7 +17,7 @@ schema gained the same operation.
 | `codex` | `npx -y @agentclientprotocol/codex-acp` plus full-access defaults | adapter over Codex App Server |
 | `codex-deepseek` | the same Codex ACP adapter with an isolated provider-owned `CODEX_HOME` | Codex over the independent local DeepSeek Responses gateway |
 | `gemini` | `npx -y @google/gemini-cli --acp` | Gemini's native ACP mode |
-| `grok` | `npx -y @xai-official/grok --no-auto-update --experimental-memory agent --always-approve --no-leader stdio` | Grok Build's native ACP stdio agent |
+| `grok` | `npx -y @xai-official/grok --no-auto-update --experimental-memory --rules <project-rule-bootstrap> agent --always-approve --no-leader stdio` | Grok Build's native ACP stdio agent |
 
 Each entry is a **`LaunchSpec`**: `id` + `command` + `args` + scoped environment.
 That's the whole contract a provider must satisfy to start; everything downstream
@@ -30,6 +30,11 @@ removed legacy `--subagents` flag. Machine-created worktrees have already
 passed Cowboy's configured trusted-workspace check; only those worker
 processes receive `GROK_FOLDER_TRUST=0`, allowing Grok to load repository rules
 and hooks without adding persistent entries to the user's folder-trust store.
+Grok 1.0.3 also skips automatic project-rule discovery for Machine worktrees
+below the hidden `~/.local/state` root. The launch contract therefore appends a
+minimal rule telling Grok to read the closest `AGENTS.md`; it contains no copied
+project policy and should be deleted once `grok inspect --json` reports the
+project instruction directly from those worktrees.
 
 Managed Machine releases also set Codex ACP's `CODEX_PATH` to
 `cowboy-codex-app-server`. This transparent NDJSON proxy forwards the selected

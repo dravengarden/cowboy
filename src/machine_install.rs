@@ -288,9 +288,8 @@ mod tests {
         assert!(script.contains("/opt/homebrew/bin"));
         assert!(script.contains("--enrollment-token-file"));
         assert!(script.contains("COWBOY_ACP_GROK_CMD"));
-        assert!(script.contains(
-            "--no-auto-update --experimental-memory agent --always-approve --no-leader stdio"
-        ));
+        assert!(script.contains("--experimental-memory --rules"));
+        assert!(script.contains("Read and follow the closest AGENTS.md"));
         assert!(!script.contains("secret"));
     }
 }

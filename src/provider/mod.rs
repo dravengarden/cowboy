@@ -832,6 +832,8 @@ mod tests {
                 "@xai-official/grok",
                 "--no-auto-update",
                 "--experimental-memory",
+                "--rules",
+                crate::grok::PROJECT_RULES_BOOTSTRAP,
                 "agent",
                 "--always-approve",
                 "--no-leader",
@@ -951,6 +953,8 @@ mod tests {
             [
                 "--no-auto-update",
                 "--experimental-memory",
+                "--rules",
+                crate::grok::PROJECT_RULES_BOOTSTRAP,
                 "agent",
                 "--always-approve",
                 "--no-leader",

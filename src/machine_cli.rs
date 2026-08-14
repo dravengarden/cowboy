@@ -2733,7 +2733,7 @@ mod tests {
         pin_grok_runtime_args(&mut environment, &[]);
         assert_eq!(
             environment["COWBOY_ACP_GROK_ARGS"],
-            "--no-auto-update --experimental-memory agent --always-approve --no-leader stdio"
+            crate::grok::RUNTIME_ARGS_ENV
         );
 
         pin_grok_runtime_args(&mut environment, &["grok".to_owned()]);
@@ -2990,7 +2990,7 @@ mod tests {
         assert!(environment["COWBOY_ACP_GROK_CMD"].ends_with("commands/grok"));
         assert_eq!(
             environment["COWBOY_ACP_GROK_ARGS"],
-            "--no-auto-update --experimental-memory agent --always-approve --no-leader stdio"
+            crate::grok::RUNTIME_ARGS_ENV
         );
         assert_eq!(environment["CODEX_PATH"], proxy.display().to_string());
         std::fs::remove_dir_all(root).expect("cleanup");
