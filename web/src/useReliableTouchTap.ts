@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useRef } from "react";
 import type {
   MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
 } from "react";
-import { RELIABLE_TOUCH_TAP_MOVE_SLOP_PX } from "./touchGestures";
+import {
+  isPairedTouchClick,
+  RELIABLE_TOUCH_TAP_MOVE_SLOP_PX,
+} from "./touchGestures";
 
 const MAX_TAP_MS = 800;
 
@@ -37,19 +40,6 @@ export function useReliableTouchTap<T extends HTMLElement>(onActivate: () => voi
   activateRef.current = onActivate;
   const startRef = useRef<TouchStart | null>(null);
   const suppressClickRef = useRef(false);
-  const clearTimerRef = useRef<number | null>(null);
-
-  const clearSuppressionLater = useCallback((): void => {
-    if (clearTimerRef.current !== null) globalThis.clearTimeout(clearTimerRef.current);
-    clearTimerRef.current = globalThis.setTimeout(() => {
-      suppressClickRef.current = false;
-      clearTimerRef.current = null;
-    }, 700);
-  }, []);
-
-  useEffect(() => (): void => {
-    if (clearTimerRef.current !== null) globalThis.clearTimeout(clearTimerRef.current);
-  }, []);
 
   const onPointerDown = useCallback((event: ReactPointerEvent<T>): void => {
     suppressClickRef.current = false;
@@ -89,17 +79,23 @@ export function useReliableTouchTap<T extends HTMLElement>(onActivate: () => voi
       event.timeStamp - start.at > MAX_TAP_MS
     ) return;
     suppressClickRef.current = true;
-    clearSuppressionLater();
     activateRef.current();
-  }, [clearSuppressionLater]);
+  }, []);
 
   const onPointerCancel = useCallback((event: ReactPointerEvent<T>): void => {
     if (startRef.current?.pointerId === event.pointerId) startRef.current = null;
   }, []);
 
   const onClick = useCallback((event: ReactMouseEvent<T>): void => {
-    if (suppressClickRef.current) {
-      suppressClickRef.current = false;
+    const suppress = isPairedTouchClick(
+      suppressClickRef.current,
+      event.detail,
+      "pointerType" in event.nativeEvent
+        ? String(event.nativeEvent.pointerType)
+        : "",
+    );
+    suppressClickRef.current = false;
+    if (suppress) {
       event.preventDefault();
       return;
     }

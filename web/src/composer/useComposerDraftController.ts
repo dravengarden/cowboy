@@ -95,6 +95,10 @@ export function useComposerDraftController(
   const initialText = useRef(seededText);
   const [hasText, setHasText] = useState(seededText.trim().length > 0);
   const attachmentsRef = useRef(seed.attachments);
+  // A native editor submit and a toolbar activation can reach this controller
+  // in the same browser task. Claim the commit synchronously so one physical
+  // action can mint at most one cmid before React applies the cleared state.
+  const committingRef = useRef(false);
   const [attachments, setAttachmentsState] = useState<Attachment[]>(() => {
     seedInlineAttachments(seed.attachments);
     return seed.attachments;
@@ -258,11 +262,21 @@ export function useComposerDraftController(
     action: () => Promise<void>,
     feedback = true,
   ): Promise<void> | null => {
-    if (!sendable) return null;
-    if (feedback) haptic();
-    const confirmation = action();
-    clear();
-    return confirmation;
+    if (!sendable || committingRef.current) return null;
+    committingRef.current = true;
+    try {
+      if (feedback) haptic();
+      const confirmation = action();
+      clear();
+      return confirmation;
+    } finally {
+      // React has now received the clear updates. The latch only arbitrates
+      // competing delivery entry points from this one physical action; it must
+      // not prevent the user composing a genuinely new prompt afterward.
+      globalThis.queueMicrotask(() => {
+        committingRef.current = false;
+      });
+    }
   };
   const commit = (action: () => Promise<void>, feedback = true): boolean => {
     const confirmation = commitTracked(action, feedback);

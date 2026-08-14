@@ -1357,11 +1357,14 @@ Desktop Vim + IME checks:
     removes that document line's ordinary `.cm-line` and places the image widget
     directly under `.cm-content`. Physical iOS WebKit may then keep its native
     caret on an earlier empty line after Return, even though CM6's logical
-    selection and `.cm-activeLine` advanced. Simulator exposed one variant with
-    Selection on `.cm-content`; physical-device acceptance then disproved that
-    root-node-only workaround. WebKit may represent an empty-line caret on the
-    content root, the line, or its `<br>`, so that predicate was structurally
-    incomplete.
+    selection and `.cm-activeLine` advanced. Physical telemetry proved that the
+    failure is deeper than a stale Selection node: after consecutive Returns,
+    Selection was already collapsed at offset zero of the correct active line,
+    but its native collapsed Range still had a negative top and zero height.
+    Simulator reproduced the same state. The root cause is WKWebView retaining
+    the preceding root block replacement's native caret geometry until a
+    measurable text glyph causes another layout. A root-node-only Selection
+    workaround was therefore structurally incomplete.
     An attempted repair changed touch to a non-block replacement nested in an
     ordinary `.cm-line`. Simulator paste and HID Return passed, but physical
     iPhone acceptance immediately regressed image paste. Merely changing that
@@ -1374,7 +1377,36 @@ Desktop Vim + IME checks:
     replacement design passes the
     complete physical sequence: first image paste, second image paste while CM6
     is already mounted, permission-alert return, and trailing Return before any
-    typing. Do not add ordinary-input selection writes, sentinel text, refocus,
-    or a fake caret. `mobileLineBreakCaretTelemetry` remains read-only and bounded
-    so the caret failure can be measured without user content. Token-free touch
-    documents remain on the literal textarea path from pitfall #63.
+    typing.
+
+    The component-level repair keeps that literal block image field. Only after
+    a direct keyboard transaction adds a line and leaves a collapsed caret on an
+    empty line, the touch editor mounts a CM6-owned zero-length widget containing
+    one measurable zero-width character, collapses the native Range inside it on
+    the next animation frame, and removes the complete decoration one paint
+    later. The character exists only in widget DOM: it never enters EditorState,
+    React value, undo history, persistence, or a message. The repair dispatches
+    no document change and does not focus, blur, prevent input, draw a caret, or
+    change image presentation. A keydown, composition start, touch/pointer down,
+    or blur cancels the three-frame lifecycle before the widget can overlap the
+    next user interaction. This bounded post-transaction geometry write is the
+    sole exception to the ordinary-input Selection-write prohibition in pitfall
+    #63; never turn it into a persistent sentinel, an input callback rewrite, or
+    a fake painted caret. `mobileLineBreakCaretTelemetry` and the anchor geometry
+    event remain bounded and content-free so physical acceptance can compare the
+    logical line with WKWebView's native Range. Token-free touch documents remain
+    on the literal textarea path from pitfall #63.
+
+65. **A reliable touch action must pair `pointerup` with its actual synthetic
+    `click`, never a timeout guess.** Mobile Safari can omit a click after
+    stopping scroll momentum, so Cowboy commits stationary touch actions on
+    `pointerup`. It can also delay the eventual synthetic click for longer than
+    the old 700ms suppression timer while WKWebView scroll, keyboard, or layout
+    work settles. Letting that timer expire turns one physical Send into two
+    activations with different cmids and therefore two identical user bubbles.
+    Keep the suppression claim until the next touch-owned or non-zero-detail
+    click actually consumes it; a new pointerdown resets the claim, while
+    keyboard and assistive clicks (`detail === 0`) remain native. The Composer draft
+    controller also claims a commit synchronously for the current browser task
+    so its editor-submit and toolbar-submit entry points cannot both mint a
+    message before React applies the clear.

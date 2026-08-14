@@ -10,6 +10,7 @@ export function isMobileLineBreakInput(
 export type MobileCaretNodeRelation =
   | "missing"
   | "content_root"
+  | "caret_anchor"
   | "active_line"
   | "inside_active_line"
   | "other_line"
@@ -23,11 +24,14 @@ export function mobileCaretNodeRelation(
 ): MobileCaretNodeRelation {
   if (node === null) return "missing";
   if (node === contentDOM) return "content_root";
+  const element = node instanceof Element ? node : node.parentElement;
+  if (element?.closest(".cm-mobile-empty-line-caret-anchor")) {
+    return "caret_anchor";
+  }
   if (activeLine !== null) {
     if (node === activeLine) return "active_line";
     if (activeLine.contains(node)) return "inside_active_line";
   }
-  const element = node instanceof Element ? node : node.parentElement;
   if (element?.closest(".cm-inline-image-widget")) return "image_widget";
   if (element?.closest(".cm-line")) return "other_line";
   return "other";
@@ -101,6 +105,9 @@ function reportMobileCaretState(
       root_image_widgets: rootImageWidgets,
       nested_image_widgets: content.querySelectorAll(
         ".cm-line .cm-inline-image-widget",
+      ).length,
+      caret_anchor_widgets: content.querySelectorAll(
+        ".cm-mobile-empty-line-caret-anchor",
       ).length,
       line_top: lineRect ? rounded(lineRect.top - contentRect.top) : -1,
       line_height: lineRect ? rounded(lineRect.height) : -1,
