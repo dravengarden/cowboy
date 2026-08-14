@@ -1567,6 +1567,14 @@ fn session_context_environment(session: &StartSession) -> Result<Vec<(&'static s
             session.provider
         );
     }
+    if session.provider == "grok" {
+        // A Machine worker starts only after its cwd has passed the configured
+        // trusted-workspace boundary. Map that existing decision into Grok's
+        // process-scoped native folder-trust switch so generated task
+        // worktrees load their repository guidance and hooks without mutating
+        // the user's persistent Grok trust database.
+        environment.push(("GROK_FOLDER_TRUST", "0".to_owned()));
+    }
     Ok(environment)
 }
 
@@ -2276,6 +2284,12 @@ mod tests {
             session_context_environment(&session)
                 .expect("unrelated legacy session")
                 .is_empty()
+        );
+
+        session.provider = "grok".to_owned();
+        assert_eq!(
+            session_context_environment(&session).expect("trusted Grok workspace"),
+            vec![("GROK_FOLDER_TRUST", "0".to_owned())]
         );
     }
     use crate::runtime_wire::{RuntimeEvent, WorkerState};

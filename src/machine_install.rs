@@ -131,8 +131,10 @@ fn launcher_script(args: &InstallArgs, state: &Path, token: &Path) -> String {
     script.push_str(
         "if command -v gemini >/dev/null 2>&1; then COWBOY_ACP_GEMINI_CMD=$(command -v gemini); COWBOY_ACP_GEMINI_ARGS=--acp; export COWBOY_ACP_GEMINI_CMD COWBOY_ACP_GEMINI_ARGS; fi\n",
     );
-    script.push_str(
-        "if command -v grok >/dev/null 2>&1; then COWBOY_ACP_GROK_CMD=$(command -v grok); COWBOY_ACP_GROK_ARGS='--no-auto-update --always-approve agent --no-leader stdio'; export COWBOY_ACP_GROK_CMD COWBOY_ACP_GROK_ARGS; fi\n",
+    let _ = writeln!(
+        script,
+        "if command -v grok >/dev/null 2>&1; then COWBOY_ACP_GROK_CMD=$(command -v grok); COWBOY_ACP_GROK_ARGS={}; export COWBOY_ACP_GROK_CMD COWBOY_ACP_GROK_ARGS; fi",
+        shell_quote(crate::grok::RUNTIME_ARGS_ENV)
     );
     let _ = writeln!(
         script,
@@ -286,7 +288,9 @@ mod tests {
         assert!(script.contains("/opt/homebrew/bin"));
         assert!(script.contains("--enrollment-token-file"));
         assert!(script.contains("COWBOY_ACP_GROK_CMD"));
-        assert!(script.contains("--no-auto-update --always-approve agent --no-leader stdio"));
+        assert!(script.contains(
+            "--no-auto-update --experimental-memory agent --always-approve --no-leader stdio"
+        ));
         assert!(!script.contains("secret"));
     }
 }

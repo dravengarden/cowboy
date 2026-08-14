@@ -60,6 +60,7 @@
           ./Cargo.lock
           ./src/lib.rs
           ./src/claude_shell.rs
+          ./src/grok.rs
           ./src/machine_broker.rs
           ./src/machine_cli.rs
           ./src/machine_auth.rs
@@ -107,6 +108,7 @@
         ./src/bin/cowboy-codex-app-server.rs
         ./src/cgroup.rs
         ./src/claude_shell.rs
+        ./src/grok.rs
         ./src/provider/deepseek_cache.rs
         ./src/provider/deepseek_context.rs
         ./src/provider/mod.rs
@@ -354,6 +356,7 @@
         test ! -e ${cowboy-src}/web/public
         test -e ${cowboy-src}/web/src/protocol.ts
         test -e ${machine-src}/src/provider/deepseek_cache.rs
+        test -e ${machine-src}/src/grok.rs
         test -e ${machine-src}/src/provider/deepseek_context.rs
         test -e ${machine-src}/src/provider_catalog.rs
         test -e ${machine-src}/src/provider_usage_spool.rs

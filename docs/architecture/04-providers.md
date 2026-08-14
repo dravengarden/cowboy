@@ -17,11 +17,19 @@ schema gained the same operation.
 | `codex` | `npx -y @agentclientprotocol/codex-acp` plus full-access defaults | adapter over Codex App Server |
 | `codex-deepseek` | the same Codex ACP adapter with an isolated provider-owned `CODEX_HOME` | Codex over the independent local DeepSeek Responses gateway |
 | `gemini` | `npx -y @google/gemini-cli --acp` | Gemini's native ACP mode |
-| `grok` | `npx -y @xai-official/grok --no-auto-update --always-approve agent --no-leader stdio` | Grok Build's native ACP stdio agent |
+| `grok` | `npx -y @xai-official/grok --no-auto-update --experimental-memory agent --always-approve --no-leader stdio` | Grok Build's native ACP stdio agent |
 
 Each entry is a **`LaunchSpec`**: `id` + `command` + `args` + scoped environment.
 That's the whole contract a provider must satisfy to start; everything downstream
 (initialize/handshake/command loop) is provider-agnostic and lives in `acp.rs`.
+
+Grok keeps its own native state under `~/.grok`. Cowboy enables Grok's
+cross-session memory but never reads or writes that store. Current Grok releases
+enable native subagent tools by default, so Cowboy deliberately does not pass the
+removed legacy `--subagents` flag. Machine-created worktrees have already
+passed Cowboy's configured trusted-workspace check; only those worker
+processes receive `GROK_FOLDER_TRUST=0`, allowing Grok to load repository rules
+and hooks without adding persistent entries to the user's folder-trust store.
 
 Managed Machine releases also set Codex ACP's `CODEX_PATH` to
 `cowboy-codex-app-server`. This transparent NDJSON proxy forwards the selected

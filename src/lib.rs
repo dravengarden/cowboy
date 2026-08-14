@@ -39,6 +39,8 @@ mod deepseek_context;
 mod diff_snapshot;
 #[cfg(any(feature = "full", feature = "code-adapter"))]
 mod files;
+#[cfg(any(feature = "full", feature = "machine-host"))]
+mod grok;
 #[cfg(feature = "full")]
 mod inference;
 #[cfg(any(feature = "full", feature = "machine-host"))]
