@@ -42,5 +42,16 @@ Before accepting evidence, `status` must report all of:
 Prefer `eval` with selector-driven DOM actions over pixel taps. Use `shot` only
 for visual evidence. The bridge can prove real WKWebView layout and behavior,
 but physical-device-only interactions still require device acceptance.
+
+The image-adjacent empty-line caret is one of those device-only cases.
+Simulator HID Return (`axe key 40`) updates CM6 and still draws a CSS
+`caret-color` beam on an empty `.cm-line` whose `Range` height is 0. A
+physical iPhone keeps the UIKit caret on the previous measurable text
+(the block image or its landing glyph). Treat `caret_height=0` and the
+user's painted caret as the signal; a purple Simulator caret after Return
+is not reproduction and is not acceptance. The helper also currently
+reaches the installed PWA (`https://cowboy.stormbird.xyz`), not the
+Debug `tauri://localhost` shell — another reason paste / keyboard /
+caret must not be signed off from Simulator screenshots.
 The Hawk wrapper base64-encodes `eval` source before SSH, so selectors and
 multi-statement scripts arrive without remote-shell quoting changes.

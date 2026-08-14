@@ -124,6 +124,11 @@ import {
 } from "./desktopLayout";
 import { setVimSetting, useVimSetting } from "./vimSetting";
 import {
+    setComposerDebugSetting,
+    useComposerDebugSetting,
+} from "./composerDebugSetting";
+import { reportComposerDebugModeChanged } from "./composer/composerInputDebug";
+import {
     FONT_SCALE_PRESETS,
     LINE_HEIGHT_PRESETS,
     nearestPreset,
@@ -2494,8 +2499,15 @@ export function App({
                     sx={{
                         position: "absolute",
                         zIndex: 0,
-                        inset: 0,
+                        top: 0,
+                        bottom: 0,
+                        left: 0,
+                        width: 28,
                         bgcolor: "background.default",
+                        // A full-viewport mask's box-shadow is ink overflow of a
+                        // composited layer; iOS WebKit sometimes drops it. A
+                        // thin seam at the sliding card's inner edge keeps the
+                        // same depth cue without that clip.
                         // React owns the settled depth cue. The gesture binding
                         // may add the same inline shadow while opening, but its
                         // cleanup must never make an already-open drawer look
@@ -2505,6 +2517,7 @@ export function App({
                             : "none",
                         pointerEvents: "none",
                         backfaceVisibility: "hidden",
+                        overflow: "visible",
                         willChange: "transform",
                     }}
                 />
@@ -2626,6 +2639,7 @@ export function App({
             <Stack
                 ref={columnRef}
                 data-mobile-session-surface={mobile ? "true" : undefined}
+                data-mobile-drawer-surface={mobile ? "true" : undefined}
                 sx={{
                     flex: 1,
                     height: mobile ? "100%" : undefined,
@@ -3638,6 +3652,7 @@ function DesktopSettingsContent({
     const vim = useVimSetting();
     const notify = useNotifySetting();
     const vibrate = useVibrateSetting();
+    const composerDebug = useComposerDebugSetting();
     const reading = useReadingSettings();
     const selectedFont = getFontPreset(reading.fontVariant);
     const settings = useStoreSelector((snapshot) => snapshot.settings);
@@ -3733,6 +3748,9 @@ function DesktopSettingsContent({
                     </DesktopSettingsRow>
                     <DesktopSettingsRow shortcut="A" shortcutAvailable={shortcutsAvailable} label="Auto-resume" description="Continue interrupted turns after restart">
                         <DesktopSettingsChoice active={autoResume} onClick={() => setSetting(AUTO_RESUME_DEFAULT_KEY, !autoResume)} ariaLabel="Toggle automatic turn resume">{autoResume ? "On" : "Off"}</DesktopSettingsChoice>
+                    </DesktopSettingsRow>
+                    <DesktopSettingsRow shortcut="D" shortcutAvailable={shortcutsAvailable} label="Debug mode" description="Verbose composer input logs for agents">
+                        <DesktopSettingsChoice active={composerDebug} onClick={() => { const next = !composerDebug; setComposerDebugSetting(next); reportComposerDebugModeChanged(next); }} ariaLabel="Toggle composer debug mode">{composerDebug ? "On" : "Off"}</DesktopSettingsChoice>
                     </DesktopSettingsRow>
                 </Box>
                 <Divider sx={{ my: 1 }} />
@@ -4769,6 +4787,7 @@ function SettingsShell({
     const vim = useVimSetting();
     const notify = useNotifySetting();
     const vibrate = useVibrateSetting();
+    const composerDebug = useComposerDebugSetting();
     const reading = useReadingSettings();
     // Font picker is collapsed by default (the 7 preview cards otherwise fill the
     // screen); the collapsed summary still shows the current face. Resets to
@@ -5015,10 +5034,12 @@ function SettingsShell({
                 tabs so the active section is visible, focusable, and keyable. */}
             <Box
                 sx={{
-                    position: desktop ? "sticky" : "static",
-                    top: desktop ? -1 : "auto",
-                    zIndex: desktop ? 4 : "auto",
-                    bgcolor: desktop ? "background.paper" : "transparent",
+                    position: "sticky",
+                    top: desktop ? -1 : 0,
+                    zIndex: 4,
+                    bgcolor: "background.paper",
+                    pt: desktop ? 0 : 0.25,
+                    pb: desktop ? 0 : 0.75,
                 }}
             >
             <Box
@@ -5399,6 +5420,34 @@ function SettingsShell({
                         checked={vibrate}
                         onChange={(e): void => setVibrateSetting(e.target.checked)}
                         inputProps={{ "aria-label": "Vibration alert" }}
+                    />
+                </Stack>
+                <Divider />
+                <Stack
+                    direction="row"
+                    alignItems="center"
+                    justifyContent="space-between"
+                    spacing={2}
+                >
+                    <Stack>
+                        <Typography variant="body2">
+                            Debug mode
+                        </Typography>
+                        <Typography
+                            variant="caption"
+                            color="text.secondary"
+                        >
+                            Send verbose composer input logs so an agent can
+                            diagnose caret, IME, and Return on this device
+                        </Typography>
+                    </Stack>
+                    <Switch
+                        checked={composerDebug}
+                        onChange={(e): void => {
+                            setComposerDebugSetting(e.target.checked);
+                            reportComposerDebugModeChanged(e.target.checked);
+                        }}
+                        inputProps={{ "aria-label": "Composer debug mode" }}
                     />
                 </Stack>
                 {desktop && (

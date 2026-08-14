@@ -1595,6 +1595,10 @@ struct ClientState {
     /// re-pushing it would duplicate every message. `load_session` is used
     /// purely to re-warm the agent's internal context, not to rebuild ours.
     suppress_updates: AtomicBool,
+    /// Content blocks Cowboy already echoed for the current prompt. Grok (and
+    /// any agent that ACP-accepts a prompt by emitting `user_message_chunk`)
+    /// would otherwise persist a second identical user bubble.
+    last_echoed_user_contents: Mutex<Vec<serde_json::Value>>,
 }
 
 /// Retry and completion state belongs to one serialized prompt. Keeping it
@@ -1839,6 +1843,7 @@ async fn agent_main(
         codex_full_access: AtomicBool::new(false),
         grok_permission_mode: Arc::new(Mutex::new(GrokPermissionMode::AlwaysApprove)),
         suppress_updates: AtomicBool::new(false),
+        last_echoed_user_contents: Mutex::new(Vec::new()),
     });
 
     let notif_state = state.clone();
@@ -2090,6 +2095,12 @@ fn handle_session_notification(state: &ClientState, notif: &SessionNotification)
     // actually firing the wakeup, which the ACP runtime otherwise drops.
     maybe_arm_wakeup(state, &update);
     crate::prompt_origin::annotate_inbound_user_prompt(&mut update, &state.provider_id);
+    if crate::prompt_origin::take_matching_inbound_prompt_echo(
+        &update,
+        &mut state.last_echoed_user_contents.lock(),
+    ) {
+        return;
+    }
     state.sink.push(&state.session_id, Event::Update { update });
 }
 
@@ -2483,8 +2494,10 @@ async fn run_session(
                 // typed, so it must never look like a user bubble (e.g. a wakeup
                 // re-issues a self-check prompt the user never sent).
                 let origin = crate::prompt_origin::origin_from_cmid(cmid.as_deref());
+                let mut echoed = Vec::with_capacity(blocks.len());
                 for (i, block) in blocks.iter().enumerate() {
                     let content = serde_json::to_value(block).unwrap_or(serde_json::Value::Null);
+                    echoed.push(content.clone());
                     let tag = if i == 0 { cmid.clone() } else { None };
                     let mut update = serde_json::json!({
                         "sessionUpdate": "user_message_chunk",
@@ -2495,6 +2508,7 @@ async fn run_session(
                         .sink
                         .push_tagged(&session_id, Event::Update { update }, tag);
                 }
+                *state.last_echoed_user_contents.lock() = echoed;
                 let cx = cx.clone();
                 let sink = Arc::clone(&state.sink);
                 let sid = session_id.clone();

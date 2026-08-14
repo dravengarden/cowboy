@@ -310,6 +310,114 @@ Deno.test("derive isolates user-role system-reminder echoes as agent runtime", (
   }
 });
 
+Deno.test("derive hides a Grok prompt echo after an unrendered lifecycle", () => {
+  const items = derive([
+    {
+      session_id: "s1",
+      seq: 1,
+      kind: "update",
+      update: {
+        sessionUpdate: "user_message_chunk",
+        promptOrigin: { actor: "human", source: "composer" },
+        content: { type: "image", url: "blob:one" },
+      },
+    },
+    {
+      session_id: "s1",
+      seq: 2,
+      kind: "update",
+      update: {
+        sessionUpdate: "user_message_chunk",
+        promptOrigin: { actor: "human", source: "composer" },
+        content: { type: "text", text: "why two messages?" },
+      },
+    },
+    {
+      session_id: "s1",
+      seq: 3,
+      kind: "lifecycle",
+      status: "busy",
+      detail: null,
+    },
+    {
+      session_id: "s1",
+      seq: 4,
+      kind: "update",
+      update: {
+        sessionUpdate: "user_message_chunk",
+        content: { type: "image", url: "blob:one" },
+      },
+    },
+    {
+      session_id: "s1",
+      seq: 5,
+      kind: "update",
+      update: {
+        sessionUpdate: "user_message_chunk",
+        content: { type: "text", text: "why two messages?" },
+      },
+    },
+    {
+      session_id: "s1",
+      seq: 6,
+      kind: "update",
+      update: {
+        sessionUpdate: "agent_thought_chunk",
+        content: { type: "text", text: "Looking." },
+      },
+    },
+  ]);
+  const users = items.filter((item) => item.kind === "message" && item.role === "user");
+  if (users.length !== 1) {
+    throw new Error(`expected one user bubble, got ${users.length}`);
+  }
+  const user = users[0];
+  if (user?.kind !== "message" || user.chunks.length !== 2) {
+    throw new Error("the Cowboy echo should keep both image and text chunks");
+  }
+  if (user.chunks[1]?.type !== "text" || user.chunks[1].text !== "why two messages?") {
+    throw new Error("the visible bubble should keep the original text once");
+  }
+});
+
+Deno.test("a second human prompt still becomes its own bubble", () => {
+  const items = derive([
+    {
+      session_id: "s1",
+      seq: 1,
+      kind: "update",
+      update: {
+        sessionUpdate: "user_message_chunk",
+        promptOrigin: { actor: "human", source: "composer" },
+        content: { type: "text", text: "first" },
+      },
+    },
+    {
+      session_id: "s1",
+      seq: 2,
+      kind: "update",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "ok" },
+      },
+    },
+    {
+      session_id: "s1",
+      seq: 3,
+      kind: "update",
+      update: {
+        sessionUpdate: "user_message_chunk",
+        promptOrigin: { actor: "human", source: "composer" },
+        content: { type: "text", text: "second" },
+      },
+    },
+  ]);
+  const users = items.filter((item) => item.kind === "message" && item.role === "user");
+  if (users.length !== 2) {
+    throw new Error(`expected two human bubbles, got ${users.length}`);
+  }
+});
+
 Deno.test("runtime prompt echoes do not retire the current plan", () => {
   const plan = latestPlan([
     {

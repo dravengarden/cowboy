@@ -5,6 +5,7 @@ import {
   insertNativeCodeBlock,
   insertNativeLink,
   mapNativeSelectionThroughValueChange,
+  nativeTextareaFittedHeight,
   nativeTextareaNeedsScroll,
   outdentNativeLines,
   replaceNativeSelection,
@@ -21,6 +22,12 @@ Deno.test("native textarea ignores subpixel overflow before enabling scroll", ()
   assertEquals(nativeTextareaNeedsScroll(75, 72), true);
   assertEquals(nativeTextareaNeedsScroll(431, 431), false);
   assertEquals(nativeTextareaNeedsScroll(1417, 431), true);
+});
+
+Deno.test("compact native textarea height follows content and never shrinks below the min", () => {
+  assertEquals(nativeTextareaFittedHeight(36), 48);
+  assertEquals(nativeTextareaFittedHeight(48), 48);
+  assertEquals(nativeTextareaFittedHeight(96), 96);
 });
 
 Deno.test("native text paste replaces forward or backward selections", () => {

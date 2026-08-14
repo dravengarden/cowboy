@@ -2,7 +2,6 @@ import {
   type EditorState,
   StateEffect,
   StateField,
-  type Transaction,
 } from "@codemirror/state";
 import {
   Decoration,
@@ -12,20 +11,50 @@ import {
   type ViewUpdate,
   WidgetType,
 } from "@codemirror/view";
-import { flushObservability, reportClientLog } from "../observability";
+import {
+  emptyLinePositionsAfterImages,
+  isLoneImageTokenLine,
+  selectionOnEmptyLineAfterImage,
+  selectionOnEmptyLineInImageChain,
+} from "./inlineImageCaretPolicy";
+import { reportClientLog } from "../observability";
 
 export const MOBILE_EMPTY_LINE_CARET_ANCHOR_CLASS =
   "cm-mobile-empty-line-caret-anchor";
 
-const setMobileEmptyLineCaretAnchor = StateEffect.define<boolean>();
+const setHideMobileEmptyLineCaretForIme = StateEffect.define<boolean>();
 
 /**
- * This character belongs only to a transient CM6 widget DOM node. It never
- * enters EditorState, the controlled composer value, history, or a message.
+ * Document-neutral only: this character lives in widget DOM. It never enters
+ * EditorState, React value, history, or a sent message.
+ *
+ * Physical v1250 showed the late-mount repair was the wrong trigger. First
+ * Return after paste still had no text node on the image-adjacent landing
+ * line, so WKWebView kept the UIKit caret on the thumbnail. The widget then
+ * appeared on the *next* empty line and ate the second Return as a native
+ * <br> (line_height 28, document_lines unchanged). Backspace onto that same
+ * landing line dropped the widget on docChanged and remounted it too late.
+ *
+ * A block image is not a `.cm-line`. The trailing landing line is a second
+ * document line that looks like part of the thumbnail. Put a U+200B on that
+ * landing line only while the caret is actually there — including paste —
+ * so the first Return has a native text node. Keep that landing node after
+ * the caret leaves so the line does not collapse to height 0 and reflow.
+ * v1251 stacked native <br> tags in an abandoned node; insertLineBreak is
+ * now preventDefaulted, so the magnet is gone. Mapping the DOM selection
+ * into a newly appeared landing node only routes the next key; it is not
+ * the Return/Backspace animation.
  */
 class MobileEmptyLineCaretAnchorWidget extends WidgetType {
-  override eq(): boolean {
-    return true;
+  constructor(readonly at: number) {
+    super();
+  }
+
+  override eq(other: MobileEmptyLineCaretAnchorWidget): boolean {
+    // Physical v1259: `eq()` true for every instance let CM6 move the
+    // landing node onto the new line. The abandoned landing line then
+    // collapsed and grew 14px, and the native Range died.
+    return other.at === this.at;
   }
 
   toDOM(): HTMLElement {
@@ -36,59 +65,123 @@ class MobileEmptyLineCaretAnchorWidget extends WidgetType {
     return anchor;
   }
 
-  // CM6 normally makes widgets contenteditable=false and keeps Selection
-  // outside them. This geometry-only widget must briefly own a native Range so
-  // iOS WebKit measures the new empty line. The widget is removed one paint
-  // later, before the next ordinary input transaction.
   get editable(): boolean {
     return true;
   }
 
-  override ignoreEvent(): boolean {
-    return true;
+  override ignoreEvent(event: Event): boolean {
+    if (event.type !== "beforeinput") {
+      return event.type !== "paste" && event.type !== "compositionstart";
+    }
+    const inputType = (event as InputEvent).inputType;
+    return inputType === "insertText" ||
+      inputType === "insertCompositionText" ||
+      inputType === "insertLineBreak" ||
+      inputType === "insertParagraph";
   }
 }
 
-function anchorDecoration(state: EditorState): DecorationSet {
-  return Decoration.set([
-    Decoration.widget({
-      widget: new MobileEmptyLineCaretAnchorWidget(),
-      side: 1,
-    }).range(state.selection.main.head),
-  ]);
+export function landingAnchorPositions(_state: EditorState): number[] {
+  // The image source line is a real `.cm-line` again. A U+200B on the
+  // following empty line fought iOS text after that image.
+  return [];
 }
 
-const mobileEmptyLineCaretAnchorField = StateField.define<DecorationSet>({
-  create: () => Decoration.none,
-  update(anchors, transaction) {
-    let enabled = anchors.size > 0;
-    if (transaction.docChanged || transaction.selection !== undefined) {
-      enabled = false;
-    }
+export function landingAnchorsForEmptyLinesAfterImages(
+  state: EditorState,
+): DecorationSet {
+  const positions = landingAnchorPositions(state);
+  if (positions.length === 0) return Decoration.none;
+  return Decoration.set(
+    positions.map((from) =>
+      Decoration.widget({
+        widget: new MobileEmptyLineCaretAnchorWidget(from),
+        side: 1,
+      }).range(from)
+    ),
+  );
+}
+
+export function shouldPreventNativeMobileLineBreak(
+  inputType: string | undefined,
+  state: EditorState,
+): boolean {
+  if (inputType !== "insertLineBreak" && inputType !== "insertParagraph") {
+    return false;
+  }
+  const line = state.doc.lineAt(state.selection.main.head);
+  if (isLoneImageTokenLine(line.text)) return true;
+  return line.number > 1 &&
+    isLoneImageTokenLine(state.doc.line(line.number - 1).text);
+}
+
+const hideMobileEmptyLineCaretForIme = StateField.define<boolean>({
+  create: () => false,
+  update(hidden, transaction) {
+    let next = hidden;
     for (const effect of transaction.effects) {
-      if (effect.is(setMobileEmptyLineCaretAnchor)) enabled = effect.value;
+      if (effect.is(setHideMobileEmptyLineCaretForIme)) next = effect.value;
     }
-    return enabled ? anchorDecoration(transaction.state) : Decoration.none;
+    if (
+      transaction.docChanged &&
+      emptyLinePositionsAfterImages(transaction.state).length === 0
+    ) {
+      return false;
+    }
+    return next;
+  },
+});
+
+const mobileEmptyLineCaretAnchorField = StateField.define<DecorationSet>({
+  create: (state) => landingAnchorsForEmptyLinesAfterImages(state),
+  update(anchors, transaction) {
+    const hidden = transaction.state.field(hideMobileEmptyLineCaretForIme);
+    if (hidden) return Decoration.none;
+    if (
+      transaction.docChanged ||
+      transaction.selection ||
+      transaction.effects.some((effect) =>
+        effect.is(setHideMobileEmptyLineCaretForIme)
+      )
+    ) {
+      return landingAnchorsForEmptyLinesAfterImages(transaction.state);
+    }
+    return anchors;
   },
   provide: (field) => EditorView.decorations.from(field),
 });
 
-export interface MobileEmptyLineCaretRepairUpdate {
-  docChanged: boolean;
-  startLines: number;
-  nextLines: number;
-  directInput: boolean;
-}
-
-/** Only a direct keyboard input that adds a line can need caret repair. */
-export function shouldRepairMobileEmptyLineCaret(
-  update: MobileEmptyLineCaretRepairUpdate,
+export function landingSelectionAlreadyPlaced(
+  selection: { anchorNode: Node | null; isCollapsed: boolean } | null,
+  text: Node | null,
 ): boolean {
-  return update.docChanged && update.directInput &&
-    update.nextLines > update.startLines;
+  return Boolean(
+    text &&
+      text.nodeType === 3 &&
+      selection?.isCollapsed &&
+      selection.anchorNode === text,
+  );
 }
 
-/** The repair is valid only for a collapsed caret on a genuinely empty line. */
+export function collapseLandingSelection(
+  selection: Selection | null,
+  text: Node | null,
+): boolean {
+  if (!text || text.nodeType !== 3 || !selection) return false;
+  if (landingSelectionAlreadyPlaced(selection, text)) return false;
+  selection.collapse(text, 0);
+  return true;
+}
+
+export function updateInsertedLineBreak(update: ViewUpdate): boolean {
+  if (!update.docChanged) return false;
+  let found = false;
+  update.changes.iterChanges((_fromA, _toA, _fromB, _toB, inserted) => {
+    if (inserted.toString().includes("\n")) found = true;
+  });
+  return found;
+}
+
 export function isMobileEmptyLineCaretState(state: EditorState): boolean {
   const selection = state.selection.main;
   return selection.empty && state.doc.lineAt(selection.head).length === 0;
@@ -115,7 +208,7 @@ function reportAnchorGeometry(view: EditorView, sequence: number): void {
   reportClientLog(
     "info",
     "mobile_caret_line_break_anchor",
-    "Mobile composer caret received a transient geometry anchor",
+    "Mobile composer caret kept an image-adjacent landing anchor",
     {
       sequence,
       focus_owned: content.ownerDocument.activeElement === content,
@@ -123,160 +216,137 @@ function reportAnchorGeometry(view: EditorView, sequence: number): void {
       state_head: stateSelection.head,
       state_line: view.state.doc.lineAt(stateSelection.head).number,
       document_lines: view.state.doc.lines,
+      after_image: selectionOnEmptyLineAfterImage(view.state),
+      image_chain: selectionOnEmptyLineInImageChain(view.state),
       active_line_empty: activeLine?.textContent === "\u200b",
       anchor_dom_only: true,
+      persistent_until_input: false,
+      landing_only: false,
       line_top: lineRect ? rounded(lineRect.top - contentRect.top) : -1,
       line_height: lineRect ? rounded(lineRect.height) : -1,
       caret_top: rangeRect ? rounded(rangeRect.top - contentRect.top) : -1,
       caret_height: rangeRect ? rounded(rangeRect.height) : -1,
     },
   );
-  void flushObservability();
 }
 
-export function hasDirectKeyboardInput(
-  transactions: readonly Transaction[],
-): boolean {
-  return transactions.some((transaction) =>
-    transaction.isUserEvent("input") &&
-    !transaction.isUserEvent("input.paste")
-  );
-}
-
-/**
- * iOS WebKit can retain the native caret geometry of a preceding root-level
- * block image after Return, even though CM6's state and active line advanced.
- * Give WebKit one paint with a measurable, document-neutral text node at the
- * logical caret, then remove it on the following paint. The painted native
- * caret keeps the corrected line while subsequent input returns to ordinary
- * CM6 ownership.
- */
 export const mobileEmptyLineCaretRepair = [
+  hideMobileEmptyLineCaretForIme,
   mobileEmptyLineCaretAnchorField,
   ViewPlugin.fromClass(
     class {
-      private mountFrame = 0;
-      private placeFrame = 0;
-      private releaseFrame = 0;
-      private reportSequence = 0;
+      placeTimer = 0;
+      placeFrame = 0;
+      reportSequence = 0;
 
-      constructor(readonly view: EditorView) {}
-
-      private cancelFrames(): void {
-        if (this.mountFrame !== 0) cancelAnimationFrame(this.mountFrame);
-        if (this.placeFrame !== 0) cancelAnimationFrame(this.placeFrame);
-        if (this.releaseFrame !== 0) cancelAnimationFrame(this.releaseFrame);
-        this.mountFrame = this.placeFrame = this.releaseFrame = 0;
-      }
-
-      private disableAnchor(): void {
-        const anchors = this.view.state.field(
-          mobileEmptyLineCaretAnchorField,
-          false,
+      constructor(readonly view: EditorView) {
+        this.view.contentDOM.addEventListener(
+          "beforeinput",
+          this.onBeforeInputCapture,
+          true,
         );
-        if (anchors && anchors.size > 0) {
-          this.view.dispatch({
-            effects: setMobileEmptyLineCaretAnchor.of(false),
-          });
+        if (emptyLinePositionsAfterImages(view.state).length > 0) {
+          this.schedulePlace();
         }
       }
 
-      clear(): void {
-        this.cancelFrames();
-        this.disableAnchor();
+      // Physical v1261: ViewPlugin beforeinput ran too late. Native
+      // insertLineBreak still wrote a <br> (line_height 14→28) before
+      // CM6 inserted `\n`. That double layout is the stutter. Capture
+      // on .cm-content beats widget ignoreEvent and the default.
+      onBeforeInputCapture = (event: Event): void => {
+        const input = event as InputEvent;
+        if (
+          !shouldPreventNativeMobileLineBreak(input.inputType, this.view.state)
+        ) {
+          return;
+        }
+        event.preventDefault();
+      };
+
+      cancelPlace(): void {
+        if (this.placeTimer !== 0) {
+          globalThis.clearTimeout(this.placeTimer);
+          this.placeTimer = 0;
+        }
+        if (this.placeFrame !== 0) cancelAnimationFrame(this.placeFrame);
+        this.placeFrame = 0;
       }
 
-      private eligible(expectedHead?: number): boolean {
-        const { state, contentDOM } = this.view;
-        const selection = state.selection.main;
-        return isMobileEmptyLineCaretState(state) &&
-          (expectedHead === undefined || selection.head === expectedHead) &&
-          !this.view.composing &&
-          contentDOM.ownerDocument.activeElement === contentDOM &&
-          contentDOM.querySelector(".cm-inline-image-widget") !== null;
-      }
-
-      private schedule(): void {
-        this.clear();
-        this.mountFrame = requestAnimationFrame(() => {
-          this.mountFrame = 0;
-          if (!this.eligible()) return;
-          const expectedHead = this.view.state.selection.main.head;
-          this.view.dispatch({
-            effects: setMobileEmptyLineCaretAnchor.of(true),
-          });
-
-          this.placeFrame = requestAnimationFrame(() => {
-            this.placeFrame = 0;
-            if (!this.eligible(expectedHead)) {
-              this.disableAnchor();
-              return;
-            }
-            const anchor = this.view.contentDOM.querySelector<HTMLElement>(
-              `.cm-line.cm-activeLine .${MOBILE_EMPTY_LINE_CARET_ANCHOR_CLASS}`,
-            );
-            const text = anchor?.firstChild;
-            const selection = this.view.contentDOM.ownerDocument.getSelection();
-            if (!text || text.nodeType !== Node.TEXT_NODE || !selection) {
-              this.disableAnchor();
-              return;
-            }
-
-            const range = this.view.contentDOM.ownerDocument.createRange();
-            range.setStart(text, 0);
-            range.collapse(true);
-            selection.removeAllRanges();
-            selection.addRange(range);
-
-            const sequence = this.reportSequence < 4
-              ? ++this.reportSequence
-              : 0;
-            reportAnchorGeometry(this.view, sequence);
-
-            // One paint is sufficient to refresh WKWebView's native caret
-            // cache. Do not leave an editable widget in the ordinary input
-            // path, even though its character never belonged to EditorState.
-            this.releaseFrame = requestAnimationFrame(() => {
-              this.releaseFrame = 0;
-              this.disableAnchor();
-            });
-          });
+      setImeHidden(hidden: boolean): void {
+        if (this.view.state.field(hideMobileEmptyLineCaretForIme) === hidden) {
+          return;
+        }
+        this.view.dispatch({
+          effects: setHideMobileEmptyLineCaretForIme.of(hidden),
         });
       }
 
-      update(update: ViewUpdate): void {
+      placeLandingSelection(): void {
+        if (!selectionOnEmptyLineInImageChain(this.view.state)) return;
+        const anchor = this.view.contentDOM.querySelector<HTMLElement>(
+          `.cm-line.cm-activeLine .${MOBILE_EMPTY_LINE_CARET_ANCHOR_CLASS}`,
+        );
+        const text = anchor?.firstChild ?? null;
+        const selection = this.view.contentDOM.ownerDocument.getSelection();
         if (
-          shouldRepairMobileEmptyLineCaret({
-            docChanged: update.docChanged,
-            startLines: update.startState.doc.lines,
-            nextLines: update.state.doc.lines,
-            directInput: hasDirectKeyboardInput(update.transactions),
-          })
+          !collapseLandingSelection(selection, text) &&
+          !landingSelectionAlreadyPlaced(selection, text)
         ) {
-          this.schedule();
+          return;
         }
+        const sequence = this.reportSequence < 6 ? ++this.reportSequence : 0;
+        reportAnchorGeometry(this.view, sequence);
+      }
+
+      schedulePlace(): void {
+        this.cancelPlace();
+        // Never dispatch from update(). The landing widget is already in the
+        // document transaction; this only maps the DOM selection into it.
+        this.placeTimer = globalThis.setTimeout(() => {
+          this.placeTimer = 0;
+          this.placeFrame = requestAnimationFrame(() => {
+            this.placeFrame = 0;
+            this.placeLandingSelection();
+          });
+        }, 0);
+      }
+
+      update(update: ViewUpdate): void {
+        const has = update.state.field(mobileEmptyLineCaretAnchorField).size;
+        if (has === 0) return;
+        // Physical v1259: after Return, CM6 had already updated the DOM.
+        // A delayed removeAllRanges remap bounced; skipping it left the
+        // native Range dead. Collapse into the new line's own widget in
+        // this same update, without removeAllRanges.
+        if (updateInsertedLineBreak(update)) {
+          this.placeLandingSelection();
+          return;
+        }
+        if (update.docChanged || update.selectionSet) this.schedulePlace();
       }
 
       destroy(): void {
-        this.cancelFrames();
+        this.view.contentDOM.removeEventListener(
+          "beforeinput",
+          this.onBeforeInputCapture,
+          true,
+        );
+        this.cancelPlace();
       }
     },
     {
       eventHandlers: {
-        keydown(): void {
-          this.clear();
+        beforeinput(event: InputEvent): boolean | void {
+          if (event.inputType === "insertCompositionText") {
+            this.setImeHidden(true);
+          }
         },
         compositionstart(): void {
-          this.clear();
+          this.setImeHidden(true);
         },
-        pointerdown(): void {
-          this.clear();
-        },
-        touchstart(): void {
-          this.clear();
-        },
-        blur(): void {
-          this.clear();
+        compositionend(): void {
+          this.setImeHidden(false);
         },
       },
     },

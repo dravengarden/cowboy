@@ -12,6 +12,8 @@ import type {
   ComposerEditorSelection,
 } from "./ComposerEditor";
 import { type Attachment, clipboardFiles } from "./attachments";
+import { attachComposerInputDebug } from "./composer/composerInputDebug";
+import { reportMobileNativePasteEvent } from "./composer/mobileNativePasteTelemetry";
 import { hasDraftMod, hasSendMod } from "./platform";
 import { isImeKeyEvent } from "./imeKey";
 import type { AvailableCommand } from "./protocol";
@@ -22,6 +24,7 @@ import {
   insertNativeCodeBlock,
   insertNativeLink,
   mapNativeSelectionThroughValueChange,
+  nativeTextareaFittedHeight,
   nativeTextareaNeedsScroll,
   type NativeTextEdit,
   outdentNativeLines,
@@ -237,6 +240,12 @@ export const ComposerTextarea = forwardRef<
   const measureNativeOverflow = (): void => {
     const ta = inputRef.current;
     if (!ta) return;
+    if (!expanded) {
+      ta.style.height = "auto";
+      ta.style.height = `${String(nativeTextareaFittedHeight(ta.scrollHeight))}px`;
+    } else {
+      ta.style.removeProperty("height");
+    }
     const next = nativeTextareaNeedsScroll(ta.scrollHeight, ta.clientHeight);
     setNativeScrollable((current) => current === next ? current : next);
   };
@@ -251,6 +260,12 @@ export const ComposerTextarea = forwardRef<
     const observer = new ResizeObserver(measureNativeOverflow);
     observer.observe(ta);
     return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const ta = inputRef.current;
+    if (!ta) return undefined;
+    return attachComposerInputDebug(ta);
   }, []);
 
   const rememberSelection = (
@@ -784,6 +799,12 @@ export const ComposerTextarea = forwardRef<
         }}
         onPaste={(e): void => {
           const files = clipboardFiles(e.clipboardData);
+          reportMobileNativePasteEvent({
+            surface: "textarea",
+            clipboard: e.clipboardData,
+            fileCount: files.length,
+            consumed: files.length > 0 && !!onPasteFiles,
+          });
           if (files.length > 0 && onPasteFiles) {
             e.preventDefault();
             onPasteFiles(files);
@@ -805,7 +826,7 @@ export const ComposerTextarea = forwardRef<
           width: "100%",
           minWidth: 0,
           minHeight: expanded ? "100%" : 48,
-          height: expanded ? "100%" : 48,
+          height: expanded ? "100%" : "auto",
           maxHeight: "100%",
           m: 0,
           padding: "8.5px 14px",

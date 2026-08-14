@@ -129,7 +129,10 @@ import {
   mobileComposerKeyboardGap,
   mobileComposerStackGap,
 } from "./mobileComposerPrimitives";
-import { mobileFocusedComposerSurfaceSx } from "./mobileComposerSurface";
+import {
+  mobileFocusedComposerFill,
+  mobileFocusedComposerSurfaceSx,
+} from "./mobileComposerSurface";
 import { TurnStatusOverlay } from "./TurnStatusOverlay";
 import { PermissionOverlay } from "./PermissionOverlay";
 import {
@@ -1579,7 +1582,7 @@ export function ComposerWorkspace({
           minHeight: 0,
           maxHeight: "100%",
           "&:has(> [data-mobile-primary-composer='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within)": {
-            flex: "1 1 auto",
+            flex: "0 1 auto",
             overflow: "hidden",
           },
           // Every visible slot shares one horizontal contract. Explicitly zero
@@ -1953,7 +1956,7 @@ export function ComposerWorkspace({
             // leave a tall, inert canvas after Settings or another action takes
             // focus while the native textarea has already blurred.
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within)": {
-              flex: "1 1 auto",
+              flex: "0 1 auto",
               minHeight: 0,
               maxHeight: "100%",
               // Focus changes hierarchy inside the same card. Keep the outer
@@ -1964,44 +1967,50 @@ export function ComposerWorkspace({
               ...mobileFocusedComposerSurfaceSx,
             },
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area]": {
-              flex: "1 1 auto",
+              flex: "0 1 auto",
               minHeight: MOBILE_COMPOSER_INPUT_EDITOR_MIN_H,
               maxHeight: "100%",
               overflow: "hidden",
+              bgcolor: mobileFocusedComposerFill,
+              backgroundImage: "none",
             },
-            // The focused touch composer already owns a writing canvas. Make
-            // the REAL textarea fill that canvas instead of leaving a short
-            // native textarea above inert flex space. Besides keeping
-            // every visible writing pixel selectable, this removes the tiny
-            // internal WKChildScrollView range that makes UIKit retain a stale
-            // caret overlay after a trailing Return. Closed-keyboard composers
-            // remain content-sized because this rule is focus-gated.
+            // Keep the compact native field content-tight. Filling leftover
+            // viewport with height 100% left a blank band under short text
+            // (and the Force-push row) whenever the transcript did not occupy
+            // the rest of the screen.
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor]": {
-              flex: "1 1 auto",
+              flex: "0 1 auto",
               minHeight: 0,
-              height: "100%",
+              height: "auto",
               maxHeight: "100%",
               overflow: "hidden",
               display: "flex",
               flexDirection: "column",
             },
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor] [data-mobile-native-textarea='true']": {
-              height: "100% !important",
-              minHeight: "100% !important",
+              height: "auto",
+              minHeight: 48,
               maxHeight: "100%",
             },
-            // An inline image promotes the compact native textarea to CM6. Keep
-            // the complete focused canvas inside the same contenteditable height
-            // chain; otherwise CM6 collapses to its 14px text line while the
-            // surrounding card remains tall, so an iOS long-press in the visible
-            // blank area lands on an inert wrapper and cannot open Paste/AutoFill.
+            // An inline image promotes the compact native textarea to CM6.
+            // Size that editor to its thumbnail + text, the same way the
+            // native field hugs its lines. Stretching CM6 to the leftover
+            // viewport left a tall empty canvas around an 80px image.
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-theme-none, &[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-editor, &[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-scroller": {
-              flex: 1,
+              flex: "0 1 auto",
               minHeight: 0,
-              height: "100%",
+              height: "auto",
+              // iOS promotes `.cm-scroller` to its own layer. A transparent
+              // layer composites against the transcript, so the image field
+              // looked like a darker hole while the action row kept the
+              // frosted card. Paint the same fill on that layer.
+              bgcolor: mobileFocusedComposerFill,
+              backgroundImage: "none",
+              overflow: "hidden",
             },
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-content": {
-              minHeight: "100%",
+              minHeight: 0,
+              bgcolor: "transparent",
             },
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-focus-format-row]": {
               maxHeight: 48,

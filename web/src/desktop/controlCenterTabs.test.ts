@@ -58,3 +58,9 @@ Deno.test("desktop control center keeps one stable semantic tab panel", () => {
   assertEquals(appSource.includes("flushSync(() =>"), true);
   assertEquals(appSource.includes("{tabContentReady && ("), false);
 });
+
+Deno.test("control center tab bar stays sticky on desktop and mobile scroll", () => {
+  assertEquals(appSource.includes('position: desktop ? "sticky" : "static"'), false);
+  assertEquals(appSource.includes('position: "sticky"'), true);
+  assertEquals(appSource.includes("top: desktop ? -1 : 0"), true);
+});

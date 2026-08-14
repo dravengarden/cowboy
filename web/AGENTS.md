@@ -29,6 +29,10 @@ routinely breaks another.
    the Chrome bridge cannot reproduce iOS IME / caret / paste-menu.
 4. **Record every decision in PITFALLS.md** so the next agent doesn't re-discover
    it.
+5. **OPEN TODO:** physical iPhone Return after a pasted image still fails
+   (painted UIKit caret vs CM6). Full ledger, failed attempts, and what
+   not to retry: [`src/mdlive/PITFALLS.md`](src/mdlive/PITFALLS.md) pitfall
+   **#69**. Do not claim this fixed. Do not re-ship Obsidian token reveal.
 
 ## Editing discipline (project-specific)
 

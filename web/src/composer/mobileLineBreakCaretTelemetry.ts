@@ -1,10 +1,19 @@
 import { type EditorView, ViewPlugin } from "@codemirror/view";
+import { isLoneImageTokenLine } from "./inlineImageCaretPolicy";
 import { flushObservability, reportClientLog } from "../observability";
 
 export function isMobileLineBreakInput(
   inputType: string | undefined,
 ): boolean {
   return inputType === "insertLineBreak" || inputType === "insertParagraph";
+}
+
+export function isMobileCaretGeometryInput(
+  inputType: string | undefined,
+): boolean {
+  return isMobileLineBreakInput(inputType) ||
+    inputType === "deleteContentBackward" ||
+    inputType === "deleteContentForward";
 }
 
 export type MobileCaretNodeRelation =
@@ -64,6 +73,8 @@ function reportMobileCaretState(
     : undefined;
   const stateSelection = view.state.selection.main;
   const stateLine = view.state.doc.lineAt(stateSelection.head);
+  const previousLineIsImage = stateLine.number > 1 &&
+    isLoneImageTokenLine(view.state.doc.line(stateLine.number - 1).text);
   const lineElements = Array.from(
     content.querySelectorAll<HTMLElement>(".cm-line"),
   );
@@ -85,6 +96,7 @@ function reportMobileCaretState(
       state_head: stateSelection.head,
       state_line: stateLine.number,
       document_lines: view.state.doc.lines,
+      previous_line_is_image: previousLineIsImage,
       active_line_empty: activeLine?.textContent === "",
       active_line_index: activeLine === null
         ? -1
@@ -159,11 +171,11 @@ export const mobileLineBreakCaretTelemetry = ViewPlugin.fromClass(
   {
     eventHandlers: {
       beforeinput(event: InputEvent): void {
-        if (isMobileLineBreakInput(event.inputType)) this.schedule();
+        if (isMobileCaretGeometryInput(event.inputType)) this.schedule();
       },
       input(event: Event): void {
         const inputEvent = event as InputEvent;
-        if (isMobileLineBreakInput(inputEvent.inputType)) this.schedule();
+        if (isMobileCaretGeometryInput(inputEvent.inputType)) this.schedule();
       },
     },
   },

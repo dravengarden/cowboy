@@ -16,6 +16,16 @@ export function nativeTextareaNeedsScroll(
   return scrollHeight - clientHeight > 2;
 }
 
+/** Compact native field height. Grow with text; never call setSelectionRange. */
+export const NATIVE_TEXTAREA_MIN_HEIGHT_PX = 48;
+
+export function nativeTextareaFittedHeight(
+  scrollHeight: number,
+  minHeight = NATIVE_TEXTAREA_MIN_HEIGHT_PX,
+): number {
+  return Math.max(minHeight, scrollHeight);
+}
+
 function orderedSelection(
   value: string,
   from: number,

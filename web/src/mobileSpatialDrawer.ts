@@ -1,5 +1,8 @@
 import { navigationHaptic, prepareNavigationHaptic } from "./haptic";
-import { mobileSpatialDrawerShadow } from "./mobileDrawerDepth";
+import {
+  mobileSpatialDrawerShadow,
+  shouldKeepDrawerDepth,
+} from "./mobileDrawerDepth";
 import { mobileDrawerProgress, predictDrawerOffset } from "./mobileDrawerMotion";
 import {
   expandedSelection,
@@ -76,6 +79,15 @@ export function bindMobileSpatialDrawer({
     const width = surface.clientWidth;
     return phone ? Math.min(360, width * 0.84) : Math.min(440, width * 0.52);
   };
+  const publishProgress = (offset: number): void => {
+    const width = Math.max(1, presentationWidth);
+    const progress = Math.max(0, Math.min(1, Math.abs(offset) / width));
+    if (progress > 0.02) {
+      gestureTarget.setAttribute("data-mobile-drawer-progress", progress.toFixed(3));
+    } else {
+      gestureTarget.removeAttribute("data-mobile-drawer-progress");
+    }
+  };
   const applyOpenDepth = (): void => {
     // Never clip or shadow the full session surface. On iPhone, WebKit then
     // re-composites the Transcript/CodeMirror viewport while its transform is
@@ -87,10 +99,15 @@ export function bindMobileSpatialDrawer({
     drawerMask.style.boxShadow = mobileSpatialDrawerShadow(side);
   };
   const clearOpenDepth = (): void => {
+    if (shouldKeepDrawerDepth(getOpen(), currentOffset)) {
+      applyOpenDepth();
+      return;
+    }
     drawerMask.style.removeProperty("box-shadow");
   };
   const render = (offset: number): void => {
     currentOffset = offset;
+    publishProgress(offset);
     const progress = mobileDrawerProgress(offset, presentationWidth);
     const drawerParallax = presentationWidth * (phone ? 0.28 : 0.22) *
       (1 - progress);
@@ -408,7 +425,6 @@ export function bindMobileSpatialDrawer({
       globalThis.clearTimeout(settleTimer);
       if (renderFrame !== 0) cancelAnimationFrame(renderFrame);
       gestureTarget.removeAttribute("data-mobile-drawer-moving");
-      gestureTarget.removeAttribute("data-mobile-drawer-open");
       if (releaseFrame !== 0) cancelAnimationFrame(releaseFrame);
       if (releaseIdle !== undefined) {
         if (typeof globalThis.cancelIdleCallback === "function") {
@@ -417,7 +433,11 @@ export function bindMobileSpatialDrawer({
           globalThis.clearTimeout(releaseIdle);
         }
       }
-      clearOpenDepth();
+      if (!shouldKeepDrawerDepth(getOpen(), currentOffset)) {
+        gestureTarget.removeAttribute("data-mobile-drawer-open");
+        gestureTarget.removeAttribute("data-mobile-drawer-progress");
+        drawerMask.style.removeProperty("box-shadow");
+      }
     },
   };
 }

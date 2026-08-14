@@ -102,16 +102,21 @@ export function ReviewDrawerShell({
         sx={{
           position: "absolute",
           zIndex: 0,
-          inset: 0,
+          top: 0,
+          bottom: 0,
+          right: 0,
+          width: 28,
           bgcolor: "background.default",
           boxShadow: open ? mobileSpatialDrawerShadow("right") : "none",
           pointerEvents: "none",
           backfaceVisibility: "hidden",
+          overflow: "visible",
           willChange: "transform",
         }}
       />
       <Box
         ref={surfaceRef}
+        data-mobile-drawer-surface="true"
         sx={{
           position: "absolute",
           zIndex: 1,

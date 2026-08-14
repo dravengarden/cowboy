@@ -14,6 +14,11 @@ const reviewDrawerSource = await Deno.readTextFile(
   new URL("./mobile/review/ReviewDrawerShell.tsx", import.meta.url),
 );
 
+Deno.test("dispose keeps seam shadow while a drawer is still translated", () => {
+  assert(drawerSource.includes("shouldKeepDrawerDepth(getOpen(), currentOffset)"));
+  assert(drawerSource.includes("data-mobile-drawer-progress"));
+});
+
 Deno.test("mobile drawer keeps clipping and shadows off the heavy surface", () => {
   assertEquals(drawerSource.includes("surface.style.borderRadius"), false);
   assertEquals(drawerSource.includes("surface.style.boxShadow"), false);
@@ -65,4 +70,10 @@ Deno.test("settled drawers retain declarative depth and pager ownership", () => 
   assert(productShellSource.includes(
     '"[data-mobile-drawer-presented=\'true\']',
   ));
+  assert(productShellSource.includes("translatedSurfaceOwnsPagerGesture"));
+  assert(productShellSource.includes("drawerProgressOwnsPagerGesture"));
+  assert(appSource.includes("data-mobile-drawer-surface={mobile ? \"true\" : undefined}"));
+  assert(reviewDrawerSource.includes('data-mobile-drawer-surface="true"'));
+  assert(appSource.includes("width: 28"));
+  assert(reviewDrawerSource.includes("width: 28"));
 });

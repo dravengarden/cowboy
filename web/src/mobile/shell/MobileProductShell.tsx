@@ -19,6 +19,10 @@ import type { Mode as ThemeMode } from "../../theme";
 import { holdStorePresentation } from "../../store";
 import { AgentApp } from "../agent/AgentApp";
 import {
+  drawerProgressOwnsPagerGesture,
+  translatedSurfaceOwnsPagerGesture,
+} from "../../mobileDrawerDepth";
+import {
   nextMobileProduct,
   pagerDirectionAllowed,
   type PagerGesture,
@@ -79,10 +83,31 @@ function modalOwnsGesture(): boolean {
 }
 
 function spatialDrawerOwnsGesture(shell: HTMLElement): boolean {
-  return shell.querySelector(
-    "[data-mobile-drawer-presented='true'], " +
-      "[data-mobile-drawer-open='true'], [data-mobile-drawer-moving='true']",
-  ) != null;
+  if (
+    shell.querySelector(
+      "[data-mobile-drawer-presented='true'], " +
+        "[data-mobile-drawer-open='true'], [data-mobile-drawer-moving='true']",
+    ) != null
+  ) {
+    return true;
+  }
+  const progressed = shell.querySelector("[data-mobile-drawer-progress]");
+  if (
+    progressed instanceof HTMLElement &&
+    drawerProgressOwnsPagerGesture(progressed.getAttribute("data-mobile-drawer-progress"))
+  ) {
+    return true;
+  }
+  const surfaces = shell.querySelectorAll("[data-mobile-drawer-surface='true']");
+  for (const surface of surfaces) {
+    if (
+      surface instanceof HTMLElement &&
+      translatedSurfaceOwnsPagerGesture(surface.style.transform)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function MobileProductShell({

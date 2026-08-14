@@ -130,6 +130,10 @@ echoes so older clients keep the muted-note path.
 Inbound ACP `user_message_chunk` events from the agent are classified the same
 way. A Grok background-task reminder is stamped `actor: agent`,
 `source: runtime`, `provider: grok` and never counts as a human question.
+Grok also re-emits the accepted prompt as `user_message_chunk`. Cowboy already
+echoed that prompt (with `promptOrigin`), so the inbound copy is dropped.
+`derive` hides the same replay in already-persisted logs: a `lifecycle: busy`
+between the two copies would otherwise become a second user bubble.
 
 **Auto-resume tagging:** a `cmid` starting with the `__cont__` prefix is
 `cowboy` / `auto-resume`. The UI renders it as a resumed-turn note rather than a

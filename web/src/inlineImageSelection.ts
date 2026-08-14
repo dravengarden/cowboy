@@ -22,12 +22,19 @@ export function inlineImageInsertion(
   const from = Math.min(clampedAnchor, clampedHead);
   const to = Math.max(clampedAnchor, clampedHead);
   const lineStart = value.lastIndexOf("\n", from - 1) + 1;
-  const insert = attachments.map((attachment, index) => {
-    const lead = index === 0 && from !== lineStart ? "\n" : "";
+  const restOnSameLine = to < value.length && value[to] !== "\n";
+  const lead = from !== lineStart ? "\n" : "";
+  const body = attachments.map((attachment) => {
     const label = attachment.name.replaceAll("]", "");
-    return `${lead}![${label}](cowboy-att:${attachment.id})\n`;
-  }).join("");
-  return { from, to, insert, caret: from + insert.length };
+    return `![${label}](cowboy-att:${attachment.id})`;
+  }).join("\n");
+  // Physical v1265: a space on the image line made the caret as tall as
+  // the thumbnail and Return still wrote <br> into that 88px line.
+  // Keep the thumbnail on its own line; put a real space on the next
+  // line so the caret is a normal 12px bar in a text node.
+  const trail = restOnSameLine ? "\n" : "";
+  const insert = `${lead}${body}\n ${trail}`;
+  return { from, to, insert, caret: from + lead.length + body.length + 2 };
 }
 
 /** Map a CodeMirror position through removal of one image block. */

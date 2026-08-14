@@ -1,3 +1,6 @@
+// TODO(pitfall #69): physical iPhone caret after paste+Return is OPEN.
+// Do not claim it fixed. Ledger: mdlive/PITFALLS.md #69.
+//
 // Obsidian/Zed-style INLINE images for the composer. A pasted/attached image is
 // written into the literal doc as a token `![name](cowboy-att:<id>)` at the caret
 // (see attachments.ts `IMG_TOKEN_RE`); this module renders that token as an
@@ -87,14 +90,20 @@ class InlineImageWidget extends WidgetType {
     if (att?.previewUrl !== undefined && att.isImage) {
       const widget = document.createElement("span");
       widget.className = "cm-inline-image-widget";
+      widget.contentEditable = "false";
       // @replit/codemirror-vim walks into the DOM immediately after an EOL
       // cursor to borrow its font style. A block widget whose first descendant
       // is an empty <img> makes that walk end at `undefined`, so its cursor
       // measurement aborts and the Normal-mode block disappears on the text
       // line above the image. Keep a zero-size text node first: it is inert for
       // layout and accessibility, but gives the upstream measurement a safe
-      // terminal node. The document selection itself never enters this widget.
-      widget.appendChild(document.createTextNode("\u200b"));
+      // terminal node. Mark it non-selectable so physical iOS cannot park the
+      // caret on this probe instead of the image source line.
+      const probe = document.createElement("span");
+      probe.setAttribute("aria-hidden", "true");
+      probe.style.userSelect = "none";
+      probe.textContent = "\u200b";
+      widget.appendChild(probe);
       const img = document.createElement("img");
       img.className = this.selected
         ? "cm-inline-image cm-inline-image-selected"
@@ -138,21 +147,21 @@ class InlineImageWidget extends WidgetType {
     chip.textContent = `🖼 ${this.name || "image"}`;
     return chip;
   }
-  // Self-contained widget: the editor ignores pointer events on it (so a tap
-  // opens the lightbox instead of placing the caret); arrow-key motion is handled
-  // by the atomicRanges provider below.
-  override ignoreEvent(): boolean {
-    return true;
+  // Ignore only pointer activation so a tap opens the popover. Keyboard,
+  // IME, and line-break events stay on the source `.cm-line`.
+  override ignoreEvent(event: Event): boolean {
+    return event.type === "mousedown" || event.type === "click";
   }
 }
 
-// One image == one BLOCK line (Obsidian-style): the token is inserted alone on
-// its own line, and the whole line is replaced by a block widget. Block (not
-// inline) so a tall image never grows the surrounding line box — the caret on the
-// text lines above/below stays a normal text-height bar (an inline image made the
-// caret as tall as the picture: "光标好丑"). Lines that AREN'T a lone token are
-// left untouched (a token accidentally mid-line just stays literal — rare).
+// Physical v1263: hanging a block widget at line.to still put the caret on a
+// visual break that was not a document newline. iOS insertLineBreak then
+// wrote <br> into the source line (height 14→28→42) and the native caret
+// died. Keep the token on a real `.cm-line` and replace only the token with
+// an inline widget, the same class as `@` chips. Never show cowboy-att
+// markdown in the chat composer.
 const LONE_TOKEN_RE = /^\s*!\[([^\]]*)\]\(cowboy-att:([^)]+)\)\s*$/;
+const IMG_TOKEN_RE = /!\[([^\]]*)\]\(cowboy-att:([^)]+)\)/g;
 
 function buildImageDecorations(state: EditorState): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
@@ -160,22 +169,23 @@ function buildImageDecorations(state: EditorState): DecorationSet {
   const sel = state.selection.main;
   for (let i = 1; i <= doc.lines; i++) {
     const line = doc.line(i);
-    const m = LONE_TOKEN_RE.exec(line.text);
-    if (m?.[2] !== undefined) {
-      // Selected when a non-empty selection fully contains this image's block line
-      // (set by the two-stage Backspace below, or a manual range select).
-      const selected = !sel.empty && sel.from <= line.from && sel.to >= line.to;
+    IMG_TOKEN_RE.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = IMG_TOKEN_RE.exec(line.text)) !== null) {
+      if (match[2] === undefined) continue;
+      const from = line.from + match.index;
+      const to = from + match[0].length;
+      const selected = !sel.empty && sel.from <= from && sel.to >= to;
       builder.add(
-        line.from,
-        line.to,
+        from,
+        to,
         Decoration.replace({
           widget: new InlineImageWidget(
-            m[2],
-            m[1] ?? "",
+            match[2],
+            match[1] ?? "",
             selected,
-            registry.get(m[2])?.previewUrl,
+            registry.get(match[2])?.previewUrl,
           ),
-          block: true,
         }),
       );
     }
@@ -183,16 +193,8 @@ function buildImageDecorations(state: EditorState): DecorationSet {
   return builder.finish();
 }
 
-/// The inline-image decoration — render `cowboy-att:` tokens as atomic, BLOCK
-/// thumbnails (one image per line). MUST be a StateField, not a ViewPlugin: CM6
-/// throws "Block decorations may not be specified via plugins" for `block: true`
-/// decorations from a plugin (that regressed image paste in v171). Rebuilds on any
-/// docChange (the composer is small, so a full-doc scan is cheap); provides both
-/// the decorations and the atomic ranges (arrow keys skip an image as one unit).
 export const inlineImageField = StateField.define<DecorationSet>({
   create: (state) => buildImageDecorations(state),
-  // Rebuild on doc OR selection change — the selection drives the "armed for
-  // delete" ring (the two-stage Backspace below selects before it deletes).
   update: (value, tr) =>
     tr.docChanged || tr.selection || tr.effects.some((effect) => effect.is(refreshInlineImages))
       ? buildImageDecorations(tr.state)
@@ -205,47 +207,39 @@ export const inlineImageField = StateField.define<DecorationSet>({
   ],
 });
 
-/// True when `text`'s LAST line is a lone block-image token (with no empty line
-/// after it). A block-image decoration replaces its whole line and is atomic, so
-/// as the doc's final line it traps the caret — you can't get below it to add a
-/// line or keep typing. The two guards below keep a trailing newline so there's
-/// always a landing line under a trailing image.
-function lastLineIsBlockImage(text: string): boolean {
+function lastLineIsImageToken(text: string): boolean {
   const nl = text.lastIndexOf("\n");
   const last = nl === -1 ? text : text.slice(nl + 1);
   return last.length > 0 && LONE_TOKEN_RE.test(last);
 }
 
-/// Normalise a SEED value: append a newline when it ends with a block-image
-/// token, so a restored draft / handed-off text never opens with the image
-/// trapped as the last line. Idempotent; the extra line is whitespace, trimmed
-/// back off on send (saveDraft/submit use trimEnd).
+/// Seed-only: land on a normal-height line after the thumbnail, with a
+/// real space so iOS has a text node. Do not leave the caret on the
+/// image line — that paints an 88px bar and Return inserts <br> there.
 export function ensureTrailingImageLine(text: string): string {
-  return lastLineIsBlockImage(text) ? `${text}\n` : text;
+  if (text.endsWith("\n ")) return text;
+  const trimmed = text.replace(/ +$/, "");
+  if (!lastLineIsImageToken(trimmed)) return text;
+  return `${trimmed}\n `;
 }
 
-/// Keep a block image from ever being the doc's LAST line during editing. After
-/// any change that leaves a trailing image token (e.g. the user backspaced the
-/// empty line under it), append a newline so the caret can still land below it
-/// ("图片在最后一行,无法开启新的一行"). Runs in the same transaction — no loop (the
-/// appended newline makes the last line empty, so it won't re-match).
-export const inlineImageTrailingLine = EditorState.transactionFilter.of((tr) => {
-  if (!tr.docChanged) return tr;
-  const last = tr.newDoc.line(tr.newDoc.lines);
-  return last.length > 0 && LONE_TOKEN_RE.test(last.text)
-    ? [tr, { changes: { from: tr.newDoc.length, insert: "\n" }, sequential: true }]
-    : tr;
-});
+/// No-op filter kept so ComposerEditor imports stay stable.
+export const inlineImageTrailingLine = EditorState.transactionFilter.of(
+  (tr) => tr,
+);
 
 /// Thumbnail sizing/look. Kept here so any host of `inlineImagePlugin` gets it.
 export const inlineImageTheme = EditorView.theme({
   ".cm-inline-image-widget": {
-    display: "block",
+    display: "inline-block",
+    verticalAlign: "bottom",
     fontSize: "0",
     lineHeight: "0",
+    userSelect: "none",
   },
   ".cm-inline-image": {
-    display: "block",
+    display: "inline-block",
+    verticalAlign: "bottom",
     // A SMALL tap-to-open thumbnail, not a full inline preview: the token is a
     // placeholder you tap to open the lightbox (full image), so it only needs to
     // be big enough to recognize + tap — a large inline image otherwise ate most
@@ -308,16 +302,19 @@ export function removeImageTokenById(view: EditorView, id: string): void {
   const { doc } = view.state;
   for (let i = 1; i <= doc.lines; i++) {
     const line = doc.line(i);
-    const m = LONE_TOKEN_RE.exec(line.text);
-    if (m?.[2] === id) {
+    IMG_TOKEN_RE.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = IMG_TOKEN_RE.exec(line.text)) !== null) {
+      if (match[2] !== id) continue;
       forgetInlineAttachment(id);
-      const { from, to } = imageDeletionRange(line.from, line.to, doc.length);
+      const tokenFrom = line.from + match.index;
+      const tokenTo = tokenFrom + match[0].length;
+      const { from, to } = LONE_TOKEN_RE.test(line.text)
+        ? imageDeletionRange(line.from, line.to, doc.length)
+        : { from: tokenFrom, to: tokenTo };
       const current = view.state.selection.main;
       view.dispatch({
         changes: { from, to },
-        // Preserve the active logical caret through the removed block. The old
-        // code always forced the image line's start and left the leading layout
-        // newline behind, turning deletion into a jump across a stale line.
         selection: {
           anchor: mapImageDeletionPosition(current.anchor, from, to),
           head: mapImageDeletionPosition(current.head, from, to),
