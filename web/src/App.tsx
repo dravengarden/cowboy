@@ -2499,8 +2499,15 @@ export function App({
                     sx={{
                         position: "absolute",
                         zIndex: 0,
-                        inset: 0,
+                        top: 0,
+                        bottom: 0,
+                        left: 0,
+                        width: 28,
                         bgcolor: "background.default",
+                        // A full-viewport mask's box-shadow is ink overflow of a
+                        // composited layer; iOS WebKit sometimes drops it. A
+                        // thin seam at the sliding card's inner edge keeps the
+                        // same depth cue without that clip.
                         // React owns the settled depth cue. The gesture binding
                         // may add the same inline shadow while opening, but its
                         // cleanup must never make an already-open drawer look
@@ -2510,6 +2517,7 @@ export function App({
                             : "none",
                         pointerEvents: "none",
                         backfaceVisibility: "hidden",
+                        overflow: "visible",
                         willChange: "transform",
                     }}
                 />
@@ -2631,6 +2639,7 @@ export function App({
             <Stack
                 ref={columnRef}
                 data-mobile-session-surface={mobile ? "true" : undefined}
+                data-mobile-drawer-surface={mobile ? "true" : undefined}
                 sx={{
                     flex: 1,
                     height: mobile ? "100%" : undefined,
