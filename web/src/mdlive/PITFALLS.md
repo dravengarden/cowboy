@@ -1379,32 +1379,24 @@ Desktop Vim + IME checks:
     is already mounted, permission-alert return, and trailing Return before any
     typing.
 
-    The v1240 transient editable widget is withdrawn. Physical v1243 telemetry
-    showed the one-paint hypothesis is false on real WKWebView: while the
-    widget owned Selection, `caret_height` was 12 and `caret_top` matched the
-    new line; after the widget was removed, settled `caret_height` returned to
-    0 and `caret_top` went negative again. Writing native Selection into an
-    editable widget, then tearing it down, also leaves the long-press Paste
-    menu without a durable caret anchor. Do not restore that three-frame
-    lifecycle, its `touchstart`/`pointerdown`/`blur` cleanup, or any other
-    ordinary-input Selection write.
+    The v1240 transient editable widget is withdrawn. Physical v1243/v1246
+    telemetry showed the one-paint hypothesis is false: after Return, CM6
+    `state_line` and `.cm-activeLine` advance, but the native Range stays
+    `caret_height=0` with a negative `caret_top`. Physical v1246 also showed
+    the inverse: Backspace on those empty lines does not move the painted
+    caret up. Do not restore the three-frame Selection widget.
 
-    A follow-up attempt to keep the thumbnail inside an ordinary `.cm-line`
-    (`block: false`, no presentation facet) failed on Simulator before any
-    physical claim: HID Return while the atomic image line owned selection
-    inserted empty lines *before* the image and left `.cm-activeLine` on the
-    88px thumbnail line. Keep the proven root-level
-    `Decoration.replace({ block: true })` on touch and Desktop. Do not revive
-    a presentation facet, a reconfigure-driven rebuild, or another Selection
-    widget.
-
-    `mobileLineBreakCaretTelemetry` stays read-only. Native long-press paste
-    now also emits `mobile_native_paste_event` (file/item counts and focus
-    owner only) so physical WKWebView can be distinguished from the accessory
-    Paste bridge. Token-free touch documents remain on the literal textarea
-    path from pitfall #63. The empty-line native caret after a block image
-    remains an open physical-iPhone defect; Simulator evidence cannot close
-    it.
+    Touch now mounts a **static** `createInlineImageField(false)` so the
+    thumbnail stays inside a real `.cm-line`. Desktop keeps
+    `createInlineImageField(true)` for Vim. There is no presentation facet and
+    no reconfigure-driven rebuild. If Return starts on the atomic image line,
+    `moveCaretOffImageLine` relocates onto the existing trailing empty line
+    instead of inserting a newline before the thumbnail (that is what made
+    the earlier non-block Simulator trial look like a Return trap). Touch
+    omits the Vim measurement node. `mobileLineBreakCaretTelemetry` also
+    samples `deleteContentBackward` so physical Backspace geometry can be
+    compared with Return. This image-structure change is not accepted until
+    the physical iPhone sequence passes, including delete-up.
 
 65. **A reliable touch action must pair `pointerup` with its actual synthetic
     `click`, never a timeout guess.** Mobile Safari can omit a click after

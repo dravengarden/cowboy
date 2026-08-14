@@ -47,6 +47,7 @@ import {
   registerInlineAttachment,
   refreshInlineImages,
   removeImageTokenById,
+  touchInlineImageField,
 } from "./inlineImages";
 import { clipboardFiles, type Attachment } from "./attachments";
 import {
@@ -60,6 +61,7 @@ import {
   vimEscapeBelongsToApp,
 } from "./desktop/vim/vimEscapeOwnership";
 import { inlineImageInsertion } from "./inlineImageSelection";
+import { moveCaretOffImageLine } from "./composer/inlineImageCaretPolicy";
 import { mobileLineBreakCaretTelemetry } from "./composer/mobileLineBreakCaretTelemetry";
 import { reportMobileNativePasteEvent } from "./composer/mobileNativePasteTelemetry";
 
@@ -778,7 +780,7 @@ export const ComposerEditor = forwardRef<
       // Obsidian-style inline images: render `![](cowboy-att:id)` tokens as atomic
       // thumbnails in the text flow (click → lightbox). Atomic + read-only, so
       // IME-safe like the @-chip. See inlineImages.ts.
-      inlineImageField,
+      touchInput ? touchInlineImageField : inlineImageField,
       inlineImageTheme,
       // Keep a trailing image from being the doc's last line (the atomic image
       // line otherwise traps the caret — "图片在最后一行,无法开启新的一行").
@@ -858,6 +860,9 @@ export const ComposerEditor = forwardRef<
       // Physical-keyboard path: a real `keydown` drives the chain via the keymap.
       Prec.high(keymap.of([
         { key: "Backspace", run: backspaceChain },
+        ...(touchInput
+          ? [{ key: "Enter", run: moveCaretOffImageLine }]
+          : []),
       ])),
       // SOFT-KEYBOARD path (iOS/Android): a phone's Backspace emits NO `keydown`
       // — it fires `beforeinput` with inputType "deleteContentBackward", which the
@@ -871,6 +876,15 @@ export const ComposerEditor = forwardRef<
       Prec.high(
         EditorView.domEventHandlers({
           beforeinput: (e, view): boolean => {
+            if (
+              touchInput &&
+              (e.inputType === "insertLineBreak" ||
+                e.inputType === "insertParagraph") &&
+              moveCaretOffImageLine(view)
+            ) {
+              e.preventDefault();
+              return true;
+            }
             if (e.inputType !== "deleteContentBackward") return false;
             if (!backspaceChain(view)) return false;
             e.preventDefault();
