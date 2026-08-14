@@ -79,18 +79,19 @@ Deno.test("two images do not expose landing widgets under thumbnails", () => {
   );
 });
 
-Deno.test("image-adjacent Return is not intercepted", () => {
+Deno.test("image-adjacent Return only blocks the native break", () => {
   const landing = EditorState.create({
-    doc: "![shot](cowboy-att:image-1)\n",
-    selection: { anchor: 28 },
+    doc: "![shot](cowboy-att:image-1)\n ",
+    selection: { anchor: 29 },
   });
   const onImage = EditorState.create({
-    doc: "![shot](cowboy-att:image-1)\n",
+    doc: "![shot](cowboy-att:image-1)\n ",
     selection: { anchor: 0 },
   });
+  const laterDoc = "![shot](cowboy-att:image-1)\n \n";
   const laterEmpty = EditorState.create({
-    doc: "![shot](cowboy-att:image-1)\n\n",
-    selection: { anchor: 29 },
+    doc: laterDoc,
+    selection: { anchor: laterDoc.length },
   });
   const typed = EditorState.create({
     doc: "hello\n\n",
@@ -98,11 +99,11 @@ Deno.test("image-adjacent Return is not intercepted", () => {
   });
   assertEquals(
     shouldPreventNativeMobileLineBreak("insertLineBreak", landing),
-    false,
+    true,
   );
   assertEquals(
     shouldPreventNativeMobileLineBreak("insertParagraph", onImage),
-    false,
+    true,
   );
   assertEquals(
     shouldPreventNativeMobileLineBreak("insertLineBreak", laterEmpty),

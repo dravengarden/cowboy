@@ -1477,14 +1477,13 @@ Desktop Vim + IME checks:
     Physical v1265 put that space on the image line. The caret became
     an 88px bar beside the thumbnail, and first Return still wrote
     `<br>` into that tall line (`88→102`) before the native caret
-    died. Public write-ups do not show a working CM6 + iOS native
-    caret next to an in-flow `<img>`. Obsidian (same stack) keeps the
-    token on a real `.cm-line`, hangs the thumbnail below
-    (`widget`, `block: true`, `side: 1` at `line.to`), reveals the
-    raw `![]()` when that line is active, lands clicks on the source
-    line, and always keeps a following newline. Return is then a
-    normal break in real text. Follow that model. Do not intercept
-    Return and do not mark the image field atomic.
+    died. Keep the thumbnail on its own line; put the space on the
+    next line so the caret is a 12px bar. PreventDefault native
+    insertLineBreak on the image line or the line after it, and let
+    the single later Enter insert the CM6 newline. Do not show
+    cowboy-att markdown. v1268 followed Obsidian's source-line
+    reveal; that flashes `![](cowboy-att:…)` in a chat composer and
+    was withdrawn.
 
 
 65. **A reliable touch action must pair `pointerup` with its actual synthetic
