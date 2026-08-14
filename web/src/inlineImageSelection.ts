@@ -28,12 +28,13 @@ export function inlineImageInsertion(
     const label = attachment.name.replaceAll("]", "");
     return `![${label}](cowboy-att:${attachment.id})`;
   }).join("\n");
-  // Trailing space is a real text node after the atomic thumbnail — the
-  // same completed-@-chip rule. A following empty line leaves iOS with
-  // caret_height=0; Return then writes a native <br> into that empty row.
+  // Physical v1265: a space on the image line made the caret as tall as
+  // the thumbnail and Return still wrote <br> into that 88px line.
+  // Keep the thumbnail on its own line; put a real space on the next
+  // line so the caret is a normal 12px bar in a text node.
   const trail = restOnSameLine ? "\n" : "";
-  const insert = `${lead}${body} ${trail}`;
-  return { from, to, insert, caret: from + lead.length + body.length + 1 };
+  const insert = `${lead}${body}\n ${trail}`;
+  return { from, to, insert, caret: from + lead.length + body.length + 2 };
 }
 
 /** Map a CodeMirror position through removal of one image block. */

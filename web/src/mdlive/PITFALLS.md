@@ -1474,10 +1474,13 @@ Desktop Vim + IME checks:
     (same class as `@` chips). Physical v1264 still died: paste forced a
     following empty line (`document_lines=2`, `caret_height=0` before
     Return), then insertLineBreak wrote a native `<br>` (`14→28`).
-    Completed `@` chips keep a trailing space so the caret sits in a
-    real text node, not on the empty line or `cm-widgetBuffer`. Paste
-    now inserts that same trailing space and does not open a landing
-    line. Do not hang a block widget at `line.to`, and do not show
+    Physical v1265 put that space on the image line. The caret became
+    an 88px bar beside the thumbnail, and first Return still wrote
+    `<br>` into that tall line (`88→102`) before the native caret
+    died. Keep the thumbnail on its own line; put the space on the
+    next line so the caret is a 12px bar. PreventDefault native
+    insertLineBreak on the image line or the line after it, and let
+    the single later Enter insert the CM6 newline. Do not show
     cowboy-att markdown.
 
 

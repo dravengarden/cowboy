@@ -210,11 +210,14 @@ function lastLineIsImageToken(text: string): boolean {
   return last.length > 0 && LONE_TOKEN_RE.test(last);
 }
 
-/// Seed-only: a lone image token needs the same trailing space as a
-/// completed @ chip so the caret sits in a real text node.
+/// Seed-only: land on a normal-height line after the thumbnail, with a
+/// real space so iOS has a text node. Do not leave the caret on the
+/// image line — that paints an 88px bar and Return inserts <br> there.
 export function ensureTrailingImageLine(text: string): string {
-  if (!lastLineIsImageToken(text)) return text;
-  return text.endsWith(" ") ? text : `${text} `;
+  if (text.endsWith("\n ")) return text;
+  const trimmed = text.replace(/ +$/, "");
+  if (!lastLineIsImageToken(trimmed)) return text;
+  return `${trimmed}\n `;
 }
 
 /// No-op filter kept so ComposerEditor imports stay stable.

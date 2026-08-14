@@ -9,8 +9,8 @@ Deno.test("inline image paste replaces forward or backward selections and lands 
   const expected = {
     from: 6,
     to: 10,
-    insert: "\n![shot.png](cowboy-att:image-1) \n",
-    caret: 39,
+    insert: "\n![shot.png](cowboy-att:image-1)\n \n",
+    caret: 40,
   };
   assertEquals(
     inlineImageInsertion(

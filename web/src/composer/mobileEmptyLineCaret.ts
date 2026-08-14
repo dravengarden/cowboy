@@ -13,6 +13,7 @@ import {
 } from "@codemirror/view";
 import {
   emptyLinePositionsAfterImages,
+  isLoneImageTokenLine,
   selectionOnEmptyLineAfterImage,
   selectionOnEmptyLineInImageChain,
 } from "./inlineImageCaretPolicy";
@@ -102,10 +103,16 @@ export function landingAnchorsForEmptyLinesAfterImages(
 }
 
 export function shouldPreventNativeMobileLineBreak(
-  _inputType: string | undefined,
-  _state: EditorState,
+  inputType: string | undefined,
+  state: EditorState,
 ): boolean {
-  return false;
+  if (inputType !== "insertLineBreak" && inputType !== "insertParagraph") {
+    return false;
+  }
+  const line = state.doc.lineAt(state.selection.main.head);
+  if (isLoneImageTokenLine(line.text)) return true;
+  return line.number > 1 &&
+    isLoneImageTokenLine(state.doc.line(line.number - 1).text);
 }
 
 const hideMobileEmptyLineCaretForIme = StateField.define<boolean>({
