@@ -1350,17 +1350,25 @@ Desktop Vim + IME checks:
     input must never call `setSelectionRange`, resize the DOM from an input
     callback, insert a zero-width sentinel, blur/refocus, or draw a fake caret.
 
-64. **An inline image changes the touch caret problem from textarea to CM6.**
+64. **Do not change touch image decoration structure without physical paste
+    acceptance.**
     Touch documents with an image token intentionally promote to CM6 so the
-    block thumbnail can stay in the writing flow. After Return creates one or
-    more empty lines below that block decoration, CM6's document selection and
-    `.cm-activeLine` may advance while iOS WebKit leaves the native Selection on
-    `.cm-content` offset 0. UIKit then paints the caret on the first empty line
-    until ordinary text creates a new DOM text node. The touch-only
-    `mobileEmptyLineCaret` extension coalesces the line-break `beforeinput` and
-    `input` events into the next animation frame, then repairs only this exact
-    invalid state: focused editor,
-    empty logical line, both Selection ends on `contentDOM`, and no composition.
-    Collapse onto the existing `.cm-line`; never dispatch another CM6 selection,
-    refocus, insert sentinel text, or run during IME composition. Token-free
-    touch documents remain on the literal textarea path from pitfall #63.
+    thumbnail stays in the writing flow. A `Decoration.replace({ block: true })`
+    removes that document line's ordinary `.cm-line` and places the image widget
+    directly under `.cm-content`. Physical iOS WebKit may then keep its native
+    caret on an earlier empty line after Return, even though CM6's logical
+    selection and `.cm-activeLine` advanced. Simulator exposed one variant with
+    Selection on `.cm-content`; physical-device acceptance then disproved that
+    root-node-only workaround. WebKit may represent an empty-line caret on the
+    content root, the line, or its `<br>`, so that predicate was structurally
+    incomplete.
+    An attempted repair changed touch to a non-block replacement nested in an
+    ordinary `.cm-line`. Simulator paste and HID Return passed, but physical
+    iPhone acceptance immediately regressed image paste. Keep the proven true
+    block replacement on touch and Desktop until a replacement design passes the
+    complete physical sequence: first image paste, second image paste while CM6
+    is already mounted, permission-alert return, and trailing Return before any
+    typing. Do not add ordinary-input selection writes, sentinel text, refocus,
+    or a fake caret. `mobileLineBreakCaretTelemetry` remains read-only and bounded
+    so the caret failure can be measured without user content. Token-free touch
+    documents remain on the literal textarea path from pitfall #63.
