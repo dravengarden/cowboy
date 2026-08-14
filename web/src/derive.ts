@@ -6,6 +6,8 @@
 import type { AcpUpdate, Envelope, PermissionOption, PlanEntry, Status } from "./protocol";
 import {
   isHumanPrompt,
+  isInternalRuntimePrompt,
+  parsePromptOrigin,
   type PromptOrigin,
   resolvePromptOrigin,
   samePromptOrigin,
@@ -269,6 +271,33 @@ function pushChunk(item: { chunks: ContentChunk[] }, chunk: ContentChunk): void 
   }
 }
 
+function sameContentChunk(left: ContentChunk, right: ContentChunk): boolean {
+  if (left.type !== right.type) return false;
+  if (left.type === "text" && right.type === "text") return left.text === right.text;
+  if (left.type === "image" && right.type === "image") return left.src === right.src;
+  return false;
+}
+
+/** Grok ACP accepts a prompt by re-emitting the same `user_message_chunk`s.
+ *  Cowboy already echoed those blocks. A `lifecycle: busy` between the two
+ *  copies resets the coalesce cursor, so the replay must be dropped or it
+ *  becomes a second user bubble. Runtime injections keep no `promptOrigin`
+ *  until annotated and must not match this path. */
+function isUnoriginatedPromptReplay(
+  update: AcpUpdate,
+  chunk: ContentChunk,
+  lastUser: Extract<RenderItem, { kind: "message" }> | undefined,
+  replayOffset: number,
+): boolean {
+  if (parsePromptOrigin(update.promptOrigin)) return false;
+  const text = chunk.type === "text" ? chunk.text : "";
+  if (isInternalRuntimePrompt(text)) return false;
+  const expected = lastUser?.role === "user" && isHumanPrompt(lastUser.origin)
+    ? lastUser.chunks[replayOffset]
+    : undefined;
+  return expected !== undefined && sameContentChunk(expected, chunk);
+}
+
 export function derive(timeline: Envelope[]): RenderItem[] {
   const cached = DERIVE_CACHE.get(timeline);
   if (cached) return cached;
@@ -278,6 +307,8 @@ export function derive(timeline: Envelope[]): RenderItem[] {
 
   // Coalesce consecutive chunks of the same role/thought into one item.
   let cursor: { kind: "message" | "thought"; role: "assistant" | "user" } | null = null;
+  let lastHumanUser: Extract<RenderItem, { kind: "message" }> | undefined;
+  let promptReplayOffset = 0;
 
   for (const env of timeline) {
     if (env.kind !== "update") cursor = null;
@@ -291,6 +322,13 @@ export function derive(timeline: Envelope[]): RenderItem[] {
             const role = u.sessionUpdate === "user_message_chunk" ? "user" : "assistant";
             const chunk = chunkOf(u);
             if (!chunk) break;
+            if (
+              role === "user" &&
+              isUnoriginatedPromptReplay(u, chunk, lastHumanUser, promptReplayOffset)
+            ) {
+              promptReplayOffset += 1;
+              break;
+            }
             const last = items[items.length - 1];
             if (cursor?.kind === "message" && cursor.role === role && last?.kind === "message") {
               pushChunk(last, chunk);
@@ -306,6 +344,13 @@ export function derive(timeline: Envelope[]): RenderItem[] {
                 autoResumed: origin !== undefined && !isHumanPrompt(origin),
               });
               cursor = { kind: "message", role };
+            }
+            if (role === "user") {
+              const accepted = items.at(-1);
+              if (accepted?.kind === "message" && isHumanPrompt(accepted.origin)) {
+                lastHumanUser = accepted;
+                promptReplayOffset = 0;
+              }
             }
             break;
           }

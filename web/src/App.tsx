@@ -5025,10 +5025,12 @@ function SettingsShell({
                 tabs so the active section is visible, focusable, and keyable. */}
             <Box
                 sx={{
-                    position: desktop ? "sticky" : "static",
-                    top: desktop ? -1 : "auto",
-                    zIndex: desktop ? 4 : "auto",
-                    bgcolor: desktop ? "background.paper" : "transparent",
+                    position: "sticky",
+                    top: desktop ? -1 : 0,
+                    zIndex: 4,
+                    bgcolor: "background.paper",
+                    pt: desktop ? 0 : 0.25,
+                    pb: desktop ? 0 : 0.75,
                 }}
             >
             <Box

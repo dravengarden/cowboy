@@ -128,6 +128,49 @@ pub fn annotate_inbound_user_prompt(update: &mut Value, provider_id: &str) {
     }
 }
 
+/// Whether two ACP user-content blocks are the same prompt piece.
+///
+/// Grok (and any agent that "accepts" a prompt by echoing it) reserializes the
+/// same type/text/url/data. Extra keys must not keep a replay visible.
+pub fn user_content_equiv(left: &Value, right: &Value) -> bool {
+    let left_type = left.get("type").and_then(Value::as_str);
+    if left_type != right.get("type").and_then(Value::as_str) {
+        return false;
+    }
+    match left_type {
+        Some("text") => left.get("text") == right.get("text"),
+        Some("image") => {
+            left.get("url") == right.get("url")
+                && left.get("data") == right.get("data")
+                && left.get("mimeType") == right.get("mimeType")
+        }
+        _ => left == right,
+    }
+}
+
+/// Drop an inbound `user_message_chunk` that replays a prompt Cowboy already
+/// echoed. Runtime injections are stamped with `promptOrigin` first and stay.
+/// Returns true when `remaining` consumed the matching echoed block.
+pub fn take_matching_inbound_prompt_echo(update: &Value, remaining: &mut Vec<Value>) -> bool {
+    if update.get("sessionUpdate").and_then(Value::as_str) != Some("user_message_chunk") {
+        return false;
+    }
+    if update.get("promptOrigin").is_some() {
+        return false;
+    }
+    let Some(content) = update.get("content") else {
+        return false;
+    };
+    if remaining
+        .first()
+        .is_some_and(|expected| user_content_equiv(expected, content))
+    {
+        remaining.remove(0);
+        return true;
+    }
+    false
+}
+
 pub fn is_human_prompt_update(update: &Value) -> bool {
     if update.get("autoResumed").and_then(Value::as_bool) == Some(true) {
         return false;
@@ -191,5 +234,47 @@ mod tests {
         assert_eq!(update["promptOrigin"]["provider"], "grok");
         assert_eq!(update["autoResumed"], true);
         assert!(!is_human_prompt_update(&update));
+    }
+
+    #[test]
+    fn inbound_grok_prompt_echo_consumes_the_cowboy_echo() {
+        let mut remaining = vec![
+            serde_json::json!({"type": "image", "mimeType": "image/jpeg", "url": "blob:1"}),
+            serde_json::json!({"type": "text", "text": "why two messages?"}),
+        ];
+        let image = serde_json::json!({
+            "sessionUpdate": "user_message_chunk",
+            "content": {"type": "image", "mimeType": "image/jpeg", "url": "blob:1"}
+        });
+        let text = serde_json::json!({
+            "sessionUpdate": "user_message_chunk",
+            "content": {"type": "text", "text": "why two messages?"}
+        });
+        assert!(take_matching_inbound_prompt_echo(&image, &mut remaining));
+        assert!(take_matching_inbound_prompt_echo(&text, &mut remaining));
+        assert!(remaining.is_empty());
+    }
+
+    #[test]
+    fn inbound_runtime_injection_is_not_a_prompt_echo() {
+        let mut remaining = vec![serde_json::json!({"type": "text", "text": "hello"})];
+        let mut update = serde_json::json!({
+            "sessionUpdate": "user_message_chunk",
+            "content": {"type": "text", "text": "<system-reminder>done</system-reminder>"}
+        });
+        annotate_inbound_user_prompt(&mut update, "grok");
+        assert!(!take_matching_inbound_prompt_echo(&update, &mut remaining));
+        assert_eq!(remaining.len(), 1);
+    }
+
+    #[test]
+    fn inbound_unrelated_user_chunk_is_kept() {
+        let mut remaining = vec![serde_json::json!({"type": "text", "text": "hello"})];
+        let update = serde_json::json!({
+            "sessionUpdate": "user_message_chunk",
+            "content": {"type": "text", "text": "something else"}
+        });
+        assert!(!take_matching_inbound_prompt_echo(&update, &mut remaining));
+        assert_eq!(remaining.len(), 1);
     }
 }
