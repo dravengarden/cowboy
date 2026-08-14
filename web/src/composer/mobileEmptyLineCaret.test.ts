@@ -179,6 +179,8 @@ Deno.test("mobile caret landing anchor is document-neutral and not late-mounted"
   assertEquals(source.includes("Let that single"), true);
   assertEquals(source.includes("landing node onto the new line"), true);
   assertEquals(source.includes("Only the caret line needs a"), true);
+  assertEquals(source.includes("addEventListener"), true);
+  assertEquals(source.includes("onBeforeInputCapture"), true);
   assertEquals(source.includes("other.at === this.at"), true);
   assertEquals(source.includes("selection.removeAllRanges"), false);
   assertEquals(source.includes("materializeLineBreak"), false);

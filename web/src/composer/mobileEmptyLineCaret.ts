@@ -237,10 +237,29 @@ export const mobileEmptyLineCaretRepair = [
       reportSequence = 0;
 
       constructor(readonly view: EditorView) {
+        this.view.contentDOM.addEventListener(
+          "beforeinput",
+          this.onBeforeInputCapture,
+          true,
+        );
         if (emptyLinePositionsAfterImages(view.state).length > 0) {
           this.schedulePlace();
         }
       }
+
+      // Physical v1261: ViewPlugin beforeinput ran too late. Native
+      // insertLineBreak still wrote a <br> (line_height 14→28) before
+      // CM6 inserted `\n`. That double layout is the stutter. Capture
+      // on .cm-content beats widget ignoreEvent and the default.
+      onBeforeInputCapture = (event: Event): void => {
+        const input = event as InputEvent;
+        if (
+          !shouldPreventNativeMobileLineBreak(input.inputType, this.view.state)
+        ) {
+          return;
+        }
+        event.preventDefault();
+      };
 
       cancelPlace(): void {
         if (this.placeTimer !== 0) {
@@ -305,6 +324,11 @@ export const mobileEmptyLineCaretRepair = [
       }
 
       destroy(): void {
+        this.view.contentDOM.removeEventListener(
+          "beforeinput",
+          this.onBeforeInputCapture,
+          true,
+        );
         this.cancelPlace();
       }
     },

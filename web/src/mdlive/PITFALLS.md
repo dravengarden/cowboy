@@ -1458,6 +1458,13 @@ Desktop Vim + IME checks:
     keydown collapse repaired it. Do not keep a U+200B on abandoned
     landing lines. Give `.cm-inline-image-widget + .cm-line` a 14px
     min-height so that row cannot collapse.
+    Physical v1261 proved the earlier "landing height" story was not
+    the Return stutter. First Return: `beforeinput insertLineBreak`
+    `default_prevented=false`, `line_height` 14→28 (native `<br>`),
+    then CM6 wrote `\n`. The plugin handler is too late; a `.cm-widgetBuffer`
+    also sits between the block image and the landing line so the CSS
+    sibling rule never applied. Prevent the native break on capture,
+    and target `widget + .cm-widgetBuffer + .cm-line`.
 
 
 65. **A reliable touch action must pair `pointerup` with its actual synthetic

@@ -240,10 +240,10 @@ export const inlineImageTheme = EditorView.theme({
     lineHeight: "0",
     userSelect: "none",
   },
-  // Physical v1260: the empty .cm-line under a block image collapsed to
-  // height 0 when its U+200B left with the caret, then jumped to 14px
-  // when a late widget mounted. Keep that sibling line one row tall.
-  ".cm-content > .cm-inline-image-widget + .cm-line": {
+  // Physical v1261: a .cm-widgetBuffer sits between the block image and
+  // the landing .cm-line, so `widget + .cm-line` never matched. The
+  // landing row still collapsed. Include the buffer sibling.
+  ".cm-content > .cm-inline-image-widget + .cm-line, .cm-content > .cm-inline-image-widget + .cm-widgetBuffer + .cm-line": {
     minHeight: "14px",
   },
   ".cm-inline-image": {
