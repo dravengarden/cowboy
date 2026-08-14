@@ -1350,7 +1350,8 @@ Desktop Vim + IME checks:
     input must never call `setSelectionRange`, resize the DOM from an input
     callback, insert a zero-width sentinel, blur/refocus, or draw a fake caret.
 
-64. **A top-level block image makes the touch contenteditable DOM discontinuous.**
+64. **Do not change touch image decoration structure without physical paste
+    acceptance.**
     Touch documents with an image token intentionally promote to CM6 so the
     thumbnail stays in the writing flow. A `Decoration.replace({ block: true })`
     removes that document line's ordinary `.cm-line` and places the image widget
@@ -1361,11 +1362,13 @@ Desktop Vim + IME checks:
     root-node-only workaround. WebKit may represent an empty-line caret on the
     content root, the line, or its `<br>`, so that predicate was structurally
     incomplete.
-    Keep Desktop's true block replacement for Vim, but on touch render the same
-    atomic replacement inside a real `.cm-line` and make only its widget look
-    block-level with CSS. Omit the Vim-only zero-width measurement node on touch.
-    Do not add ordinary-input selection writes, sentinel text, refocus, or a fake
-    caret. `mobileLineBreakCaretTelemetry` is read-only, bounded, and records only
-    selection/line geometry so physical WKWebView can be verified without user
-    content. Token-free touch documents remain on the literal textarea path from
-    pitfall #63.
+    An attempted repair changed touch to a non-block replacement nested in an
+    ordinary `.cm-line`. Simulator paste and HID Return passed, but physical
+    iPhone acceptance immediately regressed image paste. Keep the proven true
+    block replacement on touch and Desktop until a replacement design passes the
+    complete physical sequence: first image paste, second image paste while CM6
+    is already mounted, permission-alert return, and trailing Return before any
+    typing. Do not add ordinary-input selection writes, sentinel text, refocus,
+    or a fake caret. `mobileLineBreakCaretTelemetry` remains read-only and bounded
+    so the caret failure can be measured without user content. Token-free touch
+    documents remain on the literal textarea path from pitfall #63.

@@ -16,8 +16,8 @@ Deno.test("mobile caret telemetry is reserved for native line-break input", () =
   assertEquals(isMobileLineBreakInput(undefined), false);
 });
 
-Deno.test("touch images keep an ordinary editable line while desktop keeps CM6 blocks", () => {
-  assertEquals(inlineImageUsesBlockDecoration(true), false);
+Deno.test("touch and desktop keep the proven CM6 block image presentation", () => {
+  assertEquals(inlineImageUsesBlockDecoration(true), true);
   assertEquals(inlineImageUsesBlockDecoration(false), true);
   assertEquals(
     editorSource.includes("inlineImagePresentation(touchInput)"),

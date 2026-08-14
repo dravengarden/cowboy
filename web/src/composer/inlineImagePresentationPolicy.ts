@@ -1,8 +1,8 @@
 /**
- * Desktop keeps CM6's true block replacement for Vim cursor measurement.
- * Touch keeps the same block-looking image inside an ordinary editable line so
- * physical iOS WebKit has a continuous native-caret DOM around it.
+ * Keep the proven CM6 block replacement on every surface. An attempted touch
+ * variant nested the replacement in an ordinary line, but physical iPhone
+ * acceptance showed that it regressed the native image-paste transaction.
  */
-export function inlineImageUsesBlockDecoration(touchInput: boolean): boolean {
-  return !touchInput;
+export function inlineImageUsesBlockDecoration(_touchInput: boolean): boolean {
+  return true;
 }
