@@ -12,7 +12,7 @@ import {
   type ViewUpdate,
   WidgetType,
 } from "@codemirror/view";
-import { flushObservability, reportClientLog } from "../observability";
+import { reportClientLog } from "../observability";
 
 export const MOBILE_EMPTY_LINE_CARET_ANCHOR_CLASS =
   "cm-mobile-empty-line-caret-anchor";
@@ -45,7 +45,7 @@ class MobileEmptyLineCaretAnchorWidget extends WidgetType {
 
   override ignoreEvent(event: Event): boolean {
     return event.type !== "beforeinput" && event.type !== "paste" &&
-      event.type !== "keydown" && event.type !== "compositionstart";
+      event.type !== "compositionstart";
   }
 }
 
@@ -153,23 +153,20 @@ function reportAnchorGeometry(view: EditorView, sequence: number): void {
       caret_height: rangeRect ? rounded(rangeRect.height) : -1,
     },
   );
-  void flushObservability();
 }
 
 export const mobileEmptyLineCaretRepair = [
   mobileEmptyLineCaretAnchorField,
   ViewPlugin.fromClass(
     class {
-      private mountFrame = 0;
       private placeFrame = 0;
       private reportSequence = 0;
 
       constructor(readonly view: EditorView) {}
 
       private cancelFrames(): void {
-        if (this.mountFrame !== 0) cancelAnimationFrame(this.mountFrame);
         if (this.placeFrame !== 0) cancelAnimationFrame(this.placeFrame);
-        this.mountFrame = this.placeFrame = 0;
+        this.placeFrame = 0;
       }
 
       private disableAnchor(): void {
@@ -220,27 +217,24 @@ export const mobileEmptyLineCaretRepair = [
 
       private schedule(): void {
         this.cancelFrames();
-        this.mountFrame = requestAnimationFrame(() => {
-          this.mountFrame = 0;
-          if (!this.eligible()) return;
-          const expectedHead = this.view.state.selection.main.head;
-          const anchors = this.view.state.field(
-            mobileEmptyLineCaretAnchorField,
-            false,
-          );
-          if (!anchors || anchors.size === 0) {
-            this.view.dispatch({
-              effects: setMobileEmptyLineCaretAnchor.of(true),
-            });
-          }
-          this.placeFrame = requestAnimationFrame(() => {
-            this.placeFrame = 0;
-            if (!this.eligible(expectedHead)) {
-              this.disableAnchor();
-              return;
-            }
-            this.placeNativeCaret();
+        if (!this.eligible()) return;
+        const expectedHead = this.view.state.selection.main.head;
+        const anchors = this.view.state.field(
+          mobileEmptyLineCaretAnchorField,
+          false,
+        );
+        if (!anchors || anchors.size === 0) {
+          this.view.dispatch({
+            effects: setMobileEmptyLineCaretAnchor.of(true),
           });
+        }
+        this.placeFrame = requestAnimationFrame(() => {
+          this.placeFrame = 0;
+          if (!this.eligible(expectedHead)) {
+            this.disableAnchor();
+            return;
+          }
+          this.placeNativeCaret();
         });
       }
 
@@ -264,11 +258,16 @@ export const mobileEmptyLineCaretRepair = [
     },
     {
       eventHandlers: {
-        beforeinput(): void {
-          this.clear();
-        },
-        keydown(): void {
-          this.clear();
+        beforeinput(event: InputEvent): void {
+          // Return/Backspace must keep the current paint; docChanged already
+          // drops the old widget. Tearing down on every key was the jank.
+          if (
+            event.inputType === "insertText" ||
+            event.inputType === "insertCompositionText" ||
+            event.inputType === "insertFromPaste"
+          ) {
+            this.clear();
+          }
         },
         compositionstart(): void {
           this.clear();
