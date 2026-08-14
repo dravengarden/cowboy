@@ -1938,6 +1938,16 @@ export function ComposerWorkspace({
             borderRadius: mobileComposerPanelFrameSx.borderRadius,
             transition:
               `border-color ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, background-color ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, box-shadow ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}`,
+            // visualViewport is the keyboard authority on iOS. WebKit can move
+            // DOM focus to <body> while its keyboard and caret remain visible
+            // (notably after an attachment/IME transition), so :focus-within
+            // alone made this card transparent and let the transcript paint
+            // legibly through the writing canvas. Keep the material whenever
+            // the measured keyboard presentation is active; the more specific
+            // editor-focus rule below still owns expansion geometry.
+            "&[data-mobile-keyboard-open='true']": {
+              ...mobileFocusedComposerSurfaceSx,
+            },
             // Only the editor is allowed to promote the compact card. Utility
             // buttons also live inside this Paper, so plain :focus-within can
             // leave a tall, inert canvas after Settings or another action takes

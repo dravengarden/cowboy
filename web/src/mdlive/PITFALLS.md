@@ -1410,3 +1410,14 @@ Desktop Vim + IME checks:
     controller also claims a commit synchronously for the current browser task
     so its editor-submit and toolbar-submit entry points cannot both mint a
     message before React applies the clear.
+
+66. **A visible native keyboard is stronger evidence than transient DOM focus.**
+    WKWebView can briefly move `document.activeElement` to `body` while UIKit's
+    keyboard and caret remain visible, especially across attachment and IME
+    transitions. `:focus-within` therefore cannot decide whether the focused
+    composer owns its opaque writing material or whether a fullscreen native
+    composer should remove the home-indicator inset already consumed by the
+    resized WebView. Use the settled `visualViewport` keyboard state for those
+    presentation decisions. Keep editor-specific expansion and selection rules
+    focus-gated where they truly require an editable descendant; do not infer a
+    keyboard from focus alone.

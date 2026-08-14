@@ -19,11 +19,23 @@ Deno.test("git graph keeps first-parent line and exposes merge edge", () => {
     commit("base", []),
   ]);
   assertEquals(graph[0].nodeLane, 0);
+  assertEquals(graph.map((row) => row.incoming), [false, true, true, true]);
   assertEquals(
-    graph[0].edges.filter((edge) => edge.kind === "parent").map((edge) => edge.to),
+    graph[0].edges.filter((edge) => edge.kind === "parent").map((edge) =>
+      edge.to
+    ),
     [0, 1],
   );
   assertEquals(graph[1].nodeLane, 1);
   assertEquals(graph[2].nodeLane, 0);
   assertEquals(graph[3].nodeLane, 0);
+});
+
+Deno.test("git graph does not draw an incoming stub for a disconnected ref", () => {
+  const graph = buildGitGraph([
+    commit("head", ["main"]),
+    commit("detached", []),
+    commit("main", []),
+  ]);
+  assertEquals(graph.map((row) => row.incoming), [false, false, true]);
 });

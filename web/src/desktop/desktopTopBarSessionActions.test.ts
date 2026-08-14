@@ -66,7 +66,7 @@ Deno.test("desktop Stop remains mounted and becomes disabled while idle", () => 
   const start = composerSource.indexOf(
     'if (presentation === "desktop-toolbar")',
   );
-  const end = composerSource.indexOf("{/* Auto-scroll / follow toggle", start);
+  const end = composerSource.indexOf("\n  return (", start);
   const desktopStop = composerSource.slice(start, end);
 
   assert(start >= 0);
@@ -74,9 +74,8 @@ Deno.test("desktop Stop remains mounted and becomes disabled while idle", () => 
   assert(desktopStop.includes('data-desktop-topbar-action="stop"'));
   assert(desktopStop.includes("disabled={!busy}"));
   assert(
-    desktopStop.includes(
-      'title={busy ? "Stop current turn" : "No turn is running"}',
-    ),
+    /title=\{busy\s*\?\s*"Stop current turn"\s*:\s*"No turn is running"\}/
+      .test(desktopStop),
   );
   assert(desktopStop.includes("desktopSessionActionSx"));
   assertEquals(desktopStop.includes("const stopButton = busy"), false);

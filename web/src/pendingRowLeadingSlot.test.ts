@@ -10,7 +10,10 @@ const leading = source.slice(start, end);
 Deno.test("pending row ordinal shares the reorder grip slot", () => {
   assert(start >= 0);
   assert(end > start);
-  assert(leading.includes("const leadingHandle = editingId !== m.id && !optimistic && count > 1"));
+  assert(
+    /const leadingHandle =\s*editingId !== m\.id\s*&&\s*!optimistic\s*&&\s*count > 1/
+      .test(leading),
+  );
   assert(leading.includes('aria-label="Drag to reorder"'));
   assert(leading.includes("width: 44"));
   assert(leading.includes("height: 44"));
@@ -24,7 +27,9 @@ Deno.test("pending row ordinal shares the reorder grip slot", () => {
 
 Deno.test("pending row no longer gives the ordinal its own leading column", () => {
   assertEquals(
-    leading.includes('alignSelf: "stretch",\n                          pt: 0.75'),
+    leading.includes(
+      'alignSelf: "stretch",\n                          pt: 0.75',
+    ),
     false,
   );
 });

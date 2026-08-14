@@ -54,24 +54,41 @@ function relativeDate(value: string): string {
   }).format(date);
 }
 
-function GraphCell({ row }: { row: GitGraphRow }): React.JSX.Element {
-  const spacing = 11;
+function GraphCell(
+  { row, width }: { row: GitGraphRow; width: number },
+): React.JSX.Element {
+  const spacing = 9;
   const laneCount = Math.max(row.topLanes, row.bottomLanes, 1);
-  const visibleLanes = Math.min(laneCount, 6);
-  const width = visibleLanes * spacing + 10;
-  const x = (lane: number): number => 6 + Math.min(lane, 5) * spacing;
+  const visibleLanes = Math.min(laneCount, 5);
+  const x = (lane: number): number => 7 + Math.min(lane, 4) * spacing;
   return (
     <Box sx={{ width, minWidth: width, height: 58, alignSelf: "stretch" }}>
       <svg width={width} height="58" aria-hidden="true">
+        {row.incoming && (
+          <path
+            d={`M ${x(row.nodeLane)} 0 L ${x(row.nodeLane)} 29`}
+            fill="none"
+            stroke={graphColors[row.nodeLane % graphColors.length]}
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            opacity="0.72"
+          />
+        )}
         {row.edges.map((edge, index) => (
           <path
             key={`${edge.kind}:${edge.from}:${edge.to}:${index}`}
-            d={`M ${x(edge.from)} 0 C ${x(edge.from)} 29, ${x(edge.to)} 29, ${
-              x(edge.to)
-            } 58`}
+            d={edge.kind === "through"
+              ? `M ${x(edge.from)} 0 C ${x(edge.from)} 29, ${x(edge.to)} 29, ${
+                x(edge.to)
+              } 58`
+              : `M ${x(edge.from)} 29 C ${x(edge.from)} 43, ${x(edge.to)} 43, ${
+                x(edge.to)
+              } 58`}
             fill="none"
             stroke={graphColors[edge.to % graphColors.length]}
-            strokeWidth="1.6"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
             opacity={edge.kind === "parent" ? 0.95 : 0.56}
           />
         ))}
@@ -118,6 +135,13 @@ export function ReviewRepository({
     () => buildGitGraph(repository?.commits ?? []),
     [repository?.commits],
   );
+  const graphWidth = useMemo(() => {
+    const lanes = graph.reduce(
+      (maximum, row) => Math.max(maximum, row.topLanes, row.bottomLanes),
+      1,
+    );
+    return Math.min(lanes, 5) * 9 + 12;
+  }, [graph]);
   const load = useCallback(async (signal?: AbortSignal): Promise<void> => {
     if (!sessionId) return;
     setLoading(true);
@@ -239,7 +263,7 @@ export function ReviewRepository({
                     }}
                     sx={{ minHeight: 58, px: 0.5, py: 0 }}
                   >
-                    <GraphCell row={graph[index]!} />
+                    <GraphCell row={graph[index]!} width={graphWidth} />
                     <ListItemText
                       primary={
                         <Stack

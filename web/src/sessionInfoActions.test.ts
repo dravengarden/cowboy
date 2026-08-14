@@ -6,11 +6,15 @@ const composerSource = await Deno.readTextFile(
 
 Deno.test("session settings exposes confirmed compact and clear actions", () => {
   assertEquals(
-    composerSource.includes('aria-label="compact conversation from session settings"'),
+    composerSource.includes(
+      'aria-label="compact conversation from session settings"',
+    ),
     true,
   );
   assertEquals(
-    composerSource.includes('aria-label="clear conversation from session settings"'),
+    composerSource.includes(
+      'aria-label="clear conversation from session settings"',
+    ),
     true,
   );
   assertEquals(
@@ -19,7 +23,7 @@ Deno.test("session settings exposes confirmed compact and clear actions", () => 
   );
   assertEquals(composerSource.includes("event.currentTarget.blur();"), true);
   assertEquals(
-    composerSource.includes('disabled={dead || compacting}'),
+    composerSource.includes("disabled={dead || compacting}"),
     true,
   );
   assertEquals(
@@ -35,11 +39,13 @@ Deno.test("session actions default collapsed and expand as full-width rows", () 
     ),
     true,
   );
-  assertEquals(composerSource.includes("setSessionActionsExpanded(false);"), true);
   assertEquals(
-    composerSource.includes(
-      'aria-label={actionsExpanded ? "Collapse session actions" : "Expand session actions"}',
-    ),
+    composerSource.includes("setSessionActionsExpanded(false);"),
+    true,
+  );
+  assertEquals(
+    /aria-label=\{actionsExpanded\s*\?\s*"Collapse session actions"\s*:\s*"Expand session actions"\}/
+      .test(composerSource),
     true,
   );
   assertEquals(
@@ -50,7 +56,7 @@ Deno.test("session actions default collapsed and expand as full-width rows", () 
   );
 
   const disclosureStart = composerSource.indexOf(
-    'aria-label={actionsExpanded ? "Collapse session actions" : "Expand session actions"}',
+    "aria-label={actionsExpanded",
   );
   const disclosureEnd = composerSource.indexOf("</Collapse>", disclosureStart);
   const disclosureSource = composerSource.slice(disclosureStart, disclosureEnd);

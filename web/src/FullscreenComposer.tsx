@@ -41,6 +41,7 @@ import {
   MobileComposerAccessoryDock,
 } from "./MobileComposerAccessoryDock";
 import { mobileComposerKeyboardGap } from "./mobileComposerPrimitives";
+import { useKeyboardOpen } from "./keyboardInset";
 import { releaseMobileComposerFocus } from "./composer/mobileComposerFocus";
 import type { NativeClipboardImagePasteRequest } from "./composer/nativeClipboardImagePaste";
 import { isNativeShell } from "./nativeShell";
@@ -130,6 +131,7 @@ export function FullscreenComposer({
   forcePushEnabled?: boolean;
 }): React.JSX.Element {
   const nativeShell = isNativeShell();
+  const keyboardOpen = useKeyboardOpen();
   const theme = useTheme();
 
   // CM6 is UNCONTROLLED, exactly like the inline composer: freeze the open-time
@@ -183,6 +185,7 @@ export function FullscreenComposer({
       aria-label="Fullscreen message editor"
       data-mobile-pager-modal="true"
       data-mobile-focus-composer="true"
+      data-mobile-keyboard-open={keyboardOpen ? "true" : undefined}
       sx={{
         // `position: absolute` (not fixed): the native shell resizes the WebView for
         // the keyboard, so `body` is normal-flow at viewport height and `absolute
@@ -211,11 +214,10 @@ export function FullscreenComposer({
         // creates a conspicuous second gap above the keyboard. In that focused
         // native state, keep only the shared quiet separation.
         pb: nativeShell
-          ? `max(env(safe-area-inset-bottom, 0px), ${mobileComposerKeyboardGap}px)`
+          ? keyboardOpen
+            ? `${mobileComposerKeyboardGap}px`
+            : `max(env(safe-area-inset-bottom, 0px), ${mobileComposerKeyboardGap}px)`
           : `calc(max(var(--kb-inset, 0px), env(safe-area-inset-bottom, 0px)) + ${mobileComposerKeyboardGap}px)`,
-        ...(nativeShell && {
-          "&:focus-within": { pb: `${mobileComposerKeyboardGap}px` },
-        }),
       }}
     >
       {onDiscard && (

@@ -16,7 +16,10 @@ const composerSource = await Deno.readTextFile(
 Deno.test("new session navigation precedes Machine preparation completion", () => {
   const created = appSource.indexOf("onCreated={(session): void => {");
   const active = appSource.indexOf("setActiveId(session.id);", created);
-  const settle = appSource.indexOf("settleMobileDrawerRef.current(false, 0);", created);
+  const settle = appSource.indexOf(
+    "settleMobileDrawerRef.current(false, 0);",
+    created,
+  );
   assertEquals(created >= 0 && active > created && settle > active, true);
   assertEquals(
     transcriptSource.includes('<ConversationEmptyState kind="preparing"'),
@@ -28,7 +31,8 @@ Deno.test("new session navigation precedes Machine preparation completion", () =
     true,
   );
   assertEquals(
-    composerSource.includes('placeholder={preparing\n              ? "You can start typing while this session prepares…"'),
+    /placeholder=\{preparing\s*\?\s*"You can start typing while this session prepares…"/
+      .test(composerSource),
     true,
   );
   assertEquals(composerSource.includes('aria-label="preparing session"'), true);
@@ -58,12 +62,19 @@ Deno.test("new session stays selected before the sessions broadcast arrives", ()
   };
 
   assertEquals(resolveActiveSession([existing], pending.id, pending), pending);
-  assertEquals(resolveActiveSession([pending, existing], pending.id, pending), pending);
+  assertEquals(
+    resolveActiveSession([pending, existing], pending.id, pending),
+    pending,
+  );
 });
 
 Deno.test("new sessions prefer Columbus regardless of workspace ordering", () => {
   const choices = [
-    { value: "cowboy", label: "cowboy", help: "/home/draven/columbus/projects/cowboy" },
+    {
+      value: "cowboy",
+      label: "cowboy",
+      help: "/home/draven/columbus/projects/cowboy",
+    },
     { value: "columbus", label: "columbus", help: "/home/draven/columbus" },
   ];
 
@@ -81,11 +92,15 @@ Deno.test("new session workspace falls back to the first available choice", () =
 
 Deno.test("new session provider marks are centred in their leading column", () => {
   assertEquals(
-    appSource.includes('sx={{ alignItems: "center", py: 1, whiteSpace: "normal" }}'),
+    appSource.includes(
+      'sx={{ alignItems: "center", py: 1, whiteSpace: "normal" }}',
+    ),
     true,
   );
   assertEquals(
-    appSource.includes('sx={{ width: 36, minWidth: 36, justifyContent: "center" }}'),
+    appSource.includes(
+      'sx={{ width: 36, minWidth: 36, justifyContent: "center" }}',
+    ),
     true,
   );
 });

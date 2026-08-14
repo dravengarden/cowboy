@@ -8,6 +8,8 @@ export interface GitGraphEdge {
 
 export interface GitGraphRow {
   nodeLane: number;
+  /** The commit was already present in the active graph at this row's top. */
+  incoming: boolean;
   topLanes: number;
   bottomLanes: number;
   edges: GitGraphEdge[];
@@ -16,7 +18,8 @@ export interface GitGraphRow {
 export function buildGitGraph(commits: GitCommitSummary[]): GitGraphRow[] {
   let active: string[] = [];
   return commits.map((commit) => {
-    if (!active.includes(commit.oid)) active = [commit.oid, ...active];
+    const incoming = active.includes(commit.oid);
+    if (!incoming) active = [commit.oid, ...active];
     const before = [...active];
     const nodeLane = before.indexOf(commit.oid);
     const after = before.filter((oid) => oid !== commit.oid);
@@ -36,6 +39,7 @@ export function buildGitGraph(commits: GitCommitSummary[]): GitGraphRow[] {
     active = after;
     return {
       nodeLane,
+      incoming,
       topLanes: before.length,
       bottomLanes: after.length,
       edges,
