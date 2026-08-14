@@ -7,6 +7,7 @@ import {
 import {
   isMobileEmptyLineCaretState,
   landingAnchorsForEmptyLinesAfterImages,
+  landingLineBreakSpec,
   shouldMaterializeMobileEmptyLineBreak,
 } from "./mobileEmptyLineCaret";
 
@@ -37,7 +38,7 @@ Deno.test("landing anchors sit only on empty lines after images", () => {
   });
   assertEquals(emptyLinePositionsAfterImages(laterEmpty), [28]);
   assertEquals(selectionOnEmptyLineAfterImage(laterEmpty), false);
-  assertEquals(landingAnchorsForEmptyLinesAfterImages(laterEmpty).size, 1);
+  assertEquals(landingAnchorsForEmptyLinesAfterImages(laterEmpty).size, 0);
 
   const noImage = EditorState.create({
     doc: "hello\n\n",
@@ -47,7 +48,7 @@ Deno.test("landing anchors sit only on empty lines after images", () => {
   assertEquals(landingAnchorsForEmptyLinesAfterImages(noImage).size, 0);
 });
 
-Deno.test("two images keep a landing anchor under each thumbnail", () => {
+Deno.test("two images expose a landing position under each thumbnail", () => {
   const doc = "![a](cowboy-att:1)\n\n![b](cowboy-att:2)\n";
   const state = EditorState.create({ doc });
   const firstLanding = state.doc.line(2).from;
@@ -56,7 +57,19 @@ Deno.test("two images keep a landing anchor under each thumbnail", () => {
     firstLanding,
     secondLanding,
   ]);
-  assertEquals(landingAnchorsForEmptyLinesAfterImages(state).size, 2);
+  assertEquals(landingAnchorsForEmptyLinesAfterImages(state).size, 0);
+  assertEquals(
+    landingAnchorsForEmptyLinesAfterImages(
+      EditorState.create({ doc, selection: { anchor: firstLanding } }),
+    ).size,
+    1,
+  );
+  assertEquals(
+    landingAnchorsForEmptyLinesAfterImages(
+      EditorState.create({ doc, selection: { anchor: secondLanding } }),
+    ).size,
+    1,
+  );
 });
 
 Deno.test("Return inside a landing anchor becomes a document line break", () => {
@@ -76,6 +89,21 @@ Deno.test("Return inside a landing anchor becomes a document line break", () => 
     shouldMaterializeMobileEmptyLineBreak("insertText", true),
     false,
   );
+
+  const landing = EditorState.create({
+    doc: "![shot](cowboy-att:image-1)\n",
+    selection: { anchor: 28 },
+  });
+  assertEquals(landingLineBreakSpec(landing), {
+    from: 28,
+    insert: "\n",
+    anchor: 29,
+  });
+  const laterEmpty = EditorState.create({
+    doc: "![shot](cowboy-att:image-1)\n\n",
+    selection: { anchor: 29 },
+  });
+  assertEquals(landingLineBreakSpec(laterEmpty), null);
 });
 
 Deno.test("mobile caret repair requires a collapsed empty line", () => {

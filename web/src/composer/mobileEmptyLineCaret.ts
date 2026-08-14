@@ -33,11 +33,14 @@ const setHideMobileEmptyLineCaretForIme = StateEffect.define<boolean>();
  * <br> (line_height 28, document_lines unchanged). Backspace onto that same
  * landing line dropped the widget on docChanged and remounted it too late.
  *
- * Keep one editable U+200B on every empty line whose previous line is a
- * block image, in the same transaction that creates that line — including
- * paste. Do not decorate other empty lines. Mapping the DOM selection into
- * a newly appeared landing node only routes the next key; it is not the
- * Return/Backspace animation.
+ * A block image is not a `.cm-line`. The trailing landing line is a second
+ * document line that looks like part of the thumbnail. Put a U+200B on that
+ * landing line only while the caret is actually there — including paste —
+ * so the first Return has a native text node. Leave the line, drop the
+ * widget; keeping it after the caret moved let v1251 stack native <br>
+ * tags inside the same landing node (line_height 14→28→42, document_lines
+ * still 2). Mapping the DOM selection into a newly appeared landing node
+ * only routes the next key; it is not the Return/Backspace animation.
  */
 class MobileEmptyLineCaretAnchorWidget extends WidgetType {
   override eq(): boolean {
@@ -73,14 +76,26 @@ class MobileEmptyLineCaretAnchorWidget extends WidgetType {
 export function landingAnchorsForEmptyLinesAfterImages(
   state: EditorState,
 ): DecorationSet {
-  return Decoration.set(
-    emptyLinePositionsAfterImages(state).map((position) =>
-      Decoration.widget({
-        widget: new MobileEmptyLineCaretAnchorWidget(),
-        side: 1,
-      }).range(position)
-    ),
-  );
+  if (!selectionOnEmptyLineAfterImage(state)) return Decoration.none;
+  const line = state.doc.lineAt(state.selection.main.head);
+  return Decoration.set([
+    Decoration.widget({
+      widget: new MobileEmptyLineCaretAnchorWidget(),
+      side: 1,
+    }).range(line.from),
+  ]);
+}
+
+export function landingLineBreakSpec(state: EditorState): {
+  from: number;
+  insert: string;
+  anchor: number;
+} | null {
+  if (!state.selection.main.empty || !selectionOnEmptyLineAfterImage(state)) {
+    return null;
+  }
+  const head = state.selection.main.head;
+  return { from: head, insert: "\n", anchor: head + 1 };
 }
 
 const hideMobileEmptyLineCaretForIme = StateField.define<boolean>({
@@ -107,6 +122,7 @@ const mobileEmptyLineCaretAnchorField = StateField.define<DecorationSet>({
     if (hidden) return Decoration.none;
     if (
       transaction.docChanged ||
+      transaction.selection ||
       transaction.effects.some((effect) =>
         effect.is(setHideMobileEmptyLineCaretForIme)
       )
@@ -178,22 +194,13 @@ export const mobileEmptyLineCaretRepair = [
   mobileEmptyLineCaretAnchorField,
   ViewPlugin.fromClass(
     class {
-      syncTimer = 0;
       placeTimer = 0;
       placeFrame = 0;
-      pendingBreak = false;
       reportSequence = 0;
 
       constructor(readonly view: EditorView) {
         if (emptyLinePositionsAfterImages(view.state).length > 0) {
           this.schedulePlace();
-        }
-      }
-
-      cancelSync(): void {
-        if (this.syncTimer !== 0) {
-          globalThis.clearTimeout(this.syncTimer);
-          this.syncTimer = 0;
         }
       }
 
@@ -255,29 +262,24 @@ export const mobileEmptyLineCaretRepair = [
         }, 0);
       }
 
-      materializeLineBreak(): void {
-        const { state } = this.view;
-        const selection = state.selection.main;
-        if (!selection.empty || !selectionOnEmptyLineAfterImage(state)) return;
+      materializeLineBreak(): boolean {
+        const spec = landingLineBreakSpec(this.view.state);
+        if (!spec) return false;
         this.view.dispatch({
-          changes: { from: selection.head, insert: "\n" },
-          selection: { anchor: selection.head + 1 },
+          changes: { from: spec.from, insert: spec.insert },
+          selection: { anchor: spec.anchor },
           userEvent: "input",
         });
+        return true;
       }
 
       update(update: ViewUpdate): void {
         const had = update.startState.field(mobileEmptyLineCaretAnchorField).size;
         const has = update.state.field(mobileEmptyLineCaretAnchorField).size;
-        if (update.docChanged) {
-          this.pendingBreak = false;
-          this.cancelSync();
-        }
         if (has > 0 && had === 0) this.schedulePlace();
       }
 
       destroy(): void {
-        this.cancelSync();
         this.cancelPlace();
       }
     },
@@ -310,17 +312,11 @@ export const mobileEmptyLineCaretRepair = [
           ) {
             return;
           }
-          // Do not preventDefault: UIKit only moves the caret for a native
-          // Return. Never dispatch from update(). Materialize the CM6 line
-          // after the key instead.
-          this.pendingBreak = true;
-          this.cancelSync();
-          this.syncTimer = globalThis.setTimeout(() => {
-            this.syncTimer = 0;
-            if (!this.pendingBreak) return;
-            this.pendingBreak = false;
-            this.materializeLineBreak();
-          }, 0);
+          // A native Return inside the landing node only inserts <br> into
+          // that same line. Prevent it and write a real document line so
+          // the caret leaves the image-adjacent landing line. Never
+          // dispatch from update().
+          if (this.materializeLineBreak()) event.preventDefault();
         },
         compositionstart(): void {
           this.setImeHidden(true);

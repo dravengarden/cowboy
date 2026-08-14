@@ -1396,22 +1396,25 @@ Desktop Vim + IME checks:
     ~280ms). Backspace onto that same landing line dropped the widget on
     `docChanged` and remounted it too late. The failure is specifically
     "empty line whose previous line is a block image", not every empty line.
-    On touch only, decorate every empty line immediately after a block
-    image with a document-neutral editable U+200B widget in the same
-    transaction that creates that line, including paste. Keep that landing
-    widget across later Returns and Backspaces for as long as the line is
-    still empty after an image. Do not decorate other empty lines and do
-    not clear it on paste. When the landing widget first appears (paste or
-    promotion), map the DOM selection into that text node so the next
-    Return is native input inside it. Do not use Selection surgery as the
-    Return/Backspace animation — iOS follows the user's key, not
-    `removeAllRanges`/`addRange`. A Return that fires inside the landing
-    widget must become a CM6 newline after the native key, never from
-    `ViewPlugin.update()`. Hide the widget for IME. The image widget's vim
-    probe must stay non-selectable so it cannot steal the caret. This is
-    not accepted until physical first Return after paste, Backspace-up
-    onto the landing line, second paste, long-press menu, and IME all
-    pass.
+    The image is not a `.cm-line`. `Decoration.replace({ block: true })`
+    lifts the token out of the line flow, and `inlineImageTrailingLine`
+    always keeps a second empty landing line so the caret is not trapped
+    on the atomic thumbnail. After paste the document is already two
+    lines that look like one image. Physical v1251 put a landing U+200B
+    on that empty line and first Return finally moved the UIKit caret —
+    but only by inserting a native `<br>` into the same landing node
+    (`document_lines` stayed 2, `line_height` 14→28). A second Return
+    stacked another `<br>` (`line_height` 42) while UIKit stayed in that
+    node. On touch only, decorate the landing line while the caret is
+    actually on it, including paste. When Return fires inside that node,
+    preventDefault and insert a real CM6 newline so the caret leaves the
+    landing line; then drop the widget. Do not keep the landing widget
+    after the caret has moved — that is the magnet. When the widget first
+    appears, map the DOM selection into it so the next Return is native
+    input inside it. Hide the widget for IME. The image widget's vim
+    probe must stay non-selectable. This is not accepted until physical
+    first and second Return after paste, Backspace-up onto the landing
+    line, second paste, long-press menu, and IME all pass.
 
 65. **A reliable touch action must pair `pointerup` with its actual synthetic
     `click`, never a timeout guess.** Mobile Safari can omit a click after
