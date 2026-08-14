@@ -805,6 +805,13 @@ function CodexWorkcell({ size = 16 }: { size?: number }): React.JSX.Element {
 const CLAUDE_SPINNER_FRAMES = ["·", "✢", "*", "✶", "✻", "✽"];
 const CLAUDE_FRAME_MS = 200;
 
+// Grok Build uses this exact single-column Braille loop in its turn-status
+// line. Keep its native, terse activity language here instead of borrowing
+// Claude's rotating verbs or Codex's prompt/caret metaphor. The fixed-width
+// cell prevents transcript reflow, and 133ms matches Grok's ~7.5fps cadence.
+const GROK_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
+const GROK_FRAME_MS = 133;
+
 // Claude-code indicator: a character-level recreation of Claude Code's own
 // status line — its morphing star glyph (CLAUDE_SPINNER_FRAMES @ 200ms) + a
 // provider-aware shimmer that rotates through the playful 黑话 bank (~3.5s) and
@@ -950,6 +957,66 @@ function CodexThinking({ provider }: { provider: string }): React.JSX.Element {
   );
 }
 
+function GrokThinking({ provider }: { provider: string }): React.JSX.Element {
+  const theme = useTheme();
+  const visual = providerVisual(provider, theme.palette.mode);
+  const reducedMotion = globalThis.matchMedia?.(
+    "(prefers-reduced-motion: reduce)",
+  ).matches;
+  const [frame, setFrame] = useState(0);
+  useEffect(() => {
+    if (reducedMotion) return undefined;
+    const id = globalThis.setInterval(
+      () => setFrame((current) => current + 1),
+      GROK_FRAME_MS,
+    );
+    return () => globalThis.clearInterval(id);
+  }, [reducedMotion]);
+  const glyph = reducedMotion
+    ? GROK_SPINNER_FRAMES[0]
+    : GROK_SPINNER_FRAMES[frame % GROK_SPINNER_FRAMES.length];
+
+  return (
+    <Stack
+      direction="row"
+      spacing={0.75}
+      alignItems="center"
+      aria-label="Grok is working"
+      data-provider-activity="grok"
+      sx={{ py: 0.5, alignSelf: "flex-start", color: "text.secondary" }}
+    >
+      <Box
+        component="span"
+        aria-hidden
+        sx={{
+          width: 14,
+          flexShrink: 0,
+          textAlign: "center",
+          fontSize: 15,
+          lineHeight: 1,
+          fontWeight: 600,
+          color: visual.primary,
+          fontFamily:
+            "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+        }}
+      >
+        {glyph}
+      </Box>
+      <Typography
+        aria-hidden
+        variant="caption"
+        sx={{
+          color: "text.secondary",
+          fontWeight: 550,
+          letterSpacing: "0.015em",
+        }}
+      >
+        Grokking…
+      </Typography>
+    </Stack>
+  );
+}
+
 function DefaultThinking(): React.JSX.Element {
   return (
     <Stack
@@ -966,8 +1033,9 @@ function DefaultThinking(): React.JSX.Element {
   );
 }
 
-// Each provider keeps its own activity language: Claude's morphing spark, the
-// Codex workcell and a neutral Material fallback for providers without one.
+// Each provider keeps its own activity language: Claude's morphing spark,
+// Codex's workcell, Grok's native Braille loop, and a neutral Material fallback
+// for providers without one.
 function ThinkingIndicator({
   provider,
 }: {
@@ -978,6 +1046,8 @@ function ThinkingIndicator({
       return <ClaudeThinking provider={provider} />;
     case "codex":
       return <CodexThinking provider={provider} />;
+    case "grok":
+      return <GrokThinking provider={provider} />;
     default:
       return <DefaultThinking />;
   }

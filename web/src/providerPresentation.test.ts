@@ -43,6 +43,7 @@ Deno.test("provider presentation separates the agent from its model provider", (
 
   assertEquals(providerActivityKind("claude-deepseek"), "claude");
   assertEquals(providerActivityKind("codex-deepseek"), "codex");
+  assertEquals(providerActivityKind("grok"), "grok");
   assertEquals(providerActivityKind("future-agent"), "default");
 });
 

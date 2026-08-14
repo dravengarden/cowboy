@@ -71,11 +71,16 @@ export function providerAgentFamily(provider: string): string {
   return provider;
 }
 
-export type ProviderActivityKind = "claude" | "codex" | "default";
+export type ProviderActivityKind =
+  | "claude"
+  | "codex"
+  | "grok"
+  | "default";
 
 export function providerActivityKind(provider: string): ProviderActivityKind {
   const family = providerAgentFamily(provider);
   if (family === "claude-code") return "claude";
   if (family === "codex") return "codex";
+  if (family === "grok") return "grok";
   return "default";
 }

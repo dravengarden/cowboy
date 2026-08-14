@@ -13,6 +13,24 @@ Deno.test("Codex activity copy fades without moving the text baseline", () => {
   assertEquals(animation.includes("translateY"), false);
 });
 
+Deno.test("Grok activity keeps the native fixed-width Braille cadence", () => {
+  const component = transcriptSource.match(
+    /function GrokThinking[\s\S]*?(?=\nfunction DefaultThinking)/,
+  )?.[0];
+  assert(component);
+  assert(
+    transcriptSource.includes(
+      'const GROK_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"]',
+    ),
+  );
+  assert(transcriptSource.includes("const GROK_FRAME_MS = 133"));
+  assert(component.includes('data-provider-activity="grok"'));
+  assert(component.includes("Grokking…"));
+  assert(component.includes("if (reducedMotion) return undefined"));
+  assert(component.includes("GROK_FRAME_MS"));
+  assert(component.includes("width: 14"));
+});
+
 Deno.test("the growing row stays in the scroller paint flow", () => {
   assertEquals(transcriptRowContainment(true), "none");
   assertEquals(transcriptRowContainment(false), "layout paint");
