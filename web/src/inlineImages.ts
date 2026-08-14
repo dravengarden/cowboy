@@ -129,8 +129,16 @@ class InlineImageWidget extends WidgetType {
       img.addEventListener("mousedown", (e) => {
         e.preventDefault();
         e.stopPropagation();
-        // Hand the tap point to the host so the popover opens at the finger, not
-        // anchored to this (possibly tall) image's bottom edge.
+        // Obsidian / atomic-editor: a block widget's default click lands on
+        // the next line. Step back onto the source token line so the
+        // markdown reveals and Return is a real text-line break.
+        const pos = view.posAtDOM(widget);
+        if (pos >= 0) {
+          view.dispatch({
+            selection: { anchor: Math.max(0, pos - 1) },
+            scrollIntoView: false,
+          });
+        }
         if (imageTapHandler !== null) imageTapHandler(id, img, e.clientX, e.clientY);
         else openLightbox([att], 0);
       });
@@ -151,38 +159,69 @@ class InlineImageWidget extends WidgetType {
   }
 }
 
-// Physical v1263: hanging a block widget at line.to still put the caret on a
-// visual break that was not a document newline. iOS insertLineBreak then
-// wrote <br> into the source line (height 14→28→42) and the native caret
-// died. Keep the token on a real `.cm-line` and replace only the token with
-// an inline widget, the same class as `@` chips. Never show cowboy-att
-// markdown in the chat composer.
+// Obsidian / atomic-editor image-blocks: the token stays on a real `.cm-line`.
+// The thumbnail hangs below (`widget`, `block: true`, `side: 1` at line.to).
+// Hide the raw token only while the caret is on another line. Click lands
+// on the source line so Return is a normal break in real text. Do not
+// replace the source line out of flow and do not mark the field atomic.
 const LONE_TOKEN_RE = /^\s*!\[([^\]]*)\]\(cowboy-att:([^)]+)\)\s*$/;
 const IMG_TOKEN_RE = /!\[([^\]]*)\]\(cowboy-att:([^)]+)\)/g;
+
+function lineIsActive(
+  line: { from: number; to: number; number: number },
+  sel: { empty: boolean; from: number; to: number; head: number },
+  headLineNumber: number,
+): boolean {
+  return sel.empty
+    ? headLineNumber === line.number
+    : sel.from <= line.to && sel.to >= line.from;
+}
 
 function buildImageDecorations(state: EditorState): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
   const { doc } = state;
   const sel = state.selection.main;
+  const headLineNumber = doc.lineAt(sel.head).number;
   for (let i = 1; i <= doc.lines; i++) {
     const line = doc.line(i);
+    const tokens: {
+      from: number;
+      to: number;
+      id: string;
+      alt: string;
+    }[] = [];
     IMG_TOKEN_RE.lastIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = IMG_TOKEN_RE.exec(line.text)) !== null) {
       if (match[2] === undefined) continue;
-      const from = line.from + match.index;
-      const to = from + match[0].length;
-      const selected = !sel.empty && sel.from <= from && sel.to >= to;
+      tokens.push({
+        from: line.from + match.index,
+        to: line.from + match.index + match[0].length,
+        id: match[2],
+        alt: match[1] ?? "",
+      });
+    }
+    if (tokens.length === 0) continue;
+    const active = lineIsActive(line, sel, headLineNumber);
+    if (!active) {
+      for (const token of tokens) {
+        builder.add(token.from, token.to, Decoration.replace({}));
+      }
+    }
+    for (const token of tokens) {
+      const selected = !sel.empty && sel.from <= token.from && sel.to >= token.to;
       builder.add(
-        from,
-        to,
-        Decoration.replace({
+        line.to,
+        line.to,
+        Decoration.widget({
           widget: new InlineImageWidget(
-            match[2],
-            match[1] ?? "",
+            token.id,
+            token.alt,
             selected,
-            registry.get(match[2])?.previewUrl,
+            registry.get(token.id)?.previewUrl,
           ),
+          block: true,
+          side: 1,
         }),
       );
     }
@@ -196,12 +235,7 @@ export const inlineImageField = StateField.define<DecorationSet>({
     tr.docChanged || tr.selection || tr.effects.some((effect) => effect.is(refreshInlineImages))
       ? buildImageDecorations(tr.state)
       : value,
-  provide: (f) => [
-    EditorView.decorations.from(f),
-    EditorView.atomicRanges.of(
-      (view) => view.state.field(f, false) ?? Decoration.none,
-    ),
-  ],
+  provide: (f) => EditorView.decorations.from(f),
 });
 
 function lastLineIsImageToken(text: string): boolean {
@@ -210,33 +244,30 @@ function lastLineIsImageToken(text: string): boolean {
   return last.length > 0 && LONE_TOKEN_RE.test(last);
 }
 
-/// Seed-only: land on a normal-height line after the thumbnail, with a
-/// real space so iOS has a text node. Do not leave the caret on the
-/// image line — that paints an 88px bar and Return inserts <br> there.
+/// Obsidian: a trailing image always has a following line, and deleting
+/// that last newline puts it back.
 export function ensureTrailingImageLine(text: string): string {
-  if (text.endsWith("\n ")) return text;
-  const trimmed = text.replace(/ +$/, "");
-  if (!lastLineIsImageToken(trimmed)) return text;
-  return `${trimmed}\n `;
+  return lastLineIsImageToken(text) ? `${text}\n` : text;
 }
 
-/// No-op filter kept so ComposerEditor imports stay stable.
-export const inlineImageTrailingLine = EditorState.transactionFilter.of(
-  (tr) => tr,
-);
+export const inlineImageTrailingLine = EditorState.transactionFilter.of((tr) => {
+  if (!tr.docChanged) return tr;
+  const last = tr.newDoc.line(tr.newDoc.lines);
+  return last.length > 0 && LONE_TOKEN_RE.test(last.text)
+    ? [tr, { changes: { from: tr.newDoc.length, insert: "\n" }, sequential: true }]
+    : tr;
+});
 
 /// Thumbnail sizing/look. Kept here so any host of `inlineImagePlugin` gets it.
 export const inlineImageTheme = EditorView.theme({
   ".cm-inline-image-widget": {
-    display: "inline-block",
-    verticalAlign: "bottom",
+    display: "block",
     fontSize: "0",
     lineHeight: "0",
     userSelect: "none",
   },
   ".cm-inline-image": {
-    display: "inline-block",
-    verticalAlign: "bottom",
+    display: "block",
     // A SMALL tap-to-open thumbnail, not a full inline preview: the token is a
     // placeholder you tap to open the lightbox (full image), so it only needs to
     // be big enough to recognize + tap — a large inline image otherwise ate most

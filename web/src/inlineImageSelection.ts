@@ -22,19 +22,17 @@ export function inlineImageInsertion(
   const from = Math.min(clampedAnchor, clampedHead);
   const to = Math.max(clampedAnchor, clampedHead);
   const lineStart = value.lastIndexOf("\n", from - 1) + 1;
-  const restOnSameLine = to < value.length && value[to] !== "\n";
   const lead = from !== lineStart ? "\n" : "";
   const body = attachments.map((attachment) => {
     const label = attachment.name.replaceAll("]", "");
     return `![${label}](cowboy-att:${attachment.id})`;
   }).join("\n");
-  // Physical v1265: a space on the image line made the caret as tall as
-  // the thumbnail and Return still wrote <br> into that 88px line.
-  // Keep the thumbnail on its own line; put a real space on the next
-  // line so the caret is a normal 12px bar in a text node.
-  const trail = restOnSameLine ? "\n" : "";
-  const insert = `${lead}${body}\n ${trail}`;
-  return { from, to, insert, caret: from + lead.length + body.length + 2 };
+  // Obsidian: caret stays on the source token line so the markdown is
+  // visible and Return is a normal text-line break. Keep a following
+  // line so the image is never the last line.
+  const trail = to < value.length && value[to] === "\n" ? "" : "\n";
+  const insert = `${lead}${body}${trail}`;
+  return { from, to, insert, caret: from + lead.length + body.length };
 }
 
 /** Map a CodeMirror position through removal of one image block. */

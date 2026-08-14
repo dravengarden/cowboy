@@ -9,8 +9,8 @@ Deno.test("inline image paste replaces forward or backward selections and lands 
   const expected = {
     from: 6,
     to: 10,
-    insert: "\n![shot.png](cowboy-att:image-1)\n \n",
-    caret: 40,
+    insert: "\n![shot.png](cowboy-att:image-1)\n",
+    caret: 38,
   };
   assertEquals(
     inlineImageInsertion(
@@ -37,12 +37,13 @@ Deno.test("image deletion removes the insertion line breaks", () => {
   assertEquals(imageDeletionRange(7, 21, 30), { from: 6, to: 22 });
 });
 
-Deno.test("image decorations stay an inline token replace without a presentation branch", async () => {
+Deno.test("image decorations follow Obsidian source-line widgets", async () => {
   const source = await Deno.readTextFile(new URL("./inlineImages.ts", import.meta.url));
-  assertEquals(source.includes("block: true"), false);
-  assertEquals(source.includes("side: 1"), false);
-  assertEquals(source.includes("Decoration.replace({"), true);
-  assertEquals(source.includes("atomicRanges"), true);
+  assertEquals(source.includes("block: true"), true);
+  assertEquals(source.includes("side: 1"), true);
+  assertEquals(source.includes("Decoration.replace({})"), true);
+  assertEquals(source.includes("replace({ block: true })"), false);
+  assertEquals(source.includes("atomicRanges"), false);
   assertEquals(source.includes('userSelect: "none"'), true);
   assertEquals(source.includes('widget.contentEditable = "false"'), true);
   assertEquals(source.includes("createInlineImageField"), false);
