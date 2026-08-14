@@ -1422,6 +1422,11 @@ Desktop Vim + IME checks:
     while `caret_height` stays 0. Decide from EditorState — empty line in
     the image chain — and write a real CM6 newline with a destination
     U+200B in that same transaction.
+    Physical v1255 then bounced twice on one Return: beforeinput wrote
+    `\n` (`document_lines` 2→3) and iOS still delivered `keydown Enter`
+    ~250ms later (`3→4`). Consume that trailing Enter for 500ms after a
+    materialized image-chain line break. Do not leave the second insert
+    to `defaultKeymap`.
 
 65. **A reliable touch action must pair `pointerup` with its actual synthetic
     `click`, never a timeout guess.** Mobile Safari can omit a click after

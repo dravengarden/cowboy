@@ -6,9 +6,12 @@ import {
   selectionOnEmptyLineInImageChain,
 } from "./inlineImageCaretPolicy";
 import {
+  consumeUntilAfterMaterializedLineBreak,
   isMobileEmptyLineCaretState,
   landingAnchorsForEmptyLinesAfterImages,
   landingLineBreakSpec,
+  MOBILE_LINE_BREAK_ENTER_CONSUME_MS,
+  shouldConsumeTrailingMobileEnter,
   shouldMaterializeMobileEmptyLineBreak,
 } from "./mobileEmptyLineCaret";
 
@@ -121,6 +124,16 @@ Deno.test("Return inside a landing anchor becomes a document line break", () => 
   assertEquals(landingLineBreakSpec(typed), null);
 });
 
+Deno.test("materialized Return consumes only the trailing iOS Enter", () => {
+  const now = 1_000_000;
+  const until = consumeUntilAfterMaterializedLineBreak(now);
+  assertEquals(until, now + MOBILE_LINE_BREAK_ENTER_CONSUME_MS);
+  assertEquals(shouldConsumeTrailingMobileEnter(now + 244, until), true);
+  assertEquals(shouldConsumeTrailingMobileEnter(now + 499, until), true);
+  assertEquals(shouldConsumeTrailingMobileEnter(now + 500, until), false);
+  assertEquals(shouldConsumeTrailingMobileEnter(now, 0), false);
+});
+
 Deno.test("mobile caret repair requires a collapsed empty line", () => {
   const emptyLine = EditorState.create({
     doc: "image\n\n",
@@ -145,10 +158,12 @@ Deno.test("mobile caret landing anchor is document-neutral and not late-mounted"
   assertEquals(source.includes('anchor.textContent = "\\u200b"'), true);
   assertEquals(source.includes("selectionOnEmptyLineInImageChain"), true);
   assertEquals(source.includes("beforeinput.target is always .cm-content"), true);
+  assertEquals(source.includes("keydown Enter ~250ms later"), true);
+  assertEquals(source.includes("key: \"Enter\""), true);
   assertEquals(source.includes("placeLandingSelection"), true);
   assertEquals(source.includes("touchstart"), false);
   assertEquals(source.includes("pointerdown"), false);
-  assertEquals(source.includes("keydown"), false);
+  assertEquals(source.includes("keydown("), false);
   assertEquals(source.includes("flushObservability"), false);
   assertEquals(source.includes("setTimeout"), true);
   assertEquals(source.includes("Never dispatch from update()"), true);
