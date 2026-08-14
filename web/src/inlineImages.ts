@@ -240,6 +240,12 @@ export const inlineImageTheme = EditorView.theme({
     lineHeight: "0",
     userSelect: "none",
   },
+  // Physical v1260: the empty .cm-line under a block image collapsed to
+  // height 0 when its U+200B left with the caret, then jumped to 14px
+  // when a late widget mounted. Keep that sibling line one row tall.
+  ".cm-content > .cm-inline-image-widget + .cm-line": {
+    minHeight: "14px",
+  },
   ".cm-inline-image": {
     display: "block",
     // A SMALL tap-to-open thumbnail, not a full inline preview: the token is a

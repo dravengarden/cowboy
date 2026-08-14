@@ -81,11 +81,12 @@ class MobileEmptyLineCaretAnchorWidget extends WidgetType {
 }
 
 export function landingAnchorPositions(state: EditorState): number[] {
-  const positions = new Set(emptyLinePositionsAfterImages(state));
-  if (selectionOnEmptyLineInImageChain(state)) {
-    positions.add(state.doc.lineAt(state.selection.main.head).from);
-  }
-  return [...positions].sort((a, b) => a - b);
+  // Physical v1260: decorating every landing line mounted a second widget
+  // ~1s later (widgets 1→2). That late node gave the abandoned line its
+  // 14px and killed the native Range. Only the caret line needs a
+  // U+200B. The image-adjacent line keeps height via CSS.
+  if (!selectionOnEmptyLineInImageChain(state)) return [];
+  return [state.doc.lineAt(state.selection.main.head).from];
 }
 
 export function landingAnchorsForEmptyLinesAfterImages(

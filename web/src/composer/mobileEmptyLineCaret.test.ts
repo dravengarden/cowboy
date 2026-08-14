@@ -43,8 +43,8 @@ Deno.test("landing anchors sit only on empty lines after images", () => {
   assertEquals(emptyLinePositionsAfterImages(laterEmpty), [28]);
   assertEquals(selectionOnEmptyLineAfterImage(laterEmpty), false);
   assertEquals(selectionOnEmptyLineInImageChain(laterEmpty), true);
-  assertEquals(landingAnchorPositions(laterEmpty), [28, 29]);
-  assertEquals(landingAnchorsForEmptyLinesAfterImages(laterEmpty).size, 2);
+  assertEquals(landingAnchorPositions(laterEmpty), [29]);
+  assertEquals(landingAnchorsForEmptyLinesAfterImages(laterEmpty).size, 1);
 
   const noImage = EditorState.create({
     doc: "hello\n\n",
@@ -63,19 +63,19 @@ Deno.test("two images expose a landing position under each thumbnail", () => {
     firstLanding,
     secondLanding,
   ]);
-  assertEquals(landingAnchorPositions(state), [firstLanding, secondLanding]);
-  assertEquals(landingAnchorsForEmptyLinesAfterImages(state).size, 2);
+  assertEquals(landingAnchorPositions(state), []);
+  assertEquals(landingAnchorsForEmptyLinesAfterImages(state).size, 0);
   assertEquals(
     landingAnchorsForEmptyLinesAfterImages(
       EditorState.create({ doc, selection: { anchor: firstLanding } }),
     ).size,
-    2,
+    1,
   );
   assertEquals(
     landingAnchorsForEmptyLinesAfterImages(
       EditorState.create({ doc, selection: { anchor: secondLanding } }),
     ).size,
-    2,
+    1,
   );
 });
 
@@ -178,6 +178,7 @@ Deno.test("mobile caret landing anchor is document-neutral and not late-mounted"
   assertEquals(source.includes("beforeinput.target is always .cm-content"), true);
   assertEquals(source.includes("Let that single"), true);
   assertEquals(source.includes("landing node onto the new line"), true);
+  assertEquals(source.includes("Only the caret line needs a"), true);
   assertEquals(source.includes("other.at === this.at"), true);
   assertEquals(source.includes("selection.removeAllRanges"), false);
   assertEquals(source.includes("materializeLineBreak"), false);

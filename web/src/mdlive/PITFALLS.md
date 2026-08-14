@@ -1452,6 +1452,12 @@ Desktop Vim + IME checks:
     The landing line still collapsed. Key `eq()` by document position,
     and after a newline `Selection.collapse` into the *new* line's
     widget in the same view update — no `removeAllRanges`.
+    Physical v1260: first Return kept `line_top` at 96.5 with
+    `caret_anchor_widgets=1`. 1.3s later the second widget appeared,
+    `line_top` jumped to 110.5, and the Range died until the next
+    keydown collapse repaired it. Do not keep a U+200B on abandoned
+    landing lines. Give `.cm-inline-image-widget + .cm-line` a 14px
+    min-height so that row cannot collapse.
 
 
 65. **A reliable touch action must pair `pointerup` with its actual synthetic

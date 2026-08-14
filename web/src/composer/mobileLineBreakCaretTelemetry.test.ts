@@ -31,5 +31,11 @@ Deno.test("touch keeps block images and a persistent empty-line caret anchor", (
   );
   assertEquals(imageSource.includes("createInlineImageField"), false);
   assertEquals(imageSource.includes("block: true"), true);
+  assertEquals(
+    imageSource.includes(
+      ".cm-content > .cm-inline-image-widget + .cm-line",
+    ),
+    true,
+  );
   assertEquals(imageSource.includes("tr.reconfigured"), false);
 });
