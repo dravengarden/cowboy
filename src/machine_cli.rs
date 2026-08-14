@@ -52,7 +52,7 @@ struct ControllerConfig {
 }
 
 const DEFAULT_WORKSPACE_CONFIG: &str = "/etc/cowboy-machine/workspaces.json";
-const GROK_ACP_ARGS: &str = "--no-auto-update --always-approve agent --no-leader stdio";
+const GROK_ACP_ARGS: &str = "--no-auto-update agent --always-approve --no-leader stdio";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WorkspaceSnapshot {
@@ -2934,7 +2934,7 @@ mod tests {
         assert!(environment["COWBOY_ACP_GROK_CMD"].ends_with("commands/grok"));
         assert_eq!(
             environment["COWBOY_ACP_GROK_ARGS"],
-            "--no-auto-update --always-approve agent --no-leader stdio"
+            "--no-auto-update agent --always-approve --no-leader stdio"
         );
         assert_eq!(environment["CODEX_PATH"], proxy.display().to_string());
         std::fs::remove_dir_all(root).expect("cleanup");
