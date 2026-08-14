@@ -147,6 +147,7 @@ export function shouldMaterializeMobileEmptyLineBreak(
 
 /** Physical v1255: iOS fires beforeinput, then a later keydown Enter. */
 export const MOBILE_LINE_BREAK_ENTER_CONSUME_MS = 500;
+export const MOBILE_LINE_BREAK_USER_EVENT = "input.newline";
 
 const setMobileEnterConsumeUntil = StateEffect.define<number>();
 
@@ -169,6 +170,18 @@ export function shouldConsumeTrailingMobileEnter(
   consumeUntilMs: number,
 ): boolean {
   return consumeUntilMs > 0 && nowMs < consumeUntilMs;
+}
+
+export function landingSelectionAlreadyPlaced(
+  selection: { anchorNode: Node | null; isCollapsed: boolean } | null,
+  text: Node | null,
+): boolean {
+  return Boolean(
+    text &&
+      text.nodeType === 3 &&
+      selection?.isCollapsed &&
+      selection.anchorNode === text,
+  );
 }
 
 function consumeTrailingMobileEnter(view: EditorView): boolean {
@@ -285,6 +298,10 @@ export const mobileEmptyLineCaretRepair = [
         const text = anchor?.firstChild;
         const selection = this.view.contentDOM.ownerDocument.getSelection();
         if (!text || text.nodeType !== Node.TEXT_NODE || !selection) return;
+        // Physical v1256: after a materialized Return the CM6 selection is
+        // already inside the new landing node. removeAllRanges here is the
+        // second bounce (~27ms after cm6_doc).
+        if (landingSelectionAlreadyPlaced(selection, text)) return;
         // Route the next key into the landing text node. This does not move
         // the UIKit caret by itself — first Return / Backspace still have to
         // be native input inside that node.
@@ -316,7 +333,7 @@ export const mobileEmptyLineCaretRepair = [
         this.view.dispatch({
           changes: { from: spec.from, insert: spec.insert },
           selection: { anchor: spec.anchor },
-          userEvent: "input",
+          userEvent: MOBILE_LINE_BREAK_USER_EVENT,
           effects: setMobileEnterConsumeUntil.of(
             consumeUntilAfterMaterializedLineBreak(Date.now()),
           ),
@@ -326,9 +343,15 @@ export const mobileEmptyLineCaretRepair = [
 
       update(update: ViewUpdate): void {
         const has = update.state.field(mobileEmptyLineCaretAnchorField).size;
-        if (has > 0 && (update.docChanged || update.selectionSet)) {
-          this.schedulePlace();
+        if (has === 0) return;
+        if (
+          update.transactions.some((transaction) =>
+            transaction.isUserEvent(MOBILE_LINE_BREAK_USER_EVENT)
+          )
+        ) {
+          return;
         }
+        if (update.docChanged || update.selectionSet) this.schedulePlace();
       }
 
       destroy(): void {

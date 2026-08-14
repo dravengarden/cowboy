@@ -10,7 +10,9 @@ import {
   isMobileEmptyLineCaretState,
   landingAnchorsForEmptyLinesAfterImages,
   landingLineBreakSpec,
+  landingSelectionAlreadyPlaced,
   MOBILE_LINE_BREAK_ENTER_CONSUME_MS,
+  MOBILE_LINE_BREAK_USER_EVENT,
   shouldConsumeTrailingMobileEnter,
   shouldMaterializeMobileEmptyLineBreak,
 } from "./mobileEmptyLineCaret";
@@ -134,6 +136,26 @@ Deno.test("materialized Return consumes only the trailing iOS Enter", () => {
   assertEquals(shouldConsumeTrailingMobileEnter(now, 0), false);
 });
 
+Deno.test("landing remap is skipped when the caret is already in the widget", () => {
+  const text = { nodeType: 3 } as Node;
+  assertEquals(
+    landingSelectionAlreadyPlaced(
+      { anchorNode: text, isCollapsed: true },
+      text,
+    ),
+    true,
+  );
+  assertEquals(
+    landingSelectionAlreadyPlaced(
+      { anchorNode: text, isCollapsed: false },
+      text,
+    ),
+    false,
+  );
+  assertEquals(landingSelectionAlreadyPlaced(null, text), false);
+  assertEquals(MOBILE_LINE_BREAK_USER_EVENT, "input.newline");
+});
+
 Deno.test("mobile caret repair requires a collapsed empty line", () => {
   const emptyLine = EditorState.create({
     doc: "image\n\n",
@@ -159,7 +181,9 @@ Deno.test("mobile caret landing anchor is document-neutral and not late-mounted"
   assertEquals(source.includes("selectionOnEmptyLineInImageChain"), true);
   assertEquals(source.includes("beforeinput.target is always .cm-content"), true);
   assertEquals(source.includes("keydown Enter ~250ms later"), true);
+  assertEquals(source.includes("second bounce"), true);
   assertEquals(source.includes("key: \"Enter\""), true);
+  assertEquals(source.includes('userEvent: MOBILE_LINE_BREAK_USER_EVENT'), true);
   assertEquals(source.includes("placeLandingSelection"), true);
   assertEquals(source.includes("touchstart"), false);
   assertEquals(source.includes("pointerdown"), false);

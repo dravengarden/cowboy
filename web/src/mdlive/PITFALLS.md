@@ -1427,6 +1427,13 @@ Desktop Vim + IME checks:
     ~250ms later (`3→4`). Consume that trailing Enter for 500ms after a
     materialized image-chain line break. Do not leave the second insert
     to `defaultKeymap`.
+    Physical v1256 made the document 1:1 (`mobile_caret_line_break_consumed`
+    fired, no second `cm6_doc`). The remaining bounce was the landing
+    remap 27ms later: `cm6_doc` was already `caret_anchor`, then
+    `placeLandingSelection` called `removeAllRanges`. Skip that remap
+    after our own newline, and no-op when the caret is already in the
+    widget.
+
 
 65. **A reliable touch action must pair `pointerup` with its actual synthetic
     `click`, never a timeout guess.** Mobile Safari can omit a click after
