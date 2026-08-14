@@ -1440,3 +1440,21 @@ Desktop Vim + IME checks:
     presentation decisions. Keep editor-specific expansion and selection rules
     focus-gated where they truly require an editable descendant; do not infer a
     keyboard from focus alone.
+
+67. **iOS Simulator cannot accept the image-adjacent empty-line caret.**
+    Physical v1252 and Simulator HID Return produce the same *document*
+    telemetry after paste: first Return stays on two lines with
+    `line_height` 14→28 and `caret_height=0` (a native `<br>` inside the
+    landing node); the next Return advances CM6 onto a later empty
+    `.cm-line` whose Range is still height 0. The Simulator screenshot
+    still shows a purple caret on that empty line because Simulator
+    WKWebView paints CSS `caret-color` from the focused contenteditable
+    selection. A physical iPhone paints a UIKit `UITextSelectionView`
+    overlay from `caretRect(for:)`, which keeps the last measurable text
+    rect — the thumbnail / landing glyph — when the new line is only a
+    `<br>`. HID `axe key 40` also never matches the software-keyboard
+    path: `visualViewport` stays full-height, and `beforeinput.target` is
+    `.cm-content`, not the landing node. A Simulator purple caret is
+    therefore not evidence. The device-faithful signal is
+    `caret_height=0` plus the user's painted caret. Do not treat
+    Simulator HID Return as acceptance for this bug.
