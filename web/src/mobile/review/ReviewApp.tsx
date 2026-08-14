@@ -2432,6 +2432,7 @@ export function ReviewApp({
           />
         )}
         <Box
+          data-mobile-backdrop-chrome="true"
           sx={{
             flexShrink: 0,
             borderTop: 1,

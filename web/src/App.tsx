@@ -117,6 +117,7 @@ import { useReliableTouchTap } from "./useReliableTouchTap";
 import { bindMobileSpatialDrawer } from "./mobileSpatialDrawer";
 import { mobileSpatialDrawerShadow } from "./mobileDrawerDepth";
 import { sessionDrawerTargetScroll } from "./mobileDrawerMotion";
+import { mobilePresentationMovingRootSx } from "./mobilePresentationMotion";
 import { setNotifySetting, setVibrateSetting, useNotifySetting, useVibrateSetting } from "./turnNotify";
 import {
     clampComposerColWidth,
@@ -834,6 +835,7 @@ function SessionList({
             <List
                 dense
                 ref={listRef}
+                data-mobile-overflow-layer={mobileDrawer ? "true" : undefined}
                 onKeyDownCapture={onDesktopListKeyDown}
                 sx={{
                     flex: 1,
@@ -2442,12 +2444,12 @@ export function App({
                     position: "relative",
                     overflow: mobile ? "hidden" : undefined,
                     // Store notifications are already held during a drawer
-                    // gesture. Pause independent CSS spinners/shimmers too:
-                    // otherwise they keep consuming compositor time underneath
-                    // the frozen foreground raster on busy sessions.
-                    "&[data-mobile-drawer-moving='true'] *": {
-                        animationPlayState: "paused !important",
-                    },
+                    // gesture. Flatten overflow tiles / frosted chrome and
+                    // pause known CSS loops without a descendant-universal
+                    // style recalc of the whole transcript.
+                    ...mobilePresentationMovingRootSx(
+                        "data-mobile-drawer-moving",
+                    ),
                 }}
             >
             {surface === "desktop" && (
@@ -2518,7 +2520,6 @@ export function App({
                         pointerEvents: "none",
                         backfaceVisibility: "hidden",
                         overflow: "visible",
-                        willChange: "transform",
                     }}
                 />
             )}
@@ -2658,7 +2659,6 @@ export function App({
                     transformOrigin: "left center",
                     backfaceVisibility: "hidden",
                     contain: mobile ? "paint" : undefined,
-                    willChange: mobile ? "transform" : undefined,
                     // Lift the whole column off the on-screen keyboard + its
                     // iOS-native accessory bar: this padding (the keyboard's
                     // overlap, published by useKeyboardInset) reserves space at

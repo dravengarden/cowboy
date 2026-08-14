@@ -4899,6 +4899,7 @@ export function Transcript({
       <Box
         ref={parentRef}
         data-transcript-session={sessionId}
+        data-mobile-overflow-layer="true"
         data-render-paused={renderPausedForScroll ? "true" : undefined}
         data-desktop-transcript-scroller={desktopNavigation
           ? "true"

@@ -177,6 +177,7 @@ export function ReviewCommit({
     <Box
       component="main"
       data-review-commit
+      data-mobile-overflow-layer="true"
       sx={{ flex: 1, minHeight: 0, overflowY: "auto", px: 2, py: 2 }}
     >
       {error

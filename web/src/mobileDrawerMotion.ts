@@ -20,6 +20,14 @@ export function mobileDrawerProgress(
     : 0;
 }
 
+/** Publish drawer progress only when ownership flips. A per-frame
+ *  `setAttribute` dirties style even when no CSS reads the attribute.
+ *  Presence is ownership: a two-decimal string can round 0.021 to "0.02",
+ *  which the pager then treats as "not far enough" and steals the swipe. */
+export function drawerProgressAttribute(progress: number): string | null {
+  return progress > 0.02 ? "1" : null;
+}
+
 /**
  * Keep the current session in a calm reading band when the mobile drawer opens.
  * Rows already in that band do not move, preserving the user's recent scroll.

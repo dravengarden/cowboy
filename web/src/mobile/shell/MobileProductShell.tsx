@@ -16,6 +16,11 @@ import {
   swipeCommits,
 } from "../../touchGestures";
 import type { Mode as ThemeMode } from "../../theme";
+import {
+  bindMobileSheetPresentationHold,
+  mobilePresentationMovingRootSx,
+  mobileSheetPresentationSx,
+} from "../../mobilePresentationMotion";
 import { holdStorePresentation } from "../../store";
 import { AgentApp } from "../agent/AgentApp";
 import {
@@ -387,7 +392,9 @@ export function MobileProductShell({
       passive: true,
     });
     globalThis.addEventListener("resize", onResize);
+    const releaseSheetHold = bindMobileSheetPresentationHold(shell);
     return () => {
+      releaseSheetHold();
       shell.removeEventListener("touchstart", onTouchStart, true);
       shell.removeEventListener("touchmove", onTouchMove, true);
       shell.removeEventListener("touchend", onTouchEnd, true);
@@ -423,9 +430,8 @@ export function MobileProductShell({
         overflow: "hidden",
         position: "relative",
         bgcolor: "background.default",
-        "&[data-mobile-product-moving='true'] *": {
-          animationPlayState: "paused !important",
-        },
+        ...mobilePresentationMovingRootSx("data-mobile-product-moving"),
+        ...mobileSheetPresentationSx,
       }}
     >
       <MobileConnectionBanner store={controlPlaneConnection} />
@@ -459,7 +465,6 @@ export function MobileProductShell({
             WebkitBackfaceVisibility: "hidden",
             contain: "layout paint style",
             isolation: "isolate",
-            willChange: "transform",
             transform: product === "agent"
               ? "translate3d(0, 0, 0)"
               : "translate3d(-100%, 0, 0)",
@@ -486,7 +491,6 @@ export function MobileProductShell({
             WebkitBackfaceVisibility: "hidden",
             contain: "layout paint style",
             isolation: "isolate",
-            willChange: "transform",
             transform: product === "review"
               ? "translate3d(0, 0, 0)"
               : "translate3d(100%, 0, 0)",
