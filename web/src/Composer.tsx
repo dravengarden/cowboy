@@ -1582,6 +1582,12 @@ export function ComposerWorkspace({
             flex: "1 1 auto",
             overflow: "hidden",
           },
+          // An inline image promotes the compact field to CM6. Do not let the
+          // leftover viewport stretch that card into a tall empty canvas around
+          // a small thumbnail — keep it content-tight like the native textarea.
+          "&:has(> [data-mobile-primary-composer='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within):has(.cm-editor)": {
+            flex: "0 1 auto",
+          },
           // Every visible slot shares one horizontal contract. Explicitly zero
           // the flex minimum so a long pending row, CodeMirror canvas, or
           // container-query child cannot shrink or widen the whole bottom stack.
@@ -1963,11 +1969,17 @@ export function ComposerWorkspace({
               // WebKit leaves a sharp readable fringe around the glass edge.
               ...mobileFocusedComposerSurfaceSx,
             },
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within):has(.cm-editor)": {
+              flex: "0 1 auto",
+            },
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area]": {
               flex: "1 1 auto",
               minHeight: MOBILE_COMPOSER_INPUT_EDITOR_MIN_H,
               maxHeight: "100%",
               overflow: "hidden",
+            },
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within):has(.cm-editor) [data-mobile-editor-area]": {
+              flex: "0 1 auto",
             },
             // The focused touch composer already owns a writing canvas. Make
             // the REAL textarea fill that canvas instead of leaving a short
@@ -1990,18 +2002,17 @@ export function ComposerWorkspace({
               minHeight: "100% !important",
               maxHeight: "100%",
             },
-            // An inline image promotes the compact native textarea to CM6. Keep
-            // the complete focused canvas inside the same contenteditable height
-            // chain; otherwise CM6 collapses to its 14px text line while the
-            // surrounding card remains tall, so an iOS long-press in the visible
-            // blank area lands on an inert wrapper and cannot open Paste/AutoFill.
+            // An inline image promotes the compact native textarea to CM6.
+            // Size that editor to its thumbnail + text, the same way the
+            // native field hugs its lines. Stretching CM6 to the leftover
+            // viewport left a tall empty canvas around an 80px image.
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-theme-none, &[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-editor, &[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-scroller": {
-              flex: 1,
+              flex: "0 1 auto",
               minHeight: 0,
-              height: "100%",
+              height: "auto",
             },
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-content": {
-              minHeight: "100%",
+              minHeight: 0,
             },
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-focus-format-row]": {
               maxHeight: 48,

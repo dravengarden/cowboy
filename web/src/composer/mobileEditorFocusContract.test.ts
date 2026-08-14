@@ -707,6 +707,18 @@ Deno.test("long touch prompts scroll inside the editor without hiding chrome", (
     true,
   );
   assertEquals(
+    composerSource.includes(
+      "[data-mobile-editor-area]:focus-within):has(.cm-editor)",
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "[data-mobile-editor-area] .cm-content\": {\n              minHeight: 0,",
+    ),
+    true,
+  );
+  assertEquals(
     textareaSource.includes("nativeTextareaNeedsScroll"),
     true,
   );
