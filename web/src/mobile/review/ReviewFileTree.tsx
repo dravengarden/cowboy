@@ -577,6 +577,7 @@ export function ReviewFileTree({
       )}
       <Box
         ref={treeScrollerRef}
+        data-mobile-overflow-layer="true"
         sx={{ flex: 1, minHeight: 0, overflowY: "auto", px: 0.75, pb: 12 }}
       >
         {query.trim()

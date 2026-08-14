@@ -251,7 +251,10 @@ export function ReviewRepository({
           )
           : section === "history"
           ? (
-            <Box sx={{ height: 1, overflowY: "auto", px: 0.75, pb: 10 }}>
+            <Box
+              data-mobile-overflow-layer="true"
+              sx={{ height: 1, overflowY: "auto", px: 0.75, pb: 10 }}
+            >
               <List disablePadding>
                 {(repository?.commits ?? []).map((commit, index) => (
                   <ListItemButton
@@ -316,7 +319,10 @@ export function ReviewRepository({
             </Box>
           )
           : (
-            <Box sx={{ height: 1, overflowY: "auto", px: 1.25, pb: 10 }}>
+            <Box
+              data-mobile-overflow-layer="true"
+              sx={{ height: 1, overflowY: "auto", px: 1.25, pb: 10 }}
+            >
               <List disablePadding>
                 {(repository?.worktrees ?? []).map((worktree) => (
                   <Box

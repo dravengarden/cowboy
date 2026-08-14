@@ -2,6 +2,7 @@ import { Box } from "@mui/material";
 import { useEffect, useRef, useState } from "react";
 import { mobileSpatialDrawerShadow } from "../../mobileDrawerDepth";
 import { bindMobileSpatialDrawer } from "../../mobileSpatialDrawer";
+import { mobilePresentationMovingRootSx } from "../../mobilePresentationMotion";
 import { holdStorePresentation } from "../../store";
 
 export function ReviewDrawerShell({
@@ -73,9 +74,7 @@ export function ReviewDrawerShell({
         width: 1,
         height: 1,
         overflow: "hidden",
-        "&[data-mobile-drawer-moving='true'] *": {
-          animationPlayState: "paused !important",
-        },
+        ...mobilePresentationMovingRootSx("data-mobile-drawer-moving"),
       }}
     >
       <Box
@@ -88,7 +87,6 @@ export function ReviewDrawerShell({
           pl: "calc(100% - min(84%, 360px))",
           bgcolor: "background.default",
           backfaceVisibility: "hidden",
-          willChange: "transform, opacity",
           "@media (min-width: 768px)": {
             pl: "calc(100% - min(52%, 440px))",
           },
@@ -111,7 +109,6 @@ export function ReviewDrawerShell({
           pointerEvents: "none",
           backfaceVisibility: "hidden",
           overflow: "visible",
-          willChange: "transform",
         }}
       />
       <Box
@@ -125,7 +122,6 @@ export function ReviewDrawerShell({
           bgcolor: "background.default",
           backfaceVisibility: "hidden",
           transformOrigin: "left center",
-          willChange: "transform",
         }}
       >
         {open && (

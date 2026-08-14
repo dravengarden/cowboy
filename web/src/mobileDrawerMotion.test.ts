@@ -1,5 +1,6 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
+  drawerProgressAttribute,
   mobileDrawerProgress,
   predictDrawerOffset,
   sessionDrawerTargetScroll,
@@ -16,6 +17,12 @@ Deno.test("mobile drawer progress follows the finger", () => {
   assertEquals(mobileDrawerProgress(0, 360), 0);
   assertEquals(mobileDrawerProgress(180, 360), 0.5);
   assertEquals(mobileDrawerProgress(360, 360), 1);
+});
+
+Deno.test("drawer progress attribute is presence-only ownership", () => {
+  assertEquals(drawerProgressAttribute(0), null);
+  assertEquals(drawerProgressAttribute(0.02), null);
+  assertEquals(drawerProgressAttribute(0.021), "1");
 });
 
 Deno.test("mobile drawer progress clamps rubber-band overscroll", () => {

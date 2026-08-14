@@ -3,7 +3,11 @@ import {
   mobileSpatialDrawerShadow,
   shouldKeepDrawerDepth,
 } from "./mobileDrawerDepth";
-import { mobileDrawerProgress, predictDrawerOffset } from "./mobileDrawerMotion";
+import {
+  drawerProgressAttribute,
+  mobileDrawerProgress,
+  predictDrawerOffset,
+} from "./mobileDrawerMotion";
 import {
   expandedSelection,
   hasHorizontalScroller,
@@ -75,15 +79,18 @@ export function bindMobileSpatialDrawer({
   let releaseIdle: number | undefined;
   let releasePresentation: (() => void) | undefined;
   let presentationWidth = 1;
+  let lastPublishedProgress: string | null = null;
   const drawerWidth = (): number => {
     const width = surface.clientWidth;
     return phone ? Math.min(360, width * 0.84) : Math.min(440, width * 0.52);
   };
   const publishProgress = (offset: number): void => {
     const width = Math.max(1, presentationWidth);
-    const progress = Math.max(0, Math.min(1, Math.abs(offset) / width));
-    if (progress > 0.02) {
-      gestureTarget.setAttribute("data-mobile-drawer-progress", progress.toFixed(3));
+    const next = drawerProgressAttribute(Math.abs(offset) / width);
+    if (next === lastPublishedProgress) return;
+    lastPublishedProgress = next;
+    if (next) {
+      gestureTarget.setAttribute("data-mobile-drawer-progress", next);
     } else {
       gestureTarget.removeAttribute("data-mobile-drawer-progress");
     }
@@ -111,19 +118,18 @@ export function bindMobileSpatialDrawer({
     const progress = mobileDrawerProgress(offset, presentationWidth);
     const drawerParallax = presentationWidth * (phone ? 0.28 : 0.22) *
       (1 - progress);
-    // Keep the heavy foreground (Transcript or CodeMirror) on a translation-
-    // only compositor path. Scaling or fading this layer makes iPhone WebKit
-    // blend/raster the full viewport for every touch frame. The mask-owned
-    // edge shadow plus the lightweight drawer parallax still provide spatial
-    // depth without spending the phone's frame budget. Rounded clipping and
-    // the edge shadow must both stay off this content layer.
+    // Keep both the heavy foreground (Transcript or CodeMirror) and the
+    // drawer list on a translation-only compositor path. Fading the drawer
+    // forces WebKit to re-blend its full session/file list every touch
+    // frame; the mask-owned edge shadow plus parallax still provide depth.
+    // Rounded clipping and the edge shadow must both stay off this content
+    // layer.
     surface.style.transform = `translate3d(${
       String(openingSign * offset)
     }px, 0, 0)`;
     drawer.style.transform = `translate3d(${
       String(-openingSign * drawerParallax)
     }px, 0, 0)`;
-    drawer.style.opacity = String(0.72 + progress * 0.28);
     drawerMask.style.transform = `translate3d(${
       String(openingSign * offset)
     }px, 0, 0)`;
@@ -216,8 +222,7 @@ export function bindMobileSpatialDrawer({
     drawerMask.style.transition =
       `transform ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1)`;
     drawer.style.transition =
-      `transform ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1), ` +
-      `opacity ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1)`;
+      `transform ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1)`;
     render(targetOffset);
     if (pendingThresholdHaptic) {
       pendingThresholdHaptic = false;
@@ -329,7 +334,7 @@ export function bindMobileSpatialDrawer({
       surface.style.transition = "none";
       surface.style.willChange = "transform";
       drawer.style.transition = "none";
-      drawer.style.willChange = "transform, opacity";
+      drawer.style.willChange = "transform";
       drawerMask.style.transition = "none";
       drawerMask.style.willChange = "transform";
     }
@@ -425,6 +430,7 @@ export function bindMobileSpatialDrawer({
       globalThis.clearTimeout(settleTimer);
       if (renderFrame !== 0) cancelAnimationFrame(renderFrame);
       gestureTarget.removeAttribute("data-mobile-drawer-moving");
+      lastPublishedProgress = null;
       if (releaseFrame !== 0) cancelAnimationFrame(releaseFrame);
       if (releaseIdle !== undefined) {
         if (typeof globalThis.cancelIdleCallback === "function") {
