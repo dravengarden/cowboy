@@ -19,10 +19,11 @@ import { MobileComposerAccessoryButton } from "./MobileComposerAccessoryDock";
 import {
   nativeClipboardImageStatus,
   nativeClipboardPasteAvailable,
-  readNativeClipboardImages,
+  readNativeClipboardImageOutcome,
   readNativeClipboardText,
 } from "./nativeShell";
 import { haptic } from "./haptic";
+import { flushObservability, reportClientLog } from "./observability";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 
 interface MobileComposerFormatActionsProps {
@@ -99,25 +100,79 @@ function MobileClipboardPasteButton({
     const selection = capturedSelectionRef.current ??
       editorRef.current?.getSelection();
     capturedSelectionRef.current = null;
-    if (!selection) return;
+    if (!selection) {
+      reportClientLog(
+        "warn",
+        "mobile_paste_blocked",
+        "Mobile Paste had no editor selection",
+        { reason: "no_selection" },
+      );
+      void flushObservability();
+      return;
+    }
     const pasteImages = availability.hasImages;
-    if (!pasteImages && !nativeClipboardPasteAvailable(availability)) return;
+    if (!pasteImages && !nativeClipboardPasteAvailable(availability)) {
+      reportClientLog(
+        "warn",
+        "mobile_paste_blocked",
+        "Mobile Paste was unavailable at activation",
+        { reason: "unavailable" },
+      );
+      void flushObservability();
+      return;
+    }
+    reportClientLog(
+      "info",
+      "mobile_paste_started",
+      "Mobile Paste activation started",
+      {
+        path: pasteImages ? "image" : "text",
+        status_supported: availability.supported,
+        advertised_images: availability.imageCount,
+        has_text: availability.hasText,
+        selection_span: Math.abs(selection.anchor - selection.head),
+      },
+    );
+    void flushObservability();
     haptic();
     readingRef.current = true;
     try {
       if (pasteImages) {
+        let outcomeState = "not_started";
+        let payloadCount = 0;
+        let fileCount = 0;
         // The callback stages inline placeholders and performs the native
         // textarea -> CM6 focus handoff synchronously. Only then may it invoke
         // the privacy-gated `read` thunk and await provider bytes.
         const completion = onPasteImages({
           expectedCount: Math.max(1, availability.imageCount),
           selection,
-          read: readNativeClipboardImages,
+          read: async (): Promise<File[]> => {
+            const outcome = await readNativeClipboardImageOutcome();
+            outcomeState = outcome.state;
+            payloadCount = outcome.payloadCount;
+            fileCount = outcome.files.length;
+            return outcome.files;
+          },
         });
         // Staging must happen before this state update can disable a button that
         // WebKit briefly made the accessibility focus owner during the tap.
         setReading(true);
         await completion;
+        reportClientLog(
+          fileCount > 0 ? "info" : "warn",
+          "mobile_paste_finished",
+          fileCount > 0
+            ? "Mobile image Paste completed"
+            : "Mobile image Paste returned no usable image",
+          {
+            path: "image",
+            result: outcomeState,
+            advertised_images: availability.imageCount,
+            payload_count: payloadCount,
+            file_count: fileCount,
+          },
+        );
       } else {
         // Unlike image insertion, text does not replace the editor. If WebKit
         // projected accessibility focus onto the button, restore the captured
@@ -130,11 +185,24 @@ function MobileClipboardPasteButton({
         // A legacy shell cannot expose metadata for an empty clipboard. Never
         // let its explicit fallback tap replace a selection with an empty read.
         if (text.length > 0) editorRef.current?.insertText(text, selection);
+        reportClientLog(
+          text.length > 0 ? "info" : "warn",
+          "mobile_paste_finished",
+          text.length > 0
+            ? "Mobile text Paste completed"
+            : "Mobile text Paste returned no text",
+          {
+            path: "text",
+            result: text.length > 0 ? "ok" : "empty",
+            text_length: text.length,
+          },
+        );
       }
     } finally {
       readingRef.current = false;
       setReading(false);
       refresh();
+      void flushObservability();
     }
   };
 

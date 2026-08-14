@@ -41,7 +41,6 @@ import {
   deleteImageTokenBackward,
   ensureTrailingImageLine,
   inlineImageField,
-  inlineImagePresentation,
   inlineImageTheme,
   inlineImageTrailingLine,
   insertImageToken,
@@ -770,7 +769,6 @@ export const ComposerEditor = forwardRef<
       // Obsidian-style inline images: render `![](cowboy-att:id)` tokens as atomic
       // thumbnails in the text flow (click → lightbox). Atomic + read-only, so
       // IME-safe like the @-chip. See inlineImages.ts.
-      inlineImagePresentation(touchInput),
       inlineImageField,
       inlineImageTheme,
       // Keep a trailing image from being the doc's last line (the atomic image

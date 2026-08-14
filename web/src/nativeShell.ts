@@ -32,6 +32,13 @@ interface NativeClipboardImagesPayload {
   changeCount?: unknown;
 }
 
+export interface NativeClipboardImageReadOutcome {
+  files: File[];
+  payloadCount: number;
+  changeCount: number;
+  state: "ok" | "empty" | "invalid_payload" | "missing_bridge" | "bridge_error";
+}
+
 interface CowboyNativeClipboardWindow extends Window {
   __cowboyReadClipboard?: () => Promise<unknown>;
   __cowboyClipboardImageStatus?: () => Promise<unknown>;
@@ -168,12 +175,54 @@ export function nativeClipboardImageFiles(raw: unknown): File[] {
 }
 
 /** Read image bytes only after the user taps the dedicated paste action. */
-export async function readNativeClipboardImages(): Promise<File[]> {
+export async function readNativeClipboardImageOutcome(): Promise<
+  NativeClipboardImageReadOutcome
+> {
   const bridge = nativeClipboardWindow().__cowboyReadClipboardImages;
-  if (typeof bridge !== "function") return [];
-  try {
-    return nativeClipboardImageFiles(await bridge());
-  } catch {
-    return [];
+  if (typeof bridge !== "function") {
+    return {
+      files: [],
+      payloadCount: 0,
+      changeCount: -1,
+      state: "missing_bridge",
+    };
   }
+  try {
+    const raw = await bridge() as NativeClipboardImagesPayload | null;
+    const payloadCount = Array.isArray(raw?.images) ? raw.images.length : 0;
+    const changeCount = typeof raw?.changeCount === "number" &&
+        Number.isSafeInteger(raw.changeCount)
+      ? raw.changeCount
+      : -1;
+    if (!Array.isArray(raw?.images)) {
+      return {
+        files: [],
+        payloadCount,
+        changeCount,
+        state: "invalid_payload",
+      };
+    }
+    const files = nativeClipboardImageFiles(raw);
+    return {
+      files,
+      payloadCount,
+      changeCount,
+      state: files.length > 0
+        ? "ok"
+        : payloadCount > 0
+        ? "invalid_payload"
+        : "empty",
+    };
+  } catch {
+    return {
+      files: [],
+      payloadCount: 0,
+      changeCount: -1,
+      state: "bridge_error",
+    };
+  }
+}
+
+export async function readNativeClipboardImages(): Promise<File[]> {
+  return (await readNativeClipboardImageOutcome()).files;
 }

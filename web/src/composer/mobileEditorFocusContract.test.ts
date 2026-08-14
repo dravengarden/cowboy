@@ -359,7 +359,11 @@ Deno.test("native image and text paste action is shared by every mobile editor s
   );
   assertEquals(formatActionsSource.includes("pasteTap.onPointerUp"), true);
   assertEquals(
-    formatActionsSource.includes("read: readNativeClipboardImages"),
+    formatActionsSource.includes("readNativeClipboardImageOutcome"),
+    true,
+  );
+  assertEquals(
+    formatActionsSource.includes("return outcome.files"),
     true,
   );
   assertEquals(

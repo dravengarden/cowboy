@@ -1,5 +1,4 @@
 import { assertEquals } from "jsr:@std/assert";
-import { inlineImageUsesBlockDecoration } from "./inlineImagePresentationPolicy";
 import { isMobileLineBreakInput } from "./mobileLineBreakCaretTelemetry";
 
 const editorSource = await Deno.readTextFile(
@@ -16,12 +15,10 @@ Deno.test("mobile caret telemetry is reserved for native line-break input", () =
   assertEquals(isMobileLineBreakInput(undefined), false);
 });
 
-Deno.test("touch and desktop keep the proven CM6 block image presentation", () => {
-  assertEquals(inlineImageUsesBlockDecoration(true), true);
-  assertEquals(inlineImageUsesBlockDecoration(false), true);
+Deno.test("touch and desktop keep the proven literal CM6 block image field", () => {
   assertEquals(
-    editorSource.includes("inlineImagePresentation(touchInput)"),
-    true,
+    editorSource.includes("inlineImagePresentation"),
+    false,
   );
   assertEquals(
     editorSource.includes(
@@ -31,9 +28,10 @@ Deno.test("touch and desktop keep the proven CM6 block image presentation", () =
   );
   assertEquals(
     imageSource.includes(
-      "const blockDecoration = state.facet(blockImagePresentation)",
+      "inlineImagePresentation",
     ),
-    true,
+    false,
   );
-  assertEquals(imageSource.includes("block: blockDecoration"), true);
+  assertEquals(imageSource.includes("block: true"), true);
+  assertEquals(imageSource.includes("tr.reconfigured"), false);
 });

@@ -18,16 +18,8 @@ import {
   EditorView,
   WidgetType,
 } from "@codemirror/view";
-import {
-  EditorState,
-  type Extension,
-  Facet,
-  RangeSetBuilder,
-  StateEffect,
-  StateField,
-} from "@codemirror/state";
+import { EditorState, RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
 import type { Attachment } from "./attachments";
-import { inlineImageUsesBlockDecoration } from "./composer/inlineImagePresentationPolicy";
 import { openLightbox } from "./ResourceLightbox";
 import {
   imageDeletionRange,
@@ -75,22 +67,6 @@ export function forgetInlineAttachment(id: string): void {
 
 export const refreshInlineImages = StateEffect.define<null>();
 
-// A top-level CM6 block replacement removes the image's ordinary `.cm-line`
-// from the editable DOM. That is fine for Desktop, where the Vim cursor needs a
-// true block widget, but physical iOS WebKit can then strand its native caret on
-// an earlier blank line after Return. On touch surfaces keep the replacement
-// inside a real `.cm-line`; the widget still LOOKS like a block via CSS, without
-// making the contenteditable DOM discontinuous around the image.
-const blockImagePresentation = Facet.define<boolean, boolean>({
-  combine: (values) => values.length === 0 ? true : values[values.length - 1]!,
-});
-
-export function inlineImagePresentation(touchInput: boolean): Extension {
-  return blockImagePresentation.of(
-    inlineImageUsesBlockDecoration(touchInput),
-  );
-}
-
 class InlineImageWidget extends WidgetType {
   constructor(
     private readonly id: string,
@@ -99,14 +75,12 @@ class InlineImageWidget extends WidgetType {
     // delete, or a range select) — draws the selection ring.
     private readonly selected: boolean,
     private readonly previewUrl: string | undefined,
-    private readonly blockDecoration: boolean,
   ) {
     super();
   }
   override eq(other: InlineImageWidget): boolean {
     return other.id === this.id && other.name === this.name &&
-      other.selected === this.selected && other.previewUrl === this.previewUrl &&
-      other.blockDecoration === this.blockDecoration;
+      other.selected === this.selected && other.previewUrl === this.previewUrl;
   }
   override toDOM(view: EditorView): HTMLElement {
     const att = registry.get(this.id);
@@ -120,11 +94,7 @@ class InlineImageWidget extends WidgetType {
       // line above the image. Keep a zero-size text node first: it is inert for
       // layout and accessibility, but gives the upstream measurement a safe
       // terminal node. The document selection itself never enters this widget.
-      // Touch never loads Vim and deliberately keeps this widget inside a real
-      // `.cm-line`. Do not put an invisible text node in that native caret line.
-      if (this.blockDecoration) {
-        widget.appendChild(document.createTextNode("\u200b"));
-      }
+      widget.appendChild(document.createTextNode("\u200b"));
       const img = document.createElement("img");
       img.className = this.selected
         ? "cm-inline-image cm-inline-image-selected"
@@ -176,19 +146,18 @@ class InlineImageWidget extends WidgetType {
   }
 }
 
-// One image == one visual block line (Obsidian-style): the token is inserted
-// alone on its own line and the whole line is replaced by a widget. Desktop uses
-// a true CM6 block replacement. Touch keeps the same block-looking widget inside
-// an ordinary `.cm-line` so WebKit retains a continuous native-caret DOM. Lines
-// that AREN'T a lone token are left untouched (a token accidentally mid-line
-// just stays literal — rare).
+// One image == one BLOCK line (Obsidian-style): the token is inserted alone on
+// its own line, and the whole line is replaced by a block widget. Block (not
+// inline) so a tall image never grows the surrounding line box — the caret on the
+// text lines above/below stays a normal text-height bar (an inline image made the
+// caret as tall as the picture: "光标好丑"). Lines that AREN'T a lone token are
+// left untouched (a token accidentally mid-line just stays literal — rare).
 const LONE_TOKEN_RE = /^\s*!\[([^\]]*)\]\(cowboy-att:([^)]+)\)\s*$/;
 
 function buildImageDecorations(state: EditorState): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
   const { doc } = state;
   const sel = state.selection.main;
-  const blockDecoration = state.facet(blockImagePresentation);
   for (let i = 1; i <= doc.lines; i++) {
     const line = doc.line(i);
     const m = LONE_TOKEN_RE.exec(line.text);
@@ -205,9 +174,8 @@ function buildImageDecorations(state: EditorState): DecorationSet {
             m[1] ?? "",
             selected,
             registry.get(m[2])?.previewUrl,
-            blockDecoration,
           ),
-          block: blockDecoration,
+          block: true,
         }),
       );
     }
@@ -215,18 +183,18 @@ function buildImageDecorations(state: EditorState): DecorationSet {
   return builder.finish();
 }
 
-/// The inline-image decoration renders `cowboy-att:` tokens as atomic thumbnails
-/// (one image per line). It MUST remain a StateField because the Desktop variant
-/// is a true block decoration; CM6 rejects block decorations supplied by a
-/// ViewPlugin. Rebuilds on document, selection, presentation, or preview changes
-/// and provides atomic ranges (arrow keys skip an image as one unit).
+/// The inline-image decoration — render `cowboy-att:` tokens as atomic, BLOCK
+/// thumbnails (one image per line). MUST be a StateField, not a ViewPlugin: CM6
+/// throws "Block decorations may not be specified via plugins" for `block: true`
+/// decorations from a plugin (that regressed image paste in v171). Rebuilds on any
+/// docChange (the composer is small, so a full-doc scan is cheap); provides both
+/// the decorations and the atomic ranges (arrow keys skip an image as one unit).
 export const inlineImageField = StateField.define<DecorationSet>({
   create: (state) => buildImageDecorations(state),
   // Rebuild on doc OR selection change — the selection drives the "armed for
   // delete" ring (the two-stage Backspace below selects before it deletes).
   update: (value, tr) =>
-    tr.docChanged || tr.selection || tr.reconfigured ||
-      tr.effects.some((effect) => effect.is(refreshInlineImages))
+    tr.docChanged || tr.selection || tr.effects.some((effect) => effect.is(refreshInlineImages))
       ? buildImageDecorations(tr.state)
       : value,
   provide: (f) => [

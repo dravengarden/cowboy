@@ -3,6 +3,7 @@ import {
   nativeClipboardImageFiles,
   nativeClipboardImageStatus,
   nativeClipboardPasteAvailable,
+  readNativeClipboardImageOutcome,
   readNativeClipboardImages,
   readNativeClipboardText,
   supportsNativeClipboardImages,
@@ -26,6 +27,40 @@ Deno.test("native clipboard image payloads become ordinary image Files", async (
   assertEquals(files[0]?.name, "screenshot.png");
   assertEquals(files[0]?.type, "image/png");
   assertEquals(await files[0]?.text(), "png-bytes");
+});
+
+Deno.test("native image read outcome distinguishes empty and malformed replies", async () => {
+  const root = globalThis as typeof globalThis & {
+    __cowboyReadClipboardImages?: () => Promise<unknown>;
+  };
+  const previousRead = root.__cowboyReadClipboardImages;
+  try {
+    root.__cowboyReadClipboardImages = () =>
+      Promise.resolve({ images: [], changeCount: 11 });
+    assertEquals(await readNativeClipboardImageOutcome(), {
+      files: [],
+      payloadCount: 0,
+      changeCount: 11,
+      state: "empty",
+    });
+
+    root.__cowboyReadClipboardImages = () =>
+      Promise.resolve({ images: [{ mimeType: "image/png", data: "%%%" }] });
+    const malformed = await readNativeClipboardImageOutcome();
+    assertEquals(malformed.files, []);
+    assertEquals(malformed.payloadCount, 1);
+    assertEquals(malformed.state, "invalid_payload");
+
+    root.__cowboyReadClipboardImages = () =>
+      Promise.reject(new Error("denied"));
+    assertEquals(
+      (await readNativeClipboardImageOutcome()).state,
+      "bridge_error",
+    );
+  } finally {
+    if (previousRead === undefined) delete root.__cowboyReadClipboardImages;
+    else root.__cowboyReadClipboardImages = previousRead;
+  }
 });
 
 Deno.test("image paste stays disabled without both native clipboard bridges", () => {

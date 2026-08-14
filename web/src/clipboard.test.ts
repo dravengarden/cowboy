@@ -61,4 +61,6 @@ Deno.test("explicit dock paste uses only the capability-scoped native bridge", (
   );
   assertEquals(formatActionsSource.includes("pasteTap.onPointerUp"), true);
   assertEquals(formatActionsSource.includes("pasteTap.onClick"), true);
+  assertEquals(formatActionsSource.includes("mobile_paste_started"), true);
+  assertEquals(formatActionsSource.includes("mobile_paste_finished"), true);
 });

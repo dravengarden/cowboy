@@ -1364,8 +1364,14 @@ Desktop Vim + IME checks:
     incomplete.
     An attempted repair changed touch to a non-block replacement nested in an
     ordinary `.cm-line`. Simulator paste and HID Return passed, but physical
-    iPhone acceptance immediately regressed image paste. Keep the proven true
-    block replacement on touch and Desktop until a replacement design passes the
+    iPhone acceptance immediately regressed image paste. Merely changing that
+    experimental presentation facet back to `true` was not a complete rollback:
+    it left the alternate facet, widget constructor, and reconfiguration-aware
+    StateField path installed, and physical paste still failed while Simulator
+    paste passed. Remove the presentation branch entirely and keep the literal
+    `Decoration.replace({ block: true })` field that existed before the
+    experiment. Keep this proven block replacement on touch and Desktop until a
+    replacement design passes the
     complete physical sequence: first image paste, second image paste while CM6
     is already mounted, permission-alert return, and trailing Return before any
     typing. Do not add ordinary-input selection writes, sentinel text, refocus,

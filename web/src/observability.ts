@@ -236,8 +236,18 @@ function reportReloadCompletion(): void {
 
 async function reportRuntimeIdentity(): Promise<void> {
   const navigation = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
+  const nativeRoot = globalThis as typeof globalThis & {
+    __cowboyNativeShell?: unknown;
+    __cowboyReadClipboard?: unknown;
+    __cowboyClipboardImageStatus?: unknown;
+    __cowboyReadClipboardImages?: unknown;
+  };
   const attributes: Record<string, Scalar> = {
     navigation_type: navigation?.type ?? "unknown",
+    native_shell: nativeRoot.__cowboyNativeShell === true,
+    native_text_read_bridge: typeof nativeRoot.__cowboyReadClipboard === "function",
+    native_image_status_bridge: typeof nativeRoot.__cowboyClipboardImageStatus === "function",
+    native_image_read_bridge: typeof nativeRoot.__cowboyReadClipboardImages === "function",
   };
   try {
     const [versionResponse, workerResponse] = await Promise.all([
