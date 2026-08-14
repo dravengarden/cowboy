@@ -24,6 +24,7 @@ import {
   insertNativeCodeBlock,
   insertNativeLink,
   mapNativeSelectionThroughValueChange,
+  nativeTextareaFittedHeight,
   nativeTextareaNeedsScroll,
   type NativeTextEdit,
   outdentNativeLines,
@@ -239,6 +240,12 @@ export const ComposerTextarea = forwardRef<
   const measureNativeOverflow = (): void => {
     const ta = inputRef.current;
     if (!ta) return;
+    if (!expanded) {
+      ta.style.height = "auto";
+      ta.style.height = `${String(nativeTextareaFittedHeight(ta.scrollHeight))}px`;
+    } else {
+      ta.style.removeProperty("height");
+    }
     const next = nativeTextareaNeedsScroll(ta.scrollHeight, ta.clientHeight);
     setNativeScrollable((current) => current === next ? current : next);
   };
@@ -819,7 +826,7 @@ export const ComposerTextarea = forwardRef<
           width: "100%",
           minWidth: 0,
           minHeight: expanded ? "100%" : 48,
-          height: expanded ? "100%" : 48,
+          height: expanded ? "100%" : "auto",
           maxHeight: "100%",
           m: 0,
           padding: "8.5px 14px",

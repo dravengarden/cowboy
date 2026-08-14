@@ -1579,14 +1579,8 @@ export function ComposerWorkspace({
           minHeight: 0,
           maxHeight: "100%",
           "&:has(> [data-mobile-primary-composer='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within)": {
-            flex: "1 1 auto",
-            overflow: "hidden",
-          },
-          // An inline image promotes the compact field to CM6. Do not let the
-          // leftover viewport stretch that card into a tall empty canvas around
-          // a small thumbnail — keep it content-tight like the native textarea.
-          "&:has(> [data-mobile-primary-composer='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within):has(.cm-editor)": {
             flex: "0 1 auto",
+            overflow: "hidden",
           },
           // Every visible slot shares one horizontal contract. Explicitly zero
           // the flex minimum so a long pending row, CodeMirror canvas, or
@@ -1959,7 +1953,7 @@ export function ComposerWorkspace({
             // leave a tall, inert canvas after Settings or another action takes
             // focus while the native textarea has already blurred.
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within)": {
-              flex: "1 1 auto",
+              flex: "0 1 auto",
               minHeight: 0,
               maxHeight: "100%",
               // Focus changes hierarchy inside the same card. Keep the outer
@@ -1969,37 +1963,28 @@ export function ComposerWorkspace({
               // WebKit leaves a sharp readable fringe around the glass edge.
               ...mobileFocusedComposerSurfaceSx,
             },
-            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within):has(.cm-editor)": {
-              flex: "0 1 auto",
-            },
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area]": {
-              flex: "1 1 auto",
+              flex: "0 1 auto",
               minHeight: MOBILE_COMPOSER_INPUT_EDITOR_MIN_H,
               maxHeight: "100%",
               overflow: "hidden",
             },
-            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within):has(.cm-editor) [data-mobile-editor-area]": {
-              flex: "0 1 auto",
-            },
-            // The focused touch composer already owns a writing canvas. Make
-            // the REAL textarea fill that canvas instead of leaving a short
-            // native textarea above inert flex space. Besides keeping
-            // every visible writing pixel selectable, this removes the tiny
-            // internal WKChildScrollView range that makes UIKit retain a stale
-            // caret overlay after a trailing Return. Closed-keyboard composers
-            // remain content-sized because this rule is focus-gated.
+            // Keep the compact native field content-tight. Filling leftover
+            // viewport with height 100% left a blank band under short text
+            // (and the Force-push row) whenever the transcript did not occupy
+            // the rest of the screen.
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor]": {
-              flex: "1 1 auto",
+              flex: "0 1 auto",
               minHeight: 0,
-              height: "100%",
+              height: "auto",
               maxHeight: "100%",
               overflow: "hidden",
               display: "flex",
               flexDirection: "column",
             },
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor] [data-mobile-native-textarea='true']": {
-              height: "100% !important",
-              minHeight: "100% !important",
+              height: "auto",
+              minHeight: 48,
               maxHeight: "100%",
             },
             // An inline image promotes the compact native textarea to CM6.
