@@ -1379,24 +1379,26 @@ Desktop Vim + IME checks:
     is already mounted, permission-alert return, and trailing Return before any
     typing.
 
-    The v1240 transient editable widget is withdrawn. Physical v1243/v1246
-    telemetry showed the one-paint hypothesis is false: after Return, CM6
-    `state_line` and `.cm-activeLine` advance, but the native Range stays
-    `caret_height=0` with a negative `caret_top`. Physical v1246 also showed
-    the inverse: Backspace on those empty lines does not move the painted
-    caret up. Do not restore the three-frame Selection widget.
+    Physical v1243–v1247 proved two negative results. (1) A one-paint
+    editable U+200B widget measures the native caret (`caret_height=12`)
+    only while it exists; after removal the Range returns to height 0.
+    (2) Nesting the image in an ordinary `.cm-line` (`block: false`) still
+    leaves `caret_height=0` and a negative `caret_top` on Return and on
+    Backspace. The failure is therefore "empty line after a replaced image
+    widget", not "root-level versus nested block".
 
-    Touch now mounts a **static** `createInlineImageField(false)` so the
-    thumbnail stays inside a real `.cm-line`. Desktop keeps
-    `createInlineImageField(true)` for Vim. There is no presentation facet and
-    no reconfigure-driven rebuild. If Return starts on the atomic image line,
-    `moveCaretOffImageLine` relocates onto the existing trailing empty line
-    instead of inserting a newline before the thumbnail (that is what made
-    the earlier non-block Simulator trial look like a Return trap). Touch
-    omits the Vim measurement node. `mobileLineBreakCaretTelemetry` also
-    samples `deleteContentBackward` so physical Backspace geometry can be
-    compared with Return. This image-structure change is not accepted until
-    the physical iPhone sequence passes, including delete-up.
+    Keep the proven `Decoration.replace({ block: true })` on touch and
+    Desktop. On touch only, after a direct Return or Backspace that changes
+    the line count and leaves a collapsed empty line, mount a document-
+    neutral editable widget containing U+200B at the logical caret and
+    collapse the native Range inside that text node. **Leave it there**
+    until the next `beforeinput`, `keydown`, `compositionstart`, `paste`,
+    or `blur`. Do not remove it after one paint, and do not clear it on
+    `touchstart`/`pointerdown` (that cancelled the long-press menu). The
+    character never enters EditorState. A Selection sync must not disable
+    the field — only a document change or an explicit clear may. This is
+    not accepted until physical Return, Backspace-up, second paste, long-
+    press menu, and IME all pass.
 
 65. **A reliable touch action must pair `pointerup` with its actual synthetic
     `click`, never a timeout guess.** Mobile Safari can omit a click after

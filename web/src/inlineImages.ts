@@ -75,26 +75,26 @@ class InlineImageWidget extends WidgetType {
     // delete, or a range select) — draws the selection ring.
     private readonly selected: boolean,
     private readonly previewUrl: string | undefined,
-    private readonly includeMeasurementNode: boolean,
   ) {
     super();
   }
   override eq(other: InlineImageWidget): boolean {
     return other.id === this.id && other.name === this.name &&
-      other.selected === this.selected && other.previewUrl === this.previewUrl &&
-      other.includeMeasurementNode === this.includeMeasurementNode;
+      other.selected === this.selected && other.previewUrl === this.previewUrl;
   }
   override toDOM(view: EditorView): HTMLElement {
     const att = registry.get(this.id);
     if (att?.previewUrl !== undefined && att.isImage) {
       const widget = document.createElement("span");
       widget.className = "cm-inline-image-widget";
-      // Desktop Vim walks into the DOM after an EOL cursor to borrow font
-      // style. Touch keeps this widget inside a real `.cm-line` and must not
-      // own a hidden text node that can steal the native caret or paste menu.
-      if (this.includeMeasurementNode) {
-        widget.appendChild(document.createTextNode("\u200b"));
-      }
+      // @replit/codemirror-vim walks into the DOM immediately after an EOL
+      // cursor to borrow its font style. A block widget whose first descendant
+      // is an empty <img> makes that walk end at `undefined`, so its cursor
+      // measurement aborts and the Normal-mode block disappears on the text
+      // line above the image. Keep a zero-size text node first: it is inert for
+      // layout and accessibility, but gives the upstream measurement a safe
+      // terminal node. The document selection itself never enters this widget.
+      widget.appendChild(document.createTextNode("\u200b"));
       const img = document.createElement("img");
       img.className = this.selected
         ? "cm-inline-image cm-inline-image-selected"
@@ -146,18 +146,14 @@ class InlineImageWidget extends WidgetType {
   }
 }
 
-// One image == one visual block line. Desktop keeps a true CM6 block
-// replacement so Vim cursor measurement stays stable. Touch uses a separate
-// static field with `block: false` so Return/Backspace happen between ordinary
-// `.cm-line` siblings and WKWebView can measure the native caret. Do not revive
-// a presentation facet or a reconfigure-driven rebuild — that path broke
-// physical paste. Lines that AREN'T a lone token stay literal.
+// One image == one BLOCK line (Obsidian-style): the token is inserted alone on
+// its own line, and the whole line is replaced by a block widget. Physical
+// v1247 showed that nesting the same widget in a `.cm-line` does not give
+// WKWebView a measurable empty-line caret. Keep the proven block replacement
+// and repair the empty-line caret with a document-neutral DOM anchor instead.
 const LONE_TOKEN_RE = /^\s*!\[([^\]]*)\]\(cowboy-att:([^)]+)\)\s*$/;
 
-function buildImageDecorations(
-  state: EditorState,
-  blockDecoration: boolean,
-): DecorationSet {
+function buildImageDecorations(state: EditorState): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
   const { doc } = state;
   const sel = state.selection.main;
@@ -165,8 +161,6 @@ function buildImageDecorations(
     const line = doc.line(i);
     const m = LONE_TOKEN_RE.exec(line.text);
     if (m?.[2] !== undefined) {
-      // Selected when a non-empty selection fully contains this image's block line
-      // (set by the two-stage Backspace below, or a manual range select).
       const selected = !sel.empty && sel.from <= line.from && sel.to >= line.to;
       builder.add(
         line.from,
@@ -177,9 +171,8 @@ function buildImageDecorations(
             m[1] ?? "",
             selected,
             registry.get(m[2])?.previewUrl,
-            blockDecoration,
           ),
-          block: blockDecoration,
+          block: true,
         }),
       );
     }
@@ -187,30 +180,19 @@ function buildImageDecorations(
   return builder.finish();
 }
 
-function createInlineImageField(blockDecoration: boolean) {
-  return StateField.define<DecorationSet>({
-    create: (state) => buildImageDecorations(state, blockDecoration),
-    // Rebuild on doc OR selection change. The block/inline choice is a closure
-    // constant for the field's whole lifetime.
-    update: (value, tr) =>
-      tr.docChanged || tr.selection ||
-        tr.effects.some((effect) => effect.is(refreshInlineImages))
-        ? buildImageDecorations(tr.state, blockDecoration)
-        : value,
-    provide: (f) => [
-      EditorView.decorations.from(f),
-      EditorView.atomicRanges.of(
-        (view) => view.state.field(f, false) ?? Decoration.none,
-      ),
-    ],
-  });
-}
-
-/// Desktop / non-touch: true CM6 block replacement.
-export const inlineImageField = createInlineImageField(true);
-
-/// Touch: same atomic thumbnail, kept inside an ordinary `.cm-line`.
-export const touchInlineImageField = createInlineImageField(false);
+export const inlineImageField = StateField.define<DecorationSet>({
+  create: (state) => buildImageDecorations(state),
+  update: (value, tr) =>
+    tr.docChanged || tr.selection || tr.effects.some((effect) => effect.is(refreshInlineImages))
+      ? buildImageDecorations(tr.state)
+      : value,
+  provide: (f) => [
+    EditorView.decorations.from(f),
+    EditorView.atomicRanges.of(
+      (view) => view.state.field(f, false) ?? Decoration.none,
+    ),
+  ],
+});
 
 /// True when `text`'s LAST line is a lone block-image token (with no empty line
 /// after it). A block-image decoration replaces its whole line and is atomic, so
@@ -248,12 +230,6 @@ export const inlineImageTrailingLine = EditorState.transactionFilter.of((tr) => 
 export const inlineImageTheme = EditorView.theme({
   ".cm-inline-image-widget": {
     display: "block",
-    fontSize: "0",
-    lineHeight: "0",
-  },
-  // Touch keeps the widget inside `.cm-line`. Kill that line's text strut so
-  // adjacent Return/Backspace carets stay text-height.
-  ".cm-line:has(> .cm-inline-image-widget)": {
     fontSize: "0",
     lineHeight: "0",
   },
