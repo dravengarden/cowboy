@@ -1,6 +1,5 @@
 import {
   AccountTreeOutlined,
-  CallSplit,
   CommitOutlined,
   DescriptionOutlined,
   History,
@@ -306,9 +305,6 @@ export function ReviewRepository({
                         fontSize: "0.7rem",
                       }}
                     />
-                    {commit.parents.length > 1 && (
-                      <CallSplit color="primary" fontSize="small" />
-                    )}
                   </ListItemButton>
                 ))}
               </List>

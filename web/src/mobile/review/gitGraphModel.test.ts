@@ -39,3 +39,26 @@ Deno.test("git graph does not draw an incoming stub for a disconnected ref", () 
   ]);
   assertEquals(graph.map((row) => row.incoming), [false, false, true]);
 });
+
+Deno.test("git graph drops parents outside the visible history", () => {
+  const graph = buildGitGraph([
+    commit("head", ["visible"]),
+    commit("visible", ["outside-window"]),
+    commit("other-ref", []),
+  ]);
+  assertEquals(graph[1].bottomLanes, 0);
+  assertEquals(graph[1].edges, []);
+  assertEquals(graph[2].nodeLane, 0);
+  assertEquals(graph[2].incoming, false);
+});
+
+Deno.test("git graph keeps existing lanes stable when another ref appears", () => {
+  const graph = buildGitGraph([
+    commit("head", ["main"]),
+    commit("side", []),
+    commit("main", []),
+  ]);
+  assertEquals(graph[1].nodeLane, 1);
+  assertEquals(graph[1].edges, [{ from: 0, to: 0, kind: "through" }]);
+  assertEquals(graph[2].nodeLane, 0);
+});
