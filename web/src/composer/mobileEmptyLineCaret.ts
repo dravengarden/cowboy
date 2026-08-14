@@ -45,11 +45,15 @@ const setHideMobileEmptyLineCaretForIme = StateEffect.define<boolean>();
  * the Return/Backspace animation.
  */
 class MobileEmptyLineCaretAnchorWidget extends WidgetType {
-  override eq(): boolean {
-    // Physical v1258: rebuilding this node after Return killed the native
-    // Range (caret_height 12 → 0, caret_top -260) while the CM6 line moved.
-    // Native insertLineBreak is preventDefaulted, so reuse is safe.
-    return true;
+  constructor(readonly at: number) {
+    super();
+  }
+
+  override eq(other: MobileEmptyLineCaretAnchorWidget): boolean {
+    // Physical v1259: `eq()` true for every instance let CM6 move the
+    // landing node onto the new line. The abandoned landing line then
+    // collapsed and grew 14px, and the native Range died.
+    return other.at === this.at;
   }
 
   toDOM(): HTMLElement {
@@ -92,7 +96,7 @@ export function landingAnchorsForEmptyLinesAfterImages(
   return Decoration.set(
     positions.map((from) =>
       Decoration.widget({
-        widget: new MobileEmptyLineCaretAnchorWidget(),
+        widget: new MobileEmptyLineCaretAnchorWidget(from),
         side: 1,
       }).range(from)
     ),
@@ -153,6 +157,16 @@ export function landingSelectionAlreadyPlaced(
       selection?.isCollapsed &&
       selection.anchorNode === text,
   );
+}
+
+export function collapseLandingSelection(
+  selection: Selection | null,
+  text: Node | null,
+): boolean {
+  if (!text || text.nodeType !== 3 || !selection) return false;
+  if (landingSelectionAlreadyPlaced(selection, text)) return false;
+  selection.collapse(text, 0);
+  return true;
 }
 
 export function updateInsertedLineBreak(update: ViewUpdate): boolean {
@@ -250,18 +264,14 @@ export const mobileEmptyLineCaretRepair = [
         const anchor = this.view.contentDOM.querySelector<HTMLElement>(
           `.cm-line.cm-activeLine .${MOBILE_EMPTY_LINE_CARET_ANCHOR_CLASS}`,
         );
-        const text = anchor?.firstChild;
+        const text = anchor?.firstChild ?? null;
         const selection = this.view.contentDOM.ownerDocument.getSelection();
-        if (!text || text.nodeType !== Node.TEXT_NODE || !selection) return;
-        if (landingSelectionAlreadyPlaced(selection, text)) return;
-        // Route the next key into the landing text node. This does not move
-        // the UIKit caret by itself — first Return / Backspace still have to
-        // be native input inside that node.
-        const range = this.view.contentDOM.ownerDocument.createRange();
-        range.setStart(text, 0);
-        range.collapse(true);
-        selection.removeAllRanges();
-        selection.addRange(range);
+        if (
+          !collapseLandingSelection(selection, text) &&
+          !landingSelectionAlreadyPlaced(selection, text)
+        ) {
+          return;
+        }
         const sequence = this.reportSequence < 6 ? ++this.reportSequence : 0;
         reportAnchorGeometry(this.view, sequence);
       }
@@ -282,11 +292,14 @@ export const mobileEmptyLineCaretRepair = [
       update(update: ViewUpdate): void {
         const has = update.state.field(mobileEmptyLineCaretAnchorField).size;
         if (has === 0) return;
-        // Physical v1257: inserting on beforeinput then consuming Enter still
-        // bounced twice. The first motion was our newline; the second was
-        // UIKit moving on the delayed keydown. Do not write a newline here,
-        // and do not remap after any newline.
-        if (updateInsertedLineBreak(update)) return;
+        // Physical v1259: after Return, CM6 had already updated the DOM.
+        // A delayed removeAllRanges remap bounced; skipping it left the
+        // native Range dead. Collapse into the new line's own widget in
+        // this same update, without removeAllRanges.
+        if (updateInsertedLineBreak(update)) {
+          this.placeLandingSelection();
+          return;
+        }
         if (update.docChanged || update.selectionSet) this.schedulePlace();
       }
 

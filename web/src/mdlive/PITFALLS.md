@@ -1446,6 +1446,12 @@ Desktop Vim + IME checks:
     still advanced `.cm-activeLine`. Keep the landing U+200B after the
     caret leaves so that line never collapses, and reuse the widget DOM
     (`eq()` true) so a rebuild does not destroy the Range.
+    Physical v1259 still died on the second Return. Two widgets were
+    present (`caret_anchor_widgets=2`) but `eq()` returned true for
+    every instance, so CM6 moved the landing node onto the new line.
+    The landing line still collapsed. Key `eq()` by document position,
+    and after a newline `Selection.collapse` into the *new* line's
+    widget in the same view update — no `removeAllRanges`.
 
 
 65. **A reliable touch action must pair `pointerup` with its actual synthetic

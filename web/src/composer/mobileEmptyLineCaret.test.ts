@@ -6,6 +6,7 @@ import {
   selectionOnEmptyLineInImageChain,
 } from "./inlineImageCaretPolicy";
 import {
+  collapseLandingSelection,
   isMobileEmptyLineCaretState,
   landingAnchorPositions,
   landingAnchorsForEmptyLinesAfterImages,
@@ -131,6 +132,24 @@ Deno.test("landing remap is skipped when the caret is already in the widget", ()
   );
   assertEquals(landingSelectionAlreadyPlaced(null, text), false);
   assertEquals(typeof updateInsertedLineBreak, "function");
+
+  const moving = {
+    anchorNode: null as Node | null,
+    isCollapsed: true,
+    collapse(node: Node, offset: number) {
+      this.anchorNode = node;
+      this.isCollapsed = offset === 0;
+    },
+  };
+  assertEquals(
+    collapseLandingSelection(moving as unknown as Selection, text),
+    true,
+  );
+  assertEquals(moving.anchorNode, text);
+  assertEquals(
+    collapseLandingSelection(moving as unknown as Selection, text),
+    false,
+  );
 });
 
 Deno.test("mobile caret repair requires a collapsed empty line", () => {
@@ -158,8 +177,9 @@ Deno.test("mobile caret landing anchor is document-neutral and not late-mounted"
   assertEquals(source.includes("selectionOnEmptyLineInImageChain"), true);
   assertEquals(source.includes("beforeinput.target is always .cm-content"), true);
   assertEquals(source.includes("Let that single"), true);
-  assertEquals(source.includes("caret_height 12 → 0"), true);
-  assertEquals(source.includes("return true"), true);
+  assertEquals(source.includes("landing node onto the new line"), true);
+  assertEquals(source.includes("other.at === this.at"), true);
+  assertEquals(source.includes("selection.removeAllRanges"), false);
   assertEquals(source.includes("materializeLineBreak"), false);
   assertEquals(source.includes("placeLandingSelection"), true);
   assertEquals(source.includes("touchstart"), false);
