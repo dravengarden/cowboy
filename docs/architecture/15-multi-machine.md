@@ -1,5 +1,12 @@
 # Multi-machine runtime
 
+> **Provider packaging transition:** the `acp-runtime`, `provider-adapter`, and
+> `provider-cli` slots below describe the current internal rollout machinery.
+> The target product groups their exact pins into one independently released,
+> Machine-scoped Provider package. Ordinary UI installs, upgrades, and uninstalls
+> that Provider unit and does not expose ACP or adapter slots. See
+> [Installable Provider packages](../provider-packages.md).
+
 Cowboy evolves from one Hawk-local runtime into a control plane that can route
 sessions and code-intelligence work to independently operated macOS and Linux
 machines. The durable boundary is a small `cowboy-machine` host agent. Agent
@@ -54,8 +61,9 @@ length-bounded application frames over WebSocket/TLS.
 - provider and Zed authentication orchestration without reading credentials
   into Cowboy's database or event stream.
 
-It does **not** contain provider-specific UI rules or Zed protocol logic. Those
-live in independently versioned payloads:
+It does **not** contain provider-specific UI rules or Zed protocol logic. The
+transitional implementation stores those executable concerns in independently
+versioned internal payloads:
 
 | Payload domain | Contents | Roll trigger |
 |---|---|---|
@@ -70,6 +78,12 @@ target, and update policy. Updating Zed must not drain ACP turns. Updating
 Codex must not restart Claude/Gemini workers or Zed language servers. Updating
 the Machine host must leave all content-addressed payload executables running;
 the replacement host adopts them from snapshots after reconnect.
+
+Under the Provider package contract, these internal domains remain useful for
+content deduplication, process supervision, and diagnostics, but a signed
+Provider lockset selects all of them. A Provider install transaction is not
+`active` until the complete lockset has passed its interface checks and probes;
+users never reconcile one private layer as a standalone product operation.
 
 ## Zed is a version set, not one global binary
 
@@ -420,8 +434,10 @@ enrolled online machine before removing an old version.
   refreshes the other two from that machine's capability snapshot. Current
   machine is preselected.
 - Machines lists connectivity, platform/architecture, capacity, allowed
-  workspaces, provider install/auth/version state, ACP generation, Zed
-  generations, pending updates, and last error.
+  workspaces, Provider install/auth/version/health state, Zed generations,
+  pending updates, and last error. ACP and adapter generations move to an
+  explicitly scoped developer-diagnostics surface during Provider-package
+  migration.
 - Login and update actions are explicit sheets/dialogs with progress and
   cancellation. Secret material is never rendered after submission.
 - Offline, incompatible, draining, and revoked are visually distinct and carry
