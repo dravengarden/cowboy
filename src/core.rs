@@ -159,8 +159,7 @@ fn is_human_question_chunk(envelope: &Envelope) -> bool {
         Event::Update { update }
             if update.get("sessionUpdate").and_then(serde_json::Value::as_str)
                 == Some("user_message_chunk")
-                && update.get("autoResumed").and_then(serde_json::Value::as_bool)
-                    != Some(true)
+                && crate::prompt_origin::is_human_prompt_update(update)
                 && !matches!(
                     update.pointer("/content/text").and_then(serde_json::Value::as_str)
                         .map(str::trim),

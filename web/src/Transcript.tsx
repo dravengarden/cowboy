@@ -84,8 +84,11 @@ import {
   isCompactionCompletionTail,
   isCompactionCompletionText,
   isCompactionRequestTail,
+  isHumanPrompt,
+  type PromptOrigin,
   type RenderItem,
 } from "./derive";
+import { PromptOriginNote } from "./PromptOriginNote";
 import type { Envelope, Status } from "./protocol";
 import {
   TranscriptJudgingActivity,
@@ -105,6 +108,11 @@ import {
 import { importantHaptic, magneticHaptic } from "./haptic";
 import { useReadingSettings } from "./readingSettings";
 import { mobileTranscriptTailGap } from "./mobileComposerPrimitives";
+import {
+  USER_BUBBLE_COLLAPSE_BUFFER_PX,
+  USER_BUBBLE_COLLAPSE_PX,
+  userBubbleShouldClamp,
+} from "./userBubbleCollapse";
 import {
   requestStickToBottom,
   resetSticky,
@@ -1529,7 +1537,6 @@ function ThoughtSteps({
 // content (the inner ref isn't clamped, so the clamp can never hide its own
 // toggle) and re-measured on async growth (a pasted image loading). One height
 // cap + a centered text toggle behaves identically on mobile + desktop.
-const COLLAPSED_BUBBLE_PX = 200;
 function CollapsibleUserBody({
   children,
   containsImage = false,
@@ -1538,7 +1545,7 @@ function CollapsibleUserBody({
   containsImage?: boolean;
 }): React.JSX.Element {
   const [expanded, setExpanded] = useState(false);
-  const [overflowing, setOverflowing] = useState(false);
+  const [naturalHeight, setNaturalHeight] = useState<number | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const el = ref.current;
@@ -1549,9 +1556,7 @@ function CollapsibleUserBody({
     // offsetHeight synchronously for every transcript row forced a style/layout
     // flush during startup, especially on slower Mobile devices.
     const ro = new ResizeObserver(([entry]) => {
-      if (entry) {
-        setOverflowing(entry.contentRect.height > COLLAPSED_BUBBLE_PX + 80);
-      }
+      if (entry) setNaturalHeight(entry.contentRect.height);
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -1561,13 +1566,21 @@ function CollapsibleUserBody({
   // Images are already viewport-bounded thumbnails. Clamping their parent to
   // the text-only 200px cap is what made a portrait screenshot look like it
   // never expanded, so image messages keep their full preview.
-  const clamp = !expanded && !containsImage;
+  const measured = naturalHeight !== null;
+  const clamp = userBubbleShouldClamp({
+    measured,
+    naturalHeight: naturalHeight ?? 0,
+    expanded,
+    containsImage,
+  });
+  const overflowing = measured &&
+    naturalHeight > USER_BUBBLE_COLLAPSE_PX + USER_BUBBLE_COLLAPSE_BUFFER_PX;
   return (
     <>
       <Box sx={{ position: "relative" }}>
         <Box
           sx={{
-            maxHeight: clamp ? COLLAPSED_BUBBLE_PX : "none",
+            maxHeight: clamp ? USER_BUBBLE_COLLAPSE_PX : "none",
             overflow: "hidden",
           }}
         >
@@ -1745,7 +1758,7 @@ function MessageBubble({
   role,
   chunks,
   streaming,
-  autoResumed,
+  origin,
   provider,
   desktop,
 }: {
@@ -1754,15 +1767,12 @@ function MessageBubble({
   /** When true, append a blinking caret after the last text chunk to signal
    *  the model is still producing. */
   streaming?: boolean;
-  /** This "user" turn is a daemon-issued auto-resume continuation, not something
-   *  the human typed — render it as a distinct system note, never a user bubble
-   *  (an empty-result continuation re-issues the prompt verbatim, which would
-   *  otherwise read as a duplicate). */
-  autoResumed?: boolean;
+  origin?: PromptOrigin | undefined;
   provider: string;
   desktop: boolean;
 }): React.JSX.Element | null {
   const mine = role === "user";
+  const human = !mine || isHumanPrompt(origin);
   // Claude Code's "Compacting..." auto-compaction notice → purpose-built widget
   // instead of a stray one-word assistant reply. `streaming` (last item + turn
   // busy) means it's condensing right now; otherwise it's a finished record.
@@ -1788,54 +1798,16 @@ function MessageBubble({
   const lastChunkIdx = chunks.length - 1;
   const body = chunks.map((c, i) => (
     <Box key={i} sx={{ position: "relative" }}>
-      <ChunkView chunk={c} invert={mine && !autoResumed} />
+      <ChunkView chunk={c} invert={mine && human} />
       {streaming && i === lastChunkIdx && c.type === "text" && (
         <StreamingCaret />
       )}
     </Box>
   ));
-  // Auto-resume continuation: a right-aligned, muted "↻ Auto-resumed" note with
-  // the re-sent prompt below it. It sits on the right (the "my side" rail, since
-  // the daemon issues it on the human's behalf) but stays a muted, bordered note
-  // — never the primary-filled user bubble — so it never reads as something the
-  // human actually typed.
-  if (mine && autoResumed) {
-    return (
-      <Box
-        sx={{
-          alignSelf: "flex-end",
-          maxWidth: { xs: "92%", sm: "80%" },
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "flex-end",
-          gap: 0.5,
-          py: 0.5,
-        }}
-      >
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          sx={{ fontWeight: 600 }}
-        >
-          Auto-resumed the interrupted turn
-        </Typography>
-        <Box
-          sx={{
-            width: "100%",
-            px: 1.25,
-            py: 0.75,
-            borderRadius: 1.5,
-            border: 1,
-            borderColor: "divider",
-            bgcolor: "action.hover",
-            color: "text.secondary",
-            fontSize: 13,
-          }}
-        >
-          {body}
-        </Box>
-      </Box>
-    );
+  // Non-human user-role prompts (Cowboy auto-resume/schedule, agent runtime)
+  // stay on the timeline but never use the primary-filled human bubble.
+  if (mine && origin && !human) {
+    return <PromptOriginNote origin={origin} chunks={chunks} provider={provider} />;
   }
   // Assistant replies render flush in the page (Zed-style): no border, no card
   // background, just markdown flowing inline. The per-item `py` in the
@@ -2053,7 +2025,9 @@ function toolContextBlocks(items: RenderItem[]): ToolContextBlock[] {
     let tone: ToolContextBlock["tone"] | null = null;
     let text = "";
     if (item.kind === "message") {
-      tone = item.role === "user" ? "user" : "prose";
+      tone = item.role === "user"
+        ? (isHumanPrompt(item.origin) ? "user" : "thought")
+        : "prose";
       text = item.chunks
         .filter((chunk): chunk is Extract<ContentChunk, { type: "text" }> => chunk.type === "text")
         .map((chunk) => chunk.text)
@@ -2971,7 +2945,7 @@ const ItemView = memo(function ItemView({
           role={item.role}
           chunks={item.chunks}
           streaming={!!streaming && item.role === "assistant"}
-          autoResumed={item.autoResumed === true}
+          origin={item.origin}
           provider={provider}
           desktop={desktop}
         />

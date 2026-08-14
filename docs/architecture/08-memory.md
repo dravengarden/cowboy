@@ -1,13 +1,14 @@
-# Codex-owned memory boundary
+# Agent-owned memory boundary
 
-cowboy does not implement an agent-memory store. It launches Codex as the
-human user, with the user's normal `CODEX_HOME`, so Codex's native local-memory
-feature works exactly as it does in a direct CLI or IDE session.
+cowboy does not implement an agent-memory store. It launches each agent as the
+human user with that runtime's native home. Codex uses the normal `CODEX_HOME`;
+Grok uses `~/.grok` with its experimental native memory enabled for Cowboy
+sessions. Both stores remain owned by their agent runtime.
 
 This is a deliberate ownership boundary:
 
-- Codex owns memory extraction, consolidation, relevance selection, storage,
-  per-task controls, and rate-limit policy.
+- Codex and Grok each own memory extraction, consolidation, relevance
+  selection, storage, per-task controls, and rate-limit policy.
 - Repository guidance that must always apply belongs in `AGENTS.md`, checked-in
   documentation, tests, or hooks.
 - Reusable procedures belong in skills.
@@ -17,8 +18,10 @@ This is a deliberate ownership boundary:
   client-facing control plane.
 
 There are no cowboy memory CLI commands, HTTP endpoints, background janitor
-sessions, reconcile loops, or scheduled tidy jobs. Generated Codex memory under
-`~/.codex` is tool-owned state: cowboy neither reads nor mutates it.
+sessions, reconcile loops, or scheduled tidy jobs. Generated memory under
+`~/.codex` and `~/.grok/memory` is tool-owned state: cowboy neither reads nor
+mutates it. Columbus may audit follower stores read-only for stale filesystem
+references, but it does not bridge or rebuild them.
 
 The old in-process mnemosyne port was removed because it duplicated Codex's
 native capability and depended on a second agent session to judge the first

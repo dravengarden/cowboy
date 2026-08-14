@@ -4,6 +4,20 @@
 // transcript model — no code editor / file tree / git, just the conversation.
 
 import type { AcpUpdate, Envelope, PermissionOption, PlanEntry, Status } from "./protocol";
+import {
+  isHumanPrompt,
+  type PromptOrigin,
+  resolvePromptOrigin,
+  samePromptOrigin,
+} from "./promptOrigin";
+
+export {
+  isHumanPrompt,
+  isInternalRuntimePrompt,
+  type PromptActor,
+  type PromptOrigin,
+  resolvePromptOrigin,
+} from "./promptOrigin";
 
 /// A renderable slice of a message — text and images can interleave inside
 /// one message item (e.g. user pastes "describe this:" + image + " thanks").
@@ -16,7 +30,14 @@ export type ContentChunk =
 // The transcript keys rows by this so prepending older history (which shifts
 // every array index) doesn't re-mount/jump the visible rows; index keys can't.
 export type RenderItem = { key: string } & (
-  | { kind: "message"; role: "assistant" | "user"; chunks: ContentChunk[]; autoResumed?: boolean }
+  | {
+    kind: "message";
+    role: "assistant" | "user";
+    chunks: ContentChunk[];
+    origin?: PromptOrigin | undefined;
+    /** @deprecated Prefer `origin`. Kept for older call sites. */
+    autoResumed?: boolean;
+  }
   | { kind: "thought"; sections: string[] }
   | {
       kind: "tool";
@@ -92,7 +113,8 @@ function sameRenderItem(a: RenderItem, b: RenderItem): boolean {
   switch (a.kind) {
     case "message":
       return b.kind === "message" && a.role === b.role &&
-        a.autoResumed === b.autoResumed && sameChunks(a.chunks, b.chunks);
+        a.autoResumed === b.autoResumed &&
+        samePromptOrigin(a.origin, b.origin) && sameChunks(a.chunks, b.chunks);
     case "thought":
       return b.kind === "thought" && sameStrings(a.sections, b.sections);
     case "tool":
@@ -273,11 +295,16 @@ export function derive(timeline: Envelope[]): RenderItem[] {
             if (cursor?.kind === "message" && cursor.role === role && last?.kind === "message") {
               pushChunk(last, chunk);
             } else {
-              // An auto-resume continuation echo carries `autoResumed` (set by the
-              // daemon, src/acp.rs) so the UI marks it as a resumed turn rather
-              // than letting it read as a user message the human typed.
-              const autoResumed = u["autoResumed"] === true;
-              items.push({ kind: "message", role, chunks: [chunk], key: String(env.seq), autoResumed });
+              const text = chunk.type === "text" ? chunk.text : "";
+              const origin = role === "user" ? resolvePromptOrigin(u, text) : undefined;
+              items.push({
+                kind: "message",
+                role,
+                chunks: [chunk],
+                key: String(env.seq),
+                origin,
+                autoResumed: origin !== undefined && !isHumanPrompt(origin),
+              });
               cursor = { kind: "message", role };
             }
             break;
@@ -447,9 +474,10 @@ export function latestPlan(timeline: Envelope[]): CurrentPlan | null {
     } else if (
       entries &&
       env.kind === "update" &&
-      env.update.sessionUpdate === "user_message_chunk"
+      env.update.sessionUpdate === "user_message_chunk" &&
+      isHumanPrompt(resolvePromptOrigin(env.update, textOf(env.update)))
     ) {
-      superseded = true; // a user prompt landed after the latest plan
+      superseded = true; // a human prompt landed after the latest plan
     }
   }
   if (!entries || entries.length === 0) return null;

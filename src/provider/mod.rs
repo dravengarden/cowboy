@@ -66,14 +66,6 @@ const CODEX_RUNTIME_ARGS: &[&str] = &[
 // Grok Build is itself an ACP agent. Keep every Cowboy session in its own
 // process instead of joining the CLI's optional shared leader, leave component
 // updates to Cowboy Machine, and match Cowboy's unrestricted agent posture.
-const GROK_RUNTIME_ARGS: &[&str] = &[
-    "--no-auto-update",
-    "agent",
-    "--always-approve",
-    "--no-leader",
-    "stdio",
-];
-
 // DeepSeek's Anthropic-compatible 1M lane counts the requested completion
 // against the same context budget as the prompt. Claude Code otherwise waits
 // until roughly the end of the advertised window before compacting, after
@@ -365,8 +357,8 @@ fn builtin_with_env_and_shell(
         spec_with_custom_default_args(
             "grok",
             "npx",
-            &concat_slices(&["-y", "@xai-official/grok"], GROK_RUNTIME_ARGS),
-            GROK_RUNTIME_ARGS,
+            &concat_slices(&["-y", "@xai-official/grok"], crate::grok::RUNTIME_ARGS),
+            crate::grok::RUNTIME_ARGS,
             &get_env,
         ),
     );
@@ -839,6 +831,9 @@ mod tests {
                 "-y",
                 "@xai-official/grok",
                 "--no-auto-update",
+                "--experimental-memory",
+                "--rules",
+                crate::grok::PROJECT_RULES_BOOTSTRAP,
                 "agent",
                 "--always-approve",
                 "--no-leader",
@@ -957,6 +952,9 @@ mod tests {
             grok.args,
             [
                 "--no-auto-update",
+                "--experimental-memory",
+                "--rules",
+                crate::grok::PROJECT_RULES_BOOTSTRAP,
                 "agent",
                 "--always-approve",
                 "--no-leader",
