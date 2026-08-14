@@ -7,6 +7,14 @@ export function isMobileLineBreakInput(
   return inputType === "insertLineBreak" || inputType === "insertParagraph";
 }
 
+export function isMobileCaretGeometryInput(
+  inputType: string | undefined,
+): boolean {
+  return isMobileLineBreakInput(inputType) ||
+    inputType === "deleteContentBackward" ||
+    inputType === "deleteContentForward";
+}
+
 export type MobileCaretNodeRelation =
   | "missing"
   | "content_root"
@@ -159,11 +167,11 @@ export const mobileLineBreakCaretTelemetry = ViewPlugin.fromClass(
   {
     eventHandlers: {
       beforeinput(event: InputEvent): void {
-        if (isMobileLineBreakInput(event.inputType)) this.schedule();
+        if (isMobileCaretGeometryInput(event.inputType)) this.schedule();
       },
       input(event: Event): void {
         const inputEvent = event as InputEvent;
-        if (isMobileLineBreakInput(inputEvent.inputType)) this.schedule();
+        if (isMobileCaretGeometryInput(inputEvent.inputType)) this.schedule();
       },
     },
   },
