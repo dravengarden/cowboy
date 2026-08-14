@@ -68,8 +68,8 @@ const CODEX_RUNTIME_ARGS: &[&str] = &[
 // updates to Cowboy Machine, and match Cowboy's unrestricted agent posture.
 const GROK_RUNTIME_ARGS: &[&str] = &[
     "--no-auto-update",
-    "--always-approve",
     "agent",
+    "--always-approve",
     "--no-leader",
     "stdio",
 ];
@@ -839,8 +839,8 @@ mod tests {
                 "-y",
                 "@xai-official/grok",
                 "--no-auto-update",
-                "--always-approve",
                 "agent",
+                "--always-approve",
                 "--no-leader",
                 "stdio",
             ]
@@ -957,8 +957,8 @@ mod tests {
             grok.args,
             [
                 "--no-auto-update",
-                "--always-approve",
                 "agent",
+                "--always-approve",
                 "--no-leader",
                 "stdio",
             ]

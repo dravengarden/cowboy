@@ -33,12 +33,12 @@ use std::time::Duration;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     CancelNotification, ClientNotification, ContentBlock, ExtNotification, InitializeRequest,
-    LoadSessionRequest, Meta, NewSessionRequest, PermissionOptionId, PermissionOptionKind,
-    PromptRequest, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption,
-    SessionConfigOptionValue, SessionConfigSelectOption, SessionConfigSelectOptions, SessionId,
-    SessionModeId, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
-    SetSessionModeRequest,
+    LoadSessionRequest, Meta, NewSessionRequest, PermissionOption, PermissionOptionId,
+    PermissionOptionKind, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
+    RequestPermissionResponse, ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigKind,
+    SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption,
+    SessionConfigSelectOptions, SessionId, SessionModeId, SessionNotification, SessionUpdate,
+    SetSessionConfigOptionRequest, SetSessionModeRequest,
 };
 use agent_client_protocol::{
     Agent, ByteStreams, Client, ConnectionTo, Error, JsonRpcRequest, JsonRpcResponse,
@@ -105,6 +105,29 @@ impl GrokPermissionMode {
     const fn auto_mode(self) -> bool {
         matches!(self, Self::Auto)
     }
+}
+
+fn permission_auto_approve_enabled(
+    provider_id: &str,
+    system_session: bool,
+    codex_full_access: bool,
+    grok_permission_mode: GrokPermissionMode,
+) -> bool {
+    system_session
+        || (crate::provider::is_codex(provider_id) && codex_full_access)
+        || (provider_id == "grok"
+            && matches!(grok_permission_mode, GrokPermissionMode::AlwaysApprove))
+}
+
+fn preferred_allow_option(options: &[PermissionOption]) -> Option<&PermissionOption> {
+    options
+        .iter()
+        .find(|option| matches!(option.kind, PermissionOptionKind::AllowAlways))
+        .or_else(|| {
+            options
+                .iter()
+                .find(|option| matches!(option.kind, PermissionOptionKind::AllowOnce))
+        })
 }
 
 fn grok_permission_option(current: GrokPermissionMode) -> SessionConfigOption {
@@ -750,8 +773,21 @@ fn stable_claude_session_meta(provider_id: &str) -> Option<Meta> {
     Some(meta)
 }
 
+fn provider_session_meta(provider_id: &str) -> Option<Meta> {
+    if provider_id == "grok" {
+        let mut meta = Meta::new();
+        // Grok's own pager stamps both permission booleans on every new/load
+        // request. Keep the resident ACP session authoritative even if the
+        // process-level default changes or a resume reconnects to old state.
+        meta.insert("yoloMode".to_owned(), serde_json::json!(true));
+        meta.insert("autoMode".to_owned(), serde_json::json!(false));
+        return Some(meta);
+    }
+    stable_claude_session_meta(provider_id)
+}
+
 fn new_session_request(provider_id: &str, cwd: PathBuf) -> NewSessionRequest {
-    NewSessionRequest::new(cwd).meta(stable_claude_session_meta(provider_id))
+    NewSessionRequest::new(cwd).meta(provider_session_meta(provider_id))
 }
 
 fn resume_session_request(
@@ -759,7 +795,7 @@ fn resume_session_request(
     session_id: SessionId,
     cwd: PathBuf,
 ) -> ResumeSessionRequest {
-    ResumeSessionRequest::new(session_id, cwd).meta(stable_claude_session_meta(provider_id))
+    ResumeSessionRequest::new(session_id, cwd).meta(provider_session_meta(provider_id))
 }
 
 fn load_session_request(
@@ -767,7 +803,7 @@ fn load_session_request(
     session_id: SessionId,
     cwd: PathBuf,
 ) -> LoadSessionRequest {
-    LoadSessionRequest::new(session_id, cwd).meta(stable_claude_session_meta(provider_id))
+    LoadSessionRequest::new(session_id, cwd).meta(provider_session_meta(provider_id))
 }
 
 #[cfg(test)]
@@ -778,12 +814,13 @@ mod startup_mode_tests {
         codex_full_access_available, codex_full_access_selected, deepseek_session_environment,
         grok_cowboy_options, grok_model_request, grok_permission_notification, grok_session_usage,
         is_empty_stream_message_update, load_session_request, new_session_request,
-        resume_session_request, select_resume_method, session_config_value,
-        startup_full_access_mode,
+        permission_auto_approve_enabled, preferred_allow_option, resume_session_request,
+        select_resume_method, session_config_value, startup_full_access_mode,
     };
     use agent_client_protocol::JsonRpcMessage as _;
     use agent_client_protocol::schema::v1::{
-        SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption, SessionId,
+        PermissionOption, PermissionOptionKind, SessionConfigOption, SessionConfigOptionValue,
+        SessionConfigSelectOption, SessionId,
     };
     use std::path::PathBuf;
 
@@ -836,6 +873,80 @@ mod startup_mode_tests {
         let request =
             serde_json::to_value(new_session_request("codex", cwd)).expect("non-Claude request");
         assert!(request.get("_meta").is_none());
+    }
+
+    #[test]
+    fn every_grok_session_setup_path_explicitly_enables_always_approve() {
+        let cwd = PathBuf::from("/tmp/workspace");
+        let requests = [
+            serde_json::to_value(new_session_request("grok", cwd.clone())).expect("new request"),
+            serde_json::to_value(resume_session_request(
+                "grok",
+                SessionId::new("session"),
+                cwd.clone(),
+            ))
+            .expect("resume request"),
+            serde_json::to_value(load_session_request("grok", SessionId::new("session"), cwd))
+                .expect("load request"),
+        ];
+        for request in requests {
+            assert_eq!(
+                request.pointer("/_meta/yoloMode"),
+                Some(&serde_json::json!(true))
+            );
+            assert_eq!(
+                request.pointer("/_meta/autoMode"),
+                Some(&serde_json::json!(false))
+            );
+        }
+    }
+
+    #[test]
+    fn grok_always_approve_auto_answers_remaining_permission_requests() {
+        assert!(permission_auto_approve_enabled(
+            "grok",
+            false,
+            false,
+            GrokPermissionMode::AlwaysApprove,
+        ));
+        for mode in [GrokPermissionMode::Default, GrokPermissionMode::Auto] {
+            assert!(!permission_auto_approve_enabled("grok", false, false, mode,));
+        }
+        assert!(permission_auto_approve_enabled(
+            "codex",
+            false,
+            true,
+            GrokPermissionMode::Default,
+        ));
+        assert!(!permission_auto_approve_enabled(
+            "claude-code",
+            false,
+            true,
+            GrokPermissionMode::Default,
+        ));
+        assert!(permission_auto_approve_enabled(
+            "claude-code",
+            true,
+            false,
+            GrokPermissionMode::Default,
+        ));
+
+        let allow_once =
+            PermissionOption::new("allow-once", "Allow once", PermissionOptionKind::AllowOnce);
+        let allow_always = PermissionOption::new(
+            "allow-always",
+            "Allow always",
+            PermissionOptionKind::AllowAlways,
+        );
+        assert_eq!(
+            preferred_allow_option(&[allow_once.clone(), allow_always.clone()])
+                .map(|option| option.option_id.0.as_ref()),
+            Some("allow-always")
+        );
+        assert_eq!(
+            preferred_allow_option(&[allow_once]).map(|option| option.option_id.0.as_ref()),
+            Some("allow-once")
+        );
     }
 
     #[test]
@@ -1474,6 +1585,11 @@ struct ClientState {
     /// from blocking an explicitly unrestricted Cowboy session. This is never
     /// enabled for a restricted mode or another provider.
     codex_full_access: AtomicBool,
+    /// Cowboy synthesizes Grok's pre-standard permission selector. Sharing its
+    /// live value with the permission callback mirrors Grok's own headless
+    /// client: Always Approve answers any residual shell-gate request locally,
+    /// while Default and Auto continue through the human/classifier path.
+    grok_permission_mode: Arc<Mutex<GrokPermissionMode>>,
     /// While `true`, incoming `session/update` notifications are dropped rather
     /// than pushed to the Hub. Set only around a `session/load` resume: the
     /// agent replays the whole prior conversation as updates, but cowboy's own
@@ -1723,6 +1839,7 @@ async fn agent_main(
         active_prompt: Mutex::new(None),
         prompt_cancellation,
         codex_full_access: AtomicBool::new(false),
+        grok_permission_mode: Arc::new(Mutex::new(GrokPermissionMode::AlwaysApprove)),
         suppress_updates: AtomicBool::new(false),
     });
 
@@ -1753,12 +1870,19 @@ async fn agent_main(
                         responder,
                         cx: ConnectionTo<Agent>|
                         -> Result<(), Error> {
-                // System sessions have no human to answer. Also absorb Codex's
-                // known resume regression where it asks despite its
-                // authoritative Full Access mode. Restricted user sessions
-                // continue through the human permission path below.
+                // System sessions have no human to answer. Also absorb
+                // permission requests that survive an explicitly unrestricted
+                // Codex/Grok mode. Restricted user sessions continue through
+                // the human permission path below.
                 let system_session = perm_state.sink.session_is_system(&perm_state.session_id);
                 let codex_full_access = perm_state.codex_full_access.load(Ordering::SeqCst);
+                let grok_permission_mode = *perm_state.grok_permission_mode.lock();
+                let auto_approve = permission_auto_approve_enabled(
+                    &perm_state.provider_id,
+                    system_session,
+                    codex_full_access,
+                    grok_permission_mode,
+                );
                 let tool_call =
                     serde_json::to_value(&req.tool_call).unwrap_or(serde_json::Value::Null);
                 // A permission request proves the turn reached a tool boundary,
@@ -1767,16 +1891,8 @@ async fn agent_main(
                 if let Some(prompt) = perm_state.current_prompt() {
                     prompt.visible_update.store(true, Ordering::SeqCst);
                 }
-                if system_session || codex_full_access {
-                    let allow = req
-                        .options
-                        .iter()
-                        .find(|o| matches!(o.kind, PermissionOptionKind::AllowAlways))
-                        .or_else(|| {
-                            req.options
-                                .iter()
-                                .find(|o| matches!(o.kind, PermissionOptionKind::AllowOnce))
-                        });
+                if auto_approve {
+                    let allow = preferred_allow_option(&req.options);
                     let outcome = match allow {
                         Some(opt) => {
                             tracing::info!(
@@ -1784,6 +1900,8 @@ async fn agent_main(
                                 session = %perm_state.session_id,
                                 system_session,
                                 codex_full_access,
+                                grok_always_approve = perm_state.provider_id == "grok"
+                                    && grok_permission_mode == GrokPermissionMode::AlwaysApprove,
                                 "auto-approving permission"
                             );
                             RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
@@ -2241,7 +2359,7 @@ async fn run_session(
     // Grok workers launch with `--always-approve`; persisted Cowboy
     // preferences replay after this option is surfaced and can narrow the
     // resident session to Auto or Default without restarting the process.
-    let current_permission_mode = Arc::new(Mutex::new(GrokPermissionMode::AlwaysApprove));
+    let current_permission_mode = Arc::clone(&state.grok_permission_mode);
     let mode_select: Option<Vec<SessionConfigSelectOption>> = if mode_config_id.is_some() {
         modes
             .as_ref()
