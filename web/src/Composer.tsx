@@ -129,7 +129,10 @@ import {
   mobileComposerKeyboardGap,
   mobileComposerStackGap,
 } from "./mobileComposerPrimitives";
-import { mobileFocusedComposerSurfaceSx } from "./mobileComposerSurface";
+import {
+  mobileFocusedComposerFill,
+  mobileFocusedComposerSurfaceSx,
+} from "./mobileComposerSurface";
 import { TurnStatusOverlay } from "./TurnStatusOverlay";
 import { PermissionOverlay } from "./PermissionOverlay";
 import {
@@ -1968,6 +1971,8 @@ export function ComposerWorkspace({
               minHeight: MOBILE_COMPOSER_INPUT_EDITOR_MIN_H,
               maxHeight: "100%",
               overflow: "hidden",
+              bgcolor: mobileFocusedComposerFill,
+              backgroundImage: "none",
             },
             // Keep the compact native field content-tight. Filling leftover
             // viewport with height 100% left a blank band under short text
@@ -1995,9 +2000,17 @@ export function ComposerWorkspace({
               flex: "0 1 auto",
               minHeight: 0,
               height: "auto",
+              // iOS promotes `.cm-scroller` to its own layer. A transparent
+              // layer composites against the transcript, so the image field
+              // looked like a darker hole while the action row kept the
+              // frosted card. Paint the same fill on that layer.
+              bgcolor: mobileFocusedComposerFill,
+              backgroundImage: "none",
+              overflow: "hidden",
             },
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-content": {
               minHeight: 0,
+              bgcolor: "transparent",
             },
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-focus-format-row]": {
               maxHeight: 48,

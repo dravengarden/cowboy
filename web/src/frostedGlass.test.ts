@@ -157,6 +157,7 @@ Deno.test("focused mobile composer owns a real frosted material", () => {
     composerSource.match(/mobileFocusedComposerSurfaceSx/g)?.length,
     4,
   );
+  assertEquals(composerSource.includes("mobileFocusedComposerFill"), true);
 });
 
 Deno.test("every Mobile transcript tail shares one external boundary gap", () => {
