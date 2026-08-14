@@ -47,6 +47,7 @@ import {
   registerInlineAttachment,
   refreshInlineImages,
   removeImageTokenById,
+  touchInlineImageField,
 } from "./inlineImages";
 import { clipboardFiles, type Attachment } from "./attachments";
 import {
@@ -61,7 +62,7 @@ import {
 } from "./desktop/vim/vimEscapeOwnership";
 import { inlineImageInsertion } from "./inlineImageSelection";
 import { mobileLineBreakCaretTelemetry } from "./composer/mobileLineBreakCaretTelemetry";
-import { mobileEmptyLineCaretRepair } from "./composer/mobileEmptyLineCaret";
+import { reportMobileNativePasteEvent } from "./composer/mobileNativePasteTelemetry";
 
 export interface ComposerEditorSelection {
   anchor: number;
@@ -747,6 +748,14 @@ export const ComposerEditor = forwardRef<
           const cb = event.clipboardData;
           if (!cb) return false;
           const files = clipboardFiles(cb);
+          if (touchInput) {
+            reportMobileNativePasteEvent({
+              surface: "cm6",
+              clipboard: cb,
+              fileCount: files.length,
+              consumed: files.length > 0 && !!onPasteFilesRef.current,
+            });
+          }
           if (files.length === 0 || !onPasteFilesRef.current) return false;
           event.preventDefault();
           onPasteFilesRef.current(files);
@@ -770,14 +779,12 @@ export const ComposerEditor = forwardRef<
       // Obsidian-style inline images: render `![](cowboy-att:id)` tokens as atomic
       // thumbnails in the text flow (click → lightbox). Atomic + read-only, so
       // IME-safe like the @-chip. See inlineImages.ts.
-      inlineImageField,
+      touchInput ? touchInlineImageField : inlineImageField,
       inlineImageTheme,
       // Keep a trailing image from being the doc's last line (the atomic image
       // line otherwise traps the caret — "图片在最后一行,无法开启新的一行").
       inlineImageTrailingLine,
-      ...(touchInput
-        ? [mobileEmptyLineCaretRepair, mobileLineBreakCaretTelemetry]
-        : []),
+      ...(touchInput ? [mobileLineBreakCaretTelemetry] : []),
       autocompletion({
         override: [
           fileCompletionSource(sessionId),

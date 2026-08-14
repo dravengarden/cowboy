@@ -75,26 +75,28 @@ class InlineImageWidget extends WidgetType {
     // delete, or a range select) — draws the selection ring.
     private readonly selected: boolean,
     private readonly previewUrl: string | undefined,
+    private readonly includeMeasurementNode: boolean,
   ) {
     super();
   }
   override eq(other: InlineImageWidget): boolean {
     return other.id === this.id && other.name === this.name &&
-      other.selected === this.selected && other.previewUrl === this.previewUrl;
+      other.selected === this.selected && other.previewUrl === this.previewUrl &&
+      other.includeMeasurementNode === this.includeMeasurementNode;
   }
   override toDOM(view: EditorView): HTMLElement {
     const att = registry.get(this.id);
     if (att?.previewUrl !== undefined && att.isImage) {
       const widget = document.createElement("span");
       widget.className = "cm-inline-image-widget";
-      // @replit/codemirror-vim walks into the DOM immediately after an EOL
-      // cursor to borrow its font style. A block widget whose first descendant
-      // is an empty <img> makes that walk end at `undefined`, so its cursor
-      // measurement aborts and the Normal-mode block disappears on the text
-      // line above the image. Keep a zero-size text node first: it is inert for
-      // layout and accessibility, but gives the upstream measurement a safe
-      // terminal node. The document selection itself never enters this widget.
-      widget.appendChild(document.createTextNode("\u200b"));
+      // Desktop Vim walks into the DOM after an EOL cursor to borrow font
+      // style. A root block widget whose first descendant is an empty <img>
+      // makes that walk end at `undefined`. The measurement node is Desktop
+      // only: touch keeps this widget inside a real `.cm-line` and must not
+      // own a hidden text node that can steal the native caret or paste menu.
+      if (this.includeMeasurementNode) {
+        widget.appendChild(document.createTextNode("\u200b"));
+      }
       const img = document.createElement("img");
       img.className = this.selected
         ? "cm-inline-image cm-inline-image-selected"
@@ -146,15 +148,22 @@ class InlineImageWidget extends WidgetType {
   }
 }
 
-// One image == one BLOCK line (Obsidian-style): the token is inserted alone on
-// its own line, and the whole line is replaced by a block widget. Block (not
-// inline) so a tall image never grows the surrounding line box — the caret on the
-// text lines above/below stays a normal text-height bar (an inline image made the
-// caret as tall as the picture: "光标好丑"). Lines that AREN'T a lone token are
-// left untouched (a token accidentally mid-line just stays literal — rare).
+// One image == one visual block line (Obsidian-style): the token is inserted
+// alone on its own line and the whole line is replaced by a widget. Desktop
+// keeps a true CM6 block replacement so Vim cursor measurement stays stable.
+// Touch uses a separate static field with `block: false`: the widget still
+// looks like a block via CSS, but it stays inside a real `.cm-line` so
+// WKWebView has a continuous native-caret DOM after Return. Do not revive a
+// presentation facet or a reconfigure-driven rebuild for this choice — that
+// path broke physical image paste even after the flag was flipped back to
+// block.
+// Lines that AREN'T a lone token are left untouched.
 const LONE_TOKEN_RE = /^\s*!\[([^\]]*)\]\(cowboy-att:([^)]+)\)\s*$/;
 
-function buildImageDecorations(state: EditorState): DecorationSet {
+function buildImageDecorations(
+  state: EditorState,
+  blockDecoration: boolean,
+): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
   const { doc } = state;
   const sel = state.selection.main;
@@ -174,8 +183,9 @@ function buildImageDecorations(state: EditorState): DecorationSet {
             m[1] ?? "",
             selected,
             registry.get(m[2])?.previewUrl,
+            blockDecoration,
           ),
-          block: true,
+          block: blockDecoration,
         }),
       );
     }
@@ -183,27 +193,32 @@ function buildImageDecorations(state: EditorState): DecorationSet {
   return builder.finish();
 }
 
-/// The inline-image decoration — render `cowboy-att:` tokens as atomic, BLOCK
-/// thumbnails (one image per line). MUST be a StateField, not a ViewPlugin: CM6
-/// throws "Block decorations may not be specified via plugins" for `block: true`
-/// decorations from a plugin (that regressed image paste in v171). Rebuilds on any
-/// docChange (the composer is small, so a full-doc scan is cheap); provides both
-/// the decorations and the atomic ranges (arrow keys skip an image as one unit).
-export const inlineImageField = StateField.define<DecorationSet>({
-  create: (state) => buildImageDecorations(state),
-  // Rebuild on doc OR selection change — the selection drives the "armed for
-  // delete" ring (the two-stage Backspace below selects before it deletes).
-  update: (value, tr) =>
-    tr.docChanged || tr.selection || tr.effects.some((effect) => effect.is(refreshInlineImages))
-      ? buildImageDecorations(tr.state)
-      : value,
-  provide: (f) => [
-    EditorView.decorations.from(f),
-    EditorView.atomicRanges.of(
-      (view) => view.state.field(f, false) ?? Decoration.none,
-    ),
-  ],
-});
+function createInlineImageField(blockDecoration: boolean) {
+  return StateField.define<DecorationSet>({
+    create: (state) => buildImageDecorations(state, blockDecoration),
+    // Rebuild on doc OR selection change — the selection drives the "armed for
+    // delete" ring (the two-stage Backspace below selects before it deletes).
+    // The block/inline choice is a closure constant for the field's whole
+    // lifetime. Never key this rebuild on extension reconfiguration.
+    update: (value, tr) =>
+      tr.docChanged || tr.selection ||
+        tr.effects.some((effect) => effect.is(refreshInlineImages))
+        ? buildImageDecorations(tr.state, blockDecoration)
+        : value,
+    provide: (f) => [
+      EditorView.decorations.from(f),
+      EditorView.atomicRanges.of(
+        (view) => view.state.field(f, false) ?? Decoration.none,
+      ),
+    ],
+  });
+}
+
+/// Desktop / non-touch: true CM6 block replacement.
+export const inlineImageField = createInlineImageField(true);
+
+/// Touch: same atomic thumbnail, kept inside an ordinary `.cm-line`.
+export const touchInlineImageField = createInlineImageField(false);
 
 /// True when `text`'s LAST line is a lone block-image token (with no empty line
 /// after it). A block-image decoration replaces its whole line and is atomic, so
@@ -241,6 +256,12 @@ export const inlineImageTrailingLine = EditorState.transactionFilter.of((tr) => 
 export const inlineImageTheme = EditorView.theme({
   ".cm-inline-image-widget": {
     display: "block",
+    fontSize: "0",
+    lineHeight: "0",
+  },
+  // Touch keeps the widget inside `.cm-line`. Kill that line's text strut so
+  // the thumbnail stays a visual block and adjacent carets stay text-height.
+  ".cm-line:has(> .cm-inline-image-widget)": {
     fontSize: "0",
     lineHeight: "0",
   },

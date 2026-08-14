@@ -15,23 +15,18 @@ Deno.test("mobile caret telemetry is reserved for native line-break input", () =
   assertEquals(isMobileLineBreakInput(undefined), false);
 });
 
-Deno.test("touch and desktop keep the proven literal CM6 block image field", () => {
+Deno.test("touch images use a static non-block field without reconfigure", () => {
+  assertEquals(editorSource.includes("inlineImagePresentation"), false);
+  assertEquals(editorSource.includes("mobileEmptyLineCaretRepair"), false);
+  assertEquals(editorSource.includes("touchInlineImageField"), true);
   assertEquals(
-    editorSource.includes("inlineImagePresentation"),
-    false,
-  );
-  assertEquals(
-    editorSource.includes(
-      "[mobileEmptyLineCaretRepair, mobileLineBreakCaretTelemetry]",
-    ),
+    editorSource.includes("touchInput ? touchInlineImageField : inlineImageField"),
     true,
   );
-  assertEquals(
-    imageSource.includes(
-      "inlineImagePresentation",
-    ),
-    false,
-  );
-  assertEquals(imageSource.includes("block: true"), true);
+  assertEquals(imageSource.includes("inlineImagePresentation"), false);
+  assertEquals(imageSource.includes("Facet.define"), false);
   assertEquals(imageSource.includes("tr.reconfigured"), false);
+  assertEquals(imageSource.includes("createInlineImageField(true)"), true);
+  assertEquals(imageSource.includes("createInlineImageField(false)"), true);
+  assertEquals(imageSource.includes("if (this.includeMeasurementNode)"), true);
 });
