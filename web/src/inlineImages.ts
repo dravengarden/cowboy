@@ -87,14 +87,20 @@ class InlineImageWidget extends WidgetType {
     if (att?.previewUrl !== undefined && att.isImage) {
       const widget = document.createElement("span");
       widget.className = "cm-inline-image-widget";
+      widget.contentEditable = "false";
       // @replit/codemirror-vim walks into the DOM immediately after an EOL
       // cursor to borrow its font style. A block widget whose first descendant
       // is an empty <img> makes that walk end at `undefined`, so its cursor
       // measurement aborts and the Normal-mode block disappears on the text
       // line above the image. Keep a zero-size text node first: it is inert for
       // layout and accessibility, but gives the upstream measurement a safe
-      // terminal node. The document selection itself never enters this widget.
-      widget.appendChild(document.createTextNode("\u200b"));
+      // terminal node. Mark it non-selectable so physical iOS cannot park the
+      // caret on this probe instead of the landing line under the thumbnail.
+      const probe = document.createElement("span");
+      probe.setAttribute("aria-hidden", "true");
+      probe.style.userSelect = "none";
+      probe.textContent = "\u200b";
+      widget.appendChild(probe);
       const img = document.createElement("img");
       img.className = this.selected
         ? "cm-inline-image cm-inline-image-selected"
@@ -232,6 +238,7 @@ export const inlineImageTheme = EditorView.theme({
     display: "block",
     fontSize: "0",
     lineHeight: "0",
+    userSelect: "none",
   },
   ".cm-inline-image": {
     display: "block",

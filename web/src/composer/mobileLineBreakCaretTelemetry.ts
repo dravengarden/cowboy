@@ -1,4 +1,5 @@
 import { type EditorView, ViewPlugin } from "@codemirror/view";
+import { isLoneImageTokenLine } from "./inlineImageCaretPolicy";
 import { flushObservability, reportClientLog } from "../observability";
 
 export function isMobileLineBreakInput(
@@ -72,6 +73,8 @@ function reportMobileCaretState(
     : undefined;
   const stateSelection = view.state.selection.main;
   const stateLine = view.state.doc.lineAt(stateSelection.head);
+  const previousLineIsImage = stateLine.number > 1 &&
+    isLoneImageTokenLine(view.state.doc.line(stateLine.number - 1).text);
   const lineElements = Array.from(
     content.querySelectorAll<HTMLElement>(".cm-line"),
   );
@@ -93,6 +96,7 @@ function reportMobileCaretState(
       state_head: stateSelection.head,
       state_line: stateLine.number,
       document_lines: view.state.doc.lines,
+      previous_line_is_image: previousLineIsImage,
       active_line_empty: activeLine?.textContent === "",
       active_line_index: activeLine === null
         ? -1

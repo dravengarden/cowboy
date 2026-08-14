@@ -1388,17 +1388,30 @@ Desktop Vim + IME checks:
     widget", not "root-level versus nested block".
 
     Keep the proven `Decoration.replace({ block: true })` on touch and
-    Desktop. On touch only, after a direct Return or Backspace that changes
-    the line count and leaves a collapsed empty line, mount a document-
-    neutral editable widget containing U+200B at the logical caret and
-    collapse the native Range inside that text node. **Leave it there**
-    until the next `beforeinput`, `keydown`, `compositionstart`, `paste`,
-    or `blur`. Do not remove it after one paint, and do not clear it on
-    `touchstart`/`pointerdown` (that cancelled the long-press menu). The
-    character never enters EditorState. A Selection sync must not disable
-    the field — only a document change or an explicit clear may. This is
-    not accepted until physical Return, Backspace-up, second paste, long-
-    press menu, and IME all pass.
+    Desktop. Physical v1250 showed the late-mount repair was the wrong
+    trigger. After paste the landing line still had no text node, so first
+    Return left the UIKit caret on the thumbnail (`caret_height=0`). The
+    widget then appeared on the *next* empty line and ate the second Return
+    as a native `<br>` (`line_height` 14→28, `document_lines` unchanged for
+    ~280ms). Backspace onto that same landing line dropped the widget on
+    `docChanged` and remounted it too late. The failure is specifically
+    "empty line whose previous line is a block image", not every empty line.
+    On touch only, decorate every empty line immediately after a block
+    image with a document-neutral editable U+200B widget in the same
+    transaction that creates that line, including paste. Keep that landing
+    widget across later Returns and Backspaces for as long as the line is
+    still empty after an image. Do not decorate other empty lines and do
+    not clear it on paste. When the landing widget first appears (paste or
+    promotion), map the DOM selection into that text node so the next
+    Return is native input inside it. Do not use Selection surgery as the
+    Return/Backspace animation — iOS follows the user's key, not
+    `removeAllRanges`/`addRange`. A Return that fires inside the landing
+    widget must become a CM6 newline after the native key, never from
+    `ViewPlugin.update()`. Hide the widget for IME. The image widget's vim
+    probe must stay non-selectable so it cannot steal the caret. This is
+    not accepted until physical first Return after paste, Backspace-up
+    onto the landing line, second paste, long-press menu, and IME all
+    pass.
 
 65. **A reliable touch action must pair `pointerup` with its actual synthetic
     `click`, never a timeout guess.** Mobile Safari can omit a click after

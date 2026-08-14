@@ -2,7 +2,6 @@ import {
   type EditorState,
   StateEffect,
   StateField,
-  type Transaction,
 } from "@codemirror/state";
 import {
   Decoration,
@@ -12,23 +11,39 @@ import {
   type ViewUpdate,
   WidgetType,
 } from "@codemirror/view";
+import {
+  emptyLinePositionsAfterImages,
+  selectionOnEmptyLineAfterImage,
+} from "./inlineImageCaretPolicy";
 import { reportClientLog } from "../observability";
 
 export const MOBILE_EMPTY_LINE_CARET_ANCHOR_CLASS =
   "cm-mobile-empty-line-caret-anchor";
 
-const setMobileEmptyLineCaretAnchor = StateEffect.define<boolean>();
+const setHideMobileEmptyLineCaretForIme = StateEffect.define<boolean>();
 
 /**
- * Transient-looking only to the document: this character lives in widget DOM.
- * It never enters EditorState, React value, history, or a sent message.
- * Physical WKWebView only paints a native caret while a real text node exists
- * at the logical empty line. Removing it after one paint put the Range back
- * to height 0, so the widget stays until the next real input.
+ * Document-neutral only: this character lives in widget DOM. It never enters
+ * EditorState, React value, history, or a sent message.
+ *
+ * Physical v1250 showed the late-mount repair was the wrong trigger. First
+ * Return after paste still had no text node on the image-adjacent landing
+ * line, so WKWebView kept the UIKit caret on the thumbnail. The widget then
+ * appeared on the *next* empty line and ate the second Return as a native
+ * <br> (line_height 28, document_lines unchanged). Backspace onto that same
+ * landing line dropped the widget on docChanged and remounted it too late.
+ *
+ * Keep one editable U+200B on every empty line whose previous line is a
+ * block image, in the same transaction that creates that line — including
+ * paste. Do not decorate other empty lines. Mapping the DOM selection into
+ * a newly appeared landing node only routes the next key; it is not the
+ * Return/Backspace animation.
  */
 class MobileEmptyLineCaretAnchorWidget extends WidgetType {
   override eq(): boolean {
-    return true;
+    // Never reuse a landing node. A native Return can leave a <br> inside the
+    // previous span; keeping that DOM would stack a visual line on the image.
+    return false;
   }
 
   toDOM(): HTMLElement {
@@ -44,75 +59,76 @@ class MobileEmptyLineCaretAnchorWidget extends WidgetType {
   }
 
   override ignoreEvent(event: Event): boolean {
-    return event.type !== "beforeinput" && event.type !== "paste" &&
-      event.type !== "compositionstart";
+    if (event.type !== "beforeinput") {
+      return event.type !== "paste" && event.type !== "compositionstart";
+    }
+    const inputType = (event as InputEvent).inputType;
+    return inputType === "insertText" ||
+      inputType === "insertCompositionText" ||
+      inputType === "insertLineBreak" ||
+      inputType === "insertParagraph";
   }
 }
 
-function anchorDecoration(state: EditorState): DecorationSet {
-  return Decoration.set([
-    Decoration.widget({
-      widget: new MobileEmptyLineCaretAnchorWidget(),
-      side: 1,
-    }).range(state.selection.main.head),
-  ]);
+export function landingAnchorsForEmptyLinesAfterImages(
+  state: EditorState,
+): DecorationSet {
+  return Decoration.set(
+    emptyLinePositionsAfterImages(state).map((position) =>
+      Decoration.widget({
+        widget: new MobileEmptyLineCaretAnchorWidget(),
+        side: 1,
+      }).range(position)
+    ),
+  );
 }
 
-const mobileEmptyLineCaretAnchorField = StateField.define<DecorationSet>({
-  create: () => Decoration.none,
-  update(anchors, transaction) {
-    let enabled = anchors.size > 0;
-    // A document change replaces the empty line. Do not treat a Selection
-    // sync from the native Range as a reason to drop the only measurable
-    // text node — that is what made the one-paint repair revert.
-    if (transaction.docChanged) enabled = false;
+const hideMobileEmptyLineCaretForIme = StateField.define<boolean>({
+  create: () => false,
+  update(hidden, transaction) {
+    let next = hidden;
     for (const effect of transaction.effects) {
-      if (effect.is(setMobileEmptyLineCaretAnchor)) enabled = effect.value;
+      if (effect.is(setHideMobileEmptyLineCaretForIme)) next = effect.value;
     }
-    return enabled ? anchorDecoration(transaction.state) : Decoration.none;
+    if (
+      transaction.docChanged &&
+      emptyLinePositionsAfterImages(transaction.state).length === 0
+    ) {
+      return false;
+    }
+    return next;
+  },
+});
+
+const mobileEmptyLineCaretAnchorField = StateField.define<DecorationSet>({
+  create: (state) => landingAnchorsForEmptyLinesAfterImages(state),
+  update(anchors, transaction) {
+    const hidden = transaction.state.field(hideMobileEmptyLineCaretForIme);
+    if (hidden) return Decoration.none;
+    if (
+      transaction.docChanged ||
+      transaction.effects.some((effect) =>
+        effect.is(setHideMobileEmptyLineCaretForIme)
+      )
+    ) {
+      return landingAnchorsForEmptyLinesAfterImages(transaction.state);
+    }
+    return anchors;
   },
   provide: (field) => EditorView.decorations.from(field),
 });
 
-export interface MobileEmptyLineCaretRepairUpdate {
-  docChanged: boolean;
-  startLines: number;
-  nextLines: number;
-  directInput: boolean;
-  directDelete: boolean;
-}
-
-export function shouldRepairMobileEmptyLineCaret(
-  update: MobileEmptyLineCaretRepairUpdate,
+export function shouldMaterializeMobileEmptyLineBreak(
+  inputType: string | undefined,
+  insideLandingAnchor: boolean,
 ): boolean {
-  if (!update.docChanged || update.nextLines === update.startLines) {
-    return false;
-  }
-  return update.directInput || update.directDelete;
+  return insideLandingAnchor &&
+    (inputType === "insertLineBreak" || inputType === "insertParagraph");
 }
 
 export function isMobileEmptyLineCaretState(state: EditorState): boolean {
   const selection = state.selection.main;
   return selection.empty && state.doc.lineAt(selection.head).length === 0;
-}
-
-export function hasDirectKeyboardInput(
-  transactions: readonly Transaction[],
-): boolean {
-  return transactions.some((transaction) =>
-    transaction.isUserEvent("input") &&
-    !transaction.isUserEvent("input.paste")
-  );
-}
-
-export function hasDirectDelete(
-  transactions: readonly Transaction[],
-): boolean {
-  return transactions.some((transaction) =>
-    transaction.isUserEvent("delete.backward") ||
-    transaction.isUserEvent("delete.forward") ||
-    transaction.isUserEvent("delete")
-  );
 }
 
 function rounded(value: number): number {
@@ -136,7 +152,7 @@ function reportAnchorGeometry(view: EditorView, sequence: number): void {
   reportClientLog(
     "info",
     "mobile_caret_line_break_anchor",
-    "Mobile composer caret received a durable geometry anchor",
+    "Mobile composer caret kept an image-adjacent landing anchor",
     {
       sequence,
       focus_owned: content.ownerDocument.activeElement === content,
@@ -144,9 +160,11 @@ function reportAnchorGeometry(view: EditorView, sequence: number): void {
       state_head: stateSelection.head,
       state_line: view.state.doc.lineAt(stateSelection.head).number,
       document_lines: view.state.doc.lines,
+      after_image: selectionOnEmptyLineAfterImage(view.state),
       active_line_empty: activeLine?.textContent === "\u200b",
       anchor_dom_only: true,
-      persistent_until_input: true,
+      persistent_until_input: false,
+      landing_only: true,
       line_top: lineRect ? rounded(lineRect.top - contentRect.top) : -1,
       line_height: lineRect ? rounded(lineRect.height) : -1,
       caret_top: rangeRect ? rounded(rangeRect.top - contentRect.top) : -1,
@@ -156,61 +174,65 @@ function reportAnchorGeometry(view: EditorView, sequence: number): void {
 }
 
 export const mobileEmptyLineCaretRepair = [
+  hideMobileEmptyLineCaretForIme,
   mobileEmptyLineCaretAnchorField,
   ViewPlugin.fromClass(
     class {
-      private mountTimer = 0;
-      private placeFrame = 0;
-      private reportSequence = 0;
+      syncTimer = 0;
+      placeTimer = 0;
+      placeFrame = 0;
+      pendingBreak = false;
+      reportSequence = 0;
 
-      constructor(readonly view: EditorView) {}
+      constructor(readonly view: EditorView) {
+        if (emptyLinePositionsAfterImages(view.state).length > 0) {
+          this.schedulePlace();
+        }
+      }
 
-      private cancelFrames(): void {
-        if (this.mountTimer !== 0) {
-          globalThis.clearTimeout(this.mountTimer);
-          this.mountTimer = 0;
+      cancelSync(): void {
+        if (this.syncTimer !== 0) {
+          globalThis.clearTimeout(this.syncTimer);
+          this.syncTimer = 0;
+        }
+      }
+
+      cancelPlace(): void {
+        if (this.placeTimer !== 0) {
+          globalThis.clearTimeout(this.placeTimer);
+          this.placeTimer = 0;
         }
         if (this.placeFrame !== 0) cancelAnimationFrame(this.placeFrame);
         this.placeFrame = 0;
       }
 
-      private disableAnchor(): void {
-        const anchors = this.view.state.field(
-          mobileEmptyLineCaretAnchorField,
-          false,
-        );
-        if (anchors && anchors.size > 0) {
-          this.view.dispatch({
-            effects: setMobileEmptyLineCaretAnchor.of(false),
-          });
+      insideLandingAnchor(target: EventTarget | null): boolean {
+        if (!(target instanceof Node)) return false;
+        const element = target instanceof Element ? target : target.parentElement;
+        return element?.closest(`.${MOBILE_EMPTY_LINE_CARET_ANCHOR_CLASS}`) !=
+          null;
+      }
+
+      setImeHidden(hidden: boolean): void {
+        if (this.view.state.field(hideMobileEmptyLineCaretForIme) === hidden) {
+          return;
         }
+        this.view.dispatch({
+          effects: setHideMobileEmptyLineCaretForIme.of(hidden),
+        });
       }
 
-      clear(): void {
-        this.cancelFrames();
-        this.disableAnchor();
-      }
-
-      private eligible(expectedHead?: number): boolean {
-        const { state, contentDOM } = this.view;
-        const selection = state.selection.main;
-        return isMobileEmptyLineCaretState(state) &&
-          (expectedHead === undefined || selection.head === expectedHead) &&
-          !this.view.composing &&
-          contentDOM.ownerDocument.activeElement === contentDOM &&
-          contentDOM.querySelector(".cm-inline-image-widget") !== null;
-      }
-
-      private placeNativeCaret(): void {
+      placeLandingSelection(): void {
+        if (!selectionOnEmptyLineAfterImage(this.view.state)) return;
         const anchor = this.view.contentDOM.querySelector<HTMLElement>(
           `.cm-line.cm-activeLine .${MOBILE_EMPTY_LINE_CARET_ANCHOR_CLASS}`,
         );
         const text = anchor?.firstChild;
         const selection = this.view.contentDOM.ownerDocument.getSelection();
-        if (!text || text.nodeType !== Node.TEXT_NODE || !selection) {
-          this.disableAnchor();
-          return;
-        }
+        if (!text || text.nodeType !== Node.TEXT_NODE || !selection) return;
+        // Route the next key into the landing text node. This does not move
+        // the UIKit caret by itself — first Return / Backspace still have to
+        // be native input inside that node.
         const range = this.view.contentDOM.ownerDocument.createRange();
         range.setStart(text, 0);
         range.collapse(true);
@@ -220,73 +242,91 @@ export const mobileEmptyLineCaretRepair = [
         reportAnchorGeometry(this.view, sequence);
       }
 
-      private schedule(): void {
-        this.cancelFrames();
-        // Never dispatch from `update()`: CodeMirror rejects nested updates,
-        // which is why v1249 mounted zero anchors on the physical phone.
-        this.mountTimer = globalThis.setTimeout(() => {
-          this.mountTimer = 0;
-          if (!this.eligible()) return;
-          const expectedHead = this.view.state.selection.main.head;
-          const anchors = this.view.state.field(
-            mobileEmptyLineCaretAnchorField,
-            false,
-          );
-          if (!anchors || anchors.size === 0) {
-            this.view.dispatch({
-              effects: setMobileEmptyLineCaretAnchor.of(true),
-            });
-          }
+      schedulePlace(): void {
+        this.cancelPlace();
+        // Never dispatch from update(). The landing widget is already in the
+        // document transaction; this only maps the DOM selection into it.
+        this.placeTimer = globalThis.setTimeout(() => {
+          this.placeTimer = 0;
           this.placeFrame = requestAnimationFrame(() => {
             this.placeFrame = 0;
-            if (!this.eligible(expectedHead)) {
-              this.disableAnchor();
-              return;
-            }
-            this.placeNativeCaret();
+            this.placeLandingSelection();
           });
         }, 0);
       }
 
+      materializeLineBreak(): void {
+        const { state } = this.view;
+        const selection = state.selection.main;
+        if (!selection.empty || !selectionOnEmptyLineAfterImage(state)) return;
+        this.view.dispatch({
+          changes: { from: selection.head, insert: "\n" },
+          selection: { anchor: selection.head + 1 },
+          userEvent: "input",
+        });
+      }
+
       update(update: ViewUpdate): void {
-        if (
-          shouldRepairMobileEmptyLineCaret({
-            docChanged: update.docChanged,
-            startLines: update.startState.doc.lines,
-            nextLines: update.state.doc.lines,
-            directInput: hasDirectKeyboardInput(update.transactions),
-            directDelete: hasDirectDelete(update.transactions),
-          })
-        ) {
-          this.schedule();
+        const had = update.startState.field(mobileEmptyLineCaretAnchorField).size;
+        const has = update.state.field(mobileEmptyLineCaretAnchorField).size;
+        if (update.docChanged) {
+          this.pendingBreak = false;
+          this.cancelSync();
         }
+        if (has > 0 && had === 0) this.schedulePlace();
       }
 
       destroy(): void {
-        this.cancelFrames();
+        this.cancelSync();
+        this.cancelPlace();
       }
     },
     {
       eventHandlers: {
         beforeinput(event: InputEvent): void {
-          // Return/Backspace must keep the current paint; docChanged already
-          // drops the old widget. Tearing down on every key was the jank.
-          if (
-            event.inputType === "insertText" ||
-            event.inputType === "insertCompositionText" ||
-            event.inputType === "insertFromPaste"
-          ) {
-            this.clear();
+          if (event.inputType === "insertCompositionText") {
+            this.setImeHidden(true);
+            return;
           }
+          if (
+            event.inputType === "insertText" &&
+            event.data &&
+            this.insideLandingAnchor(event.target)
+          ) {
+            event.preventDefault();
+            const head = this.view.state.selection.main.head;
+            this.view.dispatch({
+              changes: { from: head, insert: event.data },
+              selection: { anchor: head + event.data.length },
+              userEvent: "input.type",
+            });
+            return;
+          }
+          if (
+            !shouldMaterializeMobileEmptyLineBreak(
+              event.inputType,
+              this.insideLandingAnchor(event.target),
+            )
+          ) {
+            return;
+          }
+          // Do not preventDefault: UIKit only moves the caret for a native
+          // Return. Never dispatch from update(). Materialize the CM6 line
+          // after the key instead.
+          this.pendingBreak = true;
+          this.cancelSync();
+          this.syncTimer = globalThis.setTimeout(() => {
+            this.syncTimer = 0;
+            if (!this.pendingBreak) return;
+            this.pendingBreak = false;
+            this.materializeLineBreak();
+          }, 0);
         },
         compositionstart(): void {
-          this.clear();
+          this.setImeHidden(true);
         },
-        paste(): void {
-          this.clear();
-        },
-        blur(): void {
-          this.clear();
+        compositionend(): void {
+          this.setImeHidden(false);
         },
       },
     },

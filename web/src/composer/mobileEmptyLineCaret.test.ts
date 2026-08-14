@@ -1,68 +1,81 @@
 import { assertEquals } from "jsr:@std/assert";
-import { EditorSelection, EditorState, Transaction } from "@codemirror/state";
+import { EditorSelection, EditorState } from "@codemirror/state";
 import {
-  hasDirectDelete,
-  hasDirectKeyboardInput,
+  emptyLinePositionsAfterImages,
+  selectionOnEmptyLineAfterImage,
+} from "./inlineImageCaretPolicy";
+import {
   isMobileEmptyLineCaretState,
-  shouldRepairMobileEmptyLineCaret,
+  landingAnchorsForEmptyLinesAfterImages,
+  shouldMaterializeMobileEmptyLineBreak,
 } from "./mobileEmptyLineCaret";
 
 const source = await Deno.readTextFile(
   new URL("./mobileEmptyLineCaret.ts", import.meta.url),
 );
 
-Deno.test("mobile caret repair follows a direct input or delete that changes line count", () => {
-  assertEquals(
-    shouldRepairMobileEmptyLineCaret({
-      docChanged: true,
-      startLines: 2,
-      nextLines: 3,
-      directInput: true,
-      directDelete: false,
-    }),
-    true,
-  );
-  assertEquals(
-    shouldRepairMobileEmptyLineCaret({
-      docChanged: true,
-      startLines: 3,
-      nextLines: 2,
-      directInput: false,
-      directDelete: true,
-    }),
-    true,
-  );
-  assertEquals(
-    shouldRepairMobileEmptyLineCaret({
-      docChanged: true,
-      startLines: 2,
-      nextLines: 3,
-      directInput: false,
-      directDelete: false,
-    }),
-    false,
-  );
+Deno.test("landing anchors sit only on empty lines after images", () => {
+  const afterImage = EditorState.create({
+    doc: "![shot](cowboy-att:image-1)\n",
+    selection: { anchor: 28 },
+  });
+  assertEquals(emptyLinePositionsAfterImages(afterImage), [28]);
+  assertEquals(selectionOnEmptyLineAfterImage(afterImage), true);
+  assertEquals(landingAnchorsForEmptyLinesAfterImages(afterImage).size, 1);
+
+  const typed = EditorState.create({
+    doc: "![shot](cowboy-att:image-1)\nhello",
+    selection: { anchor: 33 },
+  });
+  assertEquals(emptyLinePositionsAfterImages(typed), []);
+  assertEquals(selectionOnEmptyLineAfterImage(typed), false);
+  assertEquals(landingAnchorsForEmptyLinesAfterImages(typed).size, 0);
+
+  const laterEmpty = EditorState.create({
+    doc: "![shot](cowboy-att:image-1)\n\n",
+    selection: { anchor: 29 },
+  });
+  assertEquals(emptyLinePositionsAfterImages(laterEmpty), [28]);
+  assertEquals(selectionOnEmptyLineAfterImage(laterEmpty), false);
+  assertEquals(landingAnchorsForEmptyLinesAfterImages(laterEmpty).size, 1);
+
+  const noImage = EditorState.create({
+    doc: "hello\n\n",
+    selection: { anchor: 7 },
+  });
+  assertEquals(emptyLinePositionsAfterImages(noImage), []);
+  assertEquals(landingAnchorsForEmptyLinesAfterImages(noImage).size, 0);
 });
 
-Deno.test("mobile caret repair excludes paste transactions", () => {
-  const state = EditorState.create({ doc: "image\n" });
-  const lineBreak = state.update({
-    changes: { from: state.doc.length, insert: "\n" },
-    annotations: Transaction.userEvent.of("input"),
-  });
-  const paste = state.update({
-    changes: { from: state.doc.length, insert: "\n" },
-    annotations: Transaction.userEvent.of("input.paste"),
-  });
-  const del = state.update({
-    changes: { from: state.doc.length - 1, to: state.doc.length, insert: "" },
-    annotations: Transaction.userEvent.of("delete.backward"),
-  });
+Deno.test("two images keep a landing anchor under each thumbnail", () => {
+  const doc = "![a](cowboy-att:1)\n\n![b](cowboy-att:2)\n";
+  const state = EditorState.create({ doc });
+  const firstLanding = state.doc.line(2).from;
+  const secondLanding = state.doc.line(4).from;
+  assertEquals(emptyLinePositionsAfterImages(state), [
+    firstLanding,
+    secondLanding,
+  ]);
+  assertEquals(landingAnchorsForEmptyLinesAfterImages(state).size, 2);
+});
 
-  assertEquals(hasDirectKeyboardInput([lineBreak]), true);
-  assertEquals(hasDirectKeyboardInput([paste]), false);
-  assertEquals(hasDirectDelete([del]), true);
-  assertEquals(hasDirectDelete([paste]), false);
+Deno.test("Return inside a landing anchor becomes a document line break", () => {
+  assertEquals(
+    shouldMaterializeMobileEmptyLineBreak("insertLineBreak", true),
+    true,
+  );
+  assertEquals(
+    shouldMaterializeMobileEmptyLineBreak("insertParagraph", true),
+    true,
+  );
+  assertEquals(
+    shouldMaterializeMobileEmptyLineBreak("insertLineBreak", false),
+    false,
+  );
+  assertEquals(
+    shouldMaterializeMobileEmptyLineBreak("insertText", true),
+    false,
+  );
 });
 
 Deno.test("mobile caret repair requires a collapsed empty line", () => {
@@ -85,18 +98,20 @@ Deno.test("mobile caret repair requires a collapsed empty line", () => {
   assertEquals(isMobileEmptyLineCaretState(range), false);
 });
 
-Deno.test("mobile caret anchor stays until the next real input", () => {
+Deno.test("mobile caret landing anchor is document-neutral and not late-mounted", () => {
   assertEquals(source.includes('anchor.textContent = "\\u200b"'), true);
-  assertEquals(source.includes("persistent_until_input"), true);
-  assertEquals(source.includes("transaction.docChanged"), true);
+  assertEquals(source.includes("landing_only"), true);
+  assertEquals(source.includes("emptyLinePositionsAfterImages"), true);
+  assertEquals(source.includes("placeLandingSelection"), true);
+  assertEquals(source.includes("has > 0 && had === 0"), true);
   assertEquals(source.includes("touchstart"), false);
   assertEquals(source.includes("pointerdown"), false);
   assertEquals(source.includes("keydown"), false);
   assertEquals(source.includes("flushObservability"), false);
   assertEquals(source.includes("setTimeout"), true);
-  assertEquals(source.includes("Never dispatch from `update()`"), true);
+  assertEquals(source.includes("Never dispatch from update()"), true);
   assertEquals(source.includes("setSelectionRange"), false);
   assertEquals(source.includes("drawSelection"), false);
   assertEquals(source.includes(".focus()"), false);
-  assertEquals(source.includes("preventDefault"), false);
+  assertEquals(source.includes("this.clear()"), false);
 });

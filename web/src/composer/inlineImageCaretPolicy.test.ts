@@ -2,6 +2,8 @@ import { assertEquals } from "jsr:@std/assert";
 import { EditorState } from "@codemirror/state";
 import {
   caretOffImageLineSpec,
+  emptyLinePositionsAfterImages,
+  selectionOnEmptyLineAfterImage,
   selectionOnLoneImageLine,
 } from "./inlineImageCaretPolicy";
 
@@ -28,4 +30,6 @@ Deno.test("Return on an image line moves to the trailing empty line", () => {
   });
   assertEquals(selectionOnLoneImageLine(emptyAfter), false);
   assertEquals(caretOffImageLineSpec(emptyAfter), null);
+  assertEquals(selectionOnEmptyLineAfterImage(emptyAfter), true);
+  assertEquals(emptyLinePositionsAfterImages(emptyAfter), [28]);
 });

@@ -7,6 +7,28 @@ export function isLoneImageTokenLine(text: string): boolean {
   return LONE_IMAGE_TOKEN_RE.test(text);
 }
 
+/** Positions of every empty line whose previous line is a block image. */
+export function emptyLinePositionsAfterImages(state: EditorState): number[] {
+  const positions: number[] = [];
+  const { doc } = state;
+  for (let i = 1; i < doc.lines; i++) {
+    if (!isLoneImageTokenLine(doc.line(i).text)) continue;
+    const next = doc.line(i + 1);
+    if (next.length === 0) positions.push(next.from);
+  }
+  return positions;
+}
+
+/** True when a collapsed caret is on an empty line immediately after an image. */
+export function selectionOnEmptyLineAfterImage(state: EditorState): boolean {
+  const selection = state.selection.main;
+  if (!selection.empty) return false;
+  const line = state.doc.lineAt(selection.head);
+  return line.length === 0 &&
+    line.number > 1 &&
+    isLoneImageTokenLine(state.doc.line(line.number - 1).text);
+}
+
 /** True when a collapsed caret is on a lone image token line. */
 export function selectionOnLoneImageLine(state: EditorState): boolean {
   const selection = state.selection.main;

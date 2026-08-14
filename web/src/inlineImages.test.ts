@@ -40,6 +40,8 @@ Deno.test("image deletion removes the insertion line breaks", () => {
 Deno.test("image decorations stay a literal block field without a presentation branch", async () => {
   const source = await Deno.readTextFile(new URL("./inlineImages.ts", import.meta.url));
   assertEquals(source.includes("block: true"), true);
+  assertEquals(source.includes('userSelect: "none"'), true);
+  assertEquals(source.includes('widget.contentEditable = "false"'), true);
   assertEquals(source.includes("createInlineImageField"), false);
   assertEquals(source.includes("touchInlineImageField"), false);
   assertEquals(source.includes("tr.reconfigured"), false);
