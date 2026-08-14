@@ -1471,9 +1471,14 @@ Desktop Vim + IME checks:
     native `<br>` into that source line (`line_height` 14→28→42) and
     killed the UIKit caret (`caret_height=0`) while CM6 advanced.
     Replace only the token with an inline widget inside the `.cm-line`
-    (same class as `@` chips). Paste inserts a real following newline
-    so the caret starts on the line below the thumbnail. Do not hang a
-    block widget at `line.to`, and do not show cowboy-att markdown.
+    (same class as `@` chips). Physical v1264 still died: paste forced a
+    following empty line (`document_lines=2`, `caret_height=0` before
+    Return), then insertLineBreak wrote a native `<br>` (`14→28`).
+    Completed `@` chips keep a trailing space so the caret sits in a
+    real text node, not on the empty line or `cm-widgetBuffer`. Paste
+    now inserts that same trailing space and does not open a landing
+    line. Do not hang a block widget at `line.to`, and do not show
+    cowboy-att markdown.
 
 
 65. **A reliable touch action must pair `pointerup` with its actual synthetic

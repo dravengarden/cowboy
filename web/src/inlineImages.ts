@@ -210,10 +210,11 @@ function lastLineIsImageToken(text: string): boolean {
   return last.length > 0 && LONE_TOKEN_RE.test(last);
 }
 
-/// Seed-only: a document that ends on an image token opens with a real
-/// following line so the caret is not left on the thumbnail.
+/// Seed-only: a lone image token needs the same trailing space as a
+/// completed @ chip so the caret sits in a real text node.
 export function ensureTrailingImageLine(text: string): string {
-  return lastLineIsImageToken(text) ? `${text}\n` : text;
+  if (!lastLineIsImageToken(text)) return text;
+  return text.endsWith(" ") ? text : `${text} `;
 }
 
 /// No-op filter kept so ComposerEditor imports stay stable.

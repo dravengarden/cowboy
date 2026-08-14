@@ -22,13 +22,17 @@ export function inlineImageInsertion(
   const from = Math.min(clampedAnchor, clampedHead);
   const to = Math.max(clampedAnchor, clampedHead);
   const lineStart = value.lastIndexOf("\n", from - 1) + 1;
+  const restOnSameLine = to < value.length && value[to] !== "\n";
   const lead = from !== lineStart ? "\n" : "";
   const body = attachments.map((attachment) => {
     const label = attachment.name.replaceAll("]", "");
     return `![${label}](cowboy-att:${attachment.id})`;
   }).join("\n");
-  const trail = to < value.length && value[to] === "\n" ? "" : "\n";
-  const insert = `${lead}${body}${trail}`;
+  // Trailing space is a real text node after the atomic thumbnail — the
+  // same completed-@-chip rule. A following empty line leaves iOS with
+  // caret_height=0; Return then writes a native <br> into that empty row.
+  const trail = restOnSameLine ? "\n" : "";
+  const insert = `${lead}${body} ${trail}`;
   return { from, to, insert, caret: from + lead.length + body.length + 1 };
 }
 
