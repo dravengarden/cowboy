@@ -25,7 +25,33 @@ export interface ComposerInputDebugSample {
   line_height: number;
   line_top: number;
   visual_viewport_height: number;
+  software_keyboard: boolean;
+  enter_path: "software" | "hardware_or_hid" | "unknown";
   dropped_events: number;
+}
+
+/** True when the visual viewport has shrunk by a software-keyboard inset. */
+export function composerSoftwareKeyboardOpen(
+  viewportHeight: number,
+  windowHeight: number,
+): boolean {
+  if (viewportHeight <= 0 || windowHeight <= 0) return false;
+  return windowHeight - viewportHeight >= 80;
+}
+
+/** Classify Return so Simulator HID/hardware Enter is not treated as iPhone. */
+export function composerEnterPath(
+  inputType: string,
+  key: string,
+  softwareKeyboardOpen: boolean,
+): ComposerInputDebugSample["enter_path"] {
+  if (inputType === "insertLineBreak" || inputType === "insertParagraph") {
+    return "software";
+  }
+  if (key === "Enter") {
+    return softwareKeyboardOpen ? "software" : "hardware_or_hid";
+  }
+  return "unknown";
 }
 
 const SAFE_KEYS = new Set([

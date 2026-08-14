@@ -1527,6 +1527,39 @@ Desktop Vim + IME checks:
     `caret_height=0` plus the user's painted caret. Do not treat
     Simulator HID Return as acceptance for this bug.
 
+    Simulator and a physical iPhone will never paint the same caret.
+    Alignment means forcing Simulator onto the *software-keyboard input
+    path*, then judging it with the same telemetry the device emits —
+    not making the purple CSS caret match UIKit.
+
+    Simulator alignment protocol (this is the only way to get closer):
+
+    1. **Disconnect the Mac keyboard.** Simulator → I/O → Keyboard →
+       uncheck **Connect Hardware Keyboard**. `⌘⇧K` toggles it. If this
+       stays on, iOS treats the Mac keyboard as a paired hardware
+       keyboard: no software keyboard, no `insertLineBreak`, no
+       `visualViewport` shrink, and Return is a HID `keydown Enter`.
+    2. **Show the software keyboard.** `⌘K` / **Toggle Software
+       Keyboard**. Tap the composer so the keyboard is actually
+       on-screen. Paste the image with the long-press menu, not a Mac
+       paste shortcut.
+    3. **Tap 换行 on that software keyboard.** Do not press the Mac
+       Return key and do not send `axe key 40`. The faithful sequence is
+       `beforeinput insertLineBreak` then a later `keydown Enter`, with
+       `software_keyboard=true` and `enter_path=software`.
+    4. **Reject the run if debug says otherwise.** In Debug mode,
+       `enter_path=hardware_or_hid` or `software_keyboard=false` on
+       Return means the session is still the Mac-keyboard path. That
+       run cannot accept or refute the physical caret bug.
+    5. **Trust `caret_height` and the user's painted caret, not the
+       Simulator screenshot.** A 12px CSS caret on Simulator can sit on
+       a line whose UIKit `caretRect` is 0. Physical iPhone is still
+       the acceptance surface.
+
+    There is no WebKit flag, CSS property, or CM6 option that makes
+    Simulator's CSS caret become `UITextSelectionView`. Product code
+    must not try to emulate UIKit in CSS to "align" the two.
+
 68. **Composer debug mode is the physical-input flight recorder.** Settings
     → Debug mode (Desktop and Mobile) turns on `composer_input_debug`
     samples. They ride the existing `/api/observability/batches` path into

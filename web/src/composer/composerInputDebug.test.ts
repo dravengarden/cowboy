@@ -1,5 +1,7 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
+  composerEnterPath,
+  composerSoftwareKeyboardOpen,
   emptyComposerInputDebugRate,
   safeComposerDebugKey,
   shouldSampleComposerInputDebug,
@@ -48,6 +50,15 @@ Deno.test("composer input debug never writes the native selection", () => {
   assertEquals(source.includes("composer_input_debug"), true);
   assertEquals(source.includes("input.inputType ?? keyEvent.key"), false);
   assertEquals(source.includes("input?.inputType ?? keyEvent?.key"), false);
+});
+
+Deno.test("debug mode labels software-keyboard Return separately from HID Enter", () => {
+  assertEquals(composerSoftwareKeyboardOpen(500, 852), true);
+  assertEquals(composerSoftwareKeyboardOpen(852, 852), false);
+  assertEquals(composerEnterPath("insertLineBreak", "", false), "software");
+  assertEquals(composerEnterPath("keydown", "Enter", false), "hardware_or_hid");
+  assertEquals(composerEnterPath("keydown", "Enter", true), "software");
+  assertEquals(composerEnterPath("insertText", "char", true), "unknown");
 });
 
 Deno.test("desktop and mobile settings expose the same debug mode toggle", async () => {

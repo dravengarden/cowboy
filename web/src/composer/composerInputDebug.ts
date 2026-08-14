@@ -4,6 +4,8 @@ import { flushObservability, reportClientLog } from "../observability";
 import { isLoneImageTokenLine } from "./inlineImageCaretPolicy";
 import {
   type ComposerInputDebugSample,
+  composerEnterPath,
+  composerSoftwareKeyboardOpen,
   emptyComposerInputDebugRate,
   safeComposerDebugKey,
   shouldSampleComposerInputDebug,
@@ -117,6 +119,15 @@ export function textareaDebugSample(
     line_height: lineHeight,
     line_top: 0,
     visual_viewport_height: viewport,
+    software_keyboard: composerSoftwareKeyboardOpen(
+      viewport,
+      globalThis.innerHeight ?? -1,
+    ),
+    enter_path: composerEnterPath(
+      inputType,
+      key,
+      composerSoftwareKeyboardOpen(viewport, globalThis.innerHeight ?? -1),
+    ),
     dropped_events: 0,
   };
 }
@@ -179,6 +190,18 @@ function cm6DebugSample(
     line_height: lineRect ? rounded(lineRect.height) : -1,
     line_top: lineRect ? rounded(lineRect.top - contentRect.top) : -1,
     visual_viewport_height: rounded(viewportHeight()),
+    software_keyboard: composerSoftwareKeyboardOpen(
+      viewportHeight(),
+      globalThis.innerHeight ?? -1,
+    ),
+    enter_path: composerEnterPath(
+      input?.inputType || phase,
+      keyEvent?.key ?? "",
+      composerSoftwareKeyboardOpen(
+        viewportHeight(),
+        globalThis.innerHeight ?? -1,
+      ),
+    ),
     dropped_events: 0,
   };
 }
