@@ -367,7 +367,7 @@ fn builtin_with_env_and_shell(
 
 /// Build a provider's launch spec, letting the deployment OVERRIDE how the ACP
 /// adapter is launched via env — `COWBOY_ACP_<ID>_CMD` (+ optional
-/// whitespace-split `COWBOY_ACP_<ID>_ARGS`), where `<ID>` is the upper-cased id
+/// shell-quoted `COWBOY_ACP_<ID>_ARGS`), where `<ID>` is the upper-cased id
 /// with `-`→`_` (e.g. `COWBOY_ACP_CLAUDE_CODE_CMD`).
 ///
 /// Why: the default `npx -y <pkg>` cold-installs the adapter into the shared
@@ -401,8 +401,10 @@ fn spec_with_custom_default_args(
     get_env: &impl Fn(&str) -> Option<String>,
 ) -> LaunchSpec {
     let key = id.to_uppercase().replace('-', "_");
-    let arg_override = get_env(&format!("COWBOY_ACP_{key}_ARGS"))
-        .map(|s| s.split_whitespace().map(str::to_owned).collect::<Vec<_>>());
+    let arg_override = get_env(&format!("COWBOY_ACP_{key}_ARGS")).map(|args| {
+        shell_words::split(&args)
+            .unwrap_or_else(|_| args.split_whitespace().map(str::to_owned).collect())
+    });
     match get_env(&format!("COWBOY_ACP_{key}_CMD")) {
         // A custom command replaces npx: the npx-specific prefix (`-y <pkg>`)
         // does NOT carry over. Provider-specific args may still apply, e.g.
@@ -830,6 +832,30 @@ mod tests {
             [
                 "-y",
                 "@xai-official/grok",
+                "--no-auto-update",
+                "--experimental-memory",
+                "--rules",
+                crate::grok::PROJECT_RULES_BOOTSTRAP,
+                "agent",
+                "--always-approve",
+                "--no-leader",
+                "stdio",
+            ]
+        );
+        let pinned_grok = lookup_with(
+            &[
+                ("COWBOY_ACP_GROK_CMD", "/opt/npm-global/bin/grok"),
+                (
+                    "COWBOY_ACP_GROK_ARGS",
+                    "--no-auto-update --experimental-memory --rules 'Read and follow the closest AGENTS.md project instructions before taking any action.' agent --always-approve --no-leader stdio",
+                ),
+            ],
+            "grok",
+        )
+        .expect("pinned grok command");
+        assert_eq!(
+            pinned_grok.args,
+            [
                 "--no-auto-update",
                 "--experimental-memory",
                 "--rules",
