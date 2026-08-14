@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { Box, Button, Stack, Typography, useTheme } from "@mui/material";
-import { alpha } from "@mui/material/styles";
 import { ExpandLess, ExpandMore } from "@mui/icons-material";
 import type { ContentChunk, PromptOrigin } from "./derive";
 import { Markdown } from "./Markdown";
@@ -83,7 +82,7 @@ function AgentOriginNote({
   const name = agentOriginDisplayName(providerId);
   const source = agentOriginSourceLabel(origin);
   const hasDetails = Boolean(presented.raw && presented.raw !== presented.title);
-  const mark = <ProviderIcon provider={providerId} sx={{ fontSize: 16 }} />;
+  const mark = <ProviderIcon provider={providerId} sx={{ fontSize: 18 }} />;
 
   return (
     <Box
@@ -92,105 +91,103 @@ function AgentOriginNote({
       data-prompt-origin-provider={providerId}
       aria-label={`${name} ${source} update`}
       sx={{
-        alignSelf: "flex-start",
-        width: "fit-content",
-        maxWidth: { xs: "92%", sm: "78%" },
-        py: 0.5,
+        alignSelf: "stretch",
+        py: 0.25,
       }}
     >
-      <Stack direction="row" spacing={1} alignItems="flex-start">
-        <Box
-          aria-hidden
-          sx={{
-            width: 24,
-            height: 24,
-            mt: "1px",
-            flexShrink: 0,
-            borderRadius: "50%",
-            display: "grid",
-            placeItems: "center",
-            color: visual.primary,
-            bgcolor: alpha(visual.primary, theme.palette.mode === "dark" ? 0.14 : 0.08),
-          }}
-        >
-          {mark ?? (
-            <Typography component="span" sx={{ fontSize: 11, fontWeight: 700, lineHeight: 1 }}>
-              {name.slice(0, 1)}
-            </Typography>
-          )}
-        </Box>
-        <Box sx={{ minWidth: 0 }}>
-          <Stack direction="row" spacing={0.75} alignItems="baseline" sx={{ minHeight: 24 }}>
-            <Typography
-              variant="caption"
-              sx={{ fontWeight: 700, color: "text.primary", letterSpacing: "0.01em" }}
-            >
-              {name}
-            </Typography>
-            <Typography variant="caption" sx={{ color: "text.disabled" }}>
-              {source}
-            </Typography>
-          </Stack>
+      <Box
+        sx={{
+          px: 1.25,
+          py: 0.875,
+          borderRadius: 1,
+          border: 1,
+          borderColor: "divider",
+          bgcolor: "action.hover",
+          color: "text.primary",
+        }}
+      >
+        <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
           <Box
+            aria-hidden
             sx={{
-              mt: 0.5,
-              px: 1.25,
-              py: 1,
-              borderRadius: 2,
-              border: 1,
-              borderColor: alpha(visual.primary, theme.palette.mode === "dark" ? 0.22 : 0.14),
-              bgcolor: alpha(visual.primary, theme.palette.mode === "dark" ? 0.08 : 0.04),
-              color: "text.primary",
+              width: 18,
+              height: 18,
+              flexShrink: 0,
+              color: visual.primary,
+              display: "grid",
+              placeItems: "center",
+              "& .MuiSvgIcon-root": { fontSize: 18 },
             }}
           >
-            <Typography variant="body2" sx={{ fontWeight: 600, lineHeight: "inherit" }}>
-              {presented.title || text}
-            </Typography>
-            {hasDetails && (
-              <>
-                <Button
-                  size="small"
-                  disableRipple
-                  aria-expanded={detailsOpen}
-                  onClick={(): void => setDetailsOpen((open) => !open)}
-                  endIcon={detailsOpen ? <ExpandLess /> : <ExpandMore />}
-                  sx={{
-                    mt: 0.25,
-                    ml: -0.75,
-                    minWidth: 0,
-                    px: 0.75,
-                    color: "text.secondary",
-                    textTransform: "none",
-                    fontWeight: 600,
-                    "& .MuiButton-endIcon": { ml: 0.25 },
-                    "& .MuiButton-endIcon > svg": { fontSize: "1.15rem" },
-                    "&:hover": { bgcolor: "transparent", color: "text.primary" },
-                  }}
-                >
-                  {detailsOpen ? "Hide details" : "Details"}
-                </Button>
-                {detailsOpen && (
-                  <Box
-                    component="pre"
-                    sx={{
-                      m: 0,
-                      mt: 0.25,
-                      whiteSpace: "pre-wrap",
-                      wordBreak: "break-word",
-                      fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                      fontSize: "0.78em",
-                      lineHeight: 1.45,
-                      color: "text.secondary",
-                    }}
-                  >
-                    {presented.raw}
-                  </Box>
-                )}
-              </>
+            {mark ?? (
+              <Typography component="span" sx={{ fontSize: 11, fontWeight: 700, lineHeight: 1 }}>
+                {name.slice(0, 1)}
+              </Typography>
             )}
           </Box>
-        </Box>
-      </Stack>
+          <Typography
+            variant="caption"
+            sx={{ fontWeight: 700, color: "text.primary", letterSpacing: "0.01em" }}
+          >
+            {name}
+          </Typography>
+          <Typography variant="caption" sx={{ color: "text.disabled" }}>
+            {source}
+          </Typography>
+        </Stack>
+        <Stack
+          direction="row"
+          spacing={1}
+          alignItems="center"
+          sx={{ mt: 0.5, minWidth: 0 }}
+        >
+          <Typography
+            variant="body2"
+            sx={{ flex: 1, minWidth: 0, fontWeight: 600, lineHeight: "inherit" }}
+          >
+            {presented.title || text}
+          </Typography>
+          {hasDetails && (
+            <Button
+              size="small"
+              disableRipple
+              aria-expanded={detailsOpen}
+              onClick={(): void => setDetailsOpen((open) => !open)}
+              endIcon={detailsOpen ? <ExpandLess /> : <ExpandMore />}
+              sx={{
+                flexShrink: 0,
+                minWidth: 0,
+                px: 0.5,
+                color: "text.secondary",
+                textTransform: "none",
+                fontWeight: 600,
+                "& .MuiButton-endIcon": { ml: 0.25 },
+                "& .MuiButton-endIcon > svg": { fontSize: "1.15rem" },
+                "&:hover": { bgcolor: "transparent", color: "text.primary" },
+              }}
+            >
+              {detailsOpen ? "Hide" : "Details"}
+            </Button>
+          )}
+        </Stack>
+        {hasDetails && detailsOpen && (
+          <Box
+            component="pre"
+            sx={{
+              m: 0,
+              mt: 0.75,
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+              fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+              fontSize: "0.78em",
+              lineHeight: 1.45,
+              color: "text.secondary",
+            }}
+          >
+            {presented.raw}
+          </Box>
+        )}
+      </Box>
     </Box>
   );
 }
