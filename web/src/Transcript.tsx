@@ -66,6 +66,7 @@ import {
 } from "@mui/icons-material";
 import { providerActivityKind, providerPresentation } from "./providerPresentation";
 import { providerVisual } from "./providerVisual";
+import { ProviderIcon } from "./ProviderIcon";
 import { CLAUDE_VERBS } from "./claudeVerbs";
 import { Markdown } from "./Markdown";
 import { attachmentDisplayParts } from "./attachments";
@@ -805,12 +806,21 @@ function CodexWorkcell({ size = 16 }: { size?: number }): React.JSX.Element {
 const CLAUDE_SPINNER_FRAMES = ["·", "✢", "*", "✶", "✻", "✽"];
 const CLAUDE_FRAME_MS = 200;
 
-// Grok Build uses this exact single-column Braille loop in its turn-status
-// line. Keep its native, terse activity language here instead of borrowing
-// Claude's rotating verbs or Codex's prompt/caret metaphor. The fixed-width
-// cell prevents transcript reflow, and 133ms matches Grok's ~7.5fps cadence.
-const GROK_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
-const GROK_FRAME_MS = 133;
+// Grok keeps its real monochrome mark visible while one diagonal highlight
+// travels through it. That preserves provider identity at every frame and
+// feels like a signal crossing the xAI slash, rather than another generic
+// spinner. CSS owns the motion so a long Grok turn does not rerender React.
+const grokSignalSweep = keyframes`
+  from {
+    -webkit-mask-position: 120% 0;
+    mask-position: 120% 0;
+  }
+  to {
+    -webkit-mask-position: -20% 0;
+    mask-position: -20% 0;
+  }
+`;
+const GROK_SIGNAL_MS = 1800;
 
 // Claude-code indicator: a character-level recreation of Claude Code's own
 // status line — its morphing star glyph (CLAUDE_SPINNER_FRAMES @ 200ms) + a
@@ -960,26 +970,11 @@ function CodexThinking({ provider }: { provider: string }): React.JSX.Element {
 function GrokThinking({ provider }: { provider: string }): React.JSX.Element {
   const theme = useTheme();
   const visual = providerVisual(provider, theme.palette.mode);
-  const reducedMotion = globalThis.matchMedia?.(
-    "(prefers-reduced-motion: reduce)",
-  ).matches;
-  const [frame, setFrame] = useState(0);
-  useEffect(() => {
-    if (reducedMotion) return undefined;
-    const id = globalThis.setInterval(
-      () => setFrame((current) => current + 1),
-      GROK_FRAME_MS,
-    );
-    return () => globalThis.clearInterval(id);
-  }, [reducedMotion]);
-  const glyph = reducedMotion
-    ? GROK_SPINNER_FRAMES[0]
-    : GROK_SPINNER_FRAMES[frame % GROK_SPINNER_FRAMES.length];
 
   return (
     <Stack
       direction="row"
-      spacing={0.75}
+      spacing={0.8}
       alignItems="center"
       aria-label="Grok is working"
       data-provider-activity="grok"
@@ -989,18 +984,43 @@ function GrokThinking({ provider }: { provider: string }): React.JSX.Element {
         component="span"
         aria-hidden
         sx={{
-          width: 14,
+          width: 18,
+          height: 18,
+          position: "relative",
+          display: "inline-block",
           flexShrink: 0,
-          textAlign: "center",
-          fontSize: 15,
-          lineHeight: 1,
-          fontWeight: 600,
           color: visual.primary,
-          fontFamily:
-            "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+          "& .grok-mark-base, & .grok-mark-signal": {
+            position: "absolute",
+            inset: 0,
+            fontSize: 18,
+          },
+          "& .grok-mark-base": {
+            opacity: 0.28,
+          },
+          "& .grok-mark-signal": {
+            WebkitMaskImage:
+              "linear-gradient(115deg, transparent 32%, #000 46%, #000 54%, transparent 68%)",
+            maskImage:
+              "linear-gradient(115deg, transparent 32%, #000 46%, #000 54%, transparent 68%)",
+            WebkitMaskSize: "300% 100%",
+            maskSize: "300% 100%",
+            WebkitMaskRepeat: "no-repeat",
+            maskRepeat: "no-repeat",
+            animation: `${grokSignalSweep} ${String(GROK_SIGNAL_MS)}ms ease-in-out infinite`,
+          },
+          "@media (prefers-reduced-motion: reduce)": {
+            "& .grok-mark-base": {
+              opacity: 0.82,
+            },
+            "& .grok-mark-signal": {
+              display: "none",
+            },
+          },
         }}
       >
-        {glyph}
+        <ProviderIcon provider={provider} className="grok-mark-base" />
+        <ProviderIcon provider={provider} className="grok-mark-signal" />
       </Box>
       <Typography
         aria-hidden
@@ -1011,7 +1031,7 @@ function GrokThinking({ provider }: { provider: string }): React.JSX.Element {
           letterSpacing: "0.015em",
         }}
       >
-        Grokking…
+        Working
       </Typography>
     </Stack>
   );
@@ -1034,8 +1054,8 @@ function DefaultThinking(): React.JSX.Element {
 }
 
 // Each provider keeps its own activity language: Claude's morphing spark,
-// Codex's workcell, Grok's native Braille loop, and a neutral Material fallback
-// for providers without one.
+// Codex's workcell, Grok's signal sweep, and a neutral Material fallback for
+// providers without one.
 function ThinkingIndicator({
   provider,
 }: {

@@ -13,22 +13,22 @@ Deno.test("Codex activity copy fades without moving the text baseline", () => {
   assertEquals(animation.includes("translateY"), false);
 });
 
-Deno.test("Grok activity keeps the native fixed-width Braille cadence", () => {
+Deno.test("Grok activity sweeps its provider mark without React churn", () => {
   const component = transcriptSource.match(
     /function GrokThinking[\s\S]*?(?=\nfunction DefaultThinking)/,
   )?.[0];
   assert(component);
-  assert(
-    transcriptSource.includes(
-      'const GROK_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"]',
-    ),
-  );
-  assert(transcriptSource.includes("const GROK_FRAME_MS = 133"));
+  assert(transcriptSource.includes("const grokSignalSweep = keyframes"));
+  assert(transcriptSource.includes("const GROK_SIGNAL_MS = 1800"));
   assert(component.includes('data-provider-activity="grok"'));
-  assert(component.includes("Grokking…"));
-  assert(component.includes("if (reducedMotion) return undefined"));
-  assert(component.includes("GROK_FRAME_MS"));
-  assert(component.includes("width: 14"));
+  assert(component.includes('className="grok-mark-base"'));
+  assert(component.includes('className="grok-mark-signal"'));
+  assert(component.includes("WebkitMaskImage"));
+  assert(component.includes("Working"));
+  assert(component.includes("prefers-reduced-motion: reduce"));
+  assert(component.includes("width: 18"));
+  assertEquals(component.includes("setInterval"), false);
+  assertEquals(transcriptSource.includes("Grokking…"), false);
 });
 
 Deno.test("the growing row stays in the scroller paint flow", () => {
