@@ -112,9 +112,28 @@ The loop awaits `cmd_rx` (routed from the supervisor) and translates each
 | `Permission { request_id, option_id }` | resolve the pending oneshot, push `PermissionResolved` |
 | `SetConfigOption { config_id, value }` | Gemini's synthesized `mode` and Grok's `session_mode` → `SetSessionModeRequest`; Grok `model`/`reasoning_effort` → compatibility `session/set_model`; Grok `permission_mode` → `_x.ai/yolo_mode_changed`; otherwise typed `SetSessionConfigOptionRequest` (string ids and booleans), whose refreshed options are pushed back to the Hub |
 
-**Auto-resume tagging:** a `cmid` starting with the `__cont__` prefix marks an
-auto-continued turn — the echoed block is flagged `autoResumed: true` so the UI
-renders it as a "↻ resumed turn" note rather than a user bubble.
+**Prompt origin:** every Cowboy-echoed `user_message_chunk` carries a durable
+`promptOrigin` object so the timeline can tell senders apart. The role stays
+`user` because ACP only has that slot for a prompt; origin names who actually
+sent it.
+
+| `actor` | Known `source` values | Who sent it |
+|---|---|---|
+| `human` | `composer` | The person typed or attached it |
+| `cowboy` | `auto-resume`, `schedule` | Cowboy issued the prompt (`__cont__`, `__wake__`, `__sched__`) |
+| `agent` | `runtime` | The agent runtime injected it (for example a Grok `<system-reminder>`) |
+
+New senders add a `source` string under one of those three actors. They do not
+invent a fourth actor. Cowboy still writes `autoResumed: true` on non-human
+echoes so older clients keep the muted-note path.
+
+Inbound ACP `user_message_chunk` events from the agent are classified the same
+way. A Grok background-task reminder is stamped `actor: agent`,
+`source: runtime`, `provider: grok` and never counts as a human question.
+
+**Auto-resume tagging:** a `cmid` starting with the `__cont__` prefix is
+`cowboy` / `auto-resume`. The UI renders it as a resumed-turn note rather than a
+user bubble.
 
 ## Turn liveness: manual recovery, no auto-kill
 

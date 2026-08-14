@@ -1,4 +1,4 @@
-import type { RenderItem } from "../derive";
+import { isHumanPrompt, type RenderItem } from "../derive";
 
 export interface QuestionPage {
   id: string;
@@ -142,7 +142,7 @@ export function deriveQuestionPages(items: RenderItem[]): QuestionPage[] {
   for (let index = 0; index < items.length; index += 1) {
     const item = items[index]!;
     const beginsPage = item.kind === "message" && item.role === "user" &&
-      item.autoResumed !== true && !isContextManagementCommand(item);
+      isHumanPrompt(item.origin) && !isContextManagementCommand(item);
 
     if (beginsPage) {
       if (current) {

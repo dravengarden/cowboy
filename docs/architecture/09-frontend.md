@@ -87,6 +87,14 @@ stick-to-bottom during live streaming (releasing when the user scrolls up), and
 scroll anchoring on prepend so loading older history (via
 `GET /api/history/:id/:page`) never jumps the view.
 
+User-role rows are not all human. `derive` attaches a `promptOrigin` (`human` /
+`cowboy` / `agent`) from the persisted update, or recovers it from the older
+`autoResumed` flag and `<system-reminder>` markup. Only `actor: human` uses the
+right-aligned primary bubble and starts an Explore question page. Cowboy
+auto-resume and schedule notes stay on the human rail as muted cards. Agent
+runtime injections sit on the agent rail: left-aligned, with the provider mark
+(the Grok / xAI logo for Grok) and a short sender label, never a human bubble.
+
 ## Composer
 
 The composer (`Composer.tsx`, `ComposerEditor.tsx`, `FullscreenComposer.tsx`) is a

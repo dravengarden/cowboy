@@ -3,11 +3,24 @@ import {
   expandedSelection,
   horizontalSwipe,
   inputOverlayOwnsDrawerGesture,
+  isPairedTouchClick,
   MOBILE_DRAWER_DIRECTION_LOCK_PX,
   RELIABLE_TOUCH_TAP_MOVE_SLOP_PX,
   shouldFreezePreviewPointer,
   swipeCommits,
 } from "./touchGestures.ts";
+
+Deno.test("paired touch click stays suppressed regardless of Safari delay", () => {
+  assertEquals(isPairedTouchClick(true, 1), true);
+  assertEquals(isPairedTouchClick(true, 2), true);
+  assertEquals(isPairedTouchClick(true, 0, "touch"), true);
+});
+
+Deno.test("keyboard and assistive clicks are not swallowed by a touch claim", () => {
+  assertEquals(isPairedTouchClick(true, 0), false);
+  assertEquals(isPairedTouchClick(false, 1), false);
+  assertEquals(isPairedTouchClick(false, 0), false);
+});
 
 Deno.test("expanded native text selection owns horizontal handle drags", () => {
   assertEquals(expandedSelection(null), false);

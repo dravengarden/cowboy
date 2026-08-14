@@ -1715,6 +1715,8 @@ impl PostgresStorage {
              WHERE payload->>'kind' = 'update' \
                AND payload->'update'->>'sessionUpdate' = 'user_message_chunk' \
                AND COALESCE(payload->'update'->>'autoResumed', 'false') <> 'true' \
+               AND COALESCE(payload->'update'->'promptOrigin'->>'actor', 'human') = 'human' \
+               AND POSITION('<system-reminder' IN LOWER(COALESCE(payload->'update'->'content'->>'text', ''))) = 0 \
                AND BTRIM(COALESCE(payload->'update'->'content'->>'text', '')) \
                    NOT IN ('/compact', '/compress') \
                AND previous_update IS DISTINCT FROM 'user_message_chunk'",
@@ -1779,6 +1781,8 @@ impl PostgresStorage {
                WHERE payload->>'kind' = 'update' \
                  AND payload->'update'->>'sessionUpdate' = 'user_message_chunk' \
                  AND COALESCE(payload->'update'->>'autoResumed', 'false') <> 'true' \
+                 AND COALESCE(payload->'update'->'promptOrigin'->>'actor', 'human') = 'human' \
+                 AND POSITION('<system-reminder' IN LOWER(COALESCE(payload->'update'->'content'->>'text', ''))) = 0 \
                  AND BTRIM(COALESCE(payload->'update'->'content'->>'text', '')) \
                      NOT IN ('/compact', '/compress') \
                  AND previous_update IS DISTINCT FROM 'user_message_chunk')",
@@ -1819,6 +1823,8 @@ impl PostgresStorage {
                WHERE payload->>'kind' = 'update' \
                  AND payload->'update'->>'sessionUpdate' = 'user_message_chunk' \
                  AND COALESCE(payload->'update'->>'autoResumed', 'false') <> 'true' \
+                 AND COALESCE(payload->'update'->'promptOrigin'->>'actor', 'human') = 'human' \
+                 AND POSITION('<system-reminder' IN LOWER(COALESCE(payload->'update'->'content'->>'text', ''))) = 0 \
                  AND BTRIM(COALESCE(payload->'update'->'content'->>'text', '')) \
                      NOT IN ('/compact', '/compress') \
                  AND previous_update IS DISTINCT FROM 'user_message_chunk' \
@@ -1876,6 +1882,8 @@ impl PostgresStorage {
                WHERE payload->>'kind' = 'update' \
                  AND payload->'update'->>'sessionUpdate' = 'user_message_chunk' \
                  AND COALESCE(payload->'update'->>'autoResumed', 'false') <> 'true' \
+                 AND COALESCE(payload->'update'->'promptOrigin'->>'actor', 'human') = 'human' \
+                 AND POSITION('<system-reminder' IN LOWER(COALESCE(payload->'update'->'content'->>'text', ''))) = 0 \
                  AND BTRIM(COALESCE(payload->'update'->'content'->>'text', '')) \
                      NOT IN ('/compact', '/compress') \
                  AND previous_update IS DISTINCT FROM 'user_message_chunk' \

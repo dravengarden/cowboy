@@ -3,7 +3,9 @@ import {
   isCompactionCompletionTail,
   isCompactionRequestTail,
   isCompactingTail,
+  isHumanPrompt,
   latestCompactionCompletionSeq,
+  latestPlan,
   linkTimeline,
 } from "./derive";
 import type { Envelope } from "./protocol";
@@ -238,5 +240,98 @@ Deno.test("derive turns empty Codex HTML separators into thought sections only",
   }
   if (message.chunks[0].text !== "Example: <!-- -->") {
     throw new Error("normal message content should remain untouched");
+  }
+});
+
+Deno.test("derive isolates user-role system-reminder echoes as agent runtime", () => {
+  const items = derive([
+    {
+      session_id: "s1",
+      seq: 1,
+      kind: "update",
+      update: {
+        sessionUpdate: "user_message_chunk",
+        content: { type: "text", text: "What broke?" },
+      },
+    },
+    {
+      session_id: "s1",
+      seq: 2,
+      kind: "update",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Looking." },
+      },
+    },
+    {
+      session_id: "s1",
+      seq: 3,
+      kind: "update",
+      update: {
+        sessionUpdate: "user_message_chunk",
+        content: {
+          type: "text",
+          text: "<system-reminder>Background task \"find\" completed (exit code: 0).</system-reminder>",
+        },
+      },
+    },
+    {
+      session_id: "s1",
+      seq: 4,
+      kind: "update",
+      update: {
+        sessionUpdate: "agent_thought_chunk",
+        content: { type: "text", text: "The find finished." },
+      },
+    },
+    {
+      session_id: "s1",
+      seq: 5,
+      kind: "update",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "The search finished." },
+      },
+    },
+  ]);
+  if (items.length !== 5) {
+    throw new Error(`expected five visible items, got ${items.length}`);
+  }
+  const injected = items.find((item) => item.key === "3");
+  if (injected?.kind !== "message" || injected.role !== "user") {
+    throw new Error("runtime injection should remain a user-role timeline row");
+  }
+  if (isHumanPrompt(injected.origin) || injected.origin?.actor !== "agent") {
+    throw new Error("runtime injection must not count as a human prompt");
+  }
+  const human = items.find((item) => item.key === "1");
+  if (human?.kind !== "message" || !isHumanPrompt(human.origin)) {
+    throw new Error("the real user prompt should stay human");
+  }
+});
+
+Deno.test("runtime prompt echoes do not retire the current plan", () => {
+  const plan = latestPlan([
+    {
+      session_id: "s1",
+      seq: 1,
+      kind: "update",
+      update: {
+        sessionUpdate: "plan",
+        entries: [{ content: "Keep working", status: "in_progress" }],
+      },
+    },
+    {
+      session_id: "s1",
+      seq: 2,
+      kind: "update",
+      update: {
+        sessionUpdate: "user_message_chunk",
+        content: { type: "text", text: "<system-reminder>task done</system-reminder>" },
+      },
+    },
+  ]);
+  if (!plan || plan.supersededByUserTurn) {
+    throw new Error("a runtime injection must not count as a new user turn");
   }
 });

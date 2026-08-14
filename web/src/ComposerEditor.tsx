@@ -61,6 +61,7 @@ import {
 } from "./desktop/vim/vimEscapeOwnership";
 import { inlineImageInsertion } from "./inlineImageSelection";
 import { mobileLineBreakCaretTelemetry } from "./composer/mobileLineBreakCaretTelemetry";
+import { mobileEmptyLineCaretRepair } from "./composer/mobileEmptyLineCaret";
 
 export interface ComposerEditorSelection {
   anchor: number;
@@ -774,7 +775,9 @@ export const ComposerEditor = forwardRef<
       // Keep a trailing image from being the doc's last line (the atomic image
       // line otherwise traps the caret — "图片在最后一行,无法开启新的一行").
       inlineImageTrailingLine,
-      ...(touchInput ? [mobileLineBreakCaretTelemetry] : []),
+      ...(touchInput
+        ? [mobileEmptyLineCaretRepair, mobileLineBreakCaretTelemetry]
+        : []),
       autocompletion({
         override: [
           fileCompletionSource(sessionId),
