@@ -6,11 +6,36 @@ import {
   providerUsage,
   scheduledResetCountdown,
   topBarUsageLimits,
+  usageCardProviders,
   usageLimits,
   usageResetProvider,
   usageResetSchedule,
   XAI_SIGN_IN_MESSAGE,
 } from "./usageLimits.ts";
+
+Deno.test("usage cards place xAI directly after OpenAI", () => {
+  const snapshot = {
+    refreshed_at_ms: 1,
+    next_refresh_at_ms: 2,
+    refresh_interval_ms: 1,
+    providers: ["deepseek", "openai", "anthropic", "gemini", "xai", "future"]
+      .map((provider) => ({
+        provider,
+        status: "available",
+        source: "test",
+        observed_at_ms: 1,
+      })),
+  };
+
+  assertEquals(
+    usageCardProviders(snapshot).map((usage) => usage.provider),
+    ["deepseek", "openai", "xai", "anthropic", "gemini", "future"],
+  );
+  assertEquals(
+    snapshot.providers.map((usage) => usage.provider),
+    ["deepseek", "openai", "anthropic", "gemini", "xai", "future"],
+  );
+});
 
 Deno.test("datetime picker ignores iOS current-minute provisional values", () => {
   const now = new Date("2026-07-20T10:59:30").getTime();

@@ -47,6 +47,7 @@ import {
   relativeUpdateTime,
   scheduledResetCountdown,
   type UsageLimit,
+  usageCardProviders,
   usageLimits,
   usageResetProvider,
   usageResetSchedule,
@@ -1671,7 +1672,7 @@ function UsageInfoSection(): React.JSX.Element {
           <Refresh />
         </NetworkIconButton>
       </Stack>
-      {snapshot?.providers.map((provider) => (
+      {usageCardProviders(snapshot).map((provider) => (
         <ProviderUsageCard
           key={provider.provider}
           usage={provider}

@@ -20,6 +20,23 @@ export interface UsageSnapshot {
   xai_reset_schedule?: { fire_at_ms: number };
 }
 
+/** Keep xAI beside OpenAI without disturbing the order of other usage cards. */
+export function usageCardProviders(
+  snapshot: UsageSnapshot | null,
+): ProviderUsage[] {
+  if (!snapshot) return [];
+  const xai = snapshot.providers.filter((usage) => usage.provider === "xai");
+  const providers = snapshot.providers.filter((usage) =>
+    usage.provider !== "xai"
+  );
+  const openaiIndex = providers.findIndex((usage) =>
+    usage.provider === "openai"
+  );
+  if (openaiIndex < 0 || xai.length === 0) return [...snapshot.providers];
+  providers.splice(openaiIndex + 1, 0, ...xai);
+  return providers;
+}
+
 export type UsageResetProvider = "codex" | "xai";
 
 export function usageResetProvider(
