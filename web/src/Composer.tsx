@@ -6163,14 +6163,13 @@ export function SessionControls({
           onSessionAction={runSessionAction}
           projection={projection}
           onProjectionChange={onProjectionChange}
-          onSelectOption={(configId, value): void => {
+          onSelectOption={(configId, value): boolean =>
             send({
               type: "set_config_option",
               session_id: sessionId,
               config_id: configId,
               value,
-            });
-          }}
+            })}
         />,
         document.body,
       )}
@@ -6182,11 +6181,13 @@ function RecommendedRunConfigPresetButton({
   preset,
   selected,
   disabled,
+  pending,
   onActivate,
 }: {
   preset: RunConfigPreset;
   selected: boolean;
   disabled: boolean;
+  pending: boolean;
   onActivate: () => void;
 }): React.JSX.Element {
   const activateTap = useReliableTouchTap<HTMLButtonElement>(onActivate);
@@ -6196,6 +6197,7 @@ function RecommendedRunConfigPresetButton({
       {...activateTap}
       disabled={disabled}
       aria-pressed={selected}
+      aria-busy={pending || undefined}
       data-run-config-preset={preset.id}
       sx={{
         minHeight: 58,
@@ -6240,6 +6242,20 @@ function RecommendedRunConfigPresetButton({
           {preset.detail}
         </Typography>
       </Box>
+      <Box
+        aria-hidden
+        sx={{
+          width: 18,
+          height: 18,
+          display: "grid",
+          placeItems: "center",
+          flexShrink: 0,
+        }}
+      >
+        {pending && (
+          <CircularProgress size={14} thickness={4.5} color="inherit" />
+        )}
+      </Box>
     </ButtonBase>
   );
 }
@@ -6278,7 +6294,7 @@ function ComposerSheet({
   onSessionAction: (action: SessionAction) => Promise<void>;
   projection?: TranscriptProjection | undefined;
   onProjectionChange?: ((projection: TranscriptProjection) => void) | undefined;
-  onSelectOption: (configId: string, value: string | boolean) => void;
+  onSelectOption: (configId: string, value: string | boolean) => boolean;
 }): React.JSX.Element {
   // Phones and portrait touch tablets keep the bottom sheet. Pointer-driven
   // devices from 768px and every viewport >=1024px get a centered dialog.
@@ -6304,7 +6320,15 @@ function ComposerSheet({
       session?.provider_version,
     ],
   );
-  const activePreset = activeRunConfigPreset(recommendedPresets, options);
+  const authoritativeActivePreset = activeRunConfigPreset(
+    recommendedPresets,
+    options,
+  );
+  const [pendingPresetId, setPendingPresetId] = useState<string | null>(null);
+  const pendingPreset = pendingPresetId === null
+    ? undefined
+    : recommendedPresets.find((preset) => preset.id === pendingPresetId);
+  const activePreset = pendingPreset ?? authoritativeActivePreset;
   const [customizeAgent, setCustomizeAgent] = useState(false);
   const [sessionActionsExpanded, setSessionActionsExpanded] = useState(false);
   const [cmdConfirm, setCmdConfirm] = useState<SessionAction | null>(null);
@@ -6312,11 +6336,22 @@ function ComposerSheet({
   useEffect(() => {
     if (open) {
       setCustomizeAgent(false);
+      setPendingPresetId(null);
       setSessionActionsExpanded(false);
       setCmdConfirm(null);
       setReloadConfirm(false);
     }
   }, [open, session?.id]);
+  useEffect(() => {
+    if (pendingPresetId === null) return;
+    if (!pendingPreset) {
+      setPendingPresetId(null);
+      return;
+    }
+    if (runConfigPresetChanges(pendingPreset, options).length === 0) {
+      setPendingPresetId(null);
+    }
+  }, [options, pendingPreset, pendingPresetId]);
   const showAgentDetails = recommendedPresets.length === 0 || customizeAgent;
   const displayTitle = session?.title.startsWith(`${session.provider} · `)
     ? session.title.slice(session.provider.length + 3)
@@ -6536,15 +6571,26 @@ function ComposerSheet({
                             preset={preset}
                             selected={activePreset?.id === preset.id}
                             disabled={dead}
+                            pending={pendingPresetId === preset.id}
                             onActivate={(): void => {
+                              const changes = runConfigPresetChanges(
+                                preset,
+                                options,
+                              );
+                              if (changes.length === 0) {
+                                setPendingPresetId(null);
+                                setCustomizeAgent(false);
+                                return;
+                              }
+                              setPendingPresetId(preset.id);
                               haptic();
-                              for (
-                                const change of runConfigPresetChanges(
-                                  preset,
-                                  options,
-                                )
-                              ) {
-                                onSelectOption(change.configId, change.value);
+                              for (const change of changes) {
+                                if (
+                                  !onSelectOption(change.configId, change.value)
+                                ) {
+                                  setPendingPresetId(null);
+                                  return;
+                                }
                               }
                               setCustomizeAgent(false);
                             }}
@@ -6597,8 +6643,9 @@ function ComposerSheet({
                             status,
                             optionPresentations.get(opt.id),
                           )}
-                          onSelect={(value): void =>
-                            onSelectOption(opt.id, value)}
+                          onSelect={(value): void => {
+                            onSelectOption(opt.id, value);
+                          }}
                         />
                       ))}
                     </Stack>
