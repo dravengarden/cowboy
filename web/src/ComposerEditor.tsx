@@ -59,7 +59,7 @@ import {
   type VimEscapeState,
   vimEscapeBelongsToApp,
 } from "./desktop/vim/vimEscapeOwnership";
-import { inlineImageInsertion } from "./inlineImageSelection";
+import { inlineImagePasteInsertion } from "./inlineImageSelection";
 import { moveCaretOffImageLine } from "./composer/inlineImageCaretPolicy";
 import { mobileEmptyLineCaretRepair } from "./composer/mobileEmptyLineCaret";
 import { mobileLineBreakCaretTelemetry } from "./composer/mobileLineBreakCaretTelemetry";
@@ -487,7 +487,7 @@ export const ComposerEditor = forwardRef<
       if (!view || attachments.length === 0) return;
       attachments.forEach(registerInlineAttachment);
       const selection = capturedSelection ?? view.state.selection.main;
-      const edit = inlineImageInsertion(
+      const edit = inlineImagePasteInsertion(
         view.state.doc.toString(),
         selection.anchor,
         selection.head,
