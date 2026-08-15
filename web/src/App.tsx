@@ -1390,11 +1390,10 @@ function NewSessionDialog({
     const sessionCountRef = useRef(sessionCount);
     sessionCountRef.current = sessionCount;
     // On open: reset to a fresh "New session N" default (N keeps it distinct if
-    // you open several without renaming), then focus + select it so you can type
-    // a name straight away — or clear it to let the first message auto-name.
-    // autoFocus (below) is the keyboard's best shot within the opening tap's
-    // gesture window (iOS only raises it for an in-gesture focus); the delayed
-    // select() highlights the default once the sheet has mounted the field.
+    // you open several without renaming), then transfer the in-gesture keyboard
+    // claim onto the title field and select the default so typing replaces it.
+    // The opener calls claimKeyboard() on touch; this delay only transfers
+    // focus after the sheet mounts the field (same timing as rename).
     useEffect(() => {
         if (!open) return undefined;
         setTitle(`New session ${sessionCountRef.current + 1}`);
@@ -1406,7 +1405,7 @@ function NewSessionDialog({
         const t = globalThis.setTimeout(() => {
             titleRef.current?.focus();
             titleRef.current?.select();
-        }, 60);
+        }, 120);
         return () => globalThis.clearTimeout(t);
     }, [open]);
     useEffect(() => {
@@ -1951,6 +1950,13 @@ export function App({
         ) => void
     ) | null>(null);
     const [dialogOpen, setDialogOpen] = useState(false);
+    const openNewSession = (): void => {
+        // iOS only raises the software keyboard for an in-gesture focus. The
+        // New Session title field mounts after the sheet opens, so claim here
+        // and transfer once the field exists — same contract as rename.
+        if (mobile) claimKeyboard();
+        setDialogOpen(true);
+    };
     const [pendingCreatedSession, setPendingCreatedSession] = useState<SessionMeta | null>(null);
     const settingsControllerRef = useRef<SettingsControllerHandle>(null);
     const [exploreComposeIntent, setExploreComposeIntent] = useState<{
@@ -2315,7 +2321,7 @@ export function App({
             sessions={sessionsForView}
             activeId={active?.id ?? null}
             onPick={pick}
-            onNew={(): void => setDialogOpen(true)}
+            onNew={openNewSession}
             onClose={mobile
                 ? (): void => settleMobileDrawerRef.current?.(false)
                 : undefined}
@@ -2543,7 +2549,7 @@ export function App({
             {surface === "desktop" && (
                 <Suspense fallback={null}>
                     <DesktopCommandHost
-                        onNewSession={(): void => setDialogOpen(true)}
+                        onNewSession={openNewSession}
                         onOpenSettings={(): void => openSettings("settings")}
                     />
                 </Suspense>
@@ -3484,7 +3490,7 @@ export function App({
                                         <Button
                                             variant="contained"
                                             startIcon={<Add />}
-                                            onClick={(): void => setDialogOpen(true)}
+                                            onClick={openNewSession}
                                         >
                                             New session
                                             {surface === "desktop" && <Kbd keys={`${MOD_LABEL}N`} variant="global" />}
