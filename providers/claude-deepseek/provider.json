@@ -187,7 +187,7 @@
         "id": "claude-deepseek-gateway",
         "version": "0.1.0",
         "source": "git+ssh://git@github.com/dravengarden/columbus.git#6a83e9a9b2b4ac3239cf2c66c0821b1d3e43f781:projects/claude-deepseek",
-        "integrity": "sha256:4f5c81c192f708c8cdf7d0b0a951e5dbbb2499bde302289367988ee3d7cc8e99",
+        "integrity": "sha256:e7eff8a3bd6de2231056f879c4a0fc568e6f6eaa96f8cdac2171f4da2b4aaa14",
         "private": true
       }
     ],
@@ -195,32 +195,6 @@
       {
         "os": "linux",
         "architecture": "x86_64",
-        "payload_digest": "",
-        "launch_command": "claude-agent-acp",
-        "private_components": [
-          {
-            "kind": "provider_cli",
-            "slot": "claude",
-            "dependency": "anthropic-claude-code",
-            "command": "claude"
-          },
-          {
-            "kind": "provider_adapter",
-            "slot": "claude",
-            "dependency": "claude-agent-acp",
-            "command": "claude-agent-acp"
-          },
-          {
-            "kind": "provider_gateway",
-            "slot": "claude-deepseek",
-            "dependency": "claude-deepseek-gateway",
-            "command": "claude-deepseek-gateway"
-          }
-        ]
-      },
-      {
-        "os": "linux",
-        "architecture": "aarch64",
         "payload_digest": "",
         "launch_command": "claude-agent-acp",
         "private_components": [

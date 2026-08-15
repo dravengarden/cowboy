@@ -2090,10 +2090,8 @@ impl ProviderRelease {
         );
         validate_digest(&self.package_digest, "release package digest")?;
         validate_digest(&self.artifact_digest, "release artifact digest")?;
-        ensure!(
-            !self.artifact_url.trim().is_empty() && !self.artifact_url.contains("latest"),
-            "release artifact URL is mutable or empty"
-        );
+        validate_runtime_artifact_url(&self.artifact_url)
+            .context("invalid Provider package artifact URL")?;
         ensure!(
             !self.signature.trim().is_empty(),
             "Provider release is unsigned"

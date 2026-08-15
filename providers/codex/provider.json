@@ -70,7 +70,15 @@
       "-c",
       "model_auto_compact_token_limit_scope=\"body_after_prefix\""
     ],
-    "environment": {},
+    "environment": {
+      "CODEX_PATH": {
+        "source": "component_command",
+        "component": {
+          "kind": "provider_cli",
+          "slot": "codex"
+        }
+      }
+    },
     "remove_environment": [],
     "remove_environment_prefixes": ["CHATGPT_", "CODEX_", "OPENAI_"],
     "dependencies": [
@@ -93,26 +101,6 @@
       {
         "os": "linux",
         "architecture": "x86_64",
-        "payload_digest": "",
-        "launch_command": "codex-acp",
-        "private_components": [
-          {
-            "kind": "provider_cli",
-            "slot": "codex",
-            "dependency": "openai-codex",
-            "command": "codex"
-          },
-          {
-            "kind": "provider_adapter",
-            "slot": "codex",
-            "dependency": "codex-acp",
-            "command": "codex-acp"
-          }
-        ]
-      },
-      {
-        "os": "linux",
-        "architecture": "aarch64",
         "payload_digest": "",
         "launch_command": "codex-acp",
         "private_components": [

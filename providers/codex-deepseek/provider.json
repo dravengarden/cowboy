@@ -115,7 +115,16 @@
       "-c",
       "memories.min_rate_limit_remaining_percent=0"
     ],
-    "environment": { "MODEL_PROVIDER": "deepseek-local" },
+    "environment": {
+      "CODEX_PATH": {
+        "source": "component_command",
+        "component": {
+          "kind": "provider_cli",
+          "slot": "codex"
+        }
+      },
+      "MODEL_PROVIDER": "deepseek-local"
+    },
     "sidecars": [
       {
         "id": "deepseek-gateway",
@@ -160,7 +169,7 @@
         "id": "codex-deepseek-gateway",
         "version": "0.2.0",
         "source": "git+ssh://git@github.com/dravengarden/columbus.git#6a83e9a9b2b4ac3239cf2c66c0821b1d3e43f781:projects/codex-deepseek",
-        "integrity": "sha256:f9560a73932254ff98261bb44a0a87f4ee34aa4cb0310d83a01c234e7928a2c4",
+        "integrity": "sha256:8fbdbab1e77a504dfea9ebc55628f60ce7d037b51a06dd1d5a56d12d4dd46cdd",
         "private": true
       }
     ],
@@ -168,32 +177,6 @@
       {
         "os": "linux",
         "architecture": "x86_64",
-        "payload_digest": "",
-        "launch_command": "codex-acp",
-        "private_components": [
-          {
-            "kind": "provider_cli",
-            "slot": "codex",
-            "dependency": "openai-codex",
-            "command": "codex"
-          },
-          {
-            "kind": "provider_adapter",
-            "slot": "codex",
-            "dependency": "codex-acp",
-            "command": "codex-acp"
-          },
-          {
-            "kind": "provider_gateway",
-            "slot": "codex-deepseek",
-            "dependency": "codex-deepseek-gateway",
-            "command": "codex-deepseek-gateway"
-          }
-        ]
-      },
-      {
-        "os": "linux",
-        "architecture": "aarch64",
         "payload_digest": "",
         "launch_command": "codex-acp",
         "private_components": [

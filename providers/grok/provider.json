@@ -80,20 +80,6 @@
         ]
       },
       {
-        "os": "linux",
-        "architecture": "aarch64",
-        "payload_digest": "",
-        "launch_command": "grok",
-        "private_components": [
-          {
-            "kind": "provider_cli",
-            "slot": "grok",
-            "dependency": "xai-grok",
-            "command": "grok"
-          }
-        ]
-      },
-      {
         "os": "macos",
         "architecture": "aarch64",
         "payload_digest": "",

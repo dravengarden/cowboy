@@ -206,10 +206,15 @@ Schema v2 separates a universal data-only package from executable delivery:
 
 `provider-build` intentionally creates an unsigned, unbound release envelope.
 Such a package may appear in the Catalog as `release_state=unbound` so its UI
-can be reviewed, but Cowboy disables install and upgrade. `provider-bind-runtime`
-requires exactly one runtime entry for every declared OS/architecture and
-exactly one matching artifact for every private component. Signing is rejected
-until that link is complete.
+can be reviewed, but Cowboy disables install and upgrade. For a production
+release, `provider-release-build` builds the data-only package and every
+declared target from `providers/runtime-lock.json`, assigns content-addressed
+HTTPS URLs, and calls `provider-bind-runtime`. Binding requires exactly one
+runtime entry for every declared OS/architecture and exactly one matching
+artifact for every private component. Signing is rejected until that link is
+complete. A platform is advertised only after it has accepted execution
+evidence; adding a platform is a new immutable Provider release, not a Catalog
+metadata edit.
 
 The binding input is a JSON array. This single-target fragment illustrates the
 shape; a real release must contain every target and component declared by its
@@ -467,12 +472,30 @@ fingerprint validation, runtime binding, release envelopes, Ed25519 signing,
 verification, and the closed Rust contract. `packages/provider-ui-sdk` provides
 the matching strict TypeScript component/logic contract and Cowboy renderer.
 `just provider-build <id>` builds one unbound package; `just provider-check`
-builds and links all six independently. A release then requires
-`provider-bind-runtime`, `provider-sign`, and `provider-verify` in that order.
+validates the typed runtime lock, npm lock payloads, package schemas, and all six
+independent manifests. `just provider-release-build <id>` builds and probes the
+complete declared runtime matrix, sets immutable content-addressed URLs, and
+binds the release. A release then requires `provider-sign` and
+`provider-publish`; publication independently re-runs `provider-verify` with
+the supplied public key before writing any Catalog bytes.
+
+`providers/runtime-lock.json` is the single release-input lock for embedded
+Node.js distributions, target-specific native npm archives, and exact Git
+gateway commits. Node-based components have isolated package roots and npm v3
+lockfiles under `providers/runtime-packages/`; the lock checker requires the
+direct package version, resolved URL, and SRI to match the Provider manifest.
+The Machine never falls back to a global Node, npm, ACP adapter, Provider CLI,
+or gateway.
 
 The Controller Catalog compiles the six first-party source manifests as typed
 `unbound` entries and loads installable releases only from its trusted external
-Catalog directory. This prevents a Controller-local, platform-less component
+Catalog directory. The default is `<controller-data-dir>/provider-catalog` and
+may be overridden explicitly. `provider-publish` installs publisher public keys,
+Catalog package/release pairs, receipts, and immutable bytes below
+`artifacts/<sha256>/<filename>`. The Controller serves only those confined
+content-addressed files at `/provider-artifacts/<sha256>/<filename>`, with an
+immutable cache policy and digest ETag. This prevents a Controller-local,
+platform-less component
 inventory from being mistaken for a multi-platform Provider release. Web uses
 only Catalog manifests for discovery, marks, card layout, setup, settings,
 loading, empty, error, and session-facing identity. Service authentication is

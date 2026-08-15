@@ -447,6 +447,11 @@
           cargo-nextest
           cargo-deny
           cargo-machete
+          brotli
+          curl
+          git
+          gnutar
+          gzip
           just
           jq
           go

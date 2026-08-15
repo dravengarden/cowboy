@@ -6,6 +6,7 @@
 web/node_modules/
 web/dist/
 dist/providers/
+dist/provider-runtime-cache/
 *.tsbuildinfo
 
 # Nix

@@ -80,7 +80,9 @@ mod service_catalog {
     }
 
     impl ProviderCatalog {
-        pub(crate) fn open(_data_dir: &Path, external_root: Option<PathBuf>) -> Result<Self> {
+        pub(crate) fn open(data_dir: &Path, external_root: Option<PathBuf>) -> Result<Self> {
+            let external_root =
+                Some(external_root.unwrap_or_else(|| data_dir.join("provider-catalog")));
             let mut embedded = BTreeMap::new();
             for (expected_id, source) in EMBEDDED_SOURCES {
                 let source: StandardProviderSource = serde_json::from_str(source)
@@ -132,6 +134,25 @@ mod service_catalog {
             };
             catalog.refresh_external()?;
             Ok(catalog)
+        }
+
+        pub(crate) fn published_artifact_path(&self, digest: &str, name: &str) -> Option<PathBuf> {
+            let digest = digest.strip_prefix("sha256:").unwrap_or(digest);
+            if digest.len() != 64
+                || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+                || name.is_empty()
+                || name.len() > 255
+                || !name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+            {
+                return None;
+            }
+            self.external_root.as_ref().map(|root| {
+                root.join("artifacts")
+                    .join(digest.to_ascii_lowercase())
+                    .join(name)
+            })
         }
 
         pub(crate) fn refresh_external(&self) -> Result<usize> {
@@ -431,6 +452,32 @@ mod service_catalog {
                 compare_versions("1.0.0", "1.0.0-rc.10"),
                 std::cmp::Ordering::Greater
             );
+        }
+
+        #[test]
+        fn published_artifact_paths_are_content_addressed_and_confined() {
+            let root = std::env::temp_dir().join(format!(
+                "cowboy-provider-artifact-path-test-{}",
+                std::process::id()
+            ));
+            let _ = fs::remove_dir_all(&root);
+            let catalog = ProviderCatalog::open(&root, None).unwrap();
+            let digest = "a".repeat(64);
+            assert_eq!(
+                catalog
+                    .published_artifact_path(&format!("sha256:{digest}"), "codex.tar.gz")
+                    .unwrap(),
+                root.join("provider-catalog/artifacts")
+                    .join(&digest)
+                    .join("codex.tar.gz")
+            );
+            assert!(catalog.published_artifact_path("short", "codex").is_none());
+            assert!(
+                catalog
+                    .published_artifact_path(&digest, "../secret")
+                    .is_none()
+            );
+            let _ = fs::remove_dir_all(root);
         }
     }
 }

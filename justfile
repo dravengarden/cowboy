@@ -55,6 +55,25 @@ provider-build-all:
     just provider-build claude-deepseek
     just provider-build codex-deepseek
 
+provider-set-artifact-url PROVIDER URL:
+    case "{{PROVIDER}}" in (*[!a-z0-9-]*|"") echo "invalid Provider id" >&2; exit 2;; esac
+    cargo run --locked -p cowboy-provider-sdk --bin cowboy-provider-pack -- set-artifact-url "dist/providers/{{PROVIDER}}/{{PROVIDER}}.cowboy-provider" "dist/providers/{{PROVIDER}}/{{PROVIDER}}.release.json" "{{URL}}"
+
+provider-runtime-build PROVIDER BASE_URL="https://cowboy.stormbird.xyz/provider-artifacts":
+    case "{{PROVIDER}}" in (*[!a-z0-9-]*|"") echo "invalid Provider id" >&2; exit 2;; esac
+    deno run --allow-read --allow-write=dist --allow-net --allow-run --allow-env=COLUMBUS_ROOT tools/build-provider-runtime.ts "{{PROVIDER}}" "{{BASE_URL}}"
+
+provider-release-build PROVIDER BASE_URL="https://cowboy.stormbird.xyz/provider-artifacts":
+    just provider-build "{{PROVIDER}}"
+    just provider-runtime-build "{{PROVIDER}}" "{{BASE_URL}}"
+    package_digest=$(jq -r .package_digest "dist/providers/{{PROVIDER}}/{{PROVIDER}}.release.json"); package_hex=${package_digest#sha256:}; just provider-set-artifact-url "{{PROVIDER}}" "{{BASE_URL}}/$package_hex/{{PROVIDER}}.cowboy-provider"
+    just provider-bind-runtime "{{PROVIDER}}" "dist/providers/{{PROVIDER}}/runtime/runtime-artifacts.json"
+
+provider-publish PROVIDER CATALOG PUBLIC_KEY:
+    case "{{PROVIDER}}" in (*[!a-z0-9-]*|"") echo "invalid Provider id" >&2; exit 2;; esac
+    just provider-verify "{{PROVIDER}}" "{{PUBLIC_KEY}}"
+    deno run --allow-read --allow-write="{{CATALOG}}" --allow-run=sha256sum tools/publish-provider-release.ts "{{PROVIDER}}" "{{CATALOG}}" "{{PUBLIC_KEY}}"
+
 # Bind the independently built package to one immutable runtime component set
 # per declared OS/architecture. The resulting composite digest is the Catalog,
 # Machine-generation, and session identity.
@@ -75,6 +94,8 @@ provider-verify PROVIDER PUBLIC_KEY:
 # Cross-language package/linker conformance. This is also the Provider release
 # skill's deterministic pre-publish gate.
 provider-check:
+    deno check tools/build-provider-runtime.ts tools/check-provider-runtime-lock.ts tools/publish-provider-release.ts
+    deno run --allow-read tools/check-provider-runtime-lock.ts
     cargo test --locked -p cowboy-provider-sdk --all-targets
     just provider-build-all
     cd web && deno task typecheck

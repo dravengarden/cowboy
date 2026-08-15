@@ -54,6 +54,7 @@ use crate::usage::UsageService;
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::{mpsc, watch};
+use tokio_util::io::ReaderStream;
 
 #[derive(Clone)]
 struct ProviderUninstallPlan {
@@ -1657,6 +1658,10 @@ async fn serve_axum(
         .route("/api/sessions/{id}/prompt", post(api_session_prompt))
         .route("/api/history/{id}", get(api_history))
         .route("/api/artifacts/{name}", get(api_artifact))
+        .route(
+            "/provider-artifacts/{digest}/{name}",
+            get(provider_release_artifact),
+        )
         .route("/ws", any(ws_upgrade))
         // Everything else: the separately deployed SPA, with index.html
         // fallback for client-side routes.
@@ -7381,6 +7386,49 @@ async fn api_artifact(State(state): State<Arc<AppState>>, Path(name): Path<Strin
             StatusCode::NOT_FOUND.into_response()
         }
     }
+}
+
+async fn provider_release_artifact(
+    State(state): State<Arc<AppState>>,
+    Path((digest, name)): Path<(String, String)>,
+) -> Response {
+    let Some(path) = state
+        .provider_catalog
+        .published_artifact_path(&digest, &name)
+    else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let file = match tokio::fs::File::open(&path).await {
+        Ok(file) => file,
+        Err(error) => {
+            tracing::info!(%error, artifact = %path.display(), "Provider artifact is unavailable");
+            return StatusCode::NOT_FOUND.into_response();
+        }
+    };
+    let metadata = match file.metadata().await {
+        Ok(metadata) if metadata.is_file() => metadata,
+        Ok(_) => return StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            tracing::warn!(%error, artifact = %path.display(), "reading Provider artifact metadata failed");
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+    };
+    let digest = digest
+        .strip_prefix("sha256:")
+        .unwrap_or(&digest)
+        .to_ascii_lowercase();
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/octet-stream")
+        .header("x-content-type-options", "nosniff")
+        .header(header::CONTENT_LENGTH, metadata.len())
+        .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
+        .header(header::ETAG, format!("\"sha256:{digest}\""))
+        .body(Body::from_stream(ReaderStream::new(file)))
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "building Provider artifact response failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        })
 }
 
 /// Serve a separately deployed asset by path, falling back to `index.html` so

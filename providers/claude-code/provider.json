@@ -125,26 +125,6 @@
         ]
       },
       {
-        "os": "linux",
-        "architecture": "aarch64",
-        "payload_digest": "",
-        "launch_command": "claude-agent-acp",
-        "private_components": [
-          {
-            "kind": "provider_cli",
-            "slot": "claude",
-            "dependency": "anthropic-claude-code",
-            "command": "claude"
-          },
-          {
-            "kind": "provider_adapter",
-            "slot": "claude",
-            "dependency": "claude-agent-acp",
-            "command": "claude-agent-acp"
-          }
-        ]
-      },
-      {
         "os": "macos",
         "architecture": "aarch64",
         "payload_digest": "",

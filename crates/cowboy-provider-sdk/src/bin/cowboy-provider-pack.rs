@@ -15,6 +15,7 @@ fn main() -> Result<()> {
     };
     match command.as_ref() {
         "build" => build(&arguments[1..]),
+        "set-artifact-url" => set_artifact_url(&arguments[1..]),
         "bind-runtime" => bind_runtime(&arguments[1..]),
         "sign" => sign(&arguments[1..]),
         "verify" => verify(&arguments[1..]),
@@ -27,7 +28,7 @@ fn main() -> Result<()> {
 
 fn usage<T>() -> Result<T> {
     bail!(
-        "usage:\n  cowboy-provider-pack build <provider.json> <output.cowboy-provider> [artifact-url]\n  cowboy-provider-pack bind-runtime <artifact> <release.json> <runtime-artifacts.json>\n  cowboy-provider-pack sign <artifact> <release.json> <private-key>\n  cowboy-provider-pack verify <artifact> <release.json> <public-key>\n  cowboy-provider-pack inspect <artifact>"
+        "usage:\n  cowboy-provider-pack build <provider.json> <output.cowboy-provider> [artifact-url]\n  cowboy-provider-pack set-artifact-url <artifact> <release.json> <immutable-https-url>\n  cowboy-provider-pack bind-runtime <artifact> <release.json> <runtime-artifacts.json>\n  cowboy-provider-pack sign <artifact> <release.json> <private-key>\n  cowboy-provider-pack verify <artifact> <release.json> <public-key>\n  cowboy-provider-pack inspect <artifact>"
     )
 }
 
@@ -75,6 +76,39 @@ fn build(arguments: &[std::ffi::OsString]) -> Result<()> {
         digest,
         release_path.display()
     );
+    Ok(())
+}
+
+fn set_artifact_url(arguments: &[std::ffi::OsString]) -> Result<()> {
+    ensure!(
+        arguments.len() == 3,
+        "set-artifact-url requires artifact, release, and immutable HTTPS URL"
+    );
+    let artifact = PathBuf::from(&arguments[0]);
+    let release_path = PathBuf::from(&arguments[1]);
+    let artifact_url = arguments[2].to_string_lossy().into_owned();
+    let bytes = std::fs::read(&artifact)?;
+    let package = ProviderPackage::from_bytes(&bytes)?;
+    let mut release: ProviderRelease = serde_json::from_slice(&std::fs::read(&release_path)?)?;
+    ensure!(
+        release.signature.is_empty(),
+        "cannot rewrite a signed Provider release"
+    );
+    ensure!(
+        artifact_url.starts_with("https://")
+            && !artifact_url.contains("latest")
+            && !artifact_url.bytes().any(|byte| byte.is_ascii_whitespace()),
+        "Provider artifact URL must be immutable HTTPS"
+    );
+    ensure!(
+        release.provider_id == package.manifest.id
+            && release.provider_version == package.manifest.version
+            && release.package_digest == ProviderPackage::artifact_digest(&bytes),
+        "release does not match Provider package"
+    );
+    release.artifact_url = artifact_url;
+    write_json_atomic(&release_path, &release)?;
+    println!("{}\t{}", release.provider_id, release.artifact_url);
     Ok(())
 }
 

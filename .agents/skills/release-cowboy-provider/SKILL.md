@@ -159,9 +159,10 @@ nix develop -c just check
 
 `just provider-build <provider-id>` is the independent data-only package build.
 It writes `dist/providers/<provider-id>/<provider-id>.cowboy-provider` plus an
-unsigned, deliberately unbound release envelope. `provider-check` builds all
-six separately so a shared SDK change cannot leave one Provider un-linkable.
-An unbound envelope may be reviewed in Web but is never installable.
+unsigned, deliberately unbound release envelope. `provider-check` checks the
+typed runtime lock and npm lock payloads and builds all six separately so a
+shared SDK change cannot leave one Provider un-linkable. An unbound envelope
+may be reviewed in Web but is never installable.
 
 ## Publish and verify
 
@@ -169,34 +170,41 @@ Publish only when the user requested a release and the Provider repository's
 release authority permits it.
 
 1. Commit the complete Provider change according to its repository policy.
-2. Build the final data-only package from that exact clean commit.
-3. Build and publish every declared OS/architecture runtime component at an
-   immutable HTTPS URL. Record its exact dependency version, SHA-256 digest,
-   format, archive entrypoint when applicable, and bounded probe. A gateway
-   probe must terminate without credentials; use its owned help/version mode,
-   not the long-running listen command.
-4. Create a runtime-artifact JSON array with exactly one target entry per
-   package platform and exactly one component entry per declared private
-   component. Bind it before signing:
+2. Build the final data-only package and every declared runtime target from
+   that exact clean commit:
 
    ```bash
-   nix develop -c just provider-bind-runtime <provider-id> <runtime-artifacts.json>
+   nix develop -c just provider-release-build <provider-id>
    ```
 
-   Binding must reject a missing/extra target, missing/extra component, wrong
+   This uses `providers/runtime-lock.json` and the isolated npm v3 lock payloads
+   under `providers/runtime-packages/`, probes supported host artifacts, assigns
+   content-addressed HTTPS URLs, and binds the runtime-artifact matrix. A
+   gateway probe must terminate without credentials; use its owned help/version
+   mode, not the long-running listen command. Binding must reject a missing or
+   extra target, missing or extra component, wrong
    kind/slot/dependency/version/command, mutable URL, unsafe entrypoint, invalid
    digest, or invalid probe. It computes the composite `artifact_digest` over
    the package and full runtime matrix.
-5. Sign the complete release with the configured Ed25519 Provider publisher
+3. Sign the complete release with the configured Ed25519 Provider publisher
    identity, then verify it with the independently selected public key.
-6. Publish the package and adjacent signed release envelope through the
-   Provider-owned release command. Publish repository-owned SBOM/provenance
-   alongside them when available, but do not put them in the v2 trust claim.
-7. Resolve every published runtime URL back to immutable bytes and require its
-   digest to match the bound manifest.
-8. Verify the Cowboy Provider Catalog advertises that exact version and digest,
-   including its supported Machine platforms and compatibility report.
-9. Stop. Report that the version is available for UI installation; do not call
+4. Publish the package, adjacent signed release envelope, trusted public key,
+   runtime bytes, and receipt through the Provider-owned release command. The
+   command must independently verify the signature before writing Catalog
+   bytes:
+
+   ```bash
+   nix develop -c just provider-publish <provider-id> <catalog-directory> <publisher-public-key>
+   ```
+
+   Publish repository-owned SBOM/provenance alongside them when available, but
+   do not put them in the v2 trust claim.
+5. Resolve every published package and runtime URL back to immutable bytes and
+   require its digest to match the bound manifest.
+6. Call the Catalog refresh endpoint and verify that Cowboy advertises that
+   exact version and digest, including its supported Machine platforms and
+   compatibility report.
+7. Stop. Report that the version is available for UI installation; do not call
    a Machine installation or upgrade endpoint unless the user separately asks
    to install it on a specific Machine.
 
