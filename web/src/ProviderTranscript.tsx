@@ -1,6 +1,13 @@
-import { Box, keyframes, Stack, Typography, useTheme } from "@mui/material";
+import {
+  Box,
+  CircularProgress,
+  keyframes,
+  Stack,
+  Typography,
+  useTheme,
+} from "@mui/material";
 import { alpha } from "@mui/material/styles";
-import { LightbulbOutlined } from "@mui/icons-material";
+import { LightbulbOutlined, TerminalRounded } from "@mui/icons-material";
 import type {
   ProviderUiManifest,
   TranscriptPresentationContract,
@@ -54,27 +61,16 @@ function TerminalGlyph({ current }: { current: boolean }): React.JSX.Element {
       sx={{
         display: "inline-flex",
         alignItems: "center",
-        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-        fontSize: 14,
-        fontWeight: 750,
+        justifyContent: "center",
+        width: 15,
+        height: 15,
         lineHeight: 1,
-        letterSpacing: "-0.16em",
+        flexShrink: 0,
       }}
     >
-      <Box component="span">›</Box>
-      {current && (
-        <Box
-          component="span"
-          sx={{
-            animation: `${terminalCaret} 1s steps(2, jump-none) infinite`,
-            "@media (prefers-reduced-motion: reduce)": {
-              animation: "none",
-            },
-          }}
-        >
-          _
-        </Box>
-      )}
+      {current
+        ? <CircularProgress size={13} thickness={4.5} color="inherit" />
+        : <TerminalRounded sx={{ fontSize: 16, display: "block" }} />}
     </Box>
   );
 }
@@ -270,9 +266,6 @@ export function ProviderThoughtSteps({
               letterSpacing: presentation.variant === "terminal"
                 ? "0.035em"
                 : "0.025em",
-              fontFamily: presentation.variant === "terminal"
-                ? "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
-                : undefined,
               backgroundImage: dualAccent
                 ? `linear-gradient(100deg, ${muted} 0%, ${muted} 34%, ${accent} 46%, ${secondary} 54%, ${muted} 66%, ${muted} 100%)`
                 : `linear-gradient(100deg, ${muted} 0%, ${muted} 36%, ${accent} 50%, ${muted} 64%, ${muted} 100%)`,

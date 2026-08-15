@@ -129,6 +129,15 @@ Deno.test("Provider Transcript renderer consumes only closed presentation varian
   }
 });
 
+Deno.test("terminal thought rows use a composed icon instead of a raw prompt", () => {
+  assertEquals(transcriptPresentationSource.includes("TerminalRounded"), true);
+  assertEquals(transcriptPresentationSource.includes("CircularProgress"), true);
+  assertEquals(
+    transcriptPresentationSource.includes('<Box component="span">›</Box>'),
+    false,
+  );
+});
+
 Deno.test("Provider UI v1 loading uses a compact neutral compatibility fallback", () => {
   assertEquals(
     surfaceSource.includes(
