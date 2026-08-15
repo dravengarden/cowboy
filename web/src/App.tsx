@@ -154,6 +154,7 @@ import {
     type MachinePresence,
     machinePresencePresentation,
 } from "./machinePresence";
+import { machineCommandResultPresentation } from "./machineCommandResult";
 import {
     ExploreTranscript,
     MobilePageDock,
@@ -4192,6 +4193,9 @@ function MachinesContent(): React.JSX.Element {
                     },
                 ].filter((section) => section.components.length > 0);
                 const presence = machinePresencePresentation(machine.status);
+                const commandResult = latest?.event === "command_result"
+                    ? machineCommandResultPresentation(latest.accepted)
+                    : null;
                 return (
                     <Paper
                         key={machine.id}
@@ -4399,10 +4403,10 @@ function MachinesContent(): React.JSX.Element {
                                     ))}
                                 </Stack>
                             )}
-                            {latest?.event === "command_result" && (
-                                <Typography variant="caption" color="text.secondary">
-                                    {latest.detail ?? (latest.accepted ? "Command accepted" : "Command rejected")}
-                                </Typography>
+                            {commandResult && (
+                                <Alert severity={commandResult.severity} sx={{ py: 0.25 }}>
+                                    {commandResult.message}
+                                </Alert>
                             )}
                         </Stack>
                     </Paper>

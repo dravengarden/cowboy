@@ -149,6 +149,15 @@ Deno.test("terminal thought rows use a composed icon instead of a raw prompt", (
   );
 });
 
+Deno.test("streaming thoughts show one active marker once a step exists", () => {
+  assertEquals(
+    transcriptPresentationSource.includes(
+      "streaming && visible.length === 0 && presentation.active_label",
+    ),
+    true,
+  );
+});
+
 Deno.test("Provider UI v1 loading uses a compact neutral compatibility fallback", () => {
   assertEquals(
     surfaceSource.includes(
