@@ -2,6 +2,7 @@ import { assertEquals } from "jsr:@std/assert";
 import {
   imageDeletionRange,
   inlineImageInsertion,
+  inlineImagePasteInsertion,
   mapImageDeletionPosition,
 } from "./inlineImageSelection";
 
@@ -30,6 +31,22 @@ Deno.test("inline image paste replaces forward or backward selections and lands 
     ),
     expected,
   );
+});
+
+Deno.test("a later paste does not replace an already placed image token", () => {
+  const first = "![one.png](cowboy-att:image-1)\n ";
+  const tokenEnd = first.indexOf(")") + 1;
+  const edit = inlineImagePasteInsertion(
+    first,
+    0,
+    first.length,
+    [{ id: "image-2", name: "two.png" }],
+  );
+  assertEquals(edit.from, tokenEnd);
+  assertEquals(edit.to, tokenEnd);
+  const next = first.slice(0, edit.from) + edit.insert + first.slice(edit.to);
+  assertEquals(next.includes("cowboy-att:image-1"), true);
+  assertEquals(next.includes("cowboy-att:image-2"), true);
 });
 
 Deno.test("image deletion removes the insertion line breaks", () => {

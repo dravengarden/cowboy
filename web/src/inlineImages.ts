@@ -26,7 +26,7 @@ import type { Attachment } from "./attachments";
 import { openLightbox } from "./ResourceLightbox";
 import {
   imageDeletionRange,
-  inlineImageInsertion,
+  inlineImagePasteInsertion,
   mapImageDeletionPosition,
 } from "./inlineImageSelection";
 
@@ -279,7 +279,7 @@ export function insertImageToken(view: EditorView, a: Attachment): void {
   registerInlineAttachment(a);
   const { state } = view;
   const selection = state.selection.main;
-  const edit = inlineImageInsertion(
+  const edit = inlineImagePasteInsertion(
     state.doc.toString(),
     selection.anchor,
     selection.head,

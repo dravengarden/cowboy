@@ -1,5 +1,5 @@
 import { imageTokensInText } from "../attachments";
-import { inlineImageInsertion } from "../inlineImageSelection";
+import { inlineImagePasteInsertion } from "../inlineImageSelection";
 
 interface NativeInlineImage {
   id: string;
@@ -21,7 +21,7 @@ export function insertNativeInlineImages(
   to: number,
   attachments: readonly NativeInlineImage[],
 ): NativeInlineImageEdit {
-  const edit = inlineImageInsertion(value, from, to, attachments);
+  const edit = inlineImagePasteInsertion(value, from, to, attachments);
   if (attachments.length === 0) return { value, caret: edit.from };
   return {
     value: value.slice(0, edit.from) + edit.insert + value.slice(edit.to),
@@ -52,17 +52,29 @@ export function shouldUseNativeTouchEditor(
   return surfaceKind !== "desktop" && imageTokensInText(value).length === 0;
 }
 
+function hasNewImageToken(frozenSeed: string, touchValue: string): boolean {
+  const seedIds = new Set(
+    imageTokensInText(frozenSeed).map((token) => token.id),
+  );
+  return imageTokensInText(touchValue).some((token) => !seedIds.has(token.id));
+}
+
 /** Freeze the document used to mount uncontrolled CM6. While native is active,
  * track its live controlled text; on the one native → CM6 promotion render,
- * capture the just-inserted image token. Once CM6 owns the editor, never follow
- * later React text updates or IME/caret reconciliation regresses. */
+ * capture the just-inserted image token. Once CM6 owns the editor, follow
+ * later React text only when a new inline-image token appears. Ordinary
+ * typing/IME and stale token-less echoes must not rewrite the seed:
+ * @uiw/react-codemirror resets the document whenever `value` differs from
+ * the live doc, which would flash a second pasted thumbnail and then
+ * delete it. */
 export function composerEditorMountSeed(
   wasNative: boolean,
   nativeNow: boolean,
   frozenSeed: string,
   touchValue: string,
 ): string {
-  return wasNative || nativeNow ? touchValue : frozenSeed;
+  if (wasNative || nativeNow) return touchValue;
+  return hasNewImageToken(frozenSeed, touchValue) ? touchValue : frozenSeed;
 }
 
 /** A focused native textarea replaced during native → CM6 promotion must hand

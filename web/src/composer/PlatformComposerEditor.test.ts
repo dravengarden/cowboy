@@ -86,6 +86,20 @@ Deno.test("native to CM6 promotion freezes the token-bearing live document", () 
   );
 });
 
+Deno.test("CM6 seed follows a later image-token set without tracking typed text", () => {
+  const first = "hello\n![one](cowboy-att:image-1)\n ";
+  const second = "hello\n![one](cowboy-att:image-1)\n![two](cowboy-att:image-2)\n ";
+  const typed = "hello there\n![one](cowboy-att:image-1)\n ";
+  assertEquals(
+    composerEditorMountSeed(false, false, first, second),
+    second,
+  );
+  assertEquals(
+    composerEditorMountSeed(false, false, first, typed),
+    first,
+  );
+});
+
 Deno.test("only a focused native promotion inherits the software keyboard", () => {
   assertEquals(shouldFocusPromotedEditor(true, false, true), true);
   assertEquals(shouldFocusPromotedEditor(true, false, false), false);

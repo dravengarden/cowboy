@@ -1765,3 +1765,17 @@ Desktop Vim + IME checks:
     paste, long-press menu, IME. All must pass. User confirmation
     required. Never close this item from Simulator, telemetry
     alone, or an agent "it should be fixed now".
+
+70. **A second dedicated Paste after an inline image must not replace
+    the first thumbnail.** After the first paste the compact editor is
+    already CM6. iOS often reports the first image's atomic range, or
+    the whole document, as the captured selection. Staging a pending
+    token into that range then settling an empty/failed payload deletes
+    the only remaining token — a flash of a picture, then none.
+    `inlineImagePasteInsertion` inserts after any overlapped
+    `cowboy-att:` token instead of substituting it. The CM6 mount seed
+    still ignores ordinary typed text (so @uiw cannot bounce IME), but
+    it must follow a changed image-token set; otherwise a later React
+    `value` sync resets the live doc back to the first-image seed and
+    the second thumbnail disappears after one frame. This does not
+    claim pitfall #69 fixed.

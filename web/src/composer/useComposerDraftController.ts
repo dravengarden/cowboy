@@ -10,6 +10,7 @@ import {
   type Attachment,
   filesToAttachments,
   fileToAttachment,
+  imageTokensInText,
   pendingImageAttachment,
   promoteUnplacedImageTokens,
   reconcileDeletedInlineImages,
@@ -129,6 +130,15 @@ export function useComposerDraftController(
     if (reconciled !== currentAttachments) {
       attachmentsRef.current = reconciled;
       setAttachmentsState(reconciled);
+    }
+    if (
+      imageTokensInText(previous).map((token) => token.id).join("\0") !==
+        imageTokensInText(next).map((token) => token.id).join("\0")
+    ) {
+      // Keep remounts (fullscreen collapse, session shell refresh) from
+      // reseeding CM6 with the pre-image draft. That stale seed is what
+      // flashes a second pasted thumbnail and then deletes it.
+      initialText.current = next;
     }
     const nextHasText = next.trim().length > 0;
     setHasText((current) => current === nextHasText ? current : nextHasText);

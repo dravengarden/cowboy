@@ -10,6 +10,39 @@ export interface InlineImageInsertion {
   caret: number;
 }
 
+export function inlineImageTokenSpans(
+  value: string,
+): { from: number; to: number }[] {
+  const tokens: { from: number; to: number }[] = [];
+  const pattern = /!\[[^\]]*\]\(cowboy-att:[^)]+\)/g;
+  for (const match of value.matchAll(pattern)) {
+    tokens.push({ from: match.index, to: match.index + match[0].length });
+  }
+  return tokens;
+}
+
+/** A later Paste must not replace an already-placed thumbnail. iOS often
+ * reports the first image's atomic range (or the whole document) as the
+ * captured selection; substituting the pending token then deleting it on an
+ * empty settle leaves the composer with no image. */
+export function inlineImagePasteInsertion(
+  value: string,
+  anchor: number,
+  head: number,
+  attachments: readonly InlineImageInsertionAttachment[],
+): InlineImageInsertion {
+  const from = Math.min(anchor, head);
+  const to = Math.max(anchor, head);
+  const overlapped = inlineImageTokenSpans(value).filter((token) =>
+    token.from < to && token.to > from
+  );
+  if (overlapped.length > 0) {
+    const insertAt = Math.max(...overlapped.map((token) => token.to));
+    return inlineImageInsertion(value, insertAt, insertAt, attachments);
+  }
+  return inlineImageInsertion(value, anchor, head, attachments);
+}
+
 /** Build the one document replacement shared by native textarea and CM6 paste. */
 export function inlineImageInsertion(
   value: string,
