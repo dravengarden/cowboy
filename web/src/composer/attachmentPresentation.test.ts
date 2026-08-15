@@ -53,6 +53,16 @@ Deno.test("attachment-only pending rows retain a full content edit target", () =
   );
   assertEquals(
     composerSource.includes(
+      'sx={{ display: "inline-flex", flexWrap: "wrap", gap: 0.5, mt: 0.5 }}',
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes("const pendingEditTap = useReliableTouchTap"),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
       'target?.closest("[data-pending-content-action]")',
     ),
     true,
