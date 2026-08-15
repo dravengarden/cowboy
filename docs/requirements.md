@@ -1,10 +1,11 @@
 # Cowboy core requirements
 
 Status: normative Provider platform contract. Package schema 2, release schema
-2, the typed UI SDK, Machine-scoped installation, exact session generations,
-Service-scoped authentication, and bounded uninstall retention implement this
-boundary. The in-tree `LaunchSpec` registry remains only as a drain-compatible
-fallback for sessions created before an exact Provider generation was recorded.
+2, UI schemas 1-2, Provider SDK 2.2, Machine-scoped installation, exact session
+generations, Service-scoped authentication, and bounded uninstall retention
+implement this boundary. The in-tree `LaunchSpec` registry remains only as a
+drain-compatible fallback for sessions created before an exact Provider
+generation was recorded.
 
 ## Authority
 
@@ -89,6 +90,12 @@ and destructive confirmation.
 
 Providers do not inject React, JavaScript, HTML, CSS, or DOM code. Authoring
 types compile to canonical data-only UI IR that Cowboy validates and renders.
+Provider-specific activity uses a closed indicator union and typed label
+effects; Provider-specific vector color uses bounded gradient records. Cowboy
+owns the animation implementation, reduced-motion behavior, accessibility, and
+responsive mechanics. The host renderer must dispatch only on schema kinds,
+never on Provider IDs.
+
 Ordinary Web renders `information` and `setup` once in a Cowboy Service
 authentication region, while each Machine renders only `card` and its
 `empty`/`settings` lifecycle surface. An installed Machine card is rendered from
@@ -114,6 +121,13 @@ order values, layout, and availability policies; malformed or duplicate rules
 fail both Rust package validation and TypeScript Catalog validation. Tool
 presentation declarations likewise use unique bounded names and a closed
 renderer union.
+
+The UI schema version is part of the runtime type boundary. Cowboy accepts only
+an explicitly supported interval, rejects fields introduced after the declared
+schema version, and validates every activity frame, phrase, interval, asset
+link, gradient stop, and responsive layout constraint in both the Rust package
+validator and TypeScript Catalog validator. A new union member requires a new
+schema version and host implementation; unknown members fail closed.
 
 Effect ownership is also structural: Service authentication and logout may be
 emitted only from `setup`, Machine installation only from `empty`, and Machine
@@ -306,9 +320,9 @@ The Provider platform is not complete until automated acceptance proves:
 
 ## Implemented migration boundary
 
-Provider package schema 2, release schema 2, Controller contract 2, Machine
-contract 4, and Cowboy Provider SDK 2.1 in both Rust and TypeScript are the
-active contract.
+Provider package schema 2, release schema 2, UI schemas 1-2, Controller contract
+2, Machine contract 4, and Cowboy Provider SDK 2.2 in both Rust and TypeScript
+are the active contract.
 The Catalog embeds the six independently compiled first-party manifests as
 typed `unbound` entries and accepts installable releases only after an external
 `.cowboy-provider` package is paired with a complete, signed runtime envelope.
@@ -328,8 +342,13 @@ Web discovers Providers from `/api/providers`, renders their closed UI IR and
 assets, and exposes only Provider-level install, upgrade, authentication, and
 uninstall actions. ACP, adapters, gateways, and managed CLI components remain
 available only to developer diagnostics. The Service authentication surface is
-rendered once outside Machine cards; Machine cards use the exact installed
-manifest and treat the latest ready Catalog release only as an upgrade target.
+rendered once outside Machine cards; its lifecycle details and each Machine's
+Provider lifecycle details are collapsed behind compact summaries by default.
+Machine cards use the exact installed manifest and treat the latest ready
+Catalog release only as an upgrade target. Session execution stays pinned to
+its exact generation; generic shell chrome may adopt the latest signed v2
+presentation for the same Provider when an exact v1 session would otherwise
+retain stale brand or activity UI.
 Sessions persist exact Provider and auth generations. Service auth uses one
 encrypted, monotonic durable generation plus a Service-wide transient login
 status, and automatically seals durable state to enrolled Machines; offline

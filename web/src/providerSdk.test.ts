@@ -16,6 +16,7 @@ import {
   exactProviderEntry,
   joinProviderInstallations,
   providerEntryForIdentity,
+  providerPresentationEntry,
 } from "./providerCatalogRegistry.ts";
 
 function manifest(): ProviderManifest {
@@ -189,6 +190,105 @@ Deno.test("Provider SDK validates and executes linked typed logic", () => {
   });
   assertEquals(result.state.open, true);
   assertEquals(result.effect?.capability, "install_on_machine");
+});
+
+Deno.test("Provider UI schema 2 accepts bounded gradient and activity IR", () => {
+  const fixture = manifest();
+  fixture.sdk_version = "2.2.0";
+  fixture.ui.schema_version = 2;
+  const icon = fixture.ui.assets.find((asset) => asset.id === "icon")!;
+  if (icon.content.kind !== "vector_path") throw new Error("missing vector");
+  icon.content.gradient = {
+    x1_percent: 0,
+    y1_percent: 0,
+    x2_percent: 100,
+    y2_percent: 100,
+    stops: [
+      { offset_percent: 0, color: "#4F6BED" },
+      { offset_percent: 100, color: "#168B78" },
+    ],
+  };
+  fixture.ui.surfaces.loading = {
+    component: "activity",
+    indicator: { kind: "terminal_prompt", interval_ms: 4_200 },
+    label: {
+      kind: "phrase_cycle",
+      phrases: ["Inspecting", "Testing"],
+      interval_ms: 4_200,
+      suffix: "…",
+      effect: "shimmer",
+    },
+    accessible_label: "Example is working",
+  };
+  validateProviderManifest(fixture);
+});
+
+Deno.test("Provider UI rejects v2 nodes in v1 and unknown future interfaces", () => {
+  const fixture = manifest();
+  fixture.ui.surfaces.loading = {
+    component: "activity",
+    indicator: { kind: "progress_ring" },
+    label: {
+      kind: "text",
+      value: { source: "literal", value: "Thinking…" },
+      effect: "none",
+    },
+    accessible_label: "Example is working",
+  };
+  assertThrows(
+    () => validateProviderManifest(fixture),
+    Error,
+    "requires UI schema 2",
+  );
+  fixture.ui.schema_version = 3;
+  assertThrows(
+    () => validateProviderManifest(fixture),
+    Error,
+    "Invalid Provider manifest envelope",
+  );
+
+  const unknown = manifest();
+  unknown.sdk_version = "2.2.0";
+  unknown.ui.schema_version = 2;
+  unknown.ui.surfaces.loading = {
+    component: "activity",
+    indicator: { kind: "glyph_cycle", frames: ["·", "✢"], interval_ms: 200 },
+    label: {
+      kind: "text",
+      value: { source: "literal", value: "Thinking…" },
+      effect: "none",
+    },
+    accessible_label: "Example is working",
+  };
+  const unknownIndicator = unknown.ui.surfaces.loading
+    .indicator as unknown as Record<string, unknown>;
+  unknownIndicator.speed_curve = "provider_magic";
+  assertThrows(
+    () => validateProviderManifest(unknown),
+    Error,
+    "Invalid Provider glyph activity",
+  );
+});
+
+Deno.test("Provider UI rejects unbounded activity motion before rendering", () => {
+  const fixture = manifest();
+  fixture.sdk_version = "2.2.0";
+  fixture.ui.schema_version = 2;
+  fixture.ui.surfaces.loading = {
+    component: "activity",
+    indicator: { kind: "glyph_cycle", frames: ["·", "✢"], interval_ms: 1 },
+    label: {
+      kind: "text",
+      value: { source: "literal", value: "Thinking…" },
+      effect: "none",
+    },
+    accessible_label: "Example is working",
+  };
+  assertThrows(
+    () => validateProviderManifest(fixture),
+    Error,
+    "Invalid Provider glyph activity",
+  );
 });
 
 Deno.test("Provider SDK rejects assignment type drift before rendering", () => {
@@ -369,6 +469,36 @@ Deno.test("Machine Provider UI resolves the exact installed package", () => {
     providerEntryForIdentity([first, second], first.provider_id),
     second,
   );
+  assertEquals(
+    providerPresentationEntry(
+      [second, first],
+      first.provider_id,
+      first.provider_version,
+      first.artifact_digest!,
+    ),
+    first,
+  );
+  second.manifest.ui.schema_version = 2;
+  second.release_state = "unbound";
+  assertEquals(
+    providerPresentationEntry(
+      [second, first],
+      first.provider_id,
+      first.provider_version,
+      first.artifact_digest!,
+    ),
+    first,
+  );
+  second.release_state = "ready";
+  assertEquals(
+    providerPresentationEntry(
+      [second, first],
+      first.provider_id,
+      first.provider_version,
+      first.artifact_digest!,
+    ),
+    second,
+  );
   const installed = {
     provider_id: first.provider_id,
     provider_version: first.provider_version,
@@ -464,7 +594,7 @@ Deno.test("Provider SDK enforces semantic release identity and precedence", () =
 
 Deno.test("Provider SDK rejects incompatible authoring SDK versions before rendering", () => {
   const newer = manifest();
-  newer.sdk_version = "2.1.1";
+  newer.sdk_version = "2.2.1";
   assertThrows(() => validateProviderManifest(newer), Error, "is incompatible");
 
   const olderMinor = manifest();

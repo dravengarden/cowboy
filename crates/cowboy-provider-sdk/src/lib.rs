@@ -17,7 +17,8 @@ use sha2::{Digest as _, Sha256};
 
 pub const PACKAGE_SCHEMA_VERSION: u16 = 2;
 pub const PROVIDER_SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const UI_SCHEMA_VERSION: u16 = 1;
+pub const UI_SCHEMA_MIN_VERSION: u16 = 1;
+pub const UI_SCHEMA_VERSION: u16 = 2;
 pub const LOGIC_SCHEMA_VERSION: u16 = 1;
 pub const AUTH_SCHEMA_VERSION: u16 = 1;
 pub const CONTROLLER_CONTRACT_VERSION: u16 = 2;
@@ -109,6 +110,8 @@ pub struct StandardProviderSource {
     pub display: StandardProviderDisplay,
     pub card_layout: StandardCardLayout,
     #[serde(default)]
+    pub activity: StandardActivity,
+    #[serde(default)]
     pub configuration_presets: Vec<ConfigurationPreset>,
     #[serde(default)]
     pub configuration_options: Vec<ConfigurationOptionPresentation>,
@@ -130,6 +133,8 @@ pub struct StandardProviderDisplay {
     pub mark_path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mark_fill: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mark_gradient: Option<VectorGradient>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -138,6 +143,50 @@ pub enum StandardCardLayout {
     MarkLeading,
     MarkAbove,
     SplitStatus,
+}
+
+/// Compact, renderer-owned activity presentation for a standard Provider.
+/// The source selects a closed motion primitive; it cannot inject CSS or code.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StandardActivity {
+    pub indicator: StandardActivityIndicator,
+    pub label: ActivityLabel,
+    pub accessible_label: String,
+}
+
+impl Default for StandardActivity {
+    fn default() -> Self {
+        Self {
+            indicator: StandardActivityIndicator::ProgressRing,
+            label: ActivityLabel::Text {
+                value: TextValue::Literal {
+                    value: "Thinking…".to_owned(),
+                },
+                effect: ActivityTextEffect::None,
+            },
+            accessible_label: "Provider is working".to_owned(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum StandardActivityIndicator {
+    ProgressRing,
+    GlyphCycle {
+        frames: Vec<String>,
+        interval_ms: u16,
+    },
+    TerminalPrompt {
+        interval_ms: u16,
+    },
+    MarkSignal {
+        interval_ms: u16,
+    },
+    MarkPulse {
+        interval_ms: u16,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -325,10 +374,29 @@ pub enum AssetContent {
         path: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         fill: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        gradient: Option<VectorGradient>,
     },
     Inline {
         base64: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VectorGradient {
+    pub x1_percent: i16,
+    pub y1_percent: i16,
+    pub x2_percent: i16,
+    pub y2_percent: i16,
+    pub stops: Vec<VectorGradientStop>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VectorGradientStop {
+    pub offset_percent: u8,
+    pub color: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -337,6 +405,8 @@ pub enum UiNode {
     Stack {
         direction: StackDirection,
         gap: SpacingToken,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        wrap: bool,
         #[serde(default)]
         children: Vec<Self>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -359,6 +429,11 @@ pub enum UiNode {
     Progress {
         label: TextValue,
     },
+    Activity {
+        indicator: ActivityIndicator,
+        label: ActivityLabel,
+        accessible_label: String,
+    },
     Alert {
         tone: Tone,
         title: TextValue,
@@ -372,6 +447,51 @@ pub enum UiNode {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         enabled_when: Option<BoolExpression>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ActivityIndicator {
+    ProgressRing,
+    GlyphCycle {
+        frames: Vec<String>,
+        interval_ms: u16,
+    },
+    TerminalPrompt {
+        interval_ms: u16,
+    },
+    AssetSignal {
+        asset: String,
+        interval_ms: u16,
+    },
+    AssetPulse {
+        asset: String,
+        interval_ms: u16,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ActivityLabel {
+    Text {
+        value: TextValue,
+        effect: ActivityTextEffect,
+    },
+    PhraseCycle {
+        phrases: Vec<String>,
+        interval_ms: u16,
+        suffix: String,
+        effect: ActivityTextEffect,
+    },
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivityTextEffect {
+    #[default]
+    None,
+    Fade,
+    Shimmer,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1241,7 +1361,7 @@ impl HostIntegrationContract {
 impl UiContract {
     fn validate(&self, logic: &LogicContract) -> Result<()> {
         ensure!(
-            self.schema_version == UI_SCHEMA_VERSION,
+            (UI_SCHEMA_MIN_VERSION..=UI_SCHEMA_VERSION).contains(&self.schema_version),
             "unsupported UI schema"
         );
         ensure!(self.assets.len() <= 64, "too many Provider UI assets");
@@ -1267,6 +1387,7 @@ impl UiContract {
                     view_box,
                     path,
                     fill,
+                    gradient,
                 } => {
                     ensure!(
                         asset.media_type == "image/svg+xml",
@@ -1276,6 +1397,17 @@ impl UiContract {
                     validate_vector_path(path)?;
                     if let Some(fill) = fill {
                         validate_color(fill, "vector asset fill")?;
+                    }
+                    ensure!(
+                        fill.is_none() || gradient.is_none(),
+                        "vector asset cannot declare both fill and gradient"
+                    );
+                    if let Some(gradient) = gradient {
+                        ensure!(
+                            self.schema_version >= 2,
+                            "gradient assets require UI schema 2"
+                        );
+                        validate_vector_gradient(gradient)?;
                     }
                 }
                 AssetContent::Inline { base64 } => {
@@ -1314,7 +1446,15 @@ impl UiContract {
             .collect();
         let mut nodes = 0_usize;
         for (slot, surface) in &self.surfaces {
-            validate_node(surface, &assets, &state, &messages, 0, &mut nodes)?;
+            validate_node(
+                surface,
+                self.schema_version,
+                &assets,
+                &state,
+                &messages,
+                0,
+                &mut nodes,
+            )?;
             validate_surface_effects(slot, surface, logic)?;
         }
         ensure!(nodes <= 2_048, "Provider UI has too many nodes");
@@ -1365,6 +1505,7 @@ fn validate_surface_effects(
         | UiNode::Asset { .. }
         | UiNode::Badge { .. }
         | UiNode::Progress { .. }
+        | UiNode::Activity { .. }
         | UiNode::Alert { .. }
         | UiNode::Divider => {}
     }
@@ -2387,6 +2528,7 @@ impl StandardProviderSource {
                 view_box: self.display.mark_view_box.clone(),
                 path: self.display.mark_path.clone(),
                 fill: self.display.mark_fill.clone(),
+                gradient: self.display.mark_gradient.clone(),
             },
         };
         let literal = |value: &str| TextValue::Literal {
@@ -2396,9 +2538,14 @@ impl StandardProviderSource {
             asset: icon_asset.clone(),
             size: AssetSize::Md,
         };
+        let compact_icon = || UiNode::Asset {
+            asset: icon_asset.clone(),
+            size: AssetSize::Sm,
+        };
         let identity = || UiNode::Stack {
             direction: StackDirection::Column,
             gap: SpacingToken::Xs,
+            wrap: false,
             children: vec![
                 UiNode::Text {
                     variant: TextVariant::Title,
@@ -2419,10 +2566,28 @@ impl StandardProviderSource {
             },
             tone: Tone::Primary,
         };
-        let card_children = match self.card_layout {
-            StandardCardLayout::MarkLeading => vec![icon(), identity(), status()],
-            StandardCardLayout::MarkAbove => vec![icon(), status(), identity()],
-            StandardCardLayout::SplitStatus => vec![identity(), status(), icon()],
+        let card = match self.card_layout {
+            StandardCardLayout::MarkLeading => UiNode::Stack {
+                direction: StackDirection::Row,
+                gap: SpacingToken::Sm,
+                wrap: true,
+                children: vec![icon(), identity(), status()],
+                visible_when: None,
+            },
+            StandardCardLayout::MarkAbove => UiNode::Stack {
+                direction: StackDirection::Column,
+                gap: SpacingToken::Sm,
+                wrap: false,
+                children: vec![icon(), status(), identity()],
+                visible_when: None,
+            },
+            StandardCardLayout::SplitStatus => UiNode::Stack {
+                direction: StackDirection::Row,
+                gap: SpacingToken::Sm,
+                wrap: true,
+                children: vec![identity(), status(), icon()],
+                visible_when: None,
+            },
         };
         let button = |label: &str, message: &str, style: ButtonStyle| UiNode::Button {
             label: literal(label),
@@ -2444,24 +2609,43 @@ impl StandardProviderSource {
                 ],
             }),
         };
-        let stack = |children: Vec<UiNode>| UiNode::Stack {
-            direction: StackDirection::Responsive,
+        let row = |children: Vec<UiNode>| UiNode::Stack {
+            direction: StackDirection::Row,
             gap: SpacingToken::Sm,
+            wrap: true,
             children,
             visible_when: None,
         };
+        let activity_indicator = match &self.activity.indicator {
+            StandardActivityIndicator::ProgressRing => ActivityIndicator::ProgressRing,
+            StandardActivityIndicator::GlyphCycle {
+                frames,
+                interval_ms,
+            } => ActivityIndicator::GlyphCycle {
+                frames: frames.clone(),
+                interval_ms: *interval_ms,
+            },
+            StandardActivityIndicator::TerminalPrompt { interval_ms } => {
+                ActivityIndicator::TerminalPrompt {
+                    interval_ms: *interval_ms,
+                }
+            }
+            StandardActivityIndicator::MarkSignal { interval_ms } => {
+                ActivityIndicator::AssetSignal {
+                    asset: loading_asset.clone(),
+                    interval_ms: *interval_ms,
+                }
+            }
+            StandardActivityIndicator::MarkPulse { interval_ms } => ActivityIndicator::AssetPulse {
+                asset: loading_asset.clone(),
+                interval_ms: *interval_ms,
+            },
+        };
         let mut surfaces = BTreeMap::new();
-        surfaces.insert(SurfaceSlot::Card, stack(card_children));
+        surfaces.insert(SurfaceSlot::Card, card);
         surfaces.insert(
             SurfaceSlot::Setup,
-            stack(vec![
-                UiNode::Text {
-                    variant: TextVariant::Body,
-                    value: literal(
-                        "Authentication belongs to this Cowboy Service and syncs to every Machine.",
-                    ),
-                    tone: None,
-                },
+            row(vec![
                 UiNode::Button {
                     label: literal("Sign in"),
                     style: ButtonStyle::Primary,
@@ -2508,19 +2692,7 @@ impl StandardProviderSource {
         );
         surfaces.insert(
             SurfaceSlot::Settings,
-            stack(vec![
-                UiNode::Text {
-                    variant: TextVariant::Title,
-                    value: literal("Provider settings"),
-                    tone: None,
-                },
-                UiNode::Text {
-                    variant: TextVariant::Body,
-                    value: literal(
-                        "Runtime options are validated against the active Provider generation.",
-                    ),
-                    tone: None,
-                },
+            row(vec![
                 UiNode::Button {
                     label: literal("Upgrade"),
                     style: ButtonStyle::Secondary,
@@ -2550,8 +2722,8 @@ impl StandardProviderSource {
         );
         surfaces.insert(
             SurfaceSlot::Information,
-            stack(vec![
-                icon(),
+            row(vec![
+                compact_icon(),
                 identity(),
                 UiNode::Text {
                     variant: TextVariant::Code,
@@ -2564,27 +2736,15 @@ impl StandardProviderSource {
         );
         surfaces.insert(
             SurfaceSlot::Empty,
-            stack(vec![
-                icon(),
-                UiNode::Text {
-                    variant: TextVariant::Body,
-                    value: literal("Install this Provider on a Machine to start a session."),
-                    tone: None,
-                },
-                button("Install", "install", ButtonStyle::Primary),
-            ]),
+            row(vec![button("Install", "install", ButtonStyle::Primary)]),
         );
         surfaces.insert(
             SurfaceSlot::Loading,
-            stack(vec![
-                UiNode::Asset {
-                    asset: loading_asset.clone(),
-                    size: AssetSize::Md,
-                },
-                UiNode::Progress {
-                    label: literal("Working"),
-                },
-            ]),
+            UiNode::Activity {
+                indicator: activity_indicator,
+                label: self.activity.label.clone(),
+                accessible_label: self.activity.accessible_label.clone(),
+            },
         );
         surfaces.insert(
             SurfaceSlot::Error,
@@ -2598,8 +2758,8 @@ impl StandardProviderSource {
         );
         surfaces.insert(
             SurfaceSlot::Session,
-            stack(vec![
-                icon(),
+            row(vec![
+                compact_icon(),
                 identity(),
                 UiNode::Badge {
                     label: TextValue::Host {
@@ -2807,6 +2967,7 @@ fn validate_display(display: &ProviderDisplay) -> Result<()> {
 
 fn validate_node(
     node: &UiNode,
+    schema_version: u16,
     assets: &BTreeSet<&str>,
     state: &BTreeMap<&str, &ValueType>,
     messages: &BTreeMap<&str, &MessageSchema>,
@@ -2817,10 +2978,15 @@ fn validate_node(
     *nodes = nodes.saturating_add(1);
     match node {
         UiNode::Stack {
+            wrap,
             children,
             visible_when,
             ..
         } => {
+            ensure!(
+                schema_version >= 2 || !wrap,
+                "wrapping stacks require UI schema 2"
+            );
             ensure!(children.len() <= 64, "UI stack exceeds 64 children");
             if let Some(expression) = visible_when {
                 validate_expression(expression, state, 0)?;
@@ -2828,6 +2994,7 @@ fn validate_node(
             for child in children {
                 validate_node(
                     child,
+                    schema_version,
                     assets,
                     state,
                     messages,
@@ -2843,6 +3010,14 @@ fn validate_node(
             assets.contains(asset.as_str()),
             "UI references unknown asset {asset}"
         ),
+        UiNode::Activity {
+            indicator,
+            label,
+            accessible_label,
+        } => {
+            ensure!(schema_version >= 2, "activity nodes require UI schema 2");
+            validate_activity(indicator, label, accessible_label, assets, state)?;
+        }
         UiNode::Alert { title, body, .. } => {
             validate_text(title, state)?;
             validate_text(body, state)?;
@@ -2875,6 +3050,86 @@ fn validate_node(
                     "button message payload type mismatch"
                 );
             }
+        }
+    }
+    Ok(())
+}
+
+fn validate_activity(
+    indicator: &ActivityIndicator,
+    label: &ActivityLabel,
+    accessible_label: &str,
+    assets: &BTreeSet<&str>,
+    state: &BTreeMap<&str, &ValueType>,
+) -> Result<()> {
+    ensure!(
+        !accessible_label.trim().is_empty() && accessible_label.len() <= 512,
+        "activity accessible label is empty or too long"
+    );
+    match indicator {
+        ActivityIndicator::ProgressRing => {}
+        ActivityIndicator::GlyphCycle {
+            frames,
+            interval_ms,
+        } => {
+            ensure!(
+                (120..=10_000).contains(interval_ms),
+                "invalid glyph activity interval"
+            );
+            ensure!(
+                (2..=16).contains(&frames.len()),
+                "invalid glyph activity frame count"
+            );
+            ensure!(
+                frames.iter().all(|frame| {
+                    !frame.is_empty()
+                        && frame.chars().count() <= 8
+                        && !frame.chars().any(char::is_control)
+                }),
+                "invalid glyph activity frame"
+            );
+        }
+        ActivityIndicator::TerminalPrompt { interval_ms } => ensure!(
+            (400..=10_000).contains(interval_ms),
+            "invalid terminal activity interval"
+        ),
+        ActivityIndicator::AssetSignal { asset, interval_ms }
+        | ActivityIndicator::AssetPulse { asset, interval_ms } => {
+            ensure!(
+                (400..=10_000).contains(interval_ms),
+                "invalid asset activity interval"
+            );
+            ensure!(
+                assets.contains(asset.as_str()),
+                "activity references unknown asset"
+            );
+        }
+    }
+    match label {
+        ActivityLabel::Text { value, .. } => validate_text(value, state)?,
+        ActivityLabel::PhraseCycle {
+            phrases,
+            interval_ms,
+            suffix,
+            ..
+        } => {
+            ensure!(
+                (500..=60_000).contains(interval_ms),
+                "invalid phrase activity interval"
+            );
+            ensure!(
+                (1..=64).contains(&phrases.len()),
+                "invalid activity phrase count"
+            );
+            ensure!(
+                phrases.iter().all(|phrase| {
+                    !phrase.trim().is_empty()
+                        && phrase.len() <= 128
+                        && !phrase.chars().any(char::is_control)
+                }),
+                "invalid activity phrase"
+            );
+            ensure!(suffix.chars().count() <= 8, "activity suffix is too long");
         }
     }
     Ok(())
@@ -2938,6 +3193,40 @@ fn validate_view_box(value: &str) -> Result<()> {
             && values[3] > 0.0,
         "vector asset viewBox is invalid"
     );
+    Ok(())
+}
+
+fn validate_vector_gradient(gradient: &VectorGradient) -> Result<()> {
+    for coordinate in [
+        gradient.x1_percent,
+        gradient.y1_percent,
+        gradient.x2_percent,
+        gradient.y2_percent,
+    ] {
+        ensure!(
+            (-100..=200).contains(&coordinate),
+            "vector gradient coordinate is out of bounds"
+        );
+    }
+    ensure!(
+        (2..=8).contains(&gradient.stops.len()),
+        "vector gradient stop count is invalid"
+    );
+    let mut previous = None;
+    for stop in &gradient.stops {
+        ensure!(
+            stop.offset_percent <= 100,
+            "vector gradient stop is out of bounds"
+        );
+        if let Some(previous) = previous {
+            ensure!(
+                stop.offset_percent >= previous,
+                "vector gradient stops are not ordered"
+            );
+        }
+        validate_color(&stop.color, "vector gradient stop color")?;
+        previous = Some(stop.offset_percent);
+    }
     Ok(())
 }
 
@@ -3163,7 +3452,8 @@ mod tests {
         assert!(validate_provider_sdk_version(PROVIDER_SDK_VERSION).is_ok());
         assert!(validate_provider_sdk_version("1.99.0").is_err());
         assert!(validate_provider_sdk_version("2.0.1").is_ok());
-        assert!(validate_provider_sdk_version("2.1.1").is_err());
+        assert!(validate_provider_sdk_version("2.1.1").is_ok());
+        assert!(validate_provider_sdk_version("2.2.1").is_err());
         assert!(validate_provider_sdk_version("3.0.0").is_err());
     }
 

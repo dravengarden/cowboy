@@ -112,6 +112,9 @@ In addition, require all applicable Provider gates below:
   message payloads, reducers, state transitions, effects, capability use, or
   resource bounds. Require Rust package validation and TypeScript Catalog
   validation to agree on lifecycle-effect surface ownership.
+- For UI schema 2, validate responsive wrapping, bounded vector gradients, and
+  the closed activity indicator/label unions in both implementations. Reject
+  unknown strategy fields and any Provider-ID branch in the host renderer.
 - Validate signed `configuration.options` policy. Provider-specific option
   ordering, layout, and lifecycle availability belong in the package; reject
   a Cowboy Web branch on a Provider-specific configuration option ID.
@@ -120,7 +123,7 @@ In addition, require all applicable Provider gates below:
 - Validate every package-selected behavior profile and runtime command against
   the closed SDK contract. Exercise the real initialize and session lifecycle
   when the Provider owns a hermetic conformance harness.
-- For SDK 2.1 runtime graphs, validate every `component_command` and
+- For SDK 2.1+ runtime graphs, validate every `component_command` and
   `sidecar_url` link on every platform. Gateway behavior, capability, private
   component, session sidecar, auth-environment forwarding, and readiness must
   agree exactly. Reject fixed Machine-global ports, host profile/resource

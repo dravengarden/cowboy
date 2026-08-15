@@ -13,6 +13,7 @@ export {
   latestProviderEntries,
   loadProviderCatalog,
   providerEntryForIdentity,
+  providerPresentationEntry,
 } from "./providerCatalogRegistry";
 
 export function useProviderCatalog(enabled = true): {

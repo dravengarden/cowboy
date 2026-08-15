@@ -100,6 +100,35 @@ export function providerEntryForIdentity(
   );
 }
 
+/** Resolve presentation-only chrome for an existing session.
+ *
+ * Runtime behavior and lifecycle surfaces remain pinned to the session's exact
+ * package. A v1 session may adopt the latest signed v2 presentation from the
+ * same Provider so corrected brand assets and activity do not remain stale for
+ * the lifetime of that session.
+ */
+export function providerPresentationEntry(
+  entries: readonly ProviderCatalogEntry[],
+  providerId: string,
+  providerVersion?: string,
+  providerDigest?: string,
+): ProviderCatalogEntry | undefined {
+  const exact = providerEntryForIdentity(
+    entries,
+    providerId,
+    providerVersion,
+    providerDigest,
+  );
+  if (exact?.manifest.ui.schema_version !== 1) return exact;
+  const latest = latestProviderEntries(entries).find((entry) =>
+    entry.provider_id === providerId
+  );
+  return latest?.release_state === "ready" &&
+      latest.manifest.ui.schema_version === 2
+    ? latest
+    : exact;
+}
+
 export function currentProviderEntry(
   providerId: string,
   providerVersion?: string,

@@ -105,14 +105,27 @@ Provider SDK. It is a contract and authoring library, not a second copy of the
 Cowboy application. Provider authors compose typed primitives and Cowboy-owned
 shell slots for cards, setup, settings, information, empty, loading, error, and
 session surfaces. Provider packages supply their own content-addressed logo,
-icon, illustration, and loading assets through typed asset references.
+icon, illustration, and loading assets through typed asset references. UI
+schema v2 additionally supplies bounded vector gradients, responsive stack
+wrapping, and a closed activity node.
 
 Cowboy renders `information` and `setup` once in the Service authentication
 region. A Machine card renders `card` plus `empty` before installation or
 `settings` afterward; it never embeds login or logout. When a newer release is
 available, the exact installed manifest continues to own that Machine's card
 and settings layout, while the latest compatible signed release is only the
-upgrade target.
+upgrade target. Cowboy keeps both Service authentication details and per-Machine
+Provider lifecycle details collapsed behind compact summaries by default; the
+Provider surfaces render inside the explicit management region.
+
+The activity node separates Provider-authored identity from Cowboy-owned motion
+mechanics. Its indicator is one of `progress_ring`, `glyph_cycle`,
+`terminal_prompt`, `asset_signal`, or `asset_pulse`; its label is typed text or
+a bounded phrase cycle with a `none`, `fade`, or `shimmer` effect. Assets,
+intervals, frames, phrases, colors, and accessible labels are validated. Cowboy
+implements reduced motion, animation timing, layout, theme behavior, and ARIA
+semantics without a Provider-ID branch. This restores distinct Claude, Codex,
+Gemini, and Grok activity language without allowing executable Provider UI.
 
 The same exact manifest owns Provider-specific presentation of configuration
 options advertised by the runtime. `configuration.options` declares a unique
@@ -148,6 +161,14 @@ events, tokens, asset roles, or layout constraints fail the Provider build and
 fail again when Cowboy parses the package. Unknown or duplicate configuration
 option and tool presentation records fail at the same boundaries.
 
+UI schema versions are negotiated independently from package schema. Provider
+SDK 2.2 accepts UI schemas 1-2, rejects any v2-only field when a manifest claims
+v1, and rejects an unknown future schema. Existing v1 packages remain
+installable and render a compact neutral fallback. For session-facing icon and
+activity chrome only, an exact v1 session may adopt the latest compatible signed
+v2 presentation for the same Provider; its runtime, options, lifecycle logic,
+authentication contract, and generation remain pinned to the exact package.
+
 ## Typed linked logic
 
 Provider UI behavior is a typed state machine rather than embedded application
@@ -180,9 +201,9 @@ Machine card may consume only typed replica-convergence and installation health;
 it cannot dispatch a login message. The same message and state schemas are used
 by the Rust compiler/validator and the TypeScript renderer, so the relationship
 is checked instead of being encoded as unvalidated event names. Logic that
-cannot be expressed by the schema-v1 closed DSL requires a future SDK schema and
-host implementation; v2 does not load Provider JavaScript, WebAssembly, or
-another executable UI escape hatch.
+cannot be expressed by the current closed DSL requires a future SDK schema and
+host implementation; UI schema v2 does not load Provider JavaScript,
+WebAssembly, or another executable UI escape hatch.
 
 Static authoring types cannot make an artifact downloaded months later safe by
 themselves. The canonical IR, component schemas, and closed capability contracts
@@ -243,8 +264,8 @@ package:
 ]
 ```
 
-Package schema 2, UI schema 1, logic schema 1, auth schema 1, Cowboy Provider
-SDK 2.1, Controller contract 2, Machine contract 4, and release schema 2 are
+Package schema 2, UI schemas 1-2, logic schema 1, auth schema 1, Cowboy Provider
+SDK 2.2, Controller contract 2, Machine contract 4, and release schema 2 are
 independently checked.
 The SDK version is a coarse authoring filter: Cowboy accepts only the same SDK
 major and a Provider SDK version no newer than the validating host. A newer SDK
@@ -499,8 +520,11 @@ platform-less component
 inventory from being mistaken for a multi-platform Provider release. Web uses
 only Catalog manifests for discovery, marks, card layout, setup, settings,
 loading, empty, error, and session-facing identity. Service authentication is
-rendered once outside Machine cards; a Machine renders its exact installed
-manifest and uses the latest ready release only as the install or upgrade target.
+rendered once outside Machine cards; default summaries keep the mobile surface
+compact. A Machine renders its exact installed manifest and uses the latest
+ready release only as the install or upgrade target. Exact v1 sessions may use
+the latest same-Provider signed v2 presentation for generic session chrome
+without changing their pinned executable generation.
 Install/upgrade effects are disabled for unbound entries. A target Machine
 verifies the exact signed release again, stages its own target artifacts beside
 the active generation,

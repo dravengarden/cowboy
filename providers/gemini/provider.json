@@ -1,9 +1,9 @@
 {
   "authoring_schema": 2,
   "id": "gemini",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "cowboy-first-party",
-  "sdk_version": "2.1.0",
+  "sdk_version": "2.2.0",
   "display": {
     "name": "Gemini",
     "vendor": "Google",
@@ -12,9 +12,28 @@
     "secondary_accent": "#9B72CB",
     "mark_view_box": "0 0 24 24",
     "mark_path": "M12 24A14.304 14.304 0 0 0 0 12 14.304 14.304 0 0 0 12 0a14.304 14.304 0 0 0 12 12 14.304 14.304 0 0 0-12 12",
-    "mark_fill": "#4285F4"
+    "mark_gradient": {
+      "x1_percent": 0,
+      "y1_percent": 0,
+      "x2_percent": 100,
+      "y2_percent": 100,
+      "stops": [
+        { "offset_percent": 0, "color": "#4285F4" },
+        { "offset_percent": 50, "color": "#9B72CB" },
+        { "offset_percent": 100, "color": "#D96570" }
+      ]
+    }
   },
   "card_layout": "split_status",
+  "activity": {
+    "indicator": { "kind": "mark_pulse", "interval_ms": 1800 },
+    "label": {
+      "kind": "text",
+      "value": { "source": "literal", "value": "Thinking…" },
+      "effect": "shimmer"
+    },
+    "accessible_label": "Gemini is working"
+  },
   "host": {
     "schema_version": 1,
     "conversation_compaction": {

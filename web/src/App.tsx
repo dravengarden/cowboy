@@ -4841,7 +4841,7 @@ function SettingsShell({
                     position: "sticky",
                     top: desktop ? -1 : 0,
                     zIndex: 4,
-                    bgcolor: "background.paper",
+                    bgcolor: desktop ? "background.paper" : "background.default",
                     pt: desktop ? 0 : 0.25,
                     pb: desktop ? 0 : 0.75,
                 }}

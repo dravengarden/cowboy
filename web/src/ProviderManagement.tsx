@@ -27,6 +27,7 @@ import {
 import {
   joinProviderInstallations,
   latestProviderEntries,
+  providerPresentationEntry,
   useProviderCatalog,
 } from "./providerCatalog";
 import { ProviderMark, ProviderSurface } from "./ProviderSurface";
@@ -126,7 +127,11 @@ function ProviderManagement(
     null,
   );
   const [confirmActive, setConfirmActive] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const machineId = machine?.id;
+  const detailsId = scope === "service"
+    ? "provider-service-management"
+    : `provider-machine-management-${machine?.id ?? "unknown"}`;
   const latestEntries = useMemo(
     () => latestProviderEntries(catalog?.providers ?? []),
     [catalog],
@@ -448,9 +453,84 @@ function ProviderManagement(
       {!catalog && !catalogError
         ? <Typography variant="caption">Loading Provider Catalog…</Typography>
         : null}
+      {catalog
+        ? (
+          <Stack
+            direction="row"
+            spacing={0.75}
+            alignItems="center"
+            flexWrap="wrap"
+            useFlexGap
+          >
+            {providerRows.map((row) => {
+              const entry = row.installedEntry ?? row.latestEntry;
+              if (!entry) {
+                return (
+                  <Chip
+                    key={row.providerId}
+                    size="small"
+                    variant="outlined"
+                    color="warning"
+                    label={`${row.providerId} · package unavailable`}
+                  />
+                );
+              }
+              const auth = authentications.get(entry.provider_id);
+              const presentationEntry = scope === "machine" && row.installed
+                ? providerPresentationEntry(
+                  catalog.providers,
+                  row.installed.provider_id,
+                  row.installed.provider_version,
+                  row.installed.generation_digest,
+                ) ?? entry
+                : entry;
+              const summary = scope === "service"
+                ? entry.manifest.authentication.required
+                  ? serviceAuthenticationLabel(auth).replace("Service ", "")
+                  : "no sign-in"
+                : providerInstallationSummary(row.installed, row.latestEntry);
+              const healthy = scope === "service"
+                ? !entry.manifest.authentication.required ||
+                  auth?.authentication_state === "ready"
+                : row.installed?.state === "active";
+              return (
+                <Chip
+                  key={entry.provider_id}
+                  size="small"
+                  variant="outlined"
+                  color={healthy ? "success" : "default"}
+                  icon={
+                    <ProviderMark
+                      manifest={presentationEntry.manifest}
+                      size={17}
+                    />
+                  }
+                  label={`${presentationEntry.manifest.display.name} · ${summary}`}
+                />
+              );
+            })}
+            <Button
+              size="small"
+              variant={detailsOpen ? "outlined" : "text"}
+              aria-expanded={detailsOpen}
+              aria-controls={detailsId}
+              onClick={() => setDetailsOpen((current) => !current)}
+              sx={{ ml: "auto" }}
+            >
+              {detailsOpen
+                ? "Hide"
+                : scope === "service"
+                ? "Manage sign-ins"
+                : "Manage"}
+            </Button>
+          </Stack>
+        )
+        : null}
       <Box
+        id={detailsId}
+        hidden={!detailsOpen}
         sx={{
-          display: "grid",
+          display: detailsOpen ? "grid" : "none",
           gridTemplateColumns: { xs: "1fr", md: "repeat(2, minmax(0, 1fr))" },
           gap: 1,
         }}
@@ -558,10 +638,9 @@ function ProviderManagement(
               }`}
               variant="outlined"
               sx={{
-                p: 1.25,
+                p: 1.1,
                 minWidth: 0,
                 borderRadius: 2,
-                borderTop: `3px solid ${entry.manifest.display.accent}`,
               }}
             >
               <Stack spacing={1.1}>
@@ -576,18 +655,7 @@ function ProviderManagement(
                   flexWrap="wrap"
                   useFlexGap
                 >
-                  {scope === "machine"
-                    ? (
-                      <Chip
-                        size="small"
-                        variant="outlined"
-                        label={installed
-                          ? `Machine ${installed.provider_version}`
-                          : "Not installed"}
-                        color={installed ? "success" : "default"}
-                      />
-                    )
-                    : entry.manifest.authentication.required
+                  {scope === "service" && entry.manifest.authentication.required
                     ? (
                       <Chip
                         size="small"
@@ -598,13 +666,15 @@ function ProviderManagement(
                           : "warning"}
                       />
                     )
-                    : (
+                    : scope === "service"
+                    ? (
                       <Chip
                         size="small"
                         variant="outlined"
                         label="No sign-in required"
                       />
-                    )}
+                    )
+                    : null}
                   {scope === "machine" && installed &&
                       entry.manifest.authentication.required
                     ? (
@@ -936,6 +1006,18 @@ function serviceAuthenticationLabel(
   return `Service signed in${
     auth.account_label ? ` · ${auth.account_label}` : ""
   }`;
+}
+
+function providerInstallationSummary(
+  installed: MachineProviderInventory | undefined,
+  latest: ProviderCatalogEntry | undefined,
+): string {
+  if (!installed) return "not installed";
+  if (
+    latest?.release_state === "ready" && latest.artifact_digest !== null &&
+    latest.artifact_digest !== installed.generation_digest
+  ) return "update available";
+  return installed.state.replaceAll("_", " ");
 }
 
 function providerHost(

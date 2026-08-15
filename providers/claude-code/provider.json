@@ -1,9 +1,9 @@
 {
   "authoring_schema": 2,
   "id": "claude-code",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "cowboy-first-party",
-  "sdk_version": "2.1.0",
+  "sdk_version": "2.2.0",
   "display": {
     "name": "Claude Code",
     "vendor": "Anthropic",
@@ -15,6 +15,34 @@
     "mark_fill": "#D97757"
   },
   "card_layout": "mark_above",
+  "activity": {
+    "indicator": {
+      "kind": "glyph_cycle",
+      "frames": ["·", "✢", "*", "✶", "✻", "✽"],
+      "interval_ms": 200
+    },
+    "label": {
+      "kind": "phrase_cycle",
+      "phrases": [
+        "Analyzing",
+        "Thinking",
+        "Exploring",
+        "Reasoning",
+        "Planning",
+        "Reading",
+        "Writing",
+        "Reviewing",
+        "Refining",
+        "Verifying",
+        "Synthesizing",
+        "Working"
+      ],
+      "interval_ms": 3500,
+      "suffix": "…",
+      "effect": "shimmer"
+    },
+    "accessible_label": "Claude Code is working"
+  },
   "host": {
     "schema_version": 1,
     "conversation_compaction": {

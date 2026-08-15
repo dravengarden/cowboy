@@ -1,9 +1,9 @@
 {
   "authoring_schema": 2,
   "id": "claude-deepseek",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "cowboy-first-party",
-  "sdk_version": "2.1.0",
+  "sdk_version": "2.2.0",
   "display": {
     "name": "Claude Code · DeepSeek",
     "vendor": "DeepSeek",
@@ -12,9 +12,46 @@
     "secondary_accent": "#805AD5",
     "mark_view_box": "0 0 24 24",
     "mark_path": "M4.7 15.95 9.43 13.3l.08-.23-.08-.12H9.2l-6.87-.3L0 11.78l.05-.35.48-.32 8.59.67h.39l.05-.16-7.21-4.94-.36-.46-.16-1.01.65-.72.88.06 6.25 4.36h.16L5.96 1.91l-.17-.62L6.28.13 6.7 0l1 .13.42.37 3.87 8.4h.16l.36-6.4.08-.75.38-.91.75-.49.58.28.48.69-1.21 7.69h.21l4.95-5.34.55-.43h1.03l.76 1.13-.34 1.16-4.68 6.01.07.11 6.43-1.2.83.39.09.39-.33.81-8.16 1.76.05.06 6.85.42.79.52.47.64-.08.49-1.21.62-7.42-1.78h-.18v.11l7.11 6.86.13.58-.32.45-.34-.05-6.42-5.02h-.13v.17l3.03 4.49.12 1.08-.17.35-.61.22-.67-.12-3.93-6.04-.14.08-.67 7.25-.32.37-.73.28-.61-.46-.32-.75 1.49-7.46-.01-.04-.14.02-5.34 6.76-.42.16-.72-.37.07-.66.4-.59 4.76-6.01-.01-.16h-.05l-5.3 3.21-1.13.15-.49-.46.06-.75.23-.24Z",
-    "mark_fill": "#4D6BFE"
+    "mark_gradient": {
+      "x1_percent": 0,
+      "y1_percent": 0,
+      "x2_percent": 100,
+      "y2_percent": 100,
+      "stops": [
+        { "offset_percent": 0, "color": "#4D6BFE" },
+        { "offset_percent": 100, "color": "#805AD5" }
+      ]
+    }
   },
   "card_layout": "mark_above",
+  "activity": {
+    "indicator": {
+      "kind": "glyph_cycle",
+      "frames": ["·", "✢", "*", "✶", "✻", "✽"],
+      "interval_ms": 200
+    },
+    "label": {
+      "kind": "phrase_cycle",
+      "phrases": [
+        "Analyzing",
+        "Thinking",
+        "Exploring",
+        "Reasoning",
+        "Planning",
+        "Reading",
+        "Writing",
+        "Reviewing",
+        "Refining",
+        "Verifying",
+        "Synthesizing",
+        "Working"
+      ],
+      "interval_ms": 3500,
+      "suffix": "…",
+      "effect": "shimmer"
+    },
+    "accessible_label": "Claude Code DeepSeek is working"
+  },
   "configuration_presets": [
     {
       "id": "deepseek-flash-max",

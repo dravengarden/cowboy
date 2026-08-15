@@ -95,6 +95,7 @@ provider-verify PROVIDER PUBLIC_KEY:
 # skill's deterministic pre-publish gate.
 provider-check:
     deno check tools/build-provider-runtime.ts tools/check-provider-runtime-lock.ts tools/provider-publication-receipt.ts tools/publish-provider-release.ts
+    deno test --allow-read --allow-write .agents/skills/release-cowboy-provider/scripts/audit-dependencies_test.ts
     deno test tools/provider-publication-receipt_test.ts
     deno run --allow-read tools/check-provider-runtime-lock.ts
     cargo test --locked -p cowboy-provider-sdk --all-targets

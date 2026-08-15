@@ -1,5 +1,5 @@
 /**
- * Cowboy Provider UI SDK v1.
+ * Cowboy Provider UI SDK v2.
  *
  * This package is intentionally renderer-agnostic. Providers ship a closed,
  * data-only UI and logic IR; Cowboy supplies the renderer and privileged
@@ -7,8 +7,9 @@
  */
 
 export const PROVIDER_PACKAGE_SCHEMA_VERSION = 2 as const;
-export const PROVIDER_UI_SCHEMA_VERSION = 1 as const;
-export const PROVIDER_SDK_VERSION = "2.1.0" as const;
+export const PROVIDER_UI_SCHEMA_MIN_VERSION = 1 as const;
+export const PROVIDER_UI_SCHEMA_VERSION = 2 as const;
+export const PROVIDER_SDK_VERSION = "2.2.0" as const;
 
 export type SurfaceSlot =
   | "card"
@@ -69,6 +70,7 @@ export type UiNode =
     component: "stack";
     direction: "row" | "column" | "responsive";
     gap: "xs" | "sm" | "md" | "lg";
+    wrap?: boolean;
     children: UiNode[];
     visible_when?: BoolExpression;
   }
@@ -81,6 +83,12 @@ export type UiNode =
   | { component: "asset"; asset: string; size: "sm" | "md" | "lg" | "fill" }
   | { component: "badge"; label: TextValue; tone: Tone }
   | { component: "progress"; label: TextValue }
+  | {
+    component: "activity";
+    indicator: ActivityIndicator;
+    label: ActivityLabel;
+    accessible_label: string;
+  }
   | { component: "alert"; tone: Tone; title: TextValue; body: TextValue }
   | { component: "divider" }
   | {
@@ -91,6 +99,25 @@ export type UiNode =
     enabled_when?: BoolExpression;
   };
 
+export type ActivityIndicator =
+  | { kind: "progress_ring" }
+  | { kind: "glyph_cycle"; frames: string[]; interval_ms: number }
+  | { kind: "terminal_prompt"; interval_ms: number }
+  | { kind: "asset_signal"; asset: string; interval_ms: number }
+  | { kind: "asset_pulse"; asset: string; interval_ms: number };
+
+export type ActivityTextEffect = "none" | "fade" | "shimmer";
+
+export type ActivityLabel =
+  | { kind: "text"; value: TextValue; effect: ActivityTextEffect }
+  | {
+    kind: "phrase_cycle";
+    phrases: string[];
+    interval_ms: number;
+    suffix: string;
+    effect: ActivityTextEffect;
+  };
+
 export interface UiAsset {
   id: string;
   role: "logo" | "icon" | "loading" | "illustration";
@@ -98,8 +125,22 @@ export interface UiAsset {
   digest: string;
   accessible_label: string;
   content:
-    | { kind: "vector_path"; view_box: string; path: string; fill?: string }
+    | {
+      kind: "vector_path";
+      view_box: string;
+      path: string;
+      fill?: string;
+      gradient?: VectorGradient;
+    }
     | { kind: "inline"; base64: string };
+}
+
+export interface VectorGradient {
+  x1_percent: number;
+  y1_percent: number;
+  x2_percent: number;
+  y2_percent: number;
+  stops: Array<{ offset_percent: number; color: string }>;
 }
 
 export interface StateField {
@@ -1152,7 +1193,10 @@ export function validateProviderUiManifest(
     typeof input.sdk_version !== "string" ||
     !parseSemanticVersion(input.sdk_version) ||
     !isRecord(input.ui) ||
-    input.ui.schema_version !== PROVIDER_UI_SCHEMA_VERSION ||
+    typeof input.ui.schema_version !== "number" ||
+    !Number.isSafeInteger(input.ui.schema_version) ||
+    input.ui.schema_version < PROVIDER_UI_SCHEMA_MIN_VERSION ||
+    input.ui.schema_version > PROVIDER_UI_SCHEMA_VERSION ||
     !Array.isArray(input.ui.assets) || !isRecord(input.ui.surfaces) ||
     !isRecord(input.logic) || input.logic.schema_version !== 1 ||
     !Array.isArray(input.logic.state) || !Array.isArray(input.logic.messages) ||
@@ -1339,7 +1383,7 @@ export function validateProviderUiManifest(
   const assets = new Set<string>();
   const assetRoles = new Map<string, string>();
   for (const raw of input.ui.assets) {
-    validateUiAsset(raw);
+    validateUiAsset(raw, input.ui.schema_version);
     if (assets.has(raw.id)) throw new Error("Duplicate Provider UI asset");
     assets.add(raw.id);
     assetRoles.set(raw.id, raw.role);
@@ -1458,7 +1502,15 @@ export function validateProviderUiManifest(
     if (!(slot in surfaces)) {
       throw new Error(`Provider is missing ${slot} surface`);
     }
-    validateUiNode(surfaces[slot], state, messages, assets, 0, nodes);
+    validateUiNode(
+      surfaces[slot],
+      input.ui.schema_version,
+      state,
+      messages,
+      assets,
+      0,
+      nodes,
+    );
     validateSurfaceEffectOwnership(
       slot,
       surfaces[slot] as UiNode,
@@ -1542,7 +1594,10 @@ function validateSurfaceEffectOwnership(
   }
 }
 
-function validateUiAsset(input: unknown): asserts input is UiAsset {
+function validateUiAsset(
+  input: unknown,
+  uiSchemaVersion: number,
+): asserts input is UiAsset {
   if (
     !isRecord(input) || typeof input.id !== "string" ||
     !isIdentifier(input.id) ||
@@ -1564,7 +1619,12 @@ function validateUiAsset(input: unknown): asserts input is UiAsset {
       !isVectorPath(input.content.path) ||
       (input.content.fill !== undefined &&
         (typeof input.content.fill !== "string" ||
-          !isColor(input.content.fill)))
+          !isColor(input.content.fill))) ||
+      (input.content.gradient !== undefined &&
+        (uiSchemaVersion < 2 ||
+          !isVectorGradient(input.content.gradient))) ||
+      (input.content.fill !== undefined &&
+        input.content.gradient !== undefined)
     ) {
       throw new Error("Invalid Provider vector asset");
     }
@@ -1643,6 +1703,39 @@ function isVectorPath(value: string): boolean {
     /^[MmZzLlHhVvCcSsQqTtAa0-9eE+.,\s-]+$/.test(value);
 }
 
+function isVectorGradient(input: unknown): input is VectorGradient {
+  if (
+    !isRecord(input) ||
+    !hasOnlyKeys(input, [
+      "x1_percent",
+      "y1_percent",
+      "x2_percent",
+      "y2_percent",
+      "stops",
+    ]) ||
+    ![input.x1_percent, input.y1_percent, input.x2_percent, input.y2_percent]
+      .every((value) =>
+        typeof value === "number" && Number.isSafeInteger(value) &&
+        value >= -100 && value <= 200
+      ) ||
+    !Array.isArray(input.stops) || input.stops.length < 2 ||
+    input.stops.length > 8
+  ) return false;
+  let previous = -1;
+  for (const stop of input.stops) {
+    if (
+      !isRecord(stop) || typeof stop.offset_percent !== "number" ||
+      !hasOnlyKeys(stop, ["offset_percent", "color"]) ||
+      !Number.isSafeInteger(stop.offset_percent) ||
+      stop.offset_percent < 0 || stop.offset_percent > 100 ||
+      stop.offset_percent < previous || typeof stop.color !== "string" ||
+      !isColor(stop.color)
+    ) return false;
+    previous = stop.offset_percent;
+  }
+  return true;
+}
+
 function isBoundedBase64(value: string, maximumBytes: number): boolean {
   if (
     value.length === 0 || value.length % 4 !== 0 ||
@@ -1670,6 +1763,7 @@ function isCompatibleContract(
 
 function validateUiNode(
   input: unknown,
+  uiSchemaVersion: number,
   state: ReadonlyMap<string, ValueType>,
   messages: ReadonlyMap<string, MessageSchema>,
   assets: ReadonlySet<string>,
@@ -1686,13 +1780,23 @@ function validateUiNode(
       if (
         !["row", "column", "responsive"].includes(String(input.direction)) ||
         !["xs", "sm", "md", "lg"].includes(String(input.gap)) ||
+        (input.wrap !== undefined && typeof input.wrap !== "boolean") ||
+        (uiSchemaVersion < 2 && input.wrap === true) ||
         !Array.isArray(input.children) || input.children.length > 64
       ) {
         throw new Error("Invalid Provider stack");
       }
       validateOptionalExpression(input.visible_when, state, 0);
       for (const child of input.children) {
-        validateUiNode(child, state, messages, assets, depth + 1, nodes);
+        validateUiNode(
+          child,
+          uiSchemaVersion,
+          state,
+          messages,
+          assets,
+          depth + 1,
+          nodes,
+        );
       }
       break;
     case "text":
@@ -1716,6 +1820,12 @@ function validateUiNode(
       break;
     case "progress":
       validateText(input.label, state);
+      break;
+    case "activity":
+      if (uiSchemaVersion < 2) {
+        throw new Error("Provider activity requires UI schema 2");
+      }
+      validateActivityNode(input, state, assets);
       break;
     case "alert":
       if (!isTone(input.tone)) throw new Error("Invalid Provider alert");
@@ -1751,6 +1861,110 @@ function validateUiNode(
     default:
       throw new Error(`Unknown Provider UI component ${input.component}`);
   }
+}
+
+function validateActivityNode(
+  input: Record<string, unknown>,
+  state: ReadonlyMap<string, ValueType>,
+  assets: ReadonlySet<string>,
+): void {
+  if (
+    !hasOnlyKeys(input, [
+      "component",
+      "indicator",
+      "label",
+      "accessible_label",
+    ]) ||
+    typeof input.accessible_label !== "string" ||
+    !input.accessible_label.trim() || input.accessible_label.length > 512 ||
+    !isRecord(input.indicator) || !isRecord(input.label)
+  ) throw new Error("Invalid Provider activity");
+  const indicator = input.indicator;
+  const interval = indicator.interval_ms;
+  switch (indicator.kind) {
+    case "progress_ring":
+      if (!hasOnlyKeys(indicator, ["kind"])) {
+        throw new Error("Invalid Provider progress activity");
+      }
+      break;
+    case "glyph_cycle":
+      if (
+        !hasOnlyKeys(indicator, ["kind", "frames", "interval_ms"]) ||
+        !isIntegerBetween(interval, 120, 10_000) ||
+        !Array.isArray(indicator.frames) || indicator.frames.length < 2 ||
+        indicator.frames.length > 16 ||
+        !indicator.frames.every((frame) =>
+          typeof frame === "string" && frame.length > 0 &&
+          [...frame].length <= 8 && !hasControlCharacter(frame)
+        )
+      ) throw new Error("Invalid Provider glyph activity");
+      break;
+    case "terminal_prompt":
+      if (
+        !hasOnlyKeys(indicator, ["kind", "interval_ms"]) ||
+        !isIntegerBetween(interval, 400, 10_000)
+      ) {
+        throw new Error("Invalid Provider terminal activity");
+      }
+      break;
+    case "asset_signal":
+    case "asset_pulse":
+      if (
+        !hasOnlyKeys(indicator, ["kind", "asset", "interval_ms"]) ||
+        typeof indicator.asset !== "string" ||
+        !assets.has(indicator.asset) ||
+        !isIntegerBetween(interval, 400, 10_000)
+      ) throw new Error("Invalid Provider asset activity");
+      break;
+    default:
+      throw new Error("Unknown Provider activity indicator");
+  }
+  const label = input.label;
+  if (
+    label.kind === "text" &&
+    !hasOnlyKeys(label, ["kind", "value", "effect"])
+  ) throw new Error("Invalid Provider activity text label");
+  if (!["none", "fade", "shimmer"].includes(String(label.effect))) {
+    throw new Error("Invalid Provider activity text effect");
+  }
+  if (label.kind === "text") {
+    validateText(label.value, state);
+    return;
+  }
+  if (
+    label.kind !== "phrase_cycle" ||
+    !hasOnlyKeys(label, [
+      "kind",
+      "phrases",
+      "interval_ms",
+      "suffix",
+      "effect",
+    ]) ||
+    !Array.isArray(label.phrases) || label.phrases.length < 1 ||
+    label.phrases.length > 64 ||
+    !label.phrases.every((phrase) =>
+      typeof phrase === "string" && Boolean(phrase.trim()) &&
+      phrase.length <= 128 && !hasControlCharacter(phrase)
+    ) ||
+    !isIntegerBetween(label.interval_ms, 500, 60_000) ||
+    typeof label.suffix !== "string" || [...label.suffix].length > 8
+  ) throw new Error("Invalid Provider activity label");
+}
+
+function isIntegerBetween(
+  value: unknown,
+  minimum: number,
+  maximum: number,
+): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) &&
+    value >= minimum && value <= maximum;
+}
+
+function hasControlCharacter(value: string): boolean {
+  return [...value].some((character) => {
+    const code = character.codePointAt(0) ?? 0;
+    return code < 0x20 || code === 0x7f;
+  });
 }
 
 function validateText(
@@ -1957,6 +2171,14 @@ function isSafeRelativePath(value: string): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasOnlyKeys(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+): boolean {
+  const allowedKeys = new Set(allowed);
+  return Object.keys(value).every((key) => allowedKeys.has(key));
 }
 
 export function assertNever(value: never): never {
