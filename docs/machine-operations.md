@@ -1,17 +1,17 @@
 # Cowboy Machine operations
 
-> **Current transition:** this runbook documents the deployed Machine-scoped
-> Provider login implementation. The target contract performs login once at
-> Cowboy Service scope and automatically reconciles a credential generation to
-> every enrolled Machine. See [Cowboy core requirements](requirements.md) and
-> [Service-scoped authentication](provider-packages.md#service-scoped-authentication).
+Provider login belongs to Cowboy Service scope. One encrypted credential
+generation is reconciled automatically to every enrolled Machine; Machine
+surfaces expose only replica and materialization health. See
+[Cowboy core requirements](requirements.md) and
+[Service-scoped authentication](provider-packages.md#service-scoped-authentication).
 
 `cowboy-machine` is an outbound-only macOS/Linux host agent. It owns machine
 identity, the detached ACP broker, signed component activation, transitional
-Provider login orchestration, trusted workspace roots, and stable
-product-adapter tunnelling. In the deployed transition Cowboy remains the
-controller and does not receive Provider credentials; this is not the target
-Service-auth ownership model.
+legacy-component orchestration, Provider installation and credential
+projection, trusted workspace roots, and stable product-adapter tunnelling.
+The Controller owns encrypted Service credential generations; a Machine holds
+only its sealed replica and an installed Provider's private materialization.
 
 For a new Git-backed session, the host fetches the advertised repository's
 remote default branch and creates a worktree on the task-owned
