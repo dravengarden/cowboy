@@ -337,6 +337,7 @@ Provider installation and Provider authentication are orthogonal:
 ProviderAuthentication {
   cowboy_service_id
   provider_id
+  authentication_scope
   auth_generation
   auth_contract_fingerprint
   auth_state
@@ -358,6 +359,14 @@ monotonic `auth_generation`. The encrypted vault record is the single durable
 authority for its redacted state, account label, schema fingerprints, generation,
 and ciphertext. Neither the vault key nor Provider authentication rows enter the
 ordinary Cowboy database; Machine inventory reports only replica convergence.
+
+`authentication_scope` is the public, typed credential-sharing boundary derived
+from the package's portable schema. Providers with the same scope (currently the
+Claude Code · DeepSeek and Codex · DeepSeek lanes) accept one bundle and one
+Service API key, but keep separate signed contract fingerprints, projection
+schemas, encrypted vault rows, and Machine materialization receipts. The UI
+groups their authentication state by scope while retaining each Provider's own
+card and runtime settings.
 
 The Service starts that flow with the exact signed Provider version, composite
 digest, and authentication-contract fingerprint selected by the UI. A connected

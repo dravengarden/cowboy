@@ -99,6 +99,12 @@ Deno.test("Provider activity renderer consumes only typed generic strategies", (
   }
 });
 
+Deno.test("terminal activity keeps its Provider-defined prompt geometry", () => {
+  assertEquals(surfaceSource.includes("provider-terminal-prompt"), true);
+  assertEquals(surfaceSource.includes("provider-terminal-caret"), true);
+  assertEquals(surfaceSource.includes("terminalPromptMotion"), true);
+});
+
 Deno.test("Provider Transcript renderer consumes only closed presentation variants", () => {
   for (
     const variant of [
@@ -127,6 +133,15 @@ Deno.test("Provider Transcript renderer consumes only closed presentation varian
   ) {
     assertEquals(transcriptPresentationSource.includes(provider), false);
   }
+});
+
+Deno.test("terminal thought rows use a composed icon instead of a raw prompt", () => {
+  assertEquals(transcriptPresentationSource.includes("TerminalRounded"), true);
+  assertEquals(transcriptPresentationSource.includes("CircularProgress"), true);
+  assertEquals(
+    transcriptPresentationSource.includes('<Box component="span">›</Box>'),
+    false,
+  );
 });
 
 Deno.test("Provider UI v1 loading uses a compact neutral compatibility fallback", () => {

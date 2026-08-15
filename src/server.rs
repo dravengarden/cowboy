@@ -3561,28 +3561,55 @@ async fn api_provider_auth_commit(
         method_id: request.method,
         values: request.values,
     };
-    let status = match state.provider_auth.commit(
-        &package,
-        &bundle,
-        request.account_label,
-        request.expected_generation,
-    ) {
-        Ok(status) => status,
+    let packages = state
+        .provider_catalog
+        .packages_for_authentication_scope(&package.manifest.authentication.portable_schema);
+    let statuses = match if packages.len() == 1 {
+        state
+            .provider_auth
+            .commit(
+                &packages[0],
+                &bundle,
+                request.account_label,
+                request.expected_generation,
+            )
+            .map(|status| vec![status])
+    } else {
+        state.provider_auth.commit_shared(
+            &packages,
+            &bundle,
+            request.account_label,
+            &provider_id,
+            request.expected_generation,
+        )
+    } {
+        Ok(statuses) => statuses,
         Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
     };
-    let replicas = distribute_provider_auth(&state, &provider_id).await;
-    let distribution = replicas.state();
-    let status = state
-        .provider_auth
-        .mark_distribution(&provider_id, status.auth_generation, distribution)
-        .unwrap_or(status);
+    let (statuses, replicas) = distribute_and_mark_provider_auth(&state, statuses).await;
+    let Some(status) = statuses
+        .iter()
+        .find(|status| status.provider_id == provider_id)
+        .cloned()
+    else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "shared Provider authentication commit omitted requested Provider",
+        )
+            .into_response();
+    };
+    let replicas_succeeded: usize = replicas.values().map(|value| value.succeeded).sum();
+    let replicas_failed: usize = replicas.values().map(|value| value.failed).sum();
+    let replicas_pending: usize = replicas.values().map(|value| value.pending).sum();
     (
         StatusCode::CREATED,
         Json(serde_json::json!({
             "authentication": status,
-            "replicas_succeeded": replicas.succeeded,
-            "replicas_failed": replicas.failed,
-            "replicas_pending": replicas.pending,
+            "authentications": statuses,
+            "replicas": replicas,
+            "replicas_succeeded": replicas_succeeded,
+            "replicas_failed": replicas_failed,
+            "replicas_pending": replicas_pending,
         })),
     )
         .into_response()
@@ -3592,21 +3619,63 @@ async fn api_provider_auth_logout(
     State(state): State<Arc<AppState>>,
     Path(provider_id): Path<String>,
 ) -> Response {
-    let status = match state.provider_auth.logout(&provider_id) {
-        Ok(status) => status,
+    let scope = match state.provider_auth.status(&provider_id) {
+        Some(status) => status.authentication_scope,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "Provider is not authenticated at Cowboy Service scope",
+            )
+                .into_response();
+        }
+    };
+    let provider_ids: Vec<_> = state
+        .provider_catalog
+        .provider_ids_for_authentication_scope(&scope);
+    let provider_ids: Vec<_> = provider_ids
+        .into_iter()
+        .filter(|candidate| state.provider_auth.status(candidate).is_some())
+        .collect();
+    if provider_ids.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "authentication scope has no durable Provider state",
+        )
+            .into_response();
+    }
+    let statuses = match if provider_ids.len() == 1 {
+        state
+            .provider_auth
+            .logout(&provider_ids[0])
+            .map(|status| vec![status])
+    } else {
+        state.provider_auth.logout_shared(&provider_ids)
+    } {
+        Ok(statuses) => statuses,
         Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
     };
-    let replicas = distribute_provider_auth(&state, &provider_id).await;
-    let distribution = replicas.state();
-    let status = state
-        .provider_auth
-        .mark_distribution(&provider_id, status.auth_generation, distribution)
-        .unwrap_or(status);
+    let (statuses, replicas) = distribute_and_mark_provider_auth(&state, statuses).await;
+    let Some(status) = statuses
+        .iter()
+        .find(|status| status.provider_id == provider_id)
+        .cloned()
+    else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "shared Provider authentication logout omitted requested Provider",
+        )
+            .into_response();
+    };
+    let replicas_succeeded: usize = replicas.values().map(|value| value.succeeded).sum();
+    let replicas_failed: usize = replicas.values().map(|value| value.failed).sum();
+    let replicas_pending: usize = replicas.values().map(|value| value.pending).sum();
     Json(serde_json::json!({
         "authentication": status,
-        "replicas_succeeded": replicas.succeeded,
-        "replicas_failed": replicas.failed,
-        "replicas_pending": replicas.pending,
+        "authentications": statuses,
+        "replicas": replicas,
+        "replicas_succeeded": replicas_succeeded,
+        "replicas_failed": replicas_failed,
+        "replicas_pending": replicas_pending,
     }))
     .into_response()
 }
@@ -3856,11 +3925,33 @@ async fn api_provider_auth_cancel(
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 struct ProviderDistributionOutcome {
     succeeded: usize,
     failed: usize,
     pending: usize,
+}
+
+async fn distribute_and_mark_provider_auth(
+    state: &Arc<AppState>,
+    statuses: Vec<crate::provider_service::ProviderAuthenticationStatus>,
+) -> (
+    Vec<crate::provider_service::ProviderAuthenticationStatus>,
+    BTreeMap<String, ProviderDistributionOutcome>,
+) {
+    let mut next = Vec::with_capacity(statuses.len());
+    let mut replicas = BTreeMap::new();
+    for status in statuses {
+        let provider_id = status.provider_id.clone();
+        let outcome = distribute_provider_auth(state, &provider_id).await;
+        let marked = state
+            .provider_auth
+            .mark_distribution(&provider_id, status.auth_generation, outcome.state())
+            .unwrap_or(status);
+        replicas.insert(provider_id, outcome);
+        next.push(marked);
+    }
+    (next, replicas)
 }
 
 impl ProviderDistributionOutcome {
@@ -4001,25 +4092,36 @@ async fn accept_service_auth_candidate(
         method_id: auth_method.to_owned(),
         values,
     };
-    let status = state
-        .provider_auth
-        .commit(
-            &package,
-            &bundle,
-            account_label.clone(),
-            Some(executor.expected_generation),
-        )
-        .map_err(|error| error.to_string())?;
-    let replicas = distribute_provider_auth(state, provider_id).await;
-    let distribution = replicas.state();
-    let mut warnings = Vec::new();
-    if let Err(error) =
+    let packages = state
+        .provider_catalog
+        .packages_for_authentication_scope(portable_schema);
+    let statuses = (if packages.len() == 1 {
         state
             .provider_auth
-            .mark_distribution(provider_id, status.auth_generation, distribution)
+            .commit(
+                &packages[0],
+                &bundle,
+                account_label.clone(),
+                Some(executor.expected_generation),
+            )
+            .map(|status| vec![status])
+    } else {
+        state.provider_auth.commit_shared(
+            &packages,
+            &bundle,
+            account_label.clone(),
+            provider_id,
+            Some(executor.expected_generation),
+        )
+    })
+    .map_err(|error| error.to_string())?;
+    let (statuses, _replicas) = distribute_and_mark_provider_auth(state, statuses).await;
+    let mut warnings = Vec::new();
+    if !statuses
+        .iter()
+        .any(|status| status.provider_id == provider_id)
     {
-        tracing::warn!(%error, %provider_id, "recording Provider auth distribution state");
-        warnings.push(format!("distribution status update is pending: {error}"));
+        warnings.push("shared Provider authentication status is incomplete".to_owned());
     }
     let finalize_request_id = machine_request_id("provider-auth-finalize");
     if let Err(error) = state
@@ -5393,6 +5495,7 @@ mod machine_provider_tests {
             authentication_state: state,
             distribution_state: crate::provider_service::ServiceDistributionState::Current,
             auth_contract_fingerprint: format!("sha256:{}", "3".repeat(64)),
+            authentication_scope: "gemini-auth-v1".to_owned(),
             portable_schema: "gemini-auth-v1".to_owned(),
             projection_schema: "gemini-home-v1".to_owned(),
             account_label: None,

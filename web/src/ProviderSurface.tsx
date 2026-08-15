@@ -13,6 +13,7 @@ import {
   useMediaQuery,
   useTheme,
 } from "@mui/material";
+import type { Theme } from "@mui/material/styles";
 import { useEffect, useId, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import {
@@ -57,9 +58,12 @@ export function ProviderRuntimeSurface({
     providerDigest,
   );
   if (!entry) return <>{fallback}</>;
-  const authentication = catalog?.authentications.find((candidate) =>
-    candidate.provider_id === provider
-  );
+  const authentication =
+    catalog?.authentications.find((candidate) =>
+      candidate.provider_id === provider
+    ) ?? catalog?.authentications.find((candidate) =>
+      candidate.authentication_scope === entry.authentication_scope
+    );
   return (
     <ProviderSurface
       manifest={entry.manifest}
@@ -94,6 +98,7 @@ export function ProviderMark({
   size?: number;
   className?: string | undefined;
 }): React.JSX.Element | null {
+  const theme = useTheme();
   const assetId = role === "logo"
     ? manifest.display.logo_asset
     : role === "icon"
@@ -104,13 +109,41 @@ export function ProviderMark({
     candidate.role === role
   );
   if (!asset) return null;
+  const markColor = asset.content.kind === "vector_path" &&
+      asset.content.gradient === undefined && asset.content.fill === undefined
+    ? readableProviderMarkColor(manifest.display.accent, theme)
+    : undefined;
   return (
     <ProviderAssetGraphic
       asset={asset}
       size={size}
       className={className}
+      {...(markColor ? { sx: { color: markColor } } : {})}
     />
   );
+}
+
+/** Keep thin monochrome marks legible on dark surfaces without overriding a
+ * Provider-authored explicit fill or gradient. */
+function readableProviderMarkColor(
+  accent: string,
+  theme: Theme,
+): string {
+  if (theme.palette.mode !== "dark") return accent;
+  const match = /^#([0-9a-f]{6})$/i.exec(accent.trim());
+  if (!match) return accent;
+  const channels = [0, 2, 4].map((offset) =>
+    Number.parseInt(match[1]!.slice(offset, offset + 2), 16) / 255
+  );
+  const luminance = channels
+    .map((channel) =>
+      channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
+    )
+    .reduce(
+      (sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index]!,
+      0,
+    );
+  return luminance < 0.25 ? theme.palette.common.white : accent;
 }
 
 /** Shared safe renderer for signed Provider artwork. */
@@ -417,6 +450,10 @@ const activityFade = keyframes`
   0%, 100% { opacity: 0.34; }
   14%, 86% { opacity: 1; }
 `;
+const assetSignalMotion = keyframes`
+  from { -webkit-mask-position: 120% 0; mask-position: 120% 0; }
+  to { -webkit-mask-position: -20% 0; mask-position: -20% 0; }
+`;
 const terminalPromptMotion = keyframes`
   0%, 100% { transform: translateX(0); opacity: 0.55; }
   50% { transform: translateX(1.5px); opacity: 1; }
@@ -424,10 +461,6 @@ const terminalPromptMotion = keyframes`
 const terminalCaretMotion = keyframes`
   0%, 45% { opacity: 1; }
   55%, 100% { opacity: 0.24; }
-`;
-const assetSignalMotion = keyframes`
-  from { -webkit-mask-position: 120% 0; mask-position: 120% 0; }
-  to { -webkit-mask-position: -20% 0; mask-position: -20% 0; }
 `;
 const assetPulseMotion = keyframes`
   0%, 100% { transform: scale(0.92); opacity: 0.58; }

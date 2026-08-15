@@ -72,7 +72,9 @@ other current method graphs render `account`. The shared Cowboy card shell owns
 the logo/title region and one footer containing status, version, and only the
 currently valid actions. Consequently Claude and Codex retain account sign-in
 language, while both DeepSeek Providers render API-key missing/configured and
-add/replace/clear actions without any Provider-ID branch in Web.
+add/replace/clear actions without any Provider-ID branch in Web. Their common
+`deepseek-api-key-v1` authentication scope means the API key is entered once;
+each lane receives its own encrypted projection and keeps its own Provider card.
 
 Grok keeps its own native state under `~/.grok`. Cowboy enables Grok's
 cross-session memory but never reads or writes that store. Current Grok releases

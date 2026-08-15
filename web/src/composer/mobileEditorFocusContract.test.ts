@@ -190,6 +190,11 @@ Deno.test("mobile recommended presets survive a swallowed Safari click", () => {
     true,
   );
   assertEquals(presets.includes("{...activateTap}"), true);
+  assertEquals(presets.includes("aria-busy={pending || undefined}"), true);
+  assertEquals(
+    composerSource.includes("pending={pendingPresetId === preset.id}"),
+    true,
+  );
   assertEquals(presets.includes('touchAction: "manipulation"'), true);
   assertEquals(presets.includes("borderRadius: 1,"), true);
   assertEquals(presets.includes("borderRadius: 2,"), false);
