@@ -67,16 +67,14 @@ function humanize(value: string): string {
 }
 
 export function toolTypeName(
-  provider: string,
+  _provider: string,
   toolName: string,
   kind: string,
 ): string {
   if (toolName) return toolName;
-  if (provider === "codex" || provider === "codex-deepseek") {
-    if (kind === "execute") return "Shell";
-    if (kind === "edit") return "Patch";
-    if (kind === "read") return "Read";
-  }
+  if (kind === "execute") return "Shell";
+  if (kind === "edit") return "Patch";
+  if (kind === "read") return "Read";
   return kind ? kind.charAt(0).toUpperCase() + kind.slice(1) : "Tool";
 }
 
@@ -110,11 +108,7 @@ export function toolHeading({ provider, toolName, kind, title, rawInput }: {
   if (mcp) return humanize(mcp.tool);
   if (kind === "search") return "Web search";
   if (kind === "execute") {
-    if (
-      (provider === "claude-code" || provider === "claude-deepseek") &&
-      typeof input.description === "string" &&
-      input.description.trim()
-    ) {
+    if (typeof input.description === "string" && input.description.trim()) {
       return input.description.trim();
     }
     return `${toolTypeName(provider, toolName, kind)} command`;
@@ -123,8 +117,10 @@ export function toolHeading({ provider, toolName, kind, title, rawInput }: {
 }
 
 export function toolVariantLabel(
-  { provider, toolName, kind, title, rawInput }: {
+  { provider, providerVersion, providerDigest, toolName, kind, title, rawInput }: {
     provider: string;
+    providerVersion?: string | undefined;
+    providerDigest?: string | undefined;
     toolName: string;
     kind: string;
     title: string;
@@ -132,8 +128,9 @@ export function toolVariantLabel(
   },
 ): string {
   const mcp = mcpIdentity(toolName, rawInput, title);
-  if (mcp) return `${providerName(provider)} · MCP · ${mcp.server}`;
-  return `${providerName(provider)} · ${
+  const name = providerName(provider, providerVersion, providerDigest);
+  if (mcp) return `${name} · MCP · ${mcp.server}`;
+  return `${name} · ${
     toolTypeName(provider, toolName, kind)
   }`;
 }

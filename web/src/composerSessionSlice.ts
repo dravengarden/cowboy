@@ -11,6 +11,8 @@ export interface ComposerDestination {
  * active editor merely because the draft destination picker shares the list. */
 export interface ComposerSessionSlice {
   provider: string;
+  providerVersion: string | undefined;
+  providerDigest: string | undefined;
   paused: boolean;
   awaitingUser: boolean;
   done: boolean;
@@ -37,6 +39,8 @@ export function composerSessionSlice(
   const active = sessions.find((session) => session.id === sessionId);
   const slice: ComposerSessionSlice = {
     provider: active?.provider ?? "",
+    providerVersion: active?.provider_version,
+    providerDigest: active?.provider_generation_digest,
     paused: active?.paused ?? false,
     awaitingUser: active?.awaiting_user ?? false,
     done: active?.done ?? false,
@@ -57,6 +61,8 @@ export function sameComposerSessionSlice(
 ): boolean {
   return a === b ||
     (a.provider === b.provider &&
+      a.providerVersion === b.providerVersion &&
+      a.providerDigest === b.providerDigest &&
       a.paused === b.paused &&
       a.awaitingUser === b.awaitingUser &&
       a.done === b.done &&
@@ -81,6 +87,8 @@ export function sameComposerSheetSession(
     (a !== undefined && b !== undefined &&
       a.id === b.id &&
       a.provider === b.provider &&
+      a.provider_version === b.provider_version &&
+      a.provider_generation_digest === b.provider_generation_digest &&
       a.cwd === b.cwd &&
       a.title === b.title &&
       a.status === b.status &&

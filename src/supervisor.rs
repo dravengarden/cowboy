@@ -31,6 +31,16 @@ pub struct SessionPlacement<'a> {
     pub workspace: Option<&'a crate::machine_protocol::MachineWorkspace>,
 }
 
+/// Exact immutable Provider release and Service-auth projection selected by
+/// the Controller before a session is registered.
+#[derive(Clone, Copy)]
+pub struct ProviderGeneration<'a> {
+    pub version: &'a str,
+    pub digest: &'a str,
+    pub auth_generation: Option<u64>,
+    pub behavior: Option<&'a cowboy_provider_sdk::ProviderBehaviorContract>,
+}
+
 /// Spawns and tracks agent sessions; routes commands to their threads.
 pub struct Supervisor {
     hub: Hub,
@@ -52,6 +62,15 @@ fn initial_counter(hub: &Hub, persistent_floor: u64, clock_floor: u64) -> u64 {
         .max()
         .map_or(1, |value| value.saturating_add(1));
     live_floor.max(persistent_floor).max(clock_floor)
+}
+
+fn session_configuration(
+    meta: &crate::core::SessionMeta,
+) -> cowboy_provider_sdk::ConfigurationBehavior {
+    meta.provider_behavior.as_ref().map_or_else(
+        || provider::legacy_behavior(&meta.provider).configuration,
+        |behavior| behavior.configuration.clone(),
+    )
 }
 
 impl Supervisor {
@@ -108,6 +127,7 @@ impl Supervisor {
     /// The caller may return this stable id to the UI immediately; the session
     /// remains `Starting` until [`Self::start_registered_session`] installs its
     /// worker, or becomes `Crashed` with the preparation error.
+    #[allow(clippy::too_many_arguments)]
     pub fn register_session_on_with_id(
         &self,
         id: &str,
@@ -116,15 +136,27 @@ impl Supervisor {
         origin: SessionOrigin,
         system: bool,
         placement: SessionPlacement<'_>,
+        provider_generation: ProviderGeneration<'_>,
     ) -> Result<String, String> {
         let SessionPlacement {
             machine_id,
             workspace,
         } = placement;
+        let ProviderGeneration {
+            version,
+            digest,
+            auth_generation,
+            behavior,
+        } = provider_generation;
         if !self.router.connected(machine_id) {
             return Err(format!("machine {machine_id:?} is not connected"));
         }
-        provider::lookup(provider).ok_or_else(|| format!("unknown provider {provider:?}"))?;
+        if digest.is_empty() {
+            provider::lookup(provider).ok_or_else(|| format!("unknown provider {provider:?}"))?;
+        } else {
+            provider::remote_generation(provider)
+                .ok_or_else(|| format!("invalid Provider id {provider:?}"))?;
+        }
 
         // Resolve cwd. Relative paths join the workspace_root; absolute
         // paths are honoured as-is. Remote paths have already been validated
@@ -146,6 +178,10 @@ impl Supervisor {
         self.hub.create_session(SessionRegistration {
             id: id.to_owned(),
             provider: provider.to_owned(),
+            provider_version: version.to_owned(),
+            provider_generation_digest: digest.to_owned(),
+            provider_auth_generation: auth_generation,
+            provider_behavior: behavior.cloned(),
             machine_id: machine_id.to_owned(),
             workspace_id: workspace.map(|value| value.id.clone()),
             workspace_name: workspace.map(|value| value.display_name.clone()),
@@ -173,8 +209,12 @@ impl Supervisor {
             .into_iter()
             .find(|meta| meta.id == session_id)
             .ok_or_else(|| format!("unknown session {session_id:?}"))?;
-        let spec = provider::lookup(&meta.provider)
-            .ok_or_else(|| format!("unknown provider {:?}", meta.provider))?;
+        let spec = if meta.provider_generation_digest.is_empty() {
+            provider::lookup(&meta.provider)
+        } else {
+            provider::remote_generation(&meta.provider)
+        }
+        .ok_or_else(|| format!("unknown provider {:?}", meta.provider))?;
         let runtime = self.runtime_for_session(session_id)?;
         if runtime.has_worker(session_id) && !runtime.worker_matches_cwd(session_id, &meta.cwd) {
             self.recycle_session_inner(session_id)
@@ -184,6 +224,7 @@ impl Supervisor {
     }
 
     /// Compatibility path for callers that already own a prepared workspace.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_session_on_with_id(
         &self,
         id: &str,
@@ -192,6 +233,7 @@ impl Supervisor {
         origin: SessionOrigin,
         system: bool,
         machine_id: &str,
+        provider_generation: ProviderGeneration<'_>,
     ) -> Result<String, String> {
         let id = self.register_session_on_with_id(
             id,
@@ -203,6 +245,7 @@ impl Supervisor {
                 machine_id,
                 workspace: None,
             },
+            provider_generation,
         )?;
         self.start_registered_session(&id)?;
         Ok(id)
@@ -220,11 +263,22 @@ impl Supervisor {
         resume: Option<String>,
     ) -> Result<(), String> {
         let runtime = self.runtime_for_session(session_id)?;
-        let budget = self.deepseek_context_budget(session_id, spec.id);
-        let cache_protection = self.deepseek_cache_protection(session_id, spec.id);
+        let meta = self
+            .hub
+            .session_list()
+            .into_iter()
+            .find(|meta| meta.id == session_id)
+            .ok_or_else(|| format!("unknown session {session_id:?}"))?;
+        let configuration = session_configuration(&meta);
+        let budget = self.deepseek_context_budget(session_id, &configuration);
+        let cache_protection = self.deepseek_cache_protection(session_id, &configuration);
         runtime.ensure(StartSession {
             session_id: session_id.to_owned(),
-            provider: spec.id.to_owned(),
+            provider: spec.id.clone(),
+            provider_version: meta.provider_version,
+            provider_generation_digest: meta.provider_generation_digest,
+            provider_auth_generation: meta.provider_auth_generation,
+            provider_behavior: meta.provider_behavior,
             cwd: cwd.display().to_string(),
             agent_session_id: resume,
             system: self.hub.session_is_system(session_id),
@@ -344,11 +398,16 @@ impl Supervisor {
             .into_iter()
             .find(|meta| meta.id == session_id)
             .ok_or_else(|| format!("unknown session {session_id:?}"))?;
-        let budget = self.deepseek_context_budget(session_id, &meta.provider);
-        let cache_protection = self.deepseek_cache_protection(session_id, &meta.provider);
+        let configuration = session_configuration(&meta);
+        let budget = self.deepseek_context_budget(session_id, &configuration);
+        let cache_protection = self.deepseek_cache_protection(session_id, &configuration);
         Ok(StartSession {
             session_id: meta.id,
             provider: meta.provider,
+            provider_version: meta.provider_version,
+            provider_generation_digest: meta.provider_generation_digest,
+            provider_auth_generation: meta.provider_auth_generation,
+            provider_behavior: meta.provider_behavior,
             cwd: meta.cwd,
             agent_session_id: self.hub.agent_session_id_for_resume(session_id),
             system: meta.system,
@@ -364,19 +423,23 @@ impl Supervisor {
     fn deepseek_context_budget(
         &self,
         session_id: &str,
-        provider: &str,
+        configuration: &cowboy_provider_sdk::ConfigurationBehavior,
     ) -> Option<crate::deepseek_context::ContextBudget> {
         let preferences = self.hub.config_preferences(session_id)?;
         let model = preferences.get("model").and_then(serde_json::Value::as_str);
         let requested = preferences
             .get(crate::deepseek_context::CONFIG_ID)
             .and_then(serde_json::Value::as_str);
-        crate::deepseek_context::launch_budget(provider, model, requested)
+        crate::deepseek_context::launch_budget(configuration, model, requested)
     }
 
-    fn deepseek_cache_protection(&self, session_id: &str, provider: &str) -> Option<bool> {
+    fn deepseek_cache_protection(
+        &self,
+        session_id: &str,
+        configuration: &cowboy_provider_sdk::ConfigurationBehavior,
+    ) -> Option<bool> {
         let preferences = self.hub.config_preferences(session_id)?;
-        crate::deepseek_cache::selected(&preferences, provider)
+        crate::deepseek_cache::selected(&preferences, configuration)
     }
 
     /// Tear down a session's detached worker. Hub state is the caller's
@@ -480,7 +543,8 @@ impl Supervisor {
             .config_preferences(session_id)
             .unwrap_or_else(|| serde_json::json!({}));
         let model = preferences.get("model").and_then(serde_json::Value::as_str);
-        crate::deepseek_context::resolve(&meta.provider, model, profile)?;
+        let configuration = session_configuration(&meta);
+        crate::deepseek_context::resolve(&configuration, model, profile)?;
         self.runtime_for_session(session_id)?;
         let unchanged = preferences
             .get(crate::deepseek_context::CONFIG_ID)
@@ -516,7 +580,8 @@ impl Supervisor {
             .into_iter()
             .find(|meta| meta.id == session_id)
             .ok_or_else(|| format!("unknown session {session_id:?}"))?;
-        if !crate::deepseek_cache::supported_provider(&meta.provider) {
+        let configuration = session_configuration(&meta);
+        if !crate::deepseek_cache::supported_behavior(&configuration) {
             return Err("cache protection is available only for DeepSeek sessions".to_owned());
         }
         if matches!(meta.status, Status::Busy | Status::Starting)
@@ -531,7 +596,7 @@ impl Supervisor {
             .config_preferences(session_id)
             .unwrap_or_else(|| serde_json::json!({}));
         let unchanged =
-            crate::deepseek_cache::selected(&preferences, &meta.provider) == Some(enabled);
+            crate::deepseek_cache::selected(&preferences, &configuration) == Some(enabled);
         self.hub.set_config_preference(
             session_id,
             crate::deepseek_cache::CONFIG_ID.to_owned(),
@@ -626,7 +691,11 @@ impl Supervisor {
                     .latest_crash_detail(session_id)
                     .as_deref()
                     .is_some_and(|detail| {
-                        crate::provider::claude_code::keeps_worker_alive(&meta.provider, detail)
+                        let behavior = meta
+                            .provider_behavior
+                            .clone()
+                            .unwrap_or_else(|| provider::legacy_behavior(&meta.provider));
+                        crate::provider::keeps_worker_alive_for_behavior(&behavior, detail)
                     })
             })
             && self.runtime_for_session(session_id)?.has_worker(session_id);
@@ -741,6 +810,10 @@ mod tests {
             launch: Some(StartSession {
                 session_id: "s".to_owned(),
                 provider: "codex".to_owned(),
+                provider_version: String::new(),
+                provider_generation_digest: String::new(),
+                provider_auth_generation: None,
+                provider_behavior: None,
                 cwd: cwd.to_owned(),
                 agent_session_id: Some("codex-thread-1".to_owned()),
                 system: false,
@@ -768,6 +841,10 @@ mod tests {
         hub.create_session(SessionRegistration {
             id: "s".to_owned(),
             provider: "codex".to_owned(),
+            provider_version: String::new(),
+            provider_generation_digest: String::new(),
+            provider_auth_generation: None,
+            provider_behavior: None,
             machine_id: "hawk".to_owned(),
             workspace_id: Some("columbus".to_owned()),
             workspace_name: Some("columbus".to_owned()),

@@ -1,86 +1,44 @@
+import { currentProviderEntry } from "./providerCatalogRegistry";
+
 export interface ProviderPresentation {
   agent: string;
   modelProvider: string;
   detail: string;
-  isolated: boolean;
 }
 
-const PRESENTATIONS: Readonly<Record<string, ProviderPresentation>> = {
-  codex: {
-    agent: "Codex",
-    modelProvider: "OpenAI",
-    detail: "Standard Codex account and configuration",
-    isolated: false,
-  },
-  "codex-deepseek": {
-    agent: "Codex",
-    modelProvider: "DeepSeek",
-    detail: "Isolated API configuration · V4 Flash",
-    isolated: true,
-  },
-  "claude-code": {
-    agent: "Claude Code",
-    modelProvider: "Anthropic",
-    detail: "Standard Claude Code account and configuration",
-    isolated: false,
-  },
-  "claude-deepseek": {
-    agent: "Claude Code",
-    modelProvider: "DeepSeek",
-    detail: "Isolated instance configuration · V4 Pro 1M + V4 Flash subagents",
-    isolated: true,
-  },
-  gemini: {
-    agent: "Gemini",
-    modelProvider: "Google",
-    detail: "Standard Gemini CLI configuration",
-    isolated: false,
-  },
-  grok: {
-    agent: "Grok Build",
-    modelProvider: "xAI",
-    detail: "Official Grok Build CLI and standard Grok account configuration",
-    isolated: false,
-  },
-};
-
-export function providerPresentation(provider: string): ProviderPresentation {
-  return PRESENTATIONS[provider] ?? {
+export function providerPresentation(
+  provider: string,
+  providerVersion?: string,
+  providerDigest?: string,
+): ProviderPresentation {
+  const packaged = currentProviderEntry(provider, providerVersion, providerDigest);
+  if (packaged) {
+    return {
+      agent: packaged.manifest.display.name,
+      modelProvider: packaged.manifest.display.vendor,
+      detail: packaged.manifest.display.summary,
+    };
+  }
+  return {
     agent: provider || "Agent",
-    modelProvider: "Custom",
-    detail: "Machine-provided runtime",
-    isolated: false,
+    modelProvider: "",
+    detail: "Provider catalog unavailable",
   };
 }
 
-export function providerName(provider: string): string {
-  const presentation = providerPresentation(provider);
-  return presentation.isolated
-    ? `${presentation.agent} · ${presentation.modelProvider}`
-    : presentation.agent;
+export function providerName(
+  provider: string,
+  providerVersion?: string,
+  providerDigest?: string,
+): string {
+  return providerPresentation(provider, providerVersion, providerDigest).agent;
 }
 
 export function providerSelectionName(provider: string): string {
   const presentation = providerPresentation(provider);
+  if (!presentation.modelProvider) return presentation.agent;
+  if (presentation.agent.toLocaleLowerCase().includes(presentation.modelProvider.toLocaleLowerCase())) {
+    return presentation.agent;
+  }
   return `${presentation.agent} · ${presentation.modelProvider}`;
-}
-
-export function providerAgentFamily(provider: string): string {
-  if (provider === "claude-deepseek") return "claude-code";
-  if (provider === "codex-deepseek") return "codex";
-  return provider;
-}
-
-export type ProviderActivityKind =
-  | "claude"
-  | "codex"
-  | "grok"
-  | "default";
-
-export function providerActivityKind(provider: string): ProviderActivityKind {
-  const family = providerAgentFamily(provider);
-  if (family === "claude-code") return "claude";
-  if (family === "codex") return "codex";
-  if (family === "grok") return "grok";
-  return "default";
 }

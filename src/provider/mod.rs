@@ -1,31 +1,36 @@
-//! Provider registry.
+//! Provider process launch boundary.
 //!
-//! Transport is uniformly ACP (design §2), so a provider's only per-agent
-//! difference at this layer is *how to launch its ACP adapter over stdio* plus
-//! a couple of capability flags. Adding a provider = add a [`LaunchSpec`] here;
-//! the generic ACP backend in [`crate::acp`] does the rest.
+//! Installed sessions resolve their exact package and generation-local command
+//! from Machine-owned state. The in-tree table is a bounded compatibility path
+//! for package-less local or pre-schema sessions; it is not Provider discovery,
+//! publication, or installation authority. A conforming signed Provider can be
+//! added without adding an ID branch here.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
+
+use anyhow::{Context as _, Result, bail, ensure};
+use cowboy_provider_sdk::{
+    AuthComponent, PlatformPayload, PrivateComponentKind, RuntimeBinding, RuntimeContract,
+    RuntimeSidecar, RuntimeSidecarTransport, RuntimeValue,
+};
 
 use crate::provider_catalog::{CODEX_DEEPSEEK_CATALOG, available_codex_deepseek_catalog};
 
+pub(crate) use crate::provider_behavior::legacy_behavior;
+
 pub(crate) const DEEPSEEK_SESSION_ID_ENV: &str = "COWBOY_DEEPSEEK_SESSION_ID";
 
-// Per-provider specifics beyond launching. Today each holds its L1 confirm-detect
-// (the volatile, often-changing turn-end markers — design §B), sharing the
-// portable stop-reason rule in `confirm`.
-pub mod claude_code;
-pub mod codex;
+// Provider-independent protocol stop-reason classification.
 pub mod confirm;
-pub mod gemini;
 
 /// How to spawn one provider's ACP adapter as a subprocess.
 #[derive(Debug, Clone)]
 pub struct LaunchSpec {
     /// Stable provider id, e.g. `"claude-code"`.
-    pub id: &'static str,
+    pub id: String,
     /// Executable to run.
     pub command: String,
     /// Arguments passed to the executable.
@@ -38,14 +43,29 @@ pub struct LaunchSpec {
     /// applied. This closes over newly added upstream variables instead of
     /// relying on a permanently complete hand-written name list.
     pub remove_env_prefixes: Vec<&'static str>,
+    /// Owned isolation rules supplied by a signed Provider package.
+    pub package_remove_env: std::collections::BTreeSet<String>,
+    pub package_remove_env_prefixes: std::collections::BTreeSet<String>,
+}
+
+/// Prepared exact Provider process tree. Session sidecars use `kill_on_drop`
+/// and are held here for the complete worker lifetime.
+pub(crate) struct PreparedLaunch {
+    pub spec: LaunchSpec,
+    pub sidecars: Vec<tokio::process::Child>,
 }
 
 impl LaunchSpec {
     #[must_use]
     pub fn removes_inherited_env(&self, key: &str) -> bool {
         self.remove_env.contains(&key)
+            || self.package_remove_env.contains(key)
             || self
                 .remove_env_prefixes
+                .iter()
+                .any(|prefix| key.starts_with(prefix))
+            || self
+                .package_remove_env_prefixes
                 .iter()
                 .any(|prefix| key.starts_with(prefix))
     }
@@ -88,7 +108,8 @@ const CODEX_DEEPSEEK_AUTO_COMPACT_TOKEN_LIMIT: &str = "646000";
 // alternatives either disturb the active task or change the feature's
 // ephemeral, transcript-isolated semantics. See docs/architecture/04-providers.md.
 
-/// Built-in providers. claude-code and codex first (design build order).
+/// Legacy package-less launch recipes. Claude Code and Codex remain first for
+/// deterministic compatibility-test ordering.
 ///
 /// - `claude-code`: the `@agentclientprotocol/claude-agent-acp` adapter (the
 ///   renamed `@zed-industries/claude-code-acp`), run via `npx`. Speaks ACP over
@@ -130,10 +151,18 @@ fn builtin_with_env_and_shell(
         .zip(session_auto_compact_token_limit)
         .filter(|(window, compact)| *window > 0 && *compact > 0 && *compact <= *window);
     let claude_session_budget = session_budget_values.and_then(|(window, compact)| {
-        crate::deepseek_context::from_launch_values("claude-deepseek", window, compact)
+        crate::deepseek_context::from_launch_values(
+            &cowboy_provider_sdk::ConfigurationBehavior::AnthropicGatewayV1,
+            window,
+            compact,
+        )
     });
     let codex_session_budget = session_budget_values.and_then(|(window, compact)| {
-        crate::deepseek_context::from_launch_values("codex-deepseek", window, compact)
+        crate::deepseek_context::from_launch_values(
+            &cowboy_provider_sdk::ConfigurationBehavior::OpenaiGatewayV1,
+            window,
+            compact,
+        )
     });
     let claude_executable =
         get_env("COWBOY_ACP_CLAUDE_CODE_EXECUTABLE").filter(|value| !value.trim().is_empty());
@@ -410,7 +439,7 @@ fn spec_with_custom_default_args(
         // does NOT carry over. Provider-specific args may still apply, e.g.
         // Codex's default full-access config for a pre-installed adapter.
         Some(command) => LaunchSpec {
-            id,
+            id: id.to_owned(),
             command,
             args: arg_override.unwrap_or_else(|| {
                 custom_default_args
@@ -421,23 +450,34 @@ fn spec_with_custom_default_args(
             env: HashMap::new(),
             remove_env: Vec::new(),
             remove_env_prefixes: Vec::new(),
+            package_remove_env: std::collections::BTreeSet::new(),
+            package_remove_env_prefixes: std::collections::BTreeSet::new(),
         },
         // Default command (npx): `_ARGS` may still override the pinned adapter args.
         None => LaunchSpec {
-            id,
+            id: id.to_owned(),
             command: default_cmd.to_owned(),
             args: arg_override
                 .unwrap_or_else(|| default_args.iter().map(|s| (*s).to_owned()).collect()),
             env: HashMap::new(),
             remove_env: Vec::new(),
             remove_env_prefixes: Vec::new(),
+            package_remove_env: std::collections::BTreeSet::new(),
+            package_remove_env_prefixes: std::collections::BTreeSet::new(),
         },
     }
 }
 
-/// Look up a built-in provider's launch spec by id.
+/// Resolve the exact installed-package launch, or the legacy local fallback
+/// when no package path is present in this worker.
 #[must_use]
 pub fn lookup(id: &str) -> Option<LaunchSpec> {
+    if std::env::var_os("COWBOY_PROVIDER_PACKAGE_PATH").is_some() {
+        // Exact packages may require async sidecar readiness. The detached
+        // worker must use `prepare`; never degrade a corrupt package into the
+        // legacy table or start it without its signed process tree.
+        return None;
+    }
     let mut spec = builtin().remove(id)?;
     if id == "codex-deepseek" {
         match prepare_codex_deepseek_home() {
@@ -472,16 +512,430 @@ pub fn lookup(id: &str) -> Option<LaunchSpec> {
     Some(spec)
 }
 
-/// Whether a Cowboy provider uses the Codex ACP/runtime semantics.
-#[must_use]
-pub fn is_codex(id: &str) -> bool {
-    matches!(id, "codex" | "codex-deepseek")
+/// Resolve and prepare the complete process tree for one detached worker.
+/// Package-less sessions retain the bounded legacy launch path; exact signed
+/// packages additionally get linked components and session-owned sidecars.
+pub(crate) async fn prepare(id: &str) -> Result<PreparedLaunch> {
+    if std::env::var_os("COWBOY_PROVIDER_PACKAGE_PATH").is_none() {
+        let spec = lookup(id).with_context(|| format!("unknown provider {id:?}"))?;
+        return Ok(PreparedLaunch {
+            spec,
+            sidecars: Vec::new(),
+        });
+    }
+    prepare_package_launch(id).await
 }
 
-/// Whether a Cowboy provider uses Claude Code ACP/runtime semantics.
+/// Controller-side placeholder for an immutable Provider generation that will
+/// be resolved and launched by the selected Machine. No executable or secret
+/// crosses this boundary.
 #[must_use]
-pub fn is_claude(id: &str) -> bool {
-    matches!(id, "claude-code" | "claude-deepseek")
+pub fn remote_generation(id: &str) -> Option<LaunchSpec> {
+    let valid = !id.is_empty()
+        && id.len() <= 64
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+    valid.then(|| LaunchSpec {
+        id: id.to_owned(),
+        command: String::new(),
+        args: Vec::new(),
+        env: HashMap::new(),
+        remove_env: Vec::new(),
+        remove_env_prefixes: Vec::new(),
+        package_remove_env: std::collections::BTreeSet::new(),
+        package_remove_env_prefixes: std::collections::BTreeSet::new(),
+    })
+}
+
+/// Resolve a signed, Machine-validated Provider generation supplied to this
+/// worker and start every declared sidecar before the ACP adapter. All links
+/// are closed SDK values; no shell interpolation or Provider code is involved.
+async fn prepare_package_launch(id: &str) -> Result<PreparedLaunch> {
+    let package_path = PathBuf::from(
+        std::env::var_os("COWBOY_PROVIDER_PACKAGE_PATH")
+            .context("exact Provider worker has no package path")?,
+    );
+    let bytes = std::fs::read(&package_path)
+        .with_context(|| format!("reading Provider package {}", package_path.display()))?;
+    let package = cowboy_provider_sdk::ProviderPackage::from_bytes(&bytes)
+        .context("validating exact Provider process package")?;
+    ensure!(
+        package.manifest.id == id,
+        "Provider package identity mismatch: expected {id:?}, got {:?}",
+        package.manifest.id
+    );
+    let os = match std::env::consts::OS {
+        "linux" => cowboy_provider_sdk::OperatingSystem::Linux,
+        "macos" => cowboy_provider_sdk::OperatingSystem::Macos,
+        value => bail!("unsupported Provider worker operating system {value:?}"),
+    };
+    let architecture = match std::env::consts::ARCH {
+        "x86_64" => cowboy_provider_sdk::Architecture::X86_64,
+        "aarch64" => cowboy_provider_sdk::Architecture::Aarch64,
+        value => bail!("unsupported Provider worker architecture {value:?}"),
+    };
+    let payload = package
+        .manifest
+        .runtime
+        .platforms
+        .iter()
+        .find(|payload| payload.os == os && payload.architecture == architecture)
+        .context("Provider package does not support this worker platform")?;
+    let commands = verified_component_commands(&package_path, payload)?;
+    let command = commands
+        .get(&payload.launch_command)
+        .context("Provider launch command is absent from the Machine binding")?
+        .display()
+        .to_string();
+    if let Ok(machine_entrypoint) = std::env::var("COWBOY_PROVIDER_ENTRYPOINT") {
+        ensure!(
+            Path::new(&machine_entrypoint) == Path::new(&command),
+            "Machine Provider entrypoint disagrees with its component binding"
+        );
+    }
+
+    let mut sidecars = Vec::new();
+    let mut sidecar_urls = BTreeMap::new();
+    for sidecar in &package.manifest.runtime.sidecars {
+        let (child, url) = start_sidecar(sidecar, &package.manifest.runtime, payload, &commands)
+            .await
+            .with_context(|| format!("starting Provider sidecar {:?}", sidecar.id))?;
+        sidecars.push(child);
+        sidecar_urls.insert(sidecar.id.clone(), url);
+    }
+
+    let mut environment = HashMap::new();
+    for (name, value) in &package.manifest.runtime.environment {
+        environment.insert(
+            name.clone(),
+            resolve_runtime_value(value, payload, &commands, &sidecar_urls)?,
+        );
+    }
+    let sidecar_auth: BTreeSet<_> = package
+        .manifest
+        .runtime
+        .sidecars
+        .iter()
+        .flat_map(|sidecar| sidecar.auth_environment.iter())
+        .collect();
+    for name in package
+        .manifest
+        .authentication
+        .environment_projection
+        .keys()
+        .filter(|name| !sidecar_auth.contains(name))
+    {
+        let value = std::env::var(name)
+            .with_context(|| format!("Provider auth projection {name:?} is unavailable"))?;
+        environment.insert(name.clone(), value);
+    }
+    let arguments = package
+        .manifest
+        .runtime
+        .arguments
+        .iter()
+        .map(|value| resolve_runtime_value(value, payload, &commands, &sidecar_urls))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(PreparedLaunch {
+        spec: LaunchSpec {
+            id: package.manifest.id,
+            command,
+            args: arguments,
+            env: environment,
+            remove_env: Vec::new(),
+            remove_env_prefixes: Vec::new(),
+            package_remove_env: package.manifest.runtime.remove_environment,
+            package_remove_env_prefixes: package.manifest.runtime.remove_environment_prefixes,
+        },
+        sidecars,
+    })
+}
+
+fn verified_component_commands(
+    package_path: &Path,
+    payload: &PlatformPayload,
+) -> Result<BTreeMap<String, PathBuf>> {
+    let raw = std::env::var(crate::provider_behavior::COMPONENT_COMMANDS_ENV)
+        .context("Machine did not bind Provider component commands")?;
+    let supplied: BTreeMap<String, String> =
+        serde_json::from_str(&raw).context("decoding Machine Provider component commands")?;
+    ensure!(
+        supplied.len() == payload.private_components.len(),
+        "Machine Provider component command set is incomplete"
+    );
+    let content = package_path
+        .parent()
+        .context("Provider package has no generation content directory")?
+        .canonicalize()
+        .context("resolving Provider generation content directory")?;
+    let mut commands = BTreeMap::new();
+    for component in &payload.private_components {
+        let path = PathBuf::from(
+            supplied
+                .get(&component.command)
+                .with_context(|| format!("Machine did not bind {:?}", component.command))?,
+        );
+        ensure!(
+            path.is_absolute(),
+            "Provider component command is not absolute"
+        );
+        let path = path
+            .canonicalize()
+            .with_context(|| format!("resolving Provider component {}", path.display()))?;
+        ensure!(
+            path.starts_with(&content) && path.is_file(),
+            "Provider component command escaped its exact generation"
+        );
+        commands.insert(component.command.clone(), path);
+    }
+    ensure!(
+        supplied
+            .keys()
+            .all(|command| commands.contains_key(command)),
+        "Machine bound an undeclared Provider component command"
+    );
+    Ok(commands)
+}
+
+fn component_command<'a>(
+    component: &AuthComponent,
+    payload: &PlatformPayload,
+    commands: &'a BTreeMap<String, PathBuf>,
+) -> Result<&'a Path> {
+    let command = payload
+        .private_components
+        .iter()
+        .find(|candidate| candidate.kind == component.kind && candidate.slot == component.slot)
+        .context("Provider runtime references an unavailable component")?
+        .command
+        .as_str();
+    commands
+        .get(command)
+        .map(PathBuf::as_path)
+        .context("Provider runtime component command is not bound")
+}
+
+fn resolve_runtime_value(
+    value: &RuntimeValue,
+    payload: &PlatformPayload,
+    commands: &BTreeMap<String, PathBuf>,
+    sidecars: &BTreeMap<String, String>,
+) -> Result<String> {
+    let (prefix, value, suffix) = match value {
+        RuntimeValue::Literal(value) => return Ok(value.clone()),
+        RuntimeValue::Binding(RuntimeBinding::ComponentCommand {
+            component,
+            prefix,
+            suffix,
+        }) => (
+            prefix,
+            component_command(component, payload, commands)?
+                .display()
+                .to_string(),
+            suffix,
+        ),
+        RuntimeValue::Binding(RuntimeBinding::SidecarUrl {
+            sidecar,
+            prefix,
+            suffix,
+        }) => (
+            prefix,
+            sidecars
+                .get(sidecar)
+                .with_context(|| format!("Provider sidecar {sidecar:?} is not ready"))?
+                .clone(),
+            suffix,
+        ),
+    };
+    Ok(format!("{prefix}{value}{suffix}"))
+}
+
+async fn start_sidecar(
+    sidecar: &RuntimeSidecar,
+    runtime: &RuntimeContract,
+    payload: &PlatformPayload,
+    commands: &BTreeMap<String, PathBuf>,
+) -> Result<(tokio::process::Child, String)> {
+    ensure!(
+        sidecar.component.kind == PrivateComponentKind::ProviderGateway,
+        "Provider sidecar component is not a gateway"
+    );
+    let executable = component_command(&sidecar.component, payload, commands)?;
+    let RuntimeSidecarTransport::LoopbackHttpV1 {
+        listen_argument,
+        health_path,
+        timeout_ms,
+    } = &sidecar.transport;
+    let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .await
+        .context("allocating Provider sidecar loopback port")?;
+    let address = listener.local_addr()?;
+    drop(listener);
+    let base_url = format!("http://{address}");
+    let health_url = format!("{base_url}{health_path}");
+
+    let mut command = tokio::process::Command::new(executable);
+    command
+        .args(&sidecar.arguments)
+        .arg(listen_argument)
+        .arg(address.to_string())
+        .current_dir(
+            executable
+                .parent()
+                .context("Provider sidecar command has no parent directory")?,
+        )
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    for (name, _) in std::env::vars_os() {
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if runtime.remove_environment.contains(name)
+            || runtime
+                .remove_environment_prefixes
+                .iter()
+                .any(|prefix| name.starts_with(prefix))
+        {
+            command.env_remove(name);
+        }
+    }
+    command.envs(&sidecar.environment);
+    for name in &sidecar.auth_environment {
+        command.env(
+            name,
+            std::env::var(name)
+                .with_context(|| format!("Provider sidecar auth projection {name:?} is missing"))?,
+        );
+    }
+    let mut child = command
+        .spawn()
+        .with_context(|| format!("spawning Provider sidecar {}", executable.display()))?;
+    let deadline = Instant::now() + Duration::from_millis(*timeout_ms);
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(250))
+        .build()?;
+    loop {
+        if let Some(status) = child.try_wait().context("polling Provider sidecar")? {
+            bail!("Provider sidecar exited before readiness: {status}");
+        }
+        if client
+            .get(&health_url)
+            .send()
+            .await
+            .is_ok_and(|response| response.status().is_success())
+        {
+            return Ok((child, base_url));
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill().await;
+            bail!("Provider sidecar readiness timed out");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Read the exact package selected by the Machine for this worker. The package
+/// has already passed the Machine trust boundary; parsing it again keeps all
+/// worker-side behavior dispatch bound to the signed generation rather than to
+/// a user-visible Provider id.
+fn process_package(id: &str) -> Option<cowboy_provider_sdk::ProviderPackage> {
+    let path = std::env::var_os("COWBOY_PROVIDER_PACKAGE_PATH")?;
+    let bytes = std::fs::read(path).ok()?;
+    let package = cowboy_provider_sdk::ProviderPackage::from_bytes(&bytes).ok()?;
+    if package.manifest.id != id {
+        tracing::warn!(expected = id, actual = %package.manifest.id, "Provider package identity mismatch");
+        return None;
+    }
+    Some(package)
+}
+
+/// Display identity from the exact signed process package. Package-less legacy
+/// bridges deliberately fall back to the opaque id instead of a core name table.
+#[must_use]
+pub(crate) fn display_name(id: &str) -> String {
+    process_package(id)
+        .map(|package| package.manifest.display.name)
+        .unwrap_or_else(|| id.to_owned())
+}
+
+/// Closed host behavior selected by the signed Provider package. Embedded
+/// sources are consulted only for package-less sessions created before schema v1.
+#[must_use]
+pub fn behavior(id: &str) -> cowboy_provider_sdk::ProviderBehaviorContract {
+    if std::env::var_os("COWBOY_PROVIDER_PACKAGE_PATH").is_some() {
+        return process_package(id)
+            .map(|package| package.manifest.runtime.behavior)
+            .unwrap_or_else(|| legacy_behavior(""));
+    }
+    legacy_behavior(id)
+}
+
+/// Whether a Provider selected ACP config-option full-access mediation.
+#[must_use]
+pub fn uses_config_full_access(id: &str) -> bool {
+    behavior(id).permission == cowboy_provider_sdk::PermissionBehavior::AcpConfigFullAccessV1
+}
+
+/// Whether a Provider selected ACP's bypass-permissions session mode.
+#[must_use]
+pub fn uses_bypass_permissions_session_mode(id: &str) -> bool {
+    behavior(id).permission
+        == cowboy_provider_sdk::PermissionBehavior::AcpSessionModeBypassPermissionsV1
+}
+
+/// Whether a Provider selected stable preset metadata for ACP sessions.
+#[must_use]
+pub fn uses_stable_preset_system_prompt(id: &str) -> bool {
+    behavior(id).session == cowboy_provider_sdk::SessionBehavior::StablePresetSystemPromptV1
+}
+
+/// Whether a Provider selected the versioned xAI ACP extension interface.
+#[must_use]
+pub fn uses_xai_session_extensions(id: &str) -> bool {
+    behavior(id).session == cowboy_provider_sdk::SessionBehavior::XaiSessionV1
+}
+
+/// Whether a Provider selected ACP's yolo session-mode interface.
+#[must_use]
+pub fn uses_yolo_session_mode(id: &str) -> bool {
+    behavior(id).permission == cowboy_provider_sdk::PermissionBehavior::AcpSessionModeYoloV1
+}
+
+#[must_use]
+pub fn keeps_worker_alive_for_behavior(
+    behavior: &cowboy_provider_sdk::ProviderBehaviorContract,
+    detail: &str,
+) -> bool {
+    behavior
+        .matching_error_rule(detail)
+        .is_some_and(|rule| rule.keep_worker_alive)
+}
+
+#[must_use]
+pub fn should_retry_without_visible_update(
+    behavior: &cowboy_provider_sdk::ProviderBehaviorContract,
+    detail: &str,
+    visible_update: bool,
+    retries: usize,
+) -> bool {
+    !visible_update
+        && retries == 0
+        && behavior
+            .matching_error_rule(detail)
+            .is_some_and(|rule| rule.retry_once_without_visible_update)
+}
+
+#[must_use]
+pub fn user_facing_startup_error(
+    behavior: &cowboy_provider_sdk::ProviderBehaviorContract,
+    detail: &str,
+) -> Option<String> {
+    behavior
+        .matching_error_rule(detail)
+        .and_then(|rule| rule.user_detail.clone())
 }
 
 /// Entries a DeepSeek provider shares with the runtime's ordinary home.

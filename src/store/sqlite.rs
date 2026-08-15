@@ -68,6 +68,10 @@ struct SqliteMachineRow {
 struct SqliteSessionRow {
     id: String,
     provider: String,
+    provider_version: String,
+    provider_generation_digest: String,
+    provider_auth_generation: Option<i64>,
+    provider_behavior: Option<serde_json::Value>,
     machine_id: String,
     workspace_id: Option<String>,
     workspace_name: Option<String>,
@@ -1261,6 +1265,14 @@ impl SqliteSessionRow {
         SessionMeta {
             id: self.id,
             provider: self.provider,
+            provider_version: self.provider_version,
+            provider_generation_digest: self.provider_generation_digest,
+            provider_auth_generation: self
+                .provider_auth_generation
+                .and_then(|value| u64::try_from(value).ok()),
+            provider_behavior: self
+                .provider_behavior
+                .and_then(|value| serde_json::from_value(value).ok()),
             machine_id: self.machine_id,
             workspace_id: self.workspace_id,
             workspace_name: self.workspace_name,
@@ -1408,7 +1420,9 @@ impl SqliteStorage {
         &self,
         token: &str,
         public_key: &str,
+        encryption_public_key: &str,
     ) -> Result<EnrolledMachine> {
+        validate_encryption_public_key(encryption_public_key)?;
         let mut transaction = self
             .pool
             .begin()
@@ -1430,18 +1444,21 @@ impl SqliteStorage {
             row.context("invalid, expired, or already used enrollment token")?;
         let result = sqlx::query(
             "INSERT INTO machines \
-             (id, display_name, connection_mode, platform, architecture, status, public_key, enrolled_at_ms) \
-             VALUES (?1, ?2, 'outbound_wss', 'unknown', 'unknown', 'offline', ?3, ?4) \
+             (id, display_name, connection_mode, platform, architecture, status, public_key, \
+              encryption_public_key, enrolled_at_ms) \
+             VALUES (?1, ?2, 'outbound_wss', 'unknown', 'unknown', 'offline', ?3, ?4, ?5) \
              ON CONFLICT (id) DO UPDATE SET display_name = excluded.display_name, \
              connection_mode = 'outbound_wss', public_key = excluded.public_key, \
-             enrolled_at_ms = ?4, revoked_at_ms = NULL, status = 'offline', \
-             connection_epoch = NULL, reconnect_deadline_at_ms = NULL, updated_at_ms = ?4 \
+             encryption_public_key = excluded.encryption_public_key, \
+             enrolled_at_ms = ?5, revoked_at_ms = NULL, status = 'offline', \
+             connection_epoch = NULL, reconnect_deadline_at_ms = NULL, updated_at_ms = ?5 \
              WHERE machines.public_key IS NULL OR \
              (machines.revoked_at_ms IS NOT NULL AND machines.public_key IS NOT excluded.public_key)",
         )
         .bind(&id)
         .bind(&display_name)
         .bind(public_key)
+        .bind(encryption_public_key)
         .bind(timestamp)
         .execute(&mut *transaction)
         .await
@@ -1471,6 +1488,44 @@ impl SqliteStorage {
         .await
         .context("loading Machine public key")?;
         Ok(value.flatten())
+    }
+
+    pub(super) async fn machine_encryption_public_key(
+        &self,
+        machine_id: &str,
+    ) -> Result<Option<String>> {
+        let value: Option<Option<String>> = sqlx::query_scalar(
+            "SELECT encryption_public_key FROM machines WHERE id = ?1 AND revoked_at_ms IS NULL",
+        )
+        .bind(machine_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("loading SQLite Machine encryption public key")?;
+        Ok(value.flatten())
+    }
+
+    pub(super) async fn bind_machine_encryption_public_key(
+        &self,
+        machine_id: &str,
+        encryption_public_key: &str,
+    ) -> Result<()> {
+        validate_encryption_public_key(encryption_public_key)?;
+        let result = sqlx::query(
+            "UPDATE machines SET encryption_public_key = ?2, updated_at_ms = ?3 \
+             WHERE id = ?1 AND revoked_at_ms IS NULL \
+             AND (encryption_public_key IS NULL OR encryption_public_key = ?2)",
+        )
+        .bind(machine_id)
+        .bind(encryption_public_key)
+        .bind(now_ms())
+        .execute(&self.pool)
+        .await
+        .context("binding Machine encryption public key")?;
+        anyhow::ensure!(
+            result.rows_affected() == 1,
+            "Machine encryption public key changed; revoke and re-enroll the Machine"
+        );
+        Ok(())
     }
 
     pub(super) async fn list_machines(&self) -> Result<Vec<MachineRecord>> {
@@ -1850,7 +1905,8 @@ impl SqliteStorage {
 
     pub(super) async fn load_all(&self) -> Result<Vec<LoadedSession>> {
         let session_rows: Vec<SqliteSessionRow> = sqlx::query_as(
-            "SELECT id, provider, machine_id, workspace_id, workspace_name, workspace_source_path, \
+            "SELECT id, provider, provider_version, provider_generation_digest, \
+             provider_auth_generation, provider_behavior, machine_id, workspace_id, workspace_name, workspace_source_path, \
              cwd, title, origin, status, agent_session_id, auto_resume, \
              awaiting_user, done, system, next_seq, queue, drafts, judge_runs, \
              config_options, config_preferences, mobile_review_state, created_at_ms \
@@ -2157,12 +2213,25 @@ impl SqliteStorage {
 
     pub(super) async fn insert_session(&self, meta: &SessionMeta) -> Result<()> {
         sqlx::query(
-            "INSERT INTO sessions(id, provider, machine_id, workspace_id, workspace_name, \
+            "INSERT INTO sessions(id, provider, provider_version, provider_generation_digest, \
+             provider_auth_generation, provider_behavior, machine_id, workspace_id, workspace_name, \
              workspace_source_path, cwd, title, origin, status, next_seq, system) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0, ?11)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0, ?15)",
         )
         .bind(&meta.id)
         .bind(&meta.provider)
+        .bind(&meta.provider_version)
+        .bind(&meta.provider_generation_digest)
+        .bind(
+            meta.provider_auth_generation
+                .and_then(|value| i64::try_from(value).ok()),
+        )
+        .bind(
+            meta.provider_behavior
+                .as_ref()
+                .map(serde_json::to_value)
+                .transpose()?,
+        )
         .bind(&meta.machine_id)
         .bind(meta.workspace_id.as_deref())
         .bind(meta.workspace_name.as_deref())
@@ -2524,15 +2593,73 @@ impl SqliteStorage {
         Ok(())
     }
 
+    pub(super) async fn soft_delete_sessions_until(
+        &self,
+        session_ids: &[String],
+        purge_after_ms: i64,
+    ) -> Result<()> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("begin Provider uninstall")?;
+        let timestamp = now_ms();
+        for session_id in session_ids {
+            let result = sqlx::query(
+                "UPDATE sessions SET deleted_at_ms = ?2, purge_after_at_ms = ?3 \
+                 WHERE id = ?1 AND deleted_at_ms IS NULL",
+            )
+            .bind(session_id)
+            .bind(timestamp)
+            .bind(purge_after_ms)
+            .execute(&mut *transaction)
+            .await
+            .with_context(|| format!("soft-delete Provider session {session_id}"))?;
+            anyhow::ensure!(
+                result.rows_affected() == 1,
+                "Provider uninstall session set changed; refresh the uninstall plan"
+            );
+        }
+        transaction
+            .commit()
+            .await
+            .context("commit Provider uninstall")?;
+        Ok(())
+    }
+
     pub(super) async fn purge_deleted(&self, retention_days: i64) -> Result<u64> {
-        let cutoff = now_ms().saturating_sub(retention_days.saturating_mul(86_400_000));
+        let retention_ms = retention_days.saturating_mul(86_400_000);
         let result = sqlx::query(
-            "DELETE FROM sessions WHERE deleted_at_ms IS NOT NULL AND deleted_at_ms < ?1",
+            "DELETE FROM sessions WHERE deleted_at_ms IS NOT NULL \
+             AND COALESCE(purge_after_at_ms, deleted_at_ms + ?1) <= ?2",
         )
-        .bind(cutoff)
+        .bind(retention_ms)
+        .bind(now_ms())
         .execute(&self.pool)
         .await
         .context("purge soft-deleted SQLite sessions")?;
+        let mut referenced = HashSet::new();
+        let mut rows =
+            sqlx::query("SELECT payload FROM events WHERE payload LIKE '%/api/artifacts/%'")
+                .fetch(&self.pool);
+        while let Some(row) = rows
+            .try_next()
+            .await
+            .context("scan retained SQLite artifact references")?
+        {
+            let payload: serde_json::Value = row.try_get("payload")?;
+            crate::artifacts::collect_references(&payload, &mut referenced);
+        }
+        let artifacts_removed = self
+            .artifacts
+            .prune_unreferenced(&referenced, Duration::from_hours(24))
+            .context("prune unreferenced SQLite event artifacts")?;
+        if artifacts_removed > 0 {
+            tracing::info!(
+                artifacts_removed,
+                "purged unreferenced SQLite event artifacts"
+            );
+        }
         Ok(result.rows_affected())
     }
 

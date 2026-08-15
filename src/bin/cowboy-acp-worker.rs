@@ -12,6 +12,12 @@ struct Args {
     session_id: String,
     #[arg(long)]
     provider: String,
+    #[arg(long, default_value = "")]
+    provider_version: String,
+    #[arg(long, default_value = "")]
+    provider_generation_digest: String,
+    #[arg(long)]
+    provider_auth_generation: Option<u64>,
     #[arg(long)]
     cwd: PathBuf,
     #[arg(long)]
@@ -41,6 +47,9 @@ async fn main() -> anyhow::Result<()> {
         socket: args.socket,
         session_id: args.session_id,
         provider: args.provider,
+        provider_version: args.provider_version,
+        provider_generation_digest: args.provider_generation_digest,
+        provider_auth_generation: args.provider_auth_generation,
         cwd: args.cwd,
         resume: args.resume,
         system: args.system,

@@ -1,11 +1,15 @@
 # Multi-machine runtime
 
-> **Provider packaging transition:** the `acp-runtime`, `provider-adapter`, and
-> `provider-cli` slots below describe the current internal rollout machinery.
-> The target product groups their exact pins into one independently released,
-> Machine-scoped Provider package. Ordinary UI installs, upgrades, and uninstalls
-> that Provider unit and does not expose ACP or adapter slots. See
-> [Installable Provider packages](../provider-packages.md).
+> **Provider packaging boundary:** `acp-runtime`, `provider-adapter`, and
+> `provider-cli` slots below describe only legacy rollout machinery and scoped
+> diagnostics. New releases bind their exact per-platform runtime artifacts
+> inside one independently released, Machine-scoped Provider generation.
+> Ordinary UI installs, upgrades, and uninstalls that Provider unit and does not
+> expose ACP or adapter slots. See
+> [Cowboy core requirements](../requirements.md) and
+> [Installable Provider packages](../provider-packages.md). Authentication is a
+> separate Cowboy Service-level contract: Machines receive automatic credential
+> replicas and never own an independent Provider login.
 
 Cowboy evolves from one Hawk-local runtime into a control plane that can route
 sessions and code-intelligence work to independently operated macOS and Linux
@@ -58,8 +62,9 @@ length-bounded application frames over WebSocket/TLS.
 - atomic generation activation, health probes, drain, and rollback;
 - process supervision, per-runtime state roots, logs, and resource reporting;
 - the existing detached ACP worker pool and its replay/fencing contract;
-- provider and Zed authentication orchestration without reading credentials
-  into Cowboy's database or event stream.
+- application, validation, acknowledgement, and wipe of Service-issued sealed
+  Provider credential replicas without placing plaintext credentials in
+  Cowboy's database or event stream;
 
 It does **not** contain provider-specific UI rules or Zed protocol logic. The
 transitional implementation stores those executable concerns in independently
@@ -112,7 +117,8 @@ shell's `PATH`, Homebrew state, or `npx latest` in the session-start path:
 ```text
 payloads/<component>/<version>/<digest>/...
 active/<component> -> ../../payloads/<component>/<version>/<digest>
-state/<provider>/...       # provider-owned auth/config, mode 0700
+state/<provider>/...       # projected runtime config, mode 0700
+auth-replicas/<provider>/<generation>/...  # Service-issued sealed replica
 ```
 
 - **Codex:** prefer the official standalone macOS/Linux release artifact. It is
@@ -133,10 +139,35 @@ Linux therefore use the same lifecycle. Brew/Nix may bootstrap
 
 ## Authentication
 
-Credentials stay on the execution machine in provider-owned state. Cowboy only
-stores and displays a redacted status such as `signed_out`, `pending`,
-`signed_in`, `expired`, or `error`, plus non-secret account labels returned by
-the provider.
+Provider login is owned by the Cowboy Service, not by an execution Machine. The
+Service runs one Provider login flow, stores the portable credential bundle in
+an encrypted vault, assigns a monotonic `auth_generation`, and automatically
+reconciles that generation to every enrolled, authorized, non-revoked Machine.
+Each bundle is sealed to the Machine enrollment key. Plaintext credentials never
+enter ordinary database rows, inventory, logs, telemetry, or UI events.
+
+A Machine owns only replica convergence: `pending`, `storing`, `current`,
+`failed`, or `revoking`, plus materialization `not-installed`, `applying`,
+`current`, or `failed`. Every Machine acknowledges sealed replica storage. A
+Machine with the Provider installed separately validates the typed projection
+schema, atomically materializes official runtime state, probes it, and
+acknowledges materialization. These are diagnostic health, not `signed_in` or
+`signed_out`. The Service owns the single redacted authentication state, account
+label, and aggregate distribution status. An offline Machine degrades
+distribution without changing an otherwise valid Service login.
+
+Online Machines converge during login. Offline Machines converge on reconnect,
+and a newly enrolled Machine receives the current generation automatically. A
+Provider install consumes the already synchronized replica and never asks for a
+second login. Logout blocks new sessions, invalidates the Service generation,
+and sends an automatic wipe or revocation generation to every Machine.
+
+Credential refresh is also Service-authoritative. A Provider either refreshes
+inside the Service and issues bounded projections or submits a sealed candidate
+through compare-and-swap; Cowboy commits one next generation and redistributes
+it. A Provider whose upstream credential cannot be safely exported, brokered,
+or exchanged is incompatible rather than allowed to fall back to Machine login.
+See [Service-scoped authentication](../provider-packages.md#service-scoped-authentication).
 
 ### Provider usage ledger
 
@@ -288,11 +319,13 @@ descendant revert, not a schema downgrade. Automatic predecessor restoration
 inside one failed activation remains valid because it occurs before that
 candidate is recorded as the successful active revision.
 
-DeepSeek credentials and mutable runtime state remain independent per agent
-lane. The provider adapter may collapse duplicate official balances only when
-both gateways report the same irreversible account fingerprint; distinct
-accounts stay separate. Cowboy-measured usage spans credential rotation because
-it describes calls made through Cowboy, not one current account balance.
+DeepSeek credentials and mutable runtime state remain independent per Provider
+lane. `claude-deepseek` and `codex-deepseek` therefore have separate Service auth
+records and generation lineages even if their upstream account happens to match.
+The provider adapter may collapse duplicate official balances only when both
+gateways report the same irreversible account fingerprint; distinct accounts
+stay separate. Cowboy-measured usage spans credential rotation because it
+describes calls made through Cowboy, not one current account balance.
 
 Cache tuning starts only after each lane has at least seven days and 100
 verified requests. Compare hit tokens, verified coverage, compact frequency,
@@ -301,22 +334,27 @@ before changing prompt or compaction behavior. Reject an optimization if agent
 quality regresses, cache coverage falls, errors rise, or the apparent gain comes
 only from legacy or missing observations.
 
-Login is capability-driven:
+Login remains capability-driven, but the capability runs at Cowboy Service
+scope:
 
-- Codex App Server exposes account status plus a device-code flow. The Machine
-  Agent returns the verification URL and user code to Cowboy; Mobile opens the
-  URL and shows a copyable code, then listens for completion.
-- Claude owns its browser login flow. The Machine captures both output streams,
-  extracts only the verification URL/code, and leaves credentials in the
-  official CLI's state. Cowboy must not scrape or copy token files.
-- Gemini currently has no stable login/status subcommand. Its OAuth or API-key
-  setup remains in the official CLI on that Machine. Cowboy infers only a
-  redacted readiness state from the selected auth method, credential-file
-  presence, and relevant environment presence; it never reads credential
-  contents. Machines gives the exact local remediation and refreshes status.
+- Codex's device-code URL and user code are produced by the Provider's Service
+  auth driver. Completion creates one portable Service credential generation,
+  not the account of whichever Machine happened to run a helper.
+- Claude's browser flow is mediated by its Service auth driver. A Provider
+  release cannot claim compatibility until it can transform the result into a
+  typed portable bundle or a safe Service-brokered projection; leaving it only
+  in one CLI state directory is transitional behavior.
+- Gemini's API-key or supported Enterprise flow is entered once through the
+  Provider's Service surface. The typed auth contract validates the non-secret
+  project requirements and defines the Machine projection. Missing upstream
+  export or status APIs are compatibility blockers, not reasons to expose local
+  Machine remediation.
 
-Every login request has an id, expiry, cancellation, and one active owner.
-Login frames are never replayed into a different UI client after expiry.
+Every Service login request has an id, expiry, cancellation, one active owner,
+and one resulting generation. Login frames are never replayed into a different
+UI client after expiry. Credential material is never copied through UI events;
+only the auth driver, encrypted vault, and sealed Machine projection path may
+handle it.
 
 ## Enrollment and transport security
 
@@ -371,9 +409,10 @@ worktree failure aborts creation instead of falling back to the source root.
 
 There are three deliberately separate compatibility contracts:
 
-1. **Machine control protocol:** identity, inventory, component reconciliation,
-   login actions, health, and multiplexed runtime frames. Additive v1 fields
-   default safely; min/max negotiation rejects non-overlap.
+1. **Machine control protocol:** identity, inventory, legacy component
+   reconciliation, Provider install/uninstall, Service auth-replica
+   apply/ack/wipe, health, and multiplexed runtime frames. Min/max negotiation
+   rejects non-overlap.
 2. **ACP runtime protocol:** the existing `runtime_wire` contract between the
    controller and detached workers. Machine transport carries these frames
    without reinterpreting ACP updates.
@@ -393,16 +432,19 @@ recently used healthy compatible machine. A machine is selectable only when it
 reports:
 
 - online and not draining;
-- the requested provider capability installed and authenticated;
+- the requested Provider generation installed and healthy;
+- the Cowboy Service authentication ready when required and the Machine's
+  replica acknowledgement equal to the current `auth_generation`;
 - the selected workspace available and trusted;
 - compatible machine/runtime protocol versions;
 - sufficient free capacity for a new worker.
 
 Once created, a session never silently migrates to another machine: the agent's
-native session store, session worktree, credentials, and running tools are local. A
-future explicit migration operation must first prove provider resume support,
-workspace identity, and credential compatibility. Offline sessions remain
-bound and show a recoverable Machine Offline state.
+native session store, session worktree, materialized credential replica, and
+running tools are local. A future explicit migration operation must first prove
+Provider resume support, workspace identity, Provider-generation compatibility,
+and current Service auth-generation convergence. Offline sessions remain bound
+and show a recoverable Machine Offline state.
 
 ## Update coordination
 
@@ -434,30 +476,40 @@ enrolled online machine before removing an old version.
   refreshes the other two from that machine's capability snapshot. Current
   machine is preselected.
 - Machines lists connectivity, platform/architecture, capacity, allowed
-  workspaces, Provider install/auth/version/health state, Zed generations,
-  pending updates, and last error. ACP and adapter generations move to an
-  explicitly scoped developer-diagnostics surface during Provider-package
-  migration.
-- Login and update actions are explicit sheets/dialogs with progress and
-  cancellation. Secret material is never rendered after submission.
+  workspaces, Provider install/version/health state, auth-replica convergence,
+  Zed generations, pending updates, and last error. Replica convergence is
+  diagnostic health, not a login control. Legacy ACP and adapter component
+  generations appear only in an explicitly scoped developer-diagnostics
+  surface.
+- Providers shows one Service-level login/logout state and action per Provider,
+  with aggregate Machine distribution progress. Machine surfaces never ask for
+  credentials or expose a separate account selector. Secret material is never
+  rendered after submission.
+- Install and update actions are explicit sheets/dialogs with progress and
+  cancellation.
 - Offline, incompatible, draining, and revoked are visually distinct and carry
   a concrete remediation action.
 
 ## Implemented boundary
 
-The controller and Machine now implement immutable session placement, outbound
+The Controller and Machine implement immutable session placement, outbound
 authenticated WSS enrollment, epoch fencing, runtime replay, session-owned Git
-worktrees from trusted remote workspaces, provider inventory/login actions, signed independently activated
-components, Code Adapter routing, isolated Zed adapter/server supervision,
-capacity/drain-aware scheduling, Machines UI, and user-scoped macOS/Linux
-installation. The stable Machine wire remains additive and distinct from ACP
-runtime and Zed adapter contracts.
+worktrees from trusted remote workspaces, dynamic Provider inventory and exact
+generation launch, signed Provider runtime staging, Code Adapter routing,
+isolated Zed adapter/server supervision, capacity/drain-aware scheduling,
+Machines UI, and user-scoped macOS/Linux installation. Provider login is
+Service-owned: one encrypted monotonic generation is sealed and reconciled to
+every enrolled Machine, while Machine UI exposes only replica/materialization
+health. The old Machine login API and ordinary UI are removed. The stable
+Machine wire remains additive and distinct from private Provider transport and
+Zed adapter contracts.
 
 Operational rollout is deliberately separate from implementation. A target is
 selectable only after its one-time enrollment, signed desired manifest,
-provider login, workspace declaration, and capacity report are healthy. An
-unreachable target remains offline; Cowboy never falls back to a different
-machine or silently runs its session on Hawk.
+Provider installation, current Service auth-replica acknowledgement when
+required, workspace declaration, and capacity report are healthy. An unreachable
+target remains offline; Cowboy never falls back to a different machine or
+silently runs its session on Hawk.
 
 ## Upstream contracts
 

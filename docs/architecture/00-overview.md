@@ -10,6 +10,11 @@ is deployed through NixOS systemd units on hawk (`:3333`).
 Operational growth and migration constraints are documented in
 [`11-operations.md`](11-operations.md).
 
+The normative Provider-platform contract is
+[Cowboy core requirements](../requirements.md). It defines Provider package,
+typed UI, per-Machine installation, Service-owned authentication, and uninstall
+ownership. This chapter describes its running implementation.
+
 This document set is the **source of truth for the implementation as it stands**
 — it describes the code, not the original design draft (`design.md`, which
 predates the code and reads as a pre-flight plan).

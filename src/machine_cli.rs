@@ -21,6 +21,7 @@ use crate::machine_protocol::{
     ConnectionMode, MACHINE_PROTOCOL_VERSION, MIN_MACHINE_PROTOCOL_VERSION, MachineCapacity,
     MachineCommand, MachineEvent, MachineFrame, MachineHello, MachineWorkspace, Platform,
 };
+use crate::machine_providers::MachineProviderStore;
 
 struct LoginSession {
     cancel: tokio::sync::watch::Sender<bool>,
@@ -43,6 +44,7 @@ struct ControllerConfig {
     runtime_socket: PathBuf,
     workspaces: Arc<WorkspaceConfig>,
     components: Arc<ComponentStore>,
+    providers: Arc<MachineProviderStore>,
     zed_adapter_socket: Option<PathBuf>,
     code_adapter_socket: Option<PathBuf>,
     worktree_root: PathBuf,
@@ -215,6 +217,7 @@ pub struct Args {
 struct EnrollmentRequest<'a> {
     token: &'a str,
     public_key: &'a str,
+    encryption_public_key: &'a str,
 }
 
 #[derive(Deserialize)]
@@ -260,6 +263,11 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
         args.artifact_public_key.as_deref(),
         bootstrap_acp_generation.clone(),
     )?);
+    let providers = Arc::new(MachineProviderStore::new(
+        &args.state_dir,
+        current_platform(),
+        std::env::consts::ARCH.to_owned(),
+    )?);
     let active_acp = components
         .active()?
         .into_iter()
@@ -281,6 +289,7 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
             CliSpawnMode::SystemdUser => SpawnMode::SystemdUser,
         },
         worker_environment,
+        provider_store: Arc::clone(&providers),
         worktree_root: worktree_root.clone(),
         worker_ready_timeout: std::time::Duration::from_secs(args.worker_ready_timeout_seconds),
     };
@@ -306,7 +315,13 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
         .as_deref()
         .or(file_token.as_deref().map(str::trim))
     {
-        enroll(&controller_url, token, identity.public_key()).await?;
+        enroll(
+            &controller_url,
+            token,
+            identity.public_key(),
+            providers.encryption_public_key(),
+        )
+        .await?;
         if let Some(path) = args.enrollment_token_file.as_ref() {
             std::fs::remove_file(path).context("removing consumed enrollment token file")?;
         }
@@ -324,6 +339,7 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
         runtime_socket,
         workspaces: Arc::clone(&workspaces),
         components: Arc::clone(&components),
+        providers,
         zed_adapter_socket: zed_adapter_socket.clone(),
         code_adapter_socket: code_adapter_socket.clone(),
         worktree_root,
@@ -672,14 +688,23 @@ fn default_display_name() -> String {
         .unwrap_or_else(|| "Cowboy Machine".to_owned())
 }
 
-async fn enroll(controller_url: &str, token: &str, public_key: &str) -> anyhow::Result<()> {
+async fn enroll(
+    controller_url: &str,
+    token: &str,
+    public_key: &str,
+    encryption_public_key: &str,
+) -> anyhow::Result<()> {
     let endpoint = format!(
         "{}/api/machine/enroll",
         controller_url.trim_end_matches('/')
     );
     let response = reqwest::Client::new()
         .post(endpoint)
-        .json(&EnrollmentRequest { token, public_key })
+        .json(&EnrollmentRequest {
+            token,
+            public_key,
+            encryption_public_key,
+        })
         .send()
         .await
         .context("sending Machine enrollment")?
@@ -729,6 +754,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
         challenge_id,
         nonce,
         expires_at_ms,
+        proof_version,
     } = challenge
     else {
         bail!("controller did not begin with a challenge");
@@ -753,14 +779,19 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
         host_build: env!("CARGO_PKG_VERSION").to_owned(),
         challenge_id: Some(challenge_id.clone()),
         challenge_signature: None,
+        encryption_public_key: Some(config.providers.encryption_public_key().to_owned()),
         components: collect_inventory(&config.components, config.zed_adapter_socket.as_deref())
             .await,
+        providers: config.providers.inventory()?,
         workspaces: workspace_snapshot.workspaces,
         workspace_revision: workspace_snapshot.revision,
         capacity: config.capacity.clone(),
     };
-    let proof =
-        crate::machine_protocol::challenge_proof_v1(&challenge_id, &nonce, expires_at_ms, &hello);
+    let proof = if proof_version >= 2 {
+        crate::machine_protocol::challenge_proof_v2(&challenge_id, &nonce, expires_at_ms, &hello)
+    } else {
+        crate::machine_protocol::challenge_proof_v1(&challenge_id, &nonce, expires_at_ms, &hello)
+    };
     hello.challenge_signature = Some(config.identity.sign(&proof)?);
     send_frame(&mut socket, &MachineFrame::Hello { hello }).await?;
     let MachineFrame::Welcome {
@@ -854,6 +885,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                                 handle_machine_command(command, MachineCommandContext {
                                     events: event_tx.clone(),
                                     components: Arc::clone(&config.components),
+                                    providers: Arc::clone(&config.providers),
                                     zed_adapter_socket: config.zed_adapter_socket.clone(),
                                     code_adapter_socket: config.code_adapter_socket.clone(),
                                     worktree_root: config.worktree_root.clone(),
@@ -1093,7 +1125,7 @@ async fn collect_inventory(
             } else {
                 ComponentState::Missing
             },
-            version: String::new(),
+            version: "0.2.0".to_owned(),
             generation: String::new(),
             digest: String::new(),
             rollback_generation: None,
@@ -1123,7 +1155,7 @@ async fn collect_inventory(
             } else {
                 ComponentState::Missing
             },
-            version: String::new(),
+            version: "0.1.0".to_owned(),
             generation: String::new(),
             digest: String::new(),
             rollback_generation: None,
@@ -1626,6 +1658,7 @@ fn gemini_auth_from_metadata(
 struct MachineCommandContext {
     events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
     components: Arc<ComponentStore>,
+    providers: Arc<MachineProviderStore>,
     zed_adapter_socket: Option<PathBuf>,
     code_adapter_socket: Option<PathBuf>,
     worktree_root: PathBuf,
@@ -1638,6 +1671,7 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
     let MachineCommandContext {
         events,
         components,
+        providers,
         zed_adapter_socket,
         code_adapter_socket,
         worktree_root,
@@ -1658,6 +1692,10 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
                         workspace_revision: snapshot.revision.clone(),
                         observed_at_ms: unix_ms(),
                     });
+                    let _ = events.send(MachineEvent::ProviderInventory {
+                        providers: providers.inventory().unwrap_or_default(),
+                        observed_at_ms: unix_ms(),
+                    });
                 }
                 let _ = events.send(MachineEvent::CommandResult {
                     request_id,
@@ -1666,6 +1704,126 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
                         .err()
                         .map(|error| format!("workspace configuration reload failed: {error:#}")),
                 });
+            });
+        }
+        MachineCommand::InstallProvider {
+            request_id,
+            provider,
+        } => {
+            tokio::spawn(async move {
+                let result = providers.install(&provider).await;
+                let accepted = result.is_ok();
+                let detail = result.as_ref().err().map(|error| format!("{error:#}"));
+                let _ = events.send(MachineEvent::ProviderInventory {
+                    providers: providers.inventory().unwrap_or_default(),
+                    observed_at_ms: unix_ms(),
+                });
+                let _ = events.send(MachineEvent::CommandResult {
+                    request_id,
+                    accepted,
+                    detail,
+                });
+            });
+        }
+        MachineCommand::UninstallProvider {
+            request_id,
+            provider_id,
+            generation_digest,
+        } => {
+            tokio::spawn(async move {
+                let result = providers.uninstall(&provider_id, &generation_digest).await;
+                let accepted = result.is_ok();
+                let detail = result.err().map(|error| format!("{error:#}"));
+                let _ = events.send(MachineEvent::ProviderInventory {
+                    providers: providers.inventory().unwrap_or_default(),
+                    observed_at_ms: unix_ms(),
+                });
+                let _ = events.send(MachineEvent::CommandResult {
+                    request_id,
+                    accepted,
+                    detail,
+                });
+            });
+        }
+        MachineCommand::ReactivateProvider {
+            request_id,
+            provider_id,
+            generation_digest,
+        } => {
+            tokio::spawn(async move {
+                let result = providers.reactivate(&provider_id, &generation_digest).await;
+                let accepted = result.is_ok();
+                let detail = result.err().map(|error| format!("{error:#}"));
+                let _ = events.send(MachineEvent::ProviderInventory {
+                    providers: providers.inventory().unwrap_or_default(),
+                    observed_at_ms: unix_ms(),
+                });
+                let _ = events.send(MachineEvent::CommandResult {
+                    request_id,
+                    accepted,
+                    detail,
+                });
+            });
+        }
+        MachineCommand::ApplyProviderAuth {
+            request_id,
+            envelope,
+        } => {
+            tokio::spawn(async move {
+                match providers.apply_auth(&envelope).await {
+                    Ok(receipt) => {
+                        let _ = events.send(MachineEvent::ProviderAuthReceipt {
+                            request_id: request_id.clone(),
+                            provider_id: receipt.provider_id,
+                            auth_generation: receipt.auth_generation,
+                            replica_state: receipt.replica_state,
+                            materialization_state: receipt.materialization_state,
+                            detail: None,
+                        });
+                        let _ = events.send(MachineEvent::ProviderInventory {
+                            providers: providers.inventory().unwrap_or_default(),
+                            observed_at_ms: unix_ms(),
+                        });
+                        let _ = events.send(MachineEvent::CommandResult {
+                            request_id,
+                            accepted: true,
+                            detail: None,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = events.send(MachineEvent::ProviderAuthReceipt {
+                            request_id: request_id.clone(),
+                            provider_id: envelope.provider_id.clone(),
+                            auth_generation: envelope.auth_generation,
+                            replica_state: crate::machine_protocol::ProviderReplicaState::Failed,
+                            materialization_state:
+                                crate::machine_protocol::ProviderMaterializationState::Failed,
+                            detail: Some(format!("{error:#}")),
+                        });
+                        let _ = events.send(MachineEvent::CommandResult {
+                            request_id,
+                            accepted: false,
+                            detail: Some(format!("{error:#}")),
+                        });
+                    }
+                }
+            });
+        }
+        MachineCommand::FinalizeProviderAuthCandidate {
+            request_id,
+            provider_id,
+            auth_method,
+            candidate_request_id,
+        } => {
+            let result = providers.finalize_auth_candidate(
+                &provider_id,
+                &auth_method,
+                &candidate_request_id,
+            );
+            let _ = events.send(MachineEvent::CommandResult {
+                request_id,
+                accepted: result.is_ok(),
+                detail: result.err().map(|error| format!("{error:#}")),
             });
         }
         MachineCommand::BeginLogin {
@@ -1688,6 +1846,7 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
                 auth_method,
                 events,
                 components,
+                providers,
                 zed_adapter_socket,
                 LoginIo {
                     cancel: cancel_rx,
@@ -1850,7 +2009,7 @@ struct AdapterRequestContext {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DeepseekCacheStatusRequest {
-    provider: String,
+    configuration: cowboy_provider_sdk::ConfigurationBehavior,
     session_id: String,
 }
 
@@ -1871,7 +2030,7 @@ async fn run_adapter_request(
         if adapter == "deepseek-cache-status" {
             let request: DeepseekCacheStatusRequest = serde_json::from_value(payload)
                 .context("decoding DeepSeek cache status request")?;
-            if !crate::deepseek_cache::supported_provider(&request.provider)
+            if !crate::deepseek_cache::supported_behavior(&request.configuration)
                 || request.session_id.is_empty()
                 || request.session_id.len() > 256
                 || !request
@@ -1882,7 +2041,7 @@ async fn run_adapter_request(
                 bail!("invalid DeepSeek cache status request");
             }
             return crate::deepseek_cache::local_snapshot_status(
-                &request.provider,
+                &request.configuration,
                 &request.session_id,
             )
             .await;
@@ -2052,82 +2211,208 @@ fn login_challenge_tokens(line: &str) -> (Option<String>, Option<String>) {
     (verification_url, user_code)
 }
 
+fn authentication_process(
+    command: &Path,
+    arguments: &[String],
+    environment: &BTreeMap<String, String>,
+    terminal: &cowboy_provider_sdk::AuthTerminal,
+    home: &Path,
+) -> tokio::process::Command {
+    let mut process = match terminal {
+        cowboy_provider_sdk::AuthTerminal::Pipes => {
+            let mut process = tokio::process::Command::new(command);
+            process.args(arguments);
+            process
+        }
+        cowboy_provider_sdk::AuthTerminal::Pty => {
+            let command_line = std::iter::once(command.display().to_string())
+                .chain(arguments.iter().cloned())
+                .map(|value| shell_quote(&value))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let mut process = tokio::process::Command::new("script");
+            process.args(["-q", "-e", "-f", "-c", &command_line, "/dev/null"]);
+            process
+        }
+    };
+    process.env("HOME", home);
+    process.envs(environment);
+    process
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn apply_auth_preflight(
+    home: &Path,
+    steps: &[cowboy_provider_sdk::AuthPreflight],
+) -> anyhow::Result<()> {
+    for step in steps {
+        match step {
+            cowboy_provider_sdk::AuthPreflight::EnvFileKeyRequiredV1 { relative_path, key } => {
+                let path = home.join(relative_path);
+                let configured = std::env::var(key)
+                    .ok()
+                    .is_some_and(|value| !value.trim().is_empty())
+                    || std::fs::read_to_string(&path)
+                        .ok()
+                        .and_then(|contents| gemini_env_value_from(&contents, key))
+                        .is_some_and(|value| !value.trim().is_empty());
+                anyhow::ensure!(
+                    configured,
+                    "required authentication setting {key} is missing from {}",
+                    path.display()
+                );
+            }
+            cowboy_provider_sdk::AuthPreflight::JsonStringSetV1 {
+                relative_path,
+                path,
+                value,
+            } => {
+                let destination = home.join(relative_path);
+                if let Some(parent) = destination.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                let mut document = std::fs::read(&destination)
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+                    .unwrap_or_else(|| serde_json::json!({}));
+                let mut cursor = &mut document;
+                for segment in &path[..path.len().saturating_sub(1)] {
+                    let object = cursor
+                        .as_object_mut()
+                        .context("authentication preflight JSON parent is not an object")?;
+                    cursor = object
+                        .entry(segment.clone())
+                        .or_insert_with(|| serde_json::json!({}));
+                }
+                let leaf = path
+                    .last()
+                    .context("authentication preflight JSON path is empty")?;
+                cursor
+                    .as_object_mut()
+                    .context("authentication preflight JSON target is not an object")?
+                    .insert(leaf.clone(), serde_json::Value::String(value.clone()));
+                let temporary = destination.with_extension("cowboy-login.partial");
+                std::fs::write(&temporary, serde_json::to_vec_pretty(&document)?)?;
+                #[cfg(unix)]
+                std::fs::set_permissions(
+                    &temporary,
+                    std::os::unix::fs::PermissionsExt::from_mode(0o600),
+                )?;
+                std::fs::rename(temporary, destination)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+// One task owns the complete temporary login executor and its cancellation,
+// component, Provider, event, and isolated-home capabilities.
+#[allow(clippy::too_many_arguments)]
 async fn run_login(
     request_id: String,
     provider: String,
     auth_method: Option<String>,
     events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
     components: Arc<ComponentStore>,
+    providers: Arc<MachineProviderStore>,
     zed_adapter_socket: Option<PathBuf>,
     mut login: LoginIo,
 ) {
-    if provider == "gemini" && auth_method.as_deref() == Some("api_key") {
-        run_gemini_api_key_login(
+    let Some(method_id) = auth_method.filter(|value| !value.trim().is_empty()) else {
+        login.sessions.lock().remove(&request_id);
+        let _ = events.send(MachineEvent::CommandResult {
+            request_id,
+            accepted: false,
+            detail: Some("Provider authentication method is required".to_owned()),
+        });
+        return;
+    };
+    let method = match providers.authentication_method(&provider, &method_id) {
+        Ok(method) => method,
+        Err(error) => {
+            login.sessions.lock().remove(&request_id);
+            let _ = events.send(MachineEvent::CommandResult {
+                request_id,
+                accepted: false,
+                detail: Some(format!("{error:#}")),
+            });
+            return;
+        }
+    };
+    if let cowboy_provider_sdk::AuthExecutor::SecretInputV1 {
+        bundle_key: _,
+        verification_url,
+    } = &method.executor
+    {
+        run_secret_input_login(
             request_id,
             provider,
+            method.id,
+            method.label,
+            verification_url.clone(),
             events,
             components,
+            providers,
             zed_adapter_socket,
             login,
         )
         .await;
         return;
     }
-    let (command, args): (&str, &[&str]) = match provider.as_str() {
-        "codex" => ("codex", &["login", "--device-auth"]),
-        "claude" => ("claude", &["auth", "login"]),
-        "gemini" => ("script", &[]),
-        "grok" => ("grok", &["--no-auto-update", "login", "--device-auth"]),
-        _ => {
+    let cowboy_provider_sdk::AuthExecutor::CommandV1 {
+        component,
+        arguments,
+        terminal,
+        challenge,
+        environment,
+        preflight,
+    } = method.executor
+    else {
+        unreachable!("secret executor returned above")
+    };
+    let home = match providers.prepare_auth_candidate_home(&provider, &request_id) {
+        Ok(home) => home,
+        Err(error) => {
             login.sessions.lock().remove(&request_id);
             let _ = events.send(MachineEvent::CommandResult {
                 request_id,
                 accepted: false,
                 detail: Some(format!(
-                    "{provider} currently requires terminal-assisted login"
+                    "preparing isolated authentication home failed: {error:#}"
                 )),
             });
             return;
         }
     };
-    if provider == "gemini" && !gemini_code_assist_project_configured() {
-        login.sessions.lock().remove(&request_id);
-        let _ = events.send(MachineEvent::CommandResult {
-            request_id,
-            accepted: false,
-            detail: Some(GEMINI_CONSUMER_LOGIN_RETIRED.to_owned()),
-        });
-        return;
-    }
-    if provider == "gemini"
-        && let Err(error) = select_gemini_code_assist_oauth()
-    {
+    if let Err(error) = apply_auth_preflight(&home, &preflight) {
+        let _ = providers.discard_auth_candidate(&provider, &request_id);
         login.sessions.lock().remove(&request_id);
         let _ = events.send(MachineEvent::CommandResult {
             request_id,
             accepted: false,
             detail: Some(format!(
-                "preparing Gemini Code Assist login failed: {error:#}"
+                "preparing Provider authentication failed: {error:#}"
             )),
         });
         return;
     }
-    let mut process = tokio::process::Command::new(command);
-    if provider == "gemini" {
-        // Gemini deliberately rejects manual OAuth without a terminal. Give
-        // only the login process a private PTY; Cowboy still owns its stdin and
-        // parses the public authorization URL from stdout.
-        process.args([
-            "-q",
-            "-e",
-            "-f",
-            "-c",
-            "env NO_BROWSER=true TERM=dumb gemini",
-            "/dev/null",
-        ]);
-    } else {
-        process.args(args);
-    }
+    let command = match providers.authentication_component_command(&provider, &component) {
+        Ok(command) => command,
+        Err(error) => {
+            let _ = providers.discard_auth_candidate(&provider, &request_id);
+            login.sessions.lock().remove(&request_id);
+            let _ = events.send(MachineEvent::CommandResult {
+                request_id,
+                accepted: false,
+                detail: Some(format!("{error:#}")),
+            });
+            return;
+        }
+    };
+    let mut process = authentication_process(&command, &arguments, &environment, &terminal, &home);
     let mut child = match process
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -2137,6 +2422,7 @@ async fn run_login(
     {
         Ok(child) => child,
         Err(error) => {
+            let _ = providers.discard_auth_candidate(&provider, &request_id);
             login.sessions.lock().remove(&request_id);
             let _ = events.send(MachineEvent::CommandResult {
                 request_id,
@@ -2163,7 +2449,6 @@ async fn run_login(
     let mut verification_url = None;
     let mut user_code = None;
     let mut challenge_sent = false;
-    let mut login_completed = false;
     loop {
         let line = tokio::select! {
             line = stdout.next_line(), if stdout_open => {
@@ -2177,6 +2462,7 @@ async fn run_login(
             changed = login.cancel.changed() => {
                 if changed.is_ok() && *login.cancel.borrow() {
                     let _ = child.kill().await;
+                    let _ = providers.discard_auth_candidate(&provider, &request_id);
                     login.sessions.lock().remove(&request_id);
                     let _ = events.send(MachineEvent::LoginState {
                         request_id,
@@ -2205,14 +2491,6 @@ async fn run_login(
             }
             continue;
         };
-        if provider == "gemini"
-            && challenge_sent
-            && probe_gemini_auth().state == AuthState::SignedIn
-        {
-            login_completed = true;
-            let _ = child.kill().await;
-            break;
-        }
         let (line_url, line_code) = login_challenge_tokens(&line);
         if line_url.is_some() {
             verification_url = line_url;
@@ -2220,7 +2498,7 @@ async fn run_login(
         if line_code.is_some() {
             user_code = line_code;
         }
-        let browser_device_flow = matches!(provider.as_str(), "codex" | "grok");
+        let browser_device_flow = challenge == cowboy_provider_sdk::AuthChallenge::DeviceCode;
         let challenge_ready = !browser_device_flow || user_code.is_some();
         if !challenge_sent
             && challenge_ready
@@ -2241,19 +2519,47 @@ async fn run_login(
     }
     let status = child.wait().await;
     login.sessions.lock().remove(&request_id);
-    let signed_in = login_completed || status.is_ok_and(|status| status.success());
+    let signed_in = status.is_ok_and(|status| status.success());
+    let candidate = signed_in
+        .then(|| providers.export_auth_candidate(&provider, &method_id, &home))
+        .transpose();
+    let service_ready = signed_in && candidate.as_ref().is_ok_and(Option::is_some);
+    if !service_ready {
+        let _ = providers.discard_auth_candidate(&provider, &request_id);
+    }
+    if let Ok(Some(candidate)) = candidate.as_ref() {
+        let _ = events.send(MachineEvent::ServiceAuthCandidate {
+            request_id: request_id.clone(),
+            provider_id: provider.clone(),
+            auth_method: method_id.clone(),
+            provider_version: candidate.provider_version.clone(),
+            generation_digest: candidate.generation_digest.clone(),
+            auth_contract_fingerprint: candidate.auth_contract_fingerprint.clone(),
+            portable_schema: candidate.bundle.portable_schema.clone(),
+            bundle: candidate.bundle.values.clone(),
+            account_label: None,
+        });
+    }
     let _ = events.send(MachineEvent::LoginState {
         request_id: request_id.clone(),
-        provider,
-        state: if signed_in {
-            AuthState::SignedIn
+        provider: provider.clone(),
+        state: if service_ready {
+            AuthState::Pending
         } else {
             AuthState::Error
         },
         account_label: None,
-        detail: (!signed_in).then_some("provider login did not complete".to_owned()),
+        detail: if service_ready {
+            Some("login completed; promoting credentials to Cowboy Service".to_owned())
+        } else if !signed_in {
+            Some("provider login did not complete".to_owned())
+        } else {
+            candidate.err().map(|error| format!(
+                "login completed but credentials could not be promoted to Cowboy Service scope: {error:#}"
+            ))
+        },
     });
-    if signed_in {
+    if service_ready {
         let inventory = collect_inventory(&components, zed_adapter_socket.as_deref()).await;
         let _ = events.send(MachineEvent::Inventory {
             components: inventory,
@@ -2264,11 +2570,18 @@ async fn run_login(
     }
 }
 
-async fn run_gemini_api_key_login(
+// Secret input follows the same single-task ownership boundary as command
+// login, with method presentation fields carried explicitly.
+#[allow(clippy::too_many_arguments)]
+async fn run_secret_input_login(
     request_id: String,
     provider: String,
+    method_id: String,
+    method_label: String,
+    verification_url: String,
     events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
     components: Arc<ComponentStore>,
+    providers: Arc<MachineProviderStore>,
     zed_adapter_socket: Option<PathBuf>,
     mut login: LoginIo,
 ) {
@@ -2277,42 +2590,59 @@ async fn run_gemini_api_key_login(
         provider: provider.clone(),
         state: AuthState::Pending,
         account_label: None,
-        detail: Some("waiting for a Gemini API key".to_owned()),
+        detail: Some(format!("waiting for {method_label}")),
     });
     let _ = events.send(MachineEvent::LoginChallenge {
         request_id: request_id.clone(),
         provider: provider.clone(),
-        verification_url: "https://aistudio.google.com/apikey".to_owned(),
+        verification_url,
         user_code: None,
         input_required: true,
-        input_label: Some("Gemini API key".to_owned()),
+        input_label: Some(method_label),
         secret_input: true,
         expires_at_ms: unix_ms().saturating_add(15 * 60 * 1_000),
     });
-    let result = tokio::select! {
+    let candidate = tokio::select! {
         changed = login.cancel.changed() => {
             if changed.is_ok() && *login.cancel.borrow() { Err(anyhow::anyhow!("login cancelled")) }
             else { Err(anyhow::anyhow!("login interrupted")) }
         },
         input = login.input.recv() => match input {
-            Some(api_key) => store_gemini_api_key(&api_key),
+            Some(secret) => providers.auth_candidate_from_secret(&provider, &method_id, &secret),
             None => Err(anyhow::anyhow!("login input closed")),
         },
     };
     login.sessions.lock().remove(&request_id);
-    let signed_in = result.is_ok();
+    let service_ready = candidate.is_ok();
+    if let Ok(candidate) = candidate.as_ref() {
+        let _ = events.send(MachineEvent::ServiceAuthCandidate {
+            request_id: request_id.clone(),
+            provider_id: provider.clone(),
+            auth_method: method_id,
+            provider_version: candidate.provider_version.clone(),
+            generation_digest: candidate.generation_digest.clone(),
+            auth_contract_fingerprint: candidate.auth_contract_fingerprint.clone(),
+            portable_schema: candidate.bundle.portable_schema.clone(),
+            bundle: candidate.bundle.values.clone(),
+            account_label: None,
+        });
+    }
     let _ = events.send(MachineEvent::LoginState {
         request_id: request_id.clone(),
         provider,
-        state: if signed_in {
-            AuthState::SignedIn
+        state: if service_ready {
+            AuthState::Pending
         } else {
             AuthState::Error
         },
         account_label: None,
-        detail: result.err().map(|error| error.to_string()),
+        detail: if service_ready {
+            Some("credential accepted; promoting it to Cowboy Service".to_owned())
+        } else {
+            candidate.err().map(|error| error.to_string())
+        },
     });
-    if signed_in {
+    if service_ready {
         let inventory = collect_inventory(&components, zed_adapter_socket.as_deref()).await;
         let _ = events.send(MachineEvent::Inventory {
             components: inventory,
@@ -2321,88 +2651,6 @@ async fn run_gemini_api_key_login(
             observed_at_ms: unix_ms(),
         });
     }
-}
-
-fn store_gemini_api_key(api_key: &str) -> anyhow::Result<()> {
-    use std::io::Write as _;
-    #[cfg(unix)]
-    use std::os::unix::fs::OpenOptionsExt as _;
-
-    let api_key = api_key.trim();
-    anyhow::ensure!(!api_key.is_empty(), "Gemini API key is empty");
-    anyhow::ensure!(
-        !api_key.contains(['\r', '\n']),
-        "Gemini API key contains a line break"
-    );
-    let home = std::env::var_os("HOME").context("HOME is not configured")?;
-    let root = PathBuf::from(home).join(".gemini");
-    std::fs::create_dir_all(&root).context("creating Gemini state directory")?;
-    let env_path = root.join(".env");
-    let existing = std::fs::read_to_string(&env_path).unwrap_or_default();
-    let mut lines: Vec<String> = existing
-        .lines()
-        .filter(|line| {
-            let candidate = line.trim().strip_prefix("export ").unwrap_or(line.trim());
-            !candidate.starts_with("GEMINI_API_KEY=")
-        })
-        .map(str::to_owned)
-        .collect();
-    lines.push(format!("GEMINI_API_KEY={api_key}"));
-    let temporary = root.join(".env.cowboy-login");
-    let mut options = std::fs::OpenOptions::new();
-    options.create(true).truncate(true).write(true);
-    #[cfg(unix)]
-    options.mode(0o600);
-    let mut file = options.open(&temporary).context("staging Gemini API key")?;
-    writeln!(file, "{}", lines.join("\n")).context("writing Gemini API key")?;
-    file.sync_all().context("syncing Gemini API key")?;
-    std::fs::rename(&temporary, &env_path).context("activating Gemini API key")?;
-    select_gemini_auth_type("gemini-api-key")
-}
-
-fn gemini_code_assist_project_configured() -> bool {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .is_some_and(|home| gemini_env_configured(&home.join(".gemini"), "GOOGLE_CLOUD_PROJECT"))
-}
-
-fn select_gemini_code_assist_oauth() -> anyhow::Result<()> {
-    select_gemini_auth_type("oauth-personal")
-}
-
-fn select_gemini_auth_type(selected_type: &str) -> anyhow::Result<()> {
-    let home = std::env::var_os("HOME").context("HOME is not configured")?;
-    let root = PathBuf::from(home).join(".gemini");
-    std::fs::create_dir_all(&root).context("creating Gemini state directory")?;
-    let settings_path = root.join("settings.json");
-    let mut settings = std::fs::read(&settings_path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
-    let object = settings
-        .as_object_mut()
-        .context("Gemini settings must be a JSON object")?;
-    let security = object
-        .entry("security")
-        .or_insert_with(|| serde_json::json!({}));
-    let security = security
-        .as_object_mut()
-        .context("Gemini security settings must be a JSON object")?;
-    let auth = security
-        .entry("auth")
-        .or_insert_with(|| serde_json::json!({}));
-    let auth = auth
-        .as_object_mut()
-        .context("Gemini auth settings must be a JSON object")?;
-    auth.insert(
-        "selectedType".to_owned(),
-        serde_json::Value::String(selected_type.to_owned()),
-    );
-    let temporary = root.join("settings.json.cowboy-login");
-    std::fs::write(&temporary, serde_json::to_vec_pretty(&settings)?)
-        .context("writing staged Gemini settings")?;
-    std::fs::rename(&temporary, &settings_path).context("activating Gemini OAuth settings")?;
-    Ok(())
 }
 
 fn current_platform() -> Platform {
@@ -3011,6 +3259,10 @@ mod tests {
                 session: StartSession {
                     session_id: "session".to_owned(),
                     provider: "codex".to_owned(),
+                    provider_version: String::new(),
+                    provider_generation_digest: String::new(),
+                    provider_auth_generation: None,
+                    provider_behavior: None,
                     cwd,
                     agent_session_id: None,
                     system: false,

@@ -435,6 +435,8 @@ export interface ExploreTranscriptProps {
   timeline: Envelope[];
   status: Status;
   provider: string;
+  providerVersion?: string | undefined;
+  providerDigest?: string | undefined;
   cwd: string;
   loading: boolean;
   connected: boolean;
@@ -1993,6 +1995,8 @@ export function ExploreTranscript(
               timeline={props.timeline}
               status={props.status}
               provider={props.provider}
+              providerVersion={props.providerVersion}
+              providerDigest={props.providerDigest}
               cwd={props.cwd}
               loading={props.loading}
               connected={props.connected}

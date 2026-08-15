@@ -54,6 +54,64 @@ use crate::usage::UsageService;
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::{mpsc, watch};
+use tokio_util::io::ReaderStream;
+
+#[derive(Clone)]
+struct ProviderUninstallPlan {
+    machine_id: String,
+    provider_id: String,
+    generation_digest: String,
+    session_ids: Vec<String>,
+    active_session_ids: Vec<String>,
+    purge_after_ms: i64,
+    expires_at_ms: i64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProviderFenceState {
+    Installing,
+    Uninstalling,
+    Uninstalled,
+}
+
+type ProviderSessionFences =
+    Arc<parking_lot::RwLock<HashMap<(String, String), ProviderFenceState>>>;
+
+const fn provider_session_has_active_turn(status: crate::agent_model::Status) -> bool {
+    matches!(status, crate::agent_model::Status::Busy)
+}
+
+#[derive(Clone)]
+struct ProviderAuthExecutor {
+    machine_id: String,
+    provider_id: String,
+    provider_version: String,
+    generation_digest: String,
+    auth_contract_fingerprint: String,
+    auth_method: String,
+    expected_generation: u64,
+    promotion_started: bool,
+    expires_at_ms: i64,
+}
+
+impl ProviderAuthExecutor {
+    fn accepts_candidate(
+        &self,
+        machine_id: &str,
+        provider_id: &str,
+        auth_method: &str,
+        provider_version: &str,
+        generation_digest: &str,
+        auth_contract_fingerprint: &str,
+    ) -> bool {
+        self.machine_id == machine_id
+            && self.provider_id == provider_id
+            && self.provider_version == provider_version
+            && self.generation_digest == generation_digest
+            && self.auth_contract_fingerprint == auth_contract_fingerprint
+            && self.auth_method == auth_method
+    }
+}
 
 struct AppState {
     hub: Hub,
@@ -65,6 +123,11 @@ struct AppState {
     runtime_health: Arc<RuntimeHealth>,
     runtime_router: Arc<RuntimeRouter>,
     machine_control: Arc<MachineControl>,
+    provider_catalog: Arc<crate::provider_catalog::ProviderCatalog>,
+    provider_auth: Arc<crate::provider_service::ProviderAuthService>,
+    provider_auth_executors: parking_lot::Mutex<HashMap<String, ProviderAuthExecutor>>,
+    provider_uninstall_plans: parking_lot::Mutex<HashMap<String, ProviderUninstallPlan>>,
+    provider_session_fences: ProviderSessionFences,
     desired_machine_components: Arc<Vec<crate::machine_protocol::DesiredComponent>>,
     web_root: PathBuf,
     usage: UsageService,
@@ -79,6 +142,8 @@ const FORCE_CANCEL_GRACE: std::time::Duration = std::time::Duration::from_secs(5
 const MACHINE_RECONNECT_GRACE_SECONDS: i32 = 15;
 const RUNTIME_RECONCILIATION_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
 const MACHINE_RECONNECT_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+const PROVIDER_UNINSTALL_RETENTION_MS: i64 = 3 * 24 * 60 * 60 * 1_000;
+const PROVIDER_UNINSTALL_PLAN_TTL_MS: i64 = 10 * 60 * 1_000;
 
 #[derive(Debug, PartialEq, Eq)]
 enum ScheduledResetFailurePolicy {
@@ -117,6 +182,13 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         crate::code_cache::CodeCache::open(args.data_dir.join("code-cache"), args.code_cache_bytes)
             .map_err(anyhow::Error::msg)
             .context("opening code content cache")?;
+    let provider_catalog = Arc::new(crate::provider_catalog::ProviderCatalog::open(
+        &args.data_dir,
+        args.provider_catalog_dir.clone(),
+    )?);
+    let provider_auth = Arc::new(crate::provider_service::ProviderAuthService::open(
+        &args.data_dir,
+    )?);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     // Persistence closes only after dispatcher/runtime quiescence. Using the
     // HTTP shutdown signal directly would race a last-millisecond prompt
@@ -465,16 +537,20 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // agent here, off the lock. Wired before any client connects.
     let (dispatch_tx, dispatch_rx) = mpsc::channel::<DispatchReq>(1_024);
     hub.set_dispatch_tx(dispatch_tx);
+    let provider_session_fences: ProviderSessionFences =
+        Arc::new(parking_lot::RwLock::new(HashMap::new()));
     runtime_health.set_dispatcher(true);
     let dispatcher_health = Arc::clone(&runtime_health);
     let dispatcher_hub = hub.clone();
     let dispatcher_supervisor = Arc::clone(&supervisor);
+    let dispatcher_provider_fences = Arc::clone(&provider_session_fences);
     let dispatcher_shutdown = shutdown_rx.clone();
     let dispatcher_exit_state = dispatcher_shutdown.clone();
     let mut dispatcher_task = tokio::spawn(async move {
         run_dispatcher(
             dispatcher_hub,
             dispatcher_supervisor,
+            dispatcher_provider_fences,
             dispatch_rx,
             dispatcher_shutdown,
         )
@@ -588,6 +664,11 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             runtime_health,
             runtime_router,
             machine_control: Arc::new(MachineControl::default()),
+            provider_catalog,
+            provider_auth,
+            provider_auth_executors: parking_lot::Mutex::new(HashMap::new()),
+            provider_uninstall_plans: parking_lot::Mutex::new(HashMap::new()),
+            provider_session_fences,
             desired_machine_components: Arc::new(desired_machine_components),
             web_root: args.web_root,
             usage,
@@ -879,10 +960,10 @@ async fn record_lifecycle_incidents(store: &Store, rows: &[Envelope]) -> anyhow:
 }
 
 fn classify_crash_detail(detail: Option<&str>) -> &'static str {
-    if detail.is_some_and(crate::provider::claude_code::is_context_window_rejection) {
+    if detail.is_some_and(is_context_window_rejection) {
         return "provider_context_limit";
     }
-    if detail.is_some_and(crate::provider::claude_code::is_empty_stream_failure) {
+    if detail.is_some_and(is_empty_stream_failure) {
         return "provider_empty_stream";
     }
     let detail = detail.unwrap_or_default().to_ascii_lowercase();
@@ -906,6 +987,22 @@ fn classify_crash_detail(detail: Option<&str>) -> &'static str {
     } else {
         "runtime_failure"
     }
+}
+
+fn is_context_window_rejection(detail: &str) -> bool {
+    let detail = detail.to_ascii_lowercase();
+    detail.contains("maximum context length")
+        || detail.contains("prompt is too long")
+        || (detail.contains("context window")
+            && (detail.contains("exceed")
+                || detail.contains("full")
+                || detail.contains("limit reached")))
+}
+
+fn is_empty_stream_failure(detail: &str) -> bool {
+    detail
+        .to_ascii_lowercase()
+        .contains("stream ended without receiving any events")
 }
 
 fn bounded_incident_summary(value: &str) -> (String, bool) {
@@ -1301,6 +1398,7 @@ fn force_cancel_with_watchdog(state: &AppState, session_id: &str) -> Result<(), 
 async fn run_dispatcher(
     hub: Hub,
     supervisor: Arc<Supervisor>,
+    provider_session_fences: ProviderSessionFences,
     mut rx: mpsc::Receiver<DispatchReq>,
     mut shutdown: watch::Receiver<bool>,
 ) {
@@ -1322,6 +1420,12 @@ async fn run_dispatcher(
             content,
             cmid,
         } = req;
+        if provider_fence_state_for_session(&hub, &provider_session_fences, &session_id)
+            .is_some_and(|state| state != ProviderFenceState::Installing)
+        {
+            hub.requeue_prompt(&session_id, text, content, cmid);
+            continue;
+        }
         let Some(blocks) = build_prompt_blocks(&text, &content) else {
             tracing::warn!(session = %session_id, "queued prompt had no content; dropping");
             hub.clear_in_flight(&session_id);
@@ -1342,6 +1446,22 @@ async fn run_dispatcher(
         }
     }
     tracing::info!("dispatcher shutting down (channel closed)");
+}
+
+fn provider_fence_state_for_session(
+    hub: &Hub,
+    fences: &ProviderSessionFences,
+    session_id: &str,
+) -> Option<ProviderFenceState> {
+    let key = provider_fence_key_for_session(hub, session_id)?;
+    fences.read().get(&key).copied()
+}
+
+fn provider_fence_key_for_session(hub: &Hub, session_id: &str) -> Option<(String, String)> {
+    hub.session_list()
+        .into_iter()
+        .find(|session| session.id == session_id)
+        .map(|session| (session.machine_id, session.provider))
 }
 
 /// Revive one opted-in interrupted session only when it has durable work ready
@@ -1430,18 +1550,45 @@ async fn serve_axum(
         )
         .route("/metrics", get(prometheus_metrics))
         .route("/api/workspaces", get(api_workspaces))
+        .route("/api/providers", get(api_providers))
+        .route(
+            "/api/providers/catalog/refresh",
+            post(api_provider_catalog_refresh),
+        )
+        .route(
+            "/api/providers/{id}/auth",
+            post(api_provider_auth_commit).delete(api_provider_auth_logout),
+        )
+        .route(
+            "/api/providers/{id}/auth/start",
+            post(api_provider_auth_start),
+        )
+        .route(
+            "/api/providers/{id}/auth/{request_id}",
+            get(api_provider_auth_events)
+                .post(api_provider_auth_submit)
+                .delete(api_provider_auth_cancel),
+        )
         .route("/api/machines", get(api_machines))
         .route(
             "/api/machines/enrollment",
             post(api_machine_create_enrollment),
         )
         .route("/api/machines/{id}/events", get(api_machine_events))
-        .route("/api/machines/{id}/refresh", post(api_machine_refresh))
-        .route("/api/machines/{id}/login", post(api_machine_login))
+        .route("/api/machines/{id}/providers", get(api_machine_providers))
         .route(
-            "/api/machines/{id}/login/{request_id}",
-            post(api_machine_login_submit).delete(api_machine_login_cancel),
+            "/api/machines/{id}/providers/{provider_id}",
+            post(api_machine_provider_install),
         )
+        .route(
+            "/api/machines/{id}/providers/{provider_id}/uninstall-plan",
+            post(api_machine_provider_uninstall_plan),
+        )
+        .route(
+            "/api/machines/{id}/providers/{provider_id}/uninstall",
+            post(api_machine_provider_uninstall),
+        )
+        .route("/api/machines/{id}/refresh", post(api_machine_refresh))
         .route(
             "/api/machines/{id}/components/reconcile",
             post(api_machine_reconcile),
@@ -1511,6 +1658,10 @@ async fn serve_axum(
         .route("/api/sessions/{id}/prompt", post(api_session_prompt))
         .route("/api/history/{id}", get(api_history))
         .route("/api/artifacts/{name}", get(api_artifact))
+        .route(
+            "/provider-artifacts/{digest}/{name}",
+            get(provider_release_artifact),
+        )
         .route("/ws", any(ws_upgrade))
         // Everything else: the separately deployed SPA, with index.html
         // fallback for client-side routes.
@@ -1734,14 +1885,20 @@ async fn api_observability_incidents(State(state): State<Arc<AppState>>) -> Resp
 }
 
 async fn api_usage(State(state): State<Arc<AppState>>) -> Response {
-    let snapshot =
-        crate::usage::with_session_usage(state.usage.snapshot().await, &state.hub.session_list());
+    let snapshot = crate::usage::with_session_usage(
+        state.usage.snapshot().await,
+        &state.hub.session_list(),
+        &state.provider_catalog,
+    );
     Json(snapshot).into_response()
 }
 
 async fn api_usage_refresh(State(state): State<Arc<AppState>>) -> Response {
-    let snapshot =
-        crate::usage::with_session_usage(state.usage.refresh().await, &state.hub.session_list());
+    let snapshot = crate::usage::with_session_usage(
+        state.usage.refresh().await,
+        &state.hub.session_list(),
+        &state.provider_catalog,
+    );
     Json(snapshot).into_response()
 }
 
@@ -1753,6 +1910,7 @@ async fn api_usage_provider_refresh(
         Ok(snapshot) => Json(crate::usage::with_session_usage(
             snapshot,
             &state.hub.session_list(),
+            &state.provider_catalog,
         ))
         .into_response(),
         Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
@@ -2778,18 +2936,6 @@ async fn api_machine_events(
 }
 
 #[derive(Debug, Deserialize)]
-struct MachineLoginRequest {
-    provider: String,
-    #[serde(default)]
-    auth_method: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct MachineLoginCodeRequest {
-    code: String,
-}
-
-#[derive(Debug, Deserialize)]
 struct MachineEnrollmentRequest {
     machine_id: String,
     display_name: String,
@@ -2854,23 +3000,6 @@ fn apply_workspace_inventory(
     }
 }
 
-fn usage_provider_after_login(
-    event: &crate::machine_protocol::MachineEvent,
-    local_machine: bool,
-) -> Option<&'static str> {
-    match event {
-        crate::machine_protocol::MachineEvent::LoginState {
-            provider, state, ..
-        } if local_machine
-            && provider == "grok"
-            && *state == crate::machine_protocol::AuthState::SignedIn =>
-        {
-            Some("xai")
-        }
-        _ => None,
-    }
-}
-
 async fn api_machine_refresh(
     State(state): State<Arc<AppState>>,
     Path(machine_id): Path<String>,
@@ -2880,95 +3009,6 @@ async fn api_machine_refresh(
         &machine_id,
         crate::machine_protocol::MachineCommand::RefreshInventory {
             request_id: request_id.clone(),
-        },
-    ) {
-        Ok(()) => Json(MachineCommandResponse { request_id }).into_response(),
-        Err(error) => (StatusCode::CONFLICT, error).into_response(),
-    }
-}
-
-async fn api_machine_login(
-    State(state): State<Arc<AppState>>,
-    Path(machine_id): Path<String>,
-    Json(request): Json<MachineLoginRequest>,
-) -> Response {
-    if !matches!(
-        request.provider.as_str(),
-        "codex" | "claude" | "gemini" | "grok"
-    ) {
-        return (StatusCode::BAD_REQUEST, "unknown provider").into_response();
-    }
-    if request.provider == "gemini"
-        && !matches!(
-            request.auth_method.as_deref(),
-            Some("api_key" | "code_assist")
-        )
-    {
-        return (StatusCode::BAD_REQUEST, "Gemini auth method is required").into_response();
-    }
-    if request.provider != "gemini" && request.auth_method.is_some() {
-        return (
-            StatusCode::BAD_REQUEST,
-            "auth method is not supported for this provider",
-        )
-            .into_response();
-    }
-    if request.provider == "gemini" {
-        let supports_current_auth = match state.store.as_ref() {
-            Some(store) => store
-                .list_machines()
-                .await
-                .ok()
-                .and_then(|machines| {
-                    machines
-                        .into_iter()
-                        .find(|machine| machine.id == machine_id)
-                })
-                .and_then(|machine| machine.inventory.get("components").cloned())
-                .and_then(|value| {
-                    serde_json::from_value::<Vec<crate::machine_protocol::ComponentInventory>>(
-                        value,
-                    )
-                    .ok()
-                })
-                .is_some_and(|components| gemini_machine_auth_is_current(&components)),
-            None => false,
-        };
-        if !supports_current_auth {
-            return (
-                StatusCode::CONFLICT,
-                "This Machine must update cowboy-machine before using the current Gemini authentication flows",
-            ).into_response();
-        }
-    }
-    let request_id = machine_request_id("login");
-    match state.machine_control.send(
-        &machine_id,
-        crate::machine_protocol::MachineCommand::BeginLogin {
-            request_id: request_id.clone(),
-            provider: request.provider,
-            auth_method: request.auth_method,
-        },
-    ) {
-        Ok(()) => Json(MachineCommandResponse { request_id }).into_response(),
-        Err(error) => (StatusCode::CONFLICT, error).into_response(),
-    }
-}
-
-async fn api_machine_login_submit(
-    State(state): State<Arc<AppState>>,
-    Path((machine_id, request_id)): Path<(String, String)>,
-    Json(request): Json<MachineLoginCodeRequest>,
-) -> Response {
-    let code = request.code.trim();
-    if code.is_empty() || code.len() > 16_384 {
-        return (StatusCode::BAD_REQUEST, "authorization code is invalid").into_response();
-    }
-    match state.machine_control.send(
-        &machine_id,
-        crate::machine_protocol::MachineCommand::SubmitLoginCode {
-            request_id: request_id.clone(),
-            code: code.to_owned(),
         },
     ) {
         Ok(()) => Json(MachineCommandResponse { request_id }).into_response(),
@@ -3044,21 +3084,6 @@ async fn api_machine_update_npm(
     }
 }
 
-async fn api_machine_login_cancel(
-    State(state): State<Arc<AppState>>,
-    Path((machine_id, request_id)): Path<(String, String)>,
-) -> Response {
-    match state.machine_control.send(
-        &machine_id,
-        crate::machine_protocol::MachineCommand::CancelLogin {
-            request_id: request_id.clone(),
-        },
-    ) {
-        Ok(()) => StatusCode::ACCEPTED.into_response(),
-        Err(error) => (StatusCode::CONFLICT, error).into_response(),
-    }
-}
-
 async fn api_machine_revoke(
     State(state): State<Arc<AppState>>,
     Path(machine_id): Path<String>,
@@ -3072,10 +3097,973 @@ async fn api_machine_revoke(
     }
 }
 
+async fn api_providers(State(state): State<Arc<AppState>>) -> Response {
+    let providers = state.provider_catalog.entries();
+    Json(serde_json::json!({
+        "providers": providers,
+        "authentications": state.provider_auth.statuses(),
+    }))
+    .into_response()
+}
+
+async fn api_provider_catalog_refresh(State(state): State<Arc<AppState>>) -> Response {
+    match state.provider_catalog.refresh_external() {
+        Ok(count) => Json(serde_json::json!({ "external_releases": count })).into_response(),
+        Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    }
+}
+
+async fn api_machine_providers(
+    State(state): State<Arc<AppState>>,
+    Path(machine_id): Path<String>,
+) -> Response {
+    let Some(store) = state.store.as_ref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "machine registry unavailable",
+        )
+            .into_response();
+    };
+    match store.list_machines().await {
+        Ok(machines) => machines
+            .into_iter()
+            .find(|machine| machine.id == machine_id && !machine.revoked)
+            .map_or_else(
+                || (StatusCode::NOT_FOUND, "unknown or revoked Machine").into_response(),
+                |machine| {
+                    Json(
+                        machine
+                            .inventory
+                            .get("providers")
+                            .cloned()
+                            .unwrap_or_else(|| serde_json::json!([])),
+                    )
+                    .into_response()
+                },
+            ),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ProviderInstallRequest {
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
+    digest: Option<String>,
+}
+
+async fn api_machine_provider_install(
+    State(state): State<Arc<AppState>>,
+    Path((machine_id, provider_id)): Path<(String, String)>,
+    Json(request): Json<ProviderInstallRequest>,
+) -> Response {
+    let desired = match state.provider_catalog.resolve(
+        &provider_id,
+        request.version.as_deref(),
+        request.digest.as_deref(),
+    ) {
+        Ok(desired) => desired,
+        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    };
+    let fence = (machine_id.clone(), provider_id.clone());
+    let previous_fence = {
+        let mut fences = state.provider_session_fences.write();
+        match fences.get(&fence).copied() {
+            Some(ProviderFenceState::Installing | ProviderFenceState::Uninstalling) => {
+                return (
+                    StatusCode::CONFLICT,
+                    "another Provider lifecycle operation is already in progress",
+                )
+                    .into_response();
+            }
+            previous => {
+                fences.insert(fence.clone(), ProviderFenceState::Installing);
+                previous
+            }
+        }
+    };
+    // A replica can be stored before the Provider exists. Synchronize it first
+    // so Machine activation validates and materializes the current Service
+    // generation in the same local lifecycle transaction.
+    if state.provider_auth.status(&provider_id).is_some()
+        && let Err(error) = sync_provider_auth_to_machine(&state, &machine_id, &provider_id).await
+    {
+        let mut fences = state.provider_session_fences.write();
+        if previous_fence == Some(ProviderFenceState::Uninstalled) {
+            fences.insert(fence, ProviderFenceState::Uninstalled);
+        } else {
+            fences.remove(&fence);
+        }
+        return (
+            StatusCode::CONFLICT,
+            format!("Service authentication sync failed before Provider installation: {error}"),
+        )
+            .into_response();
+    }
+    let request_id = machine_request_id("provider-install");
+    let command = crate::machine_protocol::MachineCommand::InstallProvider {
+        request_id: request_id.clone(),
+        provider: Box::new(desired),
+    };
+    if let Err(error) = state
+        .machine_control
+        .command_request(&machine_id, request_id, command)
+        .await
+    {
+        let mut fences = state.provider_session_fences.write();
+        if previous_fence == Some(ProviderFenceState::Uninstalled) {
+            fences.insert(fence, ProviderFenceState::Uninstalled);
+        } else {
+            fences.remove(&fence);
+        }
+        return (StatusCode::CONFLICT, error).into_response();
+    }
+    // Re-read after activation to close a concurrent refresh/logout window. A
+    // failure leaves a valid installed generation unschedulable until normal
+    // reconciliation catches up; it never launches with stale credentials.
+    let auth_sync = if state.provider_auth.status(&provider_id).is_some() {
+        sync_provider_auth_to_machine(&state, &machine_id, &provider_id).await
+    } else {
+        Ok(())
+    };
+    state.provider_session_fences.write().remove(&fence);
+    if let Err(error) = auth_sync {
+        return (
+            StatusCode::CONFLICT,
+            format!("Provider installed but Service authentication sync failed: {error}"),
+        )
+            .into_response();
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
+async fn current_machine_provider(
+    state: &Arc<AppState>,
+    machine_id: &str,
+    provider_id: &str,
+) -> Result<crate::machine_protocol::ProviderInventory, String> {
+    let store = state
+        .store
+        .as_ref()
+        .ok_or_else(|| "Provider lifecycle requires persistence".to_owned())?;
+    let machine = store
+        .list_machines()
+        .await
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|machine| machine.id == machine_id && !machine.revoked)
+        .ok_or_else(|| format!("unknown or revoked Machine {machine_id:?}"))?;
+    let providers: Vec<crate::machine_protocol::ProviderInventory> = machine
+        .inventory
+        .get("providers")
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default();
+    providers
+        .into_iter()
+        .find(|provider| {
+            provider.provider_id == provider_id
+                && provider.state == crate::machine_protocol::ProviderInstallationState::Active
+        })
+        .ok_or_else(|| {
+            format!("Provider {provider_id:?} is not installed on Machine {machine_id:?}")
+        })
+}
+
+async fn api_machine_provider_uninstall_plan(
+    State(state): State<Arc<AppState>>,
+    Path((machine_id, provider_id)): Path<(String, String)>,
+) -> Response {
+    let installed = match current_machine_provider(&state, &machine_id, &provider_id).await {
+        Ok(installed) => installed,
+        Err(error) => return (StatusCode::CONFLICT, error).into_response(),
+    };
+    let mut affected: Vec<_> = state
+        .hub
+        .session_list()
+        .into_iter()
+        .filter(|session| session.machine_id == machine_id && session.provider == provider_id)
+        .collect();
+    affected.sort_by(|left, right| left.id.cmp(&right.id));
+    let session_ids: Vec<_> = affected.iter().map(|session| session.id.clone()).collect();
+    let active_session_ids: Vec<_> = affected
+        .iter()
+        .filter(|session| provider_session_has_active_turn(session.status))
+        .map(|session| session.id.clone())
+        .collect();
+    let timestamp = now_ms();
+    let purge_after_ms = timestamp.saturating_add(PROVIDER_UNINSTALL_RETENTION_MS);
+    let expires_at_ms = timestamp.saturating_add(PROVIDER_UNINSTALL_PLAN_TTL_MS);
+    let plan_id = match random_machine_token() {
+        Ok(value) => value,
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+        }
+    };
+    state
+        .provider_uninstall_plans
+        .lock()
+        .retain(|_, plan| plan.expires_at_ms >= timestamp);
+    state.provider_uninstall_plans.lock().insert(
+        plan_id.clone(),
+        ProviderUninstallPlan {
+            machine_id: machine_id.clone(),
+            provider_id: provider_id.clone(),
+            generation_digest: installed.generation_digest.clone(),
+            session_ids,
+            active_session_ids: active_session_ids.clone(),
+            purge_after_ms,
+            expires_at_ms,
+        },
+    );
+    Json(serde_json::json!({
+        "plan_id": plan_id,
+        "machine_id": machine_id,
+        "provider_id": provider_id,
+        "provider_version": installed.provider_version,
+        "generation_digest": installed.generation_digest,
+        "affected_sessions": affected,
+        "active_session_ids": active_session_ids,
+        "purge_after_ms": purge_after_ms,
+        "expires_at_ms": expires_at_ms,
+        "warning": "Uninstalling this Provider removes it from this Machine and soft-deletes every affected session. Session data remains recoverable only until the stated purge deadline.",
+    }))
+    .into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct ProviderUninstallRequest {
+    plan_id: String,
+    #[serde(default)]
+    confirm_active_sessions: bool,
+}
+
+async fn compensate_provider_uninstall(
+    state: &Arc<AppState>,
+    plan: &ProviderUninstallPlan,
+    stopped_live_sessions: &[String],
+    cause: String,
+) -> String {
+    let request_id = machine_request_id("provider-reactivate");
+    let compensation = state
+        .machine_control
+        .command_request(
+            &plan.machine_id,
+            request_id.clone(),
+            crate::machine_protocol::MachineCommand::ReactivateProvider {
+                request_id,
+                provider_id: plan.provider_id.clone(),
+                generation_digest: plan.generation_digest.clone(),
+            },
+        )
+        .await;
+    let Err(compensation_error) = compensation else {
+        let mut reload_errors = Vec::new();
+        for session_id in stopped_live_sessions {
+            if let Err(error) = state.supervisor.reload_session(session_id) {
+                reload_errors.push(format!("{session_id}: {error}"));
+            }
+        }
+        return if reload_errors.is_empty() {
+            format!("{cause}; the previous Provider generation was restored")
+        } else {
+            format!(
+                "{cause}; the previous Provider generation was restored, but live session reload failed: {}",
+                reload_errors.join("; ")
+            )
+        };
+    };
+    format!(
+        "{cause}; automatic Provider restoration failed: {compensation_error}. The Machine requires Provider lifecycle reconciliation"
+    )
+}
+
+async fn api_machine_provider_uninstall(
+    State(state): State<Arc<AppState>>,
+    Path((machine_id, provider_id)): Path<(String, String)>,
+    Json(request): Json<ProviderUninstallRequest>,
+) -> Response {
+    let plan = state
+        .provider_uninstall_plans
+        .lock()
+        .remove(&request.plan_id);
+    let Some(plan) = plan else {
+        return (
+            StatusCode::CONFLICT,
+            "uninstall plan is missing or already consumed",
+        )
+            .into_response();
+    };
+    if plan.machine_id != machine_id
+        || plan.provider_id != provider_id
+        || plan.expires_at_ms < now_ms()
+    {
+        return (
+            StatusCode::CONFLICT,
+            "uninstall plan is stale or does not match this target",
+        )
+            .into_response();
+    }
+    if !plan.active_session_ids.is_empty() && !request.confirm_active_sessions {
+        return (
+            StatusCode::CONFLICT,
+            "active sessions require an explicit second confirmation",
+        )
+            .into_response();
+    }
+    let fence = (machine_id.clone(), provider_id.clone());
+    let acquired = {
+        let mut fences = state.provider_session_fences.write();
+        if fences.contains_key(&fence) {
+            false
+        } else {
+            fences.insert(fence.clone(), ProviderFenceState::Uninstalling);
+            true
+        }
+    };
+    if !acquired {
+        return (
+            StatusCode::CONFLICT,
+            "another Provider lifecycle operation is already in progress",
+        )
+            .into_response();
+    }
+    let result = async {
+        let current = current_machine_provider(&state, &machine_id, &provider_id).await?;
+        if current.generation_digest != plan.generation_digest {
+            return Err("Provider generation changed; refresh the uninstall plan".to_owned());
+        }
+        let mut current_sessions: Vec<_> = state
+            .hub
+            .session_list()
+            .into_iter()
+            .filter(|session| session.machine_id == machine_id && session.provider == provider_id)
+            .collect();
+        current_sessions.sort_by(|left, right| left.id.cmp(&right.id));
+        let current_session_ids: Vec<_> = current_sessions
+            .iter()
+            .map(|session| session.id.clone())
+            .collect();
+        if current_session_ids != plan.session_ids {
+            return Err("affected session set changed; refresh the uninstall plan".to_owned());
+        }
+        let current_active_session_ids: Vec<_> = current_sessions
+            .iter()
+            .filter(|session| provider_session_has_active_turn(session.status))
+            .map(|session| session.id.clone())
+            .collect();
+        if current_active_session_ids != plan.active_session_ids {
+            return Err("active turn set changed; refresh the uninstall plan".to_owned());
+        }
+        let stopped_live_sessions: Vec<_> = plan
+            .session_ids
+            .iter()
+            .filter(|session_id| state.supervisor.delete_session(session_id))
+            .cloned()
+            .collect();
+        let request_id = machine_request_id("provider-uninstall");
+        if let Err(error) = state
+            .machine_control
+            .command_request(
+                &machine_id,
+                request_id.clone(),
+                crate::machine_protocol::MachineCommand::UninstallProvider {
+                    request_id,
+                    provider_id: provider_id.clone(),
+                    generation_digest: plan.generation_digest.clone(),
+                },
+            )
+            .await
+        {
+            return Err(compensate_provider_uninstall(
+                &state,
+                &plan,
+                &stopped_live_sessions,
+                format!("Provider uninstall failed: {error}"),
+            )
+            .await);
+        }
+        let store = state
+            .store
+            .as_ref()
+            .ok_or_else(|| "Provider uninstall requires persistence".to_owned())?;
+        if let Err(error) = store
+            .soft_delete_sessions_until(&plan.session_ids, plan.purge_after_ms)
+            .await
+        {
+            return Err(compensate_provider_uninstall(
+                &state,
+                &plan,
+                &stopped_live_sessions,
+                format!("durable Provider session deletion failed: {error}"),
+            )
+            .await);
+        }
+        for session_id in &plan.session_ids {
+            state.hub.detach_session(session_id);
+        }
+        Ok::<(), String>(())
+    }
+    .await;
+    match result {
+        Ok(()) => {
+            state
+                .provider_session_fences
+                .write()
+                .insert(fence, ProviderFenceState::Uninstalled);
+            Json(serde_json::json!({
+                "provider_id": provider_id,
+                "machine_id": machine_id,
+                "deleted_session_ids": plan.session_ids,
+                "purge_after_ms": plan.purge_after_ms,
+            }))
+            .into_response()
+        }
+        Err(error) => {
+            state.provider_session_fences.write().remove(&fence);
+            (StatusCode::CONFLICT, error).into_response()
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ProviderAuthCommitRequest {
+    /// Exact Provider-declared authentication method that produced this bundle.
+    method: String,
+    /// Provider-declared bundle keys mapped to standard-base64 credential values.
+    values: BTreeMap<String, String>,
+    #[serde(default)]
+    account_label: Option<String>,
+    #[serde(default)]
+    expected_generation: Option<u64>,
+}
+
+async fn api_provider_auth_commit(
+    State(state): State<Arc<AppState>>,
+    Path(provider_id): Path<String>,
+    Json(request): Json<ProviderAuthCommitRequest>,
+) -> Response {
+    let desired = match state.provider_catalog.resolve(&provider_id, None, None) {
+        Ok(desired) => desired,
+        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    };
+    let package = match state.provider_catalog.package(
+        &provider_id,
+        &desired.release.provider_version,
+        &desired.release.artifact_digest,
+    ) {
+        Some(package) => package,
+        None => return (StatusCode::CONFLICT, "Catalog package disappeared").into_response(),
+    };
+    let bundle = crate::machine_protocol::PortableCredentialBundle {
+        portable_schema: package.manifest.authentication.portable_schema.clone(),
+        method_id: request.method,
+        values: request.values,
+    };
+    let status = match state.provider_auth.commit(
+        &package,
+        &bundle,
+        request.account_label,
+        request.expected_generation,
+    ) {
+        Ok(status) => status,
+        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    };
+    let replicas = distribute_provider_auth(&state, &provider_id).await;
+    let distribution = replicas.state();
+    let status = state
+        .provider_auth
+        .mark_distribution(&provider_id, status.auth_generation, distribution)
+        .unwrap_or(status);
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "authentication": status,
+            "replicas_succeeded": replicas.succeeded,
+            "replicas_failed": replicas.failed,
+            "replicas_pending": replicas.pending,
+        })),
+    )
+        .into_response()
+}
+
+async fn api_provider_auth_logout(
+    State(state): State<Arc<AppState>>,
+    Path(provider_id): Path<String>,
+) -> Response {
+    let status = match state.provider_auth.logout(&provider_id) {
+        Ok(status) => status,
+        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    };
+    let replicas = distribute_provider_auth(&state, &provider_id).await;
+    let distribution = replicas.state();
+    let status = state
+        .provider_auth
+        .mark_distribution(&provider_id, status.auth_generation, distribution)
+        .unwrap_or(status);
+    Json(serde_json::json!({
+        "authentication": status,
+        "replicas_succeeded": replicas.succeeded,
+        "replicas_failed": replicas.failed,
+        "replicas_pending": replicas.pending,
+    }))
+    .into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct ProviderAuthStartRequest {
+    method: String,
+    provider_version: String,
+    generation_digest: String,
+}
+
+async fn api_provider_auth_start(
+    State(state): State<Arc<AppState>>,
+    Path(provider_id): Path<String>,
+    Json(request): Json<ProviderAuthStartRequest>,
+) -> Response {
+    let desired = match state.provider_catalog.resolve(
+        &provider_id,
+        Some(&request.provider_version),
+        Some(&request.generation_digest),
+    ) {
+        Ok(desired) => desired,
+        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    };
+    let Some(package) = state.provider_catalog.package(
+        &provider_id,
+        &desired.release.provider_version,
+        &desired.release.artifact_digest,
+    ) else {
+        return (StatusCode::CONFLICT, "Catalog package disappeared").into_response();
+    };
+    if !package
+        .manifest
+        .authentication
+        .methods
+        .iter()
+        .any(|method| method.id == request.method)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            "authentication method is not declared by this Provider",
+        )
+            .into_response();
+    }
+    let candidates = state.machine_control.connected_machine_ids();
+    let mut executor = None;
+    for machine_id in candidates {
+        if current_machine_provider(&state, &machine_id, &provider_id)
+            .await
+            .is_ok_and(|installed| {
+                installed.provider_version == desired.release.provider_version
+                    && installed.generation_digest == desired.release.artifact_digest
+            })
+        {
+            executor = Some(machine_id);
+            break;
+        }
+    }
+    let Some(machine_id) = executor else {
+        return (
+            StatusCode::CONFLICT,
+            "No connected Machine has this exact Provider release installed for temporary authentication",
+        )
+            .into_response();
+    };
+    let request_id = machine_request_id("provider-login");
+    let expected_generation = state
+        .provider_auth
+        .status(&provider_id)
+        .map_or(0, |status| status.auth_generation);
+    let timestamp = now_ms();
+    let expires_at_ms = timestamp.saturating_add(15 * 60 * 1_000);
+    let mut executors = state.provider_auth_executors.lock();
+    let expired: Vec<_> = executors
+        .iter()
+        .filter(|(_, executor)| executor.expires_at_ms < timestamp)
+        .map(|(request_id, executor)| (executor.provider_id.clone(), request_id.clone()))
+        .collect();
+    executors.retain(|_, executor| executor.expires_at_ms >= timestamp);
+    executors.insert(
+        request_id.clone(),
+        ProviderAuthExecutor {
+            machine_id: machine_id.clone(),
+            provider_id: provider_id.clone(),
+            provider_version: desired.release.provider_version,
+            generation_digest: desired.release.artifact_digest,
+            auth_contract_fingerprint: package
+                .manifest
+                .compatibility
+                .auth_contract_fingerprint
+                .clone(),
+            auth_method: request.method.clone(),
+            expected_generation,
+            promotion_started: false,
+            expires_at_ms,
+        },
+    );
+    drop(executors);
+    for (expired_provider, expired_request) in expired {
+        state
+            .provider_auth
+            .cancel_authentication(&expired_provider, &expired_request);
+    }
+    if let Err(error) = state
+        .provider_auth
+        .begin_authentication(&package, &request_id)
+    {
+        state.provider_auth_executors.lock().remove(&request_id);
+        return (StatusCode::CONFLICT, error.to_string()).into_response();
+    }
+    if let Err(error) = state.machine_control.send(
+        &machine_id,
+        crate::machine_protocol::MachineCommand::BeginLogin {
+            request_id: request_id.clone(),
+            provider: provider_id.clone(),
+            auth_method: Some(request.method),
+        },
+    ) {
+        state.provider_auth_executors.lock().remove(&request_id);
+        state
+            .provider_auth
+            .cancel_authentication(&provider_id, &request_id);
+        return (StatusCode::CONFLICT, error).into_response();
+    }
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "request_id": request_id,
+            "expires_at_ms": expires_at_ms,
+        })),
+    )
+        .into_response()
+}
+
+async fn api_provider_auth_events(
+    State(state): State<Arc<AppState>>,
+    Path((provider_id, request_id)): Path<(String, String)>,
+) -> Response {
+    let executor = state
+        .provider_auth_executors
+        .lock()
+        .get(&request_id)
+        .cloned();
+    let Some(executor) = executor.filter(|value| value.provider_id == provider_id) else {
+        return (
+            StatusCode::NOT_FOUND,
+            "authentication request is not active",
+        )
+            .into_response();
+    };
+    if executor.expires_at_ms < now_ms() {
+        state.provider_auth_executors.lock().remove(&request_id);
+        state
+            .provider_auth
+            .cancel_authentication(&provider_id, &request_id);
+        let _ = state.machine_control.send(
+            &executor.machine_id,
+            crate::machine_protocol::MachineCommand::CancelLogin {
+                request_id: request_id.clone(),
+            },
+        );
+        return (StatusCode::NOT_FOUND, "authentication request expired").into_response();
+    }
+    let events: Vec<_> = state
+        .machine_control
+        .events(&executor.machine_id)
+        .into_iter()
+        .filter(|event| match event {
+            crate::machine_protocol::MachineEvent::LoginChallenge { request_id: id, .. }
+            | crate::machine_protocol::MachineEvent::LoginState { request_id: id, .. }
+            | crate::machine_protocol::MachineEvent::CommandResult { request_id: id, .. } => {
+                id == &request_id
+            }
+            _ => false,
+        })
+        .collect();
+    Json(serde_json::json!({ "request_id": request_id, "events": events })).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct ProviderAuthSubmitRequest {
+    code: String,
+}
+
+async fn api_provider_auth_submit(
+    State(state): State<Arc<AppState>>,
+    Path((provider_id, request_id)): Path<(String, String)>,
+    Json(request): Json<ProviderAuthSubmitRequest>,
+) -> Response {
+    let executor = state
+        .provider_auth_executors
+        .lock()
+        .get(&request_id)
+        .cloned();
+    let Some(executor) = executor
+        .filter(|value| value.provider_id == provider_id && value.expires_at_ms >= now_ms())
+    else {
+        return (
+            StatusCode::NOT_FOUND,
+            "authentication request is not active",
+        )
+            .into_response();
+    };
+    match state.machine_control.send(
+        &executor.machine_id,
+        crate::machine_protocol::MachineCommand::SubmitLoginCode {
+            request_id,
+            code: request.code,
+        },
+    ) {
+        Ok(()) => StatusCode::ACCEPTED.into_response(),
+        Err(error) => (StatusCode::CONFLICT, error).into_response(),
+    }
+}
+
+async fn api_provider_auth_cancel(
+    State(state): State<Arc<AppState>>,
+    Path((provider_id, request_id)): Path<(String, String)>,
+) -> Response {
+    let executor = {
+        let mut executors = state.provider_auth_executors.lock();
+        if executors
+            .get(&request_id)
+            .is_some_and(|value| value.provider_id == provider_id)
+        {
+            executors.remove(&request_id)
+        } else {
+            None
+        }
+    };
+    let Some(executor) = executor else {
+        return (
+            StatusCode::NOT_FOUND,
+            "authentication request is not active",
+        )
+            .into_response();
+    };
+    state
+        .provider_auth
+        .cancel_authentication(&provider_id, &request_id);
+    match state.machine_control.send(
+        &executor.machine_id,
+        crate::machine_protocol::MachineCommand::CancelLogin { request_id },
+    ) {
+        Ok(()) => StatusCode::ACCEPTED.into_response(),
+        Err(error) => (StatusCode::CONFLICT, error).into_response(),
+    }
+}
+
+#[derive(Debug, Default)]
+struct ProviderDistributionOutcome {
+    succeeded: usize,
+    failed: usize,
+    pending: usize,
+}
+
+impl ProviderDistributionOutcome {
+    const fn state(&self) -> crate::provider_service::ServiceDistributionState {
+        use crate::provider_service::ServiceDistributionState;
+        if self.failed == 0 && self.pending == 0 {
+            ServiceDistributionState::Current
+        } else if self.succeeded == 0 && self.failed == 0 {
+            ServiceDistributionState::Pending
+        } else if self.succeeded == 0 && self.pending == 0 {
+            ServiceDistributionState::Failed
+        } else {
+            ServiceDistributionState::Partial
+        }
+    }
+}
+
+async fn distribute_provider_auth(
+    state: &Arc<AppState>,
+    provider_id: &str,
+) -> ProviderDistributionOutcome {
+    let connected = state.machine_control.connected_machine_ids();
+    let Some(store) = state.store.as_ref() else {
+        return ProviderDistributionOutcome {
+            failed: 1,
+            ..ProviderDistributionOutcome::default()
+        };
+    };
+    let enrolled = match store.list_machines().await {
+        Ok(machines) => machines,
+        Err(error) => {
+            tracing::warn!(%error, %provider_id, "listing enrolled Machines for Provider auth sync");
+            return ProviderDistributionOutcome {
+                failed: 1,
+                ..ProviderDistributionOutcome::default()
+            };
+        }
+    };
+    let mut outcome = ProviderDistributionOutcome::default();
+    for machine in enrolled.into_iter().filter(|machine| !machine.revoked) {
+        let machine_id = machine.id;
+        if !connected.contains(&machine_id) {
+            outcome.pending += 1;
+            continue;
+        }
+        match sync_provider_auth_to_machine(state, &machine_id, provider_id).await {
+            Ok(()) => outcome.succeeded += 1,
+            Err(error) => {
+                outcome.failed += 1;
+                tracing::warn!(%error, %machine_id, %provider_id, "Provider auth replica sync failed");
+            }
+        }
+    }
+    outcome
+}
+
+async fn sync_provider_auth_to_machine(
+    state: &Arc<AppState>,
+    machine_id: &str,
+    provider_id: &str,
+) -> Result<(), String> {
+    let store = state
+        .store
+        .as_ref()
+        .ok_or_else(|| "Provider authentication sync requires persistence".to_owned())?;
+    let public_key = store
+        .machine_encryption_public_key(machine_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("Machine {machine_id:?} has no enrolled encryption key"))?;
+    let envelope = state
+        .provider_auth
+        .seal_for_machine(provider_id, &public_key)
+        .map_err(|error| error.to_string())?;
+    let request_id = machine_request_id("provider-auth");
+    state
+        .machine_control
+        .command_request(
+            machine_id,
+            request_id.clone(),
+            crate::machine_protocol::MachineCommand::ApplyProviderAuth {
+                request_id,
+                envelope: Box::new(envelope),
+            },
+        )
+        .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn accept_service_auth_candidate(
+    state: &Arc<AppState>,
+    machine_id: &str,
+    request_id: &str,
+    provider_id: &str,
+    auth_method: &str,
+    provider_version: &str,
+    generation_digest: &str,
+    auth_contract_fingerprint: &str,
+    portable_schema: &str,
+    values: BTreeMap<String, String>,
+    account_label: Option<String>,
+) -> Result<(), String> {
+    let executor = {
+        let mut executors = state.provider_auth_executors.lock();
+        let executor = executors
+            .get_mut(request_id)
+            .ok_or_else(|| "authentication executor is no longer active".to_owned())?;
+        if !executor.accepts_candidate(
+            machine_id,
+            provider_id,
+            auth_method,
+            provider_version,
+            generation_digest,
+            auth_contract_fingerprint,
+        ) {
+            return Err("authentication candidate does not match its executor".to_owned());
+        }
+        if executor.promotion_started {
+            return Ok(());
+        }
+        executor.promotion_started = true;
+        executor.clone()
+    };
+    let package = state
+        .provider_catalog
+        .package(provider_id, provider_version, generation_digest)
+        .ok_or_else(|| {
+            "authentication candidate references an untrusted Provider release".to_owned()
+        })?;
+    if package.manifest.compatibility.auth_contract_fingerprint != auth_contract_fingerprint {
+        return Err("authentication candidate contract fingerprint mismatch".to_owned());
+    }
+    if package.manifest.authentication.portable_schema != portable_schema {
+        return Err("authentication candidate portable schema mismatch".to_owned());
+    }
+    let bundle = crate::machine_protocol::PortableCredentialBundle {
+        portable_schema: portable_schema.to_owned(),
+        method_id: auth_method.to_owned(),
+        values,
+    };
+    let status = state
+        .provider_auth
+        .commit(
+            &package,
+            &bundle,
+            account_label.clone(),
+            Some(executor.expected_generation),
+        )
+        .map_err(|error| error.to_string())?;
+    let replicas = distribute_provider_auth(state, provider_id).await;
+    let distribution = replicas.state();
+    let mut warnings = Vec::new();
+    if let Err(error) =
+        state
+            .provider_auth
+            .mark_distribution(provider_id, status.auth_generation, distribution)
+    {
+        tracing::warn!(%error, %provider_id, "recording Provider auth distribution state");
+        warnings.push(format!("distribution status update is pending: {error}"));
+    }
+    let finalize_request_id = machine_request_id("provider-auth-finalize");
+    if let Err(error) = state
+        .machine_control
+        .command_request(
+            machine_id,
+            finalize_request_id.clone(),
+            crate::machine_protocol::MachineCommand::FinalizeProviderAuthCandidate {
+                request_id: finalize_request_id,
+                provider_id: provider_id.to_owned(),
+                auth_method: auth_method.to_owned(),
+                candidate_request_id: request_id.to_owned(),
+            },
+        )
+        .await
+    {
+        tracing::warn!(%error, %provider_id, %request_id, "cleaning temporary Provider authentication home");
+        warnings.push(format!("temporary executor cleanup is pending: {error}"));
+    }
+    state.machine_control.record(
+        machine_id,
+        crate::machine_protocol::MachineEvent::LoginState {
+            request_id: request_id.to_owned(),
+            provider: provider_id.to_owned(),
+            state: crate::machine_protocol::AuthState::SignedIn,
+            account_label,
+            detail: Some(if warnings.is_empty() {
+                "authentication is owned and synchronized by Cowboy Service".to_owned()
+            } else {
+                format!(
+                    "authentication is owned by Cowboy Service; {}",
+                    warnings.join("; ")
+                )
+            }),
+        },
+    );
+    Ok(())
+}
+
 #[derive(Debug, Deserialize)]
 struct MachineEnrollRequest {
     token: String,
     public_key: String,
+    encryption_public_key: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -3101,7 +4089,7 @@ async fn api_machine_enroll(
         Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
     };
     match store
-        .consume_machine_enrollment(&request.token, &public_key)
+        .consume_machine_enrollment(&request.token, &public_key, &request.encryption_public_key)
         .await
     {
         Ok(machine) => (
@@ -3174,6 +4162,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
         challenge_id: challenge_id.clone(),
         nonce: nonce.clone(),
         expires_at_ms,
+        proof_version: 2,
     };
     if send_json(&mut socket, &challenge).await.is_err() {
         return;
@@ -3210,8 +4199,11 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     if now_ms() > expires_at_ms {
         return;
     }
-    let proof =
-        crate::machine_protocol::challenge_proof_v1(&challenge_id, &nonce, expires_at_ms, &hello);
+    let proof = if hello.max_protocol >= 3 {
+        crate::machine_protocol::challenge_proof_v2(&challenge_id, &nonce, expires_at_ms, &hello)
+    } else {
+        crate::machine_protocol::challenge_proof_v1(&challenge_id, &nonce, expires_at_ms, &hello)
+    };
     let signature = signature.to_owned();
     let verified = tokio::task::spawn_blocking(move || {
         crate::machine_auth::verify(&public_key, &proof, &signature)
@@ -3220,6 +4212,19 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     if !matches!(verified, Ok(Ok(true))) {
         tracing::warn!(machine = %hello.machine_id, "Machine challenge verification failed");
         return;
+    }
+    if hello.max_protocol >= 3 {
+        let Some(encryption_public_key) = hello.encryption_public_key.as_deref() else {
+            tracing::warn!(machine = %hello.machine_id, "protocol-three Machine omitted encryption key");
+            return;
+        };
+        if let Err(error) = store
+            .bind_machine_encryption_public_key(&hello.machine_id, encryption_public_key)
+            .await
+        {
+            tracing::warn!(%error, machine = %hello.machine_id, "Machine encryption key rejected");
+            return;
+        }
     }
     let Some(protocol) = crate::machine_protocol::negotiate(
         crate::machine_protocol::MIN_MACHINE_PROTOCOL_VERSION,
@@ -3246,6 +4251,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     };
     let inventory = serde_json::json!({
         "components": &hello.components,
+        "providers": &hello.providers,
         "workspaces": &hello.workspaces,
         "workspace_revision": &hello.workspace_revision,
         "capacity": &hello.capacity,
@@ -3296,6 +4302,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
         hello.machine_id.clone(),
         challenge_id.clone(),
         connection_mode == "local",
+        protocol,
         machine_command_tx,
     );
     state.machine_control.record(
@@ -3307,6 +4314,27 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
             observed_at_ms: now_ms(),
         },
     );
+    state.machine_control.record(
+        &hello.machine_id,
+        crate::machine_protocol::MachineEvent::ProviderInventory {
+            providers: hello.providers.clone(),
+            observed_at_ms: now_ms(),
+        },
+    );
+    for authentication in state.provider_auth.replica_statuses() {
+        let sync_state = Arc::clone(&state);
+        let machine_id = hello.machine_id.clone();
+        tokio::spawn(async move {
+            let outcome = distribute_provider_auth(&sync_state, &authentication.provider_id).await;
+            if let Err(error) = sync_state.provider_auth.mark_distribution(
+                &authentication.provider_id,
+                authentication.auth_generation,
+                outcome.state(),
+            ) {
+                tracing::warn!(%error, %machine_id, provider_id = %authentication.provider_id, "recording reconnected Machine Provider auth convergence");
+            }
+        });
+    }
     let (runtime_core, runtime_tunnel) = match UnixStream::pair() {
         Ok(pair) => pair,
         Err(error) => {
@@ -3352,8 +4380,10 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     }
     let mut connected_runtime: Option<Arc<RemoteRuntime>> = None;
     let mut runtime_registration_pending = true;
+    let mut current_components = hello.components.clone();
     let mut current_workspaces = hello.workspaces.clone();
     let mut current_workspace_revision = hello.workspace_revision.clone();
+    let mut current_providers = hello.providers.clone();
     let mut revocation_check = tokio::time::interval(std::time::Duration::from_secs(2));
     revocation_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     revocation_check.tick().await;
@@ -3433,6 +4463,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                         ..
                     },
             } => {
+                current_components = components;
                 apply_workspace_inventory(
                     &mut current_workspaces,
                     &mut current_workspace_revision,
@@ -3442,14 +4473,41 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                 state.machine_control.record(
                     &hello.machine_id,
                     crate::machine_protocol::MachineEvent::Inventory {
-                        components: components.clone(),
+                        components: current_components.clone(),
                         workspaces: Some(current_workspaces.clone()),
                         workspace_revision: current_workspace_revision.clone(),
                         observed_at_ms: now_ms(),
                     },
                 );
                 let inventory = serde_json::json!({
-                    "components": components,
+                    "components": &current_components,
+                    "providers": &current_providers,
+                    "workspaces": &current_workspaces,
+                    "workspace_revision": &current_workspace_revision,
+                    "capacity": &hello.capacity,
+                });
+                store
+                    .machine_seen(&hello.machine_id, &challenge_id, Some(&inventory))
+                    .await
+            }
+            crate::machine_protocol::MachineFrame::Event {
+                event:
+                    crate::machine_protocol::MachineEvent::ProviderInventory {
+                        providers,
+                        observed_at_ms,
+                    },
+            } => {
+                current_providers = providers;
+                state.machine_control.record(
+                    &hello.machine_id,
+                    crate::machine_protocol::MachineEvent::ProviderInventory {
+                        providers: current_providers.clone(),
+                        observed_at_ms,
+                    },
+                );
+                let inventory = serde_json::json!({
+                    "components": &current_components,
+                    "providers": &current_providers,
                     "workspaces": &current_workspaces,
                     "workspace_revision": &current_workspace_revision,
                     "capacity": &hello.capacity,
@@ -3507,21 +4565,77 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                     }
                 }
             }
+            crate::machine_protocol::MachineFrame::Event {
+                event:
+                    crate::machine_protocol::MachineEvent::ServiceAuthCandidate {
+                        request_id,
+                        provider_id,
+                        auth_method,
+                        provider_version,
+                        generation_digest,
+                        auth_contract_fingerprint,
+                        portable_schema,
+                        bundle,
+                        account_label,
+                    },
+            } => {
+                let candidate_state = Arc::clone(&state);
+                let candidate_machine_id = hello.machine_id.clone();
+                tokio::spawn(async move {
+                    if let Err(error) = accept_service_auth_candidate(
+                        &candidate_state,
+                        &candidate_machine_id,
+                        &request_id,
+                        &provider_id,
+                        &auth_method,
+                        &provider_version,
+                        &generation_digest,
+                        &auth_contract_fingerprint,
+                        &portable_schema,
+                        bundle,
+                        account_label,
+                    )
+                    .await
+                    {
+                        tracing::warn!(%error, %provider_id, "temporary Provider login could not be promoted");
+                        candidate_state
+                            .provider_auth
+                            .fail_authentication(&provider_id, &request_id);
+                        candidate_state.machine_control.record(
+                            &candidate_machine_id,
+                            crate::machine_protocol::MachineEvent::LoginState {
+                                request_id,
+                                provider: provider_id,
+                                state: crate::machine_protocol::AuthState::Error,
+                                account_label: None,
+                                detail: Some(error),
+                            },
+                        );
+                    }
+                });
+                store
+                    .machine_seen(&hello.machine_id, &challenge_id, None)
+                    .await
+            }
             crate::machine_protocol::MachineFrame::Event { event } => {
-                let usage_provider = usage_provider_after_login(&event, connection_mode == "local");
-                state.machine_control.record(&hello.machine_id, event);
-                if let Some(provider) = usage_provider {
-                    let usage = state.usage.clone();
-                    tokio::spawn(async move {
-                        if let Err(error) = usage.refresh_provider(provider).await {
-                            tracing::warn!(
-                                %error,
-                                provider,
-                                "refreshing provider usage after Machine login"
-                            );
-                        }
-                    });
+                if let crate::machine_protocol::MachineEvent::LoginState {
+                    request_id,
+                    provider,
+                    state: auth_state,
+                    ..
+                } = &event
+                    && matches!(
+                        auth_state,
+                        crate::machine_protocol::AuthState::SignedOut
+                            | crate::machine_protocol::AuthState::Unsupported
+                            | crate::machine_protocol::AuthState::Error
+                    )
+                {
+                    state
+                        .provider_auth
+                        .fail_authentication(provider, request_id);
                 }
+                state.machine_control.record(&hello.machine_id, event);
                 store
                     .machine_seen(&hello.machine_id, &challenge_id, None)
                     .await
@@ -3583,6 +4697,15 @@ async fn api_session_reload(
     if state.hub.session_info(&session_id).is_none() {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     }
+    if provider_fence_state_for_session(&state.hub, &state.provider_session_fences, &session_id)
+        .is_some_and(|fence| fence != ProviderFenceState::Installing)
+    {
+        return (
+            StatusCode::CONFLICT,
+            "the session Provider is uninstalling from its Machine",
+        )
+            .into_response();
+    }
     match state.supervisor.reload_session(&session_id) {
         Ok(()) => (StatusCode::ACCEPTED, "reloading").into_response(),
         Err(error) => (StatusCode::CONFLICT, error).into_response(),
@@ -3601,7 +4724,11 @@ async fn api_session_cache_protection(
     else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
-    if !crate::deepseek_cache::supported_provider(&session.provider) {
+    let configuration = session.provider_behavior.as_ref().map_or_else(
+        || crate::provider::legacy_behavior(&session.provider).configuration,
+        |behavior| behavior.configuration.clone(),
+    );
+    if !crate::deepseek_cache::supported_behavior(&configuration) {
         return (
             StatusCode::BAD_REQUEST,
             "cache protection is available only for DeepSeek sessions",
@@ -3611,7 +4738,7 @@ async fn api_session_cache_protection(
     let enabled = state
         .hub
         .config_preferences(&session.id)
-        .and_then(|preferences| crate::deepseek_cache::selected(&preferences, &session.provider))
+        .and_then(|preferences| crate::deepseek_cache::selected(&preferences, &configuration))
         .unwrap_or(true);
     if !enabled {
         return Json(serde_json::json!({
@@ -3628,7 +4755,7 @@ async fn api_session_cache_protection(
             &session.machine_id,
             "deepseek-cache-status",
             serde_json::json!({
-                "provider": session.provider,
+                "configuration": configuration,
                 "sessionId": session.id,
             }),
         )
@@ -3672,6 +4799,22 @@ async fn api_session_prompt(
     Path(session_id): Path<String>,
     Json(req): Json<SessionPromptRequest>,
 ) -> Response {
+    // Keep the read guard through dispatch. Provider uninstall acquires the
+    // write guard before it snapshots active turns, so a prompt can never slip
+    // between the fence check and the explicit active-turn confirmation.
+    let provider_key = provider_fence_key_for_session(&state.hub, &session_id);
+    let provider_prompt_fence = state.provider_session_fences.read();
+    if provider_key
+        .as_ref()
+        .and_then(|key| provider_prompt_fence.get(key))
+        .is_some_and(|fence| *fence != ProviderFenceState::Installing)
+    {
+        return (
+            StatusCode::CONFLICT,
+            "the session Provider is uninstalling from its Machine",
+        )
+            .into_response();
+    }
     let blocks: Vec<ContentBlock> = if req.content.is_empty() {
         if req.text.is_empty() {
             return (StatusCode::BAD_REQUEST, "empty prompt: no text or content").into_response();
@@ -3732,10 +4875,102 @@ fn web_session_is_missing_machine(machine_id: &str, origin: &SessionOrigin) -> b
     machine_id == "local" && matches!(origin, SessionOrigin::Web)
 }
 
+struct ResolvedProviderGeneration {
+    version: String,
+    digest: String,
+    auth_generation: Option<u64>,
+    behavior: cowboy_provider_sdk::ProviderBehaviorContract,
+}
+
+fn resolve_scheduling_auth_generation(
+    installed: &crate::machine_protocol::ProviderInventory,
+    authentication_required: bool,
+    service_auth: Option<&crate::provider_service::ProviderAuthenticationStatus>,
+) -> Result<Option<u64>, String> {
+    if !authentication_required {
+        return Ok(None);
+    }
+    let provider_id = &installed.provider_id;
+    let service_auth = service_auth.ok_or_else(|| {
+        format!("Provider {provider_id:?} is not authenticated at Cowboy Service scope")
+    })?;
+    if service_auth.authentication_state
+        != crate::provider_service::ServiceAuthenticationState::Ready
+    {
+        return Err(format!(
+            "Provider {provider_id:?} authentication is not ready at Cowboy Service scope"
+        ));
+    }
+    if installed.replica_state != crate::machine_protocol::ProviderReplicaState::Current
+        || installed.materialization_state
+            != crate::machine_protocol::ProviderMaterializationState::Current
+    {
+        return Err(format!(
+            "Provider {provider_id:?} Service authentication is not synchronized to this Machine"
+        ));
+    }
+    let installed_generation = installed
+        .auth_generation
+        .ok_or_else(|| "Provider auth generation is missing".to_owned())?;
+    if installed_generation != service_auth.auth_generation {
+        return Err(format!(
+            "Provider {provider_id:?} Service authentication generation is not synchronized to this Machine"
+        ));
+    }
+    Ok(Some(installed_generation))
+}
+
+fn resolve_provider_generation(
+    catalog: &crate::provider_catalog::ProviderCatalog,
+    inventory: &[crate::machine_protocol::ProviderInventory],
+    provider_id: &str,
+    service_auth: Option<&crate::provider_service::ProviderAuthenticationStatus>,
+) -> Result<ResolvedProviderGeneration, String> {
+    let installed = inventory
+        .iter()
+        .find(|provider| {
+            provider.provider_id == provider_id
+                && provider.state == crate::machine_protocol::ProviderInstallationState::Active
+        })
+        .ok_or_else(|| format!("Provider {provider_id:?} is not installed on this Machine"))?;
+    let package = catalog
+        .package(
+            provider_id,
+            &installed.provider_version,
+            &installed.generation_digest,
+        )
+        .ok_or_else(|| {
+            format!(
+                "installed Provider generation {} is not trusted by this Catalog",
+                installed.generation_digest
+            )
+        })?;
+    if package.contract_fingerprint != installed.contract_fingerprint {
+        return Err(
+            "installed Provider contract fingerprint does not match the Catalog".to_owned(),
+        );
+    }
+    let auth_generation = resolve_scheduling_auth_generation(
+        installed,
+        package.manifest.authentication.required,
+        service_auth,
+    )?;
+    Ok(ResolvedProviderGeneration {
+        version: installed.provider_version.clone(),
+        digest: installed.generation_digest.clone(),
+        auth_generation,
+        behavior: package.manifest.runtime.behavior,
+    })
+}
+
 /// Response body for `POST /api/sessions`.
 #[derive(Debug, Serialize)]
 struct NewSessionResponse {
     session_id: String,
+    provider_version: String,
+    provider_generation_digest: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider_auth_generation: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3806,6 +5041,17 @@ async fn api_new_session(
         )
             .into_response();
     }
+    if state
+        .provider_session_fences
+        .read()
+        .contains_key(&(req.machine_id.clone(), req.provider.clone()))
+    {
+        return (
+            StatusCode::CONFLICT,
+            "Provider is changing on the selected Machine",
+        )
+            .into_response();
+    }
     if req.machine_id != "local" {
         let Some(store) = state.store.as_ref() else {
             return (
@@ -3855,25 +5101,25 @@ async fn api_new_session(
             )
                 .into_response();
         }
-        let supported = machine
+        let providers = machine
             .inventory
-            .get("components")
+            .get("providers")
             .cloned()
             .and_then(|value| {
-                serde_json::from_value::<Vec<crate::machine_protocol::ComponentInventory>>(value)
+                serde_json::from_value::<Vec<crate::machine_protocol::ProviderInventory>>(value)
                     .ok()
             })
-            .is_some_and(|components| machine_supports_provider(&components, &req.provider));
-        if !supported {
-            return (
-                StatusCode::CONFLICT,
-                format!(
-                    "provider {:?} is not installed and authenticated on machine {:?}",
-                    req.provider, req.machine_id
-                ),
-            )
-                .into_response();
-        }
+            .unwrap_or_default();
+        let provider_auth = state.provider_auth.status(&req.provider);
+        let provider_generation = match resolve_provider_generation(
+            &state.provider_catalog,
+            &providers,
+            &req.provider,
+            provider_auth.as_ref(),
+        ) {
+            Ok(generation) => generation,
+            Err(error) => return (StatusCode::CONFLICT, error).into_response(),
+        };
 
         let Some(source_path) = cwd.as_deref() else {
             return (
@@ -3882,18 +5128,47 @@ async fn api_new_session(
             )
                 .into_response();
         };
-        if let Err(message) = state.supervisor.register_session_on_with_id(
-            &session_id,
+        // Hold both guards through the synchronous durable registration. The
+        // lifecycle read guard makes an uninstall snapshot include this new
+        // session; the Service auth read guard prevents logout/refresh from
+        // changing the generation after readiness was checked.
+        let provider_creation_fence = state.provider_session_fences.read();
+        if provider_creation_fence.contains_key(&(req.machine_id.clone(), req.provider.clone())) {
+            return (
+                StatusCode::CONFLICT,
+                "Provider is changing on the selected Machine",
+            )
+                .into_response();
+        }
+        let registration = state.provider_auth.with_scheduling_generation(
             &req.provider,
-            Some(source_path.to_owned()),
-            req.origin,
-            req.system,
-            crate::supervisor::SessionPlacement {
-                machine_id: &req.machine_id,
-                workspace: Some(&selected_workspace),
+            provider_generation.auth_generation.is_some(),
+            provider_generation.auth_generation,
+            || {
+                state.supervisor.register_session_on_with_id(
+                    &session_id,
+                    &req.provider,
+                    Some(source_path.to_owned()),
+                    req.origin,
+                    req.system,
+                    crate::supervisor::SessionPlacement {
+                        machine_id: &req.machine_id,
+                        workspace: Some(&selected_workspace),
+                    },
+                    crate::supervisor::ProviderGeneration {
+                        version: &provider_generation.version,
+                        digest: &provider_generation.digest,
+                        auth_generation: provider_generation.auth_generation,
+                        behavior: Some(&provider_generation.behavior),
+                    },
+                )
             },
-        ) {
-            return (StatusCode::BAD_REQUEST, message).into_response();
+        );
+        drop(provider_creation_fence);
+        match registration {
+            Ok(Ok(_)) => {}
+            Ok(Err(message)) => return (StatusCode::BAD_REQUEST, message).into_response(),
+            Err(error) => return (StatusCode::CONFLICT, error.to_string()).into_response(),
         }
 
         let prepare_state = Arc::clone(&state);
@@ -3943,6 +5218,19 @@ async fn api_new_session(
                 created = prepared.created,
                 "prepared Machine workspace for session"
             );
+            loop {
+                match provider_fence_state_for_session(
+                    &prepare_state.hub,
+                    &prepare_state.provider_session_fences,
+                    &prepare_session_id,
+                ) {
+                    Some(ProviderFenceState::Uninstalling) => {
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    }
+                    Some(ProviderFenceState::Uninstalled) => return,
+                    Some(ProviderFenceState::Installing) | None => break,
+                }
+            }
             let prepared_session = prepare_state
                 .hub
                 .update_session_cwd(&prepare_session_id, prepared.path)
@@ -3972,7 +5260,16 @@ async fn api_new_session(
                 );
             }
         });
-        return (StatusCode::CREATED, Json(NewSessionResponse { session_id })).into_response();
+        return (
+            StatusCode::CREATED,
+            Json(NewSessionResponse {
+                session_id,
+                provider_version: provider_generation.version,
+                provider_generation_digest: provider_generation.digest,
+                provider_auth_generation: provider_generation.auth_generation,
+            }),
+        )
+            .into_response();
     }
     match state.supervisor.new_session_on_with_id(
         &session_id,
@@ -3981,6 +5278,12 @@ async fn api_new_session(
         req.origin,
         req.system,
         &req.machine_id,
+        crate::supervisor::ProviderGeneration {
+            version: "",
+            digest: "",
+            auth_generation: None,
+            behavior: None,
+        },
     ) {
         Ok(session_id) => {
             if let Some(prompt) = req
@@ -3997,7 +5300,16 @@ async fn api_new_session(
                     Some(format!("Initial prompt failed: {message}")),
                 );
             }
-            (StatusCode::CREATED, Json(NewSessionResponse { session_id })).into_response()
+            (
+                StatusCode::CREATED,
+                Json(NewSessionResponse {
+                    session_id,
+                    provider_version: String::new(),
+                    provider_generation_digest: String::new(),
+                    provider_auth_generation: None,
+                }),
+            )
+                .into_response()
         }
         Err(message) => (StatusCode::BAD_REQUEST, message).into_response(),
     }
@@ -4016,86 +5328,75 @@ fn resolve_machine_workspace<'a>(
         .ok_or_else(|| format!("unknown trusted workspace {requested_id:?}"))
 }
 
-fn machine_supports_provider(
-    components: &[crate::machine_protocol::ComponentInventory],
-    provider: &str,
-) -> bool {
-    use crate::machine_protocol::{AuthState, ComponentKind, ComponentState};
-    let cli_slot = match provider {
-        "claude-code" | "claude-deepseek" => "claude",
-        "codex-deepseek" => "codex",
-        provider => provider,
-    };
-    let cli_ready = components.iter().any(|component| {
-        component.id.kind == ComponentKind::ProviderCli
-            && matches!(component.id.slot.as_str(), candidate if candidate == cli_slot || candidate == provider)
-            && component.state == ComponentState::Active
-            && (matches!(provider, "codex-deepseek" | "claude-deepseek")
-                || component.auth == Some(AuthState::SignedIn))
-    });
-    if !cli_ready {
-        return false;
-    }
-    if provider == "gemini" {
-        return gemini_machine_auth_is_current(components);
-    }
-    if provider == "grok" {
-        // Grok Build is the ACP stdio entrypoint; there is no separate adapter
-        // component to install or reconcile.
-        return true;
-    }
-    let adapter_active = |slot: &str| {
-        components.iter().any(|component| {
-            component.id.kind == ComponentKind::ProviderAdapter
-                && component.id.slot == slot
-                && component.state == ComponentState::Active
-        })
-    };
-    if provider == "codex-deepseek" {
-        adapter_active("codex") && adapter_active("codex-deepseek")
-    } else if provider == "claude-deepseek" {
-        adapter_active("claude") && adapter_active("claude-deepseek")
-    } else {
-        adapter_active(cli_slot) || adapter_active(provider)
-    }
-}
-
-fn gemini_machine_auth_is_current(
-    components: &[crate::machine_protocol::ComponentInventory],
-) -> bool {
-    components.iter().any(|component| {
-        component.id.kind == crate::machine_protocol::ComponentKind::ProviderCli
-            && component.id.slot == "gemini"
-            && component.detail.is_some()
-    })
-}
-
 #[cfg(test)]
 mod machine_provider_tests {
     use super::{
-        apply_workspace_inventory, machine_supports_provider, resolve_machine_workspace,
-        usage_provider_after_login, web_session_is_missing_machine,
+        ProviderAuthExecutor, apply_workspace_inventory, resolve_machine_workspace,
+        resolve_scheduling_auth_generation, web_session_is_missing_machine,
     };
     use crate::core::SessionOrigin;
-    use crate::machine_protocol::{
-        AuthState, ComponentId, ComponentInventory, ComponentKind, ComponentState,
-    };
 
-    fn component(kind: ComponentKind, slot: &str, auth: Option<AuthState>) -> ComponentInventory {
-        ComponentInventory {
-            id: ComponentId {
-                kind,
-                slot: slot.to_owned(),
-            },
-            state: ComponentState::Active,
-            version: "v1".to_owned(),
-            generation: "v1".to_owned(),
-            digest: "digest".to_owned(),
-            rollback_generation: None,
-            active_leases: 0,
-            auth,
+    fn installed_auth(generation: u64) -> crate::machine_protocol::ProviderInventory {
+        crate::machine_protocol::ProviderInventory {
+            provider_id: "gemini".to_owned(),
+            provider_version: "1.0.0".to_owned(),
+            generation_digest: format!("sha256:{}", "1".repeat(64)),
+            contract_fingerprint: format!("sha256:{}", "2".repeat(64)),
+            state: crate::machine_protocol::ProviderInstallationState::Active,
+            rollback_generation_digest: None,
+            active_session_leases: 0,
+            auth_generation: Some(generation),
+            replica_state: crate::machine_protocol::ProviderReplicaState::Current,
+            materialization_state: crate::machine_protocol::ProviderMaterializationState::Current,
             detail: None,
-            update: None,
+        }
+    }
+
+    #[test]
+    fn authentication_candidate_is_bound_to_the_exact_executor_release() {
+        let executor = ProviderAuthExecutor {
+            machine_id: "hawk".to_owned(),
+            provider_id: "gemini".to_owned(),
+            provider_version: "1.0.0".to_owned(),
+            generation_digest: "sha256:release".to_owned(),
+            auth_contract_fingerprint: "sha256:auth".to_owned(),
+            auth_method: "api-key".to_owned(),
+            expected_generation: 0,
+            promotion_started: false,
+            expires_at_ms: i64::MAX,
+        };
+        assert!(executor.accepts_candidate(
+            "hawk",
+            "gemini",
+            "api-key",
+            "1.0.0",
+            "sha256:release",
+            "sha256:auth",
+        ));
+        assert!(!executor.accepts_candidate(
+            "hawk",
+            "gemini",
+            "api-key",
+            "1.0.0",
+            "sha256:other-release",
+            "sha256:auth",
+        ));
+    }
+
+    fn service_auth(
+        generation: u64,
+        state: crate::provider_service::ServiceAuthenticationState,
+    ) -> crate::provider_service::ProviderAuthenticationStatus {
+        crate::provider_service::ProviderAuthenticationStatus {
+            provider_id: "gemini".to_owned(),
+            auth_generation: generation,
+            authentication_state: state,
+            distribution_state: crate::provider_service::ServiceDistributionState::Current,
+            auth_contract_fingerprint: format!("sha256:{}", "3".repeat(64)),
+            portable_schema: "gemini-auth-v1".to_owned(),
+            projection_schema: "gemini-home-v1".to_owned(),
+            account_label: None,
+            updated_at_ms: 1,
         }
     }
 
@@ -4107,153 +5408,6 @@ mod machine_provider_tests {
             &SessionOrigin::Api
         ));
         assert!(!web_session_is_missing_machine("hawk", &SessionOrigin::Web));
-    }
-
-    #[test]
-    fn codex_requires_authenticated_cli_and_adapter() {
-        let cli = component(
-            ComponentKind::ProviderCli,
-            "codex",
-            Some(AuthState::SignedIn),
-        );
-        assert!(!machine_supports_provider(
-            std::slice::from_ref(&cli),
-            "codex"
-        ));
-        let adapter = component(ComponentKind::ProviderAdapter, "codex", None);
-        assert!(machine_supports_provider(&[cli, adapter], "codex"));
-    }
-
-    #[test]
-    fn claude_provider_id_maps_to_managed_claude_slot() {
-        let components = [
-            component(
-                ComponentKind::ProviderCli,
-                "claude",
-                Some(AuthState::SignedIn),
-            ),
-            component(ComponentKind::ProviderAdapter, "claude", None),
-        ];
-        assert!(machine_supports_provider(&components, "claude-code"));
-    }
-
-    #[test]
-    fn deepseek_runtime_reuses_managed_codex_components() {
-        let codex_only = [
-            component(
-                ComponentKind::ProviderCli,
-                "codex",
-                Some(AuthState::SignedIn),
-            ),
-            component(ComponentKind::ProviderAdapter, "codex", None),
-        ];
-        assert!(!machine_supports_provider(&codex_only, "codex-deepseek"));
-        let components = [
-            component(
-                ComponentKind::ProviderCli,
-                "codex",
-                Some(AuthState::SignedIn),
-            ),
-            component(ComponentKind::ProviderAdapter, "codex", None),
-            component(ComponentKind::ProviderAdapter, "codex-deepseek", None),
-        ];
-        assert!(machine_supports_provider(&components, "codex-deepseek"));
-
-        let signed_out_components = [
-            component(
-                ComponentKind::ProviderCli,
-                "codex",
-                Some(AuthState::SignedOut),
-            ),
-            component(ComponentKind::ProviderAdapter, "codex", None),
-            component(ComponentKind::ProviderAdapter, "codex-deepseek", None),
-        ];
-        assert!(machine_supports_provider(
-            &signed_out_components,
-            "codex-deepseek"
-        ));
-    }
-
-    #[test]
-    fn deepseek_runtime_reuses_claude_adapter_without_claude_login() {
-        let claude_only = [
-            component(
-                ComponentKind::ProviderCli,
-                "claude",
-                Some(AuthState::SignedIn),
-            ),
-            component(ComponentKind::ProviderAdapter, "claude", None),
-        ];
-        assert!(!machine_supports_provider(&claude_only, "claude-deepseek"));
-        let components = [
-            component(
-                ComponentKind::ProviderCli,
-                "claude",
-                Some(AuthState::SignedOut),
-            ),
-            component(ComponentKind::ProviderAdapter, "claude", None),
-            component(ComponentKind::ProviderAdapter, "claude-deepseek", None),
-        ];
-        assert!(machine_supports_provider(&components, "claude-deepseek"));
-    }
-
-    #[test]
-    fn gemini_cli_is_its_acp_entrypoint_only_after_login_is_confirmed() {
-        let cli = component(
-            ComponentKind::ProviderCli,
-            "gemini",
-            Some(AuthState::SignedOut),
-        );
-        assert!(!machine_supports_provider(
-            std::slice::from_ref(&cli),
-            "gemini"
-        ));
-        let authenticated = ComponentInventory {
-            auth: Some(AuthState::SignedIn),
-            detail: Some("Gemini API key".to_owned()),
-            ..cli
-        };
-        assert!(machine_supports_provider(&[authenticated], "gemini"));
-    }
-
-    #[test]
-    fn grok_cli_is_its_acp_entrypoint_after_login() {
-        let signed_out = component(
-            ComponentKind::ProviderCli,
-            "grok",
-            Some(AuthState::SignedOut),
-        );
-        assert!(!machine_supports_provider(
-            std::slice::from_ref(&signed_out),
-            "grok"
-        ));
-        let signed_in = ComponentInventory {
-            auth: Some(AuthState::SignedIn),
-            ..signed_out
-        };
-        assert!(machine_supports_provider(&[signed_in], "grok"));
-    }
-
-    #[test]
-    fn local_grok_login_refreshes_xai_usage_without_crossing_machine_boundaries() {
-        let signed_in = crate::machine_protocol::MachineEvent::LoginState {
-            request_id: "login-1".to_owned(),
-            provider: "grok".to_owned(),
-            state: AuthState::SignedIn,
-            account_label: None,
-            detail: None,
-        };
-        assert_eq!(usage_provider_after_login(&signed_in, true), Some("xai"));
-        assert_eq!(usage_provider_after_login(&signed_in, false), None);
-
-        let signed_out = crate::machine_protocol::MachineEvent::LoginState {
-            request_id: "login-2".to_owned(),
-            provider: "grok".to_owned(),
-            state: AuthState::SignedOut,
-            account_label: None,
-            detail: None,
-        };
-        assert_eq!(usage_provider_after_login(&signed_out, true), None);
     }
 
     #[test]
@@ -4270,6 +5424,43 @@ mod machine_provider_tests {
         );
         assert!(resolve_machine_workspace(&workspaces, Some("/srv/cowboy")).is_err());
         assert!(resolve_machine_workspace(&workspaces, Some("unknown")).is_err());
+    }
+
+    #[test]
+    fn session_scheduling_requires_the_exact_ready_service_auth_generation() {
+        let installed = installed_auth(7);
+        let ready = service_auth(
+            7,
+            crate::provider_service::ServiceAuthenticationState::Ready,
+        );
+        assert_eq!(
+            resolve_scheduling_auth_generation(&installed, true, Some(&ready)),
+            Ok(Some(7))
+        );
+
+        let stale = service_auth(
+            8,
+            crate::provider_service::ServiceAuthenticationState::Ready,
+        );
+        assert!(
+            resolve_scheduling_auth_generation(&installed, true, Some(&stale))
+                .unwrap_err()
+                .contains("generation is not synchronized")
+        );
+
+        let signed_out = service_auth(
+            7,
+            crate::provider_service::ServiceAuthenticationState::SignedOut,
+        );
+        assert!(
+            resolve_scheduling_auth_generation(&installed, true, Some(&signed_out))
+                .unwrap_err()
+                .contains("not ready")
+        );
+        assert_eq!(
+            resolve_scheduling_auth_generation(&installed, false, None),
+            Ok(None)
+        );
     }
 
     #[test]
@@ -6197,6 +7388,49 @@ async fn api_artifact(State(state): State<Arc<AppState>>, Path(name): Path<Strin
     }
 }
 
+async fn provider_release_artifact(
+    State(state): State<Arc<AppState>>,
+    Path((digest, name)): Path<(String, String)>,
+) -> Response {
+    let Some(path) = state
+        .provider_catalog
+        .published_artifact_path(&digest, &name)
+    else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let file = match tokio::fs::File::open(&path).await {
+        Ok(file) => file,
+        Err(error) => {
+            tracing::info!(%error, artifact = %path.display(), "Provider artifact is unavailable");
+            return StatusCode::NOT_FOUND.into_response();
+        }
+    };
+    let metadata = match file.metadata().await {
+        Ok(metadata) if metadata.is_file() => metadata,
+        Ok(_) => return StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            tracing::warn!(%error, artifact = %path.display(), "reading Provider artifact metadata failed");
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+    };
+    let digest = digest
+        .strip_prefix("sha256:")
+        .unwrap_or(&digest)
+        .to_ascii_lowercase();
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/octet-stream")
+        .header("x-content-type-options", "nosniff")
+        .header(header::CONTENT_LENGTH, metadata.len())
+        .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
+        .header(header::ETAG, format!("\"sha256:{digest}\""))
+        .body(Body::from_stream(ReaderStream::new(file)))
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "building Provider artifact response failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        })
+}
+
 /// Serve a separately deployed asset by path, falling back to `index.html` so
 /// the SPA owns client-side routing. Missing hashed assets never fall back: a
 /// module request must receive a real 404 rather than HTML with a 200 status.
@@ -6541,6 +7775,28 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
         );
         return;
     }
+    // Serialize prompt admission against Provider lifecycle changes. Holding
+    // this read guard through the command match closes the check-then-dispatch
+    // race with uninstall's active-turn snapshot.
+    let provider_prompt_key = session_id_for_err
+        .as_deref()
+        .filter(|_| matches!(&cmd, Inbound::Prompt { .. } | Inbound::Submit { .. }))
+        .and_then(|sid| provider_fence_key_for_session(&state.hub, sid));
+    let provider_prompt_fence = provider_prompt_key
+        .as_ref()
+        .map(|_| state.provider_session_fences.read());
+    if provider_prompt_key
+        .as_ref()
+        .zip(provider_prompt_fence.as_ref())
+        .and_then(|(key, fences)| fences.get(key))
+        .is_some_and(|fence| *fence != ProviderFenceState::Installing)
+    {
+        state.hub.broadcast_error(
+            session_id_for_err,
+            "the session Provider is uninstalling from its Machine".to_owned(),
+        );
+        return;
+    }
     let result = match cmd {
         Inbound::NewSession { .. } => Err(
             "legacy WebSocket session creation is disabled; use POST /api/sessions with a connected Machine"
@@ -6721,12 +7977,19 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
                 .find(|meta| meta.id == session_id);
             let terminal_provider_error = meta.as_ref().is_some_and(|meta| {
                 meta.status == Status::Crashed
-                    && meta.provider == "gemini"
                     && state
                         .hub
                         .latest_crash_detail(&session_id)
                         .as_deref()
-                        .is_some_and(crate::provider::gemini::is_retired_consumer_error)
+                        .is_some_and(|detail| {
+                            let behavior = meta
+                                .provider_behavior
+                                .clone()
+                                .unwrap_or_else(|| crate::provider::legacy_behavior(&meta.provider));
+                            behavior
+                                .matching_error_rule(detail)
+                                .is_some_and(|rule| rule.user_detail.is_some())
+                        })
             });
             if terminal_provider_error
                 || (state.hub.status(&session_id) == Some(Status::Interrupted)
@@ -7302,5 +8565,25 @@ mod bootstrap_tests {
             Outbound::SyncPatch { state, .. } => state == "queue:focused",
             _ => true,
         }));
+    }
+}
+
+#[cfg(test)]
+mod provider_uninstall_tests {
+    use super::provider_session_has_active_turn;
+    use crate::agent_model::Status;
+
+    #[test]
+    fn only_an_in_flight_turn_requires_active_uninstall_confirmation() {
+        assert!(provider_session_has_active_turn(Status::Busy));
+        for idle_or_terminal in [
+            Status::Starting,
+            Status::Running,
+            Status::Exited,
+            Status::Crashed,
+            Status::Interrupted,
+        ] {
+            assert!(!provider_session_has_active_turn(idle_or_terminal));
+        }
     }
 }

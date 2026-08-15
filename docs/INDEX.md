@@ -13,6 +13,7 @@ material, operational guidance, research evidence, and historical notes.
 ## Reading order
 
 - [`architecture/00-overview.md`](architecture/00-overview.md) — 00 Overview
+- [`requirements.md`](requirements.md) — Normative contract and implemented boundary for the Provider platform
 
 ## Documents
 
@@ -38,11 +39,12 @@ material, operational guidance, research evidence, and historical notes.
 
 ### Core documents
 
+- [`requirements.md`](requirements.md) — Cowboy core requirements and state-ownership contract
 - [`desktop-efficiency-redesign.md`](desktop-efficiency-redesign.md) — Desktop Efficiency Redesign, including the no page-wide target overlay contract
 - [`explore-transcript-design.md`](explore-transcript-design.md) — Explore Transcript Design
 - [`ios-simulator.md`](ios-simulator.md) — Ios Simulator
-- [`machine-operations.md`](machine-operations.md) — Machine Operations
-- [`provider-packages.md`](provider-packages.md) — Target design for independently released, Machine-scoped Provider packages
+- [`machine-operations.md`](machine-operations.md) — Machine operations, including Provider installation and Service-auth replica convergence
+- [`provider-packages.md`](provider-packages.md) — Schema v2 implementation for independently released, Machine-scoped Provider packages
 
 ### Integrations
 

@@ -2,6 +2,7 @@
 
 #![warn(clippy::pedantic)]
 
+use cowboy_provider_sdk::ConfigurationBehavior;
 use sha2::{Digest as _, Sha256};
 
 #[cfg(feature = "full")]
@@ -19,14 +20,17 @@ const GATEWAY_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_s
 const GATEWAY_STATUS_MAX_BYTES: usize = 4 * 1024;
 
 #[must_use]
-pub fn supported_provider(provider: &str) -> bool {
-    matches!(provider, "claude-deepseek" | "codex-deepseek")
+pub fn supported_behavior(behavior: &ConfigurationBehavior) -> bool {
+    matches!(
+        behavior,
+        ConfigurationBehavior::AnthropicGatewayV1 | ConfigurationBehavior::OpenaiGatewayV1
+    )
 }
 
 #[must_use]
 #[cfg(feature = "full")]
-pub fn selected(preferences: &serde_json::Value, provider: &str) -> Option<bool> {
-    supported_provider(provider).then(|| {
+pub fn selected(preferences: &serde_json::Value, behavior: &ConfigurationBehavior) -> Option<bool> {
+    supported_behavior(behavior).then(|| {
         preferences
             .get(CONFIG_ID)
             .and_then(serde_json::Value::as_bool)
@@ -41,10 +45,10 @@ pub fn opaque_session_id(session_id: &str) -> String {
 
 #[must_use]
 #[cfg(feature = "machine-host")]
-pub fn gateway_origin(provider: &str) -> Option<&'static str> {
-    match provider {
-        "codex-deepseek" => Some("http://127.0.0.1:61137"),
-        "claude-deepseek" => Some("http://127.0.0.1:61138"),
+pub fn gateway_origin(behavior: &ConfigurationBehavior) -> Option<&'static str> {
+    match behavior {
+        ConfigurationBehavior::OpenaiGatewayV1 => Some("http://127.0.0.1:61137"),
+        ConfigurationBehavior::AnthropicGatewayV1 => Some("http://127.0.0.1:61138"),
         _ => None,
     }
 }
@@ -53,9 +57,12 @@ pub fn gateway_origin(provider: &str) -> Option<&'static str> {
 /// deliberately independent from the worker lifecycle: callers can spawn it
 /// without delaying or interrupting a real agent turn.
 #[cfg(feature = "machine-host")]
-pub async fn revoke_local_snapshot(provider: &str, session_id: &str) -> anyhow::Result<()> {
-    let origin = gateway_origin(provider)
-        .ok_or_else(|| anyhow::anyhow!("cache protection is unavailable for {provider}"))?;
+pub async fn revoke_local_snapshot(
+    behavior: &ConfigurationBehavior,
+    session_id: &str,
+) -> anyhow::Result<()> {
+    let origin = gateway_origin(behavior)
+        .ok_or_else(|| anyhow::anyhow!("cache protection is unavailable for {behavior:?}"))?;
     let client = reqwest::Client::builder()
         .timeout(GATEWAY_REQUEST_TIMEOUT)
         .build()?;
@@ -73,11 +80,11 @@ pub async fn revoke_local_snapshot(provider: &str, session_id: &str) -> anyhow::
 /// before it crosses the Machine/controller adapter boundary.
 #[cfg(feature = "machine-host")]
 pub async fn local_snapshot_status(
-    provider: &str,
+    behavior: &ConfigurationBehavior,
     session_id: &str,
 ) -> anyhow::Result<serde_json::Value> {
-    let origin = gateway_origin(provider)
-        .ok_or_else(|| anyhow::anyhow!("cache protection is unavailable for {provider}"))?;
+    let origin = gateway_origin(behavior)
+        .ok_or_else(|| anyhow::anyhow!("cache protection is unavailable for {behavior:?}"))?;
     let client = reqwest::Client::builder()
         .timeout(GATEWAY_REQUEST_TIMEOUT)
         .build()?;
@@ -102,8 +109,8 @@ pub async fn local_snapshot_status(
 
 #[must_use]
 #[cfg(feature = "full")]
-pub fn config_option(provider: &str, enabled: bool) -> Option<serde_json::Value> {
-    supported_provider(provider).then(|| {
+pub fn config_option(behavior: &ConfigurationBehavior, enabled: bool) -> Option<serde_json::Value> {
+    supported_behavior(behavior).then(|| {
         serde_json::json!({
             "id": CONFIG_ID,
             "name": "Cache protection",
@@ -123,35 +130,30 @@ pub fn config_option(provider: &str, enabled: bool) -> Option<serde_json::Value>
 mod tests {
     use super::*;
 
+    const CLAUDE: ConfigurationBehavior = ConfigurationBehavior::AnthropicGatewayV1;
+    const CODEX: ConfigurationBehavior = ConfigurationBehavior::OpenaiGatewayV1;
+    const PORTABLE: ConfigurationBehavior = ConfigurationBehavior::PortableV1;
+
     #[cfg(feature = "full")]
     #[test]
     fn deepseek_defaults_to_auto_and_preserves_explicit_off() {
-        assert_eq!(
-            selected(&serde_json::json!({}), "codex-deepseek"),
-            Some(true)
-        );
+        assert_eq!(selected(&serde_json::json!({}), &CODEX), Some(true));
         assert_eq!(
             selected(
                 &serde_json::json!({"deepseek_cache_protection": false}),
-                "claude-deepseek"
+                &CLAUDE
             ),
             Some(false)
         );
-        assert_eq!(selected(&serde_json::json!({}), "codex"), None);
+        assert_eq!(selected(&serde_json::json!({}), &PORTABLE), None);
     }
 
     #[cfg(feature = "machine-host")]
     #[test]
     fn cache_endpoint_and_opaque_identity_are_provider_scoped_and_content_free() {
-        assert_eq!(
-            gateway_origin("codex-deepseek"),
-            Some("http://127.0.0.1:61137")
-        );
-        assert_eq!(
-            gateway_origin("claude-deepseek"),
-            Some("http://127.0.0.1:61138")
-        );
-        assert_eq!(gateway_origin("codex"), None);
+        assert_eq!(gateway_origin(&CODEX), Some("http://127.0.0.1:61137"));
+        assert_eq!(gateway_origin(&CLAUDE), Some("http://127.0.0.1:61138"));
+        assert_eq!(gateway_origin(&PORTABLE), None);
 
         let opaque = opaque_session_id("sess-private-value");
         assert_eq!(opaque.len(), 64);

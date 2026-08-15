@@ -52,7 +52,6 @@ import {
   ExpandLess,
   ExpandMore,
   Folder,
-  LightbulbOutlined,
   KeyboardArrowDown,
   MyLocation,
   NavigateBefore,
@@ -64,16 +63,20 @@ import {
   UnfoldLess,
   WarningAmberRounded,
 } from "@mui/icons-material";
-import { providerActivityKind, providerPresentation } from "./providerPresentation";
+import { providerPresentation } from "./providerPresentation";
 import { providerVisual } from "./providerVisual";
-import { ProviderIcon } from "./ProviderIcon";
-import { CLAUDE_VERBS } from "./claudeVerbs";
+import { ProviderRuntimeSurface } from "./ProviderSurface";
 import { Markdown } from "./Markdown";
 import { attachmentDisplayParts } from "./attachments";
 import { CodeView, Labeled } from "./tools/blocks";
 import { ToolBody, type ToolCtx } from "./tools/registry";
-import { toolCopyText, toolHeading, toolUsesRawOnly, toolVariantLabel } from "./tools/presentation";
-import { toolRuns, type ToolItem, type ToolRun } from "./tools/runs";
+import {
+  toolCopyText,
+  toolHeading,
+  toolUsesRawOnly,
+  toolVariantLabel,
+} from "./tools/presentation";
+import { type ToolItem, type ToolRun, toolRuns } from "./tools/runs";
 import { formatShellForDisplay } from "./shellFormatter";
 import {
   COMPACTING_NOTICE,
@@ -136,11 +139,11 @@ import {
   scrollbackReplacementFromTop,
   shouldBackfillTranscriptViewport,
   shouldContinueScrollbackFill,
+  shouldMagnetizeTranscript,
   shouldPrefetchVisibleScrollbackBoundary,
   shouldRecoverUnrenderableHistory,
-  shouldShowFreshSessionEmptyState,
   shouldShowClearedConversationEmptyState,
-  shouldMagnetizeTranscript,
+  shouldShowFreshSessionEmptyState,
 } from "./transcriptViewport";
 import {
   advanceTimelinePresentation,
@@ -194,13 +197,17 @@ async function waitForScrollbackMount(
 ): Promise<void> {
   const deadline = performance.now() + SCROLLBACK_MOUNT_WAIT_MS;
   while (stillCurrent() && performance.now() < deadline) {
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => resolve())
+    );
     const bandHeight = el.querySelector<HTMLElement>(
       "[data-transcript-scrollback-fill]",
     )?.getBoundingClientRect().height ?? 0;
     const rowCount = el.querySelectorAll<HTMLElement>("[data-key]").length;
     const contentHeight = Math.max(0, el.scrollHeight - bandHeight);
-    if (rowCount > previousRowCount || contentHeight > previousContentHeight + 1) {
+    if (
+      rowCount > previousRowCount || contentHeight > previousContentHeight + 1
+    ) {
       return;
     }
     await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 32));
@@ -235,9 +242,13 @@ const LOADING_FILL_TURNS: { mine: boolean; lines: string[] }[] = [
 function TranscriptSkeleton({
   desktop,
   provider,
+  providerVersion,
+  providerDigest,
 }: {
   desktop: boolean;
   provider: string;
+  providerVersion?: string | undefined;
+  providerDigest?: string | undefined;
 }): React.JSX.Element {
   const [stalled, setStalled] = useState(false);
   useEffect(() => {
@@ -245,7 +256,8 @@ function TranscriptSkeleton({
     return () => globalThis.clearTimeout(timer);
   }, []);
 
-  const agent = providerPresentation(provider).agent;
+  const agent =
+    providerPresentation(provider, providerVersion, providerDigest).agent;
 
   return (
     <Stack
@@ -254,14 +266,26 @@ function TranscriptSkeleton({
       sx={{
         minHeight: desktop ? undefined : "100%",
         py: desktop ? 2 : { xs: 2, sm: 3 },
-        justifyContent: desktop ? undefined : { xs: "flex-end", sm: "flex-start" },
+        justifyContent: desktop
+          ? undefined
+          : { xs: "flex-end", sm: "flex-start" },
       }}
       aria-busy="true"
       aria-label="Loading chat history"
     >
       {!desktop && (
-        <Stack direction="row" spacing={1} alignItems="center" sx={{ color: "text.secondary" }}>
-          <CircularProgress size={14} thickness={4} color="inherit" aria-hidden />
+        <Stack
+          direction="row"
+          spacing={1}
+          alignItems="center"
+          sx={{ color: "text.secondary" }}
+        >
+          <CircularProgress
+            size={14}
+            thickness={4}
+            color="inherit"
+            aria-hidden
+          />
           <Typography variant="caption" sx={{ fontWeight: 650 }}>
             Restoring {agent} conversation…
           </Typography>
@@ -369,16 +393,14 @@ function TranscriptLoadingFill({
         }}
       >
         <Stack direction="row" spacing={1} alignItems="center">
-          {paused
-            ? null
-            : (
-              <CircularProgress
-                size={13}
-                thickness={4}
-                color="inherit"
-                aria-hidden
-              />
-            )}
+          {paused ? null : (
+            <CircularProgress
+              size={13}
+              thickness={4}
+              color="inherit"
+              aria-hidden
+            />
+          )}
           <Typography
             variant="caption"
             sx={{ color: "text.secondary", fontWeight: 600 }}
@@ -504,7 +526,9 @@ function ScrollbackLoadingSkeleton({
               <Stack key={title} spacing={0.55}>
                 <Skeleton
                   variant="text"
-                  animation={loading && index >= rows.length - 2 ? "wave" : false}
+                  animation={loading && index >= rows.length - 2
+                    ? "wave"
+                    : false}
                   width={title}
                   height={13}
                   sx={{ ml: 1.5, transform: "none" }}
@@ -541,6 +565,8 @@ type ConversationEmptyKind = "preparing" | "ready" | "cleared";
 
 interface ConversationEmptyContext {
   provider: string;
+  providerVersion?: string | undefined;
+  providerDigest?: string | undefined;
   project: string | null;
   machine: string | null;
   model: string | null;
@@ -562,8 +588,14 @@ function ConversationEmptyState({
   kind: ConversationEmptyKind;
   context: ConversationEmptyContext;
 }): React.JSX.Element {
-  const agent = providerPresentation(context.provider).agent;
-  const location = [context.project, context.machine].filter(Boolean).join(" on ");
+  const agent = providerPresentation(
+    context.provider,
+    context.providerVersion,
+    context.providerDigest,
+  ).agent;
+  const location = [context.project, context.machine].filter(Boolean).join(
+    " on ",
+  );
   const title = kind === "preparing"
     ? "Preparing session"
     : kind === "cleared"
@@ -645,7 +677,10 @@ function ConversationEmptyState({
           ? <CleaningServices sx={{ fontSize: 22 }} />
           : <ChatBubbleOutline sx={{ fontSize: 22 }} />}
       </Box>
-      <Typography variant="body1" sx={{ fontWeight: 700, color: "text.primary" }}>
+      <Typography
+        variant="body1"
+        sx={{ fontWeight: 700, color: "text.primary" }}
+      >
         {title}
       </Typography>
       <Typography variant="body2" sx={{ maxWidth: 420, lineHeight: 1.55 }}>
@@ -669,7 +704,8 @@ function ConversationEmptyState({
               width: "38%",
               borderRadius: "inherit",
               bgcolor: "primary.main",
-              animation: `${prepareSweep} 1.65s cubic-bezier(.4,0,.2,1) infinite`,
+              animation:
+                `${prepareSweep} 1.65s cubic-bezier(.4,0,.2,1) infinite`,
             },
             "@media (prefers-reduced-motion: reduce)": {
               "&::after": { animation: "none", width: "55%", opacity: 0.72 },
@@ -678,7 +714,13 @@ function ConversationEmptyState({
         />
       )}
       {facts.length > 0 && (
-        <Stack direction="row" useFlexGap flexWrap="wrap" justifyContent="center" gap={0.75}>
+        <Stack
+          direction="row"
+          useFlexGap
+          flexWrap="wrap"
+          justifyContent="center"
+          gap={0.75}
+        >
           {facts.map((fact) => (
             <Chip
               key={fact}
@@ -724,361 +766,42 @@ const toolLocateFlash = keyframes`
 // Claude Code's "prompt keyword shimmer": a highlight band sweeps across the
 // verb word (color applied via background-clip:text in sx).
 const shimmer = keyframes`to { background-position: -200% 0; }`;
-// The active thought line is itself live state, not merely prose. A restrained
-// colour band moving through the glyphs makes that clear without adding another
-// spinner beside the existing work icon. Travel from 100% to 0% while the image
-// remains wider than the glyph run: the default repeating 110% → -110% motion
-// brought an adjacent gradient tile through the text as a second flash.
+// Streaming thought text is host-owned transcript state. Keep one restrained,
+// Provider-neutral band moving through the glyphs without shifting layout.
 const thoughtTextShimmer = keyframes`
   from { background-position: 100% 0; }
   to   { background-position: 0% 0; }
 `;
-const codexPhraseFade = keyframes`
-  0%, 100% { opacity: 0.28; }
-  12%, 88% { opacity: 1; }
-`;
-
-// Codex activity uses the smallest useful coding gesture: a prompt chevron
-// advances toward a breathing caret. There is no enclosing spinner or badge,
-// so it stays calm beside transcript text while remaining provider-specific.
-const codexPrompt = keyframes`
-  0%, 100% { transform: translateX(0); opacity: 0.55; }
-  50%      { transform: translateX(1.5px); opacity: 1; }
-`;
-const codexCaret = keyframes`
-  0%, 45%  { opacity: 1; }
-  55%, 100% { opacity: 0.24; }
-`;
-
-const CODEX_PHRASE_MS = 4200;
-
-function CodexWorkcell({ size = 16 }: { size?: number }): React.JSX.Element {
-  return (
-    <Box
-      component="svg"
-      viewBox="0 0 18 18"
-      aria-hidden
-      sx={{
-        width: size,
-        height: size,
-        display: "block",
-        flexShrink: 0,
-        overflow: "visible",
-        color: "primary.main",
-        "& .codex-workcell-prompt": {
-          animation: `${codexPrompt} ${
-            String(CODEX_PHRASE_MS)
-          }ms ease-in-out infinite`,
-        },
-        "& .codex-workcell-caret": {
-          animation: `${codexCaret} ${
-            String(CODEX_PHRASE_MS)
-          }ms ease-in-out infinite`,
-        },
-        "@media (prefers-reduced-motion: reduce)": {
-          "& .codex-workcell-prompt, & .codex-workcell-caret": {
-            animation: "none",
-          },
-        },
-      }}
-    >
-      <path
-        className="codex-workcell-prompt"
-        d="M3.5 5.5 7 9l-3.5 3.5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.7"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path
-        className="codex-workcell-caret"
-        d="M9.5 12.5h5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.7"
-        strokeLinecap="round"
-      />
-    </Box>
-  );
-}
-
-// Claude Code's morphing star glyph — the literal frames its terminal spinner
-// cycles through (from CC's Spinner/utils.ts `getDefaultCharacters`, the
-// non-darwin set). The "·→✢→*→✶→✻→✽" growth IS the animation. CC advances one
-// frame every 120ms in the terminal, where the glyph is small. Rendered larger
-// and higher-contrast on this web surface, that 120ms beat reads as jittery
-// "蹦", so we deliberately diverge from CC and slow it to 200ms — a calmer
-// 1.2s/cycle breath that still reads as alive. The 黑话 verb bank lives in
-// ./claudeVerbs (full 187-word copy of CC's own list).
-const CLAUDE_SPINNER_FRAMES = ["·", "✢", "*", "✶", "✻", "✽"];
-const CLAUDE_FRAME_MS = 200;
-
-// Grok keeps its real monochrome mark visible while one diagonal highlight
-// travels through it. That preserves provider identity at every frame and
-// feels like a signal crossing the xAI slash, rather than another generic
-// spinner. CSS owns the motion so a long Grok turn does not rerender React.
-const grokSignalSweep = keyframes`
-  from {
-    -webkit-mask-position: 120% 0;
-    mask-position: 120% 0;
-  }
-  to {
-    -webkit-mask-position: -20% 0;
-    mask-position: -20% 0;
-  }
-`;
-const GROK_SIGNAL_MS = 1800;
-
-// Claude-code indicator: a character-level recreation of Claude Code's own
-// status line — its morphing star glyph (CLAUDE_SPINNER_FRAMES @ 200ms) + a
-// provider-aware shimmer that rotates through the playful 黑话 bank (~3.5s) and
-// a literal "…". Standard Claude stays terracotta; DeepSeek Claude uses the
-// shared DeepSeek blue with a violet family accent. Under reduced motion the
-// glyph freezes on frame 0 ("·") and the verb shimmer collapses to a static
-// muted word (CC freezes the glyph the same way — `reducedMotion ? 0 : …`).
-// Verb rotation is content, not motion, so it stays.
-function ClaudeThinking({ provider }: { provider: string }): React.JSX.Element {
-  const theme = useTheme();
-  const muted = theme.palette.text.secondary;
-  const visual = providerVisual(provider, theme.palette.mode);
-  const reducedMotion = globalThis.matchMedia?.(
-    "(prefers-reduced-motion: reduce)",
-  ).matches;
-  const [vi, setVi] = useState(0);
-  const [frame, setFrame] = useState(0);
-  useEffect(() => {
-    const id = globalThis.setInterval(() => setVi((v) => v + 1), 3500);
-    return () => globalThis.clearInterval(id);
-  }, []);
-  useEffect(() => {
-    if (reducedMotion) return undefined;
-    const id = globalThis.setInterval(
-      () => setFrame((f) => f + 1),
-      CLAUDE_FRAME_MS,
-    );
-    return () => globalThis.clearInterval(id);
-  }, [reducedMotion]);
-  const verb = CLAUDE_VERBS[vi % CLAUDE_VERBS.length] ?? "Thinking";
-  const glyph = reducedMotion
-    ? CLAUDE_SPINNER_FRAMES[0]
-    : CLAUDE_SPINNER_FRAMES[frame % CLAUDE_SPINNER_FRAMES.length];
-
-  return (
-    <Stack
-      direction="row"
-      spacing={0.75}
-      alignItems="center"
-      sx={{ py: 0.5, alignSelf: "flex-start" }}
-    >
-      <Box
-        component="span"
-        aria-hidden
-        sx={{
-          width: 14,
-          textAlign: "center",
-          fontSize: 14,
-          lineHeight: 1,
-          fontWeight: 700,
-          color: visual.primary,
-          // Monospace + tabular so the glyph swap doesn't shift the verb.
-          fontFamily:
-            "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-        }}
-      >
-        {glyph}
-      </Box>
-      <Typography
-        variant="caption"
-        sx={{
-          fontWeight: 500,
-          letterSpacing: 0.2,
-          background:
-            `linear-gradient(90deg, ${muted} 0%, ${muted} 34%, ${visual.primary} 46%, ${visual.secondary} 54%, ${muted} 66%, ${muted} 100%)`,
-          backgroundSize: "200% 100%",
-          WebkitBackgroundClip: "text",
-          backgroundClip: "text",
-          color: "transparent",
-          animation: `${shimmer} 2.4s linear infinite`,
-          "@media (prefers-reduced-motion: reduce)": {
-            animation: "none",
-            background: "none",
-            color: muted,
-            WebkitTextFillColor: muted,
-          },
-        }}
-      >
-        {verb}…
-      </Typography>
-    </Stack>
-  );
-}
-
-function CodexThinking({ provider }: { provider: string }): React.JSX.Element {
-  const theme = useTheme();
-  const reducedMotion = globalThis.matchMedia?.(
-    "(prefers-reduced-motion: reduce)",
-  ).matches;
-  const [phraseIndex, setPhraseIndex] = useState(() =>
-    Math.floor(Date.now() / CODEX_PHRASE_MS) % CLAUDE_VERBS.length
-  );
-  useEffect(() => {
-    const id = globalThis.setInterval(
-      () => setPhraseIndex((index) => index + 1),
-      CODEX_PHRASE_MS,
-    );
-    return () => globalThis.clearInterval(id);
-  }, []);
-  const phrase = CLAUDE_VERBS[
-    phraseIndex % CLAUDE_VERBS.length
-  ] ?? "Thinking";
-  const muted = theme.palette.text.secondary;
-  const visual = providerVisual(provider, theme.palette.mode);
-  return (
-    <Stack
-      direction="row"
-      spacing={0.8}
-      alignItems="center"
-      aria-label="Codex is working"
-      sx={{ py: 0.5, alignSelf: "flex-start", color: "text.secondary" }}
-    >
-      <CodexWorkcell size={17} />
-      <Typography
-        key={phraseIndex}
-        aria-hidden
-        variant="caption"
-        sx={{
-          fontWeight: 550,
-          letterSpacing: "0.015em",
-          background:
-            `linear-gradient(100deg, ${muted} 0%, ${muted} 24%, ${visual.primary} 44%, ${visual.secondary} 56%, ${muted} 74%, ${muted} 100%)`,
-          backgroundSize: "220% 100%",
-          WebkitBackgroundClip: "text",
-          backgroundClip: "text",
-          color: "transparent",
-          animation: reducedMotion
-            ? "none"
-            : `${codexPhraseFade} ${
-              String(CODEX_PHRASE_MS)
-            }ms ease-in-out, ${shimmer} 3.2s linear infinite`,
-          "@media (prefers-reduced-motion: reduce)": {
-            animation: "none",
-            background: "none",
-            color: muted,
-            WebkitTextFillColor: muted,
-          },
-        }}
-      >
-        {phrase}…
-      </Typography>
-    </Stack>
-  );
-}
-
-function GrokThinking({ provider }: { provider: string }): React.JSX.Element {
-  const theme = useTheme();
-  const visual = providerVisual(provider, theme.palette.mode);
-
-  return (
-    <Stack
-      direction="row"
-      spacing={0.8}
-      alignItems="center"
-      aria-label="Grok is working"
-      data-provider-activity="grok"
-      sx={{ py: 0.5, alignSelf: "flex-start", color: "text.secondary" }}
-    >
-      <Box
-        component="span"
-        aria-hidden
-        sx={{
-          width: 18,
-          height: 18,
-          position: "relative",
-          display: "inline-block",
-          flexShrink: 0,
-          color: visual.primary,
-          "& .grok-mark-base, & .grok-mark-signal": {
-            position: "absolute",
-            inset: 0,
-            fontSize: 18,
-          },
-          "& .grok-mark-base": {
-            opacity: 0.28,
-          },
-          "& .grok-mark-signal": {
-            WebkitMaskImage:
-              "linear-gradient(115deg, transparent 32%, #000 46%, #000 54%, transparent 68%)",
-            maskImage:
-              "linear-gradient(115deg, transparent 32%, #000 46%, #000 54%, transparent 68%)",
-            WebkitMaskSize: "300% 100%",
-            maskSize: "300% 100%",
-            WebkitMaskRepeat: "no-repeat",
-            maskRepeat: "no-repeat",
-            animation: `${grokSignalSweep} ${String(GROK_SIGNAL_MS)}ms ease-in-out infinite`,
-          },
-          "@media (prefers-reduced-motion: reduce)": {
-            "& .grok-mark-base": {
-              opacity: 0.82,
-            },
-            "& .grok-mark-signal": {
-              display: "none",
-            },
-          },
-        }}
-      >
-        <ProviderIcon provider={provider} className="grok-mark-base" />
-        <ProviderIcon provider={provider} className="grok-mark-signal" />
-      </Box>
-      <Typography
-        aria-hidden
-        variant="caption"
-        sx={{
-          color: "text.secondary",
-          fontWeight: 550,
-          letterSpacing: "0.015em",
-        }}
-      >
-        Working
-      </Typography>
-    </Stack>
-  );
-}
-
-function DefaultThinking(): React.JSX.Element {
-  return (
-    <Stack
-      direction="row"
-      spacing={1}
-      alignItems="center"
-      sx={{ py: 0.5, alignSelf: "flex-start", color: "text.secondary" }}
-    >
-      <CircularProgress size={16} thickness={5} />
-      <Typography variant="caption" color="text.secondary">
-        Thinking…
-      </Typography>
-    </Stack>
-  );
-}
-
-// Each provider keeps its own activity language: Claude's morphing spark,
-// Codex's workcell, Grok's signal sweep, and a neutral Material fallback for
-// providers without one.
 function ThinkingIndicator({
   provider,
+  providerVersion,
+  providerDigest,
 }: {
   provider: string;
+  providerVersion?: string | undefined;
+  providerDigest?: string | undefined;
 }): React.JSX.Element {
-  switch (providerActivityKind(provider)) {
-    case "claude":
-      return <ClaudeThinking provider={provider} />;
-    case "codex":
-      return <CodexThinking provider={provider} />;
-    case "grok":
-      return <GrokThinking provider={provider} />;
-    default:
-      return <DefaultThinking />;
-  }
+  return (
+    <ProviderRuntimeSurface
+      provider={provider}
+      providerVersion={providerVersion}
+      providerDigest={providerDigest}
+      slot="loading"
+      fallback={
+        <Stack
+          direction="row"
+          spacing={1}
+          alignItems="center"
+          sx={{ py: 0.5, alignSelf: "flex-start" }}
+        >
+          <CircularProgress size={16} thickness={5} />
+          <Typography variant="caption" color="text.secondary">
+            Thinking…
+          </Typography>
+        </Stack>
+      }
+    />
+  );
 }
 
 // Blinking text caret — Claude.ai / Cursor put one at the end of streaming
@@ -1161,15 +884,24 @@ const fold = keyframes`
 function CompactingWidget({
   active,
   provider,
+  providerVersion,
+  providerDigest,
   desktop,
 }: {
   active: boolean;
   provider: string;
+  providerVersion?: string | undefined;
+  providerDigest?: string | undefined;
   desktop: boolean;
 }): React.JSX.Element {
   const theme = useTheme();
   const muted = theme.palette.text.secondary;
-  const accent = providerVisual(provider, theme.palette.mode).primary;
+  const accent = providerVisual(
+    provider,
+    theme.palette.mode,
+    providerVersion,
+    providerDigest,
+  ).primary;
   const reducedMotion = globalThis.matchMedia?.(
     "(prefers-reduced-motion: reduce)",
   ).matches;
@@ -1324,17 +1056,21 @@ function ChunkView({
   if (chunk.type === "image") {
     return <TranscriptImage src={chunk.src} alt={chunk.alt ?? ""} />;
   }
-  return <Markdown text={chunk.text} invert={invert} touchWrap={touchSurface} />;
+  return (
+    <Markdown
+      text={chunk.text}
+      invert={invert}
+      touchWrap={touchSurface}
+    />
+  );
 }
 
 function ThoughtSteps({
   sections,
   streaming,
-  codex,
 }: {
   sections: string[];
   streaming: boolean;
-  codex: boolean;
 }): React.JSX.Element {
   const visible = sections.filter((section) => section.trim() !== "");
   return (
@@ -1354,44 +1090,6 @@ function ThoughtSteps({
           status label only on the one live thought; completed thoughts already
           have their lightbulb + meaningful step text. */
       }
-      {codex && streaming && (
-        <Stack
-          direction="row"
-          alignItems="center"
-          spacing={0.75}
-          sx={{ minHeight: 22, mb: 0.25, color: "text.secondary" }}
-          aria-label={streaming ? "Codex is thinking" : "Codex reasoning"}
-        >
-          <CodexWorkcell size={14} />
-          <Typography
-            variant="caption"
-            sx={{
-              fontWeight: 650,
-              letterSpacing: "0.025em",
-              ...(streaming && {
-                backgroundImage: (theme) => {
-                  const quiet = theme.palette.text.secondary;
-                  const primary = theme.palette.primary.main;
-                  return `linear-gradient(100deg, ${quiet} 0%, ${quiet} 35%, ${primary} 50%, ${quiet} 65%, ${quiet} 100%)`;
-                },
-                backgroundSize: "220% 100%",
-                backgroundRepeat: "no-repeat",
-                WebkitBackgroundClip: "text",
-                backgroundClip: "text",
-                color: "transparent",
-                animation: `${thoughtTextShimmer} 3.1s linear infinite`,
-                "@media (prefers-reduced-motion: reduce)": {
-                  animation: "none",
-                  backgroundImage: "none",
-                  color: "text.secondary",
-                },
-              }),
-            }}
-          >
-            Thinking
-          </Typography>
-        </Stack>
-      )}
       {visible.map((section, index) => {
         const current = streaming && index === visible.length - 1;
         const hasNext = index < visible.length - 1;
@@ -1399,9 +1097,7 @@ function ThoughtSteps({
         // indicator its own layout lane. The lane inherits the reading
         // line-height, so `0.5lh` is the actual first-line centre at every user
         // font scale; current-surface padding no longer needs a second offset.
-        const indicatorSize = codex ? 15 : 5;
-        const indicatorPaddingLeft = codex ? 3 : 2;
-        const indicatorGap = codex ? 4 : 9;
+        const indicatorSize = 5;
         return (
           <Box
             // A thought section has no upstream id. Its index is stable because
@@ -1412,13 +1108,9 @@ function ThoughtSteps({
               position: "relative",
               display: "grid",
               gridTemplateColumns: `${indicatorSize}px minmax(0, 1fr)`,
-              columnGap: `${indicatorGap}px`,
-              pl: `${indicatorPaddingLeft}px`,
-              pr: codex && current ? 1 : 0,
-              py: codex && current ? 0.5 : 0,
-              mb: hasNext ? (codex ? 0.25 : 0.75) : 0,
-              borderRadius: codex && current ? 1.25 : 0,
-              bgcolor: codex && current ? "action.hover" : "transparent",
+              columnGap: "9px",
+              pl: "2px",
+              mb: hasNext ? 0.75 : 0,
             }}
           >
             <Box
@@ -1441,27 +1133,16 @@ function ThoughtSteps({
                   height: indicatorSize,
                   display: "grid",
                   placeItems: "center",
-                  ...(codex
-                    ? {
-                      color: current ? "primary.main" : "text.disabled",
-                      animation: current
-                        ? `${pulse} 1.5s ease-in-out infinite`
-                        : "none",
-                    }
-                    : {
-                      borderRadius: "50%",
-                      bgcolor: current ? "primary.main" : "text.disabled",
-                      animation: current
-                        ? `${pulse} 1.4s ease-in-out infinite`
-                        : "none",
-                    }),
+                  borderRadius: "50%",
+                  bgcolor: current ? "primary.main" : "text.disabled",
+                  animation: current
+                    ? `${pulse} 1.4s ease-in-out infinite`
+                    : "none",
                   "@media (prefers-reduced-motion: reduce)": {
                     animation: "none",
                   },
                 }}
-              >
-                {codex && <LightbulbOutlined sx={{ fontSize: 14 }} />}
-              </Box>
+              />
               {hasNext && (
                 <Box
                   aria-hidden="true"
@@ -1482,17 +1163,14 @@ function ThoughtSteps({
               data-thought-step-content
               sx={{
                 minWidth: 0,
-                opacity: current || !streaming ? 1 : (codex ? 0.55 : 0.68),
+                opacity: current || !streaming ? 1 : 0.68,
                 fontStyle: "normal",
                 color: current ? "text.primary" : "text.secondary",
-                ...(codex && current && {
+                ...(current && {
                   backgroundImage: (theme) => {
                     const quiet = theme.palette.text.secondary;
-                    const primary = theme.palette.primary.main;
-                    const accent = theme.palette.mode === "dark"
-                      ? "#62D6BC"
-                      : "#168B78";
-                    return `linear-gradient(100deg, ${quiet} 0%, ${quiet} 34%, ${primary} 46%, ${accent} 54%, ${quiet} 66%, ${quiet} 100%)`;
+                    const active = theme.palette.primary.main;
+                    return `linear-gradient(100deg, ${quiet} 0%, ${quiet} 34%, ${active} 50%, ${quiet} 66%, ${quiet} 100%)`;
                   },
                   backgroundSize: "240% 100%",
                   backgroundRepeat: "no-repeat",
@@ -1500,9 +1178,6 @@ function ThoughtSteps({
                   backgroundClip: "text",
                   color: "transparent",
                   animation: `${thoughtTextShimmer} 3.1s linear infinite`,
-                  // Markdown elements set their own text colour. Inherit the
-                  // transparent foreground so the parent gradient clips through
-                  // the actual glyphs instead of disappearing behind body text.
                   "& p, & p *": { color: "inherit" },
                   "@media (prefers-reduced-motion: reduce)": {
                     animation: "none",
@@ -1520,7 +1195,7 @@ function ThoughtSteps({
               }}
             >
               <Markdown text={section} />
-              {current && !codex && <StreamingCaret />}
+              {current && <StreamingCaret />}
             </Box>
           </Box>
         );
@@ -1760,6 +1435,8 @@ function MessageBubble({
   streaming,
   origin,
   provider,
+  providerVersion,
+  providerDigest,
   desktop,
 }: {
   role: "assistant" | "user";
@@ -1769,6 +1446,8 @@ function MessageBubble({
   streaming?: boolean;
   origin?: PromptOrigin | undefined;
   provider: string;
+  providerVersion?: string | undefined;
+  providerDigest?: string | undefined;
   desktop: boolean;
 }): React.JSX.Element | null {
   const mine = role === "user";
@@ -1781,13 +1460,21 @@ function MessageBubble({
       <CompactingWidget
         active={!!streaming}
         provider={provider}
+        providerVersion={providerVersion}
+        providerDigest={providerDigest}
         desktop={desktop}
       />
     );
   }
   if (!mine && isCompactionCompletion(chunks)) {
     return (
-      <CompactingWidget active={false} provider={provider} desktop={desktop} />
+      <CompactingWidget
+        active={false}
+        provider={provider}
+        providerVersion={providerVersion}
+        providerDigest={providerDigest}
+        desktop={desktop}
+      />
     );
   }
   if (mine && isCompactionCommand(chunks)) {
@@ -1807,7 +1494,15 @@ function MessageBubble({
   // Non-human user-role prompts (Cowboy auto-resume/schedule, agent runtime)
   // stay on the timeline but never use the primary-filled human bubble.
   if (mine && origin && !human) {
-    return <PromptOriginNote origin={origin} chunks={chunks} provider={provider} />;
+    return (
+      <PromptOriginNote
+        origin={origin}
+        chunks={chunks}
+        provider={provider}
+        providerVersion={providerVersion}
+        providerDigest={providerDigest}
+      />
+    );
   }
   // Assistant replies render flush in the page (Zed-style): no border, no card
   // background, just markdown flowing inline. The per-item `py` in the
@@ -1867,7 +1562,10 @@ function ToolCard({
   const [headerTitle, setHeaderTitle] = useState(fallbackTitle);
   useEffect(() => {
     setHeaderTitle(fallbackTitle);
-    if (item.toolKind !== "execute" || !item.rawInput || typeof item.rawInput !== "object") return;
+    if (
+      item.toolKind !== "execute" || !item.rawInput ||
+      typeof item.rawInput !== "object"
+    ) return;
     const input = item.rawInput as Record<string, unknown>;
     const raw = input["command"] ?? input["cmd"];
     const command = typeof raw === "string"
@@ -1883,7 +1581,8 @@ function ToolCard({
     let active = true;
     void formatShellForDisplay(command, 88).then((display) => {
       if (!active || !display?.context) return;
-      const summary = display.summary || display.text.split("\n").find((line) => line.trim())?.trim();
+      const summary = display.summary ||
+        display.text.split("\n").find((line) => line.trim())?.trim();
       if (summary) setHeaderTitle(summary);
     });
     return () => {
@@ -1892,107 +1591,107 @@ function ToolCard({
   }, [fallbackTitle, item.rawInput, item.toolKind]);
   return (
     <Paper
-        elevation={0}
+      elevation={0}
+      sx={{
+        alignSelf: "stretch",
+        overflow: "hidden",
+        // Borderless: a filled `background.paper` surface (a touch lighter than
+        // the transcript bg) reads as a soft card WITHOUT a 1px outline. The
+        // outlined border (theme `divider`) drew a faint violet line top+bottom
+        // on every collapsed card, and a tool-heavy transcript stacked them into
+        // a "ruled paper" look. The icon + status chip already mark it as a tool.
+        bgcolor: "background.paper",
+        borderRadius: desktop ? `${DESKTOP_INSET_RADIUS}px` : 1,
+        // Subtle breathing while a tool is mid-flight; nothing while
+        // completed/failed (those are static states).
+        animation: running ? `${pulse} 1.6s ease-in-out infinite` : undefined,
+      }}
+    >
+      <Stack
+        {...(hasDetail
+          ? {
+            ...openTap,
+            role: "button",
+            tabIndex: desktop ? -1 : 0,
+            "aria-expanded": selected,
+            "aria-haspopup": "dialog" as const,
+            onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>): void => {
+              if (isImeKeyEvent(event.nativeEvent)) return;
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                openDetail();
+              }
+            },
+          }
+          : {})}
+        {...(hasDetail ? { "data-desktop-item-action": "default" } : {})}
+        {...(desktop && hasDetail
+          ? {
+            "data-desktop-widget-toggle": "tool",
+          }
+          : {})}
+        direction="row"
+        spacing={1}
+        alignItems="center"
         sx={{
-          alignSelf: "stretch",
-          overflow: "hidden",
-          // Borderless: a filled `background.paper` surface (a touch lighter than
-          // the transcript bg) reads as a soft card WITHOUT a 1px outline. The
-          // outlined border (theme `divider`) drew a faint violet line top+bottom
-          // on every collapsed card, and a tool-heavy transcript stacked them into
-          // a "ruled paper" look. The icon + status chip already mark it as a tool.
-          bgcolor: "background.paper",
-          borderRadius: desktop ? `${DESKTOP_INSET_RADIUS}px` : 1,
-          // Subtle breathing while a tool is mid-flight; nothing while
-          // completed/failed (those are static states).
-          animation: running ? `${pulse} 1.6s ease-in-out infinite` : undefined,
+          p: 1,
+          cursor: hasDetail ? "pointer" : "default",
+          "&:hover": hasDetail ? { bgcolor: "action.hover" } : undefined,
+          ...(desktop && hasDetail && {
+            outline: "none",
+            "&:focus-visible": {
+              bgcolor: "action.focus",
+              boxShadow: (theme) =>
+                `inset 3px 0 0 ${alpha(theme.palette.primary.main, 0.78)}`,
+            },
+          }),
         }}
       >
-        <Stack
-          {...(hasDetail
-            ? {
-              ...openTap,
-              role: "button",
-              tabIndex: desktop ? -1 : 0,
-              "aria-expanded": selected,
-              "aria-haspopup": "dialog" as const,
-              onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>): void => {
-                if (isImeKeyEvent(event.nativeEvent)) return;
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  openDetail();
-                }
-              },
-            }
-            : {})}
-          {...(hasDetail ? { "data-desktop-item-action": "default" } : {})}
-          {...(desktop && hasDetail
-            ? {
-              "data-desktop-widget-toggle": "tool",
-            }
-            : {})}
-          direction="row"
-          spacing={1}
-          alignItems="center"
+        {toolIcon(item.toolKind)}
+        <Typography
+          variant="body2"
           sx={{
-            p: 1,
-            cursor: hasDetail ? "pointer" : "default",
-            "&:hover": hasDetail ? { bgcolor: "action.hover" } : undefined,
-            ...(desktop && hasDetail && {
-              outline: "none",
-              "&:focus-visible": {
-                bgcolor: "action.focus",
-                boxShadow: (theme) =>
-                  `inset 3px 0 0 ${alpha(theme.palette.primary.main, 0.78)}`,
-              },
-            }),
+            flex: 1,
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            // Match the prose typography so a tool card reads as part of the same
+            // document, not as smaller UI chrome:
+            //  - FAMILY: follow the `--cowboy-reading-font` setting like the prose
+            //    does, instead of letting MUI Typography pin the theme font —
+            //    otherwise picking a serif/sans reading face restyles the messages
+            //    but the tool cards stay on the system font, which reads as
+            //    inconsistent. Shell commands (execute) stay monospace: they're
+            //    code, and a path full of slashes in a serif is worse, not better.
+            //  - SIZE: `inherit` (not body2's fixed 0.875rem) so the title tracks
+            //    the transcript's reading-size scale (the scroll container's
+            //    `${fontScale}em`) exactly like the markdown body. A fixed rem made
+            //    the title visibly smaller than the prose and, worse, it didn't
+            //    grow when the reading size was bumped — same family but reading as
+            //    two different fonts.
+            fontSize: "inherit",
+            fontFamily: item.toolKind === "execute"
+              ? "ui-monospace, SFMono-Regular, Menlo, monospace"
+              : "var(--cowboy-reading-font, inherit)",
           }}
         >
-          {toolIcon(item.toolKind)}
-          <Typography
-            variant="body2"
-            sx={{
-              flex: 1,
-              minWidth: 0,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-              // Match the prose typography so a tool card reads as part of the same
-              // document, not as smaller UI chrome:
-              //  - FAMILY: follow the `--cowboy-reading-font` setting like the prose
-              //    does, instead of letting MUI Typography pin the theme font —
-              //    otherwise picking a serif/sans reading face restyles the messages
-              //    but the tool cards stay on the system font, which reads as
-              //    inconsistent. Shell commands (execute) stay monospace: they're
-              //    code, and a path full of slashes in a serif is worse, not better.
-              //  - SIZE: `inherit` (not body2's fixed 0.875rem) so the title tracks
-              //    the transcript's reading-size scale (the scroll container's
-              //    `${fontScale}em`) exactly like the markdown body. A fixed rem made
-              //    the title visibly smaller than the prose and, worse, it didn't
-              //    grow when the reading size was bumped — same family but reading as
-              //    two different fonts.
-              fontSize: "inherit",
-              fontFamily: item.toolKind === "execute"
-                ? "ui-monospace, SFMono-Regular, Menlo, monospace"
-                : "var(--cowboy-reading-font, inherit)",
-            }}
-          >
-            {headerTitle}
-          </Typography>
-          <Chip
-            size="small"
-            color={toolColor(item.status)}
-            label={item.status}
-            variant="outlined"
+          {headerTitle}
+        </Typography>
+        <Chip
+          size="small"
+          color={toolColor(item.status)}
+          label={item.status}
+          variant="outlined"
+        />
+        {hasDetail && (
+          <ExpandMore
+            fontSize="medium"
+            sx={{ transform: "rotate(-90deg)", color: "text.secondary" }}
           />
-          {hasDetail && (
-            <ExpandMore
-              fontSize="medium"
-              sx={{ transform: "rotate(-90deg)", color: "text.secondary" }}
-            />
-          )}
-        </Stack>
-      </Paper>
+        )}
+      </Stack>
+    </Paper>
   );
 }
 
@@ -2029,7 +1728,9 @@ function toolContextBlocks(items: RenderItem[]): ToolContextBlock[] {
         ? (isHumanPrompt(item.origin) ? "user" : "thought")
         : "prose";
       text = item.chunks
-        .filter((chunk): chunk is Extract<ContentChunk, { type: "text" }> => chunk.type === "text")
+        .filter((chunk): chunk is Extract<ContentChunk, { type: "text" }> =>
+          chunk.type === "text"
+        )
         .map((chunk) => chunk.text)
         .join("\n\n");
     } else if (item.kind === "thought") {
@@ -2088,7 +1789,9 @@ function ToolTranscriptContext({
   const canExpand = blocks.length > 0;
   return (
     <Box
-      aria-label={`${position === "before" ? "Previous" : "Following"} transcript context`}
+      aria-label={`${
+        position === "before" ? "Previous" : "Following"
+      } transcript context`}
       sx={{
         border: 1,
         borderColor: open ? "divider" : "transparent",
@@ -2096,7 +1799,8 @@ function ToolTranscriptContext({
         borderRadius: 1.5,
         overflow: "hidden",
         transition: "background-color .18s ease, border-color .18s ease",
-        ...(phase === "ready" && { animation: `${nextToolArrival} .28s cubic-bezier(.2,.8,.2,1) 1` }),
+        ...(phase === "ready" &&
+          { animation: `${nextToolArrival} .28s cubic-bezier(.2,.8,.2,1) 1` }),
       }}
     >
       <ButtonBase
@@ -2120,10 +1824,18 @@ function ToolTranscriptContext({
         <Box sx={{ minWidth: 0 }}>
           <Typography
             variant="overline"
-            sx={{ display: "flex", alignItems: "center", gap: 0.625, color: "text.disabled", lineHeight: 1.35 }}
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              gap: 0.625,
+              color: "text.disabled",
+              lineHeight: 1.35,
+            }}
           >
             {label}
-            {phase === "running" && <CircularProgress size={10} thickness={5} color="inherit" />}
+            {phase === "running" && (
+              <CircularProgress size={10} thickness={5} color="inherit" />
+            )}
           </Typography>
           {!open && (
             <Typography
@@ -2152,7 +1864,15 @@ function ToolTranscriptContext({
         )}
       </ButtonBase>
       {open && (
-        <Stack spacing={1} sx={{ px: 1.25, pb: 1.25, borderLeft: 2, borderColor: "primary.main" }}>
+        <Stack
+          spacing={1}
+          sx={{
+            px: 1.25,
+            pb: 1.25,
+            borderLeft: 2,
+            borderColor: "primary.main",
+          }}
+        >
           {blocks.map((block) => (
             <Box
               key={block.key}
@@ -2183,6 +1903,8 @@ function ToolDetailsBrowser({
   selectedKey,
   desktop,
   provider,
+  providerVersion,
+  providerDigest,
   onSelect,
   onClose,
   onLocate,
@@ -2193,6 +1915,8 @@ function ToolDetailsBrowser({
   selectedKey: string | null;
   desktop: boolean;
   provider: string;
+  providerVersion?: string | undefined;
+  providerDigest?: string | undefined;
   onSelect: (key: string) => void;
   onClose: () => void;
   onLocate: (key: string) => void;
@@ -2200,9 +1924,12 @@ function ToolDetailsBrowser({
 }): React.JSX.Element | null {
   const runIndex = selectedKey === null
     ? -1
-    : runs.findIndex((candidate) => candidate.tools.some((tool) => tool.key === selectedKey));
+    : runs.findIndex((candidate) =>
+      candidate.tools.some((tool) => tool.key === selectedKey)
+    );
   const run = runIndex >= 0 ? runs[runIndex] : undefined;
-  const itemIndex = run?.tools.findIndex((tool) => tool.key === selectedKey) ?? -1;
+  const itemIndex = run?.tools.findIndex((tool) => tool.key === selectedKey) ??
+    -1;
   const item = itemIndex >= 0 ? run?.tools[itemIndex] : undefined;
   const [rawByKey, setRawByKey] = useState<Record<string, boolean>>({});
   const [detailReadyKey, setDetailReadyKey] = useState<string | null>(null);
@@ -2244,9 +1971,15 @@ function ToolDetailsBrowser({
       // its following prose. Re-run after the sheet computes its cover height.
       spacer.style.height = "0px";
       const currentTop = scroller.scrollTop +
-        current.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
-      const maxWithoutSpacer = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
-      spacer.style.height = `${Math.max(0, currentTop - maxWithoutSpacer + 8)}px`;
+        current.getBoundingClientRect().top -
+        scroller.getBoundingClientRect().top;
+      const maxWithoutSpacer = Math.max(
+        0,
+        scroller.scrollHeight - scroller.clientHeight,
+      );
+      spacer.style.height = `${
+        Math.max(0, currentTop - maxWithoutSpacer + 8)
+      }px`;
       scroller.scrollTop = saved ?? currentTop;
     };
     align();
@@ -2356,23 +2089,34 @@ function ToolDetailsBrowser({
   // transport JSON as the single, inspectable representation so input and
   // output retain their exact shape across Codex, Claude and future ACPs.
   const raw = rawOnly || (rawByKey[item.key] ?? false);
-  const firstRunItemIndex = items.findIndex((candidate) => candidate.key === run?.tools[0]?.key);
-  const lastRunItemIndex = items.findIndex((candidate) => candidate.key === run?.tools.at(-1)?.key);
+  const firstRunItemIndex = items.findIndex((candidate) =>
+    candidate.key === run?.tools[0]?.key
+  );
+  const lastRunItemIndex = items.findIndex((candidate) =>
+    candidate.key === run?.tools.at(-1)?.key
+  );
   const previousToolIndex = runIndex > 0
-    ? items.findIndex((candidate) => candidate.key === runs[runIndex - 1]?.tools.at(-1)?.key)
+    ? items.findIndex((candidate) =>
+      candidate.key === runs[runIndex - 1]?.tools.at(-1)?.key
+    )
     : -1;
   const nextToolIndex = runIndex < runs.length - 1
-    ? items.findIndex((candidate) => candidate.key === runs[runIndex + 1]?.tools[0]?.key)
+    ? items.findIndex((candidate) =>
+      candidate.key === runs[runIndex + 1]?.tools[0]?.key
+    )
     : items.length;
   const before = items.slice(previousToolIndex + 1, firstRunItemIndex);
   const after = items.slice(lastRunItemIndex + 1, nextToolIndex);
   const running = item.status === "in_progress" || item.status === "pending";
   const ctx: ToolCtx = {
     provider,
+    providerVersion,
+    providerDigest,
     toolName: item.toolName,
     kind: item.toolKind,
     title: item.title,
-    rawInput: item.rawInput && typeof item.rawInput === "object" && !Array.isArray(item.rawInput)
+    rawInput: item.rawInput && typeof item.rawInput === "object" &&
+        !Array.isArray(item.rawInput)
       ? (item.rawInput as Record<string, unknown>)
       : {},
     content: item.content,
@@ -2386,7 +2130,9 @@ function ToolDetailsBrowser({
     rawInput: item.rawInput,
   });
   const runTitle = run?.server
-    ? run.server.split(/[-_]/u).filter(Boolean).map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" ")
+    ? run.server.split(/[-_]/u).filter(Boolean).map((word) =>
+      word.charAt(0).toUpperCase() + word.slice(1)
+    ).join(" ")
     : null;
 
   const mobileNavigationItems = (
@@ -2400,14 +2146,26 @@ function ToolDetailsBrowser({
         <NavigateBefore />
       </IconButton>
       <Typography
-        aria-label={`Tool run ${runIndex + 1} of ${runs.length}${historyComplete ? "" : " loaded"}`}
+        aria-label={`Tool run ${runIndex + 1} of ${runs.length}${
+          historyComplete ? "" : " loaded"
+        }`}
         variant="caption"
-        sx={{ px: 0.75, fontWeight: 700, color: "text.secondary", fontVariantNumeric: "tabular-nums" }}
+        sx={{
+          px: 0.75,
+          fontWeight: 700,
+          color: "text.secondary",
+          fontVariantNumeric: "tabular-nums",
+        }}
       >
-        {runIndex + 1} / {runs.length}{historyComplete ? "" : "+"}
+        {runIndex + 1} / {runs.length}
+        {historyComplete ? "" : "+"}
       </Typography>
       <Tooltip title="Close details">
-        <IconButton aria-label="Close tool details" onClick={onClose} sx={{ width: 44, height: 44, justifySelf: "center" }}>
+        <IconButton
+          aria-label="Close tool details"
+          onClick={onClose}
+          sx={{ width: 44, height: 44, justifySelf: "center" }}
+        >
           <Close />
         </IconButton>
       </Tooltip>
@@ -2420,7 +2178,11 @@ function ToolDetailsBrowser({
         <NavigateNext />
       </IconButton>
       <Tooltip title="Locate in transcript">
-        <IconButton aria-label="Locate tool in transcript" onClick={(): void => onLocate(item.key)} sx={{ width: 44, height: 44 }}>
+        <IconButton
+          aria-label="Locate tool in transcript"
+          onClick={(): void => onLocate(item.key)}
+          sx={{ width: 44, height: 44 }}
+        >
           <MyLocation fontSize="small" />
         </IconButton>
       </Tooltip>
@@ -2436,205 +2198,258 @@ function ToolDetailsBrowser({
   );
 
   const details = (
-      <Box ref={bodyRef} sx={{ position: "relative", maxWidth: desktop ? 1280 : "none", mx: desktop ? "auto" : 0 }}>
-        <Stack spacing={1.25}>
-            <ToolTranscriptContext
-              key={`${item.key}-before`}
-              items={before}
-              position="before"
-              defaultOpen={desktop}
-            />
-            {run && run.tools.length > 1 && (
-              <Box
-                aria-label={`${runTitle ?? "MCP"} run with ${run.tools.length} calls`}
+    <Box
+      ref={bodyRef}
+      sx={{
+        position: "relative",
+        maxWidth: desktop ? 1280 : "none",
+        mx: desktop ? "auto" : 0,
+      }}
+    >
+      <Stack spacing={1.25}>
+        <ToolTranscriptContext
+          key={`${item.key}-before`}
+          items={before}
+          position="before"
+          defaultOpen={desktop}
+        />
+        {run && run.tools.length > 1 && (
+          <Box
+            aria-label={`${
+              runTitle ?? "MCP"
+            } run with ${run.tools.length} calls`}
+            sx={{
+              border: 1,
+              borderColor: "divider",
+              borderRadius: 1.5,
+              overflow: "hidden",
+              bgcolor: "action.hover",
+            }}
+          >
+            <Stack
+              direction="row"
+              alignItems="baseline"
+              justifyContent="space-between"
+              sx={{ px: 1.25, pt: 0.875, pb: 0.5 }}
+            >
+              <Typography
+                variant="caption"
+                sx={{ color: "text.secondary", fontWeight: 700 }}
+              >
+                {runTitle}
+              </Typography>
+              <Typography
+                variant="caption"
                 sx={{
-                  border: 1,
-                  borderColor: "divider",
-                  borderRadius: 1.5,
-                  overflow: "hidden",
-                  bgcolor: "action.hover",
+                  color: "text.disabled",
+                  fontVariantNumeric: "tabular-nums",
                 }}
               >
-                <Stack
-                  direction="row"
-                  alignItems="baseline"
-                  justifyContent="space-between"
-                  sx={{ px: 1.25, pt: 0.875, pb: 0.5 }}
+                {itemIndex + 1} / {run.tools.length} calls
+              </Typography>
+            </Stack>
+            <Stack sx={{ pb: 0.375 }}>
+              {run.tools.map((tool, callIndex) => {
+                const selected = tool.key === item.key;
+                const callHeading = toolHeading({
+                  provider,
+                  toolName: tool.toolName,
+                  kind: tool.toolKind,
+                  title: tool.title,
+                  rawInput: tool.rawInput,
+                });
+                return (
+                  <ButtonBase
+                    key={tool.key}
+                    aria-current={selected ? "step" : undefined}
+                    onClick={(): void => select(tool)}
+                    sx={{
+                      width: "100%",
+                      minHeight: 42,
+                      px: 1.25,
+                      display: "grid",
+                      gridTemplateColumns: "20px minmax(0, 1fr) auto",
+                      gap: 0.75,
+                      alignItems: "center",
+                      textAlign: "left",
+                      bgcolor: selected ? "action.selected" : "transparent",
+                      borderLeft: 2,
+                      borderColor: selected ? "primary.main" : "transparent",
+                    }}
+                  >
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        color: selected ? "primary.main" : "text.disabled",
+                        fontWeight: 700,
+                      }}
+                    >
+                      {callIndex + 1}
+                    </Typography>
+                    <Typography
+                      variant="body2"
+                      noWrap
+                      sx={{ fontWeight: selected ? 700 : 500 }}
+                    >
+                      {callHeading}
+                    </Typography>
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        color: tool.status === "failed"
+                          ? "error.main"
+                          : tool.status === "in_progress" ||
+                              tool.status === "pending"
+                          ? "warning.main"
+                          : "text.disabled",
+                      }}
+                    >
+                      {tool.status === "in_progress" ? "running" : tool.status}
+                    </Typography>
+                  </ButtonBase>
+                );
+              })}
+            </Stack>
+          </Box>
+        )}
+        <Stack ref={currentRef} direction="row" spacing={1} alignItems="center">
+          <Box sx={{ pt: 0.25, color: "text.secondary" }}>
+            {toolIcon(item.toolKind)}
+          </Box>
+          <Typography
+            sx={{
+              flex: 1,
+              minWidth: 0,
+              overflowWrap: "anywhere",
+              fontFamily: item.toolKind === "execute"
+                ? "ui-monospace, SFMono-Regular, Menlo, monospace"
+                : "var(--cowboy-reading-font, inherit)",
+            }}
+          >
+            {heading}
+          </Typography>
+          <Chip
+            size="small"
+            color={toolColor(item.status)}
+            label={item.status}
+            variant="outlined"
+            sx={{ flexShrink: 0 }}
+          />
+        </Stack>
+        <Box sx={{ borderTop: 1, borderColor: "divider", pt: 1 }}>
+          {!rawOnly && (
+            <Stack
+              direction="row"
+              alignItems="center"
+              justifyContent="space-between"
+              sx={{ mb: 0.75 }}
+            >
+              <Typography variant="caption" color="text.disabled">
+                {toolVariantLabel({
+                  provider,
+                  providerVersion,
+                  providerDigest,
+                  toolName: item.toolName,
+                  kind: item.toolKind,
+                  title: item.title,
+                  rawInput: item.rawInput,
+                })}
+              </Typography>
+              <Stack direction="row" alignItems="center" spacing={0.25}>
+                <Box
+                  role="group"
+                  aria-label="Tool detail view"
+                  sx={{
+                    display: "flex",
+                    p: 0.25,
+                    borderRadius: 1.25,
+                    bgcolor: "action.hover",
+                  }}
                 >
-                  <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 700 }}>
-                    {runTitle}
-                  </Typography>
-                  <Typography variant="caption" sx={{ color: "text.disabled", fontVariantNumeric: "tabular-nums" }}>
-                    {itemIndex + 1} / {run.tools.length} calls
-                  </Typography>
-                </Stack>
-                <Stack sx={{ pb: 0.375 }}>
-                  {run.tools.map((tool, callIndex) => {
-                    const selected = tool.key === item.key;
-                    const callHeading = toolHeading({
-                      provider,
-                      toolName: tool.toolName,
-                      kind: tool.toolKind,
-                      title: tool.title,
-                      rawInput: tool.rawInput,
-                    });
-                    return (
-                      <ButtonBase
-                        key={tool.key}
-                        aria-current={selected ? "step" : undefined}
-                        onClick={(): void => select(tool)}
-                        sx={{
-                          width: "100%",
-                          minHeight: 42,
-                          px: 1.25,
-                          display: "grid",
-                          gridTemplateColumns: "20px minmax(0, 1fr) auto",
-                          gap: 0.75,
-                          alignItems: "center",
-                          textAlign: "left",
-                          bgcolor: selected ? "action.selected" : "transparent",
-                          borderLeft: 2,
-                          borderColor: selected ? "primary.main" : "transparent",
-                        }}
-                      >
-                        <Typography variant="caption" sx={{ color: selected ? "primary.main" : "text.disabled", fontWeight: 700 }}>
-                          {callIndex + 1}
-                        </Typography>
-                        <Typography variant="body2" noWrap sx={{ fontWeight: selected ? 700 : 500 }}>
-                          {callHeading}
-                        </Typography>
-                        <Typography
-                          variant="caption"
-                          sx={{
-                            color: tool.status === "failed"
-                              ? "error.main"
-                              : tool.status === "in_progress" || tool.status === "pending"
-                              ? "warning.main"
-                              : "text.disabled",
-                          }}
-                        >
-                          {tool.status === "in_progress" ? "running" : tool.status}
-                        </Typography>
-                      </ButtonBase>
-                    );
-                  })}
-                </Stack>
+                  {[false, true].map((isRaw) => (
+                    <ButtonBase
+                      key={String(isRaw)}
+                      aria-pressed={raw === isRaw}
+                      onClick={(): void =>
+                        setRawByKey((state) => ({
+                          ...state,
+                          [item.key]: isRaw,
+                        }))}
+                      sx={{
+                        minHeight: 32,
+                        px: 1,
+                        borderRadius: 1,
+                        fontSize: "0.6875rem",
+                        fontWeight: raw === isRaw ? 700 : 500,
+                        color: raw === isRaw ? "text.primary" : "text.disabled",
+                        bgcolor: raw === isRaw
+                          ? "background.paper"
+                          : "transparent",
+                        boxShadow: raw === isRaw ? 1 : 0,
+                      }}
+                    >
+                      {isRaw ? "Raw" : "Formatted"}
+                    </ButtonBase>
+                  ))}
+                </Box>
+              </Stack>
+            </Stack>
+          )}
+          {detailReadyKey !== item.key
+            ? (
+              <Stack spacing={0.75} aria-label="Loading tool details">
+                <Skeleton animation="wave" width="92%" />
+                <Skeleton animation="wave" width="78%" />
+                <Skeleton animation="wave" width="86%" />
+              </Stack>
+            )
+            : raw
+            ? (
+              <Stack spacing={1}>
+                {item.rawInput !== undefined && (
+                  <Labeled label="Input">
+                    <CodeView
+                      code={JSON.stringify(item.rawInput, null, 2) ??
+                        String(item.rawInput)}
+                      lang="json"
+                      maxHeight={desktop ? 640 : 360}
+                      touchWrap={!rawOnly}
+                    />
+                  </Labeled>
+                )}
+                {item.content !== undefined && (
+                  <Labeled label="Output">
+                    <CodeView
+                      code={JSON.stringify(item.content, null, 2) ??
+                        String(item.content)}
+                      lang="json"
+                      maxHeight={desktop ? 640 : 360}
+                      touchWrap={!rawOnly}
+                    />
+                  </Labeled>
+                )}
+              </Stack>
+            )
+            : (
+              <Box>
+                <ToolBody ctx={ctx} />
               </Box>
             )}
-            <Stack ref={currentRef} direction="row" spacing={1} alignItems="center">
-              <Box sx={{ pt: 0.25, color: "text.secondary" }}>
-                {toolIcon(item.toolKind)}
-              </Box>
-              <Typography
-                sx={{
-                  flex: 1,
-                  minWidth: 0,
-                  overflowWrap: "anywhere",
-                  fontFamily: item.toolKind === "execute"
-                    ? "ui-monospace, SFMono-Regular, Menlo, monospace"
-                    : "var(--cowboy-reading-font, inherit)",
-                }}
-              >
-                {heading}
-              </Typography>
-              <Chip
-                size="small"
-                color={toolColor(item.status)}
-                label={item.status}
-                variant="outlined"
-                sx={{ flexShrink: 0 }}
-              />
-            </Stack>
-            <Box sx={{ borderTop: 1, borderColor: "divider", pt: 1 }}>
-              {!rawOnly && (
-                <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 0.75 }}>
-                  <Typography variant="caption" color="text.disabled">
-                    {toolVariantLabel({
-                      provider,
-                      toolName: item.toolName,
-                      kind: item.toolKind,
-                      title: item.title,
-                      rawInput: item.rawInput,
-                    })}
-                  </Typography>
-                  <Stack direction="row" alignItems="center" spacing={0.25}>
-                    <Box
-                      role="group"
-                      aria-label="Tool detail view"
-                      sx={{ display: "flex", p: 0.25, borderRadius: 1.25, bgcolor: "action.hover" }}
-                    >
-                      {[false, true].map((isRaw) => (
-                        <ButtonBase
-                          key={String(isRaw)}
-                          aria-pressed={raw === isRaw}
-                          onClick={(): void => setRawByKey((state) => ({ ...state, [item.key]: isRaw }))}
-                          sx={{
-                            minHeight: 32,
-                            px: 1,
-                            borderRadius: 1,
-                            fontSize: "0.6875rem",
-                            fontWeight: raw === isRaw ? 700 : 500,
-                            color: raw === isRaw ? "text.primary" : "text.disabled",
-                            bgcolor: raw === isRaw ? "background.paper" : "transparent",
-                            boxShadow: raw === isRaw ? 1 : 0,
-                          }}
-                        >
-                          {isRaw ? "Raw" : "Formatted"}
-                        </ButtonBase>
-                      ))}
-                    </Box>
-                  </Stack>
-                </Stack>
-              )}
-              {detailReadyKey !== item.key
-                ? (
-                  <Stack spacing={0.75} aria-label="Loading tool details">
-                    <Skeleton animation="wave" width="92%" />
-                    <Skeleton animation="wave" width="78%" />
-                    <Skeleton animation="wave" width="86%" />
-                  </Stack>
-                )
-                : raw
-                ? (
-                  <Stack spacing={1}>
-                    {item.rawInput !== undefined && (
-                      <Labeled label="Input">
-                        <CodeView
-                          code={JSON.stringify(item.rawInput, null, 2) ?? String(item.rawInput)}
-                          lang="json"
-                          maxHeight={desktop ? 640 : 360}
-                          touchWrap={!rawOnly}
-                        />
-                      </Labeled>
-                    )}
-                    {item.content !== undefined && (
-                      <Labeled label="Output">
-                        <CodeView
-                          code={JSON.stringify(item.content, null, 2) ?? String(item.content)}
-                          lang="json"
-                          maxHeight={desktop ? 640 : 360}
-                          touchWrap={!rawOnly}
-                        />
-                      </Labeled>
-                    )}
-                  </Stack>
-                )
-                : (
-                  <Box>
-                    <ToolBody ctx={ctx} />
-                  </Box>
-                )}
-            </Box>
-            <ToolTranscriptContext
-              key={`${item.key}-after`}
-              items={after}
-              position="after"
-              phase={running ? "running" : runIndex < runs.length - 1 ? "ready" : "settled"}
-              defaultOpen={desktop}
-            />
-            <Box ref={anchorSpacerRef} aria-hidden />
-          </Stack>
-      </Box>
+        </Box>
+        <ToolTranscriptContext
+          key={`${item.key}-after`}
+          items={after}
+          position="after"
+          phase={running
+            ? "running"
+            : runIndex < runs.length - 1
+            ? "ready"
+            : "settled"}
+          defaultOpen={desktop}
+        />
+        <Box ref={anchorSpacerRef} aria-hidden />
+      </Stack>
+    </Box>
   );
 
   const desktopHistory = (
@@ -2652,12 +2467,28 @@ function ToolDetailsBrowser({
         userSelect: "none",
       }}
     >
-      <Box sx={{ position: "sticky", top: 0, zIndex: 1, px: 1.5, py: 1.25, bgcolor: "background.paper", borderBottom: 1, borderColor: "divider" }}>
-        <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 800 }}>
+      <Box
+        sx={{
+          position: "sticky",
+          top: 0,
+          zIndex: 1,
+          px: 1.5,
+          py: 1.25,
+          bgcolor: "background.paper",
+          borderBottom: 1,
+          borderColor: "divider",
+        }}
+      >
+        <Typography
+          variant="overline"
+          color="text.secondary"
+          sx={{ fontWeight: 800 }}
+        >
           Agent history
         </Typography>
         <Typography variant="caption" display="block" color="text.disabled">
-          {runs.length} runs{historyComplete ? "" : "+"} · newest agent activity last
+          {runs.length} runs{historyComplete ? "" : "+"}{" "}
+          · newest agent activity last
         </Typography>
       </Box>
       <Stack sx={{ py: 0.5 }}>
@@ -2703,18 +2534,46 @@ function ToolDetailsBrowser({
                 },
               }}
             >
-              <Typography variant="caption" color={active ? "primary.main" : "text.disabled"} sx={{ fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>
+              <Typography
+                variant="caption"
+                color={active ? "primary.main" : "text.disabled"}
+                sx={{ fontWeight: 800, fontVariantNumeric: "tabular-nums" }}
+              >
                 {candidateIndex + 1}
               </Typography>
               <Box sx={{ minWidth: 0 }}>
-                <Typography variant="body2" noWrap sx={{ fontFamily: candidateTool.toolKind === "execute" ? "ui-monospace, SFMono-Regular, Menlo, monospace" : "inherit", fontWeight: active ? 750 : 550 }}>
+                <Typography
+                  variant="body2"
+                  noWrap
+                  sx={{
+                    fontFamily: candidateTool.toolKind === "execute"
+                      ? "ui-monospace, SFMono-Regular, Menlo, monospace"
+                      : "inherit",
+                    fontWeight: active ? 750 : 550,
+                  }}
+                >
                   {candidateSummary}
                 </Typography>
                 <Typography variant="caption" color="text.disabled" noWrap>
-                  {candidateHeading}{candidate.tools.length > 1 ? ` · ${candidate.tools.length} calls` : ""}
+                  {candidateHeading}
+                  {candidate.tools.length > 1
+                    ? ` · ${candidate.tools.length} calls`
+                    : ""}
                 </Typography>
               </Box>
-              <Box sx={{ width: 8, height: 8, borderRadius: "50%", bgcolor: candidateTool.status === "failed" ? "error.main" : candidateTool.status === "in_progress" || candidateTool.status === "pending" ? "warning.main" : "success.main" }} />
+              <Box
+                sx={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: "50%",
+                  bgcolor: candidateTool.status === "failed"
+                    ? "error.main"
+                    : candidateTool.status === "in_progress" ||
+                        candidateTool.status === "pending"
+                    ? "warning.main"
+                    : "success.main",
+                }}
+              />
             </ButtonBase>
           );
         })}
@@ -2743,19 +2602,53 @@ function ToolDetailsBrowser({
             },
           }}
         >
-          <Box sx={{ height: "100%", minHeight: 0, display: "grid", gridTemplateRows: "auto minmax(0, 1fr) auto" }}>
-            <Box sx={{ px: 2.5, py: 1.25, display: "grid", gridTemplateColumns: "clamp(280px, 24vw, 380px) minmax(0, 1fr)", alignItems: "center", gap: 2.5, borderBottom: 1, borderColor: "divider", userSelect: "none" }}>
+          <Box
+            sx={{
+              height: "100%",
+              minHeight: 0,
+              display: "grid",
+              gridTemplateRows: "auto minmax(0, 1fr) auto",
+            }}
+          >
+            <Box
+              sx={{
+                px: 2.5,
+                py: 1.25,
+                display: "grid",
+                gridTemplateColumns: "clamp(280px, 24vw, 380px) minmax(0, 1fr)",
+                alignItems: "center",
+                gap: 2.5,
+                borderBottom: 1,
+                borderColor: "divider",
+                userSelect: "none",
+              }}
+            >
               <Box>
-                <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>Tool history inspector</Typography>
+                <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
+                  Tool history inspector
+                </Typography>
                 <Typography variant="caption" color="text.secondary">
                   Review what the agent ran, changed, and observed
                 </Typography>
               </Box>
-              <Stack direction="row" alignItems="center" spacing={1.25} sx={{ minWidth: 0 }}>
+              <Stack
+                direction="row"
+                alignItems="center"
+                spacing={1.25}
+                sx={{ minWidth: 0 }}
+              >
                 <Box sx={{ minWidth: 0, flex: 1 }}>
-                  <Typography variant="body2" noWrap sx={{ fontWeight: 750 }}>{heading}</Typography>
-                  <Typography variant="caption" color="text.secondary" sx={{ fontVariantNumeric: "tabular-nums" }}>
-                    Run {runIndex + 1} of {runs.length}{historyComplete ? "" : "+"}{runTitle ? ` · ${runTitle}` : ""}
+                  <Typography variant="body2" noWrap sx={{ fontWeight: 750 }}>
+                    {heading}
+                  </Typography>
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ fontVariantNumeric: "tabular-nums" }}
+                  >
+                    Run {runIndex + 1} of {runs.length}
+                    {historyComplete ? "" : "+"}
+                    {runTitle ? ` · ${runTitle}` : ""}
                   </Typography>
                 </Box>
                 <Button
@@ -2775,80 +2668,106 @@ function ToolDetailsBrowser({
                   Next
                 </Button>
                 <Tooltip title="Locate in transcript">
-                  <IconButton aria-label="Locate tool in transcript" onClick={(): void => onLocate(item.key)}>
+                  <IconButton
+                    aria-label="Locate tool in transcript"
+                    onClick={(): void => onLocate(item.key)}
+                  >
                     <MyLocation fontSize="small" />
                   </IconButton>
                 </Tooltip>
-                <Button onClick={onClose} endIcon={<KeyboardArrowDown />} sx={{ textTransform: "none", flexShrink: 0 }}>
+                <Button
+                  onClick={onClose}
+                  endIcon={<KeyboardArrowDown />}
+                  sx={{ textTransform: "none", flexShrink: 0 }}
+                >
                   Close
                 </Button>
               </Stack>
             </Box>
-            <Box sx={{ minHeight: 0, display: "grid", gridTemplateColumns: "clamp(280px, 24vw, 380px) minmax(0, 1fr)" }}>
+            <Box
+              sx={{
+                minHeight: 0,
+                display: "grid",
+                gridTemplateColumns: "clamp(280px, 24vw, 380px) minmax(0, 1fr)",
+              }}
+            >
               {desktopHistory}
-              <DialogContent sx={{ minHeight: 0, overflowY: "auto", px: { md: 3, xl: 4 }, py: 2.5 }}>
+              <DialogContent
+                sx={{
+                  minHeight: 0,
+                  overflowY: "auto",
+                  px: { md: 3, xl: 4 },
+                  py: 2.5,
+                }}
+              >
                 {details}
               </DialogContent>
             </Box>
             <DesktopShortcutBar
-                groups={[
-                  {
-                    label: "Navigate",
-                    slots: [
-                      {
-                        shortcut: "J/K",
-                        label: "Run",
-                        availability: navigationPrefixArmed ? "inactive" : "available",
-                      },
-                      {
-                        shortcut: "H/L",
-                        label: "View",
-                        availability: rawOnly || navigationPrefixArmed
-                          ? "inactive"
-                          : "available",
-                      },
-                      {
-                        shortcut: "Enter",
-                        label: "Locate",
-                        availability: navigationPrefixArmed ? "inactive" : "available",
-                      },
-                    ],
-                  },
-                  {
-                    label: "Go",
-                    slots: [
-                      {
-                        shortcut: "G",
-                        label: "Prefix",
-                        availability: sequentialShortcutAvailability({
-                          scopeAvailable: true,
-                          armed: navigationPrefixArmed,
-                          prefix: true,
-                        }),
-                      },
-                      {
-                        shortcut: "G",
-                        label: "Oldest",
-                        availability: sequentialShortcutAvailability({
-                          scopeAvailable: true,
-                          armed: navigationPrefixArmed,
-                          prefix: false,
-                        }),
-                      },
-                      {
-                        shortcut: "Shift+G",
-                        label: "Latest",
-                        availability: navigationPrefixArmed ? "inactive" : "available",
-                      },
-                    ],
-                  },
-                  {
-                    slots: [{
-                      shortcut: "Esc",
-                      label: navigationPrefixArmed ? "Cancel prefix" : "Close",
-                    }],
-                  },
-                ]}
+              groups={[
+                {
+                  label: "Navigate",
+                  slots: [
+                    {
+                      shortcut: "J/K",
+                      label: "Run",
+                      availability: navigationPrefixArmed
+                        ? "inactive"
+                        : "available",
+                    },
+                    {
+                      shortcut: "H/L",
+                      label: "View",
+                      availability: rawOnly || navigationPrefixArmed
+                        ? "inactive"
+                        : "available",
+                    },
+                    {
+                      shortcut: "Enter",
+                      label: "Locate",
+                      availability: navigationPrefixArmed
+                        ? "inactive"
+                        : "available",
+                    },
+                  ],
+                },
+                {
+                  label: "Go",
+                  slots: [
+                    {
+                      shortcut: "G",
+                      label: "Prefix",
+                      availability: sequentialShortcutAvailability({
+                        scopeAvailable: true,
+                        armed: navigationPrefixArmed,
+                        prefix: true,
+                      }),
+                    },
+                    {
+                      shortcut: "G",
+                      label: "Oldest",
+                      availability: sequentialShortcutAvailability({
+                        scopeAvailable: true,
+                        armed: navigationPrefixArmed,
+                        prefix: false,
+                      }),
+                    },
+                    {
+                      shortcut: "Shift+G",
+                      label: "Latest",
+                      availability: navigationPrefixArmed
+                        ? "inactive"
+                        : "available",
+                    },
+                  ],
+                },
+                {
+                  slots: [{
+                    shortcut: "Esc",
+                    label: navigationPrefixArmed ? "Cancel prefix" : "Close",
+                  }],
+                },
+              ]}
             />
           </Box>
         </Dialog>
@@ -2925,6 +2844,8 @@ const ItemView = memo(function ItemView({
   item,
   streaming,
   provider,
+  providerVersion,
+  providerDigest,
   desktop,
   selectedToolKey,
   onOpenTool,
@@ -2934,6 +2855,8 @@ const ItemView = memo(function ItemView({
    *  session is still busy. Adds a blinking caret / dots accordingly. */
   streaming?: boolean;
   provider: string;
+  providerVersion?: string | undefined;
+  providerDigest?: string | undefined;
   desktop: boolean;
   selectedToolKey: string | null;
   onOpenTool: (key: string) => void;
@@ -2947,6 +2870,8 @@ const ItemView = memo(function ItemView({
           streaming={!!streaming && item.role === "assistant"}
           origin={item.origin}
           provider={provider}
+          providerVersion={providerVersion}
+          providerDigest={providerDigest}
           desktop={desktop}
         />
       );
@@ -2957,15 +2882,13 @@ const ItemView = memo(function ItemView({
             color: "text.secondary",
             alignSelf: "stretch",
             maxWidth: "100%",
-            px: provider === "codex" || provider === "codex-deepseek" ? 0.25 : 0,
+            px: 0,
           }}
         >
           <Box sx={{ fontSize: "0.84rem", flex: 1, minWidth: 0 }}>
-            {/* Empty Codex HTML separators become compact, connected steps. */}
             <ThoughtSteps
               sections={item.sections}
               streaming={!!streaming}
-              codex={provider === "codex" || provider === "codex-deepseek"}
             />
           </Box>
         </Box>
@@ -3001,7 +2924,7 @@ const ItemView = memo(function ItemView({
             sx={{ fontWeight: interrupted ? 600 : 400 }}
           >
             {item.status}
-            {item.detail ? `: ${presentedCrashDetail(item.detail)}` : ""}
+            {item.detail ? `: ${item.detail}` : ""}
           </Typography>
         </Stack>
       );
@@ -3047,7 +2970,10 @@ const ItemView = memo(function ItemView({
           >
             <CleaningServices sx={{ fontSize: 13 }} />
           </Box>
-          <Typography variant="caption" sx={{ fontWeight: 650, letterSpacing: 0.1 }}>
+          <Typography
+            variant="caption"
+            sx={{ fontWeight: 650, letterSpacing: 0.1 }}
+          >
             New conversation
           </Typography>
         </Box>
@@ -3074,20 +3000,13 @@ const ItemView = memo(function ItemView({
 // surfaces as `interrupted` (amber, "didn't finish"), distinct from the normal
 // `exited` dormant (grey, "completed, asleep") — completed vs interrupted at a
 // glance, no percentage.
-const GEMINI_CONSUMER_RETIRED =
-  "This client is no longer supported for Gemini Code Assist for individuals";
-const GEMINI_CONSUMER_GUIDANCE =
-  "Gemini CLI no longer supports Google Login for personal, Google AI Pro, or AI Ultra accounts. Use an API key, Code Assist Standard/Enterprise, or migrate to Antigravity.";
-
-function presentedCrashDetail(detail: string): string {
-  return detail.includes(GEMINI_CONSUMER_RETIRED) ? GEMINI_CONSUMER_GUIDANCE : detail;
-}
-
 function latestCrashDetail(items: RenderItem[]): string | null {
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
-    if (item?.kind === "lifecycle" && item.status === "crashed" && item.detail) {
-      return presentedCrashDetail(item.detail);
+    if (
+      item?.kind === "lifecycle" && item.status === "crashed" && item.detail
+    ) {
+      return item.detail;
     }
   }
   return null;
@@ -3111,7 +3030,8 @@ function SessionStatusBar({
   } else if (status === "crashed") {
     tone = "error";
     icon = <ErrorOutline fontSize="small" />;
-    text = crashDetail ?? "Agent stopped unexpectedly — send a message to restart it.";
+    text = crashDetail ??
+      "Agent stopped unexpectedly — send a message to restart it.";
   } else if (status === "exited") {
     tone = "neutral";
     icon = <Bedtime fontSize="small" />;
@@ -3273,6 +3193,8 @@ export function Transcript({
   timeline,
   status,
   provider,
+  providerVersion,
+  providerDigest,
   cwd,
   emptyContext,
   loading,
@@ -3296,6 +3218,9 @@ export function Transcript({
   status: Status;
   /** Drives the per-provider "thinking" indicator flavor (color + verbs). */
   provider: string;
+  /** Exact immutable Provider package identity pinned by this session. */
+  providerVersion?: string | undefined;
+  providerDigest?: string | undefined;
   /** The session's working directory — shown in the empty-state hint so a brand
    *  new session reads as "ready in <cwd>", not a blank wall. */
   cwd: string;
@@ -3410,7 +3335,9 @@ export function Transcript({
     });
     return () => cancelAnimationFrame(frame);
   }, [drawerCatchupStep, sessionId]);
-  const allItems = useMemo(() => derive(presentedTimeline), [presentedTimeline]);
+  const allItems = useMemo(() => derive(presentedTimeline), [
+    presentedTimeline,
+  ]);
   const crashDetail = useMemo(() => latestCrashDetail(allItems), [allItems]);
   const items = useMemo(
     () =>
@@ -3424,17 +3351,25 @@ export function Transcript({
   const [selectedToolKey, setSelectedToolKey] = useState<string | null>(null);
   const [locatedToolKey, setLocatedToolKey] = useState<string | null>(null);
   const locateTimerRef = useRef<number | null>(null);
-  const openTool = useCallback((key: string): void => setSelectedToolKey(key), []);
+  const openTool = useCallback(
+    (key: string): void => setSelectedToolKey(key),
+    [],
+  );
   const closeTool = useCallback((): void => setSelectedToolKey(null), []);
 
   useEffect(() => {
-    if (selectedToolKey !== null && !tools.some((tool) => tool.key === selectedToolKey)) {
+    if (
+      selectedToolKey !== null &&
+      !tools.some((tool) => tool.key === selectedToolKey)
+    ) {
       setSelectedToolKey(null);
     }
   }, [selectedToolKey, tools]);
 
   useEffect(() => () => {
-    if (locateTimerRef.current !== null) globalThis.clearTimeout(locateTimerRef.current);
+    if (locateTimerRef.current !== null) {
+      globalThis.clearTimeout(locateTimerRef.current);
+    }
   }, []);
   // Reader-comfort controls (Settings → Reading). The font-size SCALE is now a
   // GLOBAL app zoom on the root <html> font-size (useGlobalFontScale at the app
@@ -3555,7 +3490,9 @@ export function Transcript({
   const scrollbackBoundaryBootstrapRequestedRef = useRef(false);
   const visibleScrollbackBoundaryRafRef = useRef(0);
   const requestOlderPageRef = useRef<() => void>(() => undefined);
-  const requestVisibleScrollbackBoundaryRef = useRef<() => void>(() => undefined);
+  const requestVisibleScrollbackBoundaryRef = useRef<() => void>(() =>
+    undefined
+  );
   const requestViewportBackfillRef = useRef<
     (fromResize: boolean) => void
   >(() => undefined);
@@ -3589,7 +3526,9 @@ export function Transcript({
     pageId: pageId ?? null,
     beforeSeq: paging?.beforeSeq ?? null,
   });
-  if (scrollbackBoundaryBootstrapKeyRef.current !== scrollbackBoundaryBootstrapKey) {
+  if (
+    scrollbackBoundaryBootstrapKeyRef.current !== scrollbackBoundaryBootstrapKey
+  ) {
     scrollbackBoundaryBootstrapKeyRef.current = scrollbackBoundaryBootstrapKey;
     scrollbackBoundaryBootstrapRequestedRef.current = false;
   }
@@ -3609,6 +3548,8 @@ export function Transcript({
     shouldShowClearedConversationEmptyState(items.map((item) => item.kind));
   const conversationContext: ConversationEmptyContext = emptyContext ?? {
     provider,
+    providerVersion,
+    providerDigest,
     project: cwd ? cwd.replace(/\/+$/, "").split("/").at(-1) ?? null : null,
     machine: null,
     model: null,
@@ -3669,13 +3610,16 @@ export function Transcript({
       try {
         // Give React/WebKit one paint with the promoted boundary before the
         // first network request can resolve and prepend rows.
-        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => resolve())
+        );
         if (scrollbackFillRunRef.current !== run) return;
         for (let page = 0; page < SCROLLBACK_FILL_PAGE_LIMIT; page += 1) {
           const previousBandHeight = el.querySelector<HTMLElement>(
             "[data-transcript-scrollback-fill]",
           )?.getBoundingClientRect().height ?? 0;
-          const previousRowCount = el.querySelectorAll<HTMLElement>("[data-key]").length;
+          const previousRowCount =
+            el.querySelectorAll<HTMLElement>("[data-key]").length;
           const previousContentHeight = Math.max(
             0,
             el.scrollHeight - previousBandHeight,
@@ -3694,7 +3638,8 @@ export function Transcript({
                 const currentEl = parentRef.current;
                 if (!currentEl) return;
                 const fromBottom = Math.abs(currentEl.scrollTop);
-                const fromTop = currentEl.scrollHeight - currentEl.clientHeight - fromBottom;
+                const fromTop = currentEl.scrollHeight -
+                  currentEl.clientHeight - fromBottom;
                 if (fromTop <= currentEl.clientHeight * 3) {
                   requestOlderPageRef.current();
                 }
@@ -3720,13 +3665,18 @@ export function Transcript({
           const mountedBandHeight = el.querySelector<HTMLElement>(
             "[data-transcript-scrollback-fill]",
           )?.getBoundingClientRect().height ?? 0;
-          const mountedContentHeight = Math.max(0, el.scrollHeight - mountedBandHeight);
+          const mountedContentHeight = Math.max(
+            0,
+            el.scrollHeight - mountedBandHeight,
+          );
           mountedContent = mountedContent ||
             mountedRowCount > previousRowCount ||
             mountedContentHeight > previousContentHeight + 1;
           await new Promise<void>((resolve) => {
-            globalThis.setTimeout(() => requestAnimationFrame(() => resolve()),
-              SCROLLBACK_FILL_SETTLE_MS);
+            globalThis.setTimeout(
+              () => requestAnimationFrame(() => resolve()),
+              SCROLLBACK_FILL_SETTLE_MS,
+            );
           });
           if (scrollbackFillRunRef.current !== run) return;
           const bandHeight = el.querySelector<HTMLElement>(
@@ -3746,24 +3696,27 @@ export function Transcript({
           const currentPaging = pagingRef.current;
           const loadedRows = Math.max(
             0,
-            el.querySelectorAll<HTMLElement>("[data-key]").length - baseRowCount,
+            el.querySelectorAll<HTMLElement>("[data-key]").length -
+              baseRowCount,
           );
           const fromBottom = Math.abs(el.scrollTop);
           const fromTop = el.scrollHeight - el.clientHeight - fromBottom;
-          if (!currentPaging || !shouldContinueScrollbackFill({
-            remaining,
-            loadedRows,
-            minimumRows: SCROLLBACK_FILL_MINIMUM_ROWS,
-            fromTop,
-            viewportHeight: el.clientHeight,
-            reachedStart: currentPaging.reachedStart,
-            // `loadOlder` has completed canonically; React may not have
-            // published that synchronous store update into this ref yet.
-            // Treating its stale `loadingOlder` bit as authoritative would
-            // stop sparse-page filling after the first request.
-            loadingOlder: false,
-            beforeSeq: currentPaging.beforeSeq,
-          })) break;
+          if (
+            !currentPaging || !shouldContinueScrollbackFill({
+              remaining,
+              loadedRows,
+              minimumRows: SCROLLBACK_FILL_MINIMUM_ROWS,
+              fromTop,
+              viewportHeight: el.clientHeight,
+              reachedStart: currentPaging.reachedStart,
+              // `loadOlder` has completed canonically; React may not have
+              // published that synchronous store update into this ref yet.
+              // Treating its stale `loadingOlder` bit as authoritative would
+              // stop sparse-page filling after the first request.
+              loadingOlder: false,
+              beforeSeq: currentPaging.beforeSeq,
+            })
+          ) break;
         }
       } finally {
         if (scrollbackFillRunRef.current === run) {
@@ -3776,31 +3729,34 @@ export function Transcript({
           // This is the missing replacement hand-off: fetched rows take the
           // old skeleton's place while the next skeleton remains just above.
           if (mountedContent) {
-            requestAnimationFrame(() => requestAnimationFrame(() => {
-              if (scrollbackFillRunRef.current !== run) return;
-              const currentEl = parentRef.current;
-              const boundary = currentEl?.querySelector<HTMLElement>(
-                "[data-transcript-scrollback-fill]",
-              );
-              if (!currentEl || !boundary) return;
-              const fromBottom = Math.abs(currentEl.scrollTop);
-              const currentFromTop = Math.max(
-                0,
-                currentEl.scrollHeight - currentEl.clientHeight - fromBottom,
-              );
-              const desiredFromTop = scrollbackReplacementFromTop({
-                currentFromTop,
-                boundaryHeight: boundary.getBoundingClientRect().height,
-                mountedContent: true,
-              });
-              if (desiredFromTop === null) return;
-              const desiredFromBottom = Math.max(
-                0,
-                currentEl.scrollHeight - currentEl.clientHeight - desiredFromTop,
-              );
-              const direction = currentEl.scrollTop > 0.5 ? 1 : -1;
-              currentEl.scrollTop = direction * desiredFromBottom;
-            }));
+            requestAnimationFrame(() =>
+              requestAnimationFrame(() => {
+                if (scrollbackFillRunRef.current !== run) return;
+                const currentEl = parentRef.current;
+                const boundary = currentEl?.querySelector<HTMLElement>(
+                  "[data-transcript-scrollback-fill]",
+                );
+                if (!currentEl || !boundary) return;
+                const fromBottom = Math.abs(currentEl.scrollTop);
+                const currentFromTop = Math.max(
+                  0,
+                  currentEl.scrollHeight - currentEl.clientHeight - fromBottom,
+                );
+                const desiredFromTop = scrollbackReplacementFromTop({
+                  currentFromTop,
+                  boundaryHeight: boundary.getBoundingClientRect().height,
+                  mountedContent: true,
+                });
+                if (desiredFromTop === null) return;
+                const desiredFromBottom = Math.max(
+                  0,
+                  currentEl.scrollHeight - currentEl.clientHeight -
+                    desiredFromTop,
+                );
+                const direction = currentEl.scrollTop > 0.5 ? 1 : -1;
+                currentEl.scrollTop = direction * desiredFromBottom;
+              })
+            );
           }
         }
       }
@@ -3866,14 +3822,16 @@ export function Transcript({
       // the indexed previous question page instead; the server bounds it at
       // TurnEnd, so background terminal output cannot make this recovery
       // response grow forever.
-      if (shouldRecoverUnrenderableHistory({
-        managed: managesScrollHistoryRef.current,
-        itemCount: renderableItemCountRef.current,
-        timelineEventCount: timelineEventCountRef.current,
-        reachedStart: paging.reachedStart,
-        loadingOlder: paging.loadingOlder,
-        beforeSeq: paging.beforeSeq,
-      })) {
+      if (
+        shouldRecoverUnrenderableHistory({
+          managed: managesScrollHistoryRef.current,
+          itemCount: renderableItemCountRef.current,
+          timelineEventCount: timelineEventCountRef.current,
+          reachedStart: paging.reachedStart,
+          loadingOlder: paging.loadingOlder,
+          beforeSeq: paging.beforeSeq,
+        })
+      ) {
         const cursor = paging.beforeSeq;
         if (semanticRecoveryCursorRef.current === cursor) {
           setBackfillingViewport(false);
@@ -3896,7 +3854,8 @@ export function Transcript({
       const loadingFill = el.querySelector<HTMLElement>(
         "[data-transcript-loading-fill]",
       );
-      const loadingFillHeight = loadingFill?.getBoundingClientRect().height ?? null;
+      const loadingFillHeight = loadingFill?.getBoundingClientRect().height ??
+        null;
       const hasVisibleGap = shouldBackfillTranscriptViewport({
         managed: managesScrollHistoryRef.current,
         allowed: true,
@@ -3946,11 +3905,14 @@ export function Transcript({
             if (viewportBackfillSettleTimerRef.current !== null) {
               globalThis.clearTimeout(viewportBackfillSettleTimerRef.current);
             }
-            viewportBackfillSettleTimerRef.current = globalThis.setTimeout(() => {
-              viewportBackfillSettleTimerRef.current = null;
-              viewportBackfillSettlingRef.current = false;
-              requestViewportBackfillRef.current(false);
-            }, VIEWPORT_BACKFILL_SETTLE_MS);
+            viewportBackfillSettleTimerRef.current = globalThis.setTimeout(
+              () => {
+                viewportBackfillSettleTimerRef.current = null;
+                viewportBackfillSettlingRef.current = false;
+                requestViewportBackfillRef.current(false);
+              },
+              VIEWPORT_BACKFILL_SETTLE_MS,
+            );
           }
         });
       }
@@ -4043,18 +4005,20 @@ export function Transcript({
       if (el && currentPaging && boundary) {
         const viewportRect = el.getBoundingClientRect();
         const boundaryRect = boundary.getBoundingClientRect();
-        if (shouldPrefetchVisibleScrollbackBoundary({
-          managed: managesScrollHistoryRef.current,
-          restoring: viewportRestoreActiveRef.current,
-          requested: scrollbackBoundaryBootstrapRequestedRef.current,
-          busy: scrollbackFillActiveRef.current || currentPaging.loadingOlder,
-          reachedStart: currentPaging.reachedStart,
-          beforeSeq: currentPaging.beforeSeq,
-          viewportTop: viewportRect.top,
-          viewportBottom: viewportRect.bottom,
-          boundaryTop: boundaryRect.top,
-          boundaryBottom: boundaryRect.bottom,
-        })) {
+        if (
+          shouldPrefetchVisibleScrollbackBoundary({
+            managed: managesScrollHistoryRef.current,
+            restoring: viewportRestoreActiveRef.current,
+            requested: scrollbackBoundaryBootstrapRequestedRef.current,
+            busy: scrollbackFillActiveRef.current || currentPaging.loadingOlder,
+            reachedStart: currentPaging.reachedStart,
+            beforeSeq: currentPaging.beforeSeq,
+            viewportTop: viewportRect.top,
+            viewportBottom: viewportRect.bottom,
+            boundaryTop: boundaryRect.top,
+            boundaryBottom: boundaryRect.bottom,
+          })
+        ) {
           scrollbackBoundaryBootstrapRequestedRef.current = true;
           requestOlderPageRef.current();
           return;
@@ -4066,7 +4030,9 @@ export function Transcript({
         currentPaging?.reachedStart || currentPaging?.beforeSeq === null;
       attempts += 1;
       if (!terminal && attempts < VISIBLE_SCROLLBACK_SETTLE_FRAME_LIMIT) {
-        visibleScrollbackBoundaryRafRef.current = requestAnimationFrame(measure);
+        visibleScrollbackBoundaryRafRef.current = requestAnimationFrame(
+          measure,
+        );
       }
     };
     visibleScrollbackBoundaryRafRef.current = requestAnimationFrame(measure);
@@ -4102,10 +4068,15 @@ export function Transcript({
     stick.current = false;
     setSticky(sessionIdRef.current, false);
     setLocatedToolKey(key);
-    if (locateTimerRef.current !== null) globalThis.clearTimeout(locateTimerRef.current);
+    if (locateTimerRef.current !== null) {
+      globalThis.clearTimeout(locateTimerRef.current);
+    }
     // Let the cover sheet unmount before scrolling the transcript beneath it.
     globalThis.setTimeout(() => {
-      const row = [...(parentRef.current?.querySelectorAll<HTMLElement>("[data-key]") ?? [])]
+      const row = [
+        ...(parentRef.current?.querySelectorAll<HTMLElement>("[data-key]") ??
+          []),
+      ]
         .find((candidate) => candidate.dataset["key"] === key);
       // Tool history can be tens of thousands of pixels away. An animated
       // journey delays the destination highlight until after it has already
@@ -4189,7 +4160,8 @@ export function Transcript({
     let directManipulationShouldFollow = false;
     let nativeScrollSettleTimer: number | undefined;
     const magneticThreshold = (): number => {
-      const lineHeight = Number.parseFloat(globalThis.getComputedStyle(el).lineHeight) || 24;
+      const lineHeight =
+        Number.parseFloat(globalThis.getComputedStyle(el).lineHeight) || 24;
       return Math.max(40, lineHeight * 2);
     };
     const detach = (): void => {
@@ -4257,9 +4229,10 @@ export function Transcript({
           freezeRef.current.key = null;
           el.scrollTo({
             top: 0,
-            behavior: globalThis.matchMedia("(prefers-reduced-motion: reduce)").matches
-              ? "auto"
-              : "smooth",
+            behavior:
+              globalThis.matchMedia("(prefers-reduced-motion: reduce)").matches
+                ? "auto"
+                : "smooth",
           });
           saveViewport();
           scheduleHistoryRelease();
@@ -4559,7 +4532,9 @@ export function Transcript({
     el.addEventListener("touchcancel", onTouchEnd, { passive: true });
     el.addEventListener("scroll", onScroll, { passive: true });
     globalThis.addEventListener("pointerup", onPointerEnd, { passive: true });
-    globalThis.addEventListener("pointercancel", onPointerEnd, { passive: true });
+    globalThis.addEventListener("pointercancel", onPointerEnd, {
+      passive: true,
+    });
     globalThis.addEventListener("blur", onPointerEnd);
     el.addEventListener("cowboy:desktop-transcript-nav", onDesktopNavigation);
     globalThis.addEventListener(
@@ -4981,18 +4956,35 @@ export function Transcript({
         }}
       >
         {status === "starting" && items.length === 0
-          ? <ConversationEmptyState kind="preparing" context={conversationContext} />
+          ? (
+            <ConversationEmptyState
+              kind="preparing"
+              context={conversationContext}
+            />
+          )
           : loading && items.length === 0
           ? (
             <TranscriptSkeleton
               desktop={desktopNavigation}
               provider={provider}
+              providerVersion={providerVersion}
+              providerDigest={providerDigest}
             />
           )
           : showClearedEmptyState
-          ? <ConversationEmptyState kind="cleared" context={conversationContext} />
+          ? (
+            <ConversationEmptyState
+              kind="cleared"
+              context={conversationContext}
+            />
+          )
           : showFreshSessionEmptyState
-          ? <ConversationEmptyState kind="ready" context={conversationContext} />
+          ? (
+            <ConversationEmptyState
+              kind="ready"
+              context={conversationContext}
+            />
+          )
           : (
             // Rendered NEWEST-FIRST in the DOM; column-reverse flips it to
             // oldest-at-top / newest-at-bottom on screen. The trailing dots are
@@ -5000,10 +4992,12 @@ export function Transcript({
             // item's STABLE key (first envelope seq) so prepending older history
             // doesn't re-mount/jump rows.
             <>
-              {/* column-reverse makes the first DOM child visually lowest.
+              {
+                /* column-reverse makes the first DOM child visually lowest.
                   Keep the page-turn footer next to the persistent Page Dock;
                   the flexible remainder belongs between short content and its
-                  footer, never below the footer as a large dead zone. */}
+                  footer, never below the footer as a large dead zone. */
+              }
               <Box
                 aria-hidden
                 data-transcript-tail-clearance
@@ -5076,7 +5070,11 @@ export function Transcript({
                 <Box
                   sx={{ py: 0.625, display: "flex", flexDirection: "column" }}
                 >
-                  <ThinkingIndicator provider={provider} />
+                  <ThinkingIndicator
+                    provider={provider}
+                    providerVersion={providerVersion}
+                    providerDigest={providerDigest}
+                  />
                 </Box>
               )}
               {showLiveCompactionRequest && (
@@ -5086,6 +5084,8 @@ export function Transcript({
                   <CompactingWidget
                     active
                     provider={provider}
+                    providerVersion={providerVersion}
+                    providerDigest={providerDigest}
                     desktop={desktopNavigation}
                   />
                 </Box>
@@ -5133,7 +5133,9 @@ export function Transcript({
                       contain: transcriptRowContainment(
                         item.key === streamingRowKey,
                       ),
-                      color: locatedToolKey === item.key ? "primary.main" : undefined,
+                      color: locatedToolKey === item.key
+                        ? "primary.main"
+                        : undefined,
                       animation: locatedToolKey === item.key
                         ? `${toolLocateFlash} 1.4s ease-out`
                         : undefined,
@@ -5149,6 +5151,8 @@ export function Transcript({
                       item={item}
                       streaming={item.key === streamingRowKey}
                       provider={provider}
+                      providerVersion={providerVersion}
+                      providerDigest={providerDigest}
                       desktop={desktopNavigation}
                       selectedToolKey={selectedToolKey}
                       onOpenTool={openTool}
@@ -5156,7 +5160,7 @@ export function Transcript({
                   </Box>
                 ))}
               {managesScrollHistory && !backfillingViewport && paging != null &&
-                  paging.beforeSeq !== null && !paging.reachedStart && (
+                paging.beforeSeq !== null && !paging.reachedStart && (
                 <ScrollbackLoadingSkeleton
                   height={scrollbackFailed
                     ? 44
@@ -5199,6 +5203,8 @@ export function Transcript({
         selectedKey={selectedToolKey}
         desktop={desktopNavigation}
         provider={provider}
+        providerVersion={providerVersion}
+        providerDigest={providerDigest}
         onSelect={setSelectedToolKey}
         onClose={closeTool}
         onLocate={locateTool}

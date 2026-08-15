@@ -1,0 +1,8 @@
+{
+  "name": "cowboy-runtime-gemini",
+  "version": "0.55.1",
+  "private": true,
+  "dependencies": {
+    "@google/gemini-cli": "0.55.1"
+  }
+}

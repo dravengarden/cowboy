@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 #[cfg(test)]
 use std::sync::atomic::AtomicBool;
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, ensure};
 use parking_lot::Mutex;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::process::Command;
@@ -37,7 +37,7 @@ pub enum SpawnMode {
     SystemdUser,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct MachineBrokerArgs {
     /// Stable endpoint advertised to workers and the controller.
     pub socket: PathBuf,
@@ -47,6 +47,9 @@ pub struct MachineBrokerArgs {
     /// Environment owned by the Machine component resolver and injected into
     /// every worker.
     pub worker_environment: BTreeMap<String, String>,
+    /// Content-addressed Provider generations and Service-auth projections used
+    /// to build each session's process environment.
+    pub provider_store: Arc<crate::machine_providers::MachineProviderStore>,
     /// Root containing Machine-owned session worktrees. Permanent session
     /// deletion may reclaim marked Cargo targets below this exact boundary.
     pub worktree_root: PathBuf,
@@ -125,15 +128,24 @@ struct Broker {
 }
 
 impl Broker {
-    fn revoke_cache_protection(&self, provider: &str, session_id: &str, reason: &'static str) {
-        if !crate::deepseek_cache::supported_provider(provider) {
+    fn revoke_cache_protection(
+        &self,
+        session: &StartSession,
+        session_id: &str,
+        reason: &'static str,
+    ) {
+        let configuration = session.provider_behavior.as_ref().map_or_else(
+            || crate::provider_behavior::legacy_behavior(&session.provider).configuration,
+            |behavior| behavior.configuration.clone(),
+        );
+        if !crate::deepseek_cache::supported_behavior(&configuration) {
             return;
         }
-        let provider = provider.to_owned();
+        let provider = session.provider.clone();
         let session_id = session_id.to_owned();
         tokio::spawn(async move {
             if let Err(error) =
-                crate::deepseek_cache::revoke_local_snapshot(&provider, &session_id).await
+                crate::deepseek_cache::revoke_local_snapshot(&configuration, &session_id).await
             {
                 tracing::warn!(
                     provider,
@@ -877,7 +889,7 @@ impl Broker {
 
     async fn reset_session(self: &Arc<Self>, mut session: StartSession, command_id: String) {
         let session_id = session.session_id.clone();
-        self.revoke_cache_protection(&session.provider, &session_id, "session_reset");
+        self.revoke_cache_protection(&session, &session_id, "session_reset");
         session.adopt_only = false;
         let cleanup_gate = self.deleted_session_cleanup_gate(&session_id);
         let _cleanup_guard = cleanup_gate.lock().await;
@@ -1205,15 +1217,15 @@ impl Broker {
     }
 
     fn roll_provider(&self, provider: &str) {
-        let sessions: Vec<String> = self
+        let sessions: Vec<(String, StartSession)> = self
             .sessions
             .lock()
             .iter()
             .filter(|(_, session)| session.provider == provider)
-            .map(|(session_id, _)| session_id.clone())
+            .map(|(session_id, session)| (session_id.clone(), session.clone()))
             .collect();
-        for session_id in sessions {
-            self.revoke_cache_protection(provider, &session_id, "provider_roll");
+        for (session_id, session) in sessions {
+            self.revoke_cache_protection(&session, &session_id, "provider_roll");
             let snapshot = if let Some(worker) = self.workers.lock().get_mut(&session_id) {
                 worker.snapshot.drain_requested = true;
                 Some(worker.snapshot.clone())
@@ -1415,7 +1427,50 @@ impl Broker {
     }
 
     async fn spawn_worker(&self, session: &StartSession) -> Result<()> {
-        let session_environment = session_context_environment(session)?;
+        let provider = (!session.provider_generation_digest.is_empty())
+            .then(|| {
+                self.args.provider_store.launch_context(
+                    &session.provider,
+                    &session.provider_generation_digest,
+                    session.provider_auth_generation,
+                )
+            })
+            .transpose()?;
+        if let (Some(declared), Some(installed)) =
+            (session.provider_behavior.as_ref(), provider.as_ref())
+        {
+            ensure!(
+                declared == &installed.behavior,
+                "session Provider behavior does not match the installed generation"
+            );
+        }
+        if let Some(installed) = &provider {
+            ensure!(
+                session.provider_version == installed.version,
+                "session Provider version does not match the installed generation"
+            );
+        }
+        let behavior = provider.as_ref().map_or_else(
+            || {
+                session
+                    .provider_behavior
+                    .clone()
+                    .unwrap_or_else(|| crate::provider_behavior::legacy_behavior(&session.provider))
+            },
+            |provider| provider.behavior.clone(),
+        );
+        let mut session_environment =
+            session_context_environment(session, &behavior.configuration)?;
+        if let Some(provider) = &provider {
+            session_environment.push((
+                "COWBOY_PROVIDER_PACKAGE_PATH",
+                provider.package_path.display().to_string(),
+            ));
+            session_environment.push(("COWBOY_PROVIDER_ENTRYPOINT", provider.command.clone()));
+            if let Some(home) = &provider.home {
+                session_environment.push(("HOME", home.display().to_string()));
+            }
+        }
         let worker_command = self
             .generation_commands
             .lock()
@@ -1431,6 +1486,24 @@ impl Broker {
             SpawnMode::Direct => {
                 let mut command = Command::new(&worker_command);
                 command.envs(&self.args.worker_environment);
+                if let Some(provider) = &provider {
+                    for name in &provider.remove_environment {
+                        command.env_remove(name);
+                    }
+                    for (name, _) in std::env::vars().filter(|(name, _)| {
+                        provider
+                            .remove_environment_prefixes
+                            .iter()
+                            .any(|prefix| name.starts_with(prefix))
+                    }) {
+                        command.env_remove(name);
+                    }
+                    // Apply signed Provider and credential projections after
+                    // inherited-variable scrubbing. Otherwise an auth value
+                    // with a scrubbed prefix can disappear only when the
+                    // broker happens to inherit a variable with the same name.
+                    command.envs(&provider.environment);
+                }
                 for (name, value) in &session_environment {
                     command.env(name, value);
                 }
@@ -1453,18 +1526,41 @@ impl Broker {
                     &format!("--unit={unit}"),
                 ]);
                 for (name, _) in std::env::vars().filter(|(name, _)| {
-                    matches!(
+                    let inherited = matches!(
                         name.as_str(),
                         "HOME" | "USER" | "LOGNAME" | "PATH" | "NPM_CONFIG_PREFIX" | "RUST_LOG"
-                    ) || name.starts_with("COWBOY_ACP_")
+                    ) || name.starts_with("COWBOY_ACP_");
+                    inherited
+                        && !provider.as_ref().is_some_and(|provider| {
+                            provider.remove_environment.contains(name)
+                                || provider
+                                    .remove_environment_prefixes
+                                    .iter()
+                                    .any(|prefix| name.starts_with(prefix))
+                        })
                 }) {
                     command.arg(format!("--setenv={name}"));
                 }
                 for (name, value) in &self.args.worker_environment {
-                    command.arg(format!("--setenv={name}={value}"));
+                    if !provider.as_ref().is_some_and(|provider| {
+                        provider.remove_environment.contains(name)
+                            || provider
+                                .remove_environment_prefixes
+                                .iter()
+                                .any(|prefix| name.starts_with(prefix))
+                    }) {
+                        command.arg(format!("--setenv={name}={value}"));
+                    }
+                }
+                if let Some(provider) = &provider {
+                    for (name, value) in &provider.environment {
+                        command.env(name, value);
+                        command.arg(format!("--setenv={name}"));
+                    }
                 }
                 for (name, value) in &session_environment {
-                    command.arg(format!("--setenv={name}={value}"));
+                    command.env(name, value);
+                    command.arg(format!("--setenv={name}"));
                 }
                 if let Some(fallback_for) = &session.fallback_for {
                     command.arg(format!("--setenv=COWBOY_FALLBACK_FOR={fallback_for}"));
@@ -1480,10 +1576,19 @@ impl Broker {
             .arg(&session.session_id)
             .arg("--provider")
             .arg(&session.provider)
+            .arg("--provider-version")
+            .arg(&session.provider_version)
+            .arg("--provider-generation-digest")
+            .arg(&session.provider_generation_digest)
             .arg("--cwd")
             .arg(&session.cwd)
             .arg("--generation")
             .arg(&session.generation);
+        if let Some(auth_generation) = session.provider_auth_generation {
+            command
+                .arg("--provider-auth-generation")
+                .arg(auth_generation.to_string());
+        }
         if self.args.spawn_mode == SpawnMode::Direct
             && let Some(fallback_for) = &session.fallback_for
         {
@@ -1524,11 +1629,14 @@ impl Broker {
     }
 }
 
-fn session_context_environment(session: &StartSession) -> Result<Vec<(&'static str, String)>> {
+fn session_context_environment(
+    session: &StartSession,
+    configuration: &cowboy_provider_sdk::ConfigurationBehavior,
+) -> Result<Vec<(&'static str, String)>> {
     let mut environment = match (session.context_window, session.auto_compact_token_limit) {
         (None, None) => Vec::new(),
         (Some(window), Some(compact))
-            if crate::deepseek_context::from_launch_values(&session.provider, window, compact)
+            if crate::deepseek_context::from_launch_values(configuration, window, compact)
                 .is_some() =>
         {
             vec![
@@ -1551,7 +1659,7 @@ fn session_context_environment(session: &StartSession) -> Result<Vec<(&'static s
             )
         }
     };
-    let cache_provider = crate::deepseek_cache::supported_provider(&session.provider);
+    let cache_provider = crate::deepseek_cache::supported_behavior(configuration);
     if cache_provider {
         // Legacy launch snapshots predate the additive policy field. Preserve
         // the product default during a rolling Machine cutover instead of
@@ -1566,14 +1674,6 @@ fn session_context_environment(session: &StartSession) -> Result<Vec<(&'static s
             "cache protection is unavailable for provider {}",
             session.provider
         );
-    }
-    if session.provider == "grok" {
-        // A Machine worker starts only after its cwd has passed the configured
-        // trusted-workspace boundary. Map that existing decision into Grok's
-        // process-scoped native folder-trust switch so generated task
-        // worktrees load their repository guidance and hooks without mutating
-        // the user's persistent Grok trust database.
-        environment.push(("GROK_FOLDER_TRUST", "0".to_owned()));
     }
     Ok(environment)
 }
@@ -2018,13 +2118,8 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
             config_id,
             value,
         } => {
-            if let Some(provider) = broker
-                .sessions
-                .lock()
-                .get(&session_id)
-                .map(|session| session.provider.clone())
-            {
-                broker.revoke_cache_protection(&provider, &session_id, "agent_config_changed");
+            if let Some(session) = broker.sessions.lock().get(&session_id).cloned() {
+                broker.revoke_cache_protection(&session, &session_id, "agent_config_changed");
             }
             broker.route_worker(
                 &session_id,
@@ -2076,7 +2171,7 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
             let cleanup_session = broker.sessions.lock().get(&session_id).cloned();
             let cleanup_cwd = cleanup_session.as_ref().map(|session| session.cwd.clone());
             if let Some(session) = cleanup_session {
-                broker.revoke_cache_protection(&session.provider, &session_id, "session_deleted");
+                broker.revoke_cache_protection(&session, &session_id, "session_deleted");
             }
             broker.resetting_sessions.lock().remove(&session_id);
             let mut cancelled = broker.cancelled_sessions.lock();
@@ -2208,6 +2303,24 @@ async fn handle_worker(
 mod tests {
     use super::*;
 
+    fn test_provider_store() -> Arc<crate::machine_providers::MachineProviderStore> {
+        static STORE: std::sync::OnceLock<Arc<crate::machine_providers::MachineProviderStore>> =
+            std::sync::OnceLock::new();
+        Arc::clone(STORE.get_or_init(|| {
+            Arc::new(
+                crate::machine_providers::MachineProviderStore::new(
+                    &std::env::temp_dir().join(format!(
+                        "cowboy-machine-broker-provider-test-{}",
+                        std::process::id()
+                    )),
+                    crate::machine_protocol::Platform::Linux,
+                    "x86_64".to_owned(),
+                )
+                .expect("test Provider store"),
+            )
+        }))
+    }
+
     #[test]
     fn systemd_show_parser_keeps_load_and_active_state_distinct() {
         let output = "ActiveState=active\nLoadState=loaded\n";
@@ -2234,6 +2347,10 @@ mod tests {
         let mut session = StartSession {
             session_id: "s".to_owned(),
             provider: "claude-deepseek".to_owned(),
+            provider_version: String::new(),
+            provider_generation_digest: String::new(),
+            provider_auth_generation: None,
+            provider_behavior: None,
             cwd: "/work".to_owned(),
             agent_session_id: None,
             system: false,
@@ -2244,8 +2361,9 @@ mod tests {
             fallback_for: None,
             adopt_only: false,
         };
+        let mut configuration = cowboy_provider_sdk::ConfigurationBehavior::AnthropicGatewayV1;
         assert_eq!(
-            session_context_environment(&session).expect("known Claude budget"),
+            session_context_environment(&session, &configuration).expect("known Claude budget"),
             vec![
                 (
                     crate::deepseek_context::SESSION_CONTEXT_WINDOW_ENV,
@@ -2260,36 +2378,40 @@ mod tests {
         );
 
         session.auto_compact_token_limit = Some(830_000);
-        assert!(session_context_environment(&session).is_err());
+        assert!(session_context_environment(&session, &configuration).is_err());
         session.provider = "claude-code".to_owned();
-        assert!(session_context_environment(&session).is_err());
+        configuration = cowboy_provider_sdk::ConfigurationBehavior::PortableV1;
+        assert!(session_context_environment(&session, &configuration).is_err());
 
         session.provider = "codex-deepseek".to_owned();
+        configuration = cowboy_provider_sdk::ConfigurationBehavior::OpenaiGatewayV1;
         session.context_window = None;
         session.auto_compact_token_limit = None;
         session.cache_protection = Some(false);
         assert_eq!(
-            session_context_environment(&session).expect("known cache policy"),
+            session_context_environment(&session, &configuration).expect("known cache policy"),
             vec![(crate::deepseek_cache::SESSION_POLICY_ENV, "off".to_owned(),)]
         );
 
         session.cache_protection = None;
         assert_eq!(
-            session_context_environment(&session).expect("legacy cache policy"),
+            session_context_environment(&session, &configuration).expect("legacy cache policy"),
             vec![(crate::deepseek_cache::SESSION_POLICY_ENV, "auto".to_owned(),)]
         );
 
         session.provider = "codex".to_owned();
+        configuration = cowboy_provider_sdk::ConfigurationBehavior::PortableV1;
         assert!(
-            session_context_environment(&session)
+            session_context_environment(&session, &configuration)
                 .expect("unrelated legacy session")
                 .is_empty()
         );
 
         session.provider = "grok".to_owned();
-        assert_eq!(
-            session_context_environment(&session).expect("trusted Grok workspace"),
-            vec![("GROK_FOLDER_TRUST", "0".to_owned())]
+        assert!(
+            session_context_environment(&session, &configuration)
+                .expect("Provider runtime owns workspace-trust projection")
+                .is_empty()
         );
     }
     use crate::runtime_wire::{RuntimeEvent, WorkerState};
@@ -2357,6 +2479,7 @@ mod tests {
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
         });
@@ -2450,6 +2573,7 @@ mod tests {
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
         });
@@ -2458,6 +2582,10 @@ mod tests {
             StartSession {
                 session_id: "sess-1".to_owned(),
                 provider: "codex".to_owned(),
+                provider_version: String::new(),
+                provider_generation_digest: String::new(),
+                provider_auth_generation: None,
+                provider_behavior: None,
                 cwd: "/work".to_owned(),
                 agent_session_id: Some("agent-1".to_owned()),
                 system: false,
@@ -2519,6 +2647,7 @@ mod tests {
             desired_generation: String::new(),
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
         });
@@ -2537,6 +2666,10 @@ mod tests {
         let launch = StartSession {
             session_id: "sess-1".to_owned(),
             provider: "codex".to_owned(),
+            provider_version: String::new(),
+            provider_generation_digest: String::new(),
+            provider_auth_generation: None,
+            provider_behavior: None,
             cwd: "/work".to_owned(),
             agent_session_id: Some("agent-1".to_owned()),
             system: false,
@@ -2578,6 +2711,7 @@ mod tests {
             desired_generation: String::new(),
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
         });
@@ -2617,6 +2751,7 @@ mod tests {
             desired_generation: "gen-2".to_owned(),
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
         });
@@ -2626,6 +2761,10 @@ mod tests {
                 StartSession {
                     session_id: session_id.to_owned(),
                     provider: provider.to_owned(),
+                    provider_version: String::new(),
+                    provider_generation_digest: String::new(),
+                    provider_auth_generation: None,
+                    provider_behavior: None,
                     cwd: "/work".to_owned(),
                     agent_session_id: None,
                     system: false,
@@ -2685,6 +2824,10 @@ mod tests {
             StartSession {
                 session_id: "sess-late".to_owned(),
                 provider: "codex".to_owned(),
+                provider_version: String::new(),
+                provider_generation_digest: String::new(),
+                provider_auth_generation: None,
+                provider_behavior: None,
                 cwd: "/work".to_owned(),
                 agent_session_id: None,
                 system: false,
@@ -2738,6 +2881,7 @@ mod tests {
             desired_generation: "gen-2".to_owned(),
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
         });
@@ -2746,6 +2890,10 @@ mod tests {
             StartSession {
                 session_id: "sess-ready".to_owned(),
                 provider: "codex".to_owned(),
+                provider_version: String::new(),
+                provider_generation_digest: String::new(),
+                provider_auth_generation: None,
+                provider_behavior: None,
                 cwd: "/work".to_owned(),
                 agent_session_id: None,
                 system: false,
@@ -2762,6 +2910,10 @@ mod tests {
             StartSession {
                 session_id: "sess-fallback".to_owned(),
                 provider: "codex".to_owned(),
+                provider_version: String::new(),
+                provider_generation_digest: String::new(),
+                provider_auth_generation: None,
+                provider_behavior: None,
                 cwd: "/work".to_owned(),
                 agent_session_id: None,
                 system: false,
@@ -2820,6 +2972,7 @@ mod tests {
             desired_generation: "gen-2".to_owned(),
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
         });
@@ -2850,12 +3003,17 @@ mod tests {
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
         });
         let launch = StartSession {
             session_id: "sess-1".to_owned(),
             provider: "codex".to_owned(),
+            provider_version: String::new(),
+            provider_generation_digest: String::new(),
+            provider_auth_generation: None,
+            provider_behavior: None,
             cwd: "/work".to_owned(),
             agent_session_id: None,
             system: false,
@@ -2898,6 +3056,7 @@ mod tests {
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
         }));
@@ -2905,6 +3064,10 @@ mod tests {
             .ensure_session(StartSession {
                 session_id: "sess-adopt".to_owned(),
                 provider: "codex".to_owned(),
+                provider_version: String::new(),
+                provider_generation_digest: String::new(),
+                provider_auth_generation: None,
+                provider_behavior: None,
                 cwd: "/work".to_owned(),
                 agent_session_id: Some("agent-1".to_owned()),
                 system: false,
@@ -2932,6 +3095,7 @@ mod tests {
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(100),
         }));
@@ -2951,6 +3115,10 @@ mod tests {
             StartSession {
                 session_id: "sess-reset".to_owned(),
                 provider: "codex".to_owned(),
+                provider_version: String::new(),
+                provider_generation_digest: String::new(),
+                provider_auth_generation: None,
+                provider_behavior: None,
                 cwd: "/work".to_owned(),
                 agent_session_id: None,
                 system: false,
@@ -3001,6 +3169,7 @@ mod tests {
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
             worktree_root: worktree_root.clone(),
             worker_ready_timeout: Duration::from_millis(100),
         }));
@@ -3009,6 +3178,10 @@ mod tests {
             StartSession {
                 session_id: "sess-reset-race".to_owned(),
                 provider: "codex".to_owned(),
+                provider_version: String::new(),
+                provider_generation_digest: String::new(),
+                provider_auth_generation: None,
+                provider_behavior: None,
                 cwd: workspace.display().to_string(),
                 agent_session_id: None,
                 system: false,
@@ -3076,6 +3249,7 @@ mod tests {
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(100),
         });
@@ -3133,6 +3307,7 @@ mod tests {
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
             worktree_root: worktree_root.clone(),
             worker_ready_timeout: Duration::from_secs(1),
         }));
@@ -3144,6 +3319,10 @@ mod tests {
             StartSession {
                 session_id: "sess-delete".to_owned(),
                 provider: "codex".to_owned(),
+                provider_version: String::new(),
+                provider_generation_digest: String::new(),
+                provider_auth_generation: None,
+                provider_behavior: None,
                 cwd: workspace.display().to_string(),
                 agent_session_id: None,
                 system: false,
@@ -3203,6 +3382,7 @@ mod tests {
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
             worktree_root: worktree_root.clone(),
             worker_ready_timeout: Duration::from_secs(1),
         }));
@@ -3211,6 +3391,10 @@ mod tests {
             StartSession {
                 session_id: "sess-connected-delete".to_owned(),
                 provider: "codex".to_owned(),
+                provider_version: String::new(),
+                provider_generation_digest: String::new(),
+                provider_auth_generation: None,
+                provider_behavior: None,
                 cwd: workspace.display().to_string(),
                 agent_session_id: None,
                 system: false,
@@ -3273,6 +3457,7 @@ mod tests {
             desired_generation: "gen-2".to_owned(),
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
         });
@@ -3286,6 +3471,10 @@ mod tests {
                 StartSession {
                     session_id: "sess-deleted".to_owned(),
                     provider: "codex".to_owned(),
+                    provider_version: String::new(),
+                    provider_generation_digest: String::new(),
+                    provider_auth_generation: None,
+                    provider_behavior: None,
                     cwd: "/work".to_owned(),
                     agent_session_id: None,
                     system: false,
@@ -3315,6 +3504,7 @@ mod tests {
             desired_generation: "gen-2".to_owned(),
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
         }));
@@ -3351,6 +3541,7 @@ mod tests {
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
             worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(100),
         }));

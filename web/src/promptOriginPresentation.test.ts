@@ -6,9 +6,9 @@ import {
   originProviderId,
 } from "./promptOriginPresentation";
 
-Deno.test("Grok runtime notes use the short Grok name", () => {
-  assertEquals(agentOriginDisplayName("grok"), "Grok");
-  assertEquals(agentOriginDisplayName("claude-code"), "Claude Code");
+Deno.test("runtime notes resolve through Catalog identity with an opaque fallback", () => {
+  assertEquals(agentOriginDisplayName("grok"), "grok");
+  assertEquals(agentOriginDisplayName("claude-code"), "claude-code");
   assertEquals(
     originProviderId({ actor: "agent", source: "runtime", provider: "grok" }, "codex"),
     "grok",

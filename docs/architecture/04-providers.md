@@ -1,33 +1,46 @@
 # Providers
 
-> **Current implementation:** this document describes the transitional in-tree
-> launch registry. The target product boundary is an independently built,
-> Machine-scoped Provider package; ACP and adapter details become private
-> implementation dependencies rather than ordinary UI concepts. See
+> **Current implementation:** signed, independently built Provider packages are
+> the product and Machine installation unit. ACP, adapters, gateways, and agent
+> CLIs are package-private dependencies and are not ordinary UI concepts.
+> Authentication is Cowboy Service-scoped and automatically synchronizes
+> encrypted, versioned replicas to Machines. The historical launch-registry
+> details retained later in this chapter document only the old-session fallback
+> that can be removed after its final generation drains. See
+> [Cowboy core requirements](../requirements.md) and
 > [Installable Provider packages](../provider-packages.md).
 
-A **provider** is the recipe for launching one agent CLI's ACP adapter. All
-providers share the single `src/acp.rs` client backend; a provider declares
-**how to spawn its adapter binary**. Narrow compatibility mappings stay in that
-backend only when an official agent shipped an ACP extension before the stable
-schema gained the same operation.
+A **Provider** is a signed package containing typed UI/logic contracts,
+content-addressed assets, an exact private runtime dependency graph, platform
+payload descriptors, authentication projection, and compatibility claims. All
+Providers may use the single `src/acp.rs` client backend internally, but the
+transport is not part of the user-facing installation model.
 
-## Registry
+## First-party packages
 
-`provider::builtin()` returns the in-tree registry:
+The first-party Catalog compiles these independent sources under `providers/`.
+They remain visible but non-installable as `unbound` until their complete
+multi-platform runtime release is externally published and trusted:
 
-| Provider | Launch | ACP on-ramp |
+| Provider | Exact private dependencies | Internal on-ramp |
 |---|---|---|
-| `claude-code` | `npx -y @agentclientprotocol/claude-agent-acp` | Claude Code ACP adapter |
-| `claude-deepseek` | the same Claude ACP adapter with an isolated provider-owned `CLAUDE_CONFIG_DIR` | Claude Code over the independent local DeepSeek Anthropic Messages gateway |
-| `codex` | `npx -y @agentclientprotocol/codex-acp` plus full-access defaults | adapter over Codex App Server |
-| `codex-deepseek` | the same Codex ACP adapter with an isolated provider-owned `CODEX_HOME` | Codex over the independent local DeepSeek Responses gateway |
-| `gemini` | `npx -y @google/gemini-cli --acp` | Gemini's native ACP mode |
-| `grok` | `npx -y @xai-official/grok --no-auto-update --experimental-memory --rules <project-rule-bootstrap> agent --always-approve --no-leader stdio` | Grok Build's native ACP stdio agent |
+| `claude-code` | Claude Agent ACP `0.63.0`; Claude Code `2.1.231` | Claude Code ACP adapter |
+| `claude-deepseek` | the same two pins; Anthropic gateway `0.1.0` | Claude Code over the private DeepSeek Anthropic Messages gateway |
+| `codex` | Codex ACP `1.1.7`; Codex `0.147.0` | adapter over Codex App Server |
+| `codex-deepseek` | the same two pins; Responses gateway `0.2.0` | Codex over the private DeepSeek Responses gateway |
+| `gemini` | Gemini CLI `0.55.1` | Gemini's native ACP mode |
+| `grok` | Grok Build CLI `0.2.117` | Grok Build's native ACP stdio agent |
 
-Each entry is a **`LaunchSpec`**: `id` + `command` + `args` + scoped environment.
-That's the whole contract a provider must satisfy to start; everything downstream
-(initialize/handshake/command loop) is provider-agnostic and lives in `acp.rs`.
+Each source compiles to canonical `.cowboy-provider` bytes; a complete
+platform-runtime matrix is bound before the adjacent release envelope can be
+signed. Its runtime section contains the exact command, arguments, static
+non-secret environment, inherited-environment denylist, dependency versions,
+integrity hashes, logical component commands, and host capabilities. The release
+binds those logical commands to immutable bytes for every declared platform.
+The target Machine revalidates all of them before activation. New Machine-backed
+workers construct `LaunchSpec` only from the exact installed package and
+generation-local executable; `provider::builtin()` is used only by the legacy
+local/drain path.
 
 Grok keeps its own native state under `~/.grok`. Cowboy enables Grok's
 cross-session memory but never reads or writes that store. Current Grok releases
@@ -51,77 +64,43 @@ adapter still performs its explicit `thread/read(includeTurns=true)` afterward.
 The shim does not patch or take ownership of the npm-managed adapter and is
 idempotent with an upstream adapter that starts sending the option itself.
 
-`codex-deepseek` is a runtime variant, not a second agent implementation. Codex
-still owns planning, tools, approvals, goals, memory, and execution; its model
-provider points at `codex-deepseek.service` on loopback. The shim owns only wire
-compatibility and credential injection and has an independent release profile,
-lifecycle, port, credential, and health check. V4 Flash is forwarded byte-for-byte
-to DeepSeek's native Responses API; only V4 Pro uses the temporary Chat
-compatibility path until DeepSeek enables native Codex support for that model.
-Restarting or upgrading the gateway never restarts Cowboy, Cowboy Machine, or
-resident ACP workers.
+`codex-deepseek` and `claude-deepseek` are runtime variants, not second agent
+implementations. Codex and Claude Code still own planning, tools, approvals,
+memory, and execution. Their signed Provider releases additionally contain the
+matching DeepSeek gateway as a private `provider_gateway` component.
 
-Its `CODEX_HOME` lives under
-`~/.local/state/cowboy/providers/codex-deepseek/codex-home` and is generated from
-a template. It does not inherit the user's normal Codex config and does not link
-`auth.json`, history, sessions, or memories.
+An exact package worker never connects to a fixed Machine-global gateway. It
+allocates a unique loopback port for that session, starts the generation-local
+gateway with `--listen`, requires `/healthz`, and only then resolves the signed
+`sidecar_url` argument or environment binding. The sidecar process handle is
+owned by the worker, so the exact Provider version, runtime-artifact digest, and
+Service auth generation stay together for the complete session. Upgraded and
+retained generations can run concurrently while older sessions drain.
 
-Setup that carries no secret is shared rather than re-created, because a DeepSeek
-provider should differ from its ordinary counterpart only in which endpoint it
-uses and whose credential it presents. The isolated home links `AGENTS.md`,
-`skills/`, `plugins/`, and the marketplace snapshot under `.tmp/marketplaces`,
-and the generated config copies the `marketplaces`, `plugins`, and `hooks`
-tables from the ordinary config. Codex reports a plugin as installed only when
-both the tables and the snapshot are present, so neither half is optional.
-`mcp_servers` is deliberately excluded: an MCP entry can carry a token in its
-command, arguments, or headers. The sharing list is an allowlist, so a new
-runtime file that holds a secret stays private until someone adds it
-deliberately. A real provider-owned entry is never replaced by a shared link.
-The worker also removes inherited OpenAI, Codex, and DeepSeek credential/config
-variables;
-the DeepSeek secret exists only in the gateway's systemd credential mount.
-Standard `codex` sessions therefore keep their ordinary account and state, and
-the two runtimes can execute concurrently without influencing one another.
-The generated config prefers the independently moved component-profile catalog.
-During the one-time rollout only, it may use the DeepSeek-only legacy `/etc`
-catalog if the profile has not yet been initialized; this fallback contains no
-OpenAI config or credentials and can be deleted after older Machine generations
-have drained.
+The Machine passes a verified command map containing every private component in
+the selected content-addressed generation and prepends those component
+directories to the worker-only `PATH`. Claude Providers additionally bind
+`CLAUDE_CODE_EXECUTABLE` to their exact packaged CLI through the typed
+`component_command` value. Codex ACP finds its packaged Codex CLI through the
+same generation-local path. Neither variant refers to a Nix profile, `/etc`
+catalog, managed Node package, host adapter, or ambient CLI to complete an exact
+package launch.
 
-`claude-deepseek` is the corresponding Claude Code runtime variant, not another
-agent implementation. It uses `claude-deepseek.service` on loopback and a
-provider-owned config directory under
-`~/.local/state/cowboy/providers/claude-deepseek/claude-config`. The provider
-clears inherited Anthropic, Claude, and DeepSeek configuration before applying
-its closed base URL, placeholder client token, V4 Pro 1M main-model, V4 Flash
-fast/subagent models, and streaming settings. Claude Code is explicitly marked
-as provider-managed-by-host, so project or user settings cannot replace the
-endpoint or authentication selected by Cowboy. The real API key exists only in
-the gateway's distinct systemd credential. Cowboy also supplies provider-only
-`CLAUDE_CODE_SHELL` and `SHELL` values because a detached systemd Machine worker
-does not inherit an interactive login shell. Claude Code accepts bash or zsh
-specifically, so Cowboy selects an executable absolute path from the host
-override, inherited shell, worker `PATH`, or stable platform profile paths in
-that order; it never treats generic `/bin/sh` as sufficient. The host override
-is `COWBOY_ACP_CLAUDE_DEEPSEEK_SHELL`; it crosses the detached worker boundary
-but is removed before Claude Code starts. A Machine advertises this provider as
-active only when both the gateway and a supported executable shell are ready.
+For `codex-deepseek`, the Service's `DEEPSEEK_API_KEY` projection is explicitly
+forwarded only to the gateway sidecar; it is not added to the ACP adapter's
+environment. For `claude-deepseek`, the same portable bundle is materialized as
+the gateway's declared `.config/credentials/deepseek-claude-api-key` file under
+the exact auth-generation home because that gateway intentionally accepts a
+credential file rather than an environment variable. The Provider clears
+inherited OpenAI/Codex or Anthropic/Claude/DeepSeek state before applying its
+closed model, routing, and isolation environment.
 
-The isolated directory neither reads nor links top-level Claude instance
-metadata, credentials, history, projects, or cache. It links the same non-secret
-setup as the Codex variant — `CLAUDE.md`, `skills/`, and `plugins/` — and
-generates a provider-owned `settings.json` holding only `enabledPlugins` and
-`extraKnownMarketplaces`. Claude keeps plugin enablement in that file, so
-linking `plugins/` alone would leave every plugin installed but unloaded; the
-rest of the ordinary settings, including model selection, permissions, and MCP
-entries, stays private.
-Normal Claude and DeepSeek Claude may run concurrently; the npm adapter
-executable, the provider-agnostic ACP implementation, and that shared setup are
-what they have in common. The
-gateway in Columbus has its own process, profile, port, receipt, credential,
-tests, and release transaction. It preserves native Anthropic Messages/SSE and
-contains only current fixture-backed DeepSeek compatibility repairs; it is not
-a shared provider router.
+The old in-tree launch path still describes host-managed fixed-port gateways,
+generated homes, and shared adapters so pre-package sessions can drain. Those
+services are not dependencies of an installable Provider release and must not
+be used as substitutes when an exact package, component binding, sidecar, auth
+projection, or readiness check fails. Once no legacy generation is restorable,
+that fallback and its fixed 61137/61138 assumptions can be deleted.
 
 ### DeepSeek session context budgets
 
@@ -186,16 +165,15 @@ spend.
 
 Gemini CLI stopped accepting Google Login for consumer, Google AI Pro, and AI
 Ultra accounts on 2026-06-18. Its ACP mode remains usable with a Gemini API key
-or Code Assist Standard/Enterprise credentials. Machine authentication therefore
-has two explicit paths:
+or Code Assist Standard/Enterprise credentials. The Gemini Provider declares
+those two Service-scoped methods:
 
-- **Gemini API key** writes `GEMINI_API_KEY` to the target user's
-  `~/.gemini/.env` with user-only permissions and selects `gemini-api-key` in
-  Gemini settings.
+- **Gemini API key** is captured by a temporary executor, committed to the
+  Service vault, then projected to the Provider's private Machine home with
+  user-only permissions.
 - **Standard/Enterprise Google Login** is offered only when
-  `GOOGLE_CLOUD_PROJECT` is configured on the target Machine. The project is the
-  non-secret evidence that the OAuth credentials belong to a still-supported
-  Code Assist deployment.
+  `GOOGLE_CLOUD_PROJECT` is configured for the executor. The resulting portable
+  bundle follows the same Service generation and replica path.
 
 An old `oauth-personal` credential file without that project is never reported
 as signed in. Cowboy recognizes the upstream retirement response as a terminal
@@ -205,12 +183,12 @@ Personal, Google AI Pro, and AI Ultra accounts belong to Antigravity;
 Antigravity CLI is not a drop-in Cowboy provider until it publishes an ACP
 server mode.
 
-Grok uses the official Grok Build CLI as both provider CLI and ACP agent; there
-is no second adapter package. Cowboy starts one non-leader process per session,
-disables its process-local updater, and leaves installation/update ownership to
-the Machine `provider-cli:grok` component. Machine login runs
-`grok login --device-auth`; Cowboy records only signed-in/out inventory and
-never stores the OAuth token.
+Grok uses the official Grok Build CLI as both private Provider CLI and ACP
+agent; there is no second adapter package. Cowboy starts one isolated process
+per session and disables its process-local updater. `grok login --device-auth`
+runs only as a temporary Service-auth executor: Cowboy exports the declared
+portable bundle, commits one encrypted generation, synchronizes it to Machines,
+and removes the executor credential after acceptance.
 
 Grok's current ACP compatibility surface returns model and reasoning choices in
 `_meta["x.ai/sessionConfig"]` and changes either through `session/set_model`
@@ -268,7 +246,7 @@ Until then `/side` and `/btw` must not be added to Cowboy's fallback command
 list. A future implementation should consume the adapter-advertised capability
 and keep the shared domain operation separate from the Desktop and Mobile UI.
 
-## Per-provider quirks the core absorbs
+## Package-selected behavior profiles
 
 ```mermaid
 flowchart LR
@@ -283,6 +261,12 @@ flowchart LR
     style GR fill:#f3e8ff,stroke:#9333ea
 ```
 
+These mappings are declared by the signed `runtime.behavior` contract. Cowboy
+implements a closed, versioned profile union and never selects one by Provider
+ID. Adding a Provider may reuse an existing profile without a Cowboy change;
+adding genuinely new host semantics requires a new SDK/host contract version,
+and older hosts reject it instead of guessing.
+
 - **claude-code** sends its config options (mode / model) *after* the session is
   created, via a `config_option_update` notification.
 - **codex** returns config options in the session-creation response.
@@ -295,25 +279,34 @@ flowchart LR
   request metadata. Its ordinary ACP session modes stay independently routed to
   `session/set_mode`.
 
-## L1 confirm detection
+## Protocol-level L1 confirm detection
 
-Each provider also owns deterministic **layer-1** rules for the confirm-detect
-skill (`src/provider/confirm.rs`). Given a `TurnEndCtx { stop_reason, final_text }`,
-a provider's hand-coded rules (stop-reason markers, text patterns) can decide
-"awaiting user" / "done" cheaply, short-circuiting the expensive LLM-based
-layer-2 judge. Only an ambiguous `EndTurn` falls through to L2. See
+`src/provider/confirm.rs` contains one Provider-independent ACP stop-reason
+rule. A non-`EndTurn` stop is deterministically incomplete and skips the
+expensive L2 judge; an absent or ordinary `EndTurn` is ambiguous and falls
+through to L2. There is no Provider-ID rule table. See
 [Confirm-detect & inference](07-confirm-inference.md).
 
-## Toward out-of-process providers
+## Out-of-process Provider runtime
 
-The registry is in-tree today, but the launch-spec shape is deliberately thin so
-a provider could later be spawned as its **own subprocess** talking to cowboy
-over a local socket — letting third parties add providers without recompiling
-cowboy. Not built yet; the interface just doesn't preclude it.
+An installed release supplies its own generation-local executable graph and
+launch command. Cowboy starts that runtime as a subprocess and communicates
+through the package-declared protocol. A trusted third-party release that uses
+the existing schemas and behavior profiles can therefore enter the Catalog and
+install without recompiling Cowboy. Its ACP, adapter, gateway, or CLI topology
+remains private to the package.
+
+Provider SDK 2.1 adds closed `component_command` and `sidecar_url` runtime
+values plus `loopback_http_v1` session sidecars. Links must resolve on every
+advertised platform; gateway behavior, capability, component, sidecar, auth
+environment forwarding, and readiness must agree or package construction and
+Machine installation fail. Prefix/suffix composition is bounded data, not a
+shell template.
 
 ## Verifying a provider
 
-`cowboy try-agent --provider <id>` spawns the adapter end-to-end with no Hub and
-no persistence, sends one prompt, and streams the result to stdout. It is the
-quickest way to confirm an adapter is installed and the handshake works before
-wiring it into a live session.
+`cowboy try-agent --provider <id>` remains a local/legacy adapter diagnostic.
+Release verification uses `provider-bind-runtime`, `provider-sign`,
+`provider-verify`, Catalog ingestion, and the target Machine's staged probes;
+the local command is not evidence that the signed release contains the same
+runtime bytes.

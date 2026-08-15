@@ -15,6 +15,7 @@ const DEFAULT_ADAPTER_TIMEOUT: std::time::Duration = std::time::Duration::from_s
 // Machine-side envelope so it never abandons a still-running preparation.
 const WORKSPACE_ADAPTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(330);
 const CACHE_STATUS_ADAPTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+const PROVIDER_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 
 fn adapter_timeout(adapter: &str) -> std::time::Duration {
     if adapter == "workspace" {
@@ -29,6 +30,7 @@ fn adapter_timeout(adapter: &str) -> std::time::Duration {
 struct Connection {
     epoch: String,
     colocated: bool,
+    protocol: u16,
     tx: mpsc::UnboundedSender<MachineCommand>,
 }
 
@@ -45,6 +47,7 @@ impl MachineControl {
         machine_id: String,
         epoch: String,
         colocated: bool,
+        protocol: u16,
         tx: mpsc::UnboundedSender<MachineCommand>,
     ) {
         self.connections.write().insert(
@@ -52,6 +55,7 @@ impl MachineControl {
             Connection {
                 epoch,
                 colocated,
+                protocol,
                 tx,
             },
         );
@@ -79,33 +83,61 @@ impl MachineControl {
     }
 
     pub fn send(&self, machine_id: &str, command: MachineCommand) -> Result<(), String> {
-        self.connections
-            .read()
+        let connections = self.connections.read();
+        let connection = connections
             .get(machine_id)
-            .ok_or_else(|| format!("machine {machine_id:?} is not connected"))?
+            .ok_or_else(|| format!("machine {machine_id:?} is not connected"))?;
+        let required = command.minimum_protocol();
+        if connection.protocol < required {
+            return Err(format!(
+                "machine {machine_id:?} negotiated protocol {}, but this command requires {required}",
+                connection.protocol
+            ));
+        }
+        connection
             .tx
             .send(command)
             .map_err(|_| format!("machine {machine_id:?} disconnected"))
     }
 
     pub fn record(&self, machine_id: &str, event: MachineEvent) {
-        if let MachineEvent::AdapterResponse {
-            request_id,
-            accepted,
-            payload,
-            detail,
-        } = &event
+        let correlated = match &event {
+            MachineEvent::AdapterResponse {
+                request_id,
+                accepted,
+                payload,
+                detail,
+            } => Some((
+                request_id,
+                if *accepted {
+                    payload
+                        .clone()
+                        .ok_or_else(|| "adapter response has no payload".to_owned())
+                } else {
+                    Err(detail
+                        .clone()
+                        .unwrap_or_else(|| "adapter request rejected".to_owned()))
+                },
+            )),
+            MachineEvent::CommandResult {
+                request_id,
+                accepted,
+                detail,
+            } => Some((
+                request_id,
+                if *accepted {
+                    Ok(serde_json::Value::Null)
+                } else {
+                    Err(detail
+                        .clone()
+                        .unwrap_or_else(|| "Machine command rejected".to_owned()))
+                },
+            )),
+            _ => None,
+        };
+        if let Some((request_id, result)) = correlated
             && let Some(sender) = self.pending.write().remove(request_id)
         {
-            let result = if *accepted {
-                payload
-                    .clone()
-                    .ok_or_else(|| "adapter response has no payload".to_owned())
-            } else {
-                Err(detail
-                    .clone()
-                    .unwrap_or_else(|| "adapter request rejected".to_owned()))
-            };
             let _ = sender.send(result);
         }
         let mut events = self.events.write();
@@ -152,6 +184,36 @@ impl MachineControl {
         }
     }
 
+    pub async fn command_request(
+        &self,
+        machine_id: &str,
+        request_id: String,
+        command: MachineCommand,
+    ) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
+        self.pending.write().insert(request_id.clone(), tx);
+        if let Err(error) = self.send(machine_id, command) {
+            self.pending.write().remove(&request_id);
+            return Err(error);
+        }
+        match tokio::time::timeout(PROVIDER_COMMAND_TIMEOUT, rx).await {
+            Ok(Ok(Ok(_))) => Ok(()),
+            Ok(Ok(Err(error))) => Err(error),
+            Ok(Err(_)) => Err("Machine command response channel closed".to_owned()),
+            Err(_) => {
+                self.pending.write().remove(&request_id);
+                Err("Machine command timed out".to_owned())
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn connected_machine_ids(&self) -> Vec<String> {
+        let mut ids: Vec<_> = self.connections.read().keys().cloned().collect();
+        ids.sort();
+        ids
+    }
+
     #[must_use]
     pub fn events(&self, machine_id: &str) -> Vec<MachineEvent> {
         self.events
@@ -185,7 +247,7 @@ mod tests {
     async fn adapter_response_is_correlated_without_entering_another_machine() {
         let control = Arc::new(MachineControl::default());
         let (tx, mut rx) = mpsc::unbounded_channel();
-        control.install("mac".to_owned(), "epoch".to_owned(), false, tx);
+        control.install("mac".to_owned(), "epoch".to_owned(), false, 3, tx);
         let requester = Arc::clone(&control);
         let request = tokio::spawn(async move {
             requester
@@ -215,15 +277,58 @@ mod tests {
     fn colocated_state_belongs_to_the_current_machine_connection() {
         let control = MachineControl::default();
         let (first, _) = mpsc::unbounded_channel();
-        control.install("hawk".to_owned(), "old".to_owned(), true, first);
+        control.install("hawk".to_owned(), "old".to_owned(), true, 3, first);
         assert_eq!(control.is_colocated("hawk"), Some(true));
 
         let (current, _) = mpsc::unbounded_channel();
-        control.install("hawk".to_owned(), "current".to_owned(), false, current);
+        control.install("hawk".to_owned(), "current".to_owned(), false, 3, current);
         control.remove_if_current("hawk", "old");
         assert_eq!(control.is_colocated("hawk"), Some(false));
 
         control.remove_if_current("hawk", "current");
         assert_eq!(control.is_colocated("hawk"), None);
+    }
+
+    #[test]
+    fn provider_commands_fail_before_crossing_an_old_machine_protocol() {
+        let control = MachineControl::default();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        control.install("old".to_owned(), "epoch".to_owned(), false, 2, tx);
+        let error = control
+            .send(
+                "old",
+                MachineCommand::BeginLogin {
+                    request_id: "request".to_owned(),
+                    provider: "gemini".to_owned(),
+                    auth_method: Some("code-assist".to_owned()),
+                },
+            )
+            .unwrap_err();
+        assert!(error.contains("requires 3"));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn provider_uninstall_and_compensation_require_machine_protocol_four() {
+        let control = MachineControl::default();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        control.install("old".to_owned(), "epoch".to_owned(), false, 3, tx);
+        let digest = format!("sha256:{}", "ab".repeat(32));
+        for command in [
+            MachineCommand::UninstallProvider {
+                request_id: "uninstall".to_owned(),
+                provider_id: "gemini".to_owned(),
+                generation_digest: digest.clone(),
+            },
+            MachineCommand::ReactivateProvider {
+                request_id: "reactivate".to_owned(),
+                provider_id: "gemini".to_owned(),
+                generation_digest: digest.clone(),
+            },
+        ] {
+            let error = control.send("old", command).unwrap_err();
+            assert!(error.contains("requires 4"));
+        }
+        assert!(rx.try_recv().is_err());
     }
 }

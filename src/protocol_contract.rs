@@ -56,7 +56,7 @@ fn typescript_tags(type_name: &str, end_marker: &str) -> BTreeSet<String> {
 fn inbound_tags_match_typescript() {
     assert_eq!(
         rust_tags("Inbound"),
-        typescript_tags("Inbound", "export const PROVIDERS")
+        typescript_tags("Inbound", "// End of Inbound wire union.")
     );
 }
 

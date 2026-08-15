@@ -883,7 +883,12 @@ fn codex_full_access_permission(
     };
     let workers = shared.workers.lock();
     let worker = workers.get(session_id)?;
-    if !crate::provider::is_codex(&worker.launch.as_ref()?.provider)
+    let launch = worker.launch.as_ref()?;
+    let permission = launch.provider_behavior.as_ref().map_or_else(
+        || crate::provider::legacy_behavior(&launch.provider).permission,
+        |behavior| behavior.permission.clone(),
+    );
+    if permission != cowboy_provider_sdk::PermissionBehavior::AcpConfigFullAccessV1
         || !worker
             .config_options
             .as_ref()
@@ -1217,7 +1222,11 @@ fn recoverable_live_worker_error(
     matches!(state, WorkerState::Running | WorkerState::Draining)
         && hub.session_info(session_id).is_some_and(|session| {
             detail.is_some_and(|detail| {
-                crate::provider::claude_code::keeps_worker_alive(&session.meta.provider, detail)
+                let behavior =
+                    session.meta.provider_behavior.clone().unwrap_or_else(|| {
+                        crate::provider::legacy_behavior(&session.meta.provider)
+                    });
+                crate::provider::keeps_worker_alive_for_behavior(&behavior, detail)
             })
         })
 }
@@ -1629,6 +1638,10 @@ mod tests {
             launch: Some(StartSession {
                 session_id: session_id.to_owned(),
                 provider: "codex".to_owned(),
+                provider_version: String::new(),
+                provider_generation_digest: String::new(),
+                provider_auth_generation: None,
+                provider_behavior: None,
                 cwd: "/tmp".to_owned(),
                 agent_session_id: Some("agent-1".to_owned()),
                 system: false,

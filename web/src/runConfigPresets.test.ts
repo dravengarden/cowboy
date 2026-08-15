@@ -1,10 +1,13 @@
 import { assertEquals } from "jsr:@std/assert";
+import type { ProviderUiManifest } from "../../packages/provider-ui-sdk/src/index.ts";
 import type { ConfigOption } from "./protocol";
 import {
   activeRunConfigPreset,
   runConfigPresetChanges,
-  runConfigPresets,
+  supportedRunConfigPresets,
 } from "./runConfigPresets";
+
+type DeclaredPreset = ProviderUiManifest["configuration"]["presets"][number];
 
 function selectOption(
   id: string,
@@ -19,10 +22,47 @@ function selectOption(
   };
 }
 
-const openAiOptions: ConfigOption[] = [
-  selectOption("model", "gpt-5.6-luna", ["gpt-5.6-sol", "gpt-5.6-luna"]),
-  selectOption("reasoning_effort", "max", ["medium", "max"]),
+const options: ConfigOption[] = [
+  selectOption("model", "model-a", ["model-a", "model-b"]),
+  selectOption("effort", "max", ["medium", "max"]),
 ];
+
+const declared: DeclaredPreset[] = [{
+  id: "recommended",
+  name: "Recommended",
+  detail: "Provider-owned recommendation",
+  is_default: true,
+  values: { model: "model-a", effort: "max" },
+}, {
+  id: "balanced",
+  name: "Balanced",
+  detail: "Provider-owned balanced mode",
+  is_default: false,
+  values: { model: "model-b", effort: "medium" },
+}];
+
+Deno.test("signed Provider presets project without Provider identity branches", () => {
+  const presets = supportedRunConfigPresets(declared, options);
+  assertEquals(presets.map((preset) => [preset.id, preset.isDefault]), [
+    ["recommended", true],
+    ["balanced", false],
+  ]);
+  assertEquals(activeRunConfigPreset(presets, options)?.id, "recommended");
+});
+
+Deno.test("presets fail closed when the live Provider surface lacks a value", () => {
+  assertEquals(supportedRunConfigPresets(declared, options.slice(0, 1)), []);
+  assertEquals(supportedRunConfigPresets([{ ...declared[0], values: { model: "unknown" } }], options), []);
+});
+
+Deno.test("preset changes omit values the session already owns", () => {
+  const presets = supportedRunConfigPresets(declared, options);
+  assertEquals(runConfigPresetChanges(presets[0], options), []);
+  assertEquals(runConfigPresetChanges(presets[1], options), [
+    { configId: "model", value: "model-b" },
+    { configId: "effort", value: "medium" },
+  ]);
+});
 
 const desktopSource = await Deno.readTextFile(
   new URL("./desktop/DesktopTopBarControls.tsx", import.meta.url),
@@ -30,97 +70,6 @@ const desktopSource = await Deno.readTextFile(
 const composerSource = await Deno.readTextFile(
   new URL("./Composer.tsx", import.meta.url),
 );
-
-Deno.test("OpenAI Codex exposes Luna Max, Sol Medium, and Sol Max", () => {
-  const presets = runConfigPresets("codex", openAiOptions);
-  assertEquals(presets.map((preset) => [preset.id, preset.isDefault]), [
-    ["luna-max", true],
-    ["sol-medium", false],
-    ["sol-max", false],
-  ]);
-  assertEquals(activeRunConfigPreset(presets, openAiOptions)?.id, "luna-max");
-});
-
-Deno.test("Claude and Codex DeepSeek expose provider-native Flash Max presets", () => {
-  const claude = [
-    selectOption("model", "deepseek-v4-flash[1m]", [
-      "deepseek-v4-flash[1m]",
-      "deepseek-v4-pro[1m]",
-    ]),
-    selectOption("effort", "max", ["high", "max"]),
-  ];
-  const codex = [
-    selectOption("model", "deepseek-v4-flash", [
-      "deepseek-v4-flash",
-      "deepseek-v4-pro",
-    ]),
-    selectOption("reasoning_effort", "max", ["high", "max"]),
-  ];
-  assertEquals(runConfigPresets("claude-deepseek", claude)[0]?.values, {
-    model: "deepseek-v4-flash[1m]",
-    effort: "max",
-  });
-  assertEquals(runConfigPresets("codex-deepseek", codex)[0]?.values, {
-    model: "deepseek-v4-flash",
-    reasoning_effort: "max",
-  });
-});
-
-Deno.test("Grok exposes its live model with High and Always Approve as the default", () => {
-  const grok = [
-    selectOption("model", "grok-4.6", ["grok-4.5", "grok-4.6"]),
-    selectOption("reasoning_effort", "xhigh", [
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-    ]),
-    selectOption("permission_mode", "default", [
-      "default",
-      "auto",
-      "always-approve",
-    ]),
-  ];
-  const presets = runConfigPresets("grok", grok);
-  assertEquals(presets.map((preset) => [preset.id, preset.isDefault]), [
-    ["grok-high", true],
-  ]);
-  assertEquals(presets[0]?.values, {
-    model: "grok-4.6",
-    reasoning_effort: "high",
-    permission_mode: "always-approve",
-  });
-  assertEquals(runConfigPresetChanges(presets[0], grok), [
-    { configId: "reasoning_effort", value: "high" },
-    { configId: "permission_mode", value: "always-approve" },
-  ]);
-  const active = grok.map((option) => ({
-    ...option,
-    currentValue: option.id === "reasoning_effort"
-      ? "high"
-      : option.id === "permission_mode"
-      ? "always-approve"
-      : option.currentValue,
-  }));
-  assertEquals(activeRunConfigPreset(presets, active)?.id, "grok-high");
-});
-
-Deno.test("presets require every live provider value", () => {
-  assertEquals(runConfigPresets("codex", openAiOptions.slice(0, 1)), []);
-  assertEquals(runConfigPresets("claude-code", openAiOptions), []);
-});
-
-Deno.test("preset changes omit values the session already owns", () => {
-  const presets = runConfigPresets("codex", openAiOptions);
-  assertEquals(runConfigPresetChanges(presets[0], openAiOptions), []);
-  assertEquals(runConfigPresetChanges(presets[1], openAiOptions), [
-    { configId: "model", value: "gpt-5.6-sol" },
-    { configId: "reasoning_effort", value: "medium" },
-  ]);
-  assertEquals(runConfigPresetChanges(presets[2], openAiOptions), [
-    { configId: "model", value: "gpt-5.6-sol" },
-  ]);
-});
 
 Deno.test("desktop and mobile expose presets with surface-native interactions", () => {
   assertEquals(desktopSource.includes("data-config-preset={index}"), true);

@@ -1,8 +1,8 @@
 import {
-  type PointerEvent as ReactPointerEvent,
-  type ReactNode,
   lazy,
   memo,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
   Suspense,
   useCallback,
   useEffect,
@@ -29,11 +29,11 @@ import {
   Divider,
   IconButton,
   keyframes,
+  LinearProgress,
   List,
   ListItemButton,
   ListItemIcon,
   ListItemText,
-  LinearProgress,
   Menu,
   MenuItem,
   Paper,
@@ -51,10 +51,10 @@ import {
 import {
   AlternateEmail,
   AttachFile,
-  CleaningServices,
-  Check,
   Bolt,
+  Check,
   ChevronRight,
+  CleaningServices,
   Close,
   CloseFullscreen,
   Compress,
@@ -80,9 +80,9 @@ import {
   Visibility,
 } from "@mui/icons-material";
 import {
-  PlatformComposerEditor,
   type ComposerEditorHandle,
   type ComposerEditorSelection,
+  PlatformComposerEditor,
 } from "./composer/PlatformComposerEditor";
 import { useComposerDraftController } from "./composer/useComposerDraftController";
 import {
@@ -100,6 +100,8 @@ import { useKeyboardOpen } from "./keyboardInset";
 import { attachmentTrayForSurface } from "./composer/attachmentPresentation";
 import type { ComposerWorkspaceProps } from "./composer/contracts";
 import { resolveSessionAction, type SessionAction } from "./agentCommands";
+import { currentProviderEntry } from "./providerCatalogRegistry";
+import { providerName } from "./providerPresentation";
 import { SessionReloadDialog } from "./SessionReloadDialog";
 import { createPortal, flushSync } from "react-dom";
 import { FullscreenComposer } from "./FullscreenComposer";
@@ -124,9 +126,9 @@ import { openLightbox } from "./ResourceLightbox";
 import { PlanDock } from "./PlanDock";
 import {
   mobileComposerFocusMotion,
+  mobileComposerKeyboardGap,
   mobileComposerPanelFrameSx,
   mobileComposerPanelHeaderMinHeight,
-  mobileComposerKeyboardGap,
   mobileComposerStackGap,
 } from "./mobileComposerPrimitives";
 import {
@@ -172,8 +174,8 @@ import { listJumpKey } from "./desktop/commands/listNavigation";
 import { shortcutAvailability } from "./desktop/commands/shortcutAvailability";
 import {
   type Attachment,
-  fileToAttachment,
   filesToAttachments,
+  fileToAttachment,
   pendingImageAttachment,
   reconcileDeletedInlineImages,
   settlePendingAttachments,
@@ -194,17 +196,17 @@ import {
   discardQueued,
   editDraft,
   editQueued,
-  resetSession,
   forcePushQueued,
   moveDraft,
   type QueuedMessage,
   queuedToDraft,
   removeDraft,
   removeQueued,
-  reorderDrafts,
   renameSession,
+  reorderDrafts,
   reorderQueue,
   requestSendQueued,
+  resetSession,
   retryQueued,
   scheduleDraft,
   send,
@@ -228,7 +230,13 @@ import {
   useNetworkActionState,
 } from "./NetworkActionFeedback";
 import { originLabel } from "./protocol";
-import { providerConfigOptions } from "./providerConfigOptions";
+import {
+  providerConfigOptionDisabled,
+  providerConfigOptionOrder,
+  providerConfigOptionPresentations,
+  providerConfigOptions,
+  providerConfigSurfaceDisabled,
+} from "./providerConfigOptions";
 import {
   activeRunConfigPreset,
   runConfigPresetChanges,
@@ -248,10 +256,7 @@ import type {
 } from "./protocol";
 import { sessionProjectLabel } from "./sessionProject";
 import { Sheet } from "./Sheet";
-import {
-  FloatingActionIsland,
-  MobileSheetDismiss,
-} from "./_shell";
+import { FloatingActionIsland, MobileSheetDismiss } from "./_shell";
 import {
   persisted,
   type Store,
@@ -340,7 +345,9 @@ const INLINE_IMAGE_ACTION_BUTTON_SX = {
 
 // Compact "K/M" token count for the context tooltip (48436 → "48K", 1_000_000 → "1M").
 function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 9_950_000 ? 0 : 1)}M`;
+  if (n >= 1_000_000) {
+    return `${(n / 1_000_000).toFixed(n >= 9_950_000 ? 0 : 1)}M`;
+  }
   if (n >= 1_000) return `${Math.round(n / 1_000)}K`;
   return String(n);
 }
@@ -349,14 +356,20 @@ function fmtTokens(n: number): string {
 // lives in the same 26-unit SVG coordinate space as the gauge, so it scales
 // proportionally if the toolbar icon size changes instead of relying on a
 // viewport/root-font-dependent CSS size.
-function CompactReading({ value, muted = false }: { value: number; muted?: boolean }): React.JSX.Element {
+function CompactReading(
+  { value, muted = false }: { value: number; muted?: boolean },
+): React.JSX.Element {
   const fontSize = value < 10 ? 10.5 : value < 100 ? 9.5 : 8.25;
   return (
     <Box
       component="svg"
       viewBox="0 0 26 26"
       aria-hidden="true"
-      sx={{ width: "100%", height: "100%", color: muted ? "text.disabled" : "text.secondary" }}
+      sx={{
+        width: "100%",
+        height: "100%",
+        color: muted ? "text.disabled" : "text.secondary",
+      }}
     >
       <text
         x="13"
@@ -392,7 +405,9 @@ export function CompactIcon(
 ): React.JSX.Element {
   const hasSize = size > 0;
   const pct = hasSize
-    ? (used > 0 ? Math.max(1, Math.round(Math.min(100, (used / size) * 100))) : 0)
+    ? (used > 0
+      ? Math.max(1, Math.round(Math.min(100, (used / size) * 100)))
+      : 0)
     : 0;
   // Compaction running right now → an indeterminate terracotta (Claude accent,
   // matching the transcript's CompactingWidget) spinner around a dimmed reading, in
@@ -423,7 +438,11 @@ export function CompactIcon(
     );
   }
   if (!hasSize) return <Compress fontSize="small" />;
-  const color = pct >= 90 ? "error.main" : pct >= 70 ? "warning.main" : "success.main";
+  const color = pct >= 90
+    ? "error.main"
+    : pct >= 70
+    ? "warning.main"
+    : "success.main";
   return (
     <Box
       sx={{
@@ -484,8 +503,12 @@ export function CompactIcon(
 // acts on ("Compact · context 79% · 780K / 1M tokens").
 export function compactTooltip(used: number, size: number): string {
   if (!(size > 0)) return "Compact conversation";
-  const pct = used > 0 ? Math.max(1, Math.round(Math.min(100, (used / size) * 100))) : 0;
-  return `Compact conversation · context ${pct}% · ${fmtTokens(used)} / ${fmtTokens(size)} tokens`;
+  const pct = used > 0
+    ? Math.max(1, Math.round(Math.min(100, (used / size) * 100)))
+    : 0;
+  return `Compact conversation · context ${pct}% · ${fmtTokens(used)} / ${
+    fmtTokens(size)
+  } tokens`;
 }
 
 function SessionActionConfirmDialog({
@@ -543,7 +566,11 @@ function SessionActionConfirmDialog({
             </DialogContentText>
           </DialogContent>
           <DialogActions>
-            <Button color="inherit" onClick={onClose} sx={{ textTransform: "none" }}>
+            <Button
+              color="inherit"
+              onClick={onClose}
+              sx={{ textTransform: "none" }}
+            >
               Cancel
               <Kbd keys="Esc" />
             </Button>
@@ -638,15 +665,20 @@ function ComposeBar(
     badge: string,
     shortcut: string,
     enabled = true,
-  ): ReactNode => desktop
-    ? (
-      <Suspense fallback={child}>
-        <DesktopContextShortcut badge={badge} shortcut={shortcut} enabled={enabled}>
-          {child}
-        </DesktopContextShortcut>
-      </Suspense>
-    )
-    : child;
+  ): ReactNode =>
+    desktop
+      ? (
+        <Suspense fallback={child}>
+          <DesktopContextShortcut
+            badge={badge}
+            shortcut={shortcut}
+            enabled={enabled}
+          >
+            {child}
+          </DesktopContextShortcut>
+        </Suspense>
+      )
+      : child;
   return (
     <Stack
       direction="column"
@@ -657,18 +689,22 @@ function ComposeBar(
         borderTop: (t) => `1px solid ${t.palette.divider}`,
       }}
     >
-      {/* IMAGES render inline in the editor (Obsidian-style); the docked tray now
-          carries only NON-image files (code, etc.), which have no inline form. */}
+      {
+        /* IMAGES render inline in the editor (Obsidian-style); the docked tray now
+          carries only NON-image files (code, etc.), which have no inline form. */
+      }
       {attachments.some((a) => !a.isImage) && onRemoveAttachment && (
         <AttachmentPreviews
           attachments={attachments.filter((a) => !a.isImage)}
           onRemove={onRemoveAttachment}
         />
       )}
-      {/* LEFT-aligned with a fixed gap (not space-evenly — a few icons shouldn't
+      {
+        /* LEFT-aligned with a fixed gap (not space-evenly — a few icons shouldn't
           stretch across the whole width; reads cleaner next to the attachment
           thumbnail), wrapping to a second row when they don't all fit one line. No
-          flex spacer / overflow-scroll / breakout, so nothing clips or pushes off. */}
+          flex spacer / overflow-scroll / breakout, so nothing clips or pushes off. */
+      }
       <Stack
         direction="row"
         alignItems="center"
@@ -686,44 +722,59 @@ function ComposeBar(
       >
         <Tooltip title="Slash command / skill">
           <span>
-            {desktopShortcut(<IconButton
-              aria-label="slash command"
-              disabled={dead}
-              sx={TOOLBAR_ICON_BTN}
-              onClick={(): void => onTrigger("/")}
-            >
-              <Box
-                component="span"
-                sx={{ fontSize: "1.25rem", fontWeight: 700, lineHeight: 1 }}
+            {desktopShortcut(
+              <IconButton
+                aria-label="slash command"
+                disabled={dead}
+                sx={TOOLBAR_ICON_BTN}
+                onClick={(): void => onTrigger("/")}
               >
-                /
-              </Box>
-            </IconButton>, `${ALT_LABEL}/`, `${ALT_LABEL}/ · slash command`, !dead)}
+                <Box
+                  component="span"
+                  sx={{ fontSize: "1.25rem", fontWeight: 700, lineHeight: 1 }}
+                >
+                  /
+                </Box>
+              </IconButton>,
+              `${ALT_LABEL}/`,
+              `${ALT_LABEL}/ · slash command`,
+              !dead,
+            )}
           </span>
         </Tooltip>
         <Tooltip title="Reference a file (@)">
           <span>
-            {desktopShortcut(<IconButton
-              aria-label="reference a file"
-              disabled={dead}
-              sx={TOOLBAR_ICON_BTN}
-              onClick={(): void => onTrigger("@")}
-            >
-              <AlternateEmail />
-            </IconButton>, `${ALT_LABEL}R`, `${ALT_LABEL}R · reference a file`, !dead)}
+            {desktopShortcut(
+              <IconButton
+                aria-label="reference a file"
+                disabled={dead}
+                sx={TOOLBAR_ICON_BTN}
+                onClick={(): void => onTrigger("@")}
+              >
+                <AlternateEmail />
+              </IconButton>,
+              `${ALT_LABEL}R`,
+              `${ALT_LABEL}R · reference a file`,
+              !dead,
+            )}
           </span>
         </Tooltip>
         {onAttach && (
           <Tooltip title="Attach image or file">
             <span>
-              {desktopShortcut(<IconButton
-                aria-label="attach image or file"
-                disabled={dead}
-                sx={TOOLBAR_ICON_BTN}
-                onClick={onAttach}
-              >
-                <AttachFile />
-              </IconButton>, `${ALT_LABEL}A`, `${ALT_LABEL}A · attach file`, !dead)}
+              {desktopShortcut(
+                <IconButton
+                  aria-label="attach image or file"
+                  disabled={dead}
+                  sx={TOOLBAR_ICON_BTN}
+                  onClick={onAttach}
+                >
+                  <AttachFile />
+                </IconButton>,
+                `${ALT_LABEL}A`,
+                `${ALT_LABEL}A · attach file`,
+                !dead,
+              )}
             </span>
           </Tooltip>
         )}
@@ -741,9 +792,11 @@ function ComposeBar(
             </span>
           </Tooltip>
         )}
-        {/* Secondary actions: inline on a roomy (≥ sm) bar, folded into the ⋮ on the
+        {
+          /* Secondary actions: inline on a roomy (≥ sm) bar, folded into the ⋮ on the
             narrow phone tier so the primary buttons keep their full tap size. Force
-            push only while busy/starting; jump-to-front only when there's a queue. */}
+            push only while busy/starting; jump-to-front only when there's a queue. */
+        }
         {hasSecondary &&
           (roomy
             ? (
@@ -806,15 +859,20 @@ function ComposeBar(
             ))}
         <Tooltip title={submitLabel}>
           <span>
-            {desktopShortcut(<IconButton
-              color="primary"
-              aria-label={submitLabel.toLowerCase()}
-              disabled={!sendable}
-              sx={TOOLBAR_ICON_BTN}
-              onClick={onSend}
-            >
-              {submitIcon ?? <Send />}
-            </IconButton>, `${MOD_LABEL}↵`, `${MOD_LABEL}Enter · ${submitLabel}`, sendable)}
+            {desktopShortcut(
+              <IconButton
+                color="primary"
+                aria-label={submitLabel.toLowerCase()}
+                disabled={!sendable}
+                sx={TOOLBAR_ICON_BTN}
+                onClick={onSend}
+              >
+                {submitIcon ?? <Send />}
+              </IconButton>,
+              `${MOD_LABEL}↵`,
+              `${MOD_LABEL}Enter · ${submitLabel}`,
+              sendable,
+            )}
           </span>
         </Tooltip>
         {onCollapse && (
@@ -833,20 +891,26 @@ function ComposeBar(
         {onExpand && (
           <Tooltip title="Expand editor">
             <span>
-              {desktopShortcut(<IconButton
-                aria-label="expand editor"
-                sx={TOOLBAR_ICON_BTN}
-                onClick={onExpand}
-              >
-                <OpenInFull />
-              </IconButton>, `${ALT_LABEL}E`, `${ALT_LABEL}E · expand editor`)}
+              {desktopShortcut(
+                <IconButton
+                  aria-label="expand editor"
+                  sx={TOOLBAR_ICON_BTN}
+                  onClick={onExpand}
+                >
+                  <OpenInFull />
+                </IconButton>,
+                `${ALT_LABEL}E`,
+                `${ALT_LABEL}E · expand editor`,
+              )}
             </span>
           </Tooltip>
         )}
       </Stack>
-      {/* Narrow-tier overflow for the secondary actions (folded out of the row
+      {
+        /* Narrow-tier overflow for the secondary actions (folded out of the row
           above when !roomy). Force-push anchors its confirm popover to the ⋮ button
-          (moreRef) since the menu item itself unmounts on select. */}
+          (moreRef) since the menu item itself unmounts on select. */
+      }
       <Menu
         anchorEl={moreMenu}
         open={moreMenu !== null}
@@ -928,15 +992,20 @@ export function ComposerWorkspace({
     badge: string,
     shortcut: string,
     enabled = true,
-  ): ReactNode => desktop
-    ? (
-      <Suspense fallback={child}>
-        <DesktopContextShortcut badge={badge} shortcut={shortcut} enabled={enabled}>
-          {child}
-        </DesktopContextShortcut>
-      </Suspense>
-    )
-    : child;
+  ): ReactNode =>
+    desktop
+      ? (
+        <Suspense fallback={child}>
+          <DesktopContextShortcut
+            badge={badge}
+            shortcut={shortcut}
+            enabled={enabled}
+          >
+            {child}
+          </DesktopContextShortcut>
+        </Suspense>
+      )
+      : child;
   const editorRef = useRef<ComposerEditorHandle>(null);
   const {
     text,
@@ -1012,7 +1081,13 @@ export function ComposerWorkspace({
         onSucceeded?.();
       }
     })();
-  }, [dismissAfterMobileDelivery, onSubmitted, preparing, submitFeedback, submitTracked]);
+  }, [
+    dismissAfterMobileDelivery,
+    onSubmitted,
+    preparing,
+    submitFeedback,
+    submitTracked,
+  ]);
   const sendTap = useReliableTouchTap<HTMLButtonElement>(() =>
     submitWithFeedback()
   );
@@ -1068,7 +1143,9 @@ export function ComposerWorkspace({
   // inline chip row — there's room.
   const compact = useMediaQuery(theme.breakpoints.down("lg"));
   const mobileToolbarIds = useComposerToolbar();
-  const [mobileToolbarSettingsOpen, setMobileToolbarSettingsOpen] = useState(false);
+  const [mobileToolbarSettingsOpen, setMobileToolbarSettingsOpen] = useState(
+    false,
+  );
   // A Queue/Draft edit is itself a complete composer. Mobile must expose one
   // writing focus at a time: leaving the new-message composer underneath the
   // active row editor creates two large, nearly identical cards above the
@@ -1115,7 +1192,8 @@ export function ComposerWorkspace({
       closeImgSel();
     };
     globalThis.addEventListener("keydown", closeOnEscape, true);
-    return (): void => globalThis.removeEventListener("keydown", closeOnEscape, true);
+    return (): void =>
+      globalThis.removeEventListener("keydown", closeOnEscape, true);
   }, [closeImgSel, imgSel]);
   // The expand tap transfers focus synchronously below. Never refocus from an
   // effect: a later programmatic focus replaces iOS's user-armed text
@@ -1129,7 +1207,9 @@ export function ComposerWorkspace({
   // queue). `holding` drives the fill ring; `forceAnchor` anchors the popover.
   const [holding, setHolding] = useState(false);
   const [forceAnchor, setForceAnchor] = useState<HTMLElement | null>(null);
-  const [clearComposerAnchor, setClearComposerAnchor] = useState<HTMLElement | null>(null);
+  const [clearComposerAnchor, setClearComposerAnchor] = useState<
+    HTMLElement | null
+  >(null);
   useEffect(() => {
     if (clearComposerAnchor === null) return undefined;
     const closeOnEscape = (event: KeyboardEvent): void => {
@@ -1139,9 +1219,12 @@ export function ComposerWorkspace({
       setClearComposerAnchor(null);
     };
     globalThis.addEventListener("keydown", closeOnEscape, true);
-    return (): void => globalThis.removeEventListener("keydown", closeOnEscape, true);
+    return (): void =>
+      globalThis.removeEventListener("keydown", closeOnEscape, true);
   }, [clearComposerAnchor]);
-  const [desktopMoreAnchor, setDesktopMoreAnchor] = useState<HTMLElement | null>(null);
+  const [desktopMoreAnchor, setDesktopMoreAnchor] = useState<
+    HTMLElement | null
+  >(null);
   const desktopMoreButtonRef = useRef<HTMLButtonElement | null>(null);
   const desktopToolbarRef = useRef<HTMLDivElement | null>(null);
   // The split Prompt pane is user-resizable, so viewport breakpoints cannot tell
@@ -1238,13 +1321,29 @@ export function ComposerWorkspace({
   // the slash-command down the SAME prompt path as a typed message, so it queues
   // if the agent is mid-turn, exactly like sending "/compact" by hand.
   const provider = sessionState.provider;
+  const providerVersion = sessionState.providerVersion;
+  const providerDigest = sessionState.providerDigest;
   const compactAction = useMemo(
-    () => resolveSessionAction("compact", provider, availableCommands),
-    [provider, availableCommands],
+    () =>
+      resolveSessionAction(
+        "compact",
+        provider,
+        availableCommands,
+        providerVersion,
+        providerDigest,
+      ),
+    [provider, providerVersion, providerDigest, availableCommands],
   );
   const clearAction = useMemo(
-    () => resolveSessionAction("clear", provider, availableCommands),
-    [provider, availableCommands],
+    () =>
+      resolveSessionAction(
+        "clear",
+        provider,
+        availableCommands,
+        providerVersion,
+        providerDigest,
+      ),
+    [provider, providerVersion, providerDigest, availableCommands],
   );
   const [cmdConfirm, setCmdConfirm] = useState<SessionAction | null>(null);
   const contextClearedRef = useRef({
@@ -1338,7 +1437,9 @@ export function ComposerWorkspace({
     e.preventDefault();
     const startY = e.clientY;
     const startH = expanded
-      ? (composerHeight > 0 ? composerHeight : Math.round(globalThis.innerHeight * 0.48))
+      ? (composerHeight > 0
+        ? composerHeight
+        : Math.round(globalThis.innerHeight * 0.48))
       : (editorAreaRef.current?.clientHeight ?? RESIZE_MIN);
     const maxH = Math.round(globalThis.innerHeight * 0.82);
     const doc = globalThis.document;
@@ -1528,7 +1629,9 @@ export function ComposerWorkspace({
       data-mobile-composer-workspace={!desktop ? "true" : undefined}
       onPointerDownCapture={(event): void => {
         if (!touchInput || !mobileInputResetBlocked) return;
-        const target = event.target instanceof HTMLElement ? event.target : null;
+        const target = event.target instanceof HTMLElement
+          ? event.target
+          : null;
         if (
           target?.closest(
             "[data-mobile-editor-area], [data-pending-edit-target], [data-mobile-pending-editor]",
@@ -1581,10 +1684,11 @@ export function ComposerWorkspace({
         ...(!desktop && {
           minHeight: 0,
           maxHeight: "100%",
-          "&:has(> [data-mobile-primary-composer='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within)": {
-            flex: "0 1 auto",
-            overflow: "hidden",
-          },
+          "&:has(> [data-mobile-primary-composer='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within)":
+            {
+              flex: "0 1 auto",
+              overflow: "hidden",
+            },
           // Every visible slot shares one horizontal contract. Explicitly zero
           // the flex minimum so a long pending row, CodeMirror canvas, or
           // container-query child cannot shrink or widen the whole bottom stack.
@@ -1598,18 +1702,21 @@ export function ComposerWorkspace({
           // auxiliary state mounted so Plan/Queue/Draft disclosure and edit
           // ownership survive, but remove it from presentation while the main
           // Composer owns the visible software keyboard.
-          "&:has(> [data-mobile-primary-composer='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within) > [data-composer-stack-slot]:not([data-composer-stack-slot='primary'])": {
-            display: "none",
-          },
+          "&:has(> [data-mobile-primary-composer='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within) > [data-composer-stack-slot]:not([data-composer-stack-slot='primary'])":
+            {
+              display: "none",
+            },
           // A Queue/Draft edit follows the same focus model. Its containing
           // scrollport must stay mounted because it owns the transaction, so
           // hide Plan and the inactive sibling panel instead of the scrollport.
-          "&:has([data-mobile-pending-editor='true'][data-mobile-keyboard-open='true']:focus-within) > [data-composer-stack-slot]:not([data-composer-stack-slot='pending'])": {
-            display: "none",
-          },
-          "&:has([data-mobile-pending-editor='true'][data-mobile-keyboard-open='true']:focus-within) [data-mobile-pending-panel]:not([data-mobile-floating-edit='true'])": {
-            display: "none",
-          },
+          "&:has([data-mobile-pending-editor='true'][data-mobile-keyboard-open='true']:focus-within) > [data-composer-stack-slot]:not([data-composer-stack-slot='pending'])":
+            {
+              display: "none",
+            },
+          "&:has([data-mobile-pending-editor='true'][data-mobile-keyboard-open='true']:focus-within) [data-mobile-pending-panel]:not([data-mobile-floating-edit='true'])":
+            {
+              display: "none",
+            },
         }),
         // Column mode: a fill-height flex column (queued/drafts on top, the editor
         // card flex:1 below) instead of a bottom-floating stack. No safe-area
@@ -1629,22 +1736,26 @@ export function ComposerWorkspace({
           // scroller. Keep auxiliary headers visible, but release inactive list
           // height while any Prompt workspace owns focus. Composer therefore
           // opens as a real writing canvas; Plan/Queue/Drafts expand on demand.
-          "&:has([data-desktop-region='prompt.plan'][data-desktop-focused='true'], [data-desktop-region='prompt.queued'][data-desktop-focused='true'], [data-desktop-region='prompt.draft'][data-desktop-focused='true'], [data-desktop-region='prompt.composer'][data-desktop-focused='true']) [data-desktop-aux-list]": {
-            maxHeight: 0,
-            paddingTop: 0,
-            paddingBottom: 0,
-          },
-          "& [data-desktop-region][data-desktop-focused='true'] [data-desktop-aux-list]": {
-            maxHeight: "min(52vh, 640px)",
-          },
-          "& [data-desktop-region='prompt.plan'][data-desktop-focused='true'] [data-desktop-aux-list]": {
-            maxHeight: "min(46vh, 560px)",
-            paddingTop: "10px",
-            paddingBottom: "10px",
-          },
-          "& [data-desktop-region='prompt.queued'][data-desktop-focused='true'] [data-desktop-aux-list], & [data-desktop-region='prompt.draft'][data-desktop-focused='true'] [data-desktop-aux-list]": {
-            paddingBottom: "4px",
-          },
+          "&:has([data-desktop-region='prompt.plan'][data-desktop-focused='true'], [data-desktop-region='prompt.queued'][data-desktop-focused='true'], [data-desktop-region='prompt.draft'][data-desktop-focused='true'], [data-desktop-region='prompt.composer'][data-desktop-focused='true']) [data-desktop-aux-list]":
+            {
+              maxHeight: 0,
+              paddingTop: 0,
+              paddingBottom: 0,
+            },
+          "& [data-desktop-region][data-desktop-focused='true'] [data-desktop-aux-list]":
+            {
+              maxHeight: "min(52vh, 640px)",
+            },
+          "& [data-desktop-region='prompt.plan'][data-desktop-focused='true'] [data-desktop-aux-list]":
+            {
+              maxHeight: "min(46vh, 560px)",
+              paddingTop: "10px",
+              paddingBottom: "10px",
+            },
+          "& [data-desktop-region='prompt.queued'][data-desktop-focused='true'] [data-desktop-aux-list], & [data-desktop-region='prompt.draft'][data-desktop-focused='true'] [data-desktop-aux-list]":
+            {
+              paddingBottom: "4px",
+            },
         }),
       }}
     >
@@ -1653,39 +1764,45 @@ export function ComposerWorkspace({
           A pending tool-permission outranks the turn-status pill (a blocking
           decision beats a status), and the two remain mutually exclusive. */
       }
-      {pendingPermission ? (
-        <PermissionOverlay
-          item={pendingPermission}
-          sessionId={sessionId}
-          {...(desktop
-            ? {
-              shortcutForAction: (action: "approve" | "reject") => (
-                <Suspense fallback={null}>
-                  <DesktopRegionShortcut
-                    shortcut={action === "approve" ? "A" : "R"}
-                    title={action === "approve" ? "Allow once" : "Reject once"}
-                    showWhenPane="conversation"
-                  />
-                </Suspense>
-              ),
-            }
-            : {})}
-        />
-      ) : !column ? (
-        <TurnStatusOverlay
-          sessionId={sessionId}
-          status={status}
-          working={turnWorking}
-          awaitingUser={sessionState.awaitingUser}
-          done={sessionState.done}
-          judging={sessionState.judging}
-          paused={sessionState.paused}
-          queue={queue}
-          onFocusComposer={(): void => editorRef.current?.focus()}
-        />
-      ) : (
-        null
-      )}
+      {pendingPermission
+        ? (
+          <PermissionOverlay
+            item={pendingPermission}
+            sessionId={sessionId}
+            {...(desktop
+              ? {
+                shortcutForAction: (action: "approve" | "reject") => (
+                  <Suspense fallback={null}>
+                    <DesktopRegionShortcut
+                      shortcut={action === "approve" ? "A" : "R"}
+                      title={action === "approve"
+                        ? "Allow once"
+                        : "Reject once"}
+                      showWhenPane="conversation"
+                    />
+                  </Suspense>
+                ),
+              }
+              : {})}
+          />
+        )
+        : !column
+        ? (
+          <TurnStatusOverlay
+            sessionId={sessionId}
+            status={status}
+            working={turnWorking}
+            awaitingUser={sessionState.awaitingUser}
+            done={sessionState.done}
+            judging={sessionState.judging}
+            paused={sessionState.paused}
+            queue={queue}
+            onFocusComposer={(): void => editorRef.current?.focus()}
+          />
+        )
+        : (
+          null
+        )}
       {
         /* Agent plan: a pinned, collapsible progress summary above Pending and
           Composer. Hidden when there is no plan, when dismissed, or when a
@@ -1727,7 +1844,10 @@ export function ComposerWorkspace({
         editing={scheduleTarget?.id !== undefined}
         onCommit={commitSchedule}
         onUnschedule={(): void => {
-          if (scheduleTarget?.id !== undefined) unscheduleDraft(sessionId, scheduleTarget.id);
+          if (scheduleTarget?.id !== undefined) {unscheduleDraft(
+              sessionId,
+              scheduleTarget.id,
+            );}
         }}
       />
       {
@@ -1784,8 +1904,10 @@ export function ComposerWorkspace({
             p: 0,
           }}
         >
-          {/* Queued prompts: while the agent is busy, messages stack here and
-              drain one per turn-end. */}
+          {
+            /* Queued prompts: while the agent is busy, messages stack here and
+              drain one per turn-end. */
+          }
           {queue.length > 0 && (
             <PendingPanel
               desktop={false}
@@ -1864,8 +1986,10 @@ export function ComposerWorkspace({
           )}
         </Box>
       )}
-      {/* CM6 renders token-backed images at their document position. The tray is
-          reserved for files and legacy images that have no placement token. */}
+      {
+        /* CM6 renders token-backed images at their document position. The tray is
+          reserved for files and legacy images that have no placement token. */
+      }
       {!mobilePendingEditing && compactTrayAttachments.length > 0 && (
         <AttachmentPreviews
           attachments={compactTrayAttachments}
@@ -1896,11 +2020,13 @@ export function ComposerWorkspace({
           strands IME pinyin on iOS — see ComposerTextarea), CodeMirror on
           desktop (vim + live @/​/ completion). Same ComposerEditorHandle ref. */
       }
-      {/* The composer CARD (Zed-style): one outlined Paper owning the box — the
+      {
+        /* The composer CARD (Zed-style): one outlined Paper owning the box — the
           editor sits borderless inside, the Send/Queue + Stop + ⋮ kebab overlay
           its bottom-right (`endInset` reserves text room). Transparent fill so it
           floats over the frosted bottom slab (a solid paper would hide the glass).
-          A flex column so a later step can pin an inline toolbar to the bottom. */}
+          A flex column so a later step can pin an inline toolbar to the bottom. */
+      }
       <Paper
         data-composer-stack-slot="primary"
         {...(surface === "desktop"
@@ -1912,9 +2038,9 @@ export function ComposerWorkspace({
           : {})}
         data-mobile-focus-composer={touchInput ? "true" : undefined}
         data-mobile-primary-composer={touchInput ? "true" : undefined}
-        data-mobile-keyboard-open={
-          touchInput && mobileKeyboardPresentationOpen ? "true" : undefined
-        }
+        data-mobile-keyboard-open={touchInput && mobileKeyboardPresentationOpen
+          ? "true"
+          : undefined}
         // Column mode is a dedicated writing workspace. Its subtle card boundary
         // makes an empty tall editor read as an intentional canvas, not a blank
         // hole between the session rail and transcript.
@@ -1928,7 +2054,11 @@ export function ComposerWorkspace({
             ...desktopSurfaceSx({ interactive: false, focusWithin: true }),
           }),
           bgcolor: column
-            ? (t) => alpha(t.palette.background.paper, t.palette.mode === "dark" ? 0.18 : 0.34)
+            ? (t) =>
+              alpha(
+                t.palette.background.paper,
+                t.palette.mode === "dark" ? 0.18 : 0.34,
+              )
             : "transparent",
           // Column mode: the card fills the column's remaining height (below the
           // queued/drafts panels) so the editor is always in its tall form.
@@ -1955,76 +2085,85 @@ export function ComposerWorkspace({
             // Do not gate this fill on :focus-within. iOS can move DOM focus to
             // body while the keyboard stays up; the CM6 scroller would then
             // become a transparent hole over the transcript.
-            "&[data-mobile-keyboard-open='true'] [data-mobile-editor-area], &[data-mobile-keyboard-open='true'] [data-mobile-action-row], &[data-mobile-keyboard-open='true'] [data-mobile-focus-format-row]": {
-              bgcolor: mobileFocusedComposerFill,
-              backgroundImage: "none",
-            },
-            "&[data-mobile-keyboard-open='true'] [data-mobile-editor-area] .cm-theme-none, &[data-mobile-keyboard-open='true'] [data-mobile-editor-area] .cm-editor, &[data-mobile-keyboard-open='true'] [data-mobile-editor-area] .cm-scroller, &[data-mobile-keyboard-open='true'] [data-mobile-editor-area] .cm-content": {
-              bgcolor: mobileFocusedComposerFill,
-              backgroundImage: "none",
-              WebkitOverflowScrolling: "auto",
-            },
+            "&[data-mobile-keyboard-open='true'] [data-mobile-editor-area], &[data-mobile-keyboard-open='true'] [data-mobile-action-row], &[data-mobile-keyboard-open='true'] [data-mobile-focus-format-row]":
+              {
+                bgcolor: mobileFocusedComposerFill,
+                backgroundImage: "none",
+              },
+            "&[data-mobile-keyboard-open='true'] [data-mobile-editor-area] .cm-theme-none, &[data-mobile-keyboard-open='true'] [data-mobile-editor-area] .cm-editor, &[data-mobile-keyboard-open='true'] [data-mobile-editor-area] .cm-scroller, &[data-mobile-keyboard-open='true'] [data-mobile-editor-area] .cm-content":
+              {
+                bgcolor: mobileFocusedComposerFill,
+                backgroundImage: "none",
+                WebkitOverflowScrolling: "auto",
+              },
             // Only the editor is allowed to promote the compact card. Utility
             // buttons also live inside this Paper, so plain :focus-within can
             // leave a tall, inert canvas after Settings or another action takes
             // focus while the native textarea has already blurred.
-            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within)": {
-              flex: "0 1 auto",
-              minHeight: 0,
-              maxHeight: "100%",
-              // Focus changes hierarchy inside the same card. Keep the outer
-              // edge fixed so opening the keyboard does not look like a second
-              // component replacing the compact composer.
-              // Clip the filtered sample to the same rounded card. Without this,
-              // WebKit leaves a sharp readable fringe around the glass edge.
-              ...mobileFocusedComposerSurfaceSx,
-            },
-            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area]": {
-              flex: "0 1 auto",
-              minHeight: MOBILE_COMPOSER_INPUT_EDITOR_MIN_H,
-              maxHeight: "100%",
-              overflow: "hidden",
-            },
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within)":
+              {
+                flex: "0 1 auto",
+                minHeight: 0,
+                maxHeight: "100%",
+                // Focus changes hierarchy inside the same card. Keep the outer
+                // edge fixed so opening the keyboard does not look like a second
+                // component replacing the compact composer.
+                // Clip the filtered sample to the same rounded card. Without this,
+                // WebKit leaves a sharp readable fringe around the glass edge.
+                ...mobileFocusedComposerSurfaceSx,
+              },
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area]":
+              {
+                flex: "0 1 auto",
+                minHeight: MOBILE_COMPOSER_INPUT_EDITOR_MIN_H,
+                maxHeight: "100%",
+                overflow: "hidden",
+              },
             // Keep the compact native field content-tight. Filling leftover
             // viewport with height 100% left a blank band under short text
             // (and the Force-push row) whenever the transcript did not occupy
             // the rest of the screen.
-            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor]": {
-              flex: "0 1 auto",
-              minHeight: 0,
-              height: "auto",
-              maxHeight: "100%",
-              overflow: "hidden",
-              display: "flex",
-              flexDirection: "column",
-            },
-            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor] [data-mobile-native-textarea='true']": {
-              height: "auto",
-              minHeight: 48,
-              maxHeight: "100%",
-            },
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor]":
+              {
+                flex: "0 1 auto",
+                minHeight: 0,
+                height: "auto",
+                maxHeight: "100%",
+                overflow: "hidden",
+                display: "flex",
+                flexDirection: "column",
+              },
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor] [data-mobile-native-textarea='true']":
+              {
+                height: "auto",
+                minHeight: 48,
+                maxHeight: "100%",
+              },
             // An inline image promotes the compact native textarea to CM6.
             // Size that editor to its thumbnail + text, the same way the
             // native field hugs its lines. Stretching CM6 to the leftover
             // viewport left a tall empty canvas around an 80px image.
-            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-theme-none, &[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-editor, &[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-scroller": {
-              flex: "0 1 auto",
-              minHeight: 0,
-              height: "auto",
-              overflow: "hidden",
-            },
-            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-content": {
-              minHeight: 0,
-            },
-            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-focus-format-row]": {
-              maxHeight: 48,
-              opacity: 1,
-              transform: "translateY(0)",
-              pointerEvents: "auto",
-              borderTopColor: (t) => alpha(t.palette.divider, 0.42),
-              transition:
-                `max-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, opacity 110ms ease 55ms, transform ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, border-color 120ms ease`,
-            },
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-theme-none, &[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-editor, &[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-scroller":
+              {
+                flex: "0 1 auto",
+                minHeight: 0,
+                height: "auto",
+                overflow: "hidden",
+              },
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-content":
+              {
+                minHeight: 0,
+              },
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-focus-format-row]":
+              {
+                maxHeight: 48,
+                opacity: 1,
+                transform: "translateY(0)",
+                pointerEvents: "auto",
+                borderTopColor: (t) => alpha(t.palette.divider, 0.42),
+                transition:
+                  `max-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, opacity 110ms ease 55ms, transform ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, border-color 120ms ease`,
+              },
             "@media (prefers-reduced-motion: reduce)": {
               transition: "none",
             },
@@ -2042,47 +2181,53 @@ export function ComposerWorkspace({
             />
           </Suspense>
         )}
-        {/* Top-edge resize handle: drag to grow/shrink the editor; dragging past the
+        {
+          /* Top-edge resize handle: drag to grow/shrink the editor; dragging past the
           bottom threshold auto-collapses to the compact auto-grow editor, dragging
           up auto-expands (VSCode-terminal feel). A bigger hit area + an always-
           visible grab-pill so it's findable. Shown unless this is the fullscreen
           sheet (composeFs). Desktop only — the resizable ComposerEditor is the
           !touchInput branch; touch uses the compact editor + the fullscreen ↗.
-          Dropped in column mode — the column height IS the editor size. */}
-      {!touchInput && !composeFs && !column && (
-        <Box
-          onPointerDown={onResizeStart}
-          role="separator"
-          aria-orientation="horizontal"
-          aria-label="Resize editor"
-          sx={{
-            position: "absolute",
-            top: -9,
-            left: 0,
-            right: 0,
-            height: 18,
-            cursor: "ns-resize",
-            touchAction: "none",
-            zIndex: 6,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            // An always-faintly-visible grab-pill (brightens on hover) so it reads
-            // as draggable instead of an invisible hot-zone.
-            "&::after": {
-              content: "\"\"",
-              width: 44,
-              height: 4,
-              borderRadius: 2,
-              bgcolor: "text.disabled",
-              opacity: 0.45,
-              transition: "opacity .15s, background-color .15s, width .15s",
-            },
-            "&:hover::after": { opacity: 0.95, bgcolor: "text.secondary", width: 56 },
-          }}
-        />
-      )}
-      {!composeFs && (
+          Dropped in column mode — the column height IS the editor size. */
+        }
+        {!touchInput && !composeFs && !column && (
+          <Box
+            onPointerDown={onResizeStart}
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize editor"
+            sx={{
+              position: "absolute",
+              top: -9,
+              left: 0,
+              right: 0,
+              height: 18,
+              cursor: "ns-resize",
+              touchAction: "none",
+              zIndex: 6,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              // An always-faintly-visible grab-pill (brightens on hover) so it reads
+              // as draggable instead of an invisible hot-zone.
+              "&::after": {
+                content: '""',
+                width: 44,
+                height: 4,
+                borderRadius: 2,
+                bgcolor: "text.disabled",
+                opacity: 0.45,
+                transition: "opacity .15s, background-color .15s, width .15s",
+              },
+              "&:hover::after": {
+                opacity: 0.95,
+                bgcolor: "text.secondary",
+                width: 56,
+              },
+            }}
+          />
+        )}
+        {!composeFs && (
           // PlatformComposerEditor owns the compact-touch hybrid: native textarea
           // for UIKit long-press editing while there is no inline image token,
           // CM6 as soon as a token needs its widget. The fullscreen touch surface
@@ -2105,69 +2250,75 @@ export function ComposerWorkspace({
                 minHeight: MOBILE_COMPOSER_IDLE_EDITOR_MIN_H,
                 transition:
                   `min-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}`,
-                "@media (prefers-reduced-motion: reduce)": { transition: "none" },
+                "@media (prefers-reduced-motion: reduce)": {
+                  transition: "none",
+                },
               }),
               ...(desktop && column && { flex: 1 }),
             }}
           >
-          <PlatformComposerEditor
-            ref={editorRef}
-            autoFocus={autoFocus}
-            // CM6 is seeded once and owns its document on every surface. Feeding
-            // live React state back here would bounce the caret and corrupt IME.
-            value={initialDraftText.current}
-            // The native compact touch branch is a controlled textarea and needs
-            // the live value. PlatformComposerEditor never feeds this back to CM6.
-            {...(touchInput ? { nativeValue: text } : {})}
-            onChange={setText}
-            onSubmit={submitAndNotify}
-            onSaveDraft={saveDraft}
-            borderless
-            expanded={inlineExpanded}
-            heightPx={inlineExpanded ? composerHeight : 0}
-            // Column layout: stretch to fill the column instead of the vh-bounded
-            // compact/expanded sizes (overrides expanded/heightPx).
-            fill={desktop && column}
-            flushRightScrollbar={desktop && column}
-            // Reserve a top-right gutter so no line runs under the ↗/↙ expand
-            // toggle the card overlays at its top-right corner.
-            endInset={36}
-            // Hold ⌘⏎ while busy → the same force-push confirm the Queue button's
-            // long-press opens, anchored to that button.
-            holdToForce={!preparing && (busy || starting)}
-            onForceHold={(): void => {
-              if (!sendable || queueBtnRef.current === null) return;
-              haptic();
-              setForceAnchor(queueBtnRef.current);
-            }}
-            sessionId={sessionId}
-            commands={(): AvailableCommand[] => availableCommands}
-            placeholder={preparing
-              ? "You can start typing while this session prepares…"
-              : dead
-              ? "Send to resume this session…"
-              : "Message the agent…"}
-            // Vim is desktop-only — never load it on touch (no physical keyboard /
-            // modal editing). ComposerEditor also gates the actual vim import on a
-            // fine pointer, so this is belt-and-suspenders.
-            vim={touchInput ? false : vim}
-            onVimMode={setVimMode}
-            onPasteFiles={(files): void => addFiles(files, { preserveFocus: true })}
-            onEscape={(): boolean => {
-              // Esc cancels a running turn (via the confirm modal), but only when a
-              // turn is actually in flight — otherwise leave Esc to the editor. In
-              // vim, ComposerEditor only calls this once we're already in normal
-              // mode, so insert-mode Esc still just exits to normal.
-              if (busy) {
-                setCancelOpen(true);
-                return true;
+            <PlatformComposerEditor
+              ref={editorRef}
+              autoFocus={autoFocus}
+              // CM6 is seeded once and owns its document on every surface. Feeding
+              // live React state back here would bounce the caret and corrupt IME.
+              value={initialDraftText.current}
+              {
+                // The native compact touch branch is a controlled textarea and needs
+                // the live value. PlatformComposerEditor never feeds this back to CM6.
+                ...(touchInput ? { nativeValue: text } : {})
               }
-              return false;
-            }}
-          />
+              onChange={setText}
+              onSubmit={submitAndNotify}
+              onSaveDraft={saveDraft}
+              borderless
+              expanded={inlineExpanded}
+              heightPx={inlineExpanded ? composerHeight : 0}
+              // Column layout: stretch to fill the column instead of the vh-bounded
+              // compact/expanded sizes (overrides expanded/heightPx).
+              fill={desktop && column}
+              flushRightScrollbar={desktop && column}
+              // Reserve a top-right gutter so no line runs under the ↗/↙ expand
+              // toggle the card overlays at its top-right corner.
+              endInset={36}
+              // Hold ⌘⏎ while busy → the same force-push confirm the Queue button's
+              // long-press opens, anchored to that button.
+              holdToForce={!preparing && (busy || starting)}
+              onForceHold={(): void => {
+                if (!sendable || queueBtnRef.current === null) return;
+                haptic();
+                setForceAnchor(queueBtnRef.current);
+              }}
+              sessionId={sessionId}
+              commands={(): AvailableCommand[] => availableCommands}
+              placeholder={preparing
+                ? "You can start typing while this session prepares…"
+                : dead
+                ? "Send to resume this session…"
+                : "Message the agent…"}
+              // Vim is desktop-only — never load it on touch (no physical keyboard /
+              // modal editing). ComposerEditor also gates the actual vim import on a
+              // fine pointer, so this is belt-and-suspenders.
+              vim={touchInput ? false : vim}
+              onVimMode={setVimMode}
+              onPasteFiles={(files): void =>
+                addFiles(files, { preserveFocus: true })}
+              onEscape={(): boolean => {
+                // Esc cancels a running turn (via the confirm modal), but only when a
+                // turn is actually in flight — otherwise leave Esc to the editor. In
+                // vim, ComposerEditor only calls this once we're already in normal
+                // mode, so insert-mode Esc still just exits to normal.
+                if (busy) {
+                  setCancelOpen(true);
+                  return true;
+                }
+                return false;
+              }}
+            />
           </Box>
         )}
-        {/* Expand toggle, top-right INSIDE the card. DESKTOP: Zed-style inline
+        {
+          /* Expand toggle, top-right INSIDE the card. DESKTOP: Zed-style inline
             expand — toggles a taller editor in place (flows through the
             floating-stack ResizeObserver). MOBILE: space is tight inline, so ↗ goes
             straight to the FULLSCREEN compose sheet (the first-class long-form /
@@ -2175,7 +2326,8 @@ export function ComposerWorkspace({
             so text never runs under it. Glyph sized at the BUTTON level so it
             beats the global MuiIconButton `& .MuiSvgIcon-root: 1.5rem` override
             (a per-icon sx loses that specificity); rem so it tracks the font scale.
-            Dropped in column mode — the editor already fills the column. */}
+            Dropped in column mode — the editor already fills the column. */
+        }
         {!column && (touchInput
           ? (
             <MobileComposerFixedActionSlot region="primary" overlay>
@@ -2226,612 +2378,752 @@ export function ComposerWorkspace({
               </IconButton>
             </Tooltip>
           ))}
-        {/* Inline bottom toolbar INSIDE the card (Zed layout): the / @ 📎 triggers
+        {
+          /* Inline bottom toolbar INSIDE the card (Zed layout): the / @ 📎 triggers
             + config on the left, a flex spacer, then the send/queue/stop + ⋮ action
             cluster pinned to the card's right edge. This replaces BOTH the old
             separate toolbar strip below the input AND the absolute send overlay —
             one cohesive card. `px`/`pb` (not the nav gutters) inset the row to the
-            card's own edges. */}
-        {desktop ? (
-          <>
-            <Suspense fallback={null}>
-              <DesktopComposerCommandBindings
-                sendable={sendable}
-                canAttach={!dead}
-                canJumpFront={queue.length > 0}
-                canForce={busy || starting || paused}
-                canMore={!desktopActionsExpanded}
-                onSlash={(): void => editorRef.current?.insertTrigger("/")}
-                onReference={(): void => editorRef.current?.insertTrigger("@")}
-                onAttach={(): void => fileInputRef.current?.click()}
-                onSaveDraft={saveDraft}
-                onSchedule={(): void => setScheduleTarget({ id: undefined, initial: null })}
-                onJumpFront={jumpToFront}
-                onForce={(): void => {
-                  if (queueBtnRef.current) setForceAnchor(queueBtnRef.current);
-                }}
-                onMore={(): void => setDesktopMoreAnchor(desktopMoreButtonRef.current)}
-              />
-            </Suspense>
-            <Stack
-            ref={desktopToolbarRef}
-            direction="row"
-            alignItems="center"
-            spacing={0.25}
-            sx={{ px: 1, pb: 1, minHeight: 40 }}
-          >
-            <Tooltip title="Slash command / skill">
-              <span>
-                {desktopShortcut(<IconButton
-                  size="small"
-                  aria-label="slash command"
-                  disabled={dead}
-                  onClick={(): void => editorRef.current?.insertTrigger("/")}
-                >
-                  <Box component="span" sx={{ fontSize: "1.1rem", fontWeight: 700, lineHeight: 1 }}>/</Box>
-                </IconButton>, `${ALT_LABEL}/`, `${ALT_LABEL}/ · slash command`, !dead)}
-              </span>
-            </Tooltip>
-            <Tooltip title="Reference a file (@)">
-              <span>
-                {desktopShortcut(<IconButton
-                  size="small"
-                  aria-label="reference a file"
-                  disabled={dead}
-                  onClick={(): void => editorRef.current?.insertTrigger("@")}
-                >
-                  <AlternateEmail fontSize="small" />
-                </IconButton>, `${ALT_LABEL}R`, `${ALT_LABEL}R · reference a file`, !dead)}
-              </span>
-            </Tooltip>
-            <Tooltip title="Attach image or file">
-              <span>
-                {desktopShortcut(<IconButton
-                  size="small"
-                  aria-label="attach image or file"
-                  disabled={dead}
-                  onClick={(): void => fileInputRef.current?.click()}
-                >
-                  <AttachFile fontSize="small" />
-                </IconButton>, `${ALT_LABEL}A`, `${ALT_LABEL}A · attach file`, !dead)}
-              </span>
-            </Tooltip>
-            <Box sx={{ flex: 1 }} />
-
-            {desktopActionsExpanded && (
-              <>
-                <Tooltip title="Save as draft">
-                  <span>
-                    {desktopShortcut(<IconButton
-                      size="small"
-                      aria-label="save as draft"
-                      disabled={!sendable}
-                      onClick={saveDraft}
-                    >
-                      <EditNoteOutlined fontSize="small" />
-                    </IconButton>, `${MOD_LABEL}S`, `${MOD_LABEL}S · save as draft`, sendable)}
-                  </span>
-                </Tooltip>
-                <Tooltip title="Schedule send">
-                  <span>
-                    {desktopShortcut(<IconButton
-                      size="small"
-                      aria-label="schedule send"
-                      disabled={!sendable}
-                      onClick={(): void => setScheduleTarget({ id: undefined, initial: null })}
-                    >
-                      <Schedule fontSize="small" />
-                    </IconButton>, `${ALT_LABEL}S`, `${ALT_LABEL}S · schedule prompt`, sendable)}
-                  </span>
-                </Tooltip>
-                <Tooltip title="Jump to front of queue">
-                  <span>
-                    {desktopShortcut(<IconButton
-                      size="small"
-                      aria-label="jump to front of queue"
-                      disabled={!sendable || queue.length === 0}
-                      onClick={jumpToFront}
-                    >
-                      <VerticalAlignTop fontSize="small" />
-                    </IconButton>, `${MOD_LABEL}J`, `${MOD_LABEL}J · jump to front`, sendable && queue.length > 0)}
-                  </span>
-                </Tooltip>
-                <Tooltip title="Force push">
-                  <span>
-                    {desktopShortcut(<IconButton
-                      size="small"
-                      color="warning"
-                      aria-label="force push"
-                      disabled={!sendable || !(busy || starting || paused)}
-                      onClick={(e): void => setForceAnchor(e.currentTarget)}
-                    >
-                      <Bolt fontSize="small" />
-                    </IconButton>, `${ALT_LABEL}↵`, `${ALT_LABEL}Enter · force push`, sendable && (busy || starting || paused))}
-                  </span>
-                </Tooltip>
-              </>
-            )}
-
-            {!desktopActionsExpanded && (
-              <Tooltip title="More delivery options">
-                <span>
-                  {desktopShortcut(<IconButton
-                    ref={desktopMoreButtonRef}
-                    size="small"
-                    aria-label="more delivery options"
-                    aria-controls={desktopMoreAnchor ? "desktop-composer-more" : undefined}
-                    aria-expanded={desktopMoreAnchor ? "true" : undefined}
-                    onClick={(e): void => setDesktopMoreAnchor(e.currentTarget)}
-                  >
-                    <MoreVert fontSize="small" />
-                  </IconButton>, `${MOD_LABEL}.`, `${MOD_LABEL}. · more prompt actions`)}
-                </span>
-              </Tooltip>
-            )}
-            <Menu
-              id="desktop-composer-more"
-              anchorEl={desktopMoreAnchor}
-              open={desktopMoreAnchor !== null}
-              onClose={(): void => setDesktopMoreAnchor(null)}
-              anchorOrigin={{ vertical: "top", horizontal: "right" }}
-              transformOrigin={{ vertical: "bottom", horizontal: "right" }}
-            >
-              {!desktopActionsExpanded && <MenuItem
-                disabled={!sendable}
-                onClick={(): void => {
-                  setDesktopMoreAnchor(null);
-                  saveDraft();
-                }}
-              >
-                <EditNoteOutlined fontSize="small" sx={{ mr: 1.25 }} />
-                Save as draft
-              </MenuItem>}
-              {!desktopActionsExpanded && <MenuItem
-                disabled={!sendable}
-                onClick={(): void => {
-                  setDesktopMoreAnchor(null);
-                  setScheduleTarget({ id: undefined, initial: null });
-                }}
-              >
-                <Schedule fontSize="small" sx={{ mr: 1.25 }} />
-                Schedule send
-              </MenuItem>}
-              {!desktopActionsExpanded && <Divider />}
-              {!desktopActionsExpanded && <MenuItem
-                disabled={!sendable || queue.length === 0}
-                onClick={(): void => {
-                  setDesktopMoreAnchor(null);
-                  jumpToFront();
-                }}
-              >
-                <VerticalAlignTop fontSize="small" sx={{ mr: 1.25 }} />
-                Jump to front of queue
-              </MenuItem>}
-              {!desktopActionsExpanded && <MenuItem
-                disabled={!sendable || !(busy || starting || paused)}
-                onClick={(): void => {
-                  setDesktopMoreAnchor(null);
-                  setForceAnchor(desktopMoreButtonRef.current);
-                }}
-              >
-                <Bolt fontSize="small" color="warning" sx={{ mr: 1.25 }} />
-                Force push…
-              </MenuItem>}
-            </Menu>
-
-            {desktopShortcut(<Button
-              ref={queueBtnRef}
-              variant="contained"
-              size="small"
-              disableElevation
-              startIcon={<Send fontSize="small" />}
-              aria-label={busy || starting ? "queue message" : "send"}
-              disabled={!sendable || submitFeedback.pending}
-              aria-busy={submitFeedback.pending || undefined}
-              onClick={(): void => submitWithFeedback()}
-              sx={{
-                ml: 0.5,
-                minWidth: 86,
-                borderRadius: 1.5,
-                textTransform: "none",
-                fontWeight: 650,
-              }}
-            >
-              {submitFeedback.progress
-                ? <CircularProgress size={16} color="inherit" />
-                : busy || starting ? "Queue" : "Send"}
-            </Button>, `${MOD_LABEL}↵`, `${busy || starting ? "Queue" : "Send"} · ${MOD_LABEL}Enter`, sendable)}
-            </Stack>
-          </>
-        ) : (
-        <>
-        {touchInput && (
-          <Box
-            data-mobile-focus-format-row
-            sx={{
-              order: 2,
-              flexShrink: 0,
-              maxHeight: 0,
-              minHeight: 0,
-              opacity: 0,
-              overflow: "hidden",
-              pointerEvents: "none",
-              transform: "translateY(8px)",
-              borderTop: 1,
-              borderTopColor: "transparent",
-              transition:
-                `max-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, opacity 90ms ease, transform ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, border-color 120ms ease`,
-              "@media (prefers-reduced-motion: reduce)": {
-                transition: "none",
-                transform: "none",
-              },
-            }}
-          >
-            <MobileComposerEditingBar
-              actions={
-                <MobileComposerFormatActions
-                  commandIds={mobileToolbarIds}
-                  editorRef={editorRef}
+            card's own edges. */
+        }
+        {desktop
+          ? (
+            <>
+              <Suspense fallback={null}>
+                <DesktopComposerCommandBindings
+                  sendable={sendable}
+                  canAttach={!dead}
+                  canJumpFront={queue.length > 0}
+                  canForce={busy || starting || paused}
+                  canMore={!desktopActionsExpanded}
+                  onSlash={(): void => editorRef.current?.insertTrigger("/")}
+                  onReference={(): void =>
+                    editorRef.current?.insertTrigger("@")}
                   onAttach={(): void => fileInputRef.current?.click()}
-                  onPasteImages={pasteClipboardImages}
-                  onCustomize={(): void => {
-                    releaseMobileComposerFocus();
-                    setMobileToolbarSettingsOpen(true);
+                  onSaveDraft={saveDraft}
+                  onSchedule={(): void =>
+                    setScheduleTarget({ id: undefined, initial: null })}
+                  onJumpFront={jumpToFront}
+                  onForce={(): void => {
+                    if (queueBtnRef.current) {
+                      setForceAnchor(queueBtnRef.current);
+                    }
                   }}
+                  onMore={(): void =>
+                    setDesktopMoreAnchor(desktopMoreButtonRef.current)}
                 />
-              }
-              fixedAction={
-                <MobileComposerAccessoryButton
-                  title="Hide keyboard"
-                  onClick={dismissMobileSoftwareKeyboard}
-                >
-                  <KeyboardHide />
-                </MobileComposerAccessoryButton>
-              }
-            />
-          </Box>
-        )}
-        <Box
-          data-mobile-action-row={touchInput ? "true" : undefined}
-          sx={{
-            order: touchInput ? 1 : undefined,
-            display: "flex",
-            alignItems: "center",
-            flexShrink: 0,
-            minWidth: 0,
-            pb: 0.5,
-            ...TOOLBAR_MIN_H,
-          }}
-        >
-        <Stack
-          ref={mobileActionsRef}
-          data-mobile-scrollable-actions={touchInput ? "true" : undefined}
-          direction="row"
-          alignItems="center"
-          spacing={compact ? 0 : 0.5}
-          sx={{
-            flex: 1,
-            minWidth: 0,
-            px: 0.5,
-            ...(compact && {
-              justifyContent: "flex-start",
-              columnGap: "clamp(2px, 1vw, 5px)",
-              flexWrap: "nowrap",
-              overflowX: "auto",
-              overflowY: "hidden",
-              overscrollBehaviorX: "contain",
-              scrollbarWidth: "none",
-              WebkitMaskImage: mobileActionEdges.left && mobileActionEdges.right
-                ? "linear-gradient(to right, transparent 0, black 16px, black calc(100% - 16px), transparent 100%)"
-                : mobileActionEdges.left
-                ? "linear-gradient(to right, transparent 0, black 16px)"
-                : mobileActionEdges.right
-                ? "linear-gradient(to right, black calc(100% - 16px), transparent 100%)"
-                : "none",
-              maskImage: mobileActionEdges.left && mobileActionEdges.right
-                ? "linear-gradient(to right, transparent 0, black 16px, black calc(100% - 16px), transparent 100%)"
-                : mobileActionEdges.left
-                ? "linear-gradient(to right, transparent 0, black 16px)"
-                : mobileActionEdges.right
-                ? "linear-gradient(to right, black calc(100% - 16px), transparent 100%)"
-                : "none",
-              "&::-webkit-scrollbar": { display: "none" },
-              "@media (min-width: 700px)": {
-                justifyContent: "flex-start",
-                columnGap: 0.5,
-              },
-            }),
-          }}
-        >
-        {/* (Vim mode moved OUT of the toolbar into a Zed-style bottom status bar
-            below — see the StatusBar at the card's bottom edge.) */}
-        {/* Mobile starts with the useful, state-bearing Compact action instead of
-            a one-tap `/` insertion that is easy to hit accidentally. Slash
-            completion remains available by typing `/` in the editor. Desktop
-            keeps its dedicated slash affordance in the separate toolbar above. */}
-        {!preparing && !desktop && compactAction && (
-          <Tooltip
-            title={compacting
-              ? "Compacting…"
-              : compactContext.refreshing
-              ? "Refreshing context usage…"
-              : compactTooltip(compactContext.used, compactContext.size)}
-          >
-            <span>
-              <IconButton
-                aria-label="compact conversation"
-                disabled={dead || compacting}
-                sx={{ ...TOOLBAR_ICON_BTN, p: 0.75 }}
-                onClick={(): void => setCmdConfirm(compactAction)}
+              </Suspense>
+              <Stack
+                ref={desktopToolbarRef}
+                direction="row"
+                alignItems="center"
+                spacing={0.25}
+                sx={{ px: 1, pb: 1, minHeight: 40 }}
               >
-                <CompactIcon
-                  used={compactContext.used}
-                  size={compactContext.size}
-                  active={compacting}
-                />
-              </IconButton>
-            </span>
-          </Tooltip>
-        )}
-        {/* @ folds out on compact (mobile) — the row is too tight, and typing
-            "@" raises the same file picker. Desktop keeps the dedicated button. */}
-        {!preparing && !compact && (
-          <Tooltip title="Reference a file (@)">
-            <span>
-              <IconButton
-                aria-label="reference a file"
-                disabled={dead}
-                sx={TOOLBAR_ICON_BTN}
-                onClick={(): void => editorRef.current?.insertTrigger("@")}
-              >
-                <AlternateEmail />
-              </IconButton>
-            </span>
-          </Tooltip>
-        )}
-        <Tooltip title="Attach image or file">
-          <span>
-            <IconButton
-              aria-label="attach image or file"
-              disabled={dead}
-              sx={TOOLBAR_ICON_BTN}
-              onClick={(): void => fileInputRef.current?.click()}
-            >
-              <AttachFile />
-            </IconButton>
-          </span>
-        </Tooltip>
-        {/* Session-lifecycle Clear action. Compact is mobile's first button above;
-            both actions still require confirmation before they run. */}
-        {!preparing && clearAction && (
-          <Tooltip title="Clear conversation">
-            <span>
-              <IconButton
-                aria-label="clear conversation"
-                disabled={dead}
-                sx={TOOLBAR_ICON_BTN}
-                onClick={(): void => setCmdConfirm(clearAction)}
-              >
-                <CleaningServices fontSize="small" />
-              </IconButton>
-            </span>
-          </Tooltip>
-        )}
-        {/* Spacer (desktop only) → pins the send/queue cluster to the right edge
-            while the left group (slash / @ / attach) stays left. On compact the row
-            is space-evenly instead, so the spacer would defeat the even spread.
-            (Stop + config + auto-scroll moved to the navbar — see SessionControls.) */}
-        {!compact && <Box sx={{ flex: 1 }} />}
-        {/* Primary action: Send (idle) / Queue (busy — long-press → force push).
-            Moved here from the old absolute overlay so the whole composer is one
-            card; the long-press force-push ring + haptics are preserved. */}
-        {preparing
-          ? (
-            <Tooltip title="Preparing session">
-              <span>
-                <IconButton
-                  color="primary"
-                  aria-label="preparing session"
-                  disabled
-                  sx={TOOLBAR_ICON_BTN}
+                <Tooltip title="Slash command / skill">
+                  <span>
+                    {desktopShortcut(
+                      <IconButton
+                        size="small"
+                        aria-label="slash command"
+                        disabled={dead}
+                        onClick={(): void =>
+                          editorRef.current?.insertTrigger("/")}
+                      >
+                        <Box
+                          component="span"
+                          sx={{
+                            fontSize: "1.1rem",
+                            fontWeight: 700,
+                            lineHeight: 1,
+                          }}
+                        >
+                          /
+                        </Box>
+                      </IconButton>,
+                      `${ALT_LABEL}/`,
+                      `${ALT_LABEL}/ · slash command`,
+                      !dead,
+                    )}
+                  </span>
+                </Tooltip>
+                <Tooltip title="Reference a file (@)">
+                  <span>
+                    {desktopShortcut(
+                      <IconButton
+                        size="small"
+                        aria-label="reference a file"
+                        disabled={dead}
+                        onClick={(): void =>
+                          editorRef.current?.insertTrigger("@")}
+                      >
+                        <AlternateEmail fontSize="small" />
+                      </IconButton>,
+                      `${ALT_LABEL}R`,
+                      `${ALT_LABEL}R · reference a file`,
+                      !dead,
+                    )}
+                  </span>
+                </Tooltip>
+                <Tooltip title="Attach image or file">
+                  <span>
+                    {desktopShortcut(
+                      <IconButton
+                        size="small"
+                        aria-label="attach image or file"
+                        disabled={dead}
+                        onClick={(): void => fileInputRef.current?.click()}
+                      >
+                        <AttachFile fontSize="small" />
+                      </IconButton>,
+                      `${ALT_LABEL}A`,
+                      `${ALT_LABEL}A · attach file`,
+                      !dead,
+                    )}
+                  </span>
+                </Tooltip>
+                <Box sx={{ flex: 1 }} />
+
+                {desktopActionsExpanded && (
+                  <>
+                    <Tooltip title="Save as draft">
+                      <span>
+                        {desktopShortcut(
+                          <IconButton
+                            size="small"
+                            aria-label="save as draft"
+                            disabled={!sendable}
+                            onClick={saveDraft}
+                          >
+                            <EditNoteOutlined fontSize="small" />
+                          </IconButton>,
+                          `${MOD_LABEL}S`,
+                          `${MOD_LABEL}S · save as draft`,
+                          sendable,
+                        )}
+                      </span>
+                    </Tooltip>
+                    <Tooltip title="Schedule send">
+                      <span>
+                        {desktopShortcut(
+                          <IconButton
+                            size="small"
+                            aria-label="schedule send"
+                            disabled={!sendable}
+                            onClick={(): void =>
+                              setScheduleTarget({
+                                id: undefined,
+                                initial: null,
+                              })}
+                          >
+                            <Schedule fontSize="small" />
+                          </IconButton>,
+                          `${ALT_LABEL}S`,
+                          `${ALT_LABEL}S · schedule prompt`,
+                          sendable,
+                        )}
+                      </span>
+                    </Tooltip>
+                    <Tooltip title="Jump to front of queue">
+                      <span>
+                        {desktopShortcut(
+                          <IconButton
+                            size="small"
+                            aria-label="jump to front of queue"
+                            disabled={!sendable || queue.length === 0}
+                            onClick={jumpToFront}
+                          >
+                            <VerticalAlignTop fontSize="small" />
+                          </IconButton>,
+                          `${MOD_LABEL}J`,
+                          `${MOD_LABEL}J · jump to front`,
+                          sendable && queue.length > 0,
+                        )}
+                      </span>
+                    </Tooltip>
+                    <Tooltip title="Force push">
+                      <span>
+                        {desktopShortcut(
+                          <IconButton
+                            size="small"
+                            color="warning"
+                            aria-label="force push"
+                            disabled={!sendable ||
+                              !(busy || starting || paused)}
+                            onClick={(e): void =>
+                              setForceAnchor(e.currentTarget)}
+                          >
+                            <Bolt fontSize="small" />
+                          </IconButton>,
+                          `${ALT_LABEL}↵`,
+                          `${ALT_LABEL}Enter · force push`,
+                          sendable && (busy || starting || paused),
+                        )}
+                      </span>
+                    </Tooltip>
+                  </>
+                )}
+
+                {!desktopActionsExpanded && (
+                  <Tooltip title="More delivery options">
+                    <span>
+                      {desktopShortcut(
+                        <IconButton
+                          ref={desktopMoreButtonRef}
+                          size="small"
+                          aria-label="more delivery options"
+                          aria-controls={desktopMoreAnchor
+                            ? "desktop-composer-more"
+                            : undefined}
+                          aria-expanded={desktopMoreAnchor ? "true" : undefined}
+                          onClick={(e): void =>
+                            setDesktopMoreAnchor(e.currentTarget)}
+                        >
+                          <MoreVert fontSize="small" />
+                        </IconButton>,
+                        `${MOD_LABEL}.`,
+                        `${MOD_LABEL}. · more prompt actions`,
+                      )}
+                    </span>
+                  </Tooltip>
+                )}
+                <Menu
+                  id="desktop-composer-more"
+                  anchorEl={desktopMoreAnchor}
+                  open={desktopMoreAnchor !== null}
+                  onClose={(): void => setDesktopMoreAnchor(null)}
+                  anchorOrigin={{ vertical: "top", horizontal: "right" }}
+                  transformOrigin={{ vertical: "bottom", horizontal: "right" }}
                 >
-                  <CircularProgress size={17} color="inherit" />
-                </IconButton>
-              </span>
-            </Tooltip>
-          )
-          : busy || starting
-          ? (
-            <Box component="span" sx={{ position: "relative", display: "inline-flex", flexShrink: 0 }}>
-                <IconButton
-                  ref={queueBtnRef}
-                  color="primary"
-                  aria-label="queue message"
-                  disabled={!sendable || submitFeedback.pending}
-                  aria-busy={submitFeedback.pending || undefined}
-                  sx={{
-                    ...TOOLBAR_ICON_BTN,
-                    transition: "transform .12s",
-                    ...(holding && { transform: "scale(1.12)" }),
-                  }}
-                  onClick={onQueueClick}
-                  onPointerDown={onForcePointerDown}
-                  onPointerMove={onForcePointerMove}
-                  onPointerUp={clearLongPress}
-                  onPointerLeave={clearLongPress}
-                  onPointerCancel={clearLongPress}
-                >
-                  {submitFeedback.progress
-                    ? <CircularProgress size={18} color="inherit" />
-                    : <Send fontSize="small" />}
-                </IconButton>
-                {holding && (
-                  <Box
-                    component="svg"
-                    aria-hidden
-                    viewBox="0 0 40 40"
+                  {!desktopActionsExpanded && (
+                    <MenuItem
+                      disabled={!sendable}
+                      onClick={(): void => {
+                        setDesktopMoreAnchor(null);
+                        saveDraft();
+                      }}
+                    >
+                      <EditNoteOutlined fontSize="small" sx={{ mr: 1.25 }} />
+                      Save as draft
+                    </MenuItem>
+                  )}
+                  {!desktopActionsExpanded && (
+                    <MenuItem
+                      disabled={!sendable}
+                      onClick={(): void => {
+                        setDesktopMoreAnchor(null);
+                        setScheduleTarget({ id: undefined, initial: null });
+                      }}
+                    >
+                      <Schedule fontSize="small" sx={{ mr: 1.25 }} />
+                      Schedule send
+                    </MenuItem>
+                  )}
+                  {!desktopActionsExpanded && <Divider />}
+                  {!desktopActionsExpanded && (
+                    <MenuItem
+                      disabled={!sendable || queue.length === 0}
+                      onClick={(): void => {
+                        setDesktopMoreAnchor(null);
+                        jumpToFront();
+                      }}
+                    >
+                      <VerticalAlignTop fontSize="small" sx={{ mr: 1.25 }} />
+                      Jump to front of queue
+                    </MenuItem>
+                  )}
+                  {!desktopActionsExpanded && (
+                    <MenuItem
+                      disabled={!sendable || !(busy || starting || paused)}
+                      onClick={(): void => {
+                        setDesktopMoreAnchor(null);
+                        setForceAnchor(desktopMoreButtonRef.current);
+                      }}
+                    >
+                      <Bolt
+                        fontSize="small"
+                        color="warning"
+                        sx={{ mr: 1.25 }}
+                      />
+                      Force push…
+                    </MenuItem>
+                  )}
+                </Menu>
+
+                {desktopShortcut(
+                  <Button
+                    ref={queueBtnRef}
+                    variant="contained"
+                    size="small"
+                    disableElevation
+                    startIcon={<Send fontSize="small" />}
+                    aria-label={busy || starting ? "queue message" : "send"}
+                    disabled={!sendable || submitFeedback.pending}
+                    aria-busy={submitFeedback.pending || undefined}
+                    onClick={(): void => submitWithFeedback()}
                     sx={{
-                      position: "absolute",
-                      inset: 0,
-                      width: "100%",
-                      height: "100%",
-                      pointerEvents: "none",
-                      transform: "rotate(-90deg)",
+                      ml: 0.5,
+                      minWidth: 86,
+                      borderRadius: 1.5,
+                      textTransform: "none",
+                      fontWeight: 650,
                     }}
                   >
-                    <Box
-                      component="circle"
-                      cx="20"
-                      cy="20"
-                      r="18"
-                      fill="none"
-                      strokeLinecap="round"
-                      sx={{
-                        stroke: "primary.main",
-                        strokeWidth: 2.5,
-                        strokeDasharray: 113,
-                        strokeDashoffset: 113,
-                        animation: "lpfill 450ms linear forwards",
-                        "@keyframes lpfill": { to: { strokeDashoffset: 0 } },
-                      }}
-                    />
-                  </Box>
+                    {submitFeedback.progress
+                      ? <CircularProgress size={16} color="inherit" />
+                      : busy || starting
+                      ? "Queue"
+                      : "Send"}
+                  </Button>,
+                  `${MOD_LABEL}↵`,
+                  `${busy || starting ? "Queue" : "Send"} · ${MOD_LABEL}Enter`,
+                  sendable,
                 )}
-              </Box>
+              </Stack>
+            </>
           )
           : (
-            <Tooltip title={`Send (${MOD_LABEL}${ENTER_LABEL})`}>
-              <span>
-                <IconButton
-                  color="primary"
-                  aria-label="send"
-                  disabled={!sendable || submitFeedback.pending}
-                  aria-busy={submitFeedback.pending || undefined}
-                  sx={TOOLBAR_ICON_BTN}
-                  // Keep the native textarea as UIKit's first responder, and
-                  // commit stationary touch on pointerup when iOS omits the
-                  // trailing synthetic click after stopping scroll momentum.
-                  onPointerDown={(event): void => {
-                    event.preventDefault();
-                    sendTap.onPointerDown(event);
+            <>
+              {touchInput && (
+                <Box
+                  data-mobile-focus-format-row
+                  sx={{
+                    order: 2,
+                    flexShrink: 0,
+                    maxHeight: 0,
+                    minHeight: 0,
+                    opacity: 0,
+                    overflow: "hidden",
+                    pointerEvents: "none",
+                    transform: "translateY(8px)",
+                    borderTop: 1,
+                    borderTopColor: "transparent",
+                    transition:
+                      `max-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, opacity 90ms ease, transform ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, border-color 120ms ease`,
+                    "@media (prefers-reduced-motion: reduce)": {
+                      transition: "none",
+                      transform: "none",
+                    },
                   }}
-                  onPointerMove={sendTap.onPointerMove}
-                  onPointerUp={sendTap.onPointerUp}
-                  onPointerCancel={sendTap.onPointerCancel}
-                  onClick={sendTap.onClick}
                 >
-                  {submitFeedback.progress
-                    ? <CircularProgress size={18} color="inherit" />
-                    : <Send fontSize="small" />}
-                </IconButton>
-              </span>
-            </Tooltip>
-          )}
-        {/* Secondary actions, always inline now: Save-draft (always), Jump-to-front
+                  <MobileComposerEditingBar
+                    actions={
+                      <MobileComposerFormatActions
+                        commandIds={mobileToolbarIds}
+                        editorRef={editorRef}
+                        onAttach={(): void => fileInputRef.current?.click()}
+                        onPasteImages={pasteClipboardImages}
+                        onCustomize={(): void => {
+                          releaseMobileComposerFocus();
+                          setMobileToolbarSettingsOpen(true);
+                        }}
+                      />
+                    }
+                    fixedAction={
+                      <MobileComposerAccessoryButton
+                        title="Hide keyboard"
+                        onClick={dismissMobileSoftwareKeyboard}
+                      >
+                        <KeyboardHide />
+                      </MobileComposerAccessoryButton>
+                    }
+                  />
+                </Box>
+              )}
+              <Box
+                data-mobile-action-row={touchInput ? "true" : undefined}
+                sx={{
+                  order: touchInput ? 1 : undefined,
+                  display: "flex",
+                  alignItems: "center",
+                  flexShrink: 0,
+                  minWidth: 0,
+                  pb: 0.5,
+                  ...TOOLBAR_MIN_H,
+                }}
+              >
+                <Stack
+                  ref={mobileActionsRef}
+                  data-mobile-scrollable-actions={touchInput
+                    ? "true"
+                    : undefined}
+                  direction="row"
+                  alignItems="center"
+                  spacing={compact ? 0 : 0.5}
+                  sx={{
+                    flex: 1,
+                    minWidth: 0,
+                    px: 0.5,
+                    ...(compact && {
+                      justifyContent: "flex-start",
+                      columnGap: "clamp(2px, 1vw, 5px)",
+                      flexWrap: "nowrap",
+                      overflowX: "auto",
+                      overflowY: "hidden",
+                      overscrollBehaviorX: "contain",
+                      scrollbarWidth: "none",
+                      WebkitMaskImage:
+                        mobileActionEdges.left && mobileActionEdges.right
+                          ? "linear-gradient(to right, transparent 0, black 16px, black calc(100% - 16px), transparent 100%)"
+                          : mobileActionEdges.left
+                          ? "linear-gradient(to right, transparent 0, black 16px)"
+                          : mobileActionEdges.right
+                          ? "linear-gradient(to right, black calc(100% - 16px), transparent 100%)"
+                          : "none",
+                      maskImage:
+                        mobileActionEdges.left && mobileActionEdges.right
+                          ? "linear-gradient(to right, transparent 0, black 16px, black calc(100% - 16px), transparent 100%)"
+                          : mobileActionEdges.left
+                          ? "linear-gradient(to right, transparent 0, black 16px)"
+                          : mobileActionEdges.right
+                          ? "linear-gradient(to right, black calc(100% - 16px), transparent 100%)"
+                          : "none",
+                      "&::-webkit-scrollbar": { display: "none" },
+                      "@media (min-width: 700px)": {
+                        justifyContent: "flex-start",
+                        columnGap: 0.5,
+                      },
+                    }),
+                  }}
+                >
+                  {
+                    /* (Vim mode moved OUT of the toolbar into a Zed-style bottom status bar
+            below — see the StatusBar at the card's bottom edge.) */
+                  }
+                  {
+                    /* Mobile starts with the useful, state-bearing Compact action instead of
+            a one-tap `/` insertion that is easy to hit accidentally. Slash
+            completion remains available by typing `/` in the editor. Desktop
+            keeps its dedicated slash affordance in the separate toolbar above. */
+                  }
+                  {!preparing && !desktop && compactAction && (
+                    <Tooltip
+                      title={compacting
+                        ? "Compacting…"
+                        : compactContext.refreshing
+                        ? "Refreshing context usage…"
+                        : compactTooltip(
+                          compactContext.used,
+                          compactContext.size,
+                        )}
+                    >
+                      <span>
+                        <IconButton
+                          aria-label="compact conversation"
+                          disabled={dead || compacting}
+                          sx={{ ...TOOLBAR_ICON_BTN, p: 0.75 }}
+                          onClick={(): void => setCmdConfirm(compactAction)}
+                        >
+                          <CompactIcon
+                            used={compactContext.used}
+                            size={compactContext.size}
+                            active={compacting}
+                          />
+                        </IconButton>
+                      </span>
+                    </Tooltip>
+                  )}
+                  {
+                    /* @ folds out on compact (mobile) — the row is too tight, and typing
+            "@" raises the same file picker. Desktop keeps the dedicated button. */
+                  }
+                  {!preparing && !compact && (
+                    <Tooltip title="Reference a file (@)">
+                      <span>
+                        <IconButton
+                          aria-label="reference a file"
+                          disabled={dead}
+                          sx={TOOLBAR_ICON_BTN}
+                          onClick={(): void =>
+                            editorRef.current?.insertTrigger("@")}
+                        >
+                          <AlternateEmail />
+                        </IconButton>
+                      </span>
+                    </Tooltip>
+                  )}
+                  <Tooltip title="Attach image or file">
+                    <span>
+                      <IconButton
+                        aria-label="attach image or file"
+                        disabled={dead}
+                        sx={TOOLBAR_ICON_BTN}
+                        onClick={(): void => fileInputRef.current?.click()}
+                      >
+                        <AttachFile />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                  {
+                    /* Session-lifecycle Clear action. Compact is mobile's first button above;
+            both actions still require confirmation before they run. */
+                  }
+                  {!preparing && clearAction && (
+                    <Tooltip title="Clear conversation">
+                      <span>
+                        <IconButton
+                          aria-label="clear conversation"
+                          disabled={dead}
+                          sx={TOOLBAR_ICON_BTN}
+                          onClick={(): void => setCmdConfirm(clearAction)}
+                        >
+                          <CleaningServices fontSize="small" />
+                        </IconButton>
+                      </span>
+                    </Tooltip>
+                  )}
+                  {
+                    /* Spacer (desktop only) → pins the send/queue cluster to the right edge
+            while the left group (slash / @ / attach) stays left. On compact the row
+            is space-evenly instead, so the spacer would defeat the even spread.
+            (Stop + config + auto-scroll moved to the navbar — see SessionControls.) */
+                  }
+                  {!compact && <Box sx={{ flex: 1 }} />}
+                  {
+                    /* Primary action: Send (idle) / Queue (busy — long-press → force push).
+            Moved here from the old absolute overlay so the whole composer is one
+            card; the long-press force-push ring + haptics are preserved. */
+                  }
+                  {preparing
+                    ? (
+                      <Tooltip title="Preparing session">
+                        <span>
+                          <IconButton
+                            color="primary"
+                            aria-label="preparing session"
+                            disabled
+                            sx={TOOLBAR_ICON_BTN}
+                          >
+                            <CircularProgress size={17} color="inherit" />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                    )
+                    : busy || starting
+                    ? (
+                      <Box
+                        component="span"
+                        sx={{
+                          position: "relative",
+                          display: "inline-flex",
+                          flexShrink: 0,
+                        }}
+                      >
+                        <IconButton
+                          ref={queueBtnRef}
+                          color="primary"
+                          aria-label="queue message"
+                          disabled={!sendable || submitFeedback.pending}
+                          aria-busy={submitFeedback.pending || undefined}
+                          sx={{
+                            ...TOOLBAR_ICON_BTN,
+                            transition: "transform .12s",
+                            ...(holding && { transform: "scale(1.12)" }),
+                          }}
+                          onClick={onQueueClick}
+                          onPointerDown={onForcePointerDown}
+                          onPointerMove={onForcePointerMove}
+                          onPointerUp={clearLongPress}
+                          onPointerLeave={clearLongPress}
+                          onPointerCancel={clearLongPress}
+                        >
+                          {submitFeedback.progress
+                            ? <CircularProgress size={18} color="inherit" />
+                            : <Send fontSize="small" />}
+                        </IconButton>
+                        {holding && (
+                          <Box
+                            component="svg"
+                            aria-hidden
+                            viewBox="0 0 40 40"
+                            sx={{
+                              position: "absolute",
+                              inset: 0,
+                              width: "100%",
+                              height: "100%",
+                              pointerEvents: "none",
+                              transform: "rotate(-90deg)",
+                            }}
+                          >
+                            <Box
+                              component="circle"
+                              cx="20"
+                              cy="20"
+                              r="18"
+                              fill="none"
+                              strokeLinecap="round"
+                              sx={{
+                                stroke: "primary.main",
+                                strokeWidth: 2.5,
+                                strokeDasharray: 113,
+                                strokeDashoffset: 113,
+                                animation: "lpfill 450ms linear forwards",
+                                "@keyframes lpfill": {
+                                  to: { strokeDashoffset: 0 },
+                                },
+                              }}
+                            />
+                          </Box>
+                        )}
+                      </Box>
+                    )
+                    : (
+                      <Tooltip title={`Send (${MOD_LABEL}${ENTER_LABEL})`}>
+                        <span>
+                          <IconButton
+                            color="primary"
+                            aria-label="send"
+                            disabled={!sendable || submitFeedback.pending}
+                            aria-busy={submitFeedback.pending || undefined}
+                            sx={TOOLBAR_ICON_BTN}
+                            // Keep the native textarea as UIKit's first responder, and
+                            // commit stationary touch on pointerup when iOS omits the
+                            // trailing synthetic click after stopping scroll momentum.
+                            onPointerDown={(event): void => {
+                              event.preventDefault();
+                              sendTap.onPointerDown(event);
+                            }}
+                            onPointerMove={sendTap.onPointerMove}
+                            onPointerUp={sendTap.onPointerUp}
+                            onPointerCancel={sendTap.onPointerCancel}
+                            onClick={sendTap.onClick}
+                          >
+                            {submitFeedback.progress
+                              ? <CircularProgress size={18} color="inherit" />
+                              : <Send fontSize="small" />}
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                    )}
+                  {
+                    /* Secondary actions, always inline now: Save-draft (always), Jump-to-front
             (with a queue), Force-push (while busy/starting). The narrow-phone ⋮ fold
             is gone — moving the session-level controls (config / auto-scroll / Stop)
-            out to the navbar freed the room that fold used to reclaim. */}
-        {!preparing && <>
-        <Tooltip title="Save as draft">
-          <span>
-            <IconButton
-              aria-label="save as draft"
-              disabled={!sendable}
-              sx={TOOLBAR_ICON_BTN}
-              onClick={saveDraft}
-            >
-              <EditNoteOutlined fontSize="small" />
-            </IconButton>
-          </span>
-        </Tooltip>
-        <Tooltip title="Force push">
-          <span>
-            <IconButton
-              color="warning"
-              aria-label="force push"
-              // Usable while a turn runs (busy/starting) OR the queue is paused —
-              // in both cases ⚡ pushes this message ahead of the held/queued work.
-              disabled={!sendable || !(busy || starting || paused)}
-              sx={TOOLBAR_ICON_BTN}
-              onClick={(e): void => setForceAnchor(e.currentTarget)}
-            >
-              <Bolt fontSize="small" />
-            </IconButton>
-          </span>
-        </Tooltip>
-        {/* Jump-front + Force-push are ALWAYS shown so the send cluster never reflows
+            out to the navbar freed the room that fold used to reclaim. */
+                  }
+                  {!preparing && (
+                    <>
+                      <Tooltip title="Save as draft">
+                        <span>
+                          <IconButton
+                            aria-label="save as draft"
+                            disabled={!sendable}
+                            sx={TOOLBAR_ICON_BTN}
+                            onClick={saveDraft}
+                          >
+                            <EditNoteOutlined fontSize="small" />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                      <Tooltip title="Force push">
+                        <span>
+                          <IconButton
+                            color="warning"
+                            aria-label="force push"
+                            // Usable while a turn runs (busy/starting) OR the queue is paused —
+                            // in both cases ⚡ pushes this message ahead of the held/queued work.
+                            disabled={!sendable ||
+                              !(busy || starting || paused)}
+                            sx={TOOLBAR_ICON_BTN}
+                            onClick={(e): void =>
+                              setForceAnchor(e.currentTarget)}
+                          >
+                            <Bolt fontSize="small" />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                      {
+                        /* Jump-front + Force-push are ALWAYS shown so the send cluster never reflows
             as the queue fills/drains or a turn starts/ends; each is just disabled
             (greyed) when it doesn't apply — Jump-front with no queue to jump, Force-push
-            with no running turn to interrupt. */}
-        <Tooltip title="Jump to front of queue">
-          <span>
-            <IconButton
-              aria-label="jump to front of queue"
-              disabled={!sendable || queue.length === 0}
-              sx={TOOLBAR_ICON_BTN}
-              onClick={jumpToFront}
-            >
-              <VerticalAlignTop fontSize="small" />
-            </IconButton>
-          </span>
-        </Tooltip>
-        {/* Schedule the current content: park it as a draft that the SERVER
-            auto-sends at a future time (fires even with every client offline). */}
-        <Tooltip title="定时发送">
-          <span>
-            <IconButton
-              aria-label="schedule send"
-              disabled={!sendable}
-              sx={TOOLBAR_ICON_BTN}
-              onClick={(): void => setScheduleTarget({ id: undefined, initial: null })}
-            >
-              <Schedule fontSize="small" />
-            </IconButton>
-          </span>
-        </Tooltip>
-        </>}
-        <Tooltip title="Clear composer">
-          <span data-mobile-composer-clear>
-            <IconButton
-              aria-label="clear composer"
-              disabled={!clearable}
-              sx={TOOLBAR_ICON_BTN}
-              onPointerDown={(event): void => event.preventDefault()}
-              onClick={(event): void => setClearComposerAnchor(event.currentTarget)}
-            >
-              <DeleteOutline fontSize="small" />
-            </IconButton>
-          </span>
-        </Tooltip>
-        </Stack>
-        </Box>
-        {touchInput && (
-          <ComposerToolbarSettings
-            open={mobileToolbarSettingsOpen}
-            onClose={(): void => setMobileToolbarSettingsOpen(false)}
-          />
-        )}
-        </>
-        )}
-        {/* (Vim status moved to the app-wide bottom status bar — see App's
-            StatusBar at the very bottom of the window, Zed/VSCode style.) */}
+            with no running turn to interrupt. */
+                      }
+                      <Tooltip title="Jump to front of queue">
+                        <span>
+                          <IconButton
+                            aria-label="jump to front of queue"
+                            disabled={!sendable || queue.length === 0}
+                            sx={TOOLBAR_ICON_BTN}
+                            onClick={jumpToFront}
+                          >
+                            <VerticalAlignTop fontSize="small" />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                      {
+                        /* Schedule the current content: park it as a draft that the SERVER
+            auto-sends at a future time (fires even with every client offline). */
+                      }
+                      <Tooltip title="定时发送">
+                        <span>
+                          <IconButton
+                            aria-label="schedule send"
+                            disabled={!sendable}
+                            sx={TOOLBAR_ICON_BTN}
+                            onClick={(): void =>
+                              setScheduleTarget({
+                                id: undefined,
+                                initial: null,
+                              })}
+                          >
+                            <Schedule fontSize="small" />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                    </>
+                  )}
+                  <Tooltip title="Clear composer">
+                    <span data-mobile-composer-clear>
+                      <IconButton
+                        aria-label="clear composer"
+                        disabled={!clearable}
+                        sx={TOOLBAR_ICON_BTN}
+                        onPointerDown={(event): void => event.preventDefault()}
+                        onClick={(event): void =>
+                          setClearComposerAnchor(event.currentTarget)}
+                      >
+                        <DeleteOutline fontSize="small" />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                </Stack>
+              </Box>
+              {touchInput && (
+                <ComposerToolbarSettings
+                  open={mobileToolbarSettingsOpen}
+                  onClose={(): void => setMobileToolbarSettingsOpen(false)}
+                />
+              )}
+            </>
+          )}
+        {
+          /* (Vim status moved to the app-wide bottom status bar — see App's
+            StatusBar at the very bottom of the window, Zed/VSCode style.) */
+        }
       </Paper>
-      {/* Keep this confirmation non-modal. Even with every FocusTrap option
+      {
+        /* Keep this confirmation non-modal. Even with every FocusTrap option
           disabled, MUI Popover still mounts a Modal and applies its document
           lifecycle; on iOS that ends the focused editor's software-keyboard
-          session. Popper leaves the native first responder untouched. */}
+          session. Popper leaves the native first responder untouched. */
+      }
       <Popper
         open={clearComposerAnchor !== null}
         anchorEl={clearComposerAnchor}
         placement="bottom-end"
         modifiers={[
           { name: "offset", options: { offset: [0, 8] } },
-          { name: "flip", options: { fallbackPlacements: ["top-end", "left"] } },
+          {
+            name: "flip",
+            options: { fallbackPlacements: ["top-end", "left"] },
+          },
           { name: "preventOverflow", options: { padding: 8 } },
         ]}
         sx={{ zIndex: (theme) => theme.zIndex.modal }}
       >
-        <ClickAwayListener onClickAway={(): void => setClearComposerAnchor(null)}>
+        <ClickAwayListener
+          onClickAway={(): void => setClearComposerAnchor(null)}
+        >
           <Paper
             role="dialog"
             aria-modal="false"
@@ -2849,7 +3141,12 @@ export function ComposerWorkspace({
               >
                 Text and attachments in this unsent message will be removed.
               </Typography>
-              <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ mt: 1.5 }}>
+              <Stack
+                direction="row"
+                spacing={1}
+                justifyContent="flex-end"
+                sx={{ mt: 1.5 }}
+              >
                 <Button
                   size="small"
                   color="inherit"
@@ -2941,17 +3238,22 @@ export function ComposerWorkspace({
           </Stack>
         </Box>
       </Popover>
-      {/* Inline-image actions are deliberately non-modal. MUI Popover is built on
+      {
+        /* Inline-image actions are deliberately non-modal. MUI Popover is built on
           Modal/FocusTrap, which steals CM6 focus and closes the iOS keyboard as
           soon as the image is tapped. Popper keeps the active editor and native
-          selection alive while still positioning this toolbar by the image. */}
+          selection alive while still positioning this toolbar by the image. */
+      }
       <Popper
         open={imgSel !== null}
         anchorEl={imgSel?.el ?? null}
         placement="top"
         modifiers={[
           { name: "offset", options: { offset: [0, 8] } },
-          { name: "flip", options: { fallbackPlacements: ["bottom", "right", "left"] } },
+          {
+            name: "flip",
+            options: { fallbackPlacements: ["bottom", "right", "left"] },
+          },
           { name: "preventOverflow", options: { padding: 8 } },
         ]}
         sx={{ zIndex: (t) => t.zIndex.tooltip }}
@@ -2967,8 +3269,10 @@ export function ComposerWorkspace({
               borderColor: "divider",
               boxShadow: 8,
               backgroundImage: "none",
-              bgcolor: (t) =>
-                alpha(t.palette.background.paper, t.palette.mode === "dark" ? 0.74 : 0.82),
+              bgcolor: (t) => alpha(
+                t.palette.background.paper,
+                t.palette.mode === "dark" ? 0.74 : 0.82,
+              ),
               backdropFilter: "blur(16px) saturate(180%)",
               WebkitBackdropFilter: "blur(16px) saturate(180%)",
             }}
@@ -2976,7 +3280,9 @@ export function ComposerWorkspace({
             <Stack
               direction="row"
               alignItems="stretch"
-              divider={<Divider orientation="vertical" flexItem sx={{ my: 0.875 }} />}
+              divider={
+                <Divider orientation="vertical" flexItem sx={{ my: 0.875 }} />
+              }
             >
               <Button
                 color="inherit"
@@ -3004,7 +3310,9 @@ export function ComposerWorkspace({
                 onClick={(): void => {
                   if (imgSel) {
                     editorRef.current?.deleteImage(imgSel.id);
-                    setAttachments((prev) => prev.filter((a) => a.id !== imgSel.id));
+                    setAttachments((prev) =>
+                      prev.filter((a) => a.id !== imgSel.id)
+                    );
                   }
                   closeImgSel();
                 }}
@@ -3016,23 +3324,27 @@ export function ComposerWorkspace({
           </Paper>
         </ClickAwayListener>
       </Popper>
-      {/* Confirm for the session-lifecycle actions. Compact sends the agent's
+      {
+        /* Confirm for the session-lifecycle actions. Compact sends the agent's
           slash-command; Clear is a cowboy session RESET (fresh agent context).
           Both meaningfully change context, so neither fires on a bare tap; Clear
-          is styled destructive (it discards the agent's memory of the chat). */}
+          is styled destructive (it discards the agent's memory of the chat). */
+      }
       <SessionActionConfirmDialog
         action={cmdConfirm}
-        provider={provider}
+        provider={providerName(provider, providerVersion, providerDigest)}
         activeTurn={busy || starting}
         disableRestoreFocus={touchInput && cmdConfirm?.kind === "reset"}
         onClose={(): void => setCmdConfirm(null)}
         onConfirm={confirmSessionAction}
       />
-      {/* Mobile fullscreen compose (the ↗ on touch). A near-full-screen sheet for
+      {
+        /* Mobile fullscreen compose (the ↗ on touch). A near-full-screen sheet for
           comfortable long-form writing — the first-class editor + future home of a
           markdown / rich-text toolbar + preview. Shares the composer's `text` +
           attachments; the inline editor is hidden while this is open (xor), so the
-          shared editorRef points at the one mounted here. */}
+          shared editorRef points at the one mounted here. */
+      }
       {composeFs && (
         <FullscreenComposer
           // SHARE the composer's editor handle so addFiles/submit/clear hit the
@@ -3047,8 +3359,7 @@ export function ComposerWorkspace({
           // the edit overlay) so inline text carries in; markdown stays literal.
           value={text}
           onChange={setText}
-          onSubmit={(): void =>
-            submitWithFeedback(() => setComposeFs(false))}
+          onSubmit={(): void => submitWithFeedback(() => setComposeFs(false))}
           onSaveDraft={(): void => {
             saveDraft();
             setComposeFs(false);
@@ -3085,7 +3396,9 @@ export function ComposerWorkspace({
           onPasteClipboardImages={pasteClipboardImages}
           sessionId={sessionId}
           commands={(): AvailableCommand[] => availableCommands}
-          placeholder={dead ? "Send to resume this session…" : "Message the agent…"}
+          placeholder={dead
+            ? "Send to resume this session…"
+            : "Message the agent…"}
           sendable={sendable}
           attachmentsSlot={fullscreenTrayAttachments.length > 0
             ? (
@@ -3097,9 +3410,11 @@ export function ComposerWorkspace({
             : undefined}
         />
       )}
-      {/* Stop-confirm for the editor's Esc-to-stop (only fires while busy). The
+      {
+        /* Stop-confirm for the editor's Esc-to-stop (only fires while busy). The
           navbar's Stop button keeps its own copy in SessionControls; both reuse
-          StopConfirmDialog and only one is ever open at a time. */}
+          StopConfirmDialog and only one is ever open at a time. */
+      }
       <StopConfirmDialog
         open={cancelOpen}
         onClose={(): void => setCancelOpen(false)}
@@ -3163,13 +3478,19 @@ export function ComposerWorkspace({
             width: { xs: "100%", sm: "auto" },
             minWidth: { xs: 0, sm: 288 },
             color: "text.primary",
-            bgcolor: (theme) =>
-              alpha(theme.palette.background.paper, theme.palette.mode === "dark" ? 0.96 : 0.94),
+            bgcolor: (theme) => alpha(
+              theme.palette.background.paper,
+              theme.palette.mode === "dark" ? 0.96 : 0.94,
+            ),
             backgroundImage: "none",
             border: 1,
             borderColor: "divider",
-            boxShadow: (theme) =>
-              `0 12px 36px ${alpha(theme.palette.common.black, theme.palette.mode === "dark" ? 0.42 : 0.18)}`,
+            boxShadow: (theme) => `0 12px 36px ${
+              alpha(
+                theme.palette.common.black,
+                theme.palette.mode === "dark" ? 0.42 : 0.18,
+              )
+            }`,
             backdropFilter: "blur(24px) saturate(160%)",
             WebkitBackdropFilter: "blur(24px) saturate(160%)",
           },
@@ -3712,7 +4033,8 @@ function PendingPanel({
   // only surface the status badge. Read live so it tracks the toggle.
   const queueHeld = useStoreSelector((snapshot) =>
     kind === "queued" &&
-    (snapshot.sessions.find((session) => session.id === sessionId)?.paused ?? false)
+    (snapshot.sessions.find((session) => session.id === sessionId)?.paused ??
+      false)
   );
   // Reordering 0/1 items is meaningless — drop out of the mode (and hide its
   // toggle) so a cleared/sent-down panel never sits stuck in an empty mode.
@@ -3721,14 +4043,18 @@ function PendingPanel({
   }, [count, reordering]);
   useLayoutEffect(() => {
     const list = scrollRef.current;
-    const region = list?.closest<HTMLElement>(`[data-desktop-region='prompt.${kind}']`);
+    const region = list?.closest<HTMLElement>(
+      `[data-desktop-region='prompt.${kind}']`,
+    );
     if (!desktop || !list || !region) return undefined;
     region.dataset.desktopReordering = reordering ? "true" : "false";
     return undefined;
   }, [desktop, kind, reordering]);
   useEffect(() => {
     const list = scrollRef.current;
-    const region = list?.closest<HTMLElement>(`[data-desktop-region='prompt.${kind}']`);
+    const region = list?.closest<HTMLElement>(
+      `[data-desktop-region='prompt.${kind}']`,
+    );
     if (!desktop || !list || !region) return undefined;
     const onToggle = (): void => {
       const next = region.dataset.desktopReordering !== "true";
@@ -3790,7 +4116,10 @@ function PendingPanel({
       const delta = detail?.delta;
       if (!id || (delta !== -1 && delta !== 1)) return;
       const current = sortable.order.indexOf(id);
-      const next = Math.max(0, Math.min(sortable.order.length - 1, current + delta));
+      const next = Math.max(
+        0,
+        Math.min(sortable.order.length - 1, current + delta),
+      );
       if (current < 0 || current === next) return;
       const order = [...sortable.order];
       order.splice(current, 1);
@@ -3804,7 +4133,8 @@ function PendingPanel({
       );
     };
     list.addEventListener("cowboy:desktop-reorder", onKeyboardReorder);
-    return () => list.removeEventListener("cowboy:desktop-reorder", onKeyboardReorder);
+    return () =>
+      list.removeEventListener("cowboy:desktop-reorder", onKeyboardReorder);
   }, [desktop, kind, sessionId, sortable.order]);
   const noun = kind === "queued" ? "Queued Message" : "Draft";
   const mobileFloatingEdit = !desktop && editingId !== null && keyboardOpen;
@@ -3835,9 +4165,10 @@ function PendingPanel({
           border: 0,
           bgcolor: "transparent",
           boxShadow: "none",
-          "& [data-mobile-pending-row]:not([data-mobile-pending-row-editing='true'])": {
-            display: "none",
-          },
+          "& [data-mobile-pending-row]:not([data-mobile-pending-row-editing='true'])":
+            {
+              display: "none",
+            },
         }),
         ...(desktop && {
           flexShrink: 0,
@@ -3866,9 +4197,11 @@ function PendingPanel({
           minHeight: mobileComposerPanelHeaderMinHeight,
         }}
       >
-        {/* Match PlanDock: the whole summary area is one disclosure button, not
+        {
+          /* Match PlanDock: the whole summary area is one disclosure button, not
             just the chevron/label. Bulk and reorder actions stay separate sibling
-            controls, so tapping them never also folds the panel. */}
+            controls, so tapping them never also folds the panel. */
+        }
         <ButtonBase
           {...toggleTap}
           disableRipple
@@ -3876,7 +4209,9 @@ function PendingPanel({
           data-desktop-collapse-toggle={desktop ? kind : undefined}
           aria-label={editingId !== null
             ? `Finish editing ${noun.toLowerCase()}`
-            : `${visuallyCollapsed ? "Expand" : "Collapse"} ${noun.toLowerCase()}s`}
+            : `${
+              visuallyCollapsed ? "Expand" : "Collapse"
+            } ${noun.toLowerCase()}s`}
           aria-expanded={!visuallyCollapsed}
           sx={{
             alignSelf: "stretch",
@@ -3893,7 +4228,14 @@ function PendingPanel({
             "&:active": { bgcolor: "action.hover" },
           }}
         >
-          <Box sx={{ width: 40, display: "inline-flex", justifyContent: "center", flexShrink: 0 }}>
+          <Box
+            sx={{
+              width: 40,
+              display: "inline-flex",
+              justifyContent: "center",
+              flexShrink: 0,
+            }}
+          >
             {editingId !== null
               ? <EditOutlined fontSize="small" color="primary" />
               : visuallyCollapsed
@@ -3932,8 +4274,10 @@ function PendingPanel({
               />
             </Suspense>
           )}
-          {/* Why-it's-held badge: the queue is manually paused, so it won't drain
-              until the user resumes (the ⏸ toggle in the nav/status bar). */}
+          {
+            /* Why-it's-held badge: the queue is manually paused, so it won't drain
+              until the user resumes (the ⏸ toggle in the nav/status bar). */
+          }
           {queueHeld && (
             <Box
               sx={{
@@ -3949,7 +4293,10 @@ function PendingPanel({
                 flexShrink: 0,
               }}
             >
-              <Typography variant="caption" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
+              <Typography
+                variant="caption"
+                sx={{ fontWeight: 700, lineHeight: 1.2 }}
+              >
                 Paused
               </Typography>
             </Box>
@@ -3961,11 +4308,9 @@ function PendingPanel({
                 <Suspense fallback={null}>
                   <DesktopRegionShortcut
                     shortcut="Mod+Y"
-                    title={
-                      visuallyCollapsed
-                        ? "Open and focus queue"
-                        : "Close queue when focused"
-                    }
+                    title={visuallyCollapsed
+                      ? "Open and focus queue"
+                      : "Close queue when focused"}
                     singleKeycap={`${MOD_LABEL}Y`}
                   />
                 </Suspense>
@@ -4038,10 +4383,12 @@ function PendingPanel({
             kind === "queued" ? clearQueue(sessionId) : clearDrafts(sessionId)}
         />
       </Stack>
-      {/* Match PlanDock's disclosure motion. Non-editing rows stay mounted for
+      {
+        /* Match PlanDock's disclosure motion. Non-editing rows stay mounted for
           preview/sort stability, but an active edit forces the panel open until
           its transaction is saved or discarded. Hiding an unresolved edit would
-          strand Mobile's sole composer ownership and remove the main input too. */}
+          strand Mobile's sole composer ownership and remove the main input too. */
+      }
       <Collapse
         in={!visuallyCollapsed}
         sx={{
@@ -4092,18 +4439,17 @@ function PendingPanel({
             // A LOCAL optimistic draft (carries `status`) renders a lightweight
             // row with no grip / edit / reorder — it isn't a server item yet.
             const optimistic = m.status !== undefined;
-            const leadingHandle = editingId !== m.id && !optimistic && count > 1;
+            const leadingHandle = editingId !== m.id && !optimistic &&
+              count > 1;
             const jumpBadgeSx = {
               position: "absolute",
               zIndex: 1,
               pointerEvents: "none",
-              ...(reordering
-                ? { top: 0, right: 0 }
-                : {
-                  top: "50%",
-                  left: "50%",
-                  transform: "translate(-50%, -50%)",
-                }),
+              ...(reordering ? { top: 0, right: 0 } : {
+                top: "50%",
+                left: "50%",
+                transform: "translate(-50%, -50%)",
+              }),
               [ROW_ACTIONS_INLINE]: {
                 top: 0,
                 right: 0,
@@ -4115,13 +4461,15 @@ function PendingPanel({
               <Stack
                 key={m.id}
                 data-mobile-pending-row={!desktop ? "true" : undefined}
-                data-mobile-pending-row-editing={
-                  !desktop && editingId === m.id ? "true" : undefined
-                }
+                data-mobile-pending-row-editing={!desktop && editingId === m.id
+                  ? "true"
+                  : undefined}
                 {...(desktop
                   ? {
                     "data-desktop-item": m.id,
-                    "data-desktop-current": editingId === m.id ? "true" : undefined,
+                    "data-desktop-current": editingId === m.id
+                      ? "true"
+                      : undefined,
                     tabIndex: -1,
                   }
                   : {})}
@@ -4152,7 +4500,10 @@ function PendingPanel({
                       height: 44,
                       flexShrink: 0,
                       display: reordering || desktop ? "inline-flex" : "none",
-                      [ROW_ACTIONS_INLINE]: { display: "inline-flex", width: 44 },
+                      [ROW_ACTIONS_INLINE]: {
+                        display: "inline-flex",
+                        width: 44,
+                      },
                     }}
                   >
                     <IconButton
@@ -4209,7 +4560,8 @@ function PendingPanel({
                           setEditingId(m.id);
                         }}
                         onEditDone={(): void => {
-                          const restoreFocus = !suppressEditFocusRestoreRef.current;
+                          const restoreFocus = !suppressEditFocusRestoreRef
+                            .current;
                           suppressEditFocusRestoreRef.current = false;
                           setEditingId(null);
                           if (restoreFocus) {
@@ -4244,16 +4596,23 @@ function PendingPanel({
         <DialogTitle>Save edits before closing?</DialogTitle>
         <DialogContent>
           <DialogContentText>
-            This {kind === "queued" ? "queued message" : "draft"} has unsaved changes.
-            Save or discard them before collapsing the panel.
+            This {kind === "queued" ? "queued message" : "draft"}{" "}
+            has unsaved changes. Save or discard them before collapsing the
+            panel.
           </DialogContentText>
         </DialogContent>
         <DialogActions sx={{ flexWrap: "wrap", gap: 0.5 }}>
-          <Button color="inherit" onClick={(): void => setConfirmCollapseEdit(false)}>
+          <Button
+            color="inherit"
+            onClick={(): void => setConfirmCollapseEdit(false)}
+          >
             Keep editing
             <Kbd keys="Esc" />
           </Button>
-          <Button color="error" onClick={(): void => settleEditAndCollapse("discard")}>
+          <Button
+            color="error"
+            onClick={(): void => settleEditAndCollapse("discard")}
+          >
             Discard
           </Button>
           <Button
@@ -4339,7 +4698,9 @@ function PendingRow({
   const updateEditDraft = (next: string): void => {
     const previous = editTextRef.current;
     editTextRef.current = next;
-    setEditAttachments((current) => reconcileDeletedInlineImages(previous, next, current));
+    setEditAttachments((current) =>
+      reconcileDeletedInlineImages(previous, next, current)
+    );
     setDraft(next);
   };
   const editorRef = useRef<ComposerEditorHandle>(null);
@@ -4384,7 +4745,9 @@ function PendingRow({
   // editor surface, so it gets vim too.
   const vim = useVimSetting();
   const [overlayOpen, setOverlayOpen] = useState(false);
-  const [mobileToolbarSettingsOpen, setMobileToolbarSettingsOpen] = useState(false);
+  const [mobileToolbarSettingsOpen, setMobileToolbarSettingsOpen] = useState(
+    false,
+  );
   const [hasEditSelection, setHasEditSelection] = useState(false);
   const mobileToolbarIds = useComposerToolbar();
   const overlayEditorRef = useRef<ComposerEditorHandle>(null);
@@ -4461,7 +4824,9 @@ function PendingRow({
     // button so keyboard/confirm callbacks cannot bypass the disabled state.
     if (!connected || status !== "busy") return;
     if (editing) {
-      await completePendingDelivery(() => forcePushQueued(sessionId, message.id));
+      await completePendingDelivery(() =>
+        forcePushQueued(sessionId, message.id)
+      );
     } else {
       await forcePushQueued(sessionId, message.id);
     }
@@ -4478,7 +4843,10 @@ function PendingRow({
         placement="bottom-end"
         modifiers={[
           { name: "offset", options: { offset: [0, 8] } },
-          { name: "flip", options: { fallbackPlacements: ["top-end", "left"] } },
+          {
+            name: "flip",
+            options: { fallbackPlacements: ["top-end", "left"] },
+          },
           { name: "preventOverflow", options: { padding: 8 } },
         ]}
         sx={{ zIndex: (theme) => theme.zIndex.modal }}
@@ -4605,11 +4973,13 @@ function PendingRow({
   // Register one stable controller for the lifetime of the active edit. Its
   // methods read this ref, so the panel header always resolves the latest text
   // and attachments without turning every keystroke into parent React state.
-  const latestEditTransactionRef = useRef<{
-    dirty: boolean;
-    save: () => void;
-    discard: () => void;
-  } | null>(null);
+  const latestEditTransactionRef = useRef<
+    {
+      dirty: boolean;
+      save: () => void;
+      discard: () => void;
+    } | null
+  >(null);
   latestEditTransactionRef.current = {
     dirty: editDirty,
     save: saveEdit,
@@ -4831,23 +5201,21 @@ function PendingRow({
           tabIndex={desktop ? -1 : undefined}
           data-mobile-focus-composer={touchInput ? "true" : undefined}
           data-mobile-pending-editor={touchInput ? "true" : undefined}
-          data-mobile-keyboard-open={
-            touchInput && keyboardOpen ? "true" : undefined
-          }
+          data-mobile-keyboard-open={touchInput && keyboardOpen
+            ? "true"
+            : undefined}
           sx={{
             position: "relative",
             overflow: "hidden",
-            ...(desktop
-              ? { p: 0.75 }
-              : {
-                borderRadius: mobileComposerPanelFrameSx.borderRadius,
-                bgcolor: "transparent",
-                borderColor: (theme) => alpha(theme.palette.primary.main, 0.42),
-                transition:
-                  `border-color ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, background-color ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, box-shadow ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}`,
-                "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within)":
-                  mobileFocusedComposerSurfaceSx,
-              }),
+            ...(desktop ? { p: 0.75 } : {
+              borderRadius: mobileComposerPanelFrameSx.borderRadius,
+              bgcolor: "transparent",
+              borderColor: (theme) => alpha(theme.palette.primary.main, 0.42),
+              transition:
+                `border-color ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, background-color ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, box-shadow ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}`,
+              "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within)":
+                mobileFocusedComposerSurfaceSx,
+            }),
           }}
           onKeyDownCapture={desktop
             ? (event): void => {
@@ -4879,8 +5247,10 @@ function PendingRow({
               />
             </Suspense>
           )}
-          {/* Inline editor — hidden while the focused overlay owns the edit so only
-              ONE editor is mounted at a time (shared `draft`, no uncontrolled desync). */}
+          {
+            /* Inline editor — hidden while the focused overlay owns the edit so only
+              ONE editor is mounted at a time (shared `draft`, no uncontrolled desync). */
+          }
           {!overlayOpen && (
             <PlatformComposerEditor
               ref={editorRef}
@@ -4908,9 +5278,8 @@ function PendingRow({
               }}
             />
           )}
-          {!overlayOpen && (desktop
-            ? desktopEditBar
-            : (
+          {!overlayOpen &&
+            (desktop ? desktopEditBar : (
               <MobileComposerAccessoryDock
                 embedded
                 mode={hasEditSelection ? "selection" : "insert"}
@@ -4935,7 +5304,9 @@ function PendingRow({
                         </MobileComposerAccessoryButton>
                         {onSchedule && (
                           <MobileComposerAccessoryButton
-                            title={message.schedule ? "Reschedule send" : "Schedule send"}
+                            title={message.schedule
+                              ? "Reschedule send"
+                              : "Schedule send"}
                             disabled={!editSendable}
                             onClick={(): void => {
                               haptic();
@@ -4951,7 +5322,8 @@ function PendingRow({
                       <MobileComposerAccessoryButton
                         title="Force push"
                         color="warning"
-                        disabled={!editSendable || !connected || status !== "busy"}
+                        disabled={!editSendable || !connected ||
+                          status !== "busy"}
                         onClick={(event): void => {
                           haptic();
                           setConfirmAnchor(event.currentTarget);
@@ -4979,11 +5351,13 @@ function PendingRow({
             ))}
         </Paper>
         {forcePushConfirmation}
-        {/* Focused edit overlay: the row's expanded edit reuses the SAME component
+        {
+          /* Focused edit overlay: the row's expanded edit reuses the SAME component
             as the main input's expand — FullscreenComposer (the toolbar registry,
             inline images, native caret) — NOT a bespoke DetentSheet. Desktop keeps
             explicit Done/discard semantics. Mobile auto-commits when its keyboard
-            is dismissed and immediately restores the ordinary pending card. */}
+            is dismissed and immediately restores the ordinary pending card. */
+        }
         {overlayOpen && (
           <FullscreenComposer
             editorRef={overlayEditorRef}
@@ -5032,7 +5406,9 @@ function PendingRow({
                 <AttachmentPreviews
                   attachments={editAttachments.filter((a) => !a.isImage)}
                   onRemove={(id): void =>
-                    setEditAttachments((prev) => prev.filter((a) => a.id !== id))}
+                    setEditAttachments((prev) =>
+                      prev.filter((a) => a.id !== id)
+                    )}
                 />
               )
               : undefined}
@@ -5051,7 +5427,8 @@ function PendingRow({
           <DialogTitle>Discard message edits?</DialogTitle>
           <DialogContent>
             <DialogContentText>
-              Your unsaved changes to this {kind === "queued" ? "queued message" : "draft"} will be lost.
+              Your unsaved changes to this{" "}
+              {kind === "queued" ? "queued message" : "draft"} will be lost.
             </DialogContentText>
           </DialogContent>
           <DialogActions>
@@ -5128,7 +5505,10 @@ function PendingRow({
         onClick: (): void => setConfirmRemove(true),
       },
     ];
-  const secondaryShortcut: Record<string, { badge: string; description: string }> = {
+  const secondaryShortcut: Record<
+    string,
+    { badge: string; description: string }
+  > = {
     edit: { badge: "L", description: "L / Enter · edit focused item" },
     schedule: { badge: "T", description: "T · schedule focused item" },
     move: { badge: "M", description: "M · move focused item" },
@@ -5179,8 +5559,10 @@ function PendingRow({
       : "Force push (interrupt & send)";
     primary = (
       <Tooltip title={forcePushTitle}>
-        {/* MUI disabled buttons do not emit pointer events; the span keeps the
-            reason discoverable while the action itself remains inert. */}
+        {
+          /* MUI disabled buttons do not emit pointer events; the span keeps the
+            reason discoverable while the action itself remains inert. */
+        }
         <span>
           <IconButton
             data-desktop-item-action="default"
@@ -5222,7 +5604,9 @@ function PendingRow({
       <Box
         data-pending-edit-target
         onClick={(event): void => {
-          const target = event.target instanceof HTMLElement ? event.target : null;
+          const target = event.target instanceof HTMLElement
+            ? event.target
+            : null;
           if (target?.closest("[data-pending-content-action]")) return;
           beginEdit();
         }}
@@ -5234,9 +5618,11 @@ function PendingRow({
         {message.attachments.length > 0 && (
           <QueuedAttachmentChips attachments={message.attachments} />
         )}
-        {/* Scheduled-draft badge: a calm info chip showing when it auto-fires;
+        {
+          /* Scheduled-draft badge: a calm info chip showing when it auto-fires;
             tap to reschedule/cancel. Info (blue), never accent/red — a pending
-            schedule is a notice, not a failure (conventions/ui.md §4). */}
+            schedule is a notice, not a failure (conventions/ui.md §4). */
+        }
         {message.schedule && (
           <Chip
             data-pending-content-action="schedule"
@@ -5277,19 +5663,22 @@ function PendingRow({
               <Box component="span" sx={{ display: "inline-flex" }}>
                 {desktop
                   ? (
-                    <Suspense fallback={
-                      <IconButton
-                        size="small"
-                        aria-label={a.label}
-                        data-desktop-item-action={a.key}
-                        onClick={a.onClick}
-                      >
-                        {a.icon}
-                      </IconButton>
-                    }>
+                    <Suspense
+                      fallback={
+                        <IconButton
+                          size="small"
+                          aria-label={a.label}
+                          data-desktop-item-action={a.key}
+                          onClick={a.onClick}
+                        >
+                          {a.icon}
+                        </IconButton>
+                      }
+                    >
                       <DesktopContextShortcut
                         badge={secondaryShortcut[a.key]?.badge ?? ""}
-                        shortcut={secondaryShortcut[a.key]?.description ?? a.label}
+                        shortcut={secondaryShortcut[a.key]?.description ??
+                          a.label}
                         itemScoped
                         placement="corner"
                       >
@@ -5421,12 +5810,16 @@ function StopConfirmDialog({
       <DialogTitle>Stop the running turn?</DialogTitle>
       <DialogContent>
         <DialogContentText>
-          The agent is still working. Stopping ends the current turn; whatever it
-          produced so far stays in the transcript.
+          The agent is still working. Stopping ends the current turn; whatever
+          it produced so far stays in the transcript.
         </DialogContentText>
       </DialogContent>
       <DialogActions>
-        <Button color="inherit" onClick={onClose} sx={{ textTransform: "none" }}>
+        <Button
+          color="inherit"
+          onClick={onClose}
+          sx={{ textTransform: "none" }}
+        >
           Keep running
           <Kbd keys="Esc" />
         </Button>
@@ -5492,7 +5885,9 @@ export function AutoScrollAndStop({
                 minWidth: 80,
               })}
             >
-              <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Stop</Box>
+              <Box component="span" sx={{ flex: 1, textAlign: "left" }}>
+                Stop
+              </Box>
               <ShortcutKeycap
                 keyLabel="S"
                 variant="global"
@@ -5520,9 +5915,11 @@ export function AutoScrollAndStop({
   }
   return (
     <>
-      {/* Auto-scroll / follow toggle. Default ON (primary = following the latest);
+      {
+        /* Auto-scroll / follow toggle. Default ON (primary = following the latest);
           tap while inactive → scroll to bottom + follow again; tap while active →
-          stop following. Hover-only tooltip so a tap doesn't pop the bubble. */}
+          stop following. Hover-only tooltip so a tap doesn't pop the bubble. */
+      }
       <Tooltip
         title={following
           ? "Auto-scroll: on"
@@ -5564,9 +5961,11 @@ export function AutoScrollAndStop({
           <VerticalAlignBottom fontSize={size} />
         </IconButton>
       </Tooltip>
-      {/* Stop is ALWAYS shown so the row doesn't reflow when a turn starts/ends —
+      {
+        /* Stop is ALWAYS shown so the row doesn't reflow when a turn starts/ends —
           just disabled (greyed) when there's no running turn. <span> lets the
-          Tooltip attach over the disabled button. */}
+          Tooltip attach over the disabled button. */
+      }
       <Tooltip title="Stop">
         <span>
           <IconButton
@@ -5619,7 +6018,8 @@ export function SessionControls({
     snapshot.configOptions.get(sessionId) ?? EMPTY_CONFIG_OPTIONS
   );
   const session = useStoreSelector(
-    (snapshot) => snapshot.sessions.find((candidate) => candidate.id === sessionId),
+    (snapshot) =>
+      snapshot.sessions.find((candidate) => candidate.id === sessionId),
     sameComposerSheetSession,
   );
   const timelineState = useStoreSelector(
@@ -5630,31 +6030,31 @@ export function SessionControls({
   const [sheetOpen, setSheetOpen] = useState(false);
   const dead = status === "exited" || status === "crashed" ||
     status === "interrupted";
+  const optionPresentations = useMemo(
+    () =>
+      providerConfigOptionPresentations(
+        session?.provider,
+        session?.provider_version,
+        session?.provider_generation_digest,
+      ),
+    [
+      session?.provider,
+      session?.provider_generation_digest,
+      session?.provider_version,
+    ],
+  );
   // Same fixed display order as the old inline chip row, so the sheet's selectors
   // never reshuffle between config_option_update notifications.
   const options = useMemo(() => {
-    const order = [
-      "mode",
-      "session_mode",
-      "permission_mode",
-      "model",
-      "deepseek_context",
-      "deepseek_cache_protection",
-      "effort",
-      "reasoning_effort",
-    ];
-    return providerConfigOptions(session?.provider, configOptions).sort((a, b) => {
-      const ai = order.indexOf(a.id);
-      const bi = order.indexOf(b.id);
-      if (ai === -1 && bi === -1) return a.id.localeCompare(b.id);
-      if (ai === -1) return 1;
-      if (bi === -1) return -1;
-      return ai - bi;
-    });
-  }, [configOptions, session?.provider]);
-  const contextBudgetAvailable = options.some((option) =>
-    option.id === "deepseek_context"
-  );
+    return providerConfigOptions(session?.provider, configOptions).sort(
+      (a, b) => {
+        const ai = providerConfigOptionOrder(a, optionPresentations.get(a.id));
+        const bi = providerConfigOptionOrder(b, optionPresentations.get(b.id));
+        if (ai === bi) return a.id.localeCompare(b.id);
+        return ai - bi;
+      },
+    );
+  }, [configOptions, optionPresentations, session?.provider]);
   const showSkeleton = !dead && options.length === 0 &&
     (status === "starting" || status === "running");
   const hasConfig = showSkeleton || options.length > 0;
@@ -5664,8 +6064,15 @@ export function SessionControls({
         "compact",
         session?.provider ?? "",
         timelineState.availableCommands,
+        session?.provider_version,
+        session?.provider_generation_digest,
       ),
-    [session?.provider, timelineState.availableCommands],
+    [
+      session?.provider,
+      session?.provider_version,
+      session?.provider_generation_digest,
+      timelineState.availableCommands,
+    ],
   );
   const clearAction = useMemo(
     () =>
@@ -5673,13 +6080,22 @@ export function SessionControls({
         "clear",
         session?.provider ?? "",
         timelineState.availableCommands,
+        session?.provider_version,
+        session?.provider_generation_digest,
       ),
-    [session?.provider, timelineState.availableCommands],
+    [
+      session?.provider,
+      session?.provider_version,
+      session?.provider_generation_digest,
+      timelineState.availableCommands,
+    ],
   );
   const runSessionAction = (action: SessionAction): Promise<void> => {
     haptic();
     if (action.kind === "reset") return resetSession(sessionId);
-    if (action.command !== undefined) return submitPrompt(sessionId, action.command, []);
+    if (action.command !== undefined) {
+      return submitPrompt(sessionId, action.command, []);
+    }
     return Promise.resolve();
   };
   return (
@@ -5688,7 +6104,11 @@ export function SessionControls({
         <Tooltip title="Options">
           <IconButton
             aria-label="options"
-            disabled={dead && !contextBudgetAvailable}
+            disabled={providerConfigSurfaceDisabled(
+              status,
+              options,
+              optionPresentations,
+            )}
             onPointerDown={(): void => {
               // Session settings lives in the navbar, outside the Composer's
               // focus region. Release the active Mobile editor while the
@@ -5708,8 +6128,10 @@ export function SessionControls({
           </IconButton>
         </Tooltip>
       )}
-      {/* Auto-scroll + Stop ride the navbar on MOBILE; desktop puts them in the
-          bottom status bar instead (see AppStatusBar), so gate them to touch here. */}
+      {
+        /* Auto-scroll + Stop ride the navbar on MOBILE; desktop puts them in the
+          bottom status bar instead (see AppStatusBar), so gate them to touch here. */
+      }
       {touchInput && (
         <AutoScrollAndStop
           sessionId={sessionId}
@@ -5717,12 +6139,14 @@ export function SessionControls({
           projection={projection}
         />
       )}
-      {/* Portal to <body>: SessionControls lives inside the navbar (a low z-index
+      {
+        /* Portal to <body>: SessionControls lives inside the navbar (a low z-index
           stacking context), but the mobile config sheet is a NON-portaled DetentSheet
           (position:fixed + zIndex.modal, rendered inline). Mounted in the navbar it
           would be trapped BELOW the floating composer (its own higher stacking
           context), which then bleeds through the open sheet. Portaling lifts it to the
-          top stacking context so it covers everything, like every other app sheet. */}
+          top stacking context so it covers everything, like every other app sheet. */
+      }
       {createPortal(
         <ComposerSheet
           open={sheetOpen}
@@ -5730,6 +6154,7 @@ export function SessionControls({
           session={session}
           options={options}
           loading={showSkeleton}
+          status={status}
           dead={dead}
           compacting={status === "busy" && timelineState.compactingTail}
           compactAction={compactAction}
@@ -5763,6 +6188,7 @@ function ComposerSheet({
   session,
   options,
   loading,
+  status,
   dead,
   compacting,
   compactAction,
@@ -5777,6 +6203,7 @@ function ComposerSheet({
   session: SessionMeta | undefined;
   options: ConfigOption[];
   loading: boolean;
+  status: Status;
   dead: boolean;
   compacting: boolean;
   compactAction: SessionAction | null;
@@ -5791,7 +6218,25 @@ function ComposerSheet({
   const useSheetSurface = useMediaQuery(
     "(max-width: 767.95px), (min-width: 768px) and (max-width: 1023.95px) and (pointer: coarse)",
   );
-  const recommendedPresets = runConfigPresets(session?.provider, options);
+  const recommendedPresets = runConfigPresets(
+    session?.provider,
+    options,
+    session?.provider_version,
+    session?.provider_generation_digest,
+  );
+  const optionPresentations = useMemo(
+    () =>
+      providerConfigOptionPresentations(
+        session?.provider,
+        session?.provider_version,
+        session?.provider_generation_digest,
+      ),
+    [
+      session?.provider,
+      session?.provider_generation_digest,
+      session?.provider_version,
+    ],
+  );
   const activePreset = activeRunConfigPreset(recommendedPresets, options);
   const [customizeAgent, setCustomizeAgent] = useState(false);
   const [sessionActionsExpanded, setSessionActionsExpanded] = useState(false);
@@ -5857,7 +6302,13 @@ function ComposerSheet({
         ? (
           editingTitle
             ? (
-              <Box sx={{ width: "100%", display: "flex", justifyContent: "center" }}>
+              <Box
+                sx={{
+                  width: "100%",
+                  display: "flex",
+                  justifyContent: "center",
+                }}
+              >
                 <FloatingActionIsland maxWidth={54}>
                   <ButtonBase
                     aria-label="save session title"
@@ -5888,12 +6339,20 @@ function ComposerSheet({
         )
         : undefined}
       title={useSheetSurface ? undefined : (
-        <Stack direction="row" alignItems="center" justifyContent="space-between">
+        <Stack
+          direction="row"
+          alignItems="center"
+          justifyContent="space-between"
+        >
           <Typography variant="h6" component="span" sx={{ fontWeight: 700 }}>
             Session settings
           </Typography>
           <Box sx={{ position: "relative", display: "inline-flex" }}>
-            <IconButton aria-label="close session settings" onClick={close} size="small">
+            <IconButton
+              aria-label="close session settings"
+              onClick={close}
+              size="small"
+            >
               <Close fontSize="small" />
             </IconButton>
             <Kbd keys="Esc" floating />
@@ -5987,13 +6446,20 @@ function ComposerSheet({
                 <Stack spacing={1.25} sx={{ mt: 1.25 }}>
                   {recommendedPresets.length > 0 && (
                     <>
-                      <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        sx={{ fontWeight: 700 }}
+                      >
                         Recommended
                       </Typography>
                       <Box
                         sx={{
                           display: "grid",
-                          gridTemplateColumns: { xs: "1fr", sm: "repeat(2, minmax(0, 1fr))" },
+                          gridTemplateColumns: {
+                            xs: "1fr",
+                            sm: "repeat(2, minmax(0, 1fr))",
+                          },
                           gap: 1,
                         }}
                       >
@@ -6006,7 +6472,12 @@ function ComposerSheet({
                               aria-pressed={selected}
                               onClick={(): void => {
                                 haptic();
-                                for (const change of runConfigPresetChanges(preset, options)) {
+                                for (
+                                  const change of runConfigPresetChanges(
+                                    preset,
+                                    options,
+                                  )
+                                ) {
                                   onSelectOption(change.configId, change.value);
                                 }
                                 setCustomizeAgent(false);
@@ -6019,10 +6490,16 @@ function ComposerSheet({
                                 // the other actions in this settings sheet.
                                 borderRadius: 1,
                                 border: 1,
-                                borderColor: selected ? "primary.main" : "divider",
-                                bgcolor: (theme) => selected
-                                  ? alpha(theme.palette.primary.main, 0.13)
-                                  : alpha(theme.palette.background.default, 0.34),
+                                borderColor: selected
+                                  ? "primary.main"
+                                  : "divider",
+                                bgcolor: (theme) =>
+                                  selected
+                                    ? alpha(theme.palette.primary.main, 0.13)
+                                    : alpha(
+                                      theme.palette.background.default,
+                                      0.34,
+                                    ),
                                 textAlign: "left",
                                 justifyContent: "flex-start",
                                 "&:active": { transform: "scale(0.99)" },
@@ -6030,15 +6507,32 @@ function ComposerSheet({
                               }}
                             >
                               <Box sx={{ flex: 1, minWidth: 0 }}>
-                                <Stack direction="row" spacing={0.75} alignItems="center">
-                                  <Typography variant="body2" sx={{ fontWeight: 750 }}>
+                                <Stack
+                                  direction="row"
+                                  spacing={0.75}
+                                  alignItems="center"
+                                >
+                                  <Typography
+                                    variant="body2"
+                                    sx={{ fontWeight: 750 }}
+                                  >
                                     {preset.name}
                                   </Typography>
                                   {preset.isDefault && (
-                                    <Chip label="Default" size="small" color="primary" variant="outlined" sx={{ height: 20, fontSize: "0.625rem" }} />
+                                    <Chip
+                                      label="Default"
+                                      size="small"
+                                      color="primary"
+                                      variant="outlined"
+                                      sx={{ height: 20, fontSize: "0.625rem" }}
+                                    />
                                   )}
                                 </Stack>
-                                <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.2 }}>
+                                <Typography
+                                  variant="caption"
+                                  color="text.secondary"
+                                  sx={{ display: "block", mt: 0.2 }}
+                                >
                                   {preset.detail}
                                 </Typography>
                               </Box>
@@ -6066,26 +6560,34 @@ function ComposerSheet({
                         <ExpandMore
                           fontSize="small"
                           sx={{
-                            transform: showAgentDetails ? "rotate(180deg)" : "none",
-                            transition: (theme) => theme.transitions.create("transform"),
+                            transform: showAgentDetails
+                              ? "rotate(180deg)"
+                              : "none",
+                            transition: (theme) =>
+                              theme.transitions.create("transform"),
                           }}
                         />
                       </ButtonBase>
                     </>
                   )}
-                  <Collapse in={showAgentDetails} unmountOnExit={recommendedPresets.length > 0}>
-                    <Stack spacing={2} sx={{ pt: recommendedPresets.length > 0 ? 0.5 : 0 }}>
+                  <Collapse
+                    in={showAgentDetails}
+                    unmountOnExit={recommendedPresets.length > 0}
+                  >
+                    <Stack
+                      spacing={2}
+                      sx={{ pt: recommendedPresets.length > 0 ? 0.5 : 0 }}
+                    >
                       {options.map((opt) => (
                         <ConfigSheetDropdown
                           key={opt.id}
                           option={opt}
-                          disabled={
-                            opt.id === "deepseek_context" ||
-                              opt.id === "deepseek_cache_protection"
-                              ? status === "busy" || status === "starting"
-                              : dead
-                          }
-                          onSelect={(value): void => onSelectOption(opt.id, value)}
+                          disabled={providerConfigOptionDisabled(
+                            status,
+                            optionPresentations.get(opt.id),
+                          )}
+                          onSelect={(value): void =>
+                            onSelectOption(opt.id, value)}
                         />
                       ))}
                     </Stack>
@@ -6097,8 +6599,13 @@ function ComposerSheet({
       )}
       <SessionActionConfirmDialog
         action={cmdConfirm}
-        provider={session?.provider ?? ""}
-        activeTurn={session?.status === "busy" || session?.status === "starting"}
+        provider={providerName(
+          session?.provider ?? "",
+          session?.provider_version,
+          session?.provider_generation_digest,
+        )}
+        activeTurn={session?.status === "busy" ||
+          session?.status === "starting"}
         onClose={(): void => setCmdConfirm(null)}
         onConfirm={confirmSessionAction}
       />
@@ -6140,7 +6647,10 @@ function compactCacheTokens(tokens: number | undefined): string {
 }
 
 function compactCacheDuration(milliseconds: number | undefined): string {
-  if (milliseconds === undefined || !Number.isFinite(milliseconds) || milliseconds <= 0) {
+  if (
+    milliseconds === undefined || !Number.isFinite(milliseconds) ||
+    milliseconds <= 0
+  ) {
     return "";
   }
   const totalMinutes = Math.max(1, Math.round(milliseconds / 60_000));
@@ -6196,13 +6706,23 @@ function SessionInfoSection({
   const contextPercent = hasContext
     ? Math.min(100, Math.max(0, contextUsed / contextSize * 100))
     : 0;
-  const cacheProtectionVisible = (session.provider === "claude-deepseek" ||
-    session.provider === "codex-deepseek") &&
+  const cacheProtectionVisible = currentProviderEntry(
+        session.provider,
+        session.provider_version,
+        session.provider_generation_digest,
+      )?.manifest.host.features.includes("cache_protection_v1") === true &&
     contextUsed >= DEEPSEEK_CACHE_MIN_HIT_TOKENS;
+  const sessionProviderName = providerName(
+    session.provider,
+    session.provider_version,
+    session.provider_generation_digest,
+  );
   const [cacheProtection, setCacheProtection] = useState<
     DeepseekCacheProtectionStatus | null
   >(null);
-  const [cacheProtectionUnavailable, setCacheProtectionUnavailable] = useState(false);
+  const [cacheProtectionUnavailable, setCacheProtectionUnavailable] = useState(
+    false,
+  );
   useEffect(() => {
     if (!cacheProtectionVisible) {
       setCacheProtection(null);
@@ -6237,21 +6757,30 @@ function SessionInfoSection({
     };
   }, [cacheProtectionVisible, session.id]);
   const rows: { label: string; value: string; mono?: boolean }[] = [
-    { label: "Provider", value: session.provider },
+    { label: "Provider", value: sessionProviderName },
     { label: "Project", value: project },
     { label: "Working dir", value: session.cwd, mono: true },
     { label: "Source", value: originLabel(session.origin) },
     { label: "Status", value: session.status },
     { label: "Session id", value: session.id, mono: true },
   ];
-  const cacheBaseInterval = compactCacheDuration(cacheProtection?.base_interval_ms) ||
+  const cacheBaseInterval =
+    compactCacheDuration(cacheProtection?.base_interval_ms) ||
     DEEPSEEK_CACHE_BASE_INTERVAL_LABEL;
-  const cacheAdaptiveInterval = compactCacheDuration(cacheProtection?.adaptive_interval_ms);
-  const cacheScheduledInterval = compactCacheDuration(cacheProtection?.scheduled_interval_ms);
+  const cacheAdaptiveInterval = compactCacheDuration(
+    cacheProtection?.adaptive_interval_ms,
+  );
+  const cacheScheduledInterval = compactCacheDuration(
+    cacheProtection?.scheduled_interval_ms,
+  );
   const actionsPanelId = useId();
   const cacheIntervalDetail = cacheProtection?.state === "protected"
-    ? `Base ${cacheBaseInterval} · next ${cacheScheduledInterval || cacheAdaptiveInterval || "learning"}`
-    : `Base ${cacheBaseInterval} · adaptive target ${cacheAdaptiveInterval || "learning"}`;
+    ? `Base ${cacheBaseInterval} · next ${
+      cacheScheduledInterval || cacheAdaptiveInterval || "learning"
+    }`
+    : `Base ${cacheBaseInterval} · adaptive target ${
+      cacheAdaptiveInterval || "learning"
+    }`;
   return (
     <>
       <Box sx={{ pt: 0.5, pb: 0.25 }}>
@@ -6307,18 +6836,29 @@ function SessionInfoSection({
         ))}
       </List>
       <Stack spacing={0.65} sx={{ pt: 0.75, pb: 1 }}>
-        <Stack direction="row" alignItems="baseline" justifyContent="space-between" spacing={2}>
+        <Stack
+          direction="row"
+          alignItems="baseline"
+          justifyContent="space-between"
+          spacing={2}
+        >
           <Typography variant="caption" color="text.secondary">
             Context
           </Typography>
           <Typography variant="body2" sx={{ fontWeight: 600 }}>
-            {hasContext ? `${Math.round(contextPercent)}% used` : "Waiting for usage"}
+            {hasContext
+              ? `${Math.round(contextPercent)}% used`
+              : "Waiting for usage"}
           </Typography>
         </Stack>
         <LinearProgress
           variant="determinate"
           value={contextPercent}
-          color={contextPercent >= 90 ? "error" : contextPercent >= 75 ? "warning" : "primary"}
+          color={contextPercent >= 90
+            ? "error"
+            : contextPercent >= 75
+            ? "warning"
+            : "primary"}
           aria-label="session context usage"
           sx={{
             height: 7,
@@ -6328,8 +6868,13 @@ function SessionInfoSection({
           }}
         />
         {hasContext && (
-          <Typography variant="caption" color="text.secondary" sx={{ textAlign: "right" }}>
-            {contextUsed.toLocaleString()} / {contextSize.toLocaleString()} tokens
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ textAlign: "right" }}
+          >
+            {contextUsed.toLocaleString()} / {contextSize.toLocaleString()}{" "}
+            tokens
           </Typography>
         )}
         {cacheProtectionVisible &&
@@ -6338,18 +6883,20 @@ function SessionInfoSection({
             <Tooltip
               title={cacheProtection?.state === "protected"
                 ? `${cacheIntervalDetail}. Last verified ${
-                cacheProtection.last_verified_at_ms
-                  ? new Date(cacheProtection.last_verified_at_ms).toLocaleString()
-                  : "recently"
-              }. Next attempt ${
-                cacheProtection.next_attempt_at_ms
-                  ? new Date(cacheProtection.next_attempt_at_ms).toLocaleString()
-                  : "is being scheduled"
-              }. Real agent work always preempts it.`
-              : cacheProtection?.state === "disabled"
-              ? `Automatic DeepSeek cache protection is disabled for this session. Base interval is ${cacheBaseInterval}.`
-              : cacheProtectionUnavailable
-              ? "The owning Machine could not report cache status. Agent work is unaffected."
+                  cacheProtection.last_verified_at_ms
+                    ? new Date(cacheProtection.last_verified_at_ms)
+                      .toLocaleString()
+                    : "recently"
+                }. Next attempt ${
+                  cacheProtection.next_attempt_at_ms
+                    ? new Date(cacheProtection.next_attempt_at_ms)
+                      .toLocaleString()
+                    : "is being scheduled"
+                }. Real agent work always preempts it.`
+                : cacheProtection?.state === "disabled"
+                ? `Automatic ${sessionProviderName} cache protection is disabled for this session. Base interval is ${cacheBaseInterval}.`
+                : cacheProtectionUnavailable
+                ? "The owning Machine could not report cache status. Agent work is unaffected."
                 : "This session is large enough for protection; Cowboy is waiting for a verified ≥90% cache hit before scheduling a keepalive."}
             >
               <Chip
@@ -6361,7 +6908,9 @@ function SessionInfoSection({
                   ? "warning"
                   : "default"}
                 label={cacheProtection?.state === "protected"
-                  ? `Cache protected · ${compactCacheTokens(cacheProtection.protected_tokens)}`
+                  ? `Cache protected · ${
+                    compactCacheTokens(cacheProtection.protected_tokens)
+                  }`
                   : cacheProtection?.state === "disabled"
                   ? "Cache protection off"
                   : cacheProtectionUnavailable
@@ -6379,7 +6928,9 @@ function SessionInfoSection({
         )}
         <Box sx={{ pt: 0.5 }}>
           <ButtonBase
-            aria-label={actionsExpanded ? "Collapse session actions" : "Expand session actions"}
+            aria-label={actionsExpanded
+              ? "Collapse session actions"
+              : "Expand session actions"}
             aria-expanded={actionsExpanded}
             aria-controls={actionsPanelId}
             onClick={(): void => {
