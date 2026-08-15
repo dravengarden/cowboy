@@ -37,6 +37,12 @@ Deno.test("new session navigation precedes Machine preparation completion", () =
   );
   assertEquals(composerSource.includes('aria-label="preparing session"'), true);
   assertEquals(composerSource.includes("if (preparing) return false;"), true);
+  assertEquals(appSource.includes("if (mobile) claimKeyboard();"), true);
+  assertEquals(appSource.includes("const openNewSession = (): void => {"), true);
+  assertEquals(
+    appSource.includes("titleRef.current?.focus();\n            titleRef.current?.select();\n        }, 120);"),
+    true,
+  );
   assertEquals(appSource.includes("initial_prompt: selectedWorkItem"), true);
   assertEquals(appSource.includes("/prompt`, {"), false);
   assertEquals(
