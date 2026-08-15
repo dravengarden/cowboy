@@ -3637,8 +3637,7 @@ const QueuedAttachmentChips = memo(function QueuedAttachmentChips({
 }): React.JSX.Element {
   return (
     <Box
-      data-pending-content-action="attachment-preview"
-      sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, mt: 0.5 }}
+      sx={{ display: "inline-flex", flexWrap: "wrap", gap: 0.5, mt: 0.5 }}
     >
       {attachments.map((a, i) =>
         a.isImage && a.previewUrl
@@ -3648,7 +3647,11 @@ const QueuedAttachmentChips = memo(function QueuedAttachmentChips({
               component="img"
               src={a.previewUrl}
               alt={a.name}
-              onClick={(): void => openLightbox(attachments, i)}
+              data-pending-content-action="attachment-preview"
+              onClick={(event): void => {
+                event.stopPropagation();
+                openLightbox(attachments, i);
+              }}
               sx={{
                 width: 38,
                 height: 38,
@@ -3667,7 +3670,11 @@ const QueuedAttachmentChips = memo(function QueuedAttachmentChips({
               direction="row"
               spacing={0.5}
               alignItems="center"
-              onClick={(): void => openLightbox(attachments, i)}
+              data-pending-content-action="attachment-preview"
+              onClick={(event): void => {
+                event.stopPropagation();
+                openLightbox(attachments, i);
+              }}
               sx={{
                 height: 38,
                 maxWidth: 150,
@@ -4775,6 +4782,9 @@ function PendingRow({
     setEditAttachments(message.attachments);
     onEdit();
   };
+  const pendingEditTap = useReliableTouchTap<HTMLDivElement>(() => {
+    beginEdit();
+  });
   const discardEdit = (): void => {
     setConfirmDiscardEdit(false);
     setDraft(message.text);
@@ -5600,18 +5610,29 @@ function PendingRow({
   return (
     <Paper
       variant="outlined"
-      sx={{ p: 0.75, display: "flex", alignItems: "flex-start", gap: 0.5 }}
+      data-pending-edit-target
+      // iOS hit-tests through an unpainted flex child onto this Paper fill.
+      {...pendingEditTap}
+      onClick={(event): void => {
+        const target = event.target instanceof Element ? event.target : null;
+        if (target?.closest("[data-pending-content-action]")) return;
+        pendingEditTap.onClick(event);
+      }}
+      sx={{
+        p: 0.75,
+        display: "flex",
+        alignItems: "flex-start",
+        gap: 0.5,
+        cursor: "text",
+      }}
     >
       <Box
-        data-pending-edit-target
-        onClick={(event): void => {
-          const target = event.target instanceof HTMLElement
-            ? event.target
-            : null;
-          if (target?.closest("[data-pending-content-action]")) return;
-          beginEdit();
+        sx={{
+          flex: 1,
+          alignSelf: "stretch",
+          minWidth: 0,
+          minHeight: 38,
         }}
-        sx={{ flex: 1, minWidth: 0, cursor: "text" }}
       >
         {stripImageTokens(message.text).trim() !== "" && (
           <MessagePreview text={stripImageTokens(message.text)} />

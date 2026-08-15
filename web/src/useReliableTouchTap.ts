@@ -19,7 +19,9 @@ interface TouchStart {
 
 function isNestedControl(target: EventTarget | null, current: HTMLElement): boolean {
   if (!(target instanceof Element)) return false;
-  const control = target.closest("button, a, input, select, textarea, [role='button']");
+  const control = target.closest(
+    "button, a, input, select, textarea, [role='button'], [data-pending-content-action]",
+  );
   return control !== null && control !== current;
 }
 

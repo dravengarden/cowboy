@@ -46,9 +46,23 @@ Deno.test("fullscreen keeps only images without CM inline tokens in its tray", (
 });
 
 Deno.test("attachment-only pending rows retain a full content edit target", () => {
-  assertEquals(composerSource.includes("data-pending-edit-target"), true);
   assertEquals(
     composerSource.includes('data-pending-content-action="attachment-preview"'),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      'sx={{ display: "inline-flex", flexWrap: "wrap", gap: 0.5, mt: 0.5 }}',
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes("const pendingEditTap = useReliableTouchTap"),
+    true,
+  );
+  assertEquals(
+    /<Paper[\s\S]*?data-pending-edit-target[\s\S]*?\{\.\.\.pendingEditTap\}/
+      .test(composerSource),
     true,
   );
   assertEquals(
