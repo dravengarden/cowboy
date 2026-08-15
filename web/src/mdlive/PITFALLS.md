@@ -2,11 +2,14 @@
 
 > **OPEN TODO — pitfall #69 (end of this file).** Physical iPhone Return
 > after a pasted composer image still fails: CM6 / `.cm-activeLine` move,
-> the painted UIKit caret does not. Do **not** claim this fixed. Do **not**
-> re-ship Obsidian token reveal. Do **not** start another beforeinput /
-> U+200B / Selection-remap patch. Canonical ledger (symptom, diagnosis,
-> v1240–v1269 failed attempts, do-not-retry): **#69** below. Debug mode is
-> pitfall #68. Simulator CSS caret is not evidence (pitfall #67).
+> the painted UIKit caret does not. 2026-08-15 user: same shape in
+> Obsidian; likely WeType (first Return a bit wrong on native Pinyin,
+> first few Returns wrong on WeChat Input Method). Do **not** claim this
+> fixed. Do **not** re-ship Obsidian token reveal. Do **not** start
+> another beforeinput / U+200B / Selection-remap patch. Canonical ledger
+> (symptom, diagnosis, v1240–v1269 failed attempts, do-not-retry): **#69**
+> below. Debug mode is pitfall #68. Simulator CSS caret is not evidence
+> (pitfall #67). WeType cannot be installed on the iOS Simulator.
 
 > **RESOLVED ARCHITECTURE CHANGE — task `cowboy-composer-drop-pwa-hacks`.** The
 > whole PWA iOS hack tower documented below is **REMOVED IN CURRENT CODE**: the
@@ -1610,6 +1613,10 @@ Desktop Vim + IME checks:
     first Return bad / second good; first good / second bad; one
     Return bounces twice; Return lags; only text at the end of an
     image; Backspace will not walk the caret back up onto the image.
+    2026-08-15 IME split (user, not yet agent-probed on a live
+    device): native iOS Pinyin, first Return a bit wrong; WeType,
+    first few Returns wrong. Same Return-after-image shape in
+    Obsidian.
 
     ### Current code (cowboy-v1269 / `a9aaa415`)
     Token is `![name](cowboy-att:<id>)`. Touch promotes to CM6 on the
@@ -1668,18 +1675,39 @@ Desktop Vim + IME checks:
     - Obsidian reveal shows the raw token; user rejected it.
     - Simulator can match document telemetry and still paint a
       purple CSS caret. That is not the physical bug.
+    - 2026-08-15 user: Obsidian fails the same way. Native Pinyin
+      misbehaves on the first Return; WeType on the first few.
+      Leading hypothesis, not a close. WeType is not installable on
+      the iOS Simulator (no App Store; Mac WeType is desktop IMK).
 
     ### Best current diagnosis (not a shipped fix)
-    Physical iPhone paints `UITextSelectionView` from
-    `caretRect(for:)`. After an image widget (a replaced `<img>`, plus
-    CM6's empty `<img class="cm-widgetBuffer">`), that rect binds to
-    the last measurable replaced box. Software-keyboard
-    `insertLineBreak` writes a native `<br>` into the current
-    contenteditable node. CM6 then writes a document `\n` and remaps
-    JS Selection. UIKit does not remount onto the new `.cm-line`
-    until a real character creates a text node (`caret_height`
-    returns to 12). Simulator still paints CSS `caret-color` from the
-    JS Selection, so it looks fine.
+    Two layers. The IME layer is a 2026-08-15 user report and is not
+    yet re-probed with Debug logs.
+
+    **IME (leading new hypothesis).** After an image, WeType (and to a
+    lesser degree native Pinyin) likely spends the first Return or
+    first few Returns on candidate confirm / bar dismiss instead of a
+    clean newline. That matches the native-vs-WeType severity split
+    and the same failure in Obsidian. It does not by itself explain a
+    painted caret that stays on the thumbnail after CM6 /
+    `.cm-activeLine` have already advanced.
+
+    **UIKit geometry (earlier physical logs).** Physical iPhone paints
+    `UITextSelectionView` from `caretRect(for:)`. After an image
+    widget (a replaced `<img>`, plus CM6's empty
+    `<img class="cm-widgetBuffer">`), that rect binds to the last
+    measurable replaced box. Software-keyboard `insertLineBreak`
+    writes a native `<br>` into the current contenteditable node.
+    CM6 then writes a document `\n` and remaps JS Selection. UIKit
+    does not remount onto the new `.cm-line` until a real character
+    creates a text node (`caret_height` returns to 12). Simulator
+    still paints CSS `caret-color` from the JS Selection, so it looks
+    fine.
+
+    These can both be true: IME consumes or delays early Returns,
+    then the remaining `insertLineBreak` still hits a dead
+    `caretRect`. Do not drop the geometry facts. Do not treat
+    "WeType did it" as a shipped fix.
 
     `@` chips work because they are text-height, not a tall `<img>`.
 
@@ -1687,8 +1715,7 @@ Desktop Vim + IME checks:
     half-right for the old `Decoration.replace({ block: true })` path,
     which lifted the token out of `.cm-line`. After v1264 the token
     is a real source line with an inline widget, and the caret still
-    dies. The remaining mismatch is UIKit geometry vs replaced
-    `<img>` / `cm-widgetBuffer`, not "missing `\n` in the document".
+    dies.
 
     ### What others do
     Obsidian (same CM6 stack) hits the same bug. Staff called it an
@@ -1751,13 +1778,19 @@ Desktop Vim + IME checks:
     "already fixed" close-out without physical user confirmation.
 
     ### Next candidates if this is reopened
-    1. Keep images *out* of contenteditable on iPhone (attachment
+    1. Physical iPhone probe with Debug mode: same paste+Return
+       sequence on WeType, native Pinyin, and English. Count Returns
+       until `document_lines` / painted caret move. Log composition /
+       `insertFromComposition` vs `insertLineBreak`. Simulator WeType
+       is not a substitute.
+    2. Keep images *out* of contenteditable on iPhone (attachment
        row / tray; textarea stays the editor). This is what native
        chat composers do.
-    2. A widget that is not an in-flow `<img>` (and that does not
+    3. A widget that is not an in-flow `<img>` (and that does not
        leave `cm-widgetBuffer` as the UIKit caret box), only if a
        new physical probe shows `caretRect` bound to that `<img>`.
-    3. Do not start another input-event patch.
+    4. Do not start another input-event patch unless that physical
+       IME probe gives a new structural reason.
 
     Re-open only with a new structural hypothesis and a physical
     iPhone probe. Rebase `origin/main` before any next caret change.

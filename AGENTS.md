@@ -95,5 +95,7 @@ confirm-detection, the Tauri native shell — see `web/AGENTS.md` and the
 `cowboy-*` memories.
 
 **OPEN TODO:** physical iPhone caret after a pasted composer image is
-unsolved. Ledger, failed attempts, and what not to retry:
-`web/src/mdlive/PITFALLS.md` pitfall **#69**. Do not claim it fixed.
+unsolved. 2026-08-15 user: same shape in Obsidian; likely WeType (first
+Return on native Pinyin, first few on WeChat IME). Ledger, failed
+attempts, and what not to retry: `web/src/mdlive/PITFALLS.md` pitfall
+**#69**. Do not claim it fixed.

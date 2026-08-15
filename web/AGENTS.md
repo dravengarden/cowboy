@@ -30,9 +30,11 @@ routinely breaks another.
 4. **Record every decision in PITFALLS.md** so the next agent doesn't re-discover
    it.
 5. **OPEN TODO:** physical iPhone Return after a pasted image still fails
-   (painted UIKit caret vs CM6). Full ledger, failed attempts, and what
-   not to retry: [`src/mdlive/PITFALLS.md`](src/mdlive/PITFALLS.md) pitfall
-   **#69**. Do not claim this fixed. Do not re-ship Obsidian token reveal.
+   (painted UIKit caret vs CM6). 2026-08-15 user: same shape in Obsidian;
+   likely WeType (first Return on native Pinyin, first few on WeChat IME).
+   Full ledger, failed attempts, and what not to retry:
+   [`src/mdlive/PITFALLS.md`](src/mdlive/PITFALLS.md) pitfall **#69**. Do
+   not claim this fixed. Do not re-ship Obsidian token reveal.
 
 ## Editing discipline (project-specific)
 
