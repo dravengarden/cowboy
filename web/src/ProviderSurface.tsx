@@ -58,11 +58,12 @@ export function ProviderRuntimeSurface({
     providerDigest,
   );
   if (!entry) return <>{fallback}</>;
-  const authentication = catalog?.authentications.find((candidate) =>
-    candidate.provider_id === provider
-  ) ?? catalog?.authentications.find((candidate) =>
-    candidate.authentication_scope === entry.authentication_scope
-  );
+  const authentication =
+    catalog?.authentications.find((candidate) =>
+      candidate.provider_id === provider
+    ) ?? catalog?.authentications.find((candidate) =>
+      candidate.authentication_scope === entry.authentication_scope
+    );
   return (
     <ProviderSurface
       manifest={entry.manifest}
@@ -135,11 +136,13 @@ function readableProviderMarkColor(
     Number.parseInt(match[1]!.slice(offset, offset + 2), 16) / 255
   );
   const luminance = channels
-    .map((channel) => channel <= 0.03928
-      ? channel / 12.92
-      : ((channel + 0.055) / 1.055) ** 2.4)
-    .reduce((sum, channel, index) =>
-      sum + channel * [0.2126, 0.7152, 0.0722][index]!, 0);
+    .map((channel) =>
+      channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
+    )
+    .reduce(
+      (sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index]!,
+      0,
+    );
   return luminance < 0.25 ? theme.palette.common.white : accent;
 }
 
@@ -451,6 +454,14 @@ const assetSignalMotion = keyframes`
   from { -webkit-mask-position: 120% 0; mask-position: 120% 0; }
   to { -webkit-mask-position: -20% 0; mask-position: -20% 0; }
 `;
+const terminalPromptMotion = keyframes`
+  0%, 100% { transform: translateX(0); opacity: 0.55; }
+  50% { transform: translateX(1.5px); opacity: 1; }
+`;
+const terminalCaretMotion = keyframes`
+  0%, 45% { opacity: 1; }
+  55%, 100% { opacity: 0.24; }
+`;
 const assetPulseMotion = keyframes`
   0%, 100% { transform: scale(0.92); opacity: 0.58; }
   50% { transform: scale(1); opacity: 1; }
@@ -558,23 +569,44 @@ function ProviderActivity({
       case "terminal_prompt":
         return (
           <Box
-            component="span"
+            component="svg"
+            viewBox="0 0 18 18"
             aria-hidden
             sx={{
-              width: 18,
-              height: 18,
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
+              width: 17,
+              height: 17,
+              display: "block",
               flexShrink: 0,
+              overflow: "visible",
               color: manifest.display.accent,
+              "& .provider-terminal-prompt": {
+                animation: reducedMotion
+                  ? "none"
+                  : `${terminalPromptMotion} ${node.indicator.interval_ms}ms ease-in-out infinite`,
+              },
+              "& .provider-terminal-caret": {
+                animation: reducedMotion
+                  ? "none"
+                  : `${terminalCaretMotion} ${node.indicator.interval_ms}ms ease-in-out infinite`,
+              },
             }}
           >
-            <CircularProgress
-              size={15}
-              thickness={4.5}
-              color="inherit"
-              aria-hidden
+            <path
+              className="provider-terminal-prompt"
+              d="M3.5 5.5 7 9l-3.5 3.5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.7"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              className="provider-terminal-caret"
+              d="M9.5 12.5h5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.7"
+              strokeLinecap="round"
             />
           </Box>
         );

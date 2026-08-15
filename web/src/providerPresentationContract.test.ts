@@ -99,6 +99,12 @@ Deno.test("Provider activity renderer consumes only typed generic strategies", (
   }
 });
 
+Deno.test("terminal activity keeps its Provider-defined prompt geometry", () => {
+  assertEquals(surfaceSource.includes("provider-terminal-prompt"), true);
+  assertEquals(surfaceSource.includes("provider-terminal-caret"), true);
+  assertEquals(surfaceSource.includes("terminalPromptMotion"), true);
+});
+
 Deno.test("Provider Transcript renderer consumes only closed presentation variants", () => {
   for (
     const variant of [
