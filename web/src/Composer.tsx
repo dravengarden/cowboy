@@ -259,6 +259,11 @@ import { sessionProjectLabel } from "./sessionProject";
 import { Sheet } from "./Sheet";
 import { FloatingActionIsland, MobileSheetDismiss } from "./_shell";
 import {
+  OPEN_SESSION_SETTINGS_EVENT,
+  type SessionSettingsFocus,
+  sessionSettingsFocusFromEvent,
+} from "./sessionSettingsOpen";
+import {
   persisted,
   type Store,
   useStore as usePrefStore,
@@ -6050,6 +6055,19 @@ export function SessionControls({
   );
   const touchInput = useTouchComposer();
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [sheetFocus, setSheetFocus] = useState<SessionSettingsFocus>(
+    "session",
+  );
+  useEffect(() => {
+    const onOpen = (event: Event): void => {
+      if (touchInput) releaseMobileComposerFocus();
+      setSheetFocus(sessionSettingsFocusFromEvent(event));
+      setSheetOpen(true);
+    };
+    document.addEventListener(OPEN_SESSION_SETTINGS_EVENT, onOpen);
+    return () =>
+      document.removeEventListener(OPEN_SESSION_SETTINGS_EVENT, onOpen);
+  }, [touchInput]);
   const dead = status === "exited" || status === "crashed" ||
     status === "interrupted";
   const optionPresentations = useMemo(
@@ -6143,6 +6161,7 @@ export function SessionControls({
               // Keyboard navigation does not emit pointerdown. Keep the same
               // transition boundary for accessibility and hardware keyboards.
               if (touchInput) releaseMobileComposerFocus();
+              setSheetFocus("session");
               setSheetOpen(true);
             }}
           >
@@ -6172,7 +6191,11 @@ export function SessionControls({
       {createPortal(
         <ComposerSheet
           open={sheetOpen}
-          onClose={(): void => setSheetOpen(false)}
+          focus={sheetFocus}
+          onClose={(): void => {
+            setSheetOpen(false);
+            setSheetFocus("session");
+          }}
           session={session}
           options={options}
           loading={showSkeleton}
@@ -6288,6 +6311,7 @@ function RecommendedRunConfigPresetButton({
 // the bottom-sheet pattern is iOS-native muscle memory.
 function ComposerSheet({
   open,
+  focus = "session",
   onClose,
   session,
   options,
@@ -6303,6 +6327,7 @@ function ComposerSheet({
   onSelectOption,
 }: {
   open: boolean;
+  focus?: SessionSettingsFocus;
   onClose: () => void;
   session: SessionMeta | undefined;
   options: ConfigOption[];
@@ -6363,6 +6388,14 @@ function ComposerSheet({
       setReloadConfirm(false);
     }
   }, [open, session?.id]);
+  useEffect(() => {
+    if (!open || focus !== "agent") return undefined;
+    const frame = globalThis.requestAnimationFrame(() => {
+      document.querySelector<HTMLElement>("[data-session-settings-agent]")
+        ?.scrollIntoView({ block: "start", behavior: "smooth" });
+    });
+    return () => globalThis.cancelAnimationFrame(frame);
+  }, [focus, open, session?.id]);
   useEffect(() => {
     if (pendingPresetId === null) return;
     if (!pendingPreset) {
@@ -6539,7 +6572,7 @@ function ComposerSheet({
       {(loading || options.length > 0) && (
         <>
           <Divider />
-          <Box sx={{ py: 1.5 }}>
+          <Box data-session-settings-agent sx={{ py: 1.5 }}>
             <Typography
               variant="overline"
               color="text.secondary"

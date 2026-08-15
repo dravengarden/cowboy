@@ -106,6 +106,10 @@ Deno.test("the Explore page dock yields to the focused mobile composer", () => {
   );
   assertEquals(transcriptSource.includes("context.reasoning"), true);
   assertEquals(transcriptSource.includes("Reasoning ·"), true);
+  assertEquals(
+    transcriptSource.includes("data-conversation-empty-settings"),
+    true,
+  );
 });
 
 Deno.test("transient activity is transcript-owned with a zero-jump pill handoff", () => {
