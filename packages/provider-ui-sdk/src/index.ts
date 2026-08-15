@@ -9,7 +9,7 @@
 export const PROVIDER_PACKAGE_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_UI_SCHEMA_MIN_VERSION = 1 as const;
 export const PROVIDER_UI_SCHEMA_VERSION = 2 as const;
-export const PROVIDER_SDK_VERSION = "2.3.0" as const;
+export const PROVIDER_SDK_VERSION = "2.4.0" as const;
 
 export type SurfaceSlot =
   | "card"
@@ -150,6 +150,7 @@ export type ThoughtVariant =
   | "terminal";
 export type ThoughtDensity = "compact" | "comfortable";
 export type CurrentThoughtSurface = "plain" | "soft";
+export type ProviderAuthenticationPresentation = "account" | "api_key";
 
 export interface TranscriptPresentationContract {
   schema_version: 1;
@@ -447,6 +448,7 @@ export type ProviderUiManifest =
     authentication:
       & Pick<ProviderManifest["authentication"], "schema_version" | "required">
       & {
+        presentation?: ProviderAuthenticationPresentation;
         methods: Array<
           Pick<
             ProviderManifest["authentication"]["methods"][number],
@@ -493,6 +495,18 @@ export interface ProviderAuthenticationStatus {
   projection_schema: string;
   account_label?: string;
   updated_at_ms: number;
+}
+
+export function resolveProviderAuthenticationPresentation(
+  authentication: ProviderUiManifest["authentication"],
+): ProviderAuthenticationPresentation {
+  if (authentication.presentation !== undefined) {
+    return authentication.presentation;
+  }
+  return authentication.required && authentication.methods.length > 0 &&
+      authentication.methods.every((method) => method.flow === "secret_input")
+    ? "api_key"
+    : "account";
 }
 
 export interface ProviderCatalogResponse {
@@ -1265,7 +1279,22 @@ export function validateProviderUiManifest(
     !isRecord(input.authentication) ||
     input.authentication.schema_version !== 1 ||
     typeof input.authentication.required !== "boolean" ||
-    !Array.isArray(input.authentication.methods)
+    !Array.isArray(input.authentication.methods) ||
+    !hasOnlyKeys(input.authentication, [
+      "schema_version",
+      "required",
+      "presentation",
+      "methods",
+      "portable_schema",
+      "projection_schema",
+      "refresh",
+      "credential_files",
+      "environment_projection",
+    ]) ||
+    (input.authentication.presentation !== undefined &&
+      !["account", "api_key"].includes(
+        String(input.authentication.presentation),
+      ))
   ) {
     throw new Error("Invalid Provider UI authentication contract");
   }
@@ -1276,6 +1305,13 @@ export function validateProviderUiManifest(
       !isIdentifier(method.id) ||
       authMethods.has(method.id) || typeof method.label !== "string" ||
       !method.label.trim() ||
+      !hasOnlyKeys(method, [
+        "id",
+        "label",
+        "flow",
+        "executor",
+        "required_bundle_keys",
+      ]) ||
       !["device_code", "browser_code", "secret_input", "service_broker"]
         .includes(String(method.flow))
     ) {
@@ -1285,6 +1321,21 @@ export function validateProviderUiManifest(
   }
   if (input.authentication.required && authMethods.size === 0) {
     throw new Error("Authenticated Provider has no UI authentication method");
+  }
+  const inferredAuthenticationPresentation =
+    input.authentication.required && authMethods.size > 0 &&
+      input.authentication.methods.every((method) =>
+        isRecord(method) && method.flow === "secret_input"
+      )
+      ? "api_key"
+      : "account";
+  if (
+    input.authentication.presentation !== undefined &&
+    input.authentication.presentation !== inferredAuthenticationPresentation
+  ) {
+    throw new Error(
+      "Provider authentication presentation does not match its typed methods",
+    );
   }
   if (
     !isRecord(input.compatibility) ||

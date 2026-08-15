@@ -86,6 +86,7 @@ pub struct ProviderUiManifest {
 pub struct ProviderUiAuthenticationContract {
     pub schema_version: u16,
     pub required: bool,
+    pub presentation: AuthenticationPresentation,
     pub methods: Vec<ProviderUiAuthMethod>,
 }
 
@@ -95,6 +96,16 @@ pub struct ProviderUiAuthMethod {
     pub id: String,
     pub label: String,
     pub flow: AuthFlow,
+}
+
+/// Closed, Cowboy-rendered vocabulary for Service authentication UI. The
+/// value is derived from the Provider's typed authentication methods, never
+/// from a Provider id or an arbitrary label/style payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthenticationPresentation {
+    Account,
+    ApiKey,
 }
 
 /// Concise typed authoring profile for ordinary coding-agent Providers. It
@@ -1218,6 +1229,7 @@ impl ProviderManifest {
             authentication: ProviderUiAuthenticationContract {
                 schema_version: self.authentication.schema_version,
                 required: self.authentication.required,
+                presentation: self.authentication.ui_presentation(),
                 methods: self
                     .authentication
                     .methods
@@ -2065,6 +2077,21 @@ impl RuntimeSidecarTransport {
 }
 
 impl AuthenticationContract {
+    #[must_use]
+    pub fn ui_presentation(&self) -> AuthenticationPresentation {
+        if self.required
+            && !self.methods.is_empty()
+            && self
+                .methods
+                .iter()
+                .all(|method| method.flow == AuthFlow::SecretInput)
+        {
+            AuthenticationPresentation::ApiKey
+        } else {
+            AuthenticationPresentation::Account
+        }
+    }
+
     // This is one closed cross-field validator; splitting it would obscure the
     // uniqueness and projection invariants it checks in one pass.
     #[allow(clippy::too_many_lines)]
@@ -2719,51 +2746,64 @@ impl StandardProviderSource {
         };
         let mut surfaces = BTreeMap::new();
         surfaces.insert(SurfaceSlot::Card, card);
+        let (initial_auth_label, refresh_auth_label, clear_auth_label) =
+            match self.authentication.ui_presentation() {
+                AuthenticationPresentation::Account => ("Sign in", "Sign in again", "Sign out"),
+                AuthenticationPresentation::ApiKey => {
+                    ("Add API key", "Replace API key", "Clear API key")
+                }
+            };
+        let authentication_action =
+            |label: &str, message: &str, style: ButtonStyle, visible_when| UiNode::Stack {
+                direction: StackDirection::Row,
+                gap: SpacingToken::Xs,
+                wrap: false,
+                children: vec![UiNode::Button {
+                    label: literal(label),
+                    style,
+                    emit: MessageEmission {
+                        message: message.to_owned(),
+                        payload: BTreeMap::new(),
+                    },
+                    enabled_when: Some(BoolExpression::StateEquals {
+                        field: "operation_pending".to_owned(),
+                        value: LiteralValue::Bool(false),
+                    }),
+                }],
+                visible_when: Some(visible_when),
+            };
         surfaces.insert(
             SurfaceSlot::Setup,
             row(vec![
-                UiNode::Button {
-                    label: literal("Sign in"),
-                    style: ButtonStyle::Primary,
-                    emit: MessageEmission {
-                        message: "authenticate".to_owned(),
-                        payload: BTreeMap::new(),
+                authentication_action(
+                    initial_auth_label,
+                    "authenticate",
+                    ButtonStyle::Primary,
+                    BoolExpression::Not {
+                        value: Box::new(BoolExpression::HostEquals {
+                            field: HostBoolField::AuthReady,
+                            value: true,
+                        }),
                     },
-                    enabled_when: Some(BoolExpression::All {
-                        values: vec![
-                            BoolExpression::Not {
-                                value: Box::new(BoolExpression::HostEquals {
-                                    field: HostBoolField::AuthReady,
-                                    value: true,
-                                }),
-                            },
-                            BoolExpression::StateEquals {
-                                field: "operation_pending".to_owned(),
-                                value: LiteralValue::Bool(false),
-                            },
-                        ],
-                    }),
-                },
-                UiNode::Button {
-                    label: literal("Sign out"),
-                    style: ButtonStyle::Secondary,
-                    emit: MessageEmission {
-                        message: "logout".to_owned(),
-                        payload: BTreeMap::new(),
+                ),
+                authentication_action(
+                    refresh_auth_label,
+                    "authenticate",
+                    ButtonStyle::Secondary,
+                    BoolExpression::HostEquals {
+                        field: HostBoolField::AuthReady,
+                        value: true,
                     },
-                    enabled_when: Some(BoolExpression::All {
-                        values: vec![
-                            BoolExpression::HostEquals {
-                                field: HostBoolField::AuthReady,
-                                value: true,
-                            },
-                            BoolExpression::StateEquals {
-                                field: "operation_pending".to_owned(),
-                                value: LiteralValue::Bool(false),
-                            },
-                        ],
-                    }),
-                },
+                ),
+                authentication_action(
+                    clear_auth_label,
+                    "logout",
+                    ButtonStyle::Secondary,
+                    BoolExpression::HostEquals {
+                        field: HostBoolField::AuthReady,
+                        value: true,
+                    },
+                ),
             ]),
         );
         surfaces.insert(
@@ -3531,7 +3571,9 @@ mod tests {
         assert!(validate_provider_sdk_version("2.1.1").is_ok());
         assert!(validate_provider_sdk_version("2.2.1").is_ok());
         assert!(validate_provider_sdk_version("2.3.0").is_ok());
-        assert!(validate_provider_sdk_version("2.3.1").is_err());
+        assert!(validate_provider_sdk_version("2.3.1").is_ok());
+        assert!(validate_provider_sdk_version("2.4.0").is_ok());
+        assert!(validate_provider_sdk_version("2.4.1").is_err());
         assert!(validate_provider_sdk_version("3.0.0").is_err());
     }
 
@@ -3578,6 +3620,14 @@ mod tests {
             ("gemini", ThoughtVariant::Signal),
             ("grok", ThoughtVariant::Terminal),
         ]);
+        let expected_auth_presentations = BTreeMap::from([
+            ("claude-code", AuthenticationPresentation::Account),
+            ("claude-deepseek", AuthenticationPresentation::ApiKey),
+            ("codex", AuthenticationPresentation::Account),
+            ("codex-deepseek", AuthenticationPresentation::ApiKey),
+            ("gemini", AuthenticationPresentation::Account),
+            ("grok", AuthenticationPresentation::Account),
+        ]);
         let mut ids = BTreeSet::new();
         for source in sources {
             let source: StandardProviderSource = serde_json::from_str(source).unwrap();
@@ -3591,6 +3641,24 @@ mod tests {
             assert!(ids.insert(first.manifest.id.clone()));
             assert_eq!(first.manifest.ui.surfaces.len(), REQUIRED_SURFACES.len());
             assert_eq!(first.manifest.host.schema_version, 2);
+            assert_eq!(
+                first.manifest.authentication.ui_presentation(),
+                expected_auth_presentations[first.manifest.id.as_str()]
+            );
+            assert_eq!(
+                first.manifest.ui_projection().authentication.presentation,
+                expected_auth_presentations[first.manifest.id.as_str()]
+            );
+            let setup =
+                serde_json::to_string(first.manifest.ui.surfaces.get(&SurfaceSlot::Setup).unwrap())
+                    .unwrap();
+            if first.manifest.authentication.ui_presentation() == AuthenticationPresentation::ApiKey
+            {
+                assert!(setup.contains("Add API key"));
+                assert!(setup.contains("Replace API key"));
+                assert!(setup.contains("Clear API key"));
+                assert!(!setup.contains("Sign in"));
+            }
             assert_eq!(
                 first
                     .manifest

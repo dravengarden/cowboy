@@ -64,6 +64,16 @@ choosing denser tokens. A session whose exact package predates host schema 2 may
 adopt a newer compatible signed presentation for icon, activity, and Transcript
 chrome only; its executable and authentication generations remain exact.
 
+### Service authentication presentation
+
+Provider SDK 2.4 adds a closed UI projection over the existing authentication
+method graph. An all-`secret_input` Provider renders the `api_key` presentation;
+other current method graphs render `account`. The shared Cowboy card shell owns
+the logo/title region and one footer containing status, version, and only the
+currently valid actions. Consequently Claude and Codex retain account sign-in
+language, while both DeepSeek Providers render API-key missing/configured and
+add/replace/clear actions without any Provider-ID branch in Web.
+
 Grok keeps its own native state under `~/.grok`. Cowboy enables Grok's
 cross-session memory but never reads or writes that store. Current Grok releases
 enable native subagent tools by default, so Cowboy deliberately does not pass the

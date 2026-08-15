@@ -1,7 +1,7 @@
 # Cowboy core requirements
 
 Status: normative Provider platform contract. Package schema 2, release schema
-2, UI schemas 1-2, host integration schemas 1-2, Provider SDK 2.3,
+2, UI schemas 1-2, host integration schemas 1-2, Provider SDK 2.4,
 Machine-scoped installation, exact session generations, Service-scoped
 authentication, and bounded uninstall retention implement this boundary. The
 in-tree `LaunchSpec` registry remains only as a drain-compatible fallback for
@@ -103,6 +103,13 @@ or `terminal` variant, a bounded density, an optional active label, and a
 color application, motion, reading-scale behavior, and accessibility. The
 contract cannot carry CSS, DOM, markup, arbitrary dimensions, or executable
 rendering logic.
+
+Service authentication presentation follows the same boundary. Cowboy derives
+the closed `account` or `api_key` presentation from the Provider's typed auth
+method union. Account Providers render sign-in language; Providers whose only
+declared methods are `secret_input` render API-key status, actions, and modal
+copy. Cowboy owns card geometry and interaction mechanics, and Web must not
+branch on a Provider ID to choose either presentation.
 
 Ordinary Web renders `information` and `setup` once in a Cowboy Service
 authentication region, while each Machine renders only `card` and its
@@ -336,7 +343,7 @@ The Provider platform is not complete until automated acceptance proves:
 
 Provider package schema 2, release schema 2, UI schemas 1-2, host integration
 schemas 1-2, Controller contract 2, Machine contract 4, and Cowboy Provider SDK
-2.3 in both Rust and TypeScript are the active contract.
+2.4 in both Rust and TypeScript are the active contract.
 The Catalog embeds the six independently compiled first-party manifests as
 typed `unbound` entries and accepts installable releases only after an external
 `.cowboy-provider` package is paired with a complete, signed runtime envelope.

@@ -27,7 +27,7 @@ Deno.test("Provider management cards keep geometry in the Cowboy component libra
   );
   assertEquals(
     managementSource.includes(
-      'gridTemplateColumns: "32px minmax(0, 1fr) auto"',
+      'gridTemplateColumns: "32px minmax(0, 1fr)"',
     ),
     true,
   );
@@ -50,7 +50,20 @@ Deno.test("Provider management cards keep geometry in the Cowboy component libra
     managementSource.includes("data-provider-management-actions"),
     true,
   );
+  assertEquals(
+    managementSource.includes("data-provider-management-footer"),
+    true,
+  );
   assertEquals(managementSource.includes("WebkitLineClamp: 2"), true);
+});
+
+Deno.test("Provider authentication copy dispatches on typed presentation, not Provider id", () => {
+  assertEquals(managementSource.includes('case "account"'), true);
+  assertEquals(managementSource.includes('case "api_key"'), true);
+  assertEquals(managementSource.includes('empty: "API key missing"'), true);
+  for (const provider of ["claude-deepseek", "codex-deepseek"]) {
+    assertEquals(managementSource.includes(provider), false);
+  }
 });
 
 Deno.test("Provider marks preserve host component classes and compact chip spacing", () => {

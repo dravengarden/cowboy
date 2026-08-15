@@ -44,7 +44,7 @@ material, operational guidance, research evidence, and historical notes.
 - [`explore-transcript-design.md`](explore-transcript-design.md) — Explore Transcript Design
 - [`ios-simulator.md`](ios-simulator.md) — Ios Simulator
 - [`machine-operations.md`](machine-operations.md) — Machine operations, including Provider installation and Service-auth replica convergence
-- [`provider-packages.md`](provider-packages.md) — Package, typed UI, host Transcript-variant, and release contract for independently released, Machine-scoped Provider packages
+- [`provider-packages.md`](provider-packages.md) — Package, typed UI, authentication/Transcript presentation, and release contract for independently released, Machine-scoped Provider packages
 
 ### Integrations
 

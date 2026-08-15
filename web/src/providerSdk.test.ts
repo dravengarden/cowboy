@@ -11,6 +11,7 @@ import {
   validateMachineProviderInventory,
   validateProviderCatalog,
   validateProviderManifest,
+  validateProviderUiManifest,
 } from "../../packages/provider-ui-sdk/src/index.ts";
 import {
   exactProviderEntry,
@@ -172,6 +173,11 @@ function uiManifest(full = manifest()): ProviderUiManifest {
     authentication: {
       schema_version: authentication.schema_version,
       required: authentication.required,
+      presentation:
+        authentication.required && authentication.methods.length > 0 &&
+          authentication.methods.every(({ flow }) => flow === "secret_input")
+          ? "api_key"
+          : "account",
       methods: authentication.methods.map(({ id, label, flow }) => ({
         id,
         label,
@@ -190,6 +196,38 @@ Deno.test("Provider SDK validates and executes linked typed logic", () => {
   });
   assertEquals(result.state.open, true);
   assertEquals(result.effect?.capability, "install_on_machine");
+});
+
+Deno.test("Provider UI accepts only closed Service authentication presentations", () => {
+  const account = uiManifest();
+  account.authentication.presentation = "account";
+  validateProviderUiManifest(account);
+
+  const apiKey = uiManifest();
+  apiKey.authentication.required = true;
+  apiKey.authentication.methods = [{
+    id: "api-key",
+    label: "API key",
+    flow: "secret_input",
+  }];
+  apiKey.authentication.presentation = "api_key";
+  validateProviderUiManifest(apiKey);
+
+  const mismatched = uiManifest();
+  mismatched.authentication.presentation = "api_key";
+  assertThrows(
+    () => validateProviderUiManifest(mismatched),
+    Error,
+    "does not match its typed methods",
+  );
+
+  const unknown = uiManifest() as unknown as Record<string, unknown>;
+  (unknown.authentication as Record<string, unknown>).presentation = "login";
+  assertThrows(
+    () => validateProviderUiManifest(unknown),
+    Error,
+    "Invalid Provider UI authentication contract",
+  );
 });
 
 Deno.test("Provider UI schema 2 accepts bounded gradient and activity IR", () => {
@@ -713,7 +751,7 @@ Deno.test("Provider SDK enforces semantic release identity and precedence", () =
 
 Deno.test("Provider SDK rejects incompatible authoring SDK versions before rendering", () => {
   const newer = manifest();
-  newer.sdk_version = "2.3.1";
+  newer.sdk_version = "2.4.1";
   assertThrows(() => validateProviderManifest(newer), Error, "is incompatible");
 
   const olderMinor = manifest();

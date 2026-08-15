@@ -1,7 +1,7 @@
 # Cowboy Provider UI SDK
 
 The SDK defines Cowboy Provider UI schemas v1-v2, host integration schemas
-v1-v2, and Provider SDK 2.3 as closed
+v1-v2, and Provider SDK 2.4 as closed
 TypeScript unions. It provides runtime validation, typed state transitions,
 text resolution, boolean-expression evaluation, responsive stack wrapping,
 bounded vector gradients, typed activity strategies, component-command links,
@@ -24,6 +24,11 @@ density, optional active label, and current-step surface token. Cowboy owns the
 marker geometry, typography, animation, reduced-motion behavior, theme colors,
 and accessibility. Host schema v1 cannot declare these fields, and unknown
 variants or tokens fail validation before rendering.
+
+The sanitized authentication projection exposes a closed `account` or
+`api_key` presentation derived from typed auth methods. Cowboy uses it for
+status, actions, and modal language while retaining card geometry, responsive
+layout, credential handling, and effects in the host component library.
 
 The canonical cross-language schema and package validator are in
 `crates/cowboy-provider-sdk`; this package is the browser/component-library

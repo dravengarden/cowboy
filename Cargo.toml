@@ -78,7 +78,7 @@ serde_json = "1"
 semver = "1"
 shell-words = "1"
 mime_guess = "2"
-cowboy-provider-sdk = { version = "=2.3.0", path = "crates/cowboy-provider-sdk" }
+cowboy-provider-sdk = { version = "=2.4.0", path = "crates/cowboy-provider-sdk" }
 chacha20poly1305 = "0.10"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 # `@`-picker file search: gitignore-aware walk + fuzzy ranking (the matcher

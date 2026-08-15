@@ -118,6 +118,16 @@ upgrade target. Cowboy keeps both Service authentication details and per-Machine
 Provider lifecycle details collapsed behind compact summaries by default; the
 Provider surfaces render inside the explicit management region.
 
+Authentication copy and actions are also typed. Cowboy maps a Provider with
+only `secret_input` auth methods to the closed `api_key` presentation; every
+other current method graph maps to `account`. The component library renders
+the corresponding missing/configured status, add/replace/clear or
+sign-in/sign-out verbs, secret field, and modal instructions. The Provider does
+not provide arbitrary action labels, CSS, or layout geometry, and Cowboy
+contains no Provider-ID authentication branch. Unavailable actions are omitted
+rather than shown as disabled clutter, while status, version, and the valid
+action share a stable footer slot.
+
 The activity node separates Provider-authored identity from Cowboy-owned motion
 mechanics. Its indicator is one of `progress_ring`, `glyph_cycle`,
 `terminal_prompt`, `asset_signal`, or `asset_pulse`; its label is typed text or
@@ -182,7 +192,7 @@ fail again when Cowboy parses the package. Unknown or duplicate configuration
 option and tool presentation records fail at the same boundaries.
 
 UI and host integration schema versions are negotiated independently from
-package schema. Provider SDK 2.3 accepts UI schemas 1-2 and host integration
+package schema. Provider SDK 2.4 accepts UI schemas 1-2 and host integration
 schemas 1-2, rejects any newer-schema field when a manifest claims an older
 schema, and rejects an unknown future schema. Existing UI v1 or host v1 packages
 remain installable and render compact neutral fallbacks. For session-facing
@@ -287,7 +297,7 @@ package:
 ```
 
 Package schema 2, UI schemas 1-2, host integration schemas 1-2, logic schema 1,
-auth schema 1, Cowboy Provider SDK 2.3, Controller contract 2, Machine contract
+auth schema 1, Cowboy Provider SDK 2.4, Controller contract 2, Machine contract
 4, and release schema 2 are independently checked.
 The SDK version is a coarse authoring filter: Cowboy accepts only the same SDK
 major and a Provider SDK version no newer than the validating host. A newer SDK

@@ -16,14 +16,17 @@ import {
   Typography,
 } from "@mui/material";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import {
   type EffectCapability,
   type EffectSchema,
   type MachineProviderInventory,
+  type ProviderAuthenticationPresentation,
   type ProviderAuthenticationStatus,
   type ProviderCatalogEntry,
   type ProviderHostContext,
   type ProviderUiManifest,
+  resolveProviderAuthenticationPresentation,
   validateMachineProviderInventory,
 } from "../../packages/provider-ui-sdk/src/index.ts";
 import {
@@ -125,18 +128,20 @@ function ProviderManagementIdentity({
   version,
   statusLabel,
   statusTone,
+  actions,
 }: {
   manifest: ProviderUiManifest;
   version: string;
   statusLabel: string;
   statusTone: ProviderManagementStatusTone;
+  actions: ReactNode;
 }): React.JSX.Element {
   return (
     <Box
       data-provider-management-identity
       sx={{
         display: "grid",
-        gridTemplateColumns: "32px minmax(0, 1fr) auto",
+        gridTemplateColumns: "32px minmax(0, 1fr)",
         columnGap: 1,
         alignItems: "start",
         minWidth: 0,
@@ -155,7 +160,7 @@ function ProviderManagementIdentity({
       >
         <ProviderMark manifest={manifest} size={28} />
       </Box>
-      <Stack spacing={0.25} sx={{ minWidth: 0 }}>
+      <Stack spacing={0.45} sx={{ minWidth: 0 }}>
         <Typography
           variant="subtitle1"
           fontWeight={720}
@@ -184,32 +189,54 @@ function ProviderManagementIdentity({
         >
           {manifest.display.summary}
         </Typography>
-      </Stack>
-      <Stack spacing={0.4} alignItems="flex-end" sx={{ minWidth: 0 }}>
-        <Chip
-          data-provider-management-status
-          size="small"
-          variant="outlined"
-          color={statusTone}
-          label={statusLabel}
-          sx={{
-            maxWidth: 128,
-            height: 22,
-            "& .MuiChip-label": {
-              px: 0.75,
-              fontSize: "0.68rem",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-            },
-          }}
-        />
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          sx={{ fontFamily: "monospace", lineHeight: 1 }}
+        <Stack
+          data-provider-management-footer
+          direction="row"
+          spacing={0.65}
+          alignItems="center"
+          flexWrap="wrap"
+          useFlexGap
+          sx={{ minHeight: 36, pt: 0.15 }}
         >
-          v{version}
-        </Typography>
+          <Chip
+            data-provider-management-status
+            size="small"
+            variant="outlined"
+            color={statusTone}
+            label={statusLabel}
+            sx={{
+              maxWidth: 138,
+              height: 24,
+              "& .MuiChip-label": {
+                px: 0.8,
+                fontSize: "0.68rem",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              },
+            }}
+          />
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ fontFamily: "monospace", lineHeight: 1 }}
+          >
+            v{version}
+          </Typography>
+          <Box
+            data-provider-management-actions
+            sx={{
+              ml: "auto",
+              minWidth: 0,
+              "& > .MuiStack-root": {
+                alignItems: "center",
+                justifyContent: "flex-end",
+              },
+              "& .MuiButton-root": { minHeight: 36, px: 1.25 },
+            }}
+          >
+            {actions}
+          </Box>
+        </Stack>
       </Stack>
     </Box>
   );
@@ -231,13 +258,7 @@ function ProviderManagementLifecycleSurface({
   onEffect: (effect: EffectSchema) => Promise<void>;
 }): React.JSX.Element {
   return (
-    <Box
-      data-provider-management-actions
-      sx={{
-        pl: 5,
-        "& > .MuiStack-root": { alignItems: "flex-start" },
-      }}
-    >
+    <Box sx={{ minWidth: 0 }}>
       <ProviderSurface
         manifest={manifest}
         slot={slot}
@@ -426,13 +447,18 @@ function ProviderManagement(
               "Provider authentication is managed at Cowboy Service scope",
             );
           }
+          const copy = authenticationCopy(
+            resolveProviderAuthenticationPresentation(
+              entry.manifest.authentication,
+            ),
+          );
           const response = await fetch(
             `/api/providers/${encodeURIComponent(entry.provider_id)}/auth`,
             {
               method: "DELETE",
             },
           );
-          await expectSuccess(response, "Provider sign-out failed");
+          await expectSuccess(response, copy.clearFailed);
           await refreshCatalog();
           await refreshInventory();
           return;
@@ -514,6 +540,11 @@ function ProviderManagement(
 
   const submitAuthentication = async (): Promise<void> => {
     if (!flow?.requestId || !loginInput.trim()) return;
+    const copy = authenticationCopy(
+      resolveProviderAuthenticationPresentation(
+        flow.provider.manifest.authentication,
+      ),
+    );
     const response = await fetch(
       `/api/providers/${encodeURIComponent(flow.provider.provider_id)}/auth/${
         encodeURIComponent(flow.requestId)
@@ -524,7 +555,7 @@ function ProviderManagement(
         body: JSON.stringify({ code: loginInput.trim() }),
       },
     );
-    await expectSuccess(response, "Could not submit authentication value");
+    await expectSuccess(response, copy.submitFailed);
     setLoginInput("");
   };
 
@@ -576,7 +607,7 @@ function ProviderManagement(
             sx={{ display: "block" }}
           >
             {scope === "service"
-              ? "Sign in once; encrypted generations synchronize to every enrolled Machine"
+              ? "Configure once; encrypted credentials synchronize to every enrolled Machine"
               : "Installed, upgraded, and uninstalled independently on this Machine"}
           </Typography>
         </Box>
@@ -611,6 +642,10 @@ function ProviderManagement(
                 );
               }
               const auth = authentications.get(entry.provider_id);
+              const authPresentation =
+                resolveProviderAuthenticationPresentation(
+                  entry.manifest.authentication,
+                );
               const presentationEntry = scope === "machine" && row.installed
                 ? providerPresentationEntry(
                   catalog.providers,
@@ -621,7 +656,7 @@ function ProviderManagement(
                 : entry;
               const summary = scope === "service"
                 ? entry.manifest.authentication.required
-                  ? serviceAuthenticationLabel(auth).replace("Service ", "")
+                  ? serviceAuthenticationLabel(auth, authPresentation)
                   : "no sign-in"
                 : providerInstallationSummary(row.installed, row.latestEntry);
               const healthy = scope === "service"
@@ -659,7 +694,7 @@ function ProviderManagement(
               {detailsOpen
                 ? "Hide"
                 : scope === "service"
-                ? "Manage sign-ins"
+                ? "Manage credentials"
                 : "Manage"}
             </Button>
           </Stack>
@@ -759,6 +794,9 @@ function ProviderManagement(
           if (!latestEntry) return null;
           const entry = installedEntry ?? latestEntry;
           const auth = authentications.get(entry.provider_id);
+          const authPresentation = resolveProviderAuthenticationPresentation(
+            entry.manifest.authentication,
+          );
           const error = errors[entry.provider_id] || "";
           const host = scope === "service"
             ? providerServiceHost(entry, auth, error)
@@ -767,8 +805,8 @@ function ProviderManagement(
             latestEntry.artifact_digest !== null;
           const managementStatus = scope === "service"
             ? entry.manifest.authentication.required
-              ? serviceAuthenticationLabel(auth).replace("Service ", "")
-                .split(" · ")[0] ?? "signed out"
+              ? serviceAuthenticationLabel(auth, authPresentation)
+                .split(" · ")[0] ?? authenticationCopy(authPresentation).empty
               : "no sign-in"
             : providerInstallationSummary(installed, latestEntry);
           const managementStatusTone: ProviderManagementStatusTone =
@@ -787,6 +825,37 @@ function ProviderManagement(
             : scope === "service"
             ? UNPUBLISHED_AUTH_EFFECTS
             : UNPUBLISHED_RELEASE_EFFECTS;
+          const lifecycleSurface = scope === "service"
+            ? entry.manifest.authentication.required
+              ? (
+                <ProviderManagementLifecycleSurface
+                  manifest={entry.manifest}
+                  slot="setup"
+                  host={host}
+                  blockedCapabilities={blockedCapabilities}
+                  onEffect={(effect) => run(latestEntry, undefined, effect)}
+                />
+              )
+              : null
+            : !installed
+            ? (
+              <ProviderManagementLifecycleSurface
+                manifest={entry.manifest}
+                slot="empty"
+                host={host}
+                blockedCapabilities={blockedCapabilities}
+                onEffect={(effect) => run(latestEntry, installed, effect)}
+              />
+            )
+            : (
+              <ProviderManagementLifecycleSurface
+                manifest={entry.manifest}
+                slot="settings"
+                host={host}
+                blockedCapabilities={blockedCapabilities}
+                onEffect={(effect) => run(latestEntry, installed, effect)}
+              />
+            );
           return (
             <Paper
               key={`${entry.provider_id}:${entry.provider_version}:${
@@ -806,6 +875,7 @@ function ProviderManagement(
                   version={host.provider_version}
                   statusLabel={managementStatus}
                   statusTone={managementStatusTone}
+                  actions={lifecycleSurface}
                 />
                 {scope === "machine" && installed &&
                     entry.manifest.authentication.required
@@ -833,40 +903,6 @@ function ProviderManagement(
                     />
                   )
                   : null}
-                {scope === "service"
-                  ? (
-                    entry.manifest.authentication.required
-                      ? (
-                        <ProviderManagementLifecycleSurface
-                          manifest={entry.manifest}
-                          slot="setup"
-                          host={host}
-                          blockedCapabilities={blockedCapabilities}
-                          onEffect={(effect) =>
-                            run(latestEntry, undefined, effect)}
-                        />
-                      )
-                      : null
-                  )
-                  : !installed
-                  ? (
-                    <ProviderManagementLifecycleSurface
-                      manifest={entry.manifest}
-                      slot="empty"
-                      host={host}
-                      blockedCapabilities={blockedCapabilities}
-                      onEffect={(effect) => run(latestEntry, installed, effect)}
-                    />
-                  )
-                  : (
-                    <ProviderManagementLifecycleSurface
-                      manifest={entry.manifest}
-                      slot="settings"
-                      host={host}
-                      blockedCapabilities={blockedCapabilities}
-                      onEffect={(effect) => run(latestEntry, installed, effect)}
-                    />
-                  )}
               </Stack>
             </Paper>
           );
@@ -881,22 +917,30 @@ function ProviderManagement(
       >
         <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1 }}>
           {flow ? <ProviderMark manifest={flow.provider.manifest} /> : null}
-          Sign in to {flow?.provider.manifest.display.name ?? "Provider"}
+          {flow
+            ? authenticationCopy(resolveProviderAuthenticationPresentation(
+              flow.provider.manifest.authentication,
+            )).title
+            : "Configure"} {flow?.provider.manifest.display.name ?? "Provider"}
         </DialogTitle>
         <DialogContent>
           {flow
             ? (
               <Stack spacing={1.5} sx={{ pt: 0.5 }}>
                 <Alert severity="info">
-                  This login belongs to Cowboy Service. A temporary executor
-                  performs the provider flow; the resulting encrypted generation
-                  is synchronized to every enrolled Machine.
+                  {authenticationCopy(resolveProviderAuthenticationPresentation(
+                    flow.provider.manifest.authentication,
+                  )).serviceDetail}
                 </Alert>
                 {!flow.requestId
                   ? (
                     <Stack spacing={1}>
                       <Typography variant="body2">
-                        Choose a Provider-declared authentication method.
+                        {authenticationCopy(
+                          resolveProviderAuthenticationPresentation(
+                            flow.provider.manifest.authentication,
+                          ),
+                        ).chooseMethod}
                       </Typography>
                       {flow.provider.manifest.authentication.methods.map((
                         method,
@@ -922,7 +966,11 @@ function ProviderManagement(
                         rel="noreferrer"
                         variant="contained"
                       >
-                        Open sign-in page
+                        {authenticationCopy(
+                          resolveProviderAuthenticationPresentation(
+                            flow.provider.manifest.authentication,
+                          ),
+                        ).externalAction}
                       </Button>
                       {challenge.user_code
                         ? (
@@ -956,7 +1004,11 @@ function ProviderManagement(
                               disabled={!loginInput.trim()}
                               onClick={() => void submitAuthentication()}
                             >
-                              Continue
+                              {authenticationCopy(
+                                resolveProviderAuthenticationPresentation(
+                                  flow.provider.manifest.authentication,
+                                ),
+                              ).submit}
                             </Button>
                           </Stack>
                         )
@@ -966,7 +1018,11 @@ function ProviderManagement(
                   : flow.requestId
                   ? (
                     <Typography variant="body2">
-                      Waiting for the Provider…
+                      {authenticationCopy(
+                        resolveProviderAuthenticationPresentation(
+                          flow.provider.manifest.authentication,
+                        ),
+                      ).waiting}
                     </Typography>
                   )
                   : null}
@@ -1132,13 +1188,72 @@ function providerServiceHost(
 
 function serviceAuthenticationLabel(
   auth: ProviderAuthenticationStatus | undefined,
+  presentation: ProviderAuthenticationPresentation,
 ): string {
-  if (!auth) return "Service signed out";
+  const copy = authenticationCopy(presentation);
+  if (!auth) return copy.empty;
   const state = auth.authentication_state.replaceAll("_", " ");
-  if (auth.authentication_state !== "ready") return `Service ${state}`;
-  return `Service signed in${
-    auth.account_label ? ` · ${auth.account_label}` : ""
-  }`;
+  if (auth.authentication_state !== "ready") {
+    if (presentation === "api_key") {
+      return auth.authentication_state === "authenticating"
+        ? "Saving API key"
+        : auth.authentication_state === "expired"
+        ? "API key expired"
+        : auth.authentication_state === "error"
+        ? "API key error"
+        : copy.empty;
+    }
+    return state;
+  }
+  return `${copy.ready}${auth.account_label ? ` · ${auth.account_label}` : ""}`;
+}
+
+function authenticationCopy(
+  presentation: ProviderAuthenticationPresentation,
+): {
+  title: string;
+  empty: string;
+  ready: string;
+  serviceDetail: string;
+  chooseMethod: string;
+  externalAction: string;
+  submit: string;
+  submitFailed: string;
+  clearFailed: string;
+  waiting: string;
+} {
+  switch (presentation) {
+    case "account":
+      return {
+        title: "Sign in to",
+        empty: "signed out",
+        ready: "signed in",
+        serviceDetail:
+          "This sign-in belongs to Cowboy Service. A temporary executor performs the Provider flow; the resulting encrypted generation synchronizes to every enrolled Machine.",
+        chooseMethod: "Choose a Provider-declared sign-in method.",
+        externalAction: "Open sign-in page",
+        submit: "Continue",
+        submitFailed: "Could not submit the authentication value",
+        clearFailed: "Provider sign-out failed",
+        waiting: "Waiting for the Provider…",
+      };
+    case "api_key":
+      return {
+        title: "Configure API key for",
+        empty: "API key missing",
+        ready: "API key configured",
+        serviceDetail:
+          "This API key belongs to Cowboy Service. Cowboy stores one encrypted credential generation and synchronizes it to every enrolled Machine.",
+        chooseMethod: "Choose the Provider-declared API key credential.",
+        externalAction: "Get API key",
+        submit: "Save API key",
+        submitFailed: "Could not save the API key",
+        clearFailed: "Could not clear the API key",
+        waiting: "Preparing secure API key entry…",
+      };
+    default:
+      return assertUnhandled(presentation);
+  }
 }
 
 function providerInstallationSummary(

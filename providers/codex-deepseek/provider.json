@@ -1,9 +1,9 @@
 {
   "authoring_schema": 2,
   "id": "codex-deepseek",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "publisher": "cowboy-first-party",
-  "sdk_version": "2.3.0",
+  "sdk_version": "2.4.0",
   "display": {
     "name": "Codex · DeepSeek",
     "vendor": "DeepSeek",

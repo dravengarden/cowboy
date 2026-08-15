@@ -115,12 +115,17 @@ In addition, require all applicable Provider gates below:
 - For UI schema 2, validate responsive wrapping, bounded vector gradients, and
   the closed activity indicator/label unions in both implementations. Reject
   unknown strategy fields and any Provider-ID branch in the host renderer.
-- For SDK 2.3 host integration schema 2, validate the required Transcript
+- For SDK 2.3+ host integration schema 2, validate the required Transcript
   presentation contract in both implementations. Accept only `timeline`,
   `workcell`, `signal`, or `terminal` with bounded density, active-label, and
   current-surface tokens. Reject host-schema downgrade smuggling, unknown
   fields, arbitrary style values, and any Provider-ID branch in the Transcript
   renderer.
+- For SDK 2.4, validate the closed Service authentication presentation derived
+  from the typed auth methods. An all-`secret_input` Provider must render API-key
+  status/actions/modal copy; other current method graphs render account copy.
+  Reject disabled-action clutter, arbitrary Provider labels/styles, and any
+  Provider-ID branch in the authentication renderer.
 - Validate signed `configuration.options` policy. Provider-specific option
   ordering, layout, and lifecycle availability belong in the package; reject
   a Cowboy Web branch on a Provider-specific configuration option ID.
