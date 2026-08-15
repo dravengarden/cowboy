@@ -441,6 +441,17 @@ fn last_stop_reason(log: &[Envelope]) -> Option<String> {
 pub struct SessionMeta {
     pub id: String,
     pub provider: String,
+    /// Immutable Provider release selected when the session was created.
+    #[serde(default)]
+    pub provider_version: String,
+    #[serde(default)]
+    pub provider_generation_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_auth_generation: Option<u64>,
+    /// Signed host-integration interface selected by this exact Provider
+    /// generation. `None` is reserved for package-less legacy sessions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_behavior: Option<cowboy_provider_sdk::ProviderBehaviorContract>,
     /// Stable machine placement. A session never silently migrates to another
     /// machine because its provider credentials, cwd, and native thread all
     /// belong to the selected host.
@@ -534,45 +545,34 @@ fn local_machine_id() -> String {
     "local".to_owned()
 }
 
-fn default_config_preferences(provider: &str) -> serde_json::Value {
-    if provider == "codex" {
-        serde_json::json!({
-            "model": "gpt-5.6-luna",
-            "reasoning_effort": "max",
-        })
-    } else if provider == "codex-deepseek" {
-        serde_json::json!({
-            "model": "deepseek-v4-flash",
-            "deepseek_context": "680k",
-            "deepseek_cache_protection": true,
-            "collaboration_mode": "default",
-            "reasoning_effort": "max",
-        })
-    } else if provider == "claude-deepseek" {
-        serde_json::json!({
-            "model": "deepseek-v4-flash[1m]",
-            "deepseek_context": "830k",
-            "deepseek_cache_protection": true,
-            "effort": "max",
-            "agent": "default",
-        })
-    } else if provider == "grok" {
-        // Keep the model id dynamic so a CLI update can change its catalog,
-        // while making Cowboy's High + full-access defaults durable.
-        serde_json::json!({
-            "permission_mode": "always-approve",
-            "reasoning_effort": "high",
-        })
-    } else {
-        serde_json::json!({})
-    }
+fn configuration_behavior(
+    provider: &str,
+    behavior: Option<&cowboy_provider_sdk::ProviderBehaviorContract>,
+) -> cowboy_provider_sdk::ConfigurationBehavior {
+    behavior.map_or_else(
+        || crate::provider::legacy_behavior(provider).configuration,
+        |behavior| behavior.configuration.clone(),
+    )
+}
+
+fn default_config_preferences(
+    provider: &str,
+    behavior: Option<&cowboy_provider_sdk::ProviderBehaviorContract>,
+) -> serde_json::Value {
+    let defaults = behavior.map_or_else(
+        || crate::provider::legacy_behavior(provider).default_preferences,
+        |behavior| behavior.default_preferences.clone(),
+    );
+    serde_json::to_value(defaults).unwrap_or_else(|_| serde_json::json!({}))
 }
 
 fn projected_config_options(
     provider: &str,
+    behavior: Option<&cowboy_provider_sdk::ProviderBehaviorContract>,
     preferences: &serde_json::Value,
     options: Option<serde_json::Value>,
 ) -> Option<serde_json::Value> {
+    let configuration = configuration_behavior(provider, behavior);
     let had_options = options.is_some();
     let mut options = options.unwrap_or_else(|| serde_json::json!([]));
     let Some(array) = options.as_array_mut() else {
@@ -587,7 +587,7 @@ fn projected_config_options(
     let requested = preferences
         .get(crate::deepseek_context::CONFIG_ID)
         .and_then(serde_json::Value::as_str);
-    if let Some(option) = crate::deepseek_context::config_option(provider, model, requested) {
+    if let Some(option) = crate::deepseek_context::config_option(&configuration, model, requested) {
         let insert_at = array
             .iter()
             .position(|candidate| {
@@ -596,8 +596,8 @@ fn projected_config_options(
             .map_or(array.len(), |index| index.saturating_add(1));
         array.insert(insert_at, option);
     }
-    if let Some(enabled) = crate::deepseek_cache::selected(preferences, provider)
-        && let Some(option) = crate::deepseek_cache::config_option(provider, enabled)
+    if let Some(enabled) = crate::deepseek_cache::selected(preferences, &configuration)
+        && let Some(option) = crate::deepseek_cache::config_option(&configuration, enabled)
     {
         let insert_at = array
             .iter()
@@ -608,7 +608,7 @@ fn projected_config_options(
             .map_or(array.len(), |index| index.saturating_add(1));
         array.insert(insert_at, option);
     }
-    if had_options || crate::deepseek_cache::supported_provider(provider) {
+    if had_options || crate::deepseek_cache::supported_behavior(&configuration) {
         Some(options)
     } else {
         None
@@ -619,6 +619,10 @@ fn projected_config_options(
 pub struct SessionRegistration {
     pub id: String,
     pub provider: String,
+    pub provider_version: String,
+    pub provider_generation_digest: String,
+    pub provider_auth_generation: Option<u64>,
+    pub provider_behavior: Option<cowboy_provider_sdk::ProviderBehaviorContract>,
     pub machine_id: String,
     pub workspace_id: Option<String>,
     pub workspace_name: Option<String>,
@@ -1336,7 +1340,7 @@ pub enum Outbound {
 /// [`crate::store::Store`] call.
 #[derive(Debug, Clone)]
 pub enum StoreWrite {
-    InsertSession(SessionMeta),
+    InsertSession(Box<SessionMeta>),
     AppendEvent(Envelope),
     UpdateStatus {
         session_id: String,
@@ -2330,6 +2334,10 @@ impl Hub {
         self.create_session(SessionRegistration {
             id,
             provider,
+            provider_version: String::new(),
+            provider_generation_digest: String::new(),
+            provider_auth_generation: None,
+            provider_behavior: None,
             machine_id: "local".to_owned(),
             workspace_id: None,
             workspace_name: None,
@@ -2346,6 +2354,10 @@ impl Hub {
         let SessionRegistration {
             id,
             provider,
+            provider_version,
+            provider_generation_digest,
+            provider_auth_generation,
+            provider_behavior,
             machine_id,
             workspace_id,
             workspace_name,
@@ -2355,10 +2367,14 @@ impl Hub {
             origin,
             system,
         } = registration;
-        let config_preferences = default_config_preferences(&provider);
+        let config_preferences = default_config_preferences(&provider, provider_behavior.as_ref());
         let meta = SessionMeta {
             id: id.clone(),
             provider,
+            provider_version,
+            provider_generation_digest,
+            provider_auth_generation,
+            provider_behavior,
             machine_id,
             workspace_id,
             workspace_name,
@@ -2406,7 +2422,7 @@ impl Hub {
             order.push(id.clone());
         }
         if let Some(tx) = self.inner.store_tx.as_ref() {
-            let _ = tx.send(StoreWrite::InsertSession(meta));
+            let _ = tx.send(StoreWrite::InsertSession(Box::new(meta)));
             if config_preferences
                 .as_object()
                 .is_some_and(|preferences| !preferences.is_empty())
@@ -2427,6 +2443,16 @@ impl Hub {
     /// agent thread will linger uselessly until its rx is dropped on
     /// process shutdown).
     pub fn delete_session(&self, session_id: &str) -> bool {
+        self.remove_session(session_id, true)
+    }
+
+    /// Remove a session after a caller-owned durable transaction has already
+    /// recorded its deletion and absolute purge deadline.
+    pub fn detach_session(&self, session_id: &str) -> bool {
+        self.remove_session(session_id, false)
+    }
+
+    fn remove_session(&self, session_id: &str, persist: bool) -> bool {
         let removed = {
             let mut sessions = self.inner.sessions.lock();
             let mut order = self.inner.order.lock();
@@ -2438,7 +2464,7 @@ impl Hub {
             removed
         };
         if removed {
-            if let Some(tx) = self.inner.store_tx.as_ref() {
+            if persist && let Some(tx) = self.inner.store_tx.as_ref() {
                 let _ = tx.send(StoreWrite::DeleteSession(session_id.to_owned()));
             }
             self.broadcast_sessions();
@@ -2709,7 +2735,7 @@ impl Hub {
     /// `true` keeps the hold; a repeated classifier failure clears it so the queue
     /// cannot deadlock. `done` is logged for completion notifications.
     fn judge_turn_end(&self, session_id: &str) {
-        let (final_text, seq, provider, stop_reason) = {
+        let (final_text, seq, stop_reason) = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
@@ -2718,18 +2744,14 @@ impl Hub {
             (
                 last_judge_text(&s.log),
                 s.judge_seq,
-                s.meta.provider.clone(),
                 last_stop_reason(&s.log),
             )
         };
         // L1: deterministic, no LLM. A cut-off/cancelled turn settles here; only a
         // normal `EndTurn` returns None and falls through to L2.
-        if let Some(v) = crate::provider::confirm::l1(
-            &provider,
-            &crate::provider::confirm::TurnEndCtx {
-                stop_reason: stop_reason.as_deref(),
-            },
-        ) {
+        if let Some(v) = crate::provider::confirm::l1(&crate::provider::confirm::TurnEndCtx {
+            stop_reason: stop_reason.as_deref(),
+        }) {
             let at = now_ms();
             self.emit_and_record_judge(
                 session_id,
@@ -3774,6 +3796,7 @@ impl Hub {
         sessions.get(session_id).and_then(|session| {
             projected_config_options(
                 &session.meta.provider,
+                session.meta.provider_behavior.as_ref(),
                 &session.config_preferences,
                 session.config_options.clone(),
             )
@@ -3824,6 +3847,7 @@ impl Hub {
                 .insert(config_id.clone(), value.clone());
             let mut options = projected_config_options(
                 &session.meta.provider,
+                session.meta.provider_behavior.as_ref(),
                 &session.config_preferences,
                 session.config_options.clone(),
             );
@@ -3868,9 +3892,13 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            let options =
-                projected_config_options(&s.meta.provider, &s.config_preferences, Some(options))
-                    .expect("agent config options remain present after projection");
+            let options = projected_config_options(
+                &s.meta.provider,
+                s.meta.provider_behavior.as_ref(),
+                &s.config_preferences,
+                Some(options),
+            )
+            .expect("agent config options remain present after projection");
             s.config_options = Some(options.clone());
             options
         };
@@ -5267,6 +5295,10 @@ mod runtime_reconciliation_tests {
             meta: SessionMeta {
                 id: id.to_owned(),
                 provider: "codex".to_owned(),
+                provider_version: String::new(),
+                provider_generation_digest: String::new(),
+                provider_auth_generation: None,
+                provider_behavior: None,
                 machine_id: "hawk".to_owned(),
                 workspace_id: None,
                 workspace_name: None,

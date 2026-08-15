@@ -1,8 +1,10 @@
 # Cowboy core requirements
 
-Status: normative target contract. Architecture chapters that describe the
-running in-tree Provider registry or Machine-scoped login remain operationally
-accurate during migration, but they are not the target product boundary.
+Status: normative Provider platform contract. Package schema 2, release schema
+2, the typed UI SDK, Machine-scoped installation, exact session generations,
+Service-scoped authentication, and bounded uninstall retention implement this
+boundary. The in-tree `LaunchSpec` registry remains only as a drain-compatible
+fallback for sessions created before an exact Provider generation was recorded.
 
 ## Authority
 
@@ -12,8 +14,8 @@ system until a tested migration exists, then move toward this contract. Do not
 silently redefine the contract to match the transition.
 
 The detailed package and type-system design lives in
-[Installable Provider packages](provider-packages.md). Current runtime behavior
-lives in the numbered [architecture chapters](architecture/00-overview.md).
+[Installable Provider packages](provider-packages.md). Runtime details live in
+the numbered [architecture chapters](architecture/00-overview.md).
 
 ## State ownership
 
@@ -43,9 +45,9 @@ only explicitly scoped developer diagnostics may name those internals.
 
 ### CR-2: Provider is the product and installation unit
 
-`claude-code`, `codex`, `grok`, `claude-deepseek`, and `codex-deepseek` are
-independent Providers. Each builds, versions, signs, publishes, installs,
-upgrades, rolls back, and uninstalls independently.
+`claude-code`, `codex`, `gemini`, `grok`, `claude-deepseek`, and
+`codex-deepseek` are independent Providers. Each builds, versions, signs,
+publishes, installs, upgrades, rolls back, and uninstalls independently.
 
 A user installs a Provider version on a selected Machine. Cowboy never asks the
 user to install an ACP runtime, adapter, gateway, managed Node, or CLI as a
@@ -54,15 +56,27 @@ and leased without changing this UI or lifecycle boundary.
 
 ### CR-3: Every release is immutable and independently buildable
 
-A Provider builds outside the Cowboy source tree against a published Provider
-SDK and contract bundle. Its package includes all universal UI and contract
-layers plus every declared platform payload. Its identity binds Provider ID,
-Provider version, artifact digest, publisher, and provenance.
+A Provider builds independently against the published Cowboy Provider SDK and
+contract bundle. First-party sources may be co-located in this repository, but
+each has its own source manifest, version, build invocation, artifact, release
+envelope, signature, and install transaction. Its data-only package includes
+all universal UI and contract layers; its signed release binds exactly one
+runtime-artifact set for every declared platform. Its identity binds Provider
+ID, Provider version, package digest, composite artifact digest, contract
+fingerprint, runtime-artifact matrix, and publisher.
 
 Every internal executable and protocol dependency is pinned to an exact version
 and digest inside the Provider. Moving tags, version ranges, `latest`, runtime
 package installation, and dependency-owned auto-updaters are forbidden. Any
 dependency change creates a new Provider version and new artifact bytes.
+
+If a Provider needs a gateway or another auxiliary runtime, it declares a
+closed, typed session-sidecar contract. The worker allocates a unique loopback
+endpoint, launches the exact generation-local component, waits for its declared
+health path, and resolves signed `sidecar_url` bindings only after readiness.
+Component executable bindings are resolved from the same installed generation.
+No fixed Machine-global gateway, host profile path, shell template, or ambient
+runtime download may complete an installable Provider release.
 
 ### CR-4: Cowboy supplies the typed component library
 
@@ -75,35 +89,65 @@ and destructive confirmation.
 
 Providers do not inject React, JavaScript, HTML, CSS, or DOM code. Authoring
 types compile to canonical data-only UI IR that Cowboy validates and renders.
+Ordinary Web renders `information` and `setup` once in a Cowboy Service
+authentication region, while each Machine renders only `card` and its
+`empty`/`settings` lifecycle surface. An installed Machine card is rendered from
+that exact installed package; a newer Catalog entry is only the upgrade target.
+Runtime-advertised configuration options remain protocol data, but any
+Provider-specific ordering, full-width layout, or session-lifecycle
+availability is declared in that signed package's typed
+`configuration.options` contract. Cowboy UI may supply neutral defaults for
+portable option concepts; it must not branch on a Provider-specific option ID.
+Provider-specific tool rendering follows the same boundary: the exact package
+may map an upstream tool name to a closed Cowboy renderer through
+`host.tool_presentations`; Cowboy Web must not keep a Provider-ID/tool-name
+dispatch table.
 
 ### CR-5: Linked behavior remains type-safe
 
 Provider UI behavior uses closed state schemas, typed messages, pure reducers,
 derived expressions, and capability-mediated effects. Component props, event
 payloads, reducer results, effects, and effect results are checked during build
-and checked again when Cowboy installs the artifact.
+and checked again when Cowboy installs the artifact. Configuration-option
+presentation records are a closed union with unique typed option IDs, bounded
+order values, layout, and availability policies; malformed or duplicate rules
+fail both Rust package validation and TypeScript Catalog validation. Tool
+presentation declarations likewise use unique bounded names and a closed
+renderer union.
 
-Complex pure logic may use a resource-bounded WebAssembly Component with a
-versioned WIT world and generated bindings. It receives no ambient DOM,
-credential, network, process, filesystem, clock, or randomness access. Its
-output is still validated UI IR.
+Effect ownership is also structural: Service authentication and logout may be
+emitted only from `setup`, Machine installation only from `empty`, and Machine
+upgrade or uninstall only from `settings`. Documentation links are the only
+lifecycle-neutral effect. Both Rust package validation and TypeScript Catalog
+validation enforce the same mapping before rendering.
+
+The current schema has no executable logic escape hatch. Logic that exceeds the
+closed DSL requires a future versioned SDK schema and corresponding Cowboy host
+implementation; a Provider cannot inject JavaScript, WebAssembly, or ambient
+DOM, credential, network, process, filesystem, clock, or randomness access.
 
 ### CR-6: Compatibility is derived and fail-closed
 
-SDK SemVer and a Provider-authored compatibility claim are only Catalog
-pre-filters. Cowboy derives requirements from actual UI IR, assets, state
-machines, effects, driver imports and exports, platform payloads, migrations,
-and authentication contracts.
+SDK SemVer and a Provider-authored compatibility interval are only pre-filters.
+The SDK pre-filter accepts the same major only and rejects a Provider built
+against a newer SDK than the validating Cowboy host. Cowboy then derives
+requirements from the actual UI IR, assets, state machines, effects, host
+profiles, runtime commands, exact dependency links, platform matrix, and
+authentication contract.
 
-Both build and installation validate schema versions, structural types,
-component contracts, WIT linking, capability sets, canonical fingerprints,
-resource bounds, platform support, migration paths, signatures, and provenance.
-The target Machine independently inspects downloaded bytes and runs staged
-probes. An incompatible artifact remains quarantined and never replaces the
-active generation.
+Runtime arguments and environment values are either bounded literals or closed
+host bindings to a declared private component command or declared session
+sidecar URL. Sidecar IDs, component kinds/slots, loopback transport, readiness,
+credential-environment forwarding, and every cross-reference are validated in
+both SDK implementations. Unknown, dangling, or platform-incomplete links fail
+before installation.
 
-Cowboy Web, Controller, and Machine upgrades perform the reverse check against
-all active, staged, and session-leased Provider generations before activation.
+Build, Catalog ingestion, and Machine installation validate schema versions,
+structural types, closed component/capability enums, canonical fingerprints,
+Controller/Machine contract intervals, complete platform/component binding,
+package and composite digests, publisher signature, URL/archive bounds, and
+probes. The target Machine independently inspects downloaded bytes. An
+incompatible artifact never replaces the active generation.
 
 ### CR-7: Installation is dynamic and Machine-scoped
 
@@ -111,9 +155,19 @@ The Cowboy UI joins Catalog releases with one Machine's platform, contracts,
 current installation, and health. Install and upgrade use immutable references,
 stage side by side, probe before activation, preserve the prior generation on
 failure, and retain leased generations for existing sessions and rollback.
+Each session launches auxiliary components from its exact retained generation
+on its own dynamic loopback endpoint. Old and new Provider or authentication
+generations may therefore drain concurrently without sharing a fixed port or
+silently adopting replacement runtime bytes.
 
 Publishing a Provider release does not install it. Installing it on one Machine
 does not install it on another Machine.
+
+Install and uninstall serialize per `(machine_id, provider_id)`. Installation
+validates any current Service auth envelope before changing activation and
+restores the previous runtime and auth links if the commit fails. Reusing a
+retained generation re-hashes its stored runtime artifacts against the signed
+release matrix rather than trusting cache metadata or executable existence.
 
 ### CR-8: Authentication is Cowboy Service-scoped
 
@@ -123,23 +177,35 @@ credential entry. A successful login creates a monotonic `auth_generation` in a
 Service-owned encrypted credential vault; the vault key is not stored in the
 ordinary Cowboy database.
 
+Authentication starts against an exact signed `(provider_id, version,
+artifact_digest, auth_contract_fingerprint)` and may use only a connected
+Machine with that exact release active as its temporary executor. The returned
+candidate must repeat the same immutable identity before Service commit; an
+upgrade race or mismatched method fails closed.
+
 Cowboy automatically reconciles that generation to every enrolled, authorized,
 non-revoked Machine. Each credential bundle is sealed to the target Machine's
 enrollment key, stored in a private Service-managed replica area, and exposed
 only to the matching Provider runtime. Every online Machine acknowledges sealed
 replica storage; a Machine with the Provider installed additionally acknowledges
-typed materialization and its runtime probe. The Service's aggregate distribution
-reports `converged` only after those applicable acknowledgements. Offline
-Machines remain pending and reconcile automatically on reconnect. A newly
-enrolled Machine receives the current generation without another login.
+typed materialization. The Service reports distribution `current` only after
+applicable acknowledgements; partial reachability is `partial`. Offline Machines
+remain pending and reconcile automatically on reconnect. A newly enrolled
+Machine receives the current generation without another login.
 
 The Service owns auth state `signed_out`, `authenticating`, `ready`, `expired`,
-or `error`, plus aggregate distribution `idle`, `distributing`, `converged`,
-`degraded`, or `revoking`. A Machine may report only sealed-replica convergence
+or `error`, plus distribution `none`, `pending`, `current`, `partial`, `failed`,
+or `revoking`. A Machine may report only sealed-replica convergence
 such as `pending`, `storing`, `current`, `failed`, or `revoking`, plus
 materialization `not-installed`, `applying`, `current`, or `failed`. Those are
 not login states. An offline Machine may degrade distribution without changing
 the Service from authenticated `ready` or blocking a current online Machine.
+
+An active login and its pre-commit error are Service-wide transient status, not
+credential generations. They may report generation zero before the first
+successful commit, are visible through the Catalog, and are never sealed or
+replicated. Scheduling and Machine synchronization consult only a durable,
+validated generation.
 
 Each Provider declares a typed authentication contract: login flow, portable
 credential schema, Machine projection schema, validation, import, refresh,
@@ -180,7 +246,17 @@ The confirmation modal names the Machine and Provider, counts idle and active
 sessions, distinguishes drain from cancellation, lists retained data classes,
 states that source projects and user worktrees remain untouched, and displays
 the absolute `purge_after_at` date. Permanent cleanup runs only after that date.
-Reinstall does not silently restore soft-deleted sessions.
+Reinstall does not silently restore soft-deleted sessions. Hard deletion
+cascades session events; content-addressed event attachments are reference
+scanned and deleted only when no retained event references them and their
+race-avoidance grace period has elapsed.
+
+If an ordinary Machine command or database transaction fails after uninstall
+has begun, Cowboy compensates by re-verifying and reactivating the exact retained
+signed generation and restoring workers that were live before the operation.
+The operation reports both the primary and compensation failure when recovery
+cannot complete; it must never report a successful uninstall with only half of
+the Machine/session state committed.
 
 ### CR-11: Release automation belongs to this repository
 
@@ -198,21 +274,25 @@ installation and never performs Service login as a release side effect.
 ### CR-12: Trust is re-established at every boundary
 
 A successful Provider build receipt is evidence, not installation authority.
-Cowboy verifies publisher trust, digest, signature, archive safety, SBOM,
-provenance, interfaces, capabilities, migrations, and probes again. Provider UI
-cannot render pre-activation failures. Credentials, login codes, tokens, and
-credential-bearing state never enter UI IR, logs, telemetry, Catalog metadata,
-Provider artifacts, or ordinary Cowboy database rows.
+Cowboy verifies publisher trust, package and composite digests, signature,
+archive safety, interfaces, capabilities, complete platform/runtime binding,
+exact dependency versions, and probes again. Credentials, login codes, tokens,
+and credential-bearing state never enter UI IR, logs, telemetry, Catalog
+metadata, Provider artifacts, or ordinary Cowboy database rows.
 
 ## Minimum acceptance suite
 
 The Provider platform is not complete until automated acceptance proves:
 
-- each Provider builds from its own clean checkout without Cowboy source;
+- each Provider builds independently from clean source against an exact SDK
+  contract without depending on another Provider's source or artifact;
 - malformed, mistyped, over-capable, unsigned, incompatible, and wrong-platform
   packages fail before activation;
-- a release can install, upgrade, roll back, and uninstall independently on two
-  Machines while existing sessions retain their exact generation;
+- a release can install, upgrade, roll back, and uninstall independently while
+  existing sessions retain their exact generation;
+- install/uninstall races are fenced, corrupt retained runtime bytes fail
+  reactivation, and a returned database/Machine failure restores the exact
+  pre-uninstall generation and live-session set;
 - one Cowboy Service login automatically converges the same authentication
   replica to every connected Machine, materializes it on every installed
   Provider, and later converges it to an offline or newly enrolled Machine;
@@ -221,18 +301,48 @@ The Provider platform is not complete until automated acceptance proves:
   wiped or marked pending revocation until it reconnects;
 - uninstalling one Machine's Provider removes only its affected sessions and
   does not delete Service authentication, source projects, or worktrees; and
-- Cowboy Web, Controller, and Machine candidates refuse activation when they
-  would orphan an installed or session-leased Provider contract.
+- session hard purge removes cascaded events and later reclaims only truly
+  unreferenced event attachments.
 
-## Migration order
+## Implemented migration boundary
 
-1. Publish the SDK, component library, package schema, auth contract, trusted
-   verifier, conformance suite, and Catalog.
-2. Add Service-owned authentication generations and automatic Machine replica
-   reconciliation; retire Machine login UI only after end-to-end convergence.
-3. Add persistent Machine-scoped Provider installations and exact session
-   generation identity.
-4. Convert one Provider and prove build, install, login synchronization,
-   refresh, upgrade, rollback, uninstall, logout, and retention end to end.
-5. Migrate the remaining Providers independently, then remove static Provider
-   UI tables and user-visible internal component controls after final drain.
+Provider package schema 2, release schema 2, Controller contract 2, Machine
+contract 4, and Cowboy Provider SDK 2.1 in both Rust and TypeScript are the
+active contract.
+The Catalog embeds the six independently compiled first-party manifests as
+typed `unbound` entries and accepts installable releases only after an external
+`.cowboy-provider` package is paired with a complete, signed runtime envelope.
+Target Machines repeat package, composite digest, publisher, contract,
+platform, private dependency, archive, and staged-probe checks before
+atomically changing their active generation.
+
+Exact package workers receive a Machine-verified command map for every private
+component. Cowboy prepends only those generation-local directories to the
+worker path, resolves component-command bindings without a shell, starts
+declared gateways as session-owned sidecars on dynamic loopback ports, requires
+their typed readiness probes, and keeps their process handles for the complete
+worker lifetime. This makes the Provider, rather than a Machine-global adapter,
+CLI, gateway, or resource path, the executable installation unit.
+
+Web discovers Providers from `/api/providers`, renders their closed UI IR and
+assets, and exposes only Provider-level install, upgrade, authentication, and
+uninstall actions. ACP, adapters, gateways, and managed CLI components remain
+available only to developer diagnostics. The Service authentication surface is
+rendered once outside Machine cards; Machine cards use the exact installed
+manifest and treat the latest ready Catalog release only as an upgrade target.
+Sessions persist exact Provider and auth generations. Service auth uses one
+encrypted, monotonic durable generation plus a Service-wide transient login
+status, and automatically seals durable state to enrolled Machines; offline
+replicas remain pending and converge on reconnect. Uninstall uses an expiring
+exact-impact plan, active
+turn confirmation, an absolute three-day purge deadline, and reference-aware
+attachment cleanup. Machine protocol 3 carries Provider/auth lifecycle
+commands; protocol 4 adds exact retained-generation reactivation for uninstall
+compensation. Provider lifecycle fences serialize install/uninstall, auth
+generations reject stale or conflicting replicas, and session launch resolves
+the exact recorded auth projection.
+
+The legacy in-tree launch registry is retained only to drain old sessions that
+lack an exact package generation. New Machine-backed sessions must resolve an
+active signed Provider package. Remove that fallback after the last legacy
+session generation is no longer restorable.

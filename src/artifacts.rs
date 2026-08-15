@@ -1,11 +1,16 @@
 //! Content-addressed storage for large image payloads in durable events.
 
+use std::collections::HashSet;
 use std::io::Write as _;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Context as _, Result};
 use base64::Engine as _;
 use sha2::{Digest as _, Sha256};
+
+static ARTIFACT_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone)]
 pub struct ArtifactStore {
@@ -72,8 +77,22 @@ impl ArtifactStore {
         let extension = extension_for_mime(mime);
         let name = format!("{hash}.{extension}");
         let path = self.root.join(&name);
-        if !path.exists() {
-            let temp = self.root.join(format!(".{name}.tmp"));
+        if path.exists() {
+            // Refresh the age of a content-addressed object when a new event
+            // reuses it. The event row is committed after this method returns;
+            // the GC grace period therefore also protects that in-flight
+            // reference from a concurrent sweep.
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .and_then(|file| file.set_modified(SystemTime::now()))
+                .with_context(|| format!("refreshing artifact {}", path.display()))?;
+        } else {
+            let temp = self.root.join(format!(
+                ".{name}.{}.{}.tmp",
+                std::process::id(),
+                ARTIFACT_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            ));
             let mut file = std::fs::File::create(&temp)
                 .with_context(|| format!("creating artifact {}", temp.display()))?;
             file.write_all(&bytes).context("writing artifact")?;
@@ -91,14 +110,76 @@ impl ArtifactStore {
     }
 
     pub fn path(&self, name: &str) -> Option<PathBuf> {
-        let (hash, extension) = name.split_once('.')?;
-        let valid = hash.len() == 64
-            && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
-            && matches!(extension, "png" | "jpg" | "webp" | "gif" | "avif");
-        valid
+        valid_artifact_name(name)
             .then(|| self.root.join(name))
             .filter(|path| path.is_file())
     }
+
+    /// Delete content-addressed artifacts that no retained event references.
+    /// A grace period prevents racing a file written just before its event row
+    /// commits. Shared artifacts survive until their final reference is gone.
+    pub fn prune_unreferenced(
+        &self,
+        referenced: &HashSet<String>,
+        minimum_age: Duration,
+    ) -> Result<u64> {
+        let now = SystemTime::now();
+        let mut removed = 0_u64;
+        for entry in std::fs::read_dir(&self.root)
+            .with_context(|| format!("reading artifact directory {}", self.root.display()))?
+        {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !valid_artifact_name(&name) || referenced.contains(&name) {
+                continue;
+            }
+            let metadata = entry.metadata()?;
+            if !metadata.is_file()
+                || now
+                    .duration_since(metadata.modified().unwrap_or(now))
+                    .unwrap_or_default()
+                    < minimum_age
+            {
+                continue;
+            }
+            std::fs::remove_file(entry.path())
+                .with_context(|| format!("removing unreferenced artifact {name}"))?;
+            removed = removed.saturating_add(1);
+        }
+        Ok(removed)
+    }
+}
+
+pub fn collect_references(value: &serde_json::Value, output: &mut HashSet<String>) {
+    match value {
+        serde_json::Value::Array(values) => {
+            for value in values {
+                collect_references(value, output);
+            }
+        }
+        serde_json::Value::Object(values) => {
+            for value in values.values() {
+                collect_references(value, output);
+            }
+        }
+        serde_json::Value::String(value) => {
+            if let Some(name) = value.strip_prefix("/api/artifacts/")
+                && valid_artifact_name(name)
+            {
+                output.insert(name.to_owned());
+            }
+        }
+        _ => {}
+    }
+}
+
+fn valid_artifact_name(name: &str) -> bool {
+    let Some((hash, extension)) = name.split_once('.') else {
+        return false;
+    };
+    hash.len() == 64
+        && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+        && matches!(extension, "png" | "jpg" | "webp" | "gif" | "avif")
 }
 
 fn externalize_object(
@@ -142,6 +223,32 @@ mod tests {
         let url = value["url"].as_str().unwrap();
         assert_eq!(std::path::Path::new(url).extension().unwrap(), "jpg");
         assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn garbage_collection_preserves_shared_references() {
+        let root = std::env::temp_dir().join(format!("cowboy-artifact-gc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let store = ArtifactStore::new(root.clone()).unwrap();
+        let name = format!("{}.png", "a".repeat(64));
+        std::fs::write(root.join(&name), b"image").unwrap();
+        let mut referenced = HashSet::new();
+        referenced.insert(name.clone());
+        assert_eq!(
+            store
+                .prune_unreferenced(&referenced, Duration::ZERO)
+                .unwrap(),
+            0
+        );
+        referenced.clear();
+        assert_eq!(
+            store
+                .prune_unreferenced(&referenced, Duration::ZERO)
+                .unwrap(),
+            1
+        );
+        assert!(!root.join(name).exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 }

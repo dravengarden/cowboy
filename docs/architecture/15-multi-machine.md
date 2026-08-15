@@ -1,10 +1,11 @@
 # Multi-machine runtime
 
-> **Provider packaging transition:** the `acp-runtime`, `provider-adapter`, and
-> `provider-cli` slots below describe the current internal rollout machinery.
-> The target product groups their exact pins into one independently released,
-> Machine-scoped Provider package. Ordinary UI installs, upgrades, and uninstalls
-> that Provider unit and does not expose ACP or adapter slots. See
+> **Provider packaging boundary:** `acp-runtime`, `provider-adapter`, and
+> `provider-cli` slots below describe only legacy rollout machinery and scoped
+> diagnostics. New releases bind their exact per-platform runtime artifacts
+> inside one independently released, Machine-scoped Provider generation.
+> Ordinary UI installs, upgrades, and uninstalls that Provider unit and does not
+> expose ACP or adapter slots. See
 > [Cowboy core requirements](../requirements.md) and
 > [Installable Provider packages](../provider-packages.md). Authentication is a
 > separate Cowboy Service-level contract: Machines receive automatic credential
@@ -408,10 +409,10 @@ worktree failure aborts creation instead of falling back to the source root.
 
 There are three deliberately separate compatibility contracts:
 
-1. **Machine control protocol:** identity, inventory, component reconciliation,
-   target auth-replica apply/ack/wipe, transitional Machine login actions,
-   health, and multiplexed runtime frames. Additive v1 fields default safely;
-   min/max negotiation rejects non-overlap.
+1. **Machine control protocol:** identity, inventory, legacy component
+   reconciliation, Provider install/uninstall, Service auth-replica
+   apply/ack/wipe, health, and multiplexed runtime frames. Min/max negotiation
+   rejects non-overlap.
 2. **ACP runtime protocol:** the existing `runtime_wire` contract between the
    controller and detached workers. Machine transport carries these frames
    without reinterpreting ACP updates.
@@ -477,9 +478,9 @@ enrolled online machine before removing an old version.
 - Machines lists connectivity, platform/architecture, capacity, allowed
   workspaces, Provider install/version/health state, auth-replica convergence,
   Zed generations, pending updates, and last error. Replica convergence is
-  diagnostic health, not a login control. ACP and adapter generations move to
-  an explicitly scoped developer-diagnostics surface during Provider-package
-  migration.
+  diagnostic health, not a login control. Legacy ACP and adapter component
+  generations appear only in an explicitly scoped developer-diagnostics
+  surface.
 - Providers shows one Service-level login/logout state and action per Provider,
   with aggregate Machine distribution progress. Machine surfaces never ask for
   credentials or expose a separate account selector. Secret material is never
@@ -491,16 +492,17 @@ enrolled online machine before removing an old version.
 
 ## Implemented boundary
 
-The controller and Machine now implement immutable session placement, outbound
+The Controller and Machine implement immutable session placement, outbound
 authenticated WSS enrollment, epoch fencing, runtime replay, session-owned Git
-worktrees from trusted remote workspaces, Provider inventory, transitional
-Machine-scoped login actions, signed independently activated components, Code
-Adapter routing, isolated Zed adapter/server supervision, capacity/drain-aware
-scheduling, Machines UI, and user-scoped macOS/Linux installation. Service-owned
-Provider auth generations and automatic Machine replica reconciliation remain a
-target migration; the current login UI must not be mistaken for the final
-ownership contract. The stable Machine wire remains additive and distinct from
-ACP runtime and Zed adapter contracts.
+worktrees from trusted remote workspaces, dynamic Provider inventory and exact
+generation launch, signed Provider runtime staging, Code Adapter routing,
+isolated Zed adapter/server supervision, capacity/drain-aware scheduling,
+Machines UI, and user-scoped macOS/Linux installation. Provider login is
+Service-owned: one encrypted monotonic generation is sealed and reconciled to
+every enrolled Machine, while Machine UI exposes only replica/materialization
+health. The old Machine login API and ordinary UI are removed. The stable
+Machine wire remains additive and distinct from private Provider transport and
+Zed adapter contracts.
 
 Operational rollout is deliberately separate from implementation. A target is
 selectable only after its one-time enrollment, signed desired manifest,

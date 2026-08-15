@@ -57,6 +57,8 @@ mod machine_control;
 pub mod machine_install;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod machine_protocol;
+#[cfg(feature = "machine-host")]
+mod machine_providers;
 #[cfg(feature = "full")]
 mod observability;
 #[cfg(feature = "full")]
@@ -66,9 +68,13 @@ mod prompt_origin;
 #[cfg(feature = "full")]
 mod provider;
 #[cfg(any(feature = "full", feature = "machine-host"))]
+mod provider_behavior;
+#[cfg(any(feature = "full", feature = "machine-host"))]
 mod provider_catalog;
 #[cfg(feature = "full")]
 mod provider_info;
+#[cfg(feature = "full")]
+mod provider_service;
 #[cfg(feature = "machine-host")]
 mod provider_usage_spool;
 #[cfg(feature = "full")]

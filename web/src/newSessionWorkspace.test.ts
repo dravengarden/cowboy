@@ -22,7 +22,7 @@ Deno.test("new session navigation precedes Machine preparation completion", () =
   );
   assertEquals(created >= 0 && active > created && settle > active, true);
   assertEquals(
-    transcriptSource.includes('<ConversationEmptyState kind="preparing"'),
+    /<ConversationEmptyState\s+kind="preparing"/u.test(transcriptSource),
     true,
   );
   assertEquals(transcriptSource.includes("Preparing session"), true);

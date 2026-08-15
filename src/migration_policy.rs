@@ -121,6 +121,10 @@ const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "0028_xai_provider_actions.sql",
         "7b4660a9044598f9241d08521c2b5837334c74ec806e403243c42b0b8e7fa353",
     ),
+    (
+        "0029_provider_platform.sql",
+        "dbb69d5fc808a32a7493a83288f446dc6d79f77f23462e0d56e59ea31b5e0a0c",
+    ),
 ];
 
 const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
@@ -131,6 +135,10 @@ const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "0002_xai_provider_actions.sql",
         "c6956075b1b91cd9060bfe5d2c4202bdcbeb8972f48a064d429a5eca5b0fddbf",
+    ),
+    (
+        "0003_provider_platform.sql",
+        "c33ea14ebb30f5138b4f57d53cafab3f3e22ce78f30e74d6d43a04bbe00f60e7",
     ),
 ];
 

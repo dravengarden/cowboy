@@ -65,7 +65,10 @@ Deno.test("frosted pill elevation stays close to the floating surface", () => {
 Deno.test("permission actions follow the global reading font scale", () => {
   assertEquals(permissionSource.includes('fontSize: "1rem"'), true);
   assertEquals(permissionSource.includes('fontSize: "0.875rem"'), true);
-  assertEquals(permissionSource.includes("fontSize: { xs: 15, sm: 14 }"), false);
+  assertEquals(
+    permissionSource.includes("fontSize: { xs: 15, sm: 14 }"),
+    false,
+  );
 });
 
 Deno.test("a context reset becomes a full conversation start until new content", () => {
@@ -74,13 +77,12 @@ Deno.test("a context reset becomes a full conversation start until new content",
     true,
   );
   assertEquals(
-    transcriptSource.includes('data-conversation-empty-state={kind}'),
+    transcriptSource.includes("data-conversation-empty-state={kind}"),
     true,
   );
   assertEquals(
-    transcriptSource.includes(
-      '<ConversationEmptyState kind="cleared" context={conversationContext} />',
-    ),
+    /<ConversationEmptyState\s+kind="cleared"\s+context=\{conversationContext\}\s*\/>/u
+      .test(transcriptSource),
     true,
   );
   assertEquals(transcriptSource.includes("New conversation"), true);
@@ -88,7 +90,10 @@ Deno.test("a context reset becomes a full conversation start until new content",
 });
 
 Deno.test("the Explore page dock yields to the focused mobile composer", () => {
-  assertEquals(exploreSurfaceSource.includes('data-mobile-page-dock="true"'), true);
+  assertEquals(
+    exploreSurfaceSource.includes('data-mobile-page-dock="true"'),
+    true,
+  );
   assertEquals(appSource.includes("data-mobile-page-dock='true'"), true);
   assertEquals(
     appSource.includes(
@@ -122,15 +127,24 @@ Deno.test("transient activity is transcript-owned with a zero-jump pill handoff"
     transcriptActivitySource.includes("data-composer-stack-slot"),
     false,
   );
-  assertEquals(transcriptSource.includes('data-transcript-tail-row="judging"'), true);
+  assertEquals(
+    transcriptSource.includes('data-transcript-tail-row="judging"'),
+    true,
+  );
   assertEquals(
     transcriptSource.includes('data-transcript-tail-row="reconnecting"'),
     true,
   );
   assertEquals(turnStatusSource.includes('label: "Reconnecting…"'), false);
   assertEquals(transcriptSource.includes("showJudging && ("), true);
-  assertEquals(transcriptSource.includes("<TranscriptJudgingActivity />"), true);
-  assertEquals(transcriptSource.includes("data-transcript-tail-clearance"), true);
+  assertEquals(
+    transcriptSource.includes("<TranscriptJudgingActivity />"),
+    true,
+  );
+  assertEquals(
+    transcriptSource.includes("data-transcript-tail-clearance"),
+    true,
+  );
   assertEquals(appSource.includes("judging={judging}"), true);
 });
 
@@ -143,7 +157,7 @@ Deno.test("focused mobile composer owns a real frosted material", () => {
   );
   assertEquals(
     composerSource.includes(
-      '"&[data-mobile-keyboard-open=\'true\'] [data-mobile-editor-area], &[data-mobile-keyboard-open=\'true\'] [data-mobile-action-row]',
+      "\"&[data-mobile-keyboard-open='true'] [data-mobile-editor-area], &[data-mobile-keyboard-open='true'] [data-mobile-action-row]",
     ),
     true,
   );
@@ -184,7 +198,7 @@ Deno.test("every Mobile transcript tail shares one external boundary gap", () =>
   );
 });
 
-Deno.test("live thought shimmer crosses each glyph run once per cycle", () => {
+Deno.test("Provider-neutral live thought shimmer crosses each glyph run once per cycle", () => {
   assertEquals(
     transcriptSource.includes("from { background-position: 100% 0; }"),
     true,
@@ -195,9 +209,12 @@ Deno.test("live thought shimmer crosses each glyph run once per cycle", () => {
   );
   assertEquals(
     transcriptSource.match(/backgroundRepeat: "no-repeat"/g)?.length,
-    2,
+    1,
   );
-  assertEquals(transcriptSource.includes("background-position: -110% 0"), false);
+  assertEquals(
+    transcriptSource.includes("background-position: -110% 0"),
+    false,
+  );
 });
 
 Deno.test("thought indicators align to the inherited first-line box", () => {

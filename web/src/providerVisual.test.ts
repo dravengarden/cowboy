@@ -1,20 +1,11 @@
 import { assertEquals, assertNotEquals } from "jsr:@std/assert";
 import { providerVisual } from "./providerVisual.ts";
 
-Deno.test("DeepSeek runtimes share a provider primary but retain agent identity", () => {
-  const claude = providerVisual("claude-deepseek", "dark");
-  const codex = providerVisual("codex-deepseek", "dark");
-
-  assertEquals(claude.primary, codex.primary);
-  assertNotEquals(claude.secondary, codex.secondary);
-  assertNotEquals(
-    claude.primary,
-    providerVisual("claude-code", "dark").primary,
-  );
-});
-
-Deno.test("Grok has a distinct monochrome xAI visual", () => {
-  const grok = providerVisual("grok", "dark");
-  assertNotEquals(grok.primary, providerVisual("unknown", "dark").primary);
-  assertNotEquals(grok.primary, grok.secondary);
+Deno.test("catalog-unavailable Providers use theme-safe generic visuals", () => {
+  const dark = providerVisual("future-agent", "dark");
+  const light = providerVisual("future-agent", "light");
+  assertEquals(dark.primary, "#A9B4C7");
+  assertEquals(light.primary, "#52606D");
+  assertNotEquals(dark.primary, dark.secondary);
+  assertNotEquals(dark.primary, light.primary);
 });

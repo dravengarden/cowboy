@@ -15,7 +15,9 @@
 //     the client's job. So clear is NOT a slash-command: it's a cowboy session
 //     RESET (kind: "reset") that respawns the agent with a fresh session/new.
 //     It works for every agent, so it's always available.
+import type { ProviderUiManifest } from "../../packages/provider-ui-sdk/src/index.ts";
 import type { AcpUpdate, AvailableCommand, Envelope } from "./protocol";
+import { currentProviderEntry } from "./providerCatalogRegistry";
 
 export function latestAvailableCommands(timeline: readonly Envelope[]): AvailableCommand[] {
   for (let index = timeline.length - 1; index >= 0; index -= 1) {
@@ -46,29 +48,18 @@ export interface SessionAction {
   destructive: boolean;
 }
 
-// Compact's concept spelled differently across agents. Matched case-insensitively
-// against advertised command names, so an upstream rename inside the family is
-// picked up without touching this file.
-const COMPACT_ALIASES = ["compact", "compress", "summarize", "summarise"];
+type CompactionContract = NonNullable<
+  ProviderUiManifest["host"]["conversation_compaction"]
+>;
 
-// Per-provider fallback compact command NAME (no slash) when the agent advertises
-// nothing yet (the cold-start window before the first available_commands_update).
-const COMPACT_DEFAULT: Record<string, string> = {
-  "claude-code": "compact",
-  "claude-deepseek": "compact",
-  "codex": "compact",
-  "codex-deepseek": "compact",
-  "gemini": "compress",
-  "grok": "compact",
-};
-
-function resolveCompact(
-  provider: string,
+export function resolveCompactionAction(
+  contract: CompactionContract | undefined,
   available: readonly AvailableCommand[],
 ): SessionAction | null {
-  const advertised = available.find((c) => COMPACT_ALIASES.includes(c.name.toLowerCase()));
-  const name = advertised?.name ?? COMPACT_DEFAULT[provider];
-  if (name === undefined) return null;
+  if (!contract) return null;
+  const aliases = new Set(contract.aliases.map((alias) => alias.toLocaleLowerCase()));
+  const advertised = available.find((command) => aliases.has(command.name.toLocaleLowerCase()));
+  const name = advertised?.name ?? contract.fallback_command;
   return {
     id: "compact",
     kind: "slash",
@@ -96,6 +87,11 @@ export function resolveSessionAction(
   id: SessionActionId,
   provider: string,
   available: readonly AvailableCommand[],
+  providerVersion?: string,
+  providerDigest?: string,
 ): SessionAction | null {
-  return id === "clear" ? CLEAR_ACTION : resolveCompact(provider, available);
+  if (id === "clear") return CLEAR_ACTION;
+  const contract = currentProviderEntry(provider, providerVersion, providerDigest)
+    ?.manifest.host.conversation_compaction;
+  return resolveCompactionAction(contract, available);
 }

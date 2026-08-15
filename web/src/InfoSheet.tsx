@@ -1493,9 +1493,9 @@ function ProviderUsageCard({
           <Typography variant="body2" color="text.secondary">
             {usage.status === "unavailable"
               ? usage.provider === "anthropic"
-                ? "Waiting for Claude Code session activity. Plan limits appear after the Agent SDK reports them."
+                ? "Waiting for session activity. Plan limits appear after the Provider reports them."
                 : usage.provider === "gemini"
-                ? "Waiting for Gemini session activity. Account quota is not exposed by Gemini ACP."
+                ? "Account quota is not exposed by this Provider."
                 : providerUsageErrorMessage(usage, "Waiting for usage data.")
               : providerUsageErrorMessage(
                 usage,
@@ -1924,7 +1924,7 @@ export function InfoContent({
             About
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            cowboy v0.1 — multi-agent panel driving Claude Code / Codex over ACP.
+            cowboy v0.1 — a Provider-driven multi-agent workspace.
           </Typography>
         </Stack>
         {aside}

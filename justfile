@@ -38,6 +38,49 @@ build: build-web
     cargo build --release --locked
     cd zed-adapter && cargo build --release --locked
 
+# Build one independently installable Provider artifact. The Provider id is
+# resolved only beneath providers/; shell metacharacters and path traversal are
+# rejected before any output path is created.
+provider-build PROVIDER:
+    case "{{PROVIDER}}" in (*[!a-z0-9-]*|"") echo "invalid Provider id" >&2; exit 2;; esac
+    test -f "providers/{{PROVIDER}}/provider.json"
+    mkdir -p "dist/providers/{{PROVIDER}}"
+    cargo run --locked -p cowboy-provider-sdk --bin cowboy-provider-pack -- build "providers/{{PROVIDER}}/provider.json" "dist/providers/{{PROVIDER}}/{{PROVIDER}}.cowboy-provider" "cowboy-provider://{{PROVIDER}}"
+
+provider-build-all:
+    just provider-build claude-code
+    just provider-build codex
+    just provider-build gemini
+    just provider-build grok
+    just provider-build claude-deepseek
+    just provider-build codex-deepseek
+
+# Bind the independently built package to one immutable runtime component set
+# per declared OS/architecture. The resulting composite digest is the Catalog,
+# Machine-generation, and session identity.
+provider-bind-runtime PROVIDER RUNTIME_ARTIFACTS:
+    case "{{PROVIDER}}" in (*[!a-z0-9-]*|"") echo "invalid Provider id" >&2; exit 2;; esac
+    test -f "dist/providers/{{PROVIDER}}/{{PROVIDER}}.cowboy-provider"
+    test -f "{{RUNTIME_ARTIFACTS}}"
+    cargo run --locked -p cowboy-provider-sdk --bin cowboy-provider-pack -- bind-runtime "dist/providers/{{PROVIDER}}/{{PROVIDER}}.cowboy-provider" "dist/providers/{{PROVIDER}}/{{PROVIDER}}.release.json" "{{RUNTIME_ARTIFACTS}}"
+
+provider-sign PROVIDER PRIVATE_KEY:
+    case "{{PROVIDER}}" in (*[!a-z0-9-]*|"") echo "invalid Provider id" >&2; exit 2;; esac
+    cargo run --locked -p cowboy-provider-sdk --bin cowboy-provider-pack -- sign "dist/providers/{{PROVIDER}}/{{PROVIDER}}.cowboy-provider" "dist/providers/{{PROVIDER}}/{{PROVIDER}}.release.json" "{{PRIVATE_KEY}}"
+
+provider-verify PROVIDER PUBLIC_KEY:
+    case "{{PROVIDER}}" in (*[!a-z0-9-]*|"") echo "invalid Provider id" >&2; exit 2;; esac
+    cargo run --locked -p cowboy-provider-sdk --bin cowboy-provider-pack -- verify "dist/providers/{{PROVIDER}}/{{PROVIDER}}.cowboy-provider" "dist/providers/{{PROVIDER}}/{{PROVIDER}}.release.json" "{{PUBLIC_KEY}}"
+
+# Cross-language package/linker conformance. This is also the Provider release
+# skill's deterministic pre-publish gate.
+provider-check:
+    cargo test --locked -p cowboy-provider-sdk --all-targets
+    just provider-build-all
+    cd web && deno task typecheck
+    deno run --allow-read packages/provider-ui-sdk/validate-packages.ts dist/providers/*/*.cowboy-provider
+    cd web && deno test --allow-read src/providerSdk.test.ts
+
 # Quality gates.
 fmt:
     cargo fmt --check

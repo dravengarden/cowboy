@@ -458,8 +458,12 @@ fn nearest_available_credit_id(rate_limits: Option<&Value>) -> Option<String> {
 /// Overlay the newest live ACP usage per provider onto the account snapshot.
 /// This is evaluated at response time so token/cost updates stay push-fresh and
 /// never wait for the slower account collector.
-pub fn with_session_usage(snapshot: UsageSnapshot, sessions: &[SessionMeta]) -> UsageSnapshot {
-    crate::provider_info::overlay_session_usage(snapshot, sessions)
+pub fn with_session_usage(
+    snapshot: UsageSnapshot,
+    sessions: &[SessionMeta],
+    catalog: &crate::provider_catalog::ProviderCatalog,
+) -> UsageSnapshot {
+    crate::provider_info::overlay_session_usage(snapshot, sessions, catalog)
 }
 
 pub(crate) fn now_ms() -> i64 {

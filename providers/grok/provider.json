@@ -1,0 +1,164 @@
+{
+  "authoring_schema": 2,
+  "id": "grok",
+  "version": "1.0.0",
+  "publisher": "cowboy-first-party",
+  "sdk_version": "2.1.0",
+  "display": {
+    "name": "Grok Build",
+    "vendor": "xAI",
+    "summary": "Official Grok Build agent with standard xAI authentication",
+    "accent": "#18181B",
+    "secondary_accent": "#52525B",
+    "mark_view_box": "0 0 24 24",
+    "mark_path": "M9.27 15.29l7.978-5.897c.391-.29.95-.177 1.137.272.98 2.369.542 5.215-1.41 7.169-1.951 1.954-4.667 2.382-7.149 1.406l-2.711 1.257c3.889 2.661 8.611 2.003 11.562-.953 2.341-2.344 3.066-5.539 2.388-8.42l.006.007c-.983-4.232.242-5.924 2.75-9.383L24 .5l-3.301 3.305L9.267 15.292M7.623 16.723c-2.792-2.67-2.31-6.801.071-9.184 1.761-1.763 4.647-2.483 7.166-1.425l2.705-1.25a7.808 7.808 0 0 0-1.829-1A8.975 8.975 0 0 0 5.984 5.83c-2.533 2.536-3.33 6.436-1.962 9.764 1.022 2.487-.653 4.246-2.34 6.022L0 21.54l7.62-6.815"
+  },
+  "card_layout": "mark_leading",
+  "configuration_presets": [
+    {
+      "id": "grok-high",
+      "name": "High · Always approve",
+      "detail": "High reasoning with Provider-managed approval policy",
+      "is_default": true,
+      "values": {
+        "reasoning_effort": "high",
+        "permission_mode": "always-approve"
+      }
+    }
+  ],
+  "host": {
+    "schema_version": 1,
+    "conversation_compaction": {
+      "aliases": ["compact", "summarise", "summarize"],
+      "fallback_command": "compact"
+    },
+    "account_usage": { "provider": "xai" },
+    "features": []
+  },
+  "runtime": {
+    "driver_schema": 1,
+    "protocol": "agent-client-protocol-1.3",
+    "entrypoint": "grok",
+    "behavior": {
+      "schema_version": 1,
+      "permission": "xai_session_v1",
+      "session": "xai_session_v1",
+      "turn_end": "portable_v1",
+      "configuration": "xai_session_v1",
+      "default_preferences": {
+        "permission_mode": "always-approve",
+        "reasoning_effort": "high"
+      },
+      "error_rules": []
+    },
+    "arguments": ["--no-auto-update", "agent", "stdio", "--yolo"],
+    "environment": { "GROK_FOLDER_TRUST": "0" },
+    "remove_environment": [],
+    "remove_environment_prefixes": ["GROK_", "XAI_"],
+    "dependencies": [
+      {
+        "id": "xai-grok",
+        "version": "0.2.117",
+        "source": "https://registry.npmjs.org/@xai-official/grok/-/grok-0.2.117.tgz",
+        "integrity": "sha512-OR7hJiGe1ZFRLqQdBv2G4R9g6rnMtqUgfCdjoJFIThL0gjYemXXqJizZKMwSdSPhwCn0QOdbDRW9LyWgKzq0Hw==",
+        "private": true
+      }
+    ],
+    "platforms": [
+      {
+        "os": "linux",
+        "architecture": "x86_64",
+        "payload_digest": "",
+        "launch_command": "grok",
+        "private_components": [
+          {
+            "kind": "provider_cli",
+            "slot": "grok",
+            "dependency": "xai-grok",
+            "command": "grok"
+          }
+        ]
+      },
+      {
+        "os": "linux",
+        "architecture": "aarch64",
+        "payload_digest": "",
+        "launch_command": "grok",
+        "private_components": [
+          {
+            "kind": "provider_cli",
+            "slot": "grok",
+            "dependency": "xai-grok",
+            "command": "grok"
+          }
+        ]
+      },
+      {
+        "os": "macos",
+        "architecture": "aarch64",
+        "payload_digest": "",
+        "launch_command": "grok",
+        "private_components": [
+          {
+            "kind": "provider_cli",
+            "slot": "grok",
+            "dependency": "xai-grok",
+            "command": "grok"
+          }
+        ]
+      }
+    ],
+    "required_capabilities": ["provider.runtime.v1"]
+  },
+  "authentication": {
+    "schema_version": 1,
+    "required": true,
+    "portable_schema": "grok-auth-v1",
+    "projection_schema": "grok-home-v1",
+    "refresh": "compare_and_swap",
+    "methods": [
+      {
+        "id": "xai-account",
+        "label": "xAI account",
+        "flow": "device_code",
+        "executor": {
+          "kind": "command_v1",
+          "component": { "kind": "provider_cli", "slot": "grok" },
+          "arguments": ["--no-auto-update", "login", "--device-auth"],
+          "terminal": "pipes",
+          "challenge": "device_code",
+          "environment": {},
+          "preflight": []
+        },
+        "required_bundle_keys": ["auth_json"]
+      },
+      {
+        "id": "api-key",
+        "label": "xAI API key",
+        "flow": "secret_input",
+        "executor": {
+          "kind": "secret_input_v1",
+          "bundle_key": "api_key",
+          "verification_url": "https://console.x.ai/"
+        },
+        "required_bundle_keys": ["api_key"]
+      }
+    ],
+    "credential_files": [
+      {
+        "bundle_key": "auth_json",
+        "relative_path": ".grok/auth.json",
+        "required": false
+      }
+    ],
+    "environment_projection": { "XAI_API_KEY": "api_key" }
+  },
+  "compatibility": {
+    "min_controller_contract": 2,
+    "max_controller_contract": 2,
+    "min_machine_contract": 4,
+    "max_machine_contract": 4,
+    "ui_component_fingerprint": "",
+    "auth_contract_fingerprint": ""
+  }
+}

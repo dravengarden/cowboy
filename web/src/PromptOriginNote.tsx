@@ -69,20 +69,38 @@ function AgentOriginNote({
   origin,
   text,
   provider,
+  providerVersion,
+  providerDigest,
 }: {
   origin: PromptOrigin;
   text: string;
   provider: string;
+  providerVersion?: string | undefined;
+  providerDigest?: string | undefined;
 }): React.JSX.Element {
   const theme = useTheme();
   const [detailsOpen, setDetailsOpen] = useState(false);
   const providerId = originProviderId(origin, provider);
-  const visual = providerVisual(providerId, theme.palette.mode);
+  const exactVersion = providerId === provider ? providerVersion : undefined;
+  const exactDigest = providerId === provider ? providerDigest : undefined;
+  const visual = providerVisual(
+    providerId,
+    theme.palette.mode,
+    exactVersion,
+    exactDigest,
+  );
   const presented = runtimePromptPresentation(text, origin);
-  const name = agentOriginDisplayName(providerId);
+  const name = agentOriginDisplayName(providerId, exactVersion, exactDigest);
   const source = agentOriginSourceLabel(origin);
   const hasDetails = Boolean(presented.raw && presented.raw !== presented.title);
-  const mark = <ProviderIcon provider={providerId} sx={{ fontSize: 18 }} />;
+  const mark = (
+    <ProviderIcon
+      provider={providerId}
+      providerVersion={exactVersion}
+      providerDigest={exactDigest}
+      sx={{ fontSize: 18 }}
+    />
+  );
 
   return (
     <Box
@@ -196,14 +214,26 @@ export function PromptOriginNote({
   origin,
   chunks,
   provider,
+  providerVersion,
+  providerDigest,
 }: {
   origin: PromptOrigin;
   chunks: ContentChunk[];
   provider: string;
+  providerVersion?: string | undefined;
+  providerDigest?: string | undefined;
 }): React.JSX.Element {
   const text = messageText(chunks);
   if (origin.actor === "agent") {
-    return <AgentOriginNote origin={origin} text={text} provider={provider} />;
+    return (
+      <AgentOriginNote
+        origin={origin}
+        text={text}
+        provider={provider}
+        providerVersion={providerVersion}
+        providerDigest={providerDigest}
+      />
+    );
   }
   return <CowboyOriginNote origin={origin} text={text} />;
 }

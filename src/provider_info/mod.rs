@@ -25,25 +25,21 @@ pub(crate) use xai_account::redeem_reset as redeem_xai_reset;
 
 pub(crate) const PROVIDERS: [&str; 5] = ["deepseek", "openai", "anthropic", "gemini", "xai"];
 
-pub(crate) fn account_provider(agent: &str) -> Option<&'static str> {
-    match agent {
-        "codex" => Some("openai"),
-        "claude" | "claude-code" => Some("anthropic"),
-        "codex-deepseek" | "claude-deepseek" => Some("deepseek"),
-        "gemini" => Some("gemini"),
-        "grok" => Some("xai"),
-        _ => None,
-    }
-}
-
 pub(crate) fn overlay_session_usage(
     mut snapshot: crate::usage::UsageSnapshot,
     sessions: &[SessionMeta],
+    catalog: &crate::provider_catalog::ProviderCatalog,
 ) -> crate::usage::UsageSnapshot {
     for provider in &mut snapshot.providers {
         let Some((_, session, usage)) = sessions
             .iter()
-            .filter(|session| account_provider(&session.provider) == Some(provider.provider))
+            .filter(|session| {
+                catalog.account_usage_provider(
+                    &session.provider,
+                    &session.provider_version,
+                    &session.provider_generation_digest,
+                ) == Some(provider.provider)
+            })
             .filter_map(|session| {
                 session
                     .usage
@@ -99,20 +95,5 @@ pub(crate) fn error(
     ProviderUsage {
         error: Some(message),
         ..unavailable(provider, source, "")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::account_provider;
-
-    #[test]
-    fn agent_shells_map_to_one_account_provider() {
-        assert_eq!(account_provider("codex"), Some("openai"));
-        assert_eq!(account_provider("claude-code"), Some("anthropic"));
-        assert_eq!(account_provider("codex-deepseek"), Some("deepseek"));
-        assert_eq!(account_provider("claude-deepseek"), Some("deepseek"));
-        assert_eq!(account_provider("gemini"), Some("gemini"));
-        assert_eq!(account_provider("grok"), Some("xai"));
     }
 }

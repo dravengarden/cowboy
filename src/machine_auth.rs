@@ -17,7 +17,9 @@ use anyhow::{Context as _, Result, bail};
 use base64::Engine as _;
 use sha2::Digest as _;
 
-const SIGNATURE_NAMESPACE: &str = "cowboy-machine-v1";
+pub(crate) const MACHINE_SIGNATURE_NAMESPACE: &str = "cowboy-machine-v1";
+pub(crate) const PROVIDER_RELEASE_SIGNATURE_NAMESPACE: &str = "cowboy-provider-release-v1";
+pub(crate) const PROVIDER_AUTH_SIGNATURE_NAMESPACE: &str = "cowboy-provider-auth-v1";
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone)]
@@ -85,10 +87,18 @@ impl MachineIdentity {
     /// # Errors
     /// Returns when the local identity cannot be read or `ssh-keygen` fails.
     pub fn sign(&self, challenge: &[u8]) -> Result<String> {
+        self.sign_namespaced(MACHINE_SIGNATURE_NAMESPACE, challenge)
+    }
+
+    /// Sign an application-owned proof in an explicit OpenSSH namespace.
+    /// Namespaces keep a valid Machine challenge signature from being replayed
+    /// as a Provider release or credential-distribution authorization.
+    pub(crate) fn sign_namespaced(&self, namespace: &str, proof: &[u8]) -> Result<String> {
+        validate_namespace(namespace)?;
         let mut child = Command::new("ssh-keygen")
             .args(["-Y", "sign", "-f"])
             .arg(&self.private_key)
-            .args(["-n", SIGNATURE_NAMESPACE])
+            .args(["-n", namespace])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -98,8 +108,8 @@ impl MachineIdentity {
             .stdin
             .take()
             .context("opening ssh-keygen stdin")?
-            .write_all(challenge)
-            .context("writing Machine challenge")?;
+            .write_all(proof)
+            .context("writing signature proof")?;
         let output = child
             .wait_with_output()
             .context("waiting for ssh-keygen sign")?;
@@ -121,6 +131,26 @@ impl MachineIdentity {
 /// Returns when the public key is malformed or the verification process cannot
 /// be executed. A validly executed mismatch returns `Ok(false)`.
 pub fn verify(public_key: &str, challenge: &[u8], signature: &str) -> Result<bool> {
+    verify_namespaced(
+        public_key,
+        MACHINE_SIGNATURE_NAMESPACE,
+        challenge,
+        signature,
+    )
+}
+
+/// Verify a proof in one of Cowboy's closed signing namespaces.
+///
+/// # Errors
+/// Returns when the key, namespace, or verification process is invalid. A
+/// cryptographic mismatch returns `Ok(false)`.
+pub(crate) fn verify_namespaced(
+    public_key: &str,
+    namespace: &str,
+    proof: &[u8],
+    signature: &str,
+) -> Result<bool> {
+    validate_namespace(namespace)?;
     let public_key = normalize_public_key(public_key)?;
     let temp = VerificationTemp::new()?;
     fs::write(&temp.allowed_signers, format!("machine {public_key}\n"))
@@ -129,7 +159,7 @@ pub fn verify(public_key: &str, challenge: &[u8], signature: &str) -> Result<boo
     let mut child = Command::new("ssh-keygen")
         .args(["-Y", "verify", "-f"])
         .arg(&temp.allowed_signers)
-        .args(["-I", "machine", "-n", SIGNATURE_NAMESPACE, "-s"])
+        .args(["-I", "machine", "-n", namespace, "-s"])
         .arg(&temp.signature)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -140,12 +170,25 @@ pub fn verify(public_key: &str, challenge: &[u8], signature: &str) -> Result<boo
         .stdin
         .take()
         .context("opening ssh-keygen verification stdin")?
-        .write_all(challenge)
+        .write_all(proof)
         .context("writing verification challenge")?;
     Ok(child
         .wait()
         .context("waiting for ssh-keygen verification")?
         .success())
+}
+
+fn validate_namespace(namespace: &str) -> Result<()> {
+    if matches!(
+        namespace,
+        MACHINE_SIGNATURE_NAMESPACE
+            | PROVIDER_RELEASE_SIGNATURE_NAMESPACE
+            | PROVIDER_AUTH_SIGNATURE_NAMESPACE
+    ) {
+        Ok(())
+    } else {
+        bail!("unsupported Cowboy signature namespace")
+    }
 }
 
 /// Validate and strip an untrusted SSH key down to its type and key body.

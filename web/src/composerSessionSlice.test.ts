@@ -9,6 +9,8 @@ import type { SessionMeta } from "./protocol";
 const active: SessionMeta = {
   id: "active",
   provider: "codex",
+  provider_version: "1.0.0",
+  provider_generation_digest: `sha256:${"1".repeat(64)}`,
   cwd: "/active",
   title: "Active",
   status: "busy",
@@ -47,6 +49,8 @@ Deno.test("composer session slice reacts to every visible composer field", () =>
   const initial = composerSessionSlice([active, other], active.id);
   const changes: SessionMeta[][] = [
     [{ ...active, provider: "claude-code" }, other],
+    [{ ...active, provider_version: "1.0.1" }, other],
+    [{ ...active, provider_generation_digest: `sha256:${"2".repeat(64)}` }, other],
     [{ ...active, paused: true }, other],
     [{ ...active, awaiting_user: true }, other],
     [{ ...active, done: true }, other],
@@ -78,6 +82,7 @@ Deno.test("composer sheet session ignores metadata it does not render", () => {
     next_schedule_ms: 123,
   }));
   assert(!sameComposerSheetSession(active, { ...active, title: "Renamed" }));
+  assert(!sameComposerSheetSession(active, { ...active, provider_version: "1.0.1" }));
   assert(!sameComposerSheetSession(active, { ...active, paused: true }));
   assert(!sameComposerSheetSession(active, { ...active, status: "running" }));
 });

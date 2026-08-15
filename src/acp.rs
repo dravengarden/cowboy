@@ -112,8 +112,8 @@ fn permission_auto_approve_enabled(
     grok_permission_mode: GrokPermissionMode,
 ) -> bool {
     system_session
-        || (crate::provider::is_codex(provider_id) && codex_full_access)
-        || (provider_id == "grok"
+        || (crate::provider::uses_config_full_access(provider_id) && codex_full_access)
+        || (crate::provider::uses_xai_session_extensions(provider_id)
             && matches!(grok_permission_mode, GrokPermissionMode::AlwaysApprove))
 }
 
@@ -676,8 +676,8 @@ fn deepseek_session_environment(
     cache_policy: Option<&str>,
 ) -> Option<(&'static str, String)> {
     let opaque_session_id = crate::deepseek_cache::opaque_session_id(session_id);
-    match provider_id {
-        "claude-deepseek" => {
+    match crate::provider::behavior(provider_id).configuration {
+        cowboy_provider_sdk::ConfigurationBehavior::AnthropicGatewayV1 => {
             let mut headers = existing_claude_headers
                 .unwrap_or_default()
                 .trim()
@@ -693,7 +693,9 @@ fn deepseek_session_environment(
             }
             Some(("ANTHROPIC_CUSTOM_HEADERS", headers))
         }
-        "codex-deepseek" => Some((crate::provider::DEEPSEEK_SESSION_ID_ENV, opaque_session_id)),
+        cowboy_provider_sdk::ConfigurationBehavior::OpenaiGatewayV1 => {
+            Some((crate::provider::DEEPSEEK_SESSION_ID_ENV, opaque_session_id))
+        }
         _ => None,
     }
 }
@@ -741,13 +743,10 @@ const fn select_resume_method(
 }
 
 fn startup_full_access_mode(provider_id: &str) -> Option<&'static str> {
-    if crate::provider::is_claude(provider_id) {
+    if crate::provider::uses_bypass_permissions_session_mode(provider_id) {
         return Some("bypassPermissions");
     }
-    match provider_id {
-        "gemini" => Some("yolo"),
-        _ => None,
-    }
+    crate::provider::uses_yolo_session_mode(provider_id).then_some("yolo")
 }
 
 /// Keep Claude's cacheable system-prefix stable across new and resumed ACP
@@ -755,7 +754,7 @@ fn startup_full_access_mode(provider_id: &str) -> Option<&'static str> {
 /// sections in the first user message, so the model retains the context while
 /// the system prompt no longer changes when the process is reconstructed.
 fn stable_claude_session_meta(provider_id: &str) -> Option<Meta> {
-    if !crate::provider::is_claude(provider_id) {
+    if !crate::provider::uses_stable_preset_system_prompt(provider_id) {
         return None;
     }
 
@@ -772,7 +771,7 @@ fn stable_claude_session_meta(provider_id: &str) -> Option<Meta> {
 }
 
 fn provider_session_meta(provider_id: &str) -> Option<Meta> {
-    if provider_id == "grok" {
+    if crate::provider::uses_xai_session_extensions(provider_id) {
         let mut meta = Meta::new();
         // Grok's own pager stamps both permission booleans on every new/load
         // request. Keep the resident ACP session authoritative even if the
@@ -1715,13 +1714,9 @@ pub fn run_agent_with_sink(
         Ok(()) => sink.set_status(session_id, Status::Exited, None),
         Err(e) => {
             let raw_error = e.to_string();
-            let detail = if spec.id == "gemini" {
-                crate::provider::gemini::user_facing_startup_error(&raw_error)
-                    .unwrap_or(&raw_error)
-                    .to_owned()
-            } else {
-                raw_error.clone()
-            };
+            let behavior = crate::provider::behavior(&spec.id);
+            let detail = crate::provider::user_facing_startup_error(&behavior, &raw_error)
+                .unwrap_or_else(|| raw_error.clone());
             tracing::error!(session = session_id, error = %raw_error, "agent session ended with error");
             // Salvage un-consumed prompts. A cold-start / handshake failure returns
             // BEFORE the command loop (`while let Some(cmd) = cmd_rx.recv()`) drains
@@ -1779,7 +1774,7 @@ async fn agent_main(
     }
     command.envs(&spec.env);
     if let Some((key, value)) = deepseek_session_environment(
-        spec.id,
+        &spec.id,
         session_id,
         spec.env.get("ANTHROPIC_CUSTOM_HEADERS").map(String::as_str),
         std::env::var(crate::deepseek_cache::SESSION_POLICY_ENV)
@@ -1810,7 +1805,7 @@ async fn agent_main(
     let child_stdout = child.stdout.take().context("child stdout")?;
     let child_stderr = child.stderr.take().context("child stderr")?;
     let stderr_session = session_id.to_owned();
-    let stderr_provider = spec.id.to_owned();
+    let stderr_provider = spec.id.clone();
     let stderr_task = tokio::spawn(async move {
         let mut lines = BufReader::new(child_stderr).lines();
         while let Ok(Some(line)) = lines.next_line().await {
@@ -1835,7 +1830,7 @@ async fn agent_main(
     let state = Arc::new(ClientState {
         sink,
         session_id: session_id.to_owned(),
-        provider_id: spec.id.to_owned(),
+        provider_id: spec.id.clone(),
         pending: Mutex::new(HashMap::new()),
         prompt_lock: tokio::sync::Mutex::new(()),
         active_prompt: Mutex::new(None),
@@ -1903,7 +1898,7 @@ async fn agent_main(
                                 session = %perm_state.session_id,
                                 system_session,
                                 codex_full_access,
-                                grok_always_approve = perm_state.provider_id == "grok"
+                                grok_always_approve = crate::provider::uses_xai_session_extensions(&perm_state.provider_id)
                                     && grok_permission_mode == GrokPermissionMode::AlwaysApprove,
                                 "auto-approving permission"
                             );
@@ -1972,7 +1967,7 @@ async fn agent_main(
             agent_client_protocol::on_receive_request!(),
         )
         .connect_with(transport, async move |cx: ConnectionTo<Agent>| {
-            run_session(&main_state, cx, resume, cwd, cmd_rx, spec.id, &run_progress).await
+            run_session(&main_state, cx, resume, cwd, cmd_rx, &spec.id, &run_progress).await
         });
 
     // Race the connection against the subprocess's OWN exit. The connection
@@ -2041,7 +2036,7 @@ fn handle_session_notification(state: &ClientState, notif: &SessionNotification)
     }
     let active_prompt = state.current_prompt();
     let synthetic_empty_stream = active_prompt.as_ref().is_some_and(|prompt| {
-        crate::provider::is_claude(&state.provider_id)
+        crate::provider::uses_stable_preset_system_prompt(&state.provider_id)
             && !prompt.visible_update.load(Ordering::SeqCst)
             && matches!(
                 &notif.update,
@@ -2275,7 +2270,7 @@ async fn run_session(
         session.session_id
     };
     startup_phase.send_replace(StartupPhase::Configure);
-    if crate::provider::is_codex(provider_id) {
+    if crate::provider::uses_config_full_access(provider_id) {
         state.codex_full_access.store(
             config_options
                 .as_ref()
@@ -2286,7 +2281,7 @@ async fn run_session(
     // Codex ACP exposes its approval preset as a config option instead of a
     // session mode. Default new/revived Codex panels to Full Access when the
     // adapter advertises it; a failed set falls back to the adapter default.
-    if crate::provider::is_codex(provider_id)
+    if crate::provider::uses_config_full_access(provider_id)
         && config_options
             .as_ref()
             .is_some_and(|opts| codex_full_access_available(opts))
@@ -2356,10 +2351,12 @@ async fn run_session(
     // Grok also has ordinary ACP session modes, but its model + reasoning
     // choices arrive in `x.ai/sessionConfig`; use a distinct id so both menus
     // remain independently selectable.
-    let mode_config_id = match provider_id {
-        "gemini" => Some("mode"),
-        "grok" => Some(GROK_SESSION_MODE_CONFIG_ID),
-        _ => None,
+    let mode_config_id = if crate::provider::uses_yolo_session_mode(provider_id) {
+        Some("mode")
+    } else if crate::provider::uses_xai_session_extensions(provider_id) {
+        Some(GROK_SESSION_MODE_CONFIG_ID)
+    } else {
+        None
     };
     let current_session_mode = Arc::new(Mutex::new(
         modes
@@ -2384,14 +2381,14 @@ async fn run_session(
         None
     };
     let grok_config = Arc::new(Mutex::new(
-        (provider_id == "grok")
+        crate::provider::uses_xai_session_extensions(provider_id)
             .then(|| {
                 GrokSessionConfig::from_metadata(session_meta.as_ref(), initialize_meta.as_ref())
             })
             .flatten(),
     ));
     let mut surfaced_options = config_options.unwrap_or_default();
-    if provider_id == "grok" {
+    if crate::provider::uses_xai_session_extensions(provider_id) {
         let config = grok_config.lock().clone();
         let session_mode = current_session_mode.lock().clone();
         surfaced_options.extend(grok_cowboy_options(
@@ -2421,7 +2418,7 @@ async fn run_session(
         }
     }
 
-    let grok_usage_tx = if provider_id == "grok" {
+    let grok_usage_tx = if crate::provider::uses_xai_session_extensions(provider_id) {
         let (tx, rx) = mpsc::unbounded_channel();
         let usage_cx = cx.clone();
         let usage_sink = Arc::clone(&state.sink);
@@ -2439,7 +2436,7 @@ async fn run_session(
         None
     };
 
-    let grok_config_tx = if provider_id == "grok" {
+    let grok_config_tx = if crate::provider::uses_xai_session_extensions(provider_id) {
         let (tx, rx) = mpsc::unbounded_channel();
         let queue_cx = cx.clone();
         let queue_sink = Arc::clone(&state.sink);
@@ -2564,8 +2561,9 @@ async fn run_session(
                         };
                         let detail = error.to_string();
                         let visible_update = prompt.visible_update.load(Ordering::SeqCst);
-                        if !crate::provider::claude_code::should_retry_empty_stream(
-                            &provider,
+                        let behavior = crate::provider::behavior(&provider);
+                        if !crate::provider::should_retry_without_visible_update(
+                            &behavior,
                             &detail,
                             visible_update,
                             retries,
@@ -2577,7 +2575,7 @@ async fn run_session(
                             session = %sid,
                             provider = %provider,
                             attempt = retries + 1,
-                            "Claude stream ended before its first event; retrying prompt once"
+                            "Provider requested one bounded zero-update retry"
                         );
                         tokio::select! {
                             () = tokio::time::sleep(Duration::from_millis(400)) => {}
@@ -2664,8 +2662,9 @@ async fn run_session(
                             // are failed TURNS, not failed workers. The adapter
                             // remains connected, so retain it while the controller
                             // keeps the session in an actionable error state.
-                            let worker_alive = crate::provider::claude_code::keeps_worker_alive(
-                                &provider, &detail,
+                            let behavior = crate::provider::behavior(&provider);
+                            let worker_alive = crate::provider::keeps_worker_alive_for_behavior(
+                                &behavior, &detail,
                             );
                             if worker_alive {
                                 tracing::warn!(
@@ -2744,7 +2743,7 @@ async fn run_session(
                 let current_permission_mode = Arc::clone(&current_permission_mode);
                 let current_session_mode = Arc::clone(&current_session_mode);
                 let mode_config_id = mode_config_id.expect("synthesized mode id");
-                let is_grok = provider_id == "grok";
+                let is_grok = crate::provider::uses_xai_session_extensions(provider_id);
                 cx.clone().spawn(async move {
                     let req = SetSessionModeRequest::new(acp, SessionModeId::new(mode_id.clone()));
                     match cx.send_request(req).block_task().await {
@@ -2783,7 +2782,8 @@ async fn run_session(
                 })?;
             }
             AgentCommand::SetConfigOption { config_id, value }
-                if provider_id == "grok" && config_id == GROK_PERMISSION_CONFIG_ID =>
+                if crate::provider::uses_xai_session_extensions(provider_id)
+                    && config_id == GROK_PERMISSION_CONFIG_ID =>
             {
                 let Some(requested) = value.as_str() else {
                     state.sink.broadcast_error(
@@ -2825,7 +2825,7 @@ async fn run_session(
                 }
             }
             AgentCommand::SetConfigOption { config_id, value }
-                if provider_id == "grok"
+                if crate::provider::uses_xai_session_extensions(provider_id)
                     && matches!(
                         config_id.as_str(),
                         GROK_MODEL_CONFIG_ID | GROK_REASONING_CONFIG_ID
@@ -2945,7 +2945,7 @@ pub async fn run_oneshot(spec: &LaunchSpec, cwd: PathBuf, prompt: String) -> Res
     let child_stdin = child.stdin.take().context("child stdin")?;
     let child_stdout = child.stdout.take().context("child stdout")?;
     let transport = ByteStreams::new(child_stdin.compat_write(), child_stdout.compat());
-    let provider_id = spec.id;
+    let provider_id = &spec.id;
 
     let result = Client
         .builder()

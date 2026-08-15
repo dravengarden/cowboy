@@ -162,8 +162,14 @@ struct Bridge {
 }
 
 pub async fn serve(args: ServeAcpArgs) -> anyhow::Result<()> {
-    if crate::provider::lookup(&args.provider).is_none() {
-        bail!("unknown provider {:?}", args.provider);
+    if args.provider.is_empty()
+        || args.provider.len() > 128
+        || matches!(args.provider.as_str(), "." | "..")
+        || !args.provider.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_' | b'.')
+        })
+    {
+        bail!("invalid Provider id {:?}", args.provider);
     }
 
     let base_url = normalized_base_url(&args.daemon_url)?;
@@ -460,15 +466,7 @@ async fn run_acp_server(
 
 impl Bridge {
     fn display_name(&self) -> String {
-        match self.provider.as_ref() {
-            "codex" => "Cowboy · Codex",
-            "claude-code" => "Cowboy · Claude Code",
-            "claude-deepseek" => "Cowboy · Claude Code · DeepSeek",
-            "gemini" => "Cowboy · Gemini",
-            "grok" => "Cowboy · Grok Build",
-            provider => provider,
-        }
-        .to_owned()
+        format!("Cowboy · {}", crate::provider::display_name(&self.provider))
     }
 
     fn capability_meta(&self) -> serde_json::Map<String, serde_json::Value> {
@@ -1590,6 +1588,10 @@ mod tests {
         let meta = SessionMeta {
             id: "sess-1".to_owned(),
             provider: "codex".to_owned(),
+            provider_version: String::new(),
+            provider_generation_digest: String::new(),
+            provider_auth_generation: None,
+            provider_behavior: None,
             machine_id: "local".to_owned(),
             workspace_id: None,
             workspace_name: None,

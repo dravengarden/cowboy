@@ -1,5 +1,6 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
+  accountProviderUsage,
   acceptedScheduleTime,
   nearestAvailableResetCredit,
   providerUsageErrorMessage,
@@ -252,7 +253,7 @@ Deno.test("desktop summary tolerates a missing Codex 5h bucket", () => {
   ]);
 });
 
-Deno.test("agent shells resolve to account-provider cards", () => {
+Deno.test("Provider-declared account identities resolve to usage cards", () => {
   const snapshot = {
     refreshed_at_ms: 1,
     next_refresh_at_ms: 2,
@@ -290,14 +291,12 @@ Deno.test("agent shells resolve to account-provider cards", () => {
       },
     ],
   };
-  assertEquals(providerUsage(snapshot, "codex")?.provider, "openai");
-  assertEquals(providerUsage(snapshot, "claude-code")?.provider, "anthropic");
-  assertEquals(providerUsage(snapshot, "codex-deepseek")?.provider, "deepseek");
-  assertEquals(
-    providerUsage(snapshot, "claude-deepseek")?.provider,
-    "deepseek",
-  );
-  assertEquals(providerUsage(snapshot, "grok")?.provider, "xai");
+  assertEquals(accountProviderUsage(snapshot, "openai")?.provider, "openai");
+  assertEquals(accountProviderUsage(snapshot, "anthropic")?.provider, "anthropic");
+  assertEquals(accountProviderUsage(snapshot, "deepseek")?.provider, "deepseek");
+  assertEquals(accountProviderUsage(snapshot, "gemini")?.provider, "gemini");
+  assertEquals(accountProviderUsage(snapshot, "xai")?.provider, "xai");
+  assertEquals(providerUsage(snapshot, "catalog-unavailable"), undefined);
 });
 
 Deno.test("only the earliest-expiring available reset is actionable", () => {

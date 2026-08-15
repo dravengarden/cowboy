@@ -104,15 +104,7 @@ impl ComponentStore {
         }
         if let Some(probe) = &desired.probe {
             let timeout = probe.timeout_ms.clamp(100, 120_000);
-            let mut child = tokio::process::Command::new(&executable)
-                .args(&probe.args)
-                .current_dir(&generation)
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .kill_on_drop(true)
-                .spawn()
-                .context("starting staged component health probe")?;
+            let mut child = spawn_staged_probe(&executable, &generation, &probe.args).await?;
             let status =
                 match tokio::time::timeout(std::time::Duration::from_millis(timeout), child.wait())
                     .await
@@ -229,6 +221,36 @@ impl ComponentStore {
         }
         Ok(())
     }
+}
+
+async fn spawn_staged_probe(
+    executable: &Path,
+    generation: &Path,
+    args: &[String],
+) -> anyhow::Result<tokio::process::Child> {
+    for attempt in 0_u64..3 {
+        let result = tokio::process::Command::new(executable)
+            .args(args)
+            .current_dir(generation)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn();
+        match result {
+            Ok(child) => return Ok(child),
+            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy && attempt < 2 => {
+                // Some filesystems briefly retain the write-side executable
+                // lease after atomic staging. Retry only this exact kernel
+                // condition; every other spawn failure remains immediate.
+                tokio::time::sleep(std::time::Duration::from_millis(10 * (attempt + 1))).await;
+            }
+            Err(error) => {
+                return Err(error).context("starting staged component health probe");
+            }
+        }
+    }
+    unreachable!("the bounded component probe loop always returns")
 }
 
 fn component_command(desired: &DesiredComponent) -> Option<String> {

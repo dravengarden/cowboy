@@ -9,9 +9,12 @@ export function originProviderId(
 }
 
 /** Short, human-facing sender name for an agent-origin prompt. */
-export function agentOriginDisplayName(providerId: string): string {
-  if (providerId === "grok") return "Grok";
-  return providerPresentation(providerId).agent;
+export function agentOriginDisplayName(
+  providerId: string,
+  providerVersion?: string,
+  providerDigest?: string,
+): string {
+  return providerPresentation(providerId, providerVersion, providerDigest).agent;
 }
 
 export function cowboyOriginCaption(origin: PromptOrigin): string {

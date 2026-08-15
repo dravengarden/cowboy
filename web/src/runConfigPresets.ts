@@ -1,44 +1,19 @@
+import type { ProviderUiManifest } from "../../packages/provider-ui-sdk/src/index.ts";
 import type { ConfigOption } from "./protocol";
+import { currentProviderEntry } from "./providerCatalogRegistry";
 
 export interface RunConfigPreset {
-  id:
-    | "luna-max"
-    | "sol-medium"
-    | "sol-max"
-    | "deepseek-flash-max"
-    | "grok-high";
+  id: string;
   name: string;
   detail: string;
   isDefault: boolean;
   values: Readonly<Record<string, string>>;
 }
 
-const OPENAI_CODEX_PRESETS: readonly RunConfigPreset[] = [
-  {
-    id: "luna-max",
-    name: "Luna · Max",
-    detail: "GPT-5.6-Luna · Max reasoning",
-    isDefault: true,
-    values: { model: "gpt-5.6-luna", reasoning_effort: "max" },
-  },
-  {
-    id: "sol-medium",
-    name: "Sol · Medium",
-    detail: "GPT-5.6-Sol · Medium reasoning",
-    isDefault: false,
-    values: { model: "gpt-5.6-sol", reasoning_effort: "medium" },
-  },
-  {
-    id: "sol-max",
-    name: "Sol · Max",
-    detail: "GPT-5.6-Sol · Max reasoning",
-    isDefault: false,
-    values: { model: "gpt-5.6-sol", reasoning_effort: "max" },
-  },
-];
+type DeclaredPreset = ProviderUiManifest["configuration"]["presets"][number];
 
 function supportsPreset(
-  preset: RunConfigPreset,
+  preset: Pick<RunConfigPreset, "values">,
   optionById: ReadonlyMap<string, ConfigOption>,
 ): boolean {
   return Object.entries(preset.values).every(([id, value]) =>
@@ -48,57 +23,31 @@ function supportsPreset(
   );
 }
 
-/** Project provider-native recommended combinations from the live ACP surface. */
-export function runConfigPresets(
-  provider: string | undefined,
+/** Project signed, typed Provider presets onto the live configuration surface. */
+export function supportedRunConfigPresets(
+  declared: readonly DeclaredPreset[],
   options: readonly ConfigOption[],
 ): readonly RunConfigPreset[] {
   const optionById = new Map(options.map((option) => [option.id, option]));
-  if (provider === "codex") {
-    return OPENAI_CODEX_PRESETS.filter((preset) =>
-      supportsPreset(preset, optionById)
-    );
-  }
-  if (provider === "grok") {
-    const model = optionById.get("model");
-    const modelId = model && String(model.currentValue);
-    const modelName = model?.options.find((candidate) =>
-      String(candidate.value) === modelId
-    )?.name;
-    if (!modelId || !modelName) return [];
-    const preset: RunConfigPreset = {
-      id: "grok-high",
-      name: `${modelName} · High`,
-      detail: `${modelName} · High reasoning · Always approve`,
-      isDefault: true,
-      values: {
-        model: modelId,
-        reasoning_effort: "high",
-        permission_mode: "always-approve",
-      },
-    };
-    return supportsPreset(preset, optionById) ? [preset] : [];
-  }
-  if (provider !== "claude-deepseek" && provider !== "codex-deepseek") {
-    return [];
-  }
-  const model = optionById.get("model");
-  const effortId = provider === "claude-deepseek"
-    ? "effort"
-    : "reasoning_effort";
-  const flash = model?.options.find((candidate) =>
-    String(candidate.value) !== "default" &&
-    /deepseek-v4-flash/iu.test(`${String(candidate.value)} ${candidate.name}`)
-  );
-  if (!flash) return [];
-  const preset: RunConfigPreset = {
-    id: "deepseek-flash-max",
-    name: "Flash · Max",
-    detail: "DeepSeek-V4-Flash · Max reasoning",
-    isDefault: true,
-    values: { model: String(flash.value), [effortId]: "max" },
-  };
-  return supportsPreset(preset, optionById) ? [preset] : [];
+  return declared.map((preset) => ({
+    id: preset.id,
+    name: preset.name,
+    detail: preset.detail,
+    isDefault: preset.is_default,
+    values: { ...preset.values },
+  })).filter((preset) => supportsPreset(preset, optionById));
+}
+
+export function runConfigPresets(
+  provider: string | undefined,
+  options: readonly ConfigOption[],
+  providerVersion?: string | undefined,
+  providerDigest?: string | undefined,
+): readonly RunConfigPreset[] {
+  if (!provider) return [];
+  const declared = currentProviderEntry(provider, providerVersion, providerDigest)
+    ?.manifest.configuration.presets ?? [];
+  return supportedRunConfigPresets(declared, options);
 }
 
 export function activeRunConfigPreset(

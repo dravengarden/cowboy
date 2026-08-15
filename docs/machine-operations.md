@@ -166,32 +166,31 @@ Git, so remote sessions never fall back to the controller filesystem.
 `max_sessions` and `draining` are reported by the host; Cowboy derives active
 leases from its persisted session ownership and refuses new placement when the
 envelope is full or draining. Existing sessions remain pinned and resumable.
-Provider CLI, provider adapter, managed Node, and ACP-runtime activation causes
-the small stable host process to be relaunched by launchd/systemd so its worker
-launch environment is rebuilt atomically. Detached worker services and their
-session generations remain alive and are adopted by the new broker.
+Legacy Provider CLI, provider adapter, managed Node, and ACP-runtime component
+activation can still relaunch the small stable host during a rolling drain.
+Schema-v2 Provider installation does not reconcile those slots: it stages all
+private runtime artifacts inside the Provider generation, and detached workers
+stay pinned to their original generation.
 
-### Transitional Machine login
+### Service-owned Provider authentication
 
-Codex and Grok Build device login plus Claude browser login can be initiated
-from Machines. Grok credentials remain in the official CLI's `~/.grok/auth.json`
-or configured `GROK_HOME`/`GROK_AUTH_PATH`; Cowboy never copies token material.
-Gemini exposes two explicit Cowboy flows: an API key is submitted directly to
-the target Machine and stored in its CLI-owned `~/.gemini/.env` with mode 0600;
-Standard/Enterprise Google Login is enabled only when that Machine has a
-`GOOGLE_CLOUD_PROJECT`. Consumer Google Login credentials without a project are
-retired and never make the provider ready. A controller refuses Gemini login
-commands from older Machine hosts that cannot advertise these semantics.
+Provider login is initiated once from the Service-level Providers surface, not
+from a Machine. A Provider-declared temporary executor may run on an eligible
+Machine in an isolated home, but it exports only the declared portable bundle;
+after the Service durably commits and redistributes that generation, Cowboy
+removes the temporary executor home.
 
-These commands remain necessary only until the Service auth vault, typed
-Provider auth projection, generation reconciliation, and wipe acknowledgement
-are deployed. New product work must not add another Machine-specific login flow.
+The Service encrypts one monotonic generation per Provider, seals it separately
+to every enrolled Machine's public key, and reconciles online, reconnecting, and
+newly enrolled Machines without another login. A Machine stores the sealed
+replica even when the Provider is absent and materializes it only into the
+matching installed Provider's private home. Machine inventory exposes replica
+and materialization health, never login/logout or credential entry.
 
 ## Ownership
 
 Cowboy-managed Zed payloads and state live under the Machine root. Native Zed
 continues to own `~/.zed_server` and its SSH bootstrap chain. The stable tunnel
-carries Cowboy adapter JSON, never Zed protobuf. In the deployed transition,
-Codex, Claude, Gemini, and Grok auth state remains in each official CLI's own
-state root on that Machine. The target replaces this ownership with
-Service-issued, versioned Machine replicas.
+carries Cowboy adapter JSON, never Zed protobuf. Provider credential plaintext
+is Service-owned; Machines hold only sealed replicas and the active Provider's
+private materialized projection.

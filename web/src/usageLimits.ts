@@ -1,3 +1,5 @@
+import { currentProviderEntry } from "./providerCatalogRegistry";
+
 export type JsonRecord = Record<string, unknown>;
 
 export interface ProviderUsage {
@@ -341,18 +343,21 @@ export function scheduledResetCountdown(
 export function providerUsage(
   snapshot: UsageSnapshot | null,
   provider: string | undefined,
+  providerVersion?: string | undefined,
+  providerDigest?: string | undefined,
 ): ProviderUsage | undefined {
   if (!provider) return undefined;
-  const normalized: Record<string, string> = {
-    codex: "openai",
-    claude: "anthropic",
-    "claude-code": "anthropic",
-    "codex-deepseek": "deepseek",
-    "claude-deepseek": "deepseek",
-    gemini: "gemini",
-    grok: "xai",
-  };
+  const accountProvider = currentProviderEntry(provider, providerVersion, providerDigest)
+    ?.manifest.host.account_usage?.provider;
+  return accountProviderUsage(snapshot, accountProvider);
+}
+
+export function accountProviderUsage(
+  snapshot: UsageSnapshot | null,
+  accountProvider: string | undefined,
+): ProviderUsage | undefined {
+  if (!accountProvider) return undefined;
   return snapshot?.providers.find((candidate) =>
-    candidate.provider === normalized[provider]
+    candidate.provider === accountProvider
   );
 }

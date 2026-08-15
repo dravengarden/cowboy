@@ -5,30 +5,22 @@ const transcriptSource = await Deno.readTextFile(
   new URL("./Transcript.tsx", import.meta.url),
 );
 
-Deno.test("Codex activity copy fades without moving the text baseline", () => {
-  const animation = transcriptSource.match(
-    /const codexPhraseFade = keyframes`([\s\S]*?)`;/,
-  )?.[1];
-  assert(animation);
-  assertEquals(animation.includes("translateY"), false);
-});
-
-Deno.test("Grok activity sweeps its provider mark without React churn", () => {
+Deno.test("thinking activity renders the exact Provider loading surface", () => {
   const component = transcriptSource.match(
-    /function GrokThinking[\s\S]*?(?=\nfunction DefaultThinking)/,
+    /function ThinkingIndicator[\s\S]*?(?=\n\/\/ Blinking text caret)/,
   )?.[0];
   assert(component);
-  assert(transcriptSource.includes("const grokSignalSweep = keyframes"));
-  assert(transcriptSource.includes("const GROK_SIGNAL_MS = 1800"));
-  assert(component.includes('data-provider-activity="grok"'));
-  assert(component.includes('className="grok-mark-base"'));
-  assert(component.includes('className="grok-mark-signal"'));
-  assert(component.includes("WebkitMaskImage"));
-  assert(component.includes("Working"));
-  assert(component.includes("prefers-reduced-motion: reduce"));
-  assert(component.includes("width: 18"));
-  assertEquals(component.includes("setInterval"), false);
-  assertEquals(transcriptSource.includes("Grokking…"), false);
+  assert(component.includes("<ProviderRuntimeSurface"));
+  assert(component.includes("providerVersion={providerVersion}"));
+  assert(component.includes("providerDigest={providerDigest}"));
+  assert(component.includes('slot="loading"'));
+});
+
+Deno.test("thinking activity has no Provider identity branches", () => {
+  assertEquals(transcriptSource.includes("function ClaudeThinking"), false);
+  assertEquals(transcriptSource.includes("function CodexThinking"), false);
+  assertEquals(transcriptSource.includes("function GrokThinking"), false);
+  assertEquals(transcriptSource.includes("providerActivityKind"), false);
 });
 
 Deno.test("the growing row stays in the scroller paint flow", () => {

@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 2;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 4;
 pub const MIN_MACHINE_PROTOCOL_VERSION: u16 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,8 +122,17 @@ pub struct MachineHello {
     pub challenge_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub challenge_signature: Option<String>,
+    /// X25519 public key used only to seal Service-scoped Provider credential
+    /// replicas to this Machine. It is enrolled and challenge-bound separately
+    /// from the Ed25519 signing identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encryption_public_key: Option<String>,
     #[serde(default)]
     pub components: Vec<ComponentInventory>,
+    /// Product-level Provider installations. Internal components remain a
+    /// developer diagnostic and never define ordinary scheduling on protocol 3+.
+    #[serde(default)]
+    pub providers: Vec<ProviderInventory>,
     /// Explicit launch roots exported by the Machine. Cowboy never sends an
     /// arbitrary controller-side path to a remote host.
     #[serde(default)]
@@ -208,6 +217,158 @@ pub fn challenge_proof_v1(
     proof
 }
 
+/// Version-two handshake proof additionally binds the credential-replica key.
+/// A protocol-three Machine must use this proof so an enrolled signing key
+/// cannot advertise a substituted X25519 recipient.
+#[must_use]
+pub fn challenge_proof_v2(
+    challenge_id: &str,
+    nonce: &str,
+    expires_at_ms: i64,
+    hello: &MachineHello,
+) -> Vec<u8> {
+    let mut proof = challenge_proof_v1(challenge_id, nonce, expires_at_ms, hello);
+    proof.extend_from_slice(b"cowboy-machine-proof-v2\n");
+    let encryption_key = hello.encryption_public_key.as_deref().unwrap_or_default();
+    proof.extend_from_slice(encryption_key.len().to_string().as_bytes());
+    proof.push(b':');
+    proof.extend_from_slice(encryption_key.as_bytes());
+    proof.push(b'\n');
+    proof
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderInstallationState {
+    Missing,
+    Installing,
+    Active,
+    Uninstalling,
+    Incompatible,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderReplicaState {
+    Absent,
+    Pending,
+    Storing,
+    Current,
+    Failed,
+    Revoking,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderMaterializationState {
+    NotInstalled,
+    Applying,
+    Current,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderInventory {
+    pub provider_id: String,
+    pub provider_version: String,
+    pub generation_digest: String,
+    pub contract_fingerprint: String,
+    pub state: ProviderInstallationState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollback_generation_digest: Option<String>,
+    #[serde(default)]
+    pub active_session_leases: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_generation: Option<u64>,
+    #[serde(default = "default_provider_replica_state")]
+    pub replica_state: ProviderReplicaState,
+    #[serde(default = "default_provider_materialization_state")]
+    pub materialization_state: ProviderMaterializationState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+const fn default_provider_replica_state() -> ProviderReplicaState {
+    ProviderReplicaState::Absent
+}
+
+const fn default_provider_materialization_state() -> ProviderMaterializationState {
+    ProviderMaterializationState::NotInstalled
+}
+
+/// Immutable Catalog-selected payload. The browser submits only Provider id,
+/// version, and optional digest; the Controller fills this complete envelope.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DesiredProvider {
+    pub release: cowboy_provider_sdk::ProviderRelease,
+    pub package_base64: String,
+    pub publisher_public_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderAuthAction {
+    Apply,
+    Wipe,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PortableCredentialBundle {
+    pub portable_schema: String,
+    pub method_id: String,
+    /// Opaque values encoded with standard base64. Bundle keys are declared by
+    /// the Provider authentication contract and never appear in logs.
+    pub values: std::collections::BTreeMap<String, String>,
+}
+
+/// Service-auth bundle encrypted to one enrolled Machine. The signature binds
+/// every routing and cryptographic field; plaintext never enters this contract.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SealedProviderAuth {
+    pub envelope_schema: u16,
+    pub provider_id: String,
+    pub auth_generation: u64,
+    pub auth_contract_fingerprint: String,
+    pub projection_schema: String,
+    pub action: ProviderAuthAction,
+    pub ephemeral_public_key: String,
+    pub nonce: String,
+    pub ciphertext: String,
+    pub service_public_key: String,
+    pub signature: String,
+}
+
+impl SealedProviderAuth {
+    #[must_use]
+    pub fn proof(&self) -> Vec<u8> {
+        let action = match self.action {
+            ProviderAuthAction::Apply => "apply",
+            ProviderAuthAction::Wipe => "wipe",
+        };
+        let fields = [
+            self.envelope_schema.to_string(),
+            self.provider_id.clone(),
+            self.auth_generation.to_string(),
+            self.auth_contract_fingerprint.clone(),
+            self.projection_schema.clone(),
+            action.to_owned(),
+            self.ephemeral_public_key.clone(),
+            self.nonce.clone(),
+            self.ciphertext.clone(),
+        ];
+        let mut proof = b"cowboy-provider-auth-envelope-v1\n".to_vec();
+        for field in fields {
+            proof.extend_from_slice(field.len().to_string().as_bytes());
+            proof.push(b':');
+            proof.extend_from_slice(field.as_bytes());
+            proof.push(b'\n');
+        }
+        proof
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DesiredComponent {
     pub id: ComponentId,
@@ -278,6 +439,33 @@ pub enum MachineCommand {
     RefreshInventory {
         request_id: String,
     },
+    InstallProvider {
+        request_id: String,
+        provider: Box<DesiredProvider>,
+    },
+    UninstallProvider {
+        request_id: String,
+        provider_id: String,
+        generation_digest: String,
+    },
+    /// Compensate a Controller uninstall saga whose durable session commit
+    /// failed after the Machine removed its active link. Only retained,
+    /// previously verified generation bytes may be re-activated.
+    ReactivateProvider {
+        request_id: String,
+        provider_id: String,
+        generation_digest: String,
+    },
+    ApplyProviderAuth {
+        request_id: String,
+        envelope: Box<SealedProviderAuth>,
+    },
+    FinalizeProviderAuthCandidate {
+        request_id: String,
+        provider_id: String,
+        auth_method: String,
+        candidate_request_id: String,
+    },
     /// Forward one stable Cowboy product request to a versioned adapter on
     /// the Machine. Raw Zed protobuf never crosses this boundary.
     AdapterRequest {
@@ -289,6 +477,33 @@ pub enum MachineCommand {
         producer_id: String,
         sequence: u64,
     },
+}
+
+impl MachineCommand {
+    /// Old Machines may still negotiate an earlier wire version. Keep the
+    /// capability check beside the tagged command so the Controller never
+    /// sends a Service-auth or Provider-lifecycle message an older peer could
+    /// deserialize incorrectly.
+    #[must_use]
+    pub const fn minimum_protocol(&self) -> u16 {
+        match self {
+            // Uninstall is destructive and its Controller saga relies on
+            // exact-generation reactivation for compensation. Never let a
+            // protocol-three Machine begin removal that it cannot undo.
+            Self::UninstallProvider { .. } | Self::ReactivateProvider { .. } => 4,
+            Self::BeginLogin { .. }
+            | Self::CancelLogin { .. }
+            | Self::SubmitLoginCode { .. }
+            | Self::InstallProvider { .. }
+            | Self::ApplyProviderAuth { .. }
+            | Self::FinalizeProviderAuthCandidate { .. } => 3,
+            Self::Reconcile { .. }
+            | Self::UpdateNpmComponent { .. }
+            | Self::RefreshInventory { .. }
+            | Self::AdapterRequest { .. }
+            | Self::ProviderUsageAck { .. } => 1,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -429,6 +644,33 @@ pub enum MachineEvent {
         workspace_revision: Option<String>,
         observed_at_ms: i64,
     },
+    ProviderInventory {
+        providers: Vec<ProviderInventory>,
+        observed_at_ms: i64,
+    },
+    ProviderAuthReceipt {
+        request_id: String,
+        provider_id: String,
+        auth_generation: u64,
+        replica_state: ProviderReplicaState,
+        materialization_state: ProviderMaterializationState,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+    },
+    /// A temporary login executor returns a portable typed bundle to the
+    /// Service. Values are base64 so JSON never guesses text/binary encoding.
+    ServiceAuthCandidate {
+        request_id: String,
+        provider_id: String,
+        auth_method: String,
+        provider_version: String,
+        generation_digest: String,
+        auth_contract_fingerprint: String,
+        portable_schema: String,
+        bundle: std::collections::BTreeMap<String, String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        account_label: Option<String>,
+    },
     CommandResult {
         request_id: String,
         accepted: bool,
@@ -481,6 +723,8 @@ pub enum MachineFrame {
         challenge_id: String,
         nonce: String,
         expires_at_ms: i64,
+        #[serde(default = "default_machine_proof_version")]
+        proof_version: u16,
     },
     Hello {
         hello: MachineHello,
@@ -507,6 +751,10 @@ pub enum MachineFrame {
     Heartbeat {
         sent_at_ms: i64,
     },
+}
+
+const fn default_machine_proof_version() -> u16 {
+    1
 }
 
 #[must_use]
@@ -628,7 +876,9 @@ mod tests {
             host_build: "build-a".to_owned(),
             challenge_id: None,
             challenge_signature: None,
+            encryption_public_key: None,
             components: Vec::new(),
+            providers: Vec::new(),
             workspaces: Vec::new(),
             workspace_revision: None,
             capacity: MachineCapacity::default(),
@@ -664,7 +914,9 @@ mod tests {
                 host_build: "test".to_owned(),
                 challenge_id: None,
                 challenge_signature: None,
+                encryption_public_key: None,
                 components: Vec::new(),
+                providers: Vec::new(),
                 workspaces: Vec::new(),
                 workspace_revision: None,
                 capacity: MachineCapacity::default(),

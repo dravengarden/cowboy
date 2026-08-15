@@ -7,6 +7,7 @@ import {
     useEffect,
     useImperativeHandle,
     useLayoutEffect,
+    useMemo,
     useRef,
     useState,
 } from "react";
@@ -73,23 +74,17 @@ import { SessionControls } from "./Composer";
 import { SessionReloadDialog } from "./SessionReloadDialog";
 import { MobileComposer } from "./mobile/MobileComposer";
 import { claimKeyboard } from "./keyboardClaim";
-import {
-    machineProviderAuthLabel,
-    machineProviderAvailable,
-    machineProviderNeedsLogin,
-} from "./machineProvider";
 import { machineVersionPresentation, type MachineComponentUpdate } from "./machineVersions";
 import { DelayedNetworkProgress, NetworkIconButton } from "./NetworkActionFeedback";
 import { setObservabilityContext } from "./observability";
 import { Transcript } from "./Transcript";
 import { sessionProjectLabel } from "./sessionProject";
 import {
-    providerPresentation,
-    providerSelectionName,
-} from "./providerPresentation";
+    joinProviderInstallations,
+    useProviderCatalog,
+} from "./providerCatalog";
 import { desktopScrollbarSx } from "./desktop/desktopScrollbar";
 import {
-    PROVIDERS,
     type ConfigOption,
     type Envelope,
     type SessionMeta,
@@ -146,6 +141,14 @@ import { useFloatingComposerGeometry } from "./floatingComposerGeometry";
 import { releaseMobileComposerFocus } from "./composer/mobileComposerFocus";
 import { FONT_PRESETS, getFontPreset } from "./fonts";
 import { ProviderIcon } from "./ProviderIcon";
+import {
+    MachineProviderManagement,
+    ProviderAuthenticationManagement,
+} from "./ProviderManagement";
+import {
+    type MachineProviderInventory,
+    validateMachineProviderInventory,
+} from "../../packages/provider-ui-sdk/src/index.ts";
 import {
     type MachinePresence,
     machinePresencePresentation,
@@ -934,6 +937,8 @@ function SessionList({
                                 >
                                     <ProviderIcon
                                         provider={s.provider}
+                                        providerVersion={s.provider_version}
+                                        providerDigest={s.provider_generation_digest}
                                         fontSize="medium"
                                         sx={{ flexShrink: 0 }}
                                     />
@@ -1320,9 +1325,23 @@ function NewSessionDialog({
     /** Called with a local projection so the UI can focus it before the WS list catches up. */
     onCreated: (session: SessionMeta) => void;
 }): React.JSX.Element {
-    const [provider, setProvider] = useState<string>("codex");
+    const [provider, setProvider] = useState<string>("");
     const [machineId, setMachineId] = useState<string>("");
     const [machines, setMachines] = useState<readonly MachineChoice[]>([]);
+    const [machineProviders, setMachineProviders] = useState<readonly MachineProviderInventory[]>([]);
+    const { catalog: providerCatalog } = useProviderCatalog(open);
+    const providerRows = useMemo(
+        () => joinProviderInstallations(providerCatalog?.providers ?? [], machineProviders),
+        [machineProviders, providerCatalog],
+    );
+    const providerEntries = useMemo(
+        () =>
+            providerRows.flatMap((row) => {
+                const entry = row.installedEntry ?? row.latestEntry;
+                return entry ? [entry] : [];
+            }),
+        [providerRows],
+    );
     const desktop = useSurfaceProfile().kind === "desktop";
     const [cwd, setCwd] = useState<string>(WORKING_DIRS[0].value);
     const [workItemId, setWorkItemId] = useState<string>("");
@@ -1336,15 +1355,23 @@ function NewSessionDialog({
         useState<readonly WorkspaceChoice[]>(WORKING_DIRS);
     const selectedWorkspace = workspaces.find((workspace) => workspace.value === cwd);
     const selectedMachine = machines.find((machine) => machine.id === machineId);
-    const providerAvailable = (candidate: string): boolean => Boolean(
-        selectedMachine && machineProviderAvailable(candidate, selectedMachine.components),
-    );
+    const selectedProviderEntry = providerEntries.find((entry) => entry.provider_id === provider);
+    const selectedInstalledProvider = machineProviders.find((entry) => entry.provider_id === provider);
+    const providerAvailable = (candidate: string): boolean => {
+        const row = providerRows.find((value) => value.providerId === candidate);
+        const entry = row?.installedEntry;
+        const installed = row?.installed;
+        return Boolean(
+            selectedMachine && entry && installed &&
+            (!entry.manifest.authentication.required || installed.materialization_state === "current"),
+        );
+    };
     useEffect(() => {
         if (!providerAvailable(provider)) {
-            const fallback = PROVIDERS.find(providerAvailable);
-            if (fallback) setProvider(fallback);
+            const fallback = providerEntries.find((entry) => providerAvailable(entry.provider_id));
+            setProvider(fallback?.provider_id ?? "");
         }
-    }, [machineId, machines, provider]);
+    }, [machineId, machines, machineProviders, provider, providerEntries]);
     const selectedWorkItem = selectedWorkspace?.active_work_items.find(
         (item) => item.id === workItemId,
     );
@@ -1368,7 +1395,7 @@ function NewSessionDialog({
     useEffect(() => {
         if (!open) return undefined;
         setTitle(`New session ${sessionCountRef.current + 1}`);
-        setProvider("codex");
+        setProvider("");
         setMachineId("");
         setWorkItemId("");
         setCreating(false);
@@ -1411,6 +1438,27 @@ function NewSessionDialog({
             setWorkItemId("");
         }
     }, [open, machineId, machines]);
+    useEffect(() => {
+        if (!open || !machineId) {
+            setMachineProviders([]);
+            return;
+        }
+        let active = true;
+        void fetch(`/api/machines/${encodeURIComponent(machineId)}/providers`)
+            .then(async (response) => {
+                if (!response.ok) throw new Error(await response.text());
+                return validateMachineProviderInventory(await response.json());
+            })
+            .then((value) => {
+                if (active) setMachineProviders(value);
+            })
+            .catch(() => {
+                if (active) setMachineProviders([]);
+            });
+        return () => {
+            active = false;
+        };
+    }, [open, machineId]);
     const navbarAtBottom = useNavbarAtBottom();
     const create = (): void => {
         if (creating) return;
@@ -1430,7 +1478,7 @@ function NewSessionDialog({
                         cwd,
                         origin: "web",
                         initial_prompt: selectedWorkItem
-                            ? `Resume Columbus work item ${selectedWorkItem.id}. Read its durable metadata and relevant artifact, then set the native Codex goal. Keep plan, progress, review, and session state in Codex.`
+                            ? `Resume Columbus work item ${selectedWorkItem.id}. Read its durable metadata and relevant artifact, then set the native agent goal when supported. Keep plan, progress, review, and session state in the active agent runtime.`
                             : undefined,
                     }),
                 });
@@ -1438,7 +1486,12 @@ function NewSessionDialog({
                     const detail = (await response.text()).trim();
                     throw new Error(detail || `Session creation failed (${response.status})`);
                 }
-                const data = await response.json() as { session_id?: string };
+                const data = await response.json() as {
+                    session_id?: string;
+                    provider_version?: string;
+                    provider_generation_digest?: string;
+                    provider_auth_generation?: number;
+                };
                 if (!data.session_id) throw new Error("Session creation returned no id");
 
                 // Known-empty: no history is coming (the agent only starts on the
@@ -1454,6 +1507,21 @@ function NewSessionDialog({
                 onCreated({
                     id: data.session_id,
                     provider,
+                    ...(selectedProviderEntry
+                        ? {
+                            provider_version:
+                                data.provider_version || selectedProviderEntry.provider_version,
+                            provider_generation_digest:
+                                data.provider_generation_digest ||
+                                (selectedInstalledProvider?.generation_digest ??
+                                    selectedProviderEntry.artifact_digest ?? ""),
+                            ...(data.provider_auth_generation !== undefined
+                                ? { provider_auth_generation: data.provider_auth_generation }
+                                : selectedInstalledProvider?.auth_generation !== undefined
+                                ? { provider_auth_generation: selectedInstalledProvider.auth_generation }
+                                : {}),
+                        }
+                        : {}),
                     machine_id: machineId || "local",
                     cwd: sourcePath,
                     title: trimmedTitle || `${provider} · ${sourcePath}`,
@@ -1505,7 +1573,7 @@ function NewSessionDialog({
                             ) e.preventDefault();
                         }}
                         variant="contained"
-                        disabled={creating}
+                    disabled={creating || !provider || !machineId || !cwd}
                     >
                         {creating ? "Preparing…" : "Create"}
                         <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
@@ -1550,12 +1618,15 @@ function NewSessionDialog({
                     onChange={(e): void => setProvider(e.target.value)}
                     helperText="The selected runtime is scoped to this session"
                     SelectProps={{
-                        renderValue: (value): string => providerSelectionName(String(value)),
+                        renderValue: (value): string => {
+                            const entry = providerEntries.find((candidate) => candidate.provider_id === String(value));
+                            return entry ? `${entry.manifest.display.name} · ${entry.manifest.display.vendor}` : "No Provider available";
+                        },
                     }}
                 >
-                    {PROVIDERS.map((p) => {
-                        const presentation = providerPresentation(p);
-                        const available = providerAvailable(p);
+                    {providerEntries.map((entry) => {
+                        const p = entry.provider_id;
+                        const available = providerAvailable(entry.provider_id);
                         return (
                             <MenuItem
                                 key={p}
@@ -1564,18 +1635,23 @@ function NewSessionDialog({
                                 sx={{ alignItems: "center", py: 1, whiteSpace: "normal" }}
                             >
                                 <ListItemIcon sx={{ width: 36, minWidth: 36, justifyContent: "center" }}>
-                                    <ProviderIcon provider={p} fontSize="small" />
+                                    <ProviderIcon
+                                        provider={p}
+                                        providerVersion={entry.provider_version}
+                                        providerDigest={entry.artifact_digest ?? undefined}
+                                        fontSize="small"
+                                    />
                                 </ListItemIcon>
                                 <Box sx={{ flex: 1, minWidth: 0 }}>
                                     <Typography variant="body1">
-                                        {presentation.agent}
+                                        {entry.manifest.display.name}
                                     </Typography>
                                     <Typography
                                         variant="body2"
                                         color="text.secondary"
                                         sx={{ lineHeight: 1.35, overflowWrap: "anywhere" }}
                                     >
-                                        {presentation.modelProvider} · {presentation.detail}
+                                        {entry.manifest.display.vendor} · {entry.manifest.display.summary}
                                     </Typography>
                                     {!available ? (
                                         <Typography
@@ -1634,7 +1710,7 @@ function NewSessionDialog({
                         label="Durable work item"
                         value={workItemId}
                         onChange={(e): void => setWorkItemId(e.target.value)}
-                        helperText="Optional · resumes durable context in a native Codex task"
+                        helperText="Optional · resumes durable context in the selected Provider runtime"
                     >
                         <MenuItem value="">New task</MenuItem>
                         {selectedWorkspace.active_work_items.map((item) => (
@@ -1699,6 +1775,8 @@ const StoreTranscript = memo(function StoreTranscript({
     );
     const emptyContext = {
         provider,
+        providerVersion: session?.provider_version,
+        providerDigest: session?.provider_generation_digest,
         project: session ? sessionProjectLabel(session) : null,
         machine: session?.machine_id ?? null,
         model: currentConfigOptionName(model),
@@ -1713,6 +1791,8 @@ const StoreTranscript = memo(function StoreTranscript({
             timeline={timeline ?? EMPTY_TRANSCRIPT_TIMELINE}
             status={status}
             provider={provider}
+            providerVersion={session?.provider_version}
+            providerDigest={session?.provider_generation_digest}
             cwd={cwd}
             loading={!hydrated}
             connected={connected}
@@ -1728,6 +1808,8 @@ const StoreTranscript = memo(function StoreTranscript({
             timeline={timeline ?? EMPTY_TRANSCRIPT_TIMELINE}
             status={status}
             provider={provider}
+            providerVersion={session?.provider_version}
+            providerDigest={session?.provider_generation_digest}
             cwd={cwd}
             loading={!hydrated}
             connected={connected}
@@ -1778,6 +1860,9 @@ export function App({
     surface: "desktop" | "touch";
     onMobileDrawerOpenChange?: (open: boolean) => void;
 }): React.JSX.Element {
+    // Load the signed Provider catalog once at the app boundary so every
+    // presentation helper reads the same dynamic identity registry.
+    useProviderCatalog();
     const desktopWorkspace = useOptionalDesktopWorkspace();
     const sessions = useStoreSelector((snapshot) => snapshot.sessions);
     const lastError = useStoreSelector((snapshot) => snapshot.lastError);
@@ -3044,6 +3129,8 @@ export function App({
                                 <StatusDot status={active.status} />
                                 <ProviderIcon
                                     provider={active.provider}
+                                    providerVersion={active.provider_version}
+                                    providerDigest={active.provider_generation_digest}
                                     fontSize="small"
                                     sx={{ flexShrink: 0 }}
                                 />
@@ -3885,23 +3972,11 @@ type MachineEventView =
     | { event: "command_result"; request_id: string; accepted: boolean; detail?: string }
     | { event: "inventory"; observed_at_ms: number; components: unknown[] };
 
-function machineProviderName(slot?: string): string {
-    if (slot === "codex") return "Codex";
-    if (slot === "claude" || slot === "claude-code") return "Claude Code";
-    if (slot === "claude-deepseek") return "Claude Code · DeepSeek";
-    if (slot === "gemini") return "Gemini";
-    if (slot === "grok") return "Grok Build";
-    return slot || "Agent";
-}
-
 function machineComponentName(component: MachineChoice["components"][number]): string {
-    if (component.id.kind === "provider_cli") return machineProviderName(component.id.slot);
-    if (component.id.kind === "provider_adapter") return `${machineProviderName(component.id.slot)} adapter`;
     if (component.id.kind === "zed_server") return "Zed";
     if (component.id.kind === "zed_adapter") return "Zed adapter";
     if (component.id.kind === "code_adapter") return "Code adapter";
     if (component.id.kind === "machine_host") return "Machine host";
-    if (component.id.kind === "acp_runtime") return "ACP runtime";
     if (component.id.kind === "managed_node") return "Managed Node";
     return component.id.slot || component.id.kind.replaceAll("_", " ");
 }
@@ -3945,12 +4020,11 @@ function MachinesContent(): React.JSX.Element {
     const [events, setEvents] = useState<Record<string, readonly MachineEventView[]>>({});
     const [expanded, setExpanded] = useState<Record<string, boolean>>({});
     const [busy, setBusy] = useState<Record<string, boolean>>({});
-    const [loginCodes, setLoginCodes] = useState<Record<string, string>>({});
     const [componentErrors, setComponentErrors] = useState<Record<string, string>>({});
     const [updateConfirmation, setUpdateConfirmation] = useState<{
         machineId: string;
         components: readonly MachineChoice["components"][number][];
-        action: "npm" | "reconcile-one" | "reconcile-all";
+        action: "npm" | "reconcile-one";
     } | null>(null);
     const loadEvents = useCallback((machineId: string): void => {
         void fetch(`/api/machines/${encodeURIComponent(machineId)}/events`)
@@ -3993,21 +4067,6 @@ function MachinesContent(): React.JSX.Element {
         }
         throw new Error("Machine did not confirm the inventory refresh");
     }, [loadEvents, refresh]);
-    const command = (machineId: string, action: "login" | "components/reconcile", provider?: string, authMethod?: string): void => {
-        const busyKey = `${machineId}:${action}:${provider ?? ""}`;
-        setBusy((current) => ({ ...current, [busyKey]: true }));
-        void fetch(`/api/machines/${encodeURIComponent(machineId)}/${action}`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            ...(action === "login" ? { body: JSON.stringify({ provider, auth_method: authMethod }) } : {}),
-        }).finally(() => {
-            setBusy((current) => ({ ...current, [busyKey]: false }));
-            globalThis.setTimeout(() => {
-                void refresh().catch(() => undefined);
-                loadEvents(machineId);
-            }, 500);
-        });
-    };
     const updateOne = (machineId: string, component: MachineChoice["components"][number]): void => {
         const key = `${machineId}:component:${component.id.kind}:${component.id.slot ?? ""}`;
         setBusy((current) => ({ ...current, [key]: true }));
@@ -4018,22 +4077,6 @@ function MachinesContent(): React.JSX.Element {
         }).finally(() => {
             setBusy((current) => ({ ...current, [key]: false }));
             globalThis.setTimeout(() => void refresh().catch(() => undefined), 500);
-        });
-    };
-    const submitLoginCode = (machineId: string, requestId: string): void => {
-        const code = loginCodes[requestId]?.trim() ?? "";
-        if (!code) return;
-        const key = `${machineId}:login-code:${requestId}`;
-        setBusy((current) => ({ ...current, [key]: true }));
-        void fetch(`/api/machines/${encodeURIComponent(machineId)}/login/${encodeURIComponent(requestId)}`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ code }),
-        }).then((response) => {
-            if (response.ok) setLoginCodes((current) => ({ ...current, [requestId]: "" }));
-        }).finally(() => {
-            setBusy((current) => ({ ...current, [key]: false }));
-            globalThis.setTimeout(() => loadEvents(machineId), 300);
         });
     };
     const updateNpm = (machineId: string, component: MachineChoice["components"][number]): void => {
@@ -4088,18 +4131,6 @@ function MachinesContent(): React.JSX.Element {
         }
         updateOne(machineId, component);
     };
-    const requestReconcileAll = (machine: MachineChoice): void => {
-        const affected = machine.components.filter((component) =>
-            component.active_leases > 0 && (machine.pending_updates ?? []).some((id) =>
-                id.kind === component.id.kind && (id.slot ?? "") === (component.id.slot ?? "")
-            )
-        );
-        if (affected.length > 0) {
-            setUpdateConfirmation({ machineId: machine.id, components: affected, action: "reconcile-all" });
-            return;
-        }
-        command(machine.id, "components/reconcile");
-    };
     const confirmMachineUpdate = (): void => {
         const pending = updateConfirmation;
         if (!pending) return;
@@ -4107,7 +4138,6 @@ function MachinesContent(): React.JSX.Element {
         const component = pending.components[0];
         if (pending.action === "npm" && component) updateNpm(pending.machineId, component);
         else if (pending.action === "reconcile-one" && component) updateOne(pending.machineId, component);
-        else if (pending.action === "reconcile-all") command(pending.machineId, "components/reconcile");
     };
     useConfirmEnter(updateConfirmation !== null, confirmMachineUpdate);
     return (
@@ -4116,6 +4146,9 @@ function MachinesContent(): React.JSX.Element {
                 <Typography fontWeight={760}>Machines</Typography>
                 <Typography variant="caption" color="text.secondary">Where Cowboy sessions run</Typography>
             </Box>
+            <Paper variant="outlined" sx={{ borderRadius: 3, p: 1.5 }}>
+                <ProviderAuthenticationManagement />
+            </Paper>
             {machines.map((machine) => {
                 const latest = events[machine.id]?.at(-1);
                 const open = Boolean(expanded[machine.id]);
@@ -4128,26 +4161,16 @@ function MachinesContent(): React.JSX.Element {
                 );
                 const visibleComponents = machine.components.filter((component) =>
                     component.state !== "missing" ||
-                    component.id.kind === "provider_cli" ||
                     component.id.kind === "zed_server" ||
                     component.id.kind === "zed_adapter" ||
                     pending.some((id) =>
                         id.kind === component.id.kind && (id.slot ?? "") === (component.id.slot ?? "")
                     )
                 );
-                const providerComponents = machine.components.filter((component) =>
-                    component.id.kind === "provider_cli"
-                );
                 const zedComponent = machine.components.find((component) =>
                     component.id.kind === "zed_server"
                 );
                 const componentSections = [
-                    {
-                        label: "Agents",
-                        components: visibleComponents.filter((component) =>
-                            component.id.kind === "provider_cli" || component.id.kind === "provider_adapter"
-                        ),
-                    },
                     {
                         label: "Integrations",
                         components: visibleComponents.filter((component) =>
@@ -4159,6 +4182,7 @@ function MachinesContent(): React.JSX.Element {
                         components: visibleComponents.filter((component) =>
                             component.id.kind !== "provider_cli" &&
                             component.id.kind !== "provider_adapter" &&
+                            component.id.kind !== "acp_runtime" &&
                             component.id.kind !== "zed_server" &&
                             component.id.kind !== "zed_adapter" &&
                             component.id.kind !== "code_adapter"
@@ -4213,28 +4237,6 @@ function MachinesContent(): React.JSX.Element {
                                             title={projectWorkspaces.map((workspace) => workspace.display_name).join(", ")}
                                         />
                                     </Stack>
-                                    <Stack direction="row" spacing={1} alignItems="flex-start">
-                                        <Typography variant="overline" color="text.secondary" sx={{ width: 72, flexShrink: 0, pt: 0.35 }}>Agents</Typography>
-                                        <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ minWidth: 0 }}>
-                                            {providerComponents.map((component) => {
-                                                const legacyGeminiAuth = component.id.slot === "gemini" && component.detail == null;
-                                                const unavailable = component.state === "missing";
-                                                const failed = component.state === "failed" || component.auth === "error" || component.auth === "expired";
-                                                const ready = !legacyGeminiAuth && component.state === "active" && component.auth === "signed_in";
-                                                const updateAvailable = component.update?.available === true;
-                                                const state = legacyGeminiAuth ? "update machine" : unavailable ? "unavailable" : failed ? "error" : component.auth === "signed_out" ? "sign in" : updateAvailable ? "update" : ready ? "ready" : component.state;
-                                                return (
-                                                    <Chip
-                                                        key={component.id.slot}
-                                                        size="small"
-                                                        variant="outlined"
-                                                        color={failed ? "error" : legacyGeminiAuth || updateAvailable ? "warning" : ready ? "success" : "default"}
-                                                        label={`${machineProviderName(component.id.slot)} · ${state}`}
-                                                    />
-                                                );
-                                            })}
-                                        </Stack>
-                                    </Stack>
                                     <Stack direction="row" spacing={1} alignItems="center">
                                         <Typography variant="overline" color="text.secondary" sx={{ width: 72, flexShrink: 0 }}>Integrations</Typography>
                                         <Chip
@@ -4245,18 +4247,7 @@ function MachinesContent(): React.JSX.Element {
                                         />
                                     </Stack>
                             </Stack>
-                            {pending.length > 0 && (
-                                <Button
-                                    size="small"
-                                    variant="contained"
-                                    startIcon={busy[`${machine.id}:components/reconcile:`] ? <DelayedNetworkProgress size={14} /> : <SystemUpdateAlt />}
-                                    disabled={busy[`${machine.id}:components/reconcile:`]}
-                                    onClick={() => requestReconcileAll(machine)}
-                                    sx={{ alignSelf: "flex-start" }}
-                                >
-                                    Update all ({pending.length})
-                                </Button>
-                            )}
+                            <MachineProviderManagement machine={machine} />
                             <Stack direction="row" alignItems="center" spacing={0.5}>
                                 <ButtonBase
                                     onClick={() => setExpanded((current) => ({ ...current, [machine.id]: !open }))}
@@ -4274,7 +4265,7 @@ function MachinesContent(): React.JSX.Element {
                                     </Typography>
                                     {open ? <ExpandLess fontSize="small" /> : <ExpandMore fontSize="small" />}
                                 </ButtonBase>
-                                <Tooltip title="Recheck projects, versions, and sign-in status">
+                                <Tooltip title="Recheck projects and versions">
                                     <NetworkIconButton
                                         size="small"
                                         aria-label={`Refresh ${machine.display_name} inventory`}
@@ -4323,21 +4314,6 @@ function MachinesContent(): React.JSX.Element {
                                                 const updateTitle = update
                                                     ? `Checked ${new Date(update.checked_at_ms).toLocaleString()} via ${update.source}`
                                                     : "No authoritative release comparison is available";
-                                                const provider = component.id.kind === "provider_cli" ? component.id.slot : undefined;
-                                                const authEvent = provider
-                                                    ? [...(events[machine.id] ?? [])].reverse().find((event) =>
-                                                        (event.event === "login_challenge" || event.event === "login_state") && event.provider === provider
-                                                    )
-                                                    : undefined;
-                                                const loginChallenge = authEvent?.event === "login_challenge" && authEvent.expires_at_ms > Date.now()
-                                                    ? authEvent
-                                                    : undefined;
-                                                const loginPending = authEvent?.event === "login_challenge" ||
-                                                    (authEvent?.event === "login_state" && authEvent.state === "pending");
-                                                const loginBusyKey = `${machine.id}:login:${provider ?? ""}`;
-                                                const loginBusy = busy[loginBusyKey] || loginPending;
-                                                const legacyGeminiAuth = provider === "gemini" && component.detail == null;
-                                                const authLabel = machineProviderAuthLabel(provider ?? "", component.auth);
                                                 const npmUpdateKey = `${machine.id}:npm:${component.id.kind}:${component.id.slot ?? ""}`;
                                                 const npmUpdating = busy[npmUpdateKey];
                                                 const npmInstallable = update?.available === true && update.installable;
@@ -4382,108 +4358,10 @@ function MachinesContent(): React.JSX.Element {
                                                                 sx={{ display: "block", overflowWrap: "anywhere" }}
                                                             >
                                                                 {release.version}
-                                                                {legacyGeminiAuth
-                                                                    ? " · authentication status unavailable"
-                                                                    : authLabel
-                                                                    ? ` · ${authLabel}`
-                                                                    : ""}
                                                                 {component.generation ? ` · generation ${component.generation}` : ""}
                                                             </Typography>
-                                                            {provider === "gemini" && component.detail && (
-                                                                <Typography
-                                                                    variant="body2"
-                                                                    color={component.auth === "signed_in" ? "success.main" : "text.secondary"}
-                                                                    sx={{
-                                                                        display: "block",
-                                                                        mt: 0.5,
-                                                                        maxWidth: 720,
-                                                                        lineHeight: 1.45,
-                                                                        overflowWrap: "anywhere",
-                                                                    }}
-                                                                >
-                                                                    {component.detail}
-                                                                </Typography>
-                                                            )}
-                                                            {legacyGeminiAuth && (
-                                                                <Typography
-                                                                    variant="caption"
-                                                                    color="warning.main"
-                                                                    sx={{ display: "block", mt: 0.25, maxWidth: 720 }}
-                                                                >
-                                                                    This Machine uses the legacy inventory protocol. Update Cowboy Machine to verify Gemini authentication.
-                                                                </Typography>
-                                                            )}
                                                         </Box>
-                                                        {provider && component.auth === "signed_in" && !legacyGeminiAuth && (
-                                                            <Chip
-                                                                size="small"
-                                                                color="success"
-                                                                variant="outlined"
-                                                                label="Signed in"
-                                                                sx={{ alignSelf: "flex-start" }}
-                                                            />
-                                                        )}
-                                                        {provider === "gemini" && legacyGeminiAuth && (
-                                                            <Chip
-                                                                size="small"
-                                                                variant="outlined"
-                                                                color="warning"
-                                                                label="Legacy Machine"
-                                                                sx={{ alignSelf: "flex-start" }}
-                                                            />
-                                                        )}
-                                                        {provider && component.auth !== "signed_in" && provider === "gemini" && !legacyGeminiAuth && (
-                                                            <Stack
-                                                                direction="row"
-                                                                spacing={0.75}
-                                                                flexWrap="wrap"
-                                                                useFlexGap
-                                                                sx={{
-                                                                    "@media (pointer: coarse), (max-width: 600px)": {
-                                                                        width: "100%",
-                                                                        display: "grid",
-                                                                        gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-                                                                        "& .MuiButton-root": {
-                                                                            width: "100%",
-                                                                            minWidth: 0,
-                                                                            whiteSpace: "normal",
-                                                                            lineHeight: 1.2,
-                                                                        },
-                                                                    },
-                                                                }}
-                                                            >
-                                                                <Button
-                                                                    size="small"
-                                                                    variant={loginBusy ? "outlined" : "contained"}
-                                                                    disabled={loginBusy}
-                                                                    startIcon={loginBusy ? <DelayedNetworkProgress size={14} /> : undefined}
-                                                                    onClick={() => command(machine.id, "login", provider, "api_key")}
-                                                                >{loginBusy ? "Waiting" : "Use API key"}</Button>
-                                                                <Button
-                                                                    size="small"
-                                                                    variant="outlined"
-                                                                    disabled={loginBusy}
-                                                                    onClick={() => command(machine.id, "login", provider, "code_assist")}
-                                                                >Standard / Enterprise</Button>
-                                                            </Stack>
-                                                        )}
-                                                        {provider && machineProviderNeedsLogin(component.auth) && provider !== "gemini" && (
-                                                            <Button
-                                                                size="small"
-                                                                variant={loginBusy ? "outlined" : "contained"}
-                                                                disabled={loginBusy}
-                                                                startIcon={loginBusy ? <DelayedNetworkProgress size={14} /> : undefined}
-                                                                onClick={() => command(machine.id, "login", provider)}
-                                                            >{loginBusy ? "Waiting" : "Sign in"}</Button>
-                                                        )}
-                                                        {provider && npmInstallable && (
-                                                            <MachineNpmUpdateButton
-                                                                updating={Boolean(npmUpdating)}
-                                                                onUpdate={() => requestNpmUpdate(machine.id, component)}
-                                                                fullWidthOnTouch
-                                                            />
-                                                        )}
-                                                        {!provider && componentPending && (
+                                                        {componentPending && (
                                                             <Button
                                                                 size="small"
                                                                 variant="outlined"
@@ -4492,13 +4370,13 @@ function MachinesContent(): React.JSX.Element {
                                                                 onClick={() => requestReconcileOne(machine.id, component)}
                                                             >{busy[componentKey] ? <DelayedNetworkProgress size={14} /> : "Update"}</Button>
                                                         )}
-                                                        {!provider && !componentPending && npmInstallable && (
+                                                        {!componentPending && npmInstallable && (
                                                             <MachineNpmUpdateButton
                                                                 updating={Boolean(npmUpdating)}
                                                                 onUpdate={() => requestNpmUpdate(machine.id, component)}
                                                             />
                                                         )}
-                                                        {!provider && !componentPending && !npmInstallable && (
+                                                        {!componentPending && !npmInstallable && (
                                                             <Chip
                                                                 size="small"
                                                                 variant="outlined"
@@ -4512,79 +4390,6 @@ function MachinesContent(): React.JSX.Element {
                                                                 {componentErrors[npmUpdateKey]}
                                                             </Alert>
                                                         )}
-                                                        {loginChallenge && (
-                                                            <Alert
-                                                                severity="info"
-                                                                sx={{ width: "100%", alignItems: "flex-start", mt: 0.25 }}
-                                                            >
-                                                                <Stack spacing={1} sx={{ minWidth: 0 }}>
-                                                                    <Typography variant="body2" fontWeight={650}>
-                                                                        Finish signing in to {machineProviderName(provider)}
-                                                                    </Typography>
-                                                                    <Typography variant="caption" color="text.secondary">
-                                                                        {loginChallenge.input_required
-                                                                            ? loginChallenge.secret_input
-                                                                                ? "Create or copy a Gemini API key, then paste it below. It is stored only on this Machine with user-only permissions."
-                                                                                : "Open the sign-in page, approve access, then paste the authorization code shown by the browser."
-                                                                            : "Open the sign-in page and enter the device code. Cowboy will finish automatically."}
-                                                                    </Typography>
-                                                                    <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
-                                                                        <Button
-                                                                            size="small"
-                                                                            variant="contained"
-                                                                            component="a"
-                                                                            href={loginChallenge.verification_url}
-                                                                            target="_blank"
-                                                                            rel="noreferrer"
-                                                                        >Open sign-in page</Button>
-                                                                        {loginChallenge.user_code && (
-                                                                            <Button
-                                                                                size="small"
-                                                                                variant="outlined"
-                                                                                onClick={() => void navigator.clipboard.writeText(loginChallenge.user_code ?? "")}
-                                                                            >Copy {loginChallenge.user_code}</Button>
-                                                                        )}
-                                                                        <Button
-                                                                            size="small"
-                                                                            color="inherit"
-                                                                            onClick={() => {
-                                                                                void fetch(
-                                                                                    `/api/machines/${encodeURIComponent(machine.id)}/login/${encodeURIComponent(loginChallenge.request_id)}`,
-                                                                                    { method: "DELETE" },
-                                                                                ).finally(() => loadEvents(machine.id));
-                                                                            }}
-                                                                        >Cancel</Button>
-                                                                    </Stack>
-                                                                    {loginChallenge.input_required && (
-                                                                        <Stack direction={{ xs: "column", sm: "row" }} spacing={0.75}>
-                                                                            <TextField
-                                                                                size="small"
-                                                                                fullWidth
-                                                                                label={loginChallenge.input_label ?? "Authorization code"}
-                                                                                type={loginChallenge.secret_input ? "password" : "text"}
-                                                                                value={loginCodes[loginChallenge.request_id] ?? ""}
-                                                                                autoComplete="off"
-                                                                                onChange={(event) => setLoginCodes((current) => ({
-                                                                                    ...current,
-                                                                                    [loginChallenge.request_id]: event.target.value,
-                                                                                }))}
-                                                                                onKeyDown={(event) => {
-                                                                                    if (
-                                                                                        event.key === "Enter" &&
-                                                                                        !isImeKeyEvent(event.nativeEvent)
-                                                                                    ) submitLoginCode(machine.id, loginChallenge.request_id);
-                                                                                }}
-                                                                            />
-                                                                            <Button
-                                                                                variant="contained"
-                                                                                disabled={!loginCodes[loginChallenge.request_id]?.trim() || busy[`${machine.id}:login-code:${loginChallenge.request_id}`]}
-                                                                                onClick={() => submitLoginCode(machine.id, loginChallenge.request_id)}
-                                                                            >{busy[`${machine.id}:login-code:${loginChallenge.request_id}`] ? <DelayedNetworkProgress size={16} /> : "Continue"}</Button>
-                                                                        </Stack>
-                                                                    )}
-                                                                </Stack>
-                                                            </Alert>
-                                                        )}
                                                     </Stack>
                                                 );
                                             })}
@@ -4592,10 +4397,9 @@ function MachinesContent(): React.JSX.Element {
                                     ))}
                                 </Stack>
                             )}
-                            {latest && latest.event !== "inventory" && (
+                            {latest?.event === "command_result" && (
                                 <Typography variant="caption" color="text.secondary">
-                                    {latest.event === "command_result" ? latest.detail ?? (latest.accepted ? "Command accepted" : "Command rejected") :
-                                        latest.event === "login_state" ? `${latest.provider}: ${latest.state}${latest.detail ? ` · ${latest.detail}` : ""}` : ""}
+                                    {latest.detail ?? (latest.accepted ? "Command accepted" : "Command rejected")}
                                 </Typography>
                             )}
                         </Stack>

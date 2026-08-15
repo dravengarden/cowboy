@@ -5,6 +5,7 @@
 # Frontend
 web/node_modules/
 web/dist/
+dist/providers/
 *.tsbuildinfo
 
 # Nix

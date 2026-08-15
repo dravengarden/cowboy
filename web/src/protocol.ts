@@ -35,6 +35,10 @@ export function originLabel(o: SessionOrigin | undefined): string {
 export interface SessionMeta {
   id: string;
   provider: string;
+  /** Exact immutable Provider generation selected for this session. */
+  provider_version?: string;
+  provider_generation_digest?: string;
+  provider_auth_generation?: number;
   /** Stable machine placement. Missing on older daemons means local. */
   machine_id?: string;
   /** Stable selected workspace identity; cwd may point at its isolated worktree. */
@@ -401,11 +405,4 @@ export type Inbound =
   | { type: "retry_turn"; session_id: string }
   | { type: "set_setting"; key: string; value: unknown };
 
-export const PROVIDERS = [
-  "codex",
-  "codex-deepseek",
-  "claude-code",
-  "claude-deepseek",
-  "gemini",
-  "grok",
-] as const;
+// End of Inbound wire union.

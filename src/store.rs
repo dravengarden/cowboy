@@ -21,7 +21,7 @@
 
 #![warn(clippy::pedantic)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::io::Read as _;
 use std::time::Duration;
@@ -29,6 +29,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use base64::Engine as _;
 use chrono::{DateTime, Utc};
+use futures::TryStreamExt as _;
 use sha2::Digest as _;
 use sqlx::Row as _;
 use sqlx::postgres::{PgPool, PgPoolOptions};
@@ -48,6 +49,17 @@ fn valid_machine_id(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+fn validate_encryption_public_key(value: &str) -> Result<()> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(value)
+        .context("decoding Machine encryption public key")?;
+    anyhow::ensure!(
+        bytes.len() == 32,
+        "Machine encryption public key must be 32 bytes"
+    );
+    Ok(())
 }
 
 fn ensure_reset_provider(provider: &str) -> Result<()> {
@@ -567,12 +579,33 @@ impl Store {
         &self,
         token: &str,
         public_key: &str,
+        encryption_public_key: &str,
     ) -> Result<EnrolledMachine> {
-        dispatch_storage!(self, consume_machine_enrollment(token, public_key))
+        dispatch_storage!(
+            self,
+            consume_machine_enrollment(token, public_key, encryption_public_key)
+        )
     }
 
     pub async fn machine_public_key(&self, machine_id: &str) -> Result<Option<String>> {
         dispatch_storage!(self, machine_public_key(machine_id))
+    }
+
+    pub async fn machine_encryption_public_key(&self, machine_id: &str) -> Result<Option<String>> {
+        dispatch_storage!(self, machine_encryption_public_key(machine_id))
+    }
+
+    /// Bind the first challenge-proven X25519 key for an already enrolled
+    /// signing identity, or assert that a previously bound key is unchanged.
+    pub async fn bind_machine_encryption_public_key(
+        &self,
+        machine_id: &str,
+        encryption_public_key: &str,
+    ) -> Result<()> {
+        dispatch_storage!(
+            self,
+            bind_machine_encryption_public_key(machine_id, encryption_public_key)
+        )
     }
 
     pub async fn list_machines(&self) -> Result<Vec<MachineRecord>> {
@@ -893,6 +926,17 @@ impl Store {
         dispatch_storage!(self, delete_session(session_id))
     }
 
+    pub async fn soft_delete_sessions_until(
+        &self,
+        session_ids: &[String],
+        purge_after_ms: i64,
+    ) -> Result<()> {
+        dispatch_storage!(
+            self,
+            soft_delete_sessions_until(session_ids, purge_after_ms)
+        )
+    }
+
     pub async fn purge_deleted(&self, retention_days: i64) -> Result<u64> {
         dispatch_storage!(self, purge_deleted(retention_days))
     }
@@ -1040,7 +1084,9 @@ impl PostgresStorage {
         &self,
         token: &str,
         public_key: &str,
+        encryption_public_key: &str,
     ) -> Result<EnrolledMachine> {
+        validate_encryption_public_key(encryption_public_key)?;
         let mut transaction = self
             .pool
             .begin()
@@ -1060,10 +1106,12 @@ impl PostgresStorage {
             row.context("invalid, expired, or already used enrollment token")?;
         let result = sqlx::query(
             "INSERT INTO machines \
-             (id, display_name, connection_mode, platform, architecture, status, public_key, enrolled_at) \
-             VALUES ($1, $2, 'outbound_wss', 'unknown', 'unknown', 'offline', $3, now()) \
+             (id, display_name, connection_mode, platform, architecture, status, public_key, \
+              encryption_public_key, enrolled_at) \
+             VALUES ($1, $2, 'outbound_wss', 'unknown', 'unknown', 'offline', $3, $4, now()) \
              ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name, \
              connection_mode = 'outbound_wss', public_key = EXCLUDED.public_key, \
+             encryption_public_key = EXCLUDED.encryption_public_key, \
              enrolled_at = now(), revoked_at = NULL, status = 'offline', \
              connection_epoch = NULL, reconnect_deadline_at = NULL, updated_at = now() \
              WHERE machines.public_key IS NULL OR \
@@ -1072,6 +1120,7 @@ impl PostgresStorage {
         .bind(&id)
         .bind(&display_name)
         .bind(public_key)
+        .bind(encryption_public_key)
         .execute(&mut *transaction)
         .await
         .context("binding enrolled Machine public key")?;
@@ -1104,6 +1153,40 @@ impl PostgresStorage {
         .await
         .context("loading Machine public key")?;
         Ok(value.flatten())
+    }
+
+    pub async fn machine_encryption_public_key(&self, machine_id: &str) -> Result<Option<String>> {
+        let value: Option<Option<String>> = sqlx::query_scalar(
+            "SELECT encryption_public_key FROM machines WHERE id = $1 AND revoked_at IS NULL",
+        )
+        .bind(machine_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("loading Machine encryption public key")?;
+        Ok(value.flatten())
+    }
+
+    pub async fn bind_machine_encryption_public_key(
+        &self,
+        machine_id: &str,
+        encryption_public_key: &str,
+    ) -> Result<()> {
+        validate_encryption_public_key(encryption_public_key)?;
+        let result = sqlx::query(
+            "UPDATE machines SET encryption_public_key = $2, updated_at = now() \
+             WHERE id = $1 AND revoked_at IS NULL \
+             AND (encryption_public_key IS NULL OR encryption_public_key = $2)",
+        )
+        .bind(machine_id)
+        .bind(encryption_public_key)
+        .execute(&self.pool)
+        .await
+        .context("binding Machine encryption public key")?;
+        anyhow::ensure!(
+            result.rows_affected() == 1,
+            "Machine encryption public key changed; revoke and re-enroll the Machine"
+        );
+        Ok(())
     }
 
     /// List enrolled Machines, including revoked records for administrative UI.
@@ -1551,7 +1634,8 @@ impl PostgresStorage {
     /// If a query fails or a payload is unparseable.
     pub async fn load_all(&self) -> Result<Vec<LoadedSession>> {
         let session_rows: Vec<SessionRow> = sqlx::query_as::<_, SessionRow>(
-            "SELECT id, provider, machine_id, workspace_id, workspace_name, workspace_source_path, \
+            "SELECT id, provider, provider_version, provider_generation_digest, \
+             provider_auth_generation, provider_behavior, machine_id, workspace_id, workspace_name, workspace_source_path, \
              cwd, title, origin, status, agent_session_id, auto_resume, \
              awaiting_user, done, system, next_seq, queue, drafts, judge_runs, \
              config_options, config_preferences, mobile_review_state, created_at \
@@ -1955,12 +2039,22 @@ impl PostgresStorage {
     /// If the row already exists or the INSERT fails.
     pub async fn insert_session(&self, m: &SessionMeta) -> Result<()> {
         sqlx::query(
-            "INSERT INTO sessions(id, provider, machine_id, workspace_id, workspace_name, \
+            "INSERT INTO sessions(id, provider, provider_version, provider_generation_digest, \
+             provider_auth_generation, provider_behavior, machine_id, workspace_id, workspace_name, \
              workspace_source_path, cwd, title, origin, status, next_seq, system) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, $11)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0, $15)",
         )
         .bind(&m.id)
         .bind(&m.provider)
+        .bind(&m.provider_version)
+        .bind(&m.provider_generation_digest)
+        .bind(m.provider_auth_generation.and_then(|value| i64::try_from(value).ok()))
+        .bind(
+            m.provider_behavior
+                .as_ref()
+                .map(serde_json::to_value)
+                .transpose()?,
+        )
         .bind(&m.machine_id)
         .bind(m.workspace_id.as_deref())
         .bind(m.workspace_name.as_deref())
@@ -2367,6 +2461,40 @@ impl PostgresStorage {
         Ok(())
     }
 
+    pub async fn soft_delete_sessions_until(
+        &self,
+        session_ids: &[String],
+        purge_after_ms: i64,
+    ) -> Result<()> {
+        let purge_after = chrono::DateTime::<Utc>::from_timestamp_millis(purge_after_ms)
+            .context("Provider uninstall purge deadline is outside the supported range")?;
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("begin Provider uninstall")?;
+        for session_id in session_ids {
+            let result = sqlx::query(
+                "UPDATE sessions SET deleted_at = now(), purge_after_at = $2 \
+                 WHERE id = $1 AND deleted_at IS NULL",
+            )
+            .bind(session_id)
+            .bind(purge_after)
+            .execute(&mut *transaction)
+            .await
+            .with_context(|| format!("soft-delete Provider session {session_id}"))?;
+            anyhow::ensure!(
+                result.rows_affected() == 1,
+                "Provider uninstall session set changed; refresh the uninstall plan"
+            );
+        }
+        transaction
+            .commit()
+            .await
+            .context("commit Provider uninstall")?;
+        Ok(())
+    }
+
     /// Hard-delete sessions soft-deleted more than `retention_days` ago (cascade
     /// → their events). The storage-reclaim half of soft-delete; run on startup
     /// and periodically. Returns the number of sessions purged.
@@ -2376,12 +2504,34 @@ impl PostgresStorage {
     pub async fn purge_deleted(&self, retention_days: i64) -> Result<u64> {
         let done = sqlx::query(
             "DELETE FROM sessions WHERE deleted_at IS NOT NULL \
-             AND deleted_at < now() - make_interval(days => $1::int)",
+             AND COALESCE( \
+               purge_after_at, \
+               deleted_at + make_interval(days => $1::int) \
+             ) < now()",
         )
         .bind(i32::try_from(retention_days).unwrap_or(3))
         .execute(&self.pool)
         .await
         .context("purge soft-deleted sessions")?;
+        let mut referenced = HashSet::new();
+        let mut rows =
+            sqlx::query("SELECT payload FROM events WHERE payload::text LIKE '%/api/artifacts/%'")
+                .fetch(&self.pool);
+        while let Some(row) = rows
+            .try_next()
+            .await
+            .context("scan retained PostgreSQL artifact references")?
+        {
+            let payload: serde_json::Value = row.try_get("payload")?;
+            crate::artifacts::collect_references(&payload, &mut referenced);
+        }
+        let artifacts_removed = self
+            .artifacts
+            .prune_unreferenced(&referenced, Duration::from_hours(24))
+            .context("prune unreferenced PostgreSQL event artifacts")?;
+        if artifacts_removed > 0 {
+            tracing::info!(artifacts_removed, "purged unreferenced event artifacts");
+        }
         Ok(done.rows_affected())
     }
 
@@ -4935,6 +5085,10 @@ impl UsageAggregate {
 struct SessionRow {
     id: String,
     provider: String,
+    provider_version: String,
+    provider_generation_digest: String,
+    provider_auth_generation: Option<i64>,
+    provider_behavior: Option<serde_json::Value>,
     machine_id: String,
     workspace_id: Option<String>,
     workspace_name: Option<String>,
@@ -4964,6 +5118,14 @@ impl SessionRow {
         SessionMeta {
             id: self.id,
             provider: self.provider,
+            provider_version: self.provider_version,
+            provider_generation_digest: self.provider_generation_digest,
+            provider_auth_generation: self
+                .provider_auth_generation
+                .and_then(|value| u64::try_from(value).ok()),
+            provider_behavior: self
+                .provider_behavior
+                .and_then(|value| serde_json::from_value(value).ok()),
             machine_id: self.machine_id,
             workspace_id: self.workspace_id,
             workspace_name: self.workspace_name,
@@ -5013,6 +5175,10 @@ mod storage_contract_tests {
         SessionMeta {
             id: id.to_owned(),
             provider: "codex".to_owned(),
+            provider_version: String::new(),
+            provider_generation_digest: String::new(),
+            provider_auth_generation: None,
+            provider_behavior: None,
             machine_id: "hawk".to_owned(),
             workspace_id: Some("cowboy".to_owned()),
             workspace_name: Some("Cowboy".to_owned()),
@@ -5041,7 +5207,11 @@ mod storage_contract_tests {
             .create_machine_enrollment("contract-machine", "Contract Machine", 60)
             .await?;
         let enrolled = store
-            .consume_machine_enrollment(&token, "ssh-ed25519 QUJD")
+            .consume_machine_enrollment(
+                &token,
+                "ssh-ed25519 QUJD",
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            )
             .await?;
         assert_eq!(enrolled.id, "contract-machine");
         assert_eq!(enrolled.display_name, "Contract Machine");
@@ -5052,6 +5222,13 @@ mod storage_contract_tests {
                 .await?
                 .as_deref(),
             Some("ssh-ed25519 QUJD")
+        );
+        assert_eq!(
+            store
+                .machine_encryption_public_key("contract-machine")
+                .await?
+                .as_deref(),
+            Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
         );
 
         store

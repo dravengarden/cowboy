@@ -31,6 +31,9 @@ pub struct WorkerArgs {
     pub socket: PathBuf,
     pub session_id: String,
     pub provider: String,
+    pub provider_version: String,
+    pub provider_generation_digest: String,
+    pub provider_auth_generation: Option<u64>,
     pub cwd: PathBuf,
     pub resume: Option<String>,
     pub system: bool,
@@ -304,8 +307,14 @@ fn generated_epoch() -> String {
 /// Run one detached worker until its ACP session and acknowledged outbox have
 /// both drained.
 pub async fn run(args: WorkerArgs) -> Result<()> {
-    let spec = provider::lookup(&args.provider)
-        .ok_or_else(|| anyhow::anyhow!("unknown provider {:?}", args.provider))?;
+    let prepared = provider::prepare(&args.provider).await?;
+    let spec = prepared.spec.clone();
+    let provider_behavior = (!args.provider_generation_digest.is_empty())
+        .then(|| crate::provider::behavior(&args.provider));
+    let configuration = provider_behavior.as_ref().map_or_else(
+        || crate::provider::legacy_behavior(&args.provider).configuration,
+        |behavior| behavior.configuration.clone(),
+    );
     let context_budget = std::env::var(crate::deepseek_context::SESSION_CONTEXT_WINDOW_ENV)
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
@@ -315,7 +324,7 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
                 .and_then(|value| value.parse::<u64>().ok()),
         )
         .and_then(|(window, compact)| {
-            crate::deepseek_context::from_launch_values(&args.provider, window, compact)
+            crate::deepseek_context::from_launch_values(&configuration, window, compact)
         });
     let cache_protection = std::env::var(crate::deepseek_cache::SESSION_POLICY_ENV)
         .ok()
@@ -324,7 +333,7 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
             "off" => Some(false),
             _ => None,
         })
-        .filter(|_| crate::deepseek_cache::supported_provider(&args.provider));
+        .filter(|_| crate::deepseek_cache::supported_behavior(&configuration));
     let epoch = args.worker_epoch.unwrap_or_else(generated_epoch);
     let executable = std::env::current_exe()
         .ok()
@@ -332,6 +341,10 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
     let launch = crate::runtime_wire::StartSession {
         session_id: args.session_id.clone(),
         provider: args.provider.clone(),
+        provider_version: args.provider_version.clone(),
+        provider_generation_digest: args.provider_generation_digest.clone(),
+        provider_auth_generation: args.provider_auth_generation,
+        provider_behavior,
         cwd: args.cwd.display().to_string(),
         agent_session_id: args.resume.clone(),
         system: args.system,
@@ -394,7 +407,12 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
         })
         .context("spawning ACP worker thread")?;
 
-    connection_loop(&args.socket, shared, cmd_tx, notify_rx, &mut done_rx).await
+    let result = connection_loop(&args.socket, shared, cmd_tx, notify_rx, &mut done_rx).await;
+    // Keep exact session sidecars alive through ACP shutdown and outbox drain.
+    // Dropping their kill-on-drop handles then tears down the full Provider
+    // process tree before the worker exits.
+    drop(prepared.sidecars);
+    result
 }
 
 async fn connection_loop(
@@ -849,6 +867,10 @@ mod tests {
         shared.snapshot.lock().launch = Some(crate::runtime_wire::StartSession {
             session_id: "sess-1".to_owned(),
             provider: "codex-deepseek".to_owned(),
+            provider_version: String::new(),
+            provider_generation_digest: String::new(),
+            provider_auth_generation: None,
+            provider_behavior: None,
             cwd: "/work".to_owned(),
             agent_session_id: None,
             system: false,

@@ -12,10 +12,8 @@ function assertEquals(actual: unknown, expected: unknown): void {
   if (actual !== expected) throw new Error(`Expected ${String(expected)}, got ${String(actual)}`);
 }
 
-Deno.test("tool presentation names the built-in agents", () => {
-  assertEquals(providerName("codex"), "Codex");
-  assertEquals(providerName("claude-code"), "Claude Code");
-  assertEquals(providerName("grok"), "Grok Build");
+Deno.test("tool presentation uses catalog-backed Provider identity with a safe fallback", () => {
+  assertEquals(providerName("future-agent"), "future-agent");
 });
 
 Deno.test("MCP identity normalizes Codex fields and Claude tool names", () => {
@@ -37,7 +35,7 @@ Deno.test("MCP identity normalizes Codex fields and Claude tool names", () => {
     kind: "execute",
     title: "mcp.chrome-devtools.navigate_page",
     rawInput: { server: "chrome-devtools", tool: "navigate_page", arguments: {} },
-  }), "Codex · MCP · chrome-devtools");
+  }), "codex · MCP · chrome-devtools");
 });
 
 Deno.test("tool headings adapt Codex and Claude execute variants", () => {

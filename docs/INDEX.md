@@ -13,7 +13,7 @@ material, operational guidance, research evidence, and historical notes.
 ## Reading order
 
 - [`architecture/00-overview.md`](architecture/00-overview.md) — 00 Overview
-- [`requirements.md`](requirements.md) — Normative target contract for the Provider platform
+- [`requirements.md`](requirements.md) — Normative contract and implemented boundary for the Provider platform
 
 ## Documents
 
@@ -44,7 +44,7 @@ material, operational guidance, research evidence, and historical notes.
 - [`explore-transcript-design.md`](explore-transcript-design.md) — Explore Transcript Design
 - [`ios-simulator.md`](ios-simulator.md) — Ios Simulator
 - [`machine-operations.md`](machine-operations.md) — Machine Operations
-- [`provider-packages.md`](provider-packages.md) — Target design for independently released, Machine-scoped Provider packages
+- [`provider-packages.md`](provider-packages.md) — Schema v2 design and implementation for independently released, Machine-scoped Provider packages
 
 ### Integrations
 

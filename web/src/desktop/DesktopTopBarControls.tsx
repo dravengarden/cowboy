@@ -44,7 +44,14 @@ import { resolveSessionAction } from "../agentCommands";
 import { desktopImeOwnsKey } from "./commands/imeShortcut";
 import { workspaceCommandKey } from "./commands/workspaceCommandKey";
 import type { ConfigOption, Status } from "../protocol";
-import { providerConfigOptions } from "../providerConfigOptions";
+import {
+  providerConfigOptionDisabled,
+  providerConfigOptionOrder,
+  type ProviderConfigOptionPresentation,
+  providerConfigOptionPresentations,
+  providerConfigOptions,
+  providerConfigSurfaceDisabled,
+} from "../providerConfigOptions";
 import {
   activeRunConfigPreset,
   type RunConfigPreset,
@@ -58,8 +65,8 @@ import { SessionReloadDialog } from "../SessionReloadDialog";
 import {
   acceptedScheduleTime,
   fullResetTime,
-  nearestAvailableResetCredit,
   type JsonRecord,
+  nearestAvailableResetCredit,
   num,
   type ProviderUsage,
   providerUsage,
@@ -99,19 +106,6 @@ import {
   nextRunConfigChoiceIndex,
   runConfigKeyAction,
 } from "./runConfigKeyboard";
-
-const OPTION_RANK: Record<string, number> = {
-  mode: 0,
-  session_mode: 0,
-  permission_mode: 1,
-  model: 2,
-  deepseek_context: 3,
-  deepseek_cache_protection: 4,
-  effort: 5,
-  reasoning_effort: 5,
-  fast: 6,
-  fast_mode: 6,
-};
 
 const EMPTY_CONFIG_OPTIONS: ConfigOption[] = [];
 
@@ -174,8 +168,14 @@ function UsageProviderSummary(
   const secondary = deepseek
     ? provider.spend24hPriceCoverage !== undefined &&
         provider.spend24hPriceCoverage >= 99.999
-      ? `24h ${compactCny(provider.spend24hCny)} · Miss ${provider.cacheMissRate.toFixed(1)}% · ${provider.blockingErrors.toLocaleString()} blocked`
-      : `24h ≥${compactCny(provider.spend24hCny)} · ${provider.spend24hPriceCoverage?.toFixed(0) ?? "0"}% priced · Miss ${provider.cacheMissRate.toFixed(1)}% · ${provider.blockingErrors.toLocaleString()} blocked`
+      ? `24h ${compactCny(provider.spend24hCny)} · Miss ${
+        provider.cacheMissRate.toFixed(1)
+      }% · ${provider.blockingErrors.toLocaleString()} blocked`
+      : `24h ≥${compactCny(provider.spend24hCny)} · ${
+        provider.spend24hPriceCoverage?.toFixed(0) ?? "0"
+      }% priced · Miss ${
+        provider.cacheMissRate.toFixed(1)
+      }% · ${provider.blockingErrors.toLocaleString()} blocked`
     : `${provider.periodLabel} · resets ${shortResetTime(provider.resetsAt)}`;
   return (
     <Box
@@ -191,7 +191,12 @@ function UsageProviderSummary(
       }}
     >
       <Stack direction="row" spacing={0.55}>
-        <Typography variant="caption" color="text.secondary" fontWeight={700} noWrap>
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          fontWeight={700}
+          noWrap
+        >
           {provider.label}
         </Typography>
         <Typography
@@ -207,7 +212,11 @@ function UsageProviderSummary(
         variant="caption"
         color="text.secondary"
         noWrap
-        sx={{ display: "block", fontSize: "0.625rem", fontVariantNumeric: "tabular-nums" }}
+        sx={{
+          display: "block",
+          fontSize: "0.625rem",
+          fontVariantNumeric: "tabular-nums",
+        }}
       >
         {secondary}
       </Typography>
@@ -247,7 +256,8 @@ function DesktopUsageExtras(
   const contextSize = num(session?.size);
   const lifetimeTokens = num(summary?.lifetimeTokens);
   const costAmount = num(cost?.amount);
-  const scheduleValid = fireAt !== "" && new Date(fireAt).getTime() > Date.now();
+  const scheduleValid = fireAt !== "" &&
+    new Date(fireAt).getTime() > Date.now();
   const openResetDialog = () => {
     setResetMode("schedule");
     setFireAt("");
@@ -268,18 +278,28 @@ function DesktopUsageExtras(
     setResetBusy(true);
     setResetError(null);
     try {
-      const response = await fetch(`${resetEndpoint}/schedule`, { method: "DELETE" });
-      if (!response.ok) throw new Error(await response.text() || `HTTP ${String(response.status)}`);
+      const response = await fetch(`${resetEndpoint}/schedule`, {
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        throw new Error(
+          await response.text() || `HTTP ${String(response.status)}`,
+        );
+      }
       await onUsageChanged();
     } catch (cause) {
-      setResetError(cause instanceof Error ? cause.message : "Could not cancel schedule");
+      setResetError(
+        cause instanceof Error ? cause.message : "Could not cancel schedule",
+      );
     } finally {
       setResetBusy(false);
     }
   };
   const submitReset = async (): Promise<void> => {
-    if (resetEndpoint === undefined || resetBusy || confirmText !== "confirm" ||
-      (resetMode === "schedule" && !scheduleValid)) return;
+    if (
+      resetEndpoint === undefined || resetBusy || confirmText !== "confirm" ||
+      (resetMode === "schedule" && !scheduleValid)
+    ) return;
     setResetBusy(true);
     setResetError(null);
     try {
@@ -288,18 +308,26 @@ function DesktopUsageExtras(
         {
           method: resetMode === "schedule" ? "PUT" : "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify(resetMode === "schedule"
-            ? { fire_at_ms: new Date(fireAt).getTime(), confirm: confirmText }
-            : { confirm: confirmText, expected_credit_id: nearestCreditId }),
+          body: JSON.stringify(
+            resetMode === "schedule"
+              ? { fire_at_ms: new Date(fireAt).getTime(), confirm: confirmText }
+              : { confirm: confirmText, expected_credit_id: nearestCreditId },
+          ),
         },
       );
-      if (!response.ok) throw new Error(await response.text() || `HTTP ${String(response.status)}`);
+      if (!response.ok) {
+        throw new Error(
+          await response.text() || `HTTP ${String(response.status)}`,
+        );
+      }
       setResetOpen(false);
       setResetMode("schedule");
       setConfirmText("");
       await onUsageChanged();
     } catch (cause) {
-      setResetError(cause instanceof Error ? cause.message : "Could not use reset");
+      setResetError(
+        cause instanceof Error ? cause.message : "Could not use reset",
+      );
     } finally {
       setResetBusy(false);
     }
@@ -341,7 +369,9 @@ function DesktopUsageExtras(
                     minWidth: 0,
                     boxSizing: "border-box",
                     display: "grid",
-                    gridTemplateColumns: actionable ? "minmax(0, 1fr) auto" : "minmax(0, 1fr)",
+                    gridTemplateColumns: actionable
+                      ? "minmax(0, 1fr) auto"
+                      : "minmax(0, 1fr)",
                     alignItems: "center",
                     gap: 0.75,
                     px: 0.9,
@@ -352,17 +382,38 @@ function DesktopUsageExtras(
                   }}
                 >
                   <Box sx={{ minWidth: 0 }}>
-                    <Typography variant="caption" fontWeight={700} noWrap sx={{ display: "block", minWidth: 0 }}>
+                    <Typography
+                      variant="caption"
+                      fontWeight={700}
+                      noWrap
+                      sx={{ display: "block", minWidth: 0 }}
+                    >
                       {textValue(credit.title) ?? "Rate-limit reset"}
                     </Typography>
-                    <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block" }}>
-                      {expiresAt === undefined ? "No expiry reported" : `Expires ${fullResetTime(expiresAt)}`}
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      noWrap
+                      sx={{ display: "block" }}
+                    >
+                      {expiresAt === undefined
+                        ? "No expiry reported"
+                        : `Expires ${fullResetTime(expiresAt)}`}
                     </Typography>
                   </Box>
                   {actionable && (
-                    <Stack direction="row" alignItems="center" spacing={0.25} sx={{ color: "primary.main", flexShrink: 0 }}>
-                      <Typography variant="caption" fontWeight={700}>{schedule ? "Scheduled" : "Schedule"}</Typography>
-                      {!schedule && <ArrowForwardRounded sx={{ fontSize: 15 }} />}
+                    <Stack
+                      direction="row"
+                      alignItems="center"
+                      spacing={0.25}
+                      sx={{ color: "primary.main", flexShrink: 0 }}
+                    >
+                      <Typography variant="caption" fontWeight={700}>
+                        {schedule ? "Scheduled" : "Schedule"}
+                      </Typography>
+                      {!schedule && (
+                        <ArrowForwardRounded sx={{ fontSize: 15 }} />
+                      )}
                       {!schedule && <Kbd keys="S" />}
                     </Stack>
                   )}
@@ -385,7 +436,8 @@ function DesktopUsageExtras(
                             display: "block",
                             borderRadius: 1.25,
                             outline: 1,
-                            outlineColor: (theme) => alpha(theme.palette.primary.main, 0.24),
+                            outlineColor: (theme) =>
+                              alpha(theme.palette.primary.main, 0.24),
                             "&:hover": { bgcolor: "action.hover" },
                             "&.Mui-focusVisible": {
                               outline: 2,
@@ -403,17 +455,48 @@ function DesktopUsageExtras(
             })}
           </Box>
           {schedule && (
-            <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1} sx={{ px: 1, py: 0.75, borderRadius: 1.25, bgcolor: (theme) => alpha(theme.palette.primary.main, 0.08) }}>
+            <Stack
+              direction="row"
+              alignItems="center"
+              justifyContent="space-between"
+              spacing={1}
+              sx={{
+                px: 1,
+                py: 0.75,
+                borderRadius: 1.25,
+                bgcolor: (theme) => alpha(theme.palette.primary.main, 0.08),
+              }}
+            >
               <Box>
-                <Typography variant="caption" color="primary.main" fontWeight={750}>{scheduledResetCountdown(schedule.fire_at_ms)}</Typography>
-                <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>{fullResetTime(schedule.fire_at_ms / 1000)}</Typography>
+                <Typography
+                  variant="caption"
+                  color="primary.main"
+                  fontWeight={750}
+                >
+                  {scheduledResetCountdown(schedule.fire_at_ms)}
+                </Typography>
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ display: "block" }}
+                >
+                  {fullResetTime(schedule.fire_at_ms / 1000)}
+                </Typography>
               </Box>
-              <NetworkButton size="small" disabled={resetBusy} networkAction={cancelSchedule}>
+              <NetworkButton
+                size="small"
+                disabled={resetBusy}
+                networkAction={cancelSchedule}
+              >
                 Cancel
               </NetworkButton>
             </Stack>
           )}
-          {resetError && !resetOpen && <Typography variant="caption" color="error.main">{resetError}</Typography>}
+          {resetError && !resetOpen && (
+            <Typography variant="caption" color="error.main">
+              {resetError}
+            </Typography>
+          )}
         </Stack>
       )}
       {(contextUsed !== undefined || lifetimeTokens !== undefined ||
@@ -452,8 +535,17 @@ function DesktopUsageExtras(
           )}
         </Stack>
       )}
-      <Dialog open={resetOpen} onClose={closeResetDialog} fullWidth maxWidth="xs">
-        <DialogTitle>{resetMode === "schedule" ? "Schedule nearest reset" : "Use nearest reset now?"}</DialogTitle>
+      <Dialog
+        open={resetOpen}
+        onClose={closeResetDialog}
+        fullWidth
+        maxWidth="xs"
+      >
+        <DialogTitle>
+          {resetMode === "schedule"
+            ? "Schedule nearest reset"
+            : "Use nearest reset now?"}
+        </DialogTitle>
         <DialogContent>
           <DialogContentText>
             {resetMode === "schedule"
@@ -482,30 +574,47 @@ function DesktopUsageExtras(
               fullWidth
               label="Run at"
               value={fireAt}
-              onChange={(event) => setFireAt(acceptedScheduleTime(event.target.value))}
+              onChange={(event) =>
+                setFireAt(acceptedScheduleTime(event.target.value))}
               slotProps={{ inputLabel: { shrink: true } }}
               helperText="Choose a time at least one minute ahead"
               sx={{ mt: 2 }}
             />
           )}
-          <TextField autoComplete="off" fullWidth label="Type confirm to continue" value={confirmText} onChange={(event) => setConfirmText(event.target.value)} sx={{ mt: 2 }} />
-          {resetError && <Typography color="error.main" variant="body2" sx={{ mt: 1 }}>{resetError}</Typography>}
+          <TextField
+            autoComplete="off"
+            fullWidth
+            label="Type confirm to continue"
+            value={confirmText}
+            onChange={(event) => setConfirmText(event.target.value)}
+            sx={{ mt: 2 }}
+          />
+          {resetError && (
+            <Typography color="error.main" variant="body2" sx={{ mt: 1 }}>
+              {resetError}
+            </Typography>
+          )}
         </DialogContent>
         <DialogActions>
           <Button onClick={closeResetDialog} disabled={resetBusy}>
             Cancel
-            <Kbd keys="Esc" availability={resetBusy ? "inactive" : "available"} />
+            <Kbd
+              keys="Esc"
+              availability={resetBusy ? "inactive" : "available"}
+            />
           </Button>
           <NetworkButton
             variant="contained"
             color={resetMode === "now" ? "error" : "primary"}
-            disabled={resetBusy || confirmText !== "confirm" || (resetMode === "schedule" && !scheduleValid)}
+            disabled={resetBusy || confirmText !== "confirm" ||
+              (resetMode === "schedule" && !scheduleValid)}
             networkAction={submitReset}
           >
             {resetMode === "schedule" ? "Schedule reset" : "Reset now"}
             <Kbd
               keys={`${MOD_LABEL}${ENTER_LABEL}`}
-              availability={resetBusy || confirmText !== "confirm" || (resetMode === "schedule" && !scheduleValid)
+              availability={resetBusy || confirmText !== "confirm" ||
+                  (resetMode === "schedule" && !scheduleValid)
                 ? "inactive"
                 : "available"}
             />
@@ -518,10 +627,12 @@ function DesktopUsageExtras(
 
 function ConfigOptionControl({
   option,
+  presentation,
   sessionId,
   disabled,
 }: {
   option: ConfigOption;
+  presentation?: ProviderConfigOptionPresentation | undefined;
   sessionId: string;
   disabled: boolean;
 }): React.JSX.Element {
@@ -550,8 +661,7 @@ function ConfigOptionControl({
         alignItems: "center",
         gap: 1.25,
         gridColumn: label === "Reasoning effort" ||
-            option.id === "deepseek_context" ||
-            option.id === "deepseek_cache_protection"
+            presentation?.layout === "full_width"
           ? "1 / -1"
           : undefined,
       }}
@@ -570,7 +680,10 @@ function ConfigOptionControl({
             {label}
           </Typography>
           {shortcut && (
-            <Kbd keys={shortcut} availability={disabled ? "inactive" : "available"} />
+            <Kbd
+              keys={shortcut}
+              availability={disabled ? "inactive" : "available"}
+            />
           )}
         </Stack>
       </Tooltip>
@@ -681,7 +794,7 @@ function ConfigOptionControl({
   );
 }
 
-function CodexPresetControls({
+function RecommendedPresetControls({
   presets,
   options,
   sessionId,
@@ -694,8 +807,21 @@ function CodexPresetControls({
 }): React.JSX.Element {
   const active = activeRunConfigPreset(presets, options);
   return (
-    <Box sx={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "108px minmax(0, 1fr)", alignItems: "center", gap: 1.25 }}>
-      <Typography variant="caption" fontWeight={750} color="text.secondary" sx={{ letterSpacing: "0.02em" }}>
+    <Box
+      sx={{
+        gridColumn: "1 / -1",
+        display: "grid",
+        gridTemplateColumns: "108px minmax(0, 1fr)",
+        alignItems: "center",
+        gap: 1.25,
+      }}
+    >
+      <Typography
+        variant="caption"
+        fontWeight={750}
+        color="text.secondary"
+        sx={{ letterSpacing: "0.02em" }}
+      >
         Recommended
       </Typography>
       <Stack direction="row" spacing={0.75}>
@@ -726,9 +852,10 @@ function CodexPresetControls({
                 borderRadius: 1.25,
                 border: 1,
                 borderColor: selected ? "primary.main" : "divider",
-                bgcolor: (theme) => selected
-                  ? alpha(theme.palette.primary.main, 0.14)
-                  : alpha(theme.palette.background.default, 0.42),
+                bgcolor: (theme) =>
+                  selected
+                    ? alpha(theme.palette.primary.main, 0.14)
+                    : alpha(theme.palette.background.default, 0.42),
                 justifyContent: "flex-start",
                 textAlign: "left",
                 "&:hover": { bgcolor: "action.hover" },
@@ -737,20 +864,36 @@ function CodexPresetControls({
             >
               <Box sx={{ flex: 1, minWidth: 0 }}>
                 <Stack direction="row" spacing={0.65} alignItems="center">
-                  <Typography variant="caption" fontWeight={750} color={selected ? "primary.main" : "text.primary"}>
+                  <Typography
+                    variant="caption"
+                    fontWeight={750}
+                    color={selected ? "primary.main" : "text.primary"}
+                  >
                     {preset.name}
                   </Typography>
                   {preset.isDefault && (
-                    <Typography variant="caption" color="primary.main" sx={{ fontSize: "0.625rem", fontWeight: 750 }}>
+                    <Typography
+                      variant="caption"
+                      color="primary.main"
+                      sx={{ fontSize: "0.625rem", fontWeight: 750 }}
+                    >
                       Default
                     </Typography>
                   )}
                 </Stack>
-                <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block", fontSize: "0.625rem" }}>
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  noWrap
+                  sx={{ display: "block", fontSize: "0.625rem" }}
+                >
                   {preset.detail}
                 </Typography>
               </Box>
-              <Kbd keys={String(index + 1)} availability={disabled ? "inactive" : "available"} />
+              <Kbd
+                keys={String(index + 1)}
+                availability={disabled ? "inactive" : "available"}
+              />
             </ButtonBase>
           );
         })}
@@ -792,23 +935,52 @@ export function DesktopTopBarControls({
   const [clearConfirm, setClearConfirm] = useState(false);
   const dead = status === "exited" || status === "crashed" ||
     status === "interrupted";
-  const options = useMemo(() => {
-    return providerConfigOptions(session?.provider, rawOptions).sort((left, right) => {
-      const leftIndex = OPTION_RANK[left.id] ?? Number.MAX_SAFE_INTEGER;
-      const rightIndex = OPTION_RANK[right.id] ?? Number.MAX_SAFE_INTEGER;
-      if (leftIndex === rightIndex) return left.name.localeCompare(right.name);
-      return leftIndex - rightIndex;
-    });
-  }, [rawOptions, session?.provider]);
-  const contextBudgetAvailable = options.some((option) =>
-    option.id === "deepseek_context"
+  const optionPresentations = useMemo(
+    () =>
+      providerConfigOptionPresentations(
+        session?.provider,
+        session?.provider_version,
+        session?.provider_generation_digest,
+      ),
+    [
+      session?.provider,
+      session?.provider_generation_digest,
+      session?.provider_version,
+    ],
   );
-  const configDisabled = options.length === 0 || (dead && !contextBudgetAvailable);
+  const options = useMemo(() => {
+    return providerConfigOptions(session?.provider, rawOptions).sort(
+      (left, right) => {
+        const leftIndex = providerConfigOptionOrder(
+          left,
+          optionPresentations.get(left.id),
+        );
+        const rightIndex = providerConfigOptionOrder(
+          right,
+          optionPresentations.get(right.id),
+        );
+        if (leftIndex === rightIndex) {
+          return left.name.localeCompare(right.name);
+        }
+        return leftIndex - rightIndex;
+      },
+    );
+  }, [optionPresentations, rawOptions, session?.provider]);
+  const configDisabled = providerConfigSurfaceDisabled(
+    status,
+    options,
+    optionPresentations,
+  );
   const configSummary = options.map(compactOptionName).join(" · ");
   const directConfigShortcuts = options.map(optionShortcut).filter(
     (shortcut): shortcut is string => shortcut !== undefined,
   );
-  const recommendedPresets = runConfigPresets(session?.provider, options);
+  const recommendedPresets = runConfigPresets(
+    session?.provider,
+    options,
+    session?.provider_version,
+    session?.provider_generation_digest,
+  );
   const presetShortcutLabel = recommendedPresets
     .map((_, index) => String(index + 1))
     .join("/");
@@ -839,7 +1011,9 @@ export function DesktopTopBarControls({
       );
       const choices = firstRow
         ? [...firstRow.querySelectorAll<HTMLElement>("[data-config-choice]")]
-          .filter((choice) => !choice.matches(":disabled, [aria-disabled='true']"))
+          .filter((choice) =>
+            !choice.matches(":disabled, [aria-disabled='true']")
+          )
         : [];
       const selected = choices.find((choice) =>
         choice.classList.contains("Mui-selected") ||
@@ -850,7 +1024,9 @@ export function DesktopTopBarControls({
     });
     const onKeyDown = (event: KeyboardEvent): void => {
       if (desktopImeOwnsKey(event)) return;
-      if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+      if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) {
+        return;
+      }
       if (document.querySelector("[role='listbox']") !== null) return;
       const panel = configPanelRef.current;
       if (!panel) return;
@@ -858,7 +1034,9 @@ export function DesktopTopBarControls({
       if (action === null) return;
       const choicesFor = (row: HTMLElement): HTMLElement[] =>
         [...row.querySelectorAll<HTMLElement>("[data-config-choice]")]
-          .filter((choice) => !choice.matches(":disabled, [aria-disabled='true']"));
+          .filter((choice) =>
+            !choice.matches(":disabled, [aria-disabled='true']")
+          );
       const selectedChoiceIndex = (choices: readonly HTMLElement[]): number =>
         choices.findIndex((choice) =>
           choice.classList.contains("Mui-selected") ||
@@ -883,16 +1061,20 @@ export function DesktopTopBarControls({
       ): boolean => {
         const choices = choicesFor(row);
         if (choices.length === 0) return false;
-        const select = choices.find((choice) => choice.hasAttribute("data-config-select"));
+        const select = choices.find((choice) =>
+          choice.hasAttribute("data-config-select")
+        );
         if (select) {
           // MUI Select opens from its display's primary mousedown, not click.
           // Preserve that component contract while exposing it through the
           // panel's visible keyboard grammar.
-          select.dispatchEvent(new MouseEvent("mousedown", {
-            bubbles: true,
-            cancelable: true,
-            button: 0,
-          }));
+          select.dispatchEvent(
+            new MouseEvent("mousedown", {
+              bubbles: true,
+              cancelable: true,
+              button: 0,
+            }),
+          );
           return true;
         }
         const active = document.activeElement instanceof HTMLElement
@@ -900,7 +1082,12 @@ export function DesktopTopBarControls({
           : null;
         const focused = active ? choices.indexOf(active) : -1;
         const current = focused >= 0 ? focused : selectedChoiceIndex(choices);
-        const next = nextRunConfigChoiceIndex(choices.length, current, delta, wrap);
+        const next = nextRunConfigChoiceIndex(
+          choices.length,
+          current,
+          delta,
+          wrap,
+        );
         const nextChoice = choices[next];
         if (!nextChoice) return false;
         if (next !== current) activateChoice(nextChoice);
@@ -913,7 +1100,9 @@ export function DesktopTopBarControls({
         const preset = panel.querySelector<HTMLElement>(
           `[data-config-preset="${String(action.index)}"]`,
         );
-        if (!preset || preset.matches(":disabled, [aria-disabled='true']")) return;
+        if (!preset || preset.matches(":disabled, [aria-disabled='true']")) {
+          return;
+        }
         preset.focus();
         preset.click();
         event.preventDefault();
@@ -937,10 +1126,12 @@ export function DesktopTopBarControls({
       if (action.type === "field") {
         const nextRow = rowIndex < 0
           ? (action.delta > 0 ? rows[0] : rows.at(-1))
-          : rows[Math.min(
-            rows.length - 1,
-            Math.max(0, rowIndex + action.delta),
-          )];
+          : rows[
+            Math.min(
+              rows.length - 1,
+              Math.max(0, rowIndex + action.delta),
+            )
+          ];
         if (!nextRow) return;
         focusChoice(nextRow);
       } else {
@@ -960,7 +1151,9 @@ export function DesktopTopBarControls({
     if (usageAnchor === null) return undefined;
     const onKeyDown = (event: KeyboardEvent): void => {
       if (desktopImeOwnsKey(event)) return;
-      if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+      if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) {
+        return;
+      }
       const key = workspaceCommandKey(event).toLowerCase();
       if (key === "h" || key === "l") {
         event.preventDefault();
@@ -1008,16 +1201,29 @@ export function DesktopTopBarControls({
       }
     };
     globalThis.addEventListener("keydown", onKeyDown, true);
-    return (): void => globalThis.removeEventListener("keydown", onKeyDown, true);
+    return (): void =>
+      globalThis.removeEventListener("keydown", onKeyDown, true);
   }, [loadUsage, refreshing, usageAnchor, usagePanel]);
-  const widgetProviders = useMemo(() => usageWidgetProviders(snapshot), [snapshot]);
-  const sessionUsage = providerUsage(snapshot, session?.provider);
+  const widgetProviders = useMemo(() => usageWidgetProviders(snapshot), [
+    snapshot,
+  ]);
+  const sessionUsage = providerUsage(
+    snapshot,
+    session?.provider,
+    session?.provider_version,
+    session?.provider_generation_digest,
+  );
   const sessionHasReset = sessionUsage !== undefined &&
     nearestAvailableResetCredit(sessionUsage) !== undefined;
-  const usage = widgetProviders.some((provider) => provider.kind === sessionUsage?.provider) ||
+  const usage =
+    widgetProviders.some((provider) =>
+        provider.kind === sessionUsage?.provider
+      ) ||
       sessionHasReset
-    ? sessionUsage
-    : snapshot?.providers.find((provider) => provider.provider === widgetProviders[0]?.kind);
+      ? sessionUsage
+      : snapshot?.providers.find((provider) =>
+        provider.provider === widgetProviders[0]?.kind
+      );
   const limits = useMemo(() => usageLimits(usage), [usage]);
   const hasResetCredit = usage !== undefined &&
     nearestAvailableResetCredit(usage) !== undefined;
@@ -1029,8 +1235,15 @@ export function DesktopTopBarControls({
         "compact",
         session?.provider ?? "",
         availableCommands,
+        session?.provider_version,
+        session?.provider_generation_digest,
       ),
-    [availableCommands, session?.provider],
+    [
+      availableCommands,
+      session?.provider,
+      session?.provider_version,
+      session?.provider_generation_digest,
+    ],
   );
   const clearAction = useMemo(
     () =>
@@ -1038,8 +1251,15 @@ export function DesktopTopBarControls({
         "clear",
         session?.provider ?? "",
         availableCommands,
+        session?.provider_version,
+        session?.provider_generation_digest,
       ),
-    [availableCommands, session?.provider],
+    [
+      availableCommands,
+      session?.provider,
+      session?.provider_version,
+      session?.provider_generation_digest,
+    ],
   );
   const compacting = status === "busy" && timelineState.compactingTail;
   const serverContextUsed = session?.context_used ?? 0;
@@ -1173,12 +1393,10 @@ export function DesktopTopBarControls({
   // desktop layout whenever the pane can afford it; once the pane is narrower
   // than this strip, the margin collapses and the parent toolbar scrolls instead
   // of compressing controls into one another.
-  const usageMinWidth = snapshot === null
-    ? 132
-    : widgetProviders.reduce(
-      (width, provider) => width + (provider.kind === "deepseek" ? 164 : 156),
-      0,
-    ) + Math.max(0, widgetProviders.length - 1) * 4 + 44;
+  const usageMinWidth = snapshot === null ? 132 : widgetProviders.reduce(
+    (width, provider) => width + (provider.kind === "deepseek" ? 164 : 156),
+    0,
+  ) + Math.max(0, widgetProviders.length - 1) * 4 + 44;
   const sessionActionsMinWidth = 90 + (compactAction ? 96 : 0) +
     (clearAction ? 80 : 0) + 80 +
     (2 + Number(Boolean(compactAction)) + Number(Boolean(clearAction))) *
@@ -1200,61 +1418,70 @@ export function DesktopTopBarControls({
       }}
     >
       {options.length === 0 && !dead &&
-        (status === "starting" || status === "running")
-        ? <Skeleton
+          (status === "starting" || status === "running")
+        ? (
+          <Skeleton
             variant="rounded"
             width={300}
             height={DESKTOP_TOPBAR_CONTROL_HEIGHT}
           />
+        )
         : (
           <Tooltip title={configSummary || "Run configuration"}>
-              <Button
-                data-desktop-item="topbar-config"
-                data-desktop-topbar-action="config"
-                data-desktop-run-config
-                size="small"
-                color="inherit"
-                variant="outlined"
-                startIcon={
-                  <Tune sx={{
+            <Button
+              data-desktop-item="topbar-config"
+              data-desktop-topbar-action="config"
+              data-desktop-run-config
+              size="small"
+              color="inherit"
+              variant="outlined"
+              startIcon={
+                <Tune
+                  sx={{
                     ...desktopEmbeddedControlIconSx(),
                     color: "text.secondary",
-                  }} />
-                }
-                endIcon={<ExpandMore fontSize="small" />}
-                disabled={configDisabled}
-                onClick={(event): void => setConfigAnchor(event.currentTarget)}
-                sx={{
-                  ...desktopEmbeddedControlSx({
-                    active: shortcutsActive,
-                    open: configAnchor !== null,
-                  }),
-                  width: "clamp(190px, 18vw, 260px)",
-                  height: DESKTOP_TOPBAR_CONTROL_HEIGHT,
-                  px: 1.15,
-                  justifyContent: "flex-start",
-                  textTransform: "none",
-                  flexShrink: 0,
-                  minWidth: 170,
-                  color: "text.primary",
-                  "& .MuiButton-startIcon": { mr: 0.8 },
-                  "& .MuiButton-endIcon": { ml: "auto" },
-                }}
-              >
-                <Typography variant="caption" fontWeight={650} noWrap sx={{ flex: 1, minWidth: 0, textAlign: "left" }}>
-                  {configSummary || "Run configuration"}
-                </Typography>
-                <ShortcutKeycap
-                  keyLabel="R"
-                  variant="global"
-                  accent={shortcutsActive || configAnchor !== null}
-                  availability={shortcutAvailability(
-                    shortcutsActive && !configDisabled,
-                    configAnchor !== null,
-                  )}
-                  sx={{ flexShrink: 0, ml: 0.75 }}
+                  }}
                 />
-              </Button>
+              }
+              endIcon={<ExpandMore fontSize="small" />}
+              disabled={configDisabled}
+              onClick={(event): void => setConfigAnchor(event.currentTarget)}
+              sx={{
+                ...desktopEmbeddedControlSx({
+                  active: shortcutsActive,
+                  open: configAnchor !== null,
+                }),
+                width: "clamp(190px, 18vw, 260px)",
+                height: DESKTOP_TOPBAR_CONTROL_HEIGHT,
+                px: 1.15,
+                justifyContent: "flex-start",
+                textTransform: "none",
+                flexShrink: 0,
+                minWidth: 170,
+                color: "text.primary",
+                "& .MuiButton-startIcon": { mr: 0.8 },
+                "& .MuiButton-endIcon": { ml: "auto" },
+              }}
+            >
+              <Typography
+                variant="caption"
+                fontWeight={650}
+                noWrap
+                sx={{ flex: 1, minWidth: 0, textAlign: "left" }}
+              >
+                {configSummary || "Run configuration"}
+              </Typography>
+              <ShortcutKeycap
+                keyLabel="R"
+                variant="global"
+                accent={shortcutsActive || configAnchor !== null}
+                availability={shortcutAvailability(
+                  shortcutsActive && !configDisabled,
+                  configAnchor !== null,
+                )}
+                sx={{ flexShrink: 0, ml: 0.75 }}
+              />
+            </Button>
           </Tooltip>
         )}
 
@@ -1286,9 +1513,17 @@ export function DesktopTopBarControls({
         }, { slots: [{ shortcut: "Esc", label: "Close" }] }]}
       >
         <Box ref={configPanelRef} data-desktop-shortcut-scope="exclusive">
-          <Box sx={{ px: 2.25, py: 1.75, display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 1.25 }}>
+          <Box
+            sx={{
+              px: 2.25,
+              py: 1.75,
+              display: "grid",
+              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+              gap: 1.25,
+            }}
+          >
             {recommendedPresets.length > 0 && (
-              <CodexPresetControls
+              <RecommendedPresetControls
                 presets={recommendedPresets}
                 options={options}
                 sessionId={sessionId}
@@ -1299,20 +1534,20 @@ export function DesktopTopBarControls({
               <ConfigOptionControl
                 key={option.id}
                 option={option}
+                presentation={optionPresentations.get(option.id)}
                 sessionId={sessionId}
-                disabled={
-                  option.id === "deepseek_context" ||
-                      option.id === "deepseek_cache_protection"
-                    ? status === "busy" || status === "starting"
-                    : dead
-                }
+                disabled={providerConfigOptionDisabled(
+                  status,
+                  optionPresentations.get(option.id),
+                )}
               />
             ))}
           </Box>
         </Box>
       </DesktopModal>
 
-      {(snapshot === null || widgetProviders.length > 0) && <ButtonBase
+      {(snapshot === null || widgetProviders.length > 0) && (
+        <ButtonBase
           data-desktop-item="topbar-usage"
           data-desktop-topbar-action="usage"
           data-desktop-quota
@@ -1332,7 +1567,10 @@ export function DesktopTopBarControls({
             ? (
               <Stack direction="row" spacing={0.4} alignItems="stretch">
                 {widgetProviders.map((provider) => (
-                  <UsageProviderSummary key={provider.kind} provider={provider} />
+                  <UsageProviderSummary
+                    key={provider.kind}
+                    provider={provider}
+                  />
                 ))}
               </Stack>
             )
@@ -1345,10 +1583,14 @@ export function DesktopTopBarControls({
             keyLabel="U"
             variant="global"
             accent={shortcutsActive || usageAnchor !== null}
-            availability={shortcutAvailability(shortcutsActive, usageAnchor !== null)}
+            availability={shortcutAvailability(
+              shortcutsActive,
+              usageAnchor !== null,
+            )}
             sx={{ flexShrink: 0 }}
           />
-        </ButtonBase>}
+        </ButtonBase>
+      )}
 
       <DesktopModal
         open={usageAnchor !== null}
@@ -1377,67 +1619,94 @@ export function DesktopTopBarControls({
           >
             <Box>
               <Stack direction="row" spacing={1.5}>
-                <ButtonBase onClick={() => setUsagePanel("usage")} sx={{ borderBottom: 2, borderColor: usagePanel === "usage" ? "primary.main" : "transparent" }}>
-                  <Typography variant="subtitle2" fontWeight={750}>Usage</Typography>
+                <ButtonBase
+                  onClick={() => setUsagePanel("usage")}
+                  sx={{
+                    borderBottom: 2,
+                    borderColor: usagePanel === "usage"
+                      ? "primary.main"
+                      : "transparent",
+                  }}
+                >
+                  <Typography variant="subtitle2" fontWeight={750}>
+                    Usage
+                  </Typography>
                   <Kbd keys="U" />
                 </ButtonBase>
-                <ButtonBase onClick={() => setUsagePanel("logs")} sx={{ borderBottom: 2, borderColor: usagePanel === "logs" ? "primary.main" : "transparent" }}>
-                  <Typography variant="subtitle2" fontWeight={750}>Logs</Typography>
+                <ButtonBase
+                  onClick={() => setUsagePanel("logs")}
+                  sx={{
+                    borderBottom: 2,
+                    borderColor: usagePanel === "logs"
+                      ? "primary.main"
+                      : "transparent",
+                  }}
+                >
+                  <Typography variant="subtitle2" fontWeight={750}>
+                    Logs
+                  </Typography>
                   <Kbd keys="L" />
                 </ButtonBase>
               </Stack>
             </Box>
-            {usagePanel === "usage" && <NetworkButton
-              size="small"
-              startIcon={<Refresh fontSize="small" />}
-              disabled={refreshing}
-              networkAction={() => loadUsage(true)}
-              sx={{ textTransform: "none" }}
-            >
-              Refresh
-              <Kbd keys="R" availability={refreshing ? "inactive" : "available"} />
-            </NetworkButton>}
+            {usagePanel === "usage" && (
+              <NetworkButton
+                size="small"
+                startIcon={<Refresh fontSize="small" />}
+                disabled={refreshing}
+                networkAction={() => loadUsage(true)}
+                sx={{ textTransform: "none" }}
+              >
+                Refresh
+                <Kbd
+                  keys="R"
+                  availability={refreshing ? "inactive" : "available"}
+                />
+              </NetworkButton>
+            )}
           </Stack>
           <Divider />
-          {usagePanel === "logs" ? <UsageLogs dense /> : <>
-          {limits.map((limit) => (
-            <Stack key={limit.id} spacing={0.5}>
-              <Stack direction="row" justifyContent="space-between">
-                <Typography variant="body2">{limit.label}</Typography>
-                <Typography variant="body2" fontWeight={750}>
-                  {limit.remaining}% remaining
+          {usagePanel === "logs" ? <UsageLogs dense /> : (
+            <>
+              {limits.map((limit) => (
+                <Stack key={limit.id} spacing={0.5}>
+                  <Stack direction="row" justifyContent="space-between">
+                    <Typography variant="body2">{limit.label}</Typography>
+                    <Typography variant="body2" fontWeight={750}>
+                      {limit.remaining}% remaining
+                    </Typography>
+                  </Stack>
+                  <LinearProgress
+                    variant="determinate"
+                    value={limit.remaining}
+                    sx={{
+                      height: 6,
+                      borderRadius: 99,
+                      "& .MuiLinearProgress-bar": { borderRadius: 99 },
+                    }}
+                  />
+                  <Typography variant="caption" color="text.secondary">
+                    Resets {fullResetTime(limit.resetsAt)}
+                  </Typography>
+                </Stack>
+              ))}
+              {limits.length === 0 && !hasResetCredit && (
+                <Typography variant="body2" color="text.secondary">
+                  {providerUsageErrorMessage(
+                    usage,
+                    "This provider has not exposed account limits.",
+                  )}
                 </Typography>
-              </Stack>
-              <LinearProgress
-                variant="determinate"
-                value={limit.remaining}
-                sx={{
-                  height: 6,
-                  borderRadius: 99,
-                  "& .MuiLinearProgress-bar": { borderRadius: 99 },
-                }}
-              />
-              <Typography variant="caption" color="text.secondary">
-                Resets {fullResetTime(limit.resetsAt)}
-              </Typography>
-            </Stack>
-          ))}
-          {limits.length === 0 && !hasResetCredit && (
-            <Typography variant="body2" color="text.secondary">
-              {providerUsageErrorMessage(
-                usage,
-                "This provider has not exposed account limits.",
               )}
-            </Typography>
+              {usage && (
+                <DesktopUsageExtras
+                  usage={usage}
+                  schedule={usageResetSchedule(snapshot, usage)}
+                  onUsageChanged={() => loadUsage(false)}
+                />
+              )}
+            </>
           )}
-          {usage && (
-            <DesktopUsageExtras
-              usage={usage}
-              schedule={usageResetSchedule(snapshot, usage)}
-              onUsageChanged={() => loadUsage(false)}
-            />
-          )}
-          </>}
         </Stack>
       </DesktopModal>
 
@@ -1475,7 +1744,12 @@ export function DesktopTopBarControls({
                 minWidth: 90,
               })}
             >
-              <Stack direction="row" spacing={0.5} alignItems="center" sx={{ width: "100%" }}>
+              <Stack
+                direction="row"
+                spacing={0.5}
+                alignItems="center"
+                sx={{ width: "100%" }}
+              >
                 <Typography variant="caption" fontWeight={750}>
                   Reload
                 </Typography>
@@ -1528,7 +1802,12 @@ export function DesktopTopBarControls({
                   minWidth: 96,
                 })}
               >
-                <Stack direction="row" spacing={0.5} alignItems="center" sx={{ width: "100%" }}>
+                <Stack
+                  direction="row"
+                  spacing={0.5}
+                  alignItems="center"
+                  sx={{ width: "100%" }}
+                >
                   <Typography variant="caption" fontWeight={750}>
                     Compact
                   </Typography>
@@ -1580,7 +1859,12 @@ export function DesktopTopBarControls({
                   },
                 }}
               >
-                <Stack direction="row" spacing={0.5} alignItems="center" sx={{ width: "100%" }}>
+                <Stack
+                  direction="row"
+                  spacing={0.5}
+                  alignItems="center"
+                  sx={{ width: "100%" }}
+                >
                   <Typography variant="caption" fontWeight={750}>
                     Clear
                   </Typography>
@@ -1699,7 +1983,6 @@ export function DesktopTopBarControls({
           </NetworkButton>
         </DialogActions>
       </Dialog>
-
     </Stack>
   );
 }

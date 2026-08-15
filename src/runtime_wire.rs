@@ -95,6 +95,18 @@ impl WorkerSnapshot {
 pub struct StartSession {
     pub session_id: String,
     pub provider: String,
+    /// Immutable Provider package identity. These fields are independent from
+    /// `generation`, which remains the Cowboy worker-binary generation.
+    #[serde(default)]
+    pub provider_version: String,
+    #[serde(default)]
+    pub provider_generation_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_auth_generation: Option<u64>,
+    /// Signed, closed Cowboy host-integration interface. The Machine derives
+    /// this again from the installed package before starting the worker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_behavior: Option<cowboy_provider_sdk::ProviderBehaviorContract>,
     pub cwd: String,
     #[serde(default)]
     pub agent_session_id: Option<String>,
