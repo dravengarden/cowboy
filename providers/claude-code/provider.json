@@ -1,9 +1,9 @@
 {
   "authoring_schema": 2,
   "id": "claude-code",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "publisher": "cowboy-first-party",
-  "sdk_version": "2.2.0",
+  "sdk_version": "2.3.0",
   "display": {
     "name": "Claude Code",
     "vendor": "Anthropic",
@@ -44,12 +44,21 @@
     "accessible_label": "Claude Code is working"
   },
   "host": {
-    "schema_version": 1,
+    "schema_version": 2,
     "conversation_compaction": {
       "aliases": ["compact", "summarise", "summarize"],
       "fallback_command": "compact"
     },
     "account_usage": { "provider": "anthropic" },
+    "transcript": {
+      "schema_version": 1,
+      "thought": {
+        "variant": "timeline",
+        "density": "comfortable",
+        "active_label": "Thinking",
+        "current_surface": "plain"
+      }
+    },
     "features": [],
     "tool_presentations": [
       { "tool_name": "TodoWrite", "renderer": "todo_list_v1" }

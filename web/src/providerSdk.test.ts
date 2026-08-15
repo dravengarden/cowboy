@@ -194,7 +194,7 @@ Deno.test("Provider SDK validates and executes linked typed logic", () => {
 
 Deno.test("Provider UI schema 2 accepts bounded gradient and activity IR", () => {
   const fixture = manifest();
-  fixture.sdk_version = "2.2.0";
+  fixture.sdk_version = "2.3.0";
   fixture.ui.schema_version = 2;
   const icon = fixture.ui.assets.find((asset) => asset.id === "icon")!;
   if (icon.content.kind !== "vector_path") throw new Error("missing vector");
@@ -248,7 +248,7 @@ Deno.test("Provider UI rejects v2 nodes in v1 and unknown future interfaces", ()
   );
 
   const unknown = manifest();
-  unknown.sdk_version = "2.2.0";
+  unknown.sdk_version = "2.3.0";
   unknown.ui.schema_version = 2;
   unknown.ui.surfaces.loading = {
     component: "activity",
@@ -272,7 +272,7 @@ Deno.test("Provider UI rejects v2 nodes in v1 and unknown future interfaces", ()
 
 Deno.test("Provider UI rejects unbounded activity motion before rendering", () => {
   const fixture = manifest();
-  fixture.sdk_version = "2.2.0";
+  fixture.sdk_version = "2.3.0";
   fixture.ui.schema_version = 2;
   fixture.ui.surfaces.loading = {
     component: "activity",
@@ -288,6 +288,79 @@ Deno.test("Provider UI rejects unbounded activity motion before rendering", () =
     () => validateProviderManifest(fixture),
     Error,
     "Invalid Provider glyph activity",
+  );
+});
+
+Deno.test("Provider host schema 2 accepts only bounded Transcript variants", () => {
+  for (
+    const variant of ["timeline", "workcell", "signal", "terminal"] as const
+  ) {
+    const fixture = manifest();
+    fixture.sdk_version = "2.3.0";
+    fixture.host = {
+      ...fixture.host,
+      schema_version: 2,
+      transcript: {
+        schema_version: 1,
+        thought: {
+          variant,
+          density: variant === "terminal" ? "compact" : "comfortable",
+          active_label: "Thinking",
+          current_surface: variant === "timeline" ? "plain" : "soft",
+        },
+      },
+    };
+    validateProviderManifest(fixture);
+  }
+
+  const legacy = manifest() as unknown as Record<string, unknown>;
+  const legacyHost = legacy.host as Record<string, unknown>;
+  legacyHost.transcript = {
+    schema_version: 1,
+    thought: {
+      variant: "timeline",
+      density: "comfortable",
+      current_surface: "plain",
+    },
+  };
+  assertThrows(
+    () => validateProviderManifest(legacy),
+    Error,
+    "schema 1 cannot declare Transcript presentation",
+  );
+
+  const missing = manifest() as unknown as Record<string, unknown>;
+  (missing.host as Record<string, unknown>).schema_version = 2;
+  assertThrows(
+    () => validateProviderManifest(missing),
+    Error,
+    "Invalid Provider Transcript presentation contract",
+  );
+
+  const unknown = manifest() as unknown as Record<string, unknown>;
+  unknown.sdk_version = "2.3.0";
+  const unknownHost = unknown.host as Record<string, unknown>;
+  unknownHost.schema_version = 2;
+  unknownHost.transcript = {
+    schema_version: 1,
+    thought: {
+      variant: "provider_canvas",
+      density: "comfortable",
+      current_surface: "plain",
+    },
+  };
+  assertThrows(
+    () => validateProviderManifest(unknown),
+    Error,
+    "Invalid Provider Transcript thought presentation",
+  );
+
+  const stringSchema = manifest() as unknown as Record<string, unknown>;
+  (stringSchema.host as Record<string, unknown>).schema_version = "1";
+  assertThrows(
+    () => validateProviderManifest(stringSchema),
+    Error,
+    "Invalid Provider manifest envelope",
   );
 });
 
@@ -499,6 +572,52 @@ Deno.test("Machine Provider UI resolves the exact installed package", () => {
     ),
     second,
   );
+  first.manifest.ui.schema_version = 2;
+  second.manifest.host = {
+    ...second.manifest.host,
+    schema_version: 2,
+    transcript: {
+      schema_version: 1,
+      thought: {
+        variant: "workcell",
+        density: "comfortable",
+        active_label: "Thinking",
+        current_surface: "soft",
+      },
+    },
+  };
+  assertEquals(
+    providerPresentationEntry(
+      [second, first],
+      first.provider_id,
+      first.provider_version,
+      first.artifact_digest!,
+    ),
+    second,
+  );
+  first.manifest.host = {
+    ...first.manifest.host,
+    schema_version: 2,
+    transcript: {
+      schema_version: 1,
+      thought: {
+        variant: "timeline",
+        density: "comfortable",
+        current_surface: "plain",
+      },
+    },
+  };
+  const { transcript: _transcript, ...legacyHost } = second.manifest.host;
+  second.manifest.host = { ...legacyHost, schema_version: 1 };
+  assertEquals(
+    providerPresentationEntry(
+      [second, first],
+      first.provider_id,
+      first.provider_version,
+      first.artifact_digest!,
+    ),
+    first,
+  );
   const installed = {
     provider_id: first.provider_id,
     provider_version: first.provider_version,
@@ -594,7 +713,7 @@ Deno.test("Provider SDK enforces semantic release identity and precedence", () =
 
 Deno.test("Provider SDK rejects incompatible authoring SDK versions before rendering", () => {
   const newer = manifest();
-  newer.sdk_version = "2.2.1";
+  newer.sdk_version = "2.3.1";
   assertThrows(() => validateProviderManifest(newer), Error, "is incompatible");
 
   const olderMinor = manifest();

@@ -1,6 +1,6 @@
 [package]
 name = "cowboy-provider-sdk"
-version = "2.2.0"
+version = "2.3.0"
 edition = "2024"
 publish = false
 description = "Typed authoring and artifact contracts for Cowboy Providers"

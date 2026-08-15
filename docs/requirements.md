@@ -1,11 +1,11 @@
 # Cowboy core requirements
 
 Status: normative Provider platform contract. Package schema 2, release schema
-2, UI schemas 1-2, Provider SDK 2.2, Machine-scoped installation, exact session
-generations, Service-scoped authentication, and bounded uninstall retention
-implement this boundary. The in-tree `LaunchSpec` registry remains only as a
-drain-compatible fallback for sessions created before an exact Provider
-generation was recorded.
+2, UI schemas 1-2, host integration schemas 1-2, Provider SDK 2.3,
+Machine-scoped installation, exact session generations, Service-scoped
+authentication, and bounded uninstall retention implement this boundary. The
+in-tree `LaunchSpec` registry remains only as a drain-compatible fallback for
+sessions created before an exact Provider generation was recorded.
 
 ## Authority
 
@@ -96,6 +96,14 @@ owns the animation implementation, reduced-motion behavior, accessibility, and
 responsive mechanics. The host renderer must dispatch only on schema kinds,
 never on Provider IDs.
 
+Provider-specific Transcript thoughts use a separate closed presentation
+contract. A Provider selects one Cowboy-owned `timeline`, `workcell`, `signal`,
+or `terminal` variant, a bounded density, an optional active label, and a
+`plain` or `soft` current-step surface. Cowboy owns marker geometry, typography,
+color application, motion, reading-scale behavior, and accessibility. The
+contract cannot carry CSS, DOM, markup, arbitrary dimensions, or executable
+rendering logic.
+
 Ordinary Web renders `information` and `setup` once in a Cowboy Service
 authentication region, while each Machine renders only `card` and its
 `empty`/`settings` lifecycle surface. An installed Machine card is rendered from
@@ -121,6 +129,12 @@ order values, layout, and availability policies; malformed or duplicate rules
 fail both Rust package validation and TypeScript Catalog validation. Tool
 presentation declarations likewise use unique bounded names and a closed
 renderer union.
+
+Host integration schema 1 forbids Transcript presentation fields. Host schema
+2 requires Transcript presentation schema 1, validates its exact field set and
+closed tokens, and includes it in the UI contract fingerprint. Unknown host or
+Transcript schema versions, variants, tokens, fields, control characters, and
+oversized active labels fail in both Rust and TypeScript validation.
 
 The UI schema version is part of the runtime type boundary. Cowboy accepts only
 an explicitly supported interval, rejects fields introduced after the declared
@@ -320,9 +334,9 @@ The Provider platform is not complete until automated acceptance proves:
 
 ## Implemented migration boundary
 
-Provider package schema 2, release schema 2, UI schemas 1-2, Controller contract
-2, Machine contract 4, and Cowboy Provider SDK 2.2 in both Rust and TypeScript
-are the active contract.
+Provider package schema 2, release schema 2, UI schemas 1-2, host integration
+schemas 1-2, Controller contract 2, Machine contract 4, and Cowboy Provider SDK
+2.3 in both Rust and TypeScript are the active contract.
 The Catalog embeds the six independently compiled first-party manifests as
 typed `unbound` entries and accepts installable releases only after an external
 `.cowboy-provider` package is paired with a complete, signed runtime envelope.
@@ -346,9 +360,10 @@ rendered once outside Machine cards; its lifecycle details and each Machine's
 Provider lifecycle details are collapsed behind compact summaries by default.
 Machine cards use the exact installed manifest and treat the latest ready
 Catalog release only as an upgrade target. Session execution stays pinned to
-its exact generation; generic shell chrome may adopt the latest signed v2
-presentation for the same Provider when an exact v1 session would otherwise
-retain stale brand or activity UI.
+its exact generation; generic shell chrome may adopt the latest compatible
+signed presentation for the same Provider when an exact session uses an older
+UI or host-presentation schema and would otherwise retain stale brand, activity,
+or Transcript UI.
 Sessions persist exact Provider and auth generations. Service auth uses one
 encrypted, monotonic durable generation plus a Service-wide transient login
 status, and automatically seals durable state to enrolled Machines; offline

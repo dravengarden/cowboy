@@ -4,6 +4,9 @@ import { transcriptRowContainment } from "./transcriptMotion.ts";
 const transcriptSource = await Deno.readTextFile(
   new URL("./Transcript.tsx", import.meta.url),
 );
+const providerTranscriptSource = await Deno.readTextFile(
+  new URL("./ProviderTranscript.tsx", import.meta.url),
+);
 
 Deno.test("thinking activity renders the exact Provider loading surface", () => {
   const component = transcriptSource.match(
@@ -21,6 +24,9 @@ Deno.test("thinking activity has no Provider identity branches", () => {
   assertEquals(transcriptSource.includes("function CodexThinking"), false);
   assertEquals(transcriptSource.includes("function GrokThinking"), false);
   assertEquals(transcriptSource.includes("providerActivityKind"), false);
+  for (const provider of ["claude-code", "codex", "gemini", "grok"]) {
+    assertEquals(providerTranscriptSource.includes(`"${provider}"`), false);
+  }
 });
 
 Deno.test("the growing row stays in the scroller paint flow", () => {

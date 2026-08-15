@@ -1774,6 +1774,12 @@ fn atomic_write(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
         .with_context(|| format!("creating {}", temporary.display()))?;
     file.write_all(bytes)?;
     file.sync_all()?;
+    // Close the writable descriptor before the executable becomes reachable at
+    // its final path. Linux rejects execve while any process still has the
+    // inode open for writing (ETXTBSY); keeping the descriptor across rename
+    // made a fast staged-component probe race that boundary under parallel
+    // test and production I/O.
+    drop(file);
     fs::rename(&temporary, path).with_context(|| format!("activating {}", path.display()))?;
     fs::set_permissions(path, fs::Permissions::from_mode(mode))?;
     Ok(())

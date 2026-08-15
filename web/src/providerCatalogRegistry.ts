@@ -103,9 +103,10 @@ export function providerEntryForIdentity(
 /** Resolve presentation-only chrome for an existing session.
  *
  * Runtime behavior and lifecycle surfaces remain pinned to the session's exact
- * package. A v1 session may adopt the latest signed v2 presentation from the
- * same Provider so corrected brand assets and activity do not remain stale for
- * the lifetime of that session.
+ * package. A session on an older UI or host-presentation schema may adopt the
+ * latest compatible signed presentation from the same Provider so corrected
+ * brand assets, activity, and Transcript variants do not remain stale for the
+ * lifetime of that session.
  */
 export function providerPresentationEntry(
   entries: readonly ProviderCatalogEntry[],
@@ -119,14 +120,22 @@ export function providerPresentationEntry(
     providerVersion,
     providerDigest,
   );
-  if (exact?.manifest.ui.schema_version !== 1) return exact;
   const latest = latestProviderEntries(entries).find((entry) =>
     entry.provider_id === providerId
   );
-  return latest?.release_state === "ready" &&
-      latest.manifest.ui.schema_version === 2
-    ? latest
-    : exact;
+  const exactUiSchema = exact?.manifest.ui.schema_version ?? 0;
+  const exactHostSchema = exact?.manifest.host.schema_version ?? 0;
+  const latestUiSchema = latest?.manifest.ui.schema_version ?? 0;
+  const latestHostSchema = latest?.manifest.host.schema_version ?? 0;
+  if (
+    latest?.release_state === "ready" &&
+    latestUiSchema >= exactUiSchema &&
+    latestHostSchema >= exactHostSchema &&
+    (latestUiSchema > exactUiSchema || latestHostSchema > exactHostSchema)
+  ) {
+    return latest;
+  }
+  return exact;
 }
 
 export function currentProviderEntry(

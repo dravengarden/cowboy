@@ -66,6 +66,7 @@ import {
 import { providerPresentation } from "./providerPresentation";
 import { providerVisual } from "./providerVisual";
 import { ProviderRuntimeSurface } from "./ProviderSurface";
+import { ProviderThoughtSteps } from "./ProviderTranscript";
 import { Markdown } from "./Markdown";
 import { attachmentDisplayParts } from "./attachments";
 import { CodeView, Labeled } from "./tools/blocks";
@@ -766,12 +767,6 @@ const toolLocateFlash = keyframes`
 // Claude Code's "prompt keyword shimmer": a highlight band sweeps across the
 // verb word (color applied via background-clip:text in sx).
 const shimmer = keyframes`to { background-position: -200% 0; }`;
-// Streaming thought text is host-owned transcript state. Keep one restrained,
-// Provider-neutral band moving through the glyphs without shifting layout.
-const thoughtTextShimmer = keyframes`
-  from { background-position: 100% 0; }
-  to   { background-position: 0% 0; }
-`;
 function ThinkingIndicator({
   provider,
   providerVersion,
@@ -1062,145 +1057,6 @@ function ChunkView({
       invert={invert}
       touchWrap={touchSurface}
     />
-  );
-}
-
-function ThoughtSteps({
-  sections,
-  streaming,
-}: {
-  sections: string[];
-  streaming: boolean;
-}): React.JSX.Element {
-  const visible = sections.filter((section) => section.trim() !== "");
-  return (
-    <Stack
-      spacing={0}
-      sx={{
-        flex: 1,
-        minWidth: 0,
-      }}
-      aria-label="Thinking steps"
-    >
-      {
-        /* ACP starts a fresh thought item whenever reasoning resumes after a
-          tool call.  That boundary is useful to the renderer, but it is not a
-          user-facing section: labelling every completed item "Reasoning"
-          produces a wall of duplicate headings in tool-heavy turns.  Keep the
-          status label only on the one live thought; completed thoughts already
-          have their lightbulb + meaningful step text. */
-      }
-      {visible.map((section, index) => {
-        const current = streaming && index === visible.length - 1;
-        const hasNext = index < visible.length - 1;
-        // Keep the text at its existing horizontal position while giving the
-        // indicator its own layout lane. The lane inherits the reading
-        // line-height, so `0.5lh` is the actual first-line centre at every user
-        // font scale; current-surface padding no longer needs a second offset.
-        const indicatorSize = 5;
-        return (
-          <Box
-            // A thought section has no upstream id. Its index is stable because
-            // Codex only appends sections while streaming this item.
-            key={index}
-            data-thought-step-current={current ? "true" : undefined}
-            sx={{
-              position: "relative",
-              display: "grid",
-              gridTemplateColumns: `${indicatorSize}px minmax(0, 1fr)`,
-              columnGap: "9px",
-              pl: "2px",
-              mb: hasNext ? 0.75 : 0,
-            }}
-          >
-            <Box
-              aria-hidden="true"
-              data-thought-step-indicator-lane
-              sx={{
-                position: "relative",
-                alignSelf: "stretch",
-                minHeight: "1lh",
-              }}
-            >
-              <Box
-                data-thought-step-indicator
-                sx={{
-                  position: "absolute",
-                  left: "50%",
-                  top: `calc(0.5lh - ${indicatorSize / 2}px)`,
-                  transform: "translateX(-50%)",
-                  width: indicatorSize,
-                  height: indicatorSize,
-                  display: "grid",
-                  placeItems: "center",
-                  borderRadius: "50%",
-                  bgcolor: current ? "primary.main" : "text.disabled",
-                  animation: current
-                    ? `${pulse} 1.4s ease-in-out infinite`
-                    : "none",
-                  "@media (prefers-reduced-motion: reduce)": {
-                    animation: "none",
-                  },
-                }}
-              />
-              {hasNext && (
-                <Box
-                  aria-hidden="true"
-                  data-thought-step-connector
-                  sx={{
-                    position: "absolute",
-                    left: "50%",
-                    top: `calc(0.5lh + ${indicatorSize / 2}px)`,
-                    bottom: -2,
-                    width: "1px",
-                    transform: "translateX(-50%)",
-                    bgcolor: "divider",
-                  }}
-                />
-              )}
-            </Box>
-            <Box
-              data-thought-step-content
-              sx={{
-                minWidth: 0,
-                opacity: current || !streaming ? 1 : 0.68,
-                fontStyle: "normal",
-                color: current ? "text.primary" : "text.secondary",
-                ...(current && {
-                  backgroundImage: (theme) => {
-                    const quiet = theme.palette.text.secondary;
-                    const active = theme.palette.primary.main;
-                    return `linear-gradient(100deg, ${quiet} 0%, ${quiet} 34%, ${active} 50%, ${quiet} 66%, ${quiet} 100%)`;
-                  },
-                  backgroundSize: "240% 100%",
-                  backgroundRepeat: "no-repeat",
-                  WebkitBackgroundClip: "text",
-                  backgroundClip: "text",
-                  color: "transparent",
-                  animation: `${thoughtTextShimmer} 3.1s linear infinite`,
-                  "& p, & p *": { color: "inherit" },
-                  "@media (prefers-reduced-motion: reduce)": {
-                    animation: "none",
-                    backgroundImage: "none",
-                    color: "text.primary",
-                    WebkitTextFillColor: "currentColor",
-                  },
-                }),
-                "& p": {
-                  m: 0,
-                  fontStyle: "normal",
-                  fontWeight: current ? 600 : 500,
-                  lineHeight: 1.45,
-                },
-              }}
-            >
-              <Markdown text={section} />
-              {current && <StreamingCaret />}
-            </Box>
-          </Box>
-        );
-      })}
-    </Stack>
   );
 }
 
@@ -2886,9 +2742,12 @@ const ItemView = memo(function ItemView({
           }}
         >
           <Box sx={{ fontSize: "0.84rem", flex: 1, minWidth: 0 }}>
-            <ThoughtSteps
+            <ProviderThoughtSteps
               sections={item.sections}
               streaming={!!streaming}
+              provider={provider}
+              providerVersion={providerVersion}
+              providerDigest={providerDigest}
             />
           </Box>
         </Box>

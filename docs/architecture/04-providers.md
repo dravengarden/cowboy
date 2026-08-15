@@ -42,6 +42,28 @@ workers construct `LaunchSpec` only from the exact installed package and
 generation-local executable; `provider::builtin()` is used only by the legacy
 local/drain path.
 
+### Transcript presentation variants
+
+Provider SDK 2.3 moves reasoning-step presentation behind host integration
+schema 2. The Provider selects a closed Cowboy component-library variant and
+bounded tokens; it does not supply React, HTML, CSS, dimensions, or animation
+code. The six first-party packages choose by agent interaction language:
+
+| Provider | Variant | Density | Current surface |
+|---|---|---|---|
+| `claude-code` | `timeline` | `comfortable` | `plain` |
+| `claude-deepseek` | `timeline` | `compact` | `soft` |
+| `codex` | `workcell` | `comfortable` | `soft` |
+| `codex-deepseek` | `workcell` | `compact` | `soft` |
+| `gemini` | `signal` | `comfortable` | `soft` |
+| `grok` | `terminal` | `compact` | `plain` |
+
+DeepSeek changes the model/runtime lane, not the agent-family visual grammar,
+so its Claude and Codex packages retain their respective base variants while
+choosing denser tokens. A session whose exact package predates host schema 2 may
+adopt a newer compatible signed presentation for icon, activity, and Transcript
+chrome only; its executable and authentication generations remain exact.
+
 Grok keeps its own native state under `~/.grok`. Cowboy enables Grok's
 cross-session memory but never reads or writes that store. Current Grok releases
 enable native subagent tools by default, so Cowboy deliberately does not pass the

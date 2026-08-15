@@ -1,7 +1,7 @@
 # Installable Provider packages
 
-Status: Provider package schema v2 and release schema v2 implementation
-contract. The in-tree
+Status: Provider package schema v2, release schema v2, and host integration
+schema v2 implementation contract. The in-tree
 `LaunchSpec` registry remains only as a compatibility fallback for pre-package
 session generations.
 
@@ -127,6 +127,26 @@ implements reduced motion, animation timing, layout, theme behavior, and ARIA
 semantics without a Provider-ID branch. This restores distinct Claude, Codex,
 Gemini, and Grok activity language without allowing executable Provider UI.
 
+Transcript thought presentation is a sibling host contract rather than a
+Provider-authored free-form surface because its content and lifecycle come from
+the canonical conversation timeline. Host integration schema v2 requires
+Transcript presentation schema v1. Its thought profile selects exactly one of
+four Cowboy component-library variants:
+
+| Variant | Cowboy-owned presentation | Intended use |
+|---|---|---|
+| `timeline` | Small status dots and connected steps | Long, conversational reasoning streams |
+| `workcell` | Lightbulb steps, workcell header, and dual-accent live text | Coding-agent execution plans |
+| `signal` | Provider mark as the status signal | Brand-led synthesis workflows |
+| `terminal` | Prompt markers and compact terminal rhythm | Command-oriented agents |
+
+Each profile additionally selects `compact` or `comfortable` density, an
+optional bounded active label, and a `plain` or `soft` current-step surface.
+Those are semantic tokens, not CSS values. Cowboy fixes the marker size,
+alignment, typography, spacing scale, theme blending, motion, reduced-motion
+fallback, and ARIA behavior. Unknown variants, fields, and tokens fail the
+Provider build, Catalog ingestion, Web validator, and Machine installation.
+
 The same exact manifest owns Provider-specific presentation of configuration
 options advertised by the runtime. `configuration.options` declares a unique
 option ID, bounded order, `standard` or `full_width` layout, and
@@ -161,13 +181,15 @@ events, tokens, asset roles, or layout constraints fail the Provider build and
 fail again when Cowboy parses the package. Unknown or duplicate configuration
 option and tool presentation records fail at the same boundaries.
 
-UI schema versions are negotiated independently from package schema. Provider
-SDK 2.2 accepts UI schemas 1-2, rejects any v2-only field when a manifest claims
-v1, and rejects an unknown future schema. Existing v1 packages remain
-installable and render a compact neutral fallback. For session-facing icon and
-activity chrome only, an exact v1 session may adopt the latest compatible signed
-v2 presentation for the same Provider; its runtime, options, lifecycle logic,
-authentication contract, and generation remain pinned to the exact package.
+UI and host integration schema versions are negotiated independently from
+package schema. Provider SDK 2.3 accepts UI schemas 1-2 and host integration
+schemas 1-2, rejects any newer-schema field when a manifest claims an older
+schema, and rejects an unknown future schema. Existing UI v1 or host v1 packages
+remain installable and render compact neutral fallbacks. For session-facing
+icon, activity, and Transcript chrome only, an exact older-schema session may
+adopt the latest compatible signed presentation for the same Provider; its
+runtime, options, lifecycle logic, authentication contract, and generation
+remain pinned to the exact package.
 
 ## Typed linked logic
 
@@ -264,9 +286,9 @@ package:
 ]
 ```
 
-Package schema 2, UI schemas 1-2, logic schema 1, auth schema 1, Cowboy Provider
-SDK 2.2, Controller contract 2, Machine contract 4, and release schema 2 are
-independently checked.
+Package schema 2, UI schemas 1-2, host integration schemas 1-2, logic schema 1,
+auth schema 1, Cowboy Provider SDK 2.3, Controller contract 2, Machine contract
+4, and release schema 2 are independently checked.
 The SDK version is a coarse authoring filter: Cowboy accepts only the same SDK
 major and a Provider SDK version no newer than the validating host. A newer SDK
 or a different major fails the Provider build, Catalog ingestion, Machine
@@ -522,9 +544,9 @@ only Catalog manifests for discovery, marks, card layout, setup, settings,
 loading, empty, error, and session-facing identity. Service authentication is
 rendered once outside Machine cards; default summaries keep the mobile surface
 compact. A Machine renders its exact installed manifest and uses the latest
-ready release only as the install or upgrade target. Exact v1 sessions may use
-the latest same-Provider signed v2 presentation for generic session chrome
-without changing their pinned executable generation.
+ready release only as the install or upgrade target. Exact older-schema sessions
+may use the latest compatible same-Provider signed presentation for generic
+session chrome without changing their pinned executable generation.
 Install/upgrade effects are disabled for unbound entries. A target Machine
 verifies the exact signed release again, stages its own target artifacts beside
 the active generation,

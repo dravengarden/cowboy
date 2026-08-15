@@ -666,7 +666,7 @@ dependencies = [
 
 [[package]]
 name = "cowboy-provider-sdk"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "anyhow",
  "base64",

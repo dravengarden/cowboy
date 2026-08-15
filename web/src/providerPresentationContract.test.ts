@@ -6,6 +6,9 @@ const managementSource = await Deno.readTextFile(
 const surfaceSource = await Deno.readTextFile(
   new URL("./ProviderSurface.tsx", import.meta.url),
 );
+const transcriptPresentationSource = await Deno.readTextFile(
+  new URL("./ProviderTranscript.tsx", import.meta.url),
+);
 
 Deno.test("Provider lifecycle cards stay collapsed behind a compact summary", () => {
   assertEquals(managementSource.includes("const [detailsOpen"), true);
@@ -80,6 +83,36 @@ Deno.test("Provider activity renderer consumes only typed generic strategies", (
     ]
   ) {
     assertEquals(surfaceSource.includes(provider), false);
+  }
+});
+
+Deno.test("Provider Transcript renderer consumes only closed presentation variants", () => {
+  for (
+    const variant of [
+      'case "timeline"',
+      'case "workcell"',
+      'case "signal"',
+      'case "terminal"',
+    ]
+  ) {
+    assertEquals(transcriptPresentationSource.includes(variant), true);
+  }
+  assertEquals(
+    transcriptPresentationSource.includes(
+      "data-provider-thought-variant={presentation.variant}",
+    ),
+    true,
+  );
+  for (
+    const provider of [
+      '"claude-code"',
+      '"codex"',
+      '"codex-deepseek"',
+      '"gemini"',
+      '"grok"',
+    ]
+  ) {
+    assertEquals(transcriptPresentationSource.includes(provider), false);
   }
 });
 

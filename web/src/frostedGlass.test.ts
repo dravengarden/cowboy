@@ -14,6 +14,9 @@ const composerSurfaceSource = await Deno.readTextFile(
 const transcriptSource = await Deno.readTextFile(
   new URL("./Transcript.tsx", import.meta.url),
 );
+const providerTranscriptSource = await Deno.readTextFile(
+  new URL("./ProviderTranscript.tsx", import.meta.url),
+);
 const exploreSurfaceSource = await Deno.readTextFile(
   new URL("./explore/ExploreSurface.tsx", import.meta.url),
 );
@@ -198,46 +201,51 @@ Deno.test("every Mobile transcript tail shares one external boundary gap", () =>
   );
 });
 
-Deno.test("Provider-neutral live thought shimmer crosses each glyph run once per cycle", () => {
+Deno.test("Provider thought shimmer crosses each glyph run once per cycle", () => {
   assertEquals(
-    transcriptSource.includes("from { background-position: 100% 0; }"),
+    providerTranscriptSource.includes(
+      "from { background-position: 100% 0; }",
+    ),
     true,
   );
   assertEquals(
-    transcriptSource.includes("to   { background-position: 0% 0; }"),
+    providerTranscriptSource.includes("to { background-position: 0% 0; }"),
     true,
   );
   assertEquals(
-    transcriptSource.match(/backgroundRepeat: "no-repeat"/g)?.length,
-    1,
+    providerTranscriptSource.match(/backgroundRepeat: "no-repeat"/g)?.length,
+    2,
   );
   assertEquals(
-    transcriptSource.includes("background-position: -110% 0"),
+    providerTranscriptSource.includes("background-position: -110% 0"),
     false,
   );
 });
 
 Deno.test("thought indicators align to the inherited first-line box", () => {
   assertEquals(
-    transcriptSource.includes("data-thought-step-indicator-lane"),
+    providerTranscriptSource.includes("data-thought-step-indicator-lane"),
     true,
   );
   assertEquals(
-    transcriptSource.includes('minHeight: "1lh"'),
+    providerTranscriptSource.includes('minHeight: "1lh"'),
     true,
   );
   assertEquals(
-    transcriptSource.includes(
-      "top: `calc(0.5lh - ${indicatorSize / 2}px)`,",
+    providerTranscriptSource.includes(
+      "top: `calc(0.5lh - ${geometry.size / 2}px)`,",
     ),
     true,
   );
   assertEquals(
-    transcriptSource.includes(
-      "gridTemplateColumns: `${indicatorSize}px minmax(0, 1fr)`,",
+    providerTranscriptSource.includes(
+      "`${geometry.size}px minmax(0, 1fr)`,",
     ),
     true,
   );
-  assertEquals(transcriptSource.includes('top: current ? "0.43em"'), false);
-  assertEquals(transcriptSource.includes('top: "0.62em"'), false);
+  assertEquals(
+    providerTranscriptSource.includes('top: current ? "0.43em"'),
+    false,
+  );
+  assertEquals(providerTranscriptSource.includes('top: "0.62em"'), false);
 });

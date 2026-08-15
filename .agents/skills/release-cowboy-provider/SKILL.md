@@ -115,6 +115,12 @@ In addition, require all applicable Provider gates below:
 - For UI schema 2, validate responsive wrapping, bounded vector gradients, and
   the closed activity indicator/label unions in both implementations. Reject
   unknown strategy fields and any Provider-ID branch in the host renderer.
+- For SDK 2.3 host integration schema 2, validate the required Transcript
+  presentation contract in both implementations. Accept only `timeline`,
+  `workcell`, `signal`, or `terminal` with bounded density, active-label, and
+  current-surface tokens. Reject host-schema downgrade smuggling, unknown
+  fields, arbitrary style values, and any Provider-ID branch in the Transcript
+  renderer.
 - Validate signed `configuration.options` policy. Provider-specific option
   ordering, layout, and lifecycle availability belong in the package; reject
   a Cowboy Web branch on a Provider-specific configuration option ID.

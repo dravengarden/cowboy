@@ -264,10 +264,55 @@ pub struct HostIntegrationContract {
     pub conversation_compaction: Option<CommandDiscoveryContract>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account_usage: Option<AccountUsageContract>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript: Option<TranscriptPresentationContract>,
     #[serde(default)]
     pub features: BTreeSet<HostFeature>,
     #[serde(default)]
     pub tool_presentations: Vec<ToolPresentationContract>,
+}
+
+/// Provider-selected, Cowboy-rendered presentation for semantic Transcript
+/// content. The contract exposes only bounded variants and tokens; Providers
+/// cannot inject CSS, markup, executable UI, or arbitrary geometry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TranscriptPresentationContract {
+    pub schema_version: u16,
+    pub thought: ThoughtPresentation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ThoughtPresentation {
+    pub variant: ThoughtVariant,
+    pub density: ThoughtDensity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_label: Option<String>,
+    pub current_surface: CurrentThoughtSurface,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThoughtVariant {
+    Timeline,
+    Workcell,
+    Signal,
+    Terminal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThoughtDensity {
+    Compact,
+    Comfortable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CurrentThoughtSurface {
+    Plain,
+    Soft,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1312,9 +1357,21 @@ impl ConfigurationUiContract {
 impl HostIntegrationContract {
     fn validate(&self) -> Result<()> {
         ensure!(
-            self.schema_version == 1,
+            matches!(self.schema_version, 1 | 2),
             "unsupported host integration schema"
         );
+        match self.schema_version {
+            1 => ensure!(
+                self.transcript.is_none(),
+                "host integration schema 1 cannot declare Transcript presentation"
+            ),
+            2 => self
+                .transcript
+                .as_ref()
+                .context("host integration schema 2 requires Transcript presentation")?
+                .validate()?,
+            _ => unreachable!("host integration schema checked above"),
+        }
         if let Some(compaction) = &self.conversation_compaction {
             ensure!(
                 !compaction.aliases.is_empty() && compaction.aliases.len() <= 16,
@@ -1352,6 +1409,25 @@ impl HostIntegrationContract {
             ensure!(
                 tool_names.insert(presentation.tool_name.as_str()),
                 "duplicate tool presentation"
+            );
+        }
+        Ok(())
+    }
+}
+
+impl TranscriptPresentationContract {
+    fn validate(&self) -> Result<()> {
+        ensure!(
+            self.schema_version == 1,
+            "unsupported Transcript presentation schema"
+        );
+        if let Some(label) = &self.thought.active_label {
+            ensure!(
+                !label.trim().is_empty()
+                    && label.trim() == label
+                    && label.chars().count() <= 64
+                    && !label.chars().any(char::is_control),
+                "invalid Transcript active label"
             );
         }
         Ok(())
@@ -3453,7 +3529,9 @@ mod tests {
         assert!(validate_provider_sdk_version("1.99.0").is_err());
         assert!(validate_provider_sdk_version("2.0.1").is_ok());
         assert!(validate_provider_sdk_version("2.1.1").is_ok());
-        assert!(validate_provider_sdk_version("2.2.1").is_err());
+        assert!(validate_provider_sdk_version("2.2.1").is_ok());
+        assert!(validate_provider_sdk_version("2.3.0").is_ok());
+        assert!(validate_provider_sdk_version("2.3.1").is_err());
         assert!(validate_provider_sdk_version("3.0.0").is_err());
     }
 
@@ -3492,6 +3570,14 @@ mod tests {
             include_str!("../../../providers/claude-deepseek/provider.json"),
             include_str!("../../../providers/codex-deepseek/provider.json"),
         ];
+        let expected_thought_variants = BTreeMap::from([
+            ("claude-code", ThoughtVariant::Timeline),
+            ("claude-deepseek", ThoughtVariant::Timeline),
+            ("codex", ThoughtVariant::Workcell),
+            ("codex-deepseek", ThoughtVariant::Workcell),
+            ("gemini", ThoughtVariant::Signal),
+            ("grok", ThoughtVariant::Terminal),
+        ]);
         let mut ids = BTreeSet::new();
         for source in sources {
             let source: StandardProviderSource = serde_json::from_str(source).unwrap();
@@ -3504,6 +3590,18 @@ mod tests {
             );
             assert!(ids.insert(first.manifest.id.clone()));
             assert_eq!(first.manifest.ui.surfaces.len(), REQUIRED_SURFACES.len());
+            assert_eq!(first.manifest.host.schema_version, 2);
+            assert_eq!(
+                first
+                    .manifest
+                    .host
+                    .transcript
+                    .as_ref()
+                    .unwrap()
+                    .thought
+                    .variant,
+                expected_thought_variants[first.manifest.id.as_str()]
+            );
             assert!(
                 !first
                     .manifest
@@ -3744,6 +3842,35 @@ mod tests {
         unknown_profile["runtime"]["behavior"]["permission"] =
             serde_json::Value::String("provider_specific_magic".to_owned());
         assert!(serde_json::from_value::<StandardProviderSource>(unknown_profile).is_err());
+    }
+
+    #[test]
+    fn transcript_presentation_schema_and_tokens_fail_closed() {
+        let source: StandardProviderSource =
+            serde_json::from_str(include_str!("../../../providers/codex/provider.json")).unwrap();
+
+        let mut legacy_with_transcript = source.clone().compile().unwrap();
+        legacy_with_transcript.host.schema_version = 1;
+        assert!(build_package(legacy_with_transcript).is_err());
+
+        let mut missing_transcript = source.clone().compile().unwrap();
+        missing_transcript.host.transcript = None;
+        assert!(build_package(missing_transcript).is_err());
+
+        let mut invalid_label = source.clone().compile().unwrap();
+        invalid_label
+            .host
+            .transcript
+            .as_mut()
+            .unwrap()
+            .thought
+            .active_label = Some("Thinking\nnow".to_owned());
+        assert!(build_package(invalid_label).is_err());
+
+        let mut unknown_variant = serde_json::to_value(source).unwrap();
+        unknown_variant["host"]["transcript"]["thought"]["variant"] =
+            serde_json::Value::String("provider_canvas".to_owned());
+        assert!(serde_json::from_value::<StandardProviderSource>(unknown_variant).is_err());
     }
 
     fn first_party_package(path: &str) -> ProviderPackage {

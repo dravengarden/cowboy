@@ -9,7 +9,7 @@
 export const PROVIDER_PACKAGE_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_UI_SCHEMA_MIN_VERSION = 1 as const;
 export const PROVIDER_UI_SCHEMA_VERSION = 2 as const;
-export const PROVIDER_SDK_VERSION = "2.2.0" as const;
+export const PROVIDER_SDK_VERSION = "2.3.0" as const;
 
 export type SurfaceSlot =
   | "card"
@@ -143,6 +143,46 @@ export interface VectorGradient {
   stops: Array<{ offset_percent: number; color: string }>;
 }
 
+export type ThoughtVariant =
+  | "timeline"
+  | "workcell"
+  | "signal"
+  | "terminal";
+export type ThoughtDensity = "compact" | "comfortable";
+export type CurrentThoughtSurface = "plain" | "soft";
+
+export interface TranscriptPresentationContract {
+  schema_version: 1;
+  thought: {
+    variant: ThoughtVariant;
+    density: ThoughtDensity;
+    active_label?: string;
+    current_surface: CurrentThoughtSurface;
+  };
+}
+
+interface HostIntegrationBase {
+  conversation_compaction?: {
+    aliases: string[];
+    fallback_command: string;
+  };
+  account_usage?: {
+    provider: "openai" | "anthropic" | "deepseek" | "gemini" | "xai";
+  };
+  features: Array<"cache_protection_v1">;
+  tool_presentations: Array<{
+    tool_name: string;
+    renderer: "todo_list_v1";
+  }>;
+}
+
+export type HostIntegrationContract =
+  & HostIntegrationBase
+  & (
+    | { schema_version: 1; transcript?: never }
+    | { schema_version: 2; transcript: TranscriptPresentationContract }
+  );
+
 export interface StateField {
   id: string;
   value_type: ValueType;
@@ -265,21 +305,7 @@ export interface ProviderManifest {
       availability: "live_session" | "idle_or_stopped";
     }>;
   };
-  host: {
-    schema_version: number;
-    conversation_compaction?: {
-      aliases: string[];
-      fallback_command: string;
-    };
-    account_usage?: {
-      provider: "openai" | "anthropic" | "deepseek" | "gemini" | "xai";
-    };
-    features: Array<"cache_protection_v1">;
-    tool_presentations: Array<{
-      tool_name: string;
-      renderer: "todo_list_v1";
-    }>;
-  };
+  host: HostIntegrationContract;
   runtime: {
     driver_schema: number;
     protocol: string;
@@ -1207,7 +1233,8 @@ export function validateProviderUiManifest(
     !Array.isArray(input.configuration.presets) ||
     !Array.isArray(input.configuration.options) ||
     !isRecord(input.host) ||
-    input.host.schema_version !== 1 || !Array.isArray(input.host.features) ||
+    (input.host.schema_version !== 1 && input.host.schema_version !== 2) ||
+    !Array.isArray(input.host.features) ||
     !Array.isArray(input.host.tool_presentations)
   ) {
     throw new Error("Invalid Provider manifest envelope");
@@ -1281,7 +1308,9 @@ export function validateProviderUiManifest(
   const compaction = input.host.conversation_compaction;
   if (
     compaction !== undefined &&
-    (!isRecord(compaction) || !Array.isArray(compaction.aliases) ||
+    (!isRecord(compaction) ||
+      !hasOnlyKeys(compaction, ["aliases", "fallback_command"]) ||
+      !Array.isArray(compaction.aliases) ||
       compaction.aliases.length === 0 ||
       !compaction.aliases.every((alias) =>
         typeof alias === "string" && isIdentifier(alias)
@@ -1294,11 +1323,61 @@ export function validateProviderUiManifest(
   const accountUsage = input.host.account_usage;
   if (
     accountUsage !== undefined && (!isRecord(accountUsage) ||
+      !hasOnlyKeys(accountUsage, ["provider"]) ||
       !["openai", "anthropic", "deepseek", "gemini", "xai"].includes(
         String(accountUsage.provider),
       ))
   ) {
     throw new Error("Invalid Provider account usage contract");
+  }
+  const hostKeys = [
+    "schema_version",
+    "conversation_compaction",
+    "account_usage",
+    "features",
+    "tool_presentations",
+  ];
+  if (input.host.schema_version === 1) {
+    if (!hasOnlyKeys(input.host, hostKeys)) {
+      throw new Error(
+        "Host integration schema 1 cannot declare Transcript presentation",
+      );
+    }
+  } else {
+    if (
+      !hasOnlyKeys(input.host, [...hostKeys, "transcript"]) ||
+      !isRecord(input.host.transcript) ||
+      !hasOnlyKeys(input.host.transcript, ["schema_version", "thought"]) ||
+      input.host.transcript.schema_version !== 1 ||
+      !isRecord(input.host.transcript.thought)
+    ) {
+      throw new Error("Invalid Provider Transcript presentation contract");
+    }
+    const thought = input.host.transcript.thought;
+    if (
+      !hasOnlyKeys(thought, [
+        "variant",
+        "density",
+        "active_label",
+        "current_surface",
+      ]) ||
+      !["timeline", "workcell", "signal", "terminal"].includes(
+        String(thought.variant),
+      ) ||
+      !["compact", "comfortable"].includes(String(thought.density)) ||
+      !["plain", "soft"].includes(String(thought.current_surface)) ||
+      (thought.active_label !== undefined &&
+        (typeof thought.active_label !== "string" ||
+          !thought.active_label.trim() ||
+          thought.active_label.trim() !== thought.active_label ||
+          [...thought.active_label].length > 64 ||
+          [...thought.active_label].some((character) => {
+            const code = character.codePointAt(0) ?? 0;
+            return code < 0x20 || (code >= 0x7f && code <= 0x9f);
+          })))
+    ) {
+      throw new Error("Invalid Provider Transcript thought presentation");
+    }
   }
   if (
     !input.host.features.every((feature) => feature === "cache_protection_v1")
@@ -1312,6 +1391,7 @@ export function validateProviderUiManifest(
   for (const raw of input.host.tool_presentations) {
     if (
       !isRecord(raw) || typeof raw.tool_name !== "string" ||
+      !hasOnlyKeys(raw, ["tool_name", "renderer"]) ||
       !raw.tool_name.trim() || raw.tool_name.trim() !== raw.tool_name ||
       raw.tool_name.length > 128 ||
       ![...raw.tool_name].every((character) => {
