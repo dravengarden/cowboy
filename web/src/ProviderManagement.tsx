@@ -18,10 +18,12 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   type EffectCapability,
+  type EffectSchema,
   type MachineProviderInventory,
   type ProviderAuthenticationStatus,
   type ProviderCatalogEntry,
   type ProviderHostContext,
+  type ProviderUiManifest,
   validateMachineProviderInventory,
 } from "../../packages/provider-ui-sdk/src/index.ts";
 import {
@@ -112,6 +114,139 @@ export function MachineProviderManagement(
   { machine }: { machine: ProviderMachine },
 ): React.JSX.Element {
   return <ProviderManagement scope="machine" machine={machine} />;
+}
+
+type ProviderManagementStatusTone = "default" | "success" | "warning";
+
+/** Cowboy owns management-card geometry; Providers supply only typed brand and
+ * content slots. This keeps independently authored packages visually stable. */
+function ProviderManagementIdentity({
+  manifest,
+  version,
+  statusLabel,
+  statusTone,
+}: {
+  manifest: ProviderUiManifest;
+  version: string;
+  statusLabel: string;
+  statusTone: ProviderManagementStatusTone;
+}): React.JSX.Element {
+  return (
+    <Box
+      data-provider-management-identity
+      sx={{
+        display: "grid",
+        gridTemplateColumns: "32px minmax(0, 1fr) auto",
+        columnGap: 1,
+        alignItems: "start",
+        minWidth: 0,
+      }}
+    >
+      <Box
+        data-provider-management-mark
+        sx={{
+          width: 32,
+          height: 32,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          color: manifest.display.accent,
+        }}
+      >
+        <ProviderMark manifest={manifest} size={28} />
+      </Box>
+      <Stack spacing={0.25} sx={{ minWidth: 0 }}>
+        <Typography
+          variant="subtitle1"
+          fontWeight={720}
+          sx={{
+            lineHeight: 1.25,
+            overflowWrap: "anywhere",
+            display: "-webkit-box",
+            WebkitBoxOrient: "vertical",
+            WebkitLineClamp: 2,
+            overflow: "hidden",
+          }}
+        >
+          {manifest.display.name}
+        </Typography>
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{
+            lineHeight: 1.35,
+            overflowWrap: "anywhere",
+            display: "-webkit-box",
+            WebkitBoxOrient: "vertical",
+            WebkitLineClamp: 2,
+            overflow: "hidden",
+          }}
+        >
+          {manifest.display.summary}
+        </Typography>
+      </Stack>
+      <Stack spacing={0.4} alignItems="flex-end" sx={{ minWidth: 0 }}>
+        <Chip
+          data-provider-management-status
+          size="small"
+          variant="outlined"
+          color={statusTone}
+          label={statusLabel}
+          sx={{
+            maxWidth: 128,
+            height: 22,
+            "& .MuiChip-label": {
+              px: 0.75,
+              fontSize: "0.68rem",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            },
+          }}
+        />
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ fontFamily: "monospace", lineHeight: 1 }}
+        >
+          v{version}
+        </Typography>
+      </Stack>
+    </Box>
+  );
+}
+
+type ProviderManagementLifecycleSlot = "setup" | "empty" | "settings";
+
+function ProviderManagementLifecycleSurface({
+  manifest,
+  slot,
+  host,
+  blockedCapabilities,
+  onEffect,
+}: {
+  manifest: ProviderUiManifest;
+  slot: ProviderManagementLifecycleSlot;
+  host: ProviderHostContext;
+  blockedCapabilities: ReadonlySet<EffectCapability> | undefined;
+  onEffect: (effect: EffectSchema) => Promise<void>;
+}): React.JSX.Element {
+  return (
+    <Box
+      data-provider-management-actions
+      sx={{
+        pl: 5,
+        "& > .MuiStack-root": { alignItems: "flex-start" },
+      }}
+    >
+      <ProviderSurface
+        manifest={manifest}
+        slot={slot}
+        host={host}
+        blockedCapabilities={blockedCapabilities}
+        onEffect={onEffect}
+      />
+    </Box>
+  );
 }
 
 function ProviderManagement(
@@ -506,6 +641,10 @@ function ProviderManagement(
                     />
                   }
                   label={`${presentationEntry.manifest.display.name} · ${summary}`}
+                  sx={{
+                    "& .MuiChip-icon": { ml: 0.625, mr: 0.125 },
+                    "& .MuiChip-label": { pl: 0.625, pr: 0.625 },
+                  }}
                 />
               );
             })}
@@ -626,6 +765,23 @@ function ProviderManagement(
             : providerHost(entry, latestEntry, installed, auth, machine, error);
           const releaseReady = latestEntry.release_state === "ready" &&
             latestEntry.artifact_digest !== null;
+          const managementStatus = scope === "service"
+            ? entry.manifest.authentication.required
+              ? serviceAuthenticationLabel(auth).replace("Service ", "")
+                .split(" · ")[0] ?? "signed out"
+              : "no sign-in"
+            : providerInstallationSummary(installed, latestEntry);
+          const managementStatusTone: ProviderManagementStatusTone =
+            scope === "service"
+              ? !entry.manifest.authentication.required ||
+                  auth?.authentication_state === "ready"
+                ? "success"
+                : "warning"
+              : managementStatus === "active"
+              ? "success"
+              : managementStatus === "update available"
+              ? "warning"
+              : "default";
           const blockedCapabilities = releaseReady
             ? undefined
             : scope === "service"
@@ -638,46 +794,23 @@ function ProviderManagement(
               }`}
               variant="outlined"
               sx={{
-                p: 1.1,
+                p: 1.25,
                 minWidth: 0,
                 borderRadius: 2,
               }}
+              data-provider-management-card
             >
-              <Stack spacing={1.1}>
-                <ProviderSurface
+              <Stack spacing={1.25}>
+                <ProviderManagementIdentity
                   manifest={entry.manifest}
-                  slot={scope === "service" ? "information" : "card"}
-                  host={host}
+                  version={host.provider_version}
+                  statusLabel={managementStatus}
+                  statusTone={managementStatusTone}
                 />
-                <Stack
-                  direction="row"
-                  spacing={0.75}
-                  flexWrap="wrap"
-                  useFlexGap
-                >
-                  {scope === "service" && entry.manifest.authentication.required
-                    ? (
-                      <Chip
-                        size="small"
-                        variant="outlined"
-                        label={serviceAuthenticationLabel(auth)}
-                        color={auth?.authentication_state === "ready"
-                          ? "success"
-                          : "warning"}
-                      />
-                    )
-                    : scope === "service"
-                    ? (
-                      <Chip
-                        size="small"
-                        variant="outlined"
-                        label="No sign-in required"
-                      />
-                    )
-                    : null}
-                  {scope === "machine" && installed &&
-                      entry.manifest.authentication.required
-                    ? (
+                {scope === "machine" && installed &&
+                    entry.manifest.authentication.required
+                  ? (
+                    <Box sx={{ pl: 5 }}>
                       <Chip
                         size="small"
                         variant="outlined"
@@ -688,9 +821,9 @@ function ProviderManagement(
                           ? "success"
                           : "warning"}
                       />
-                    )
-                    : null}
-                </Stack>
+                    </Box>
+                  )
+                  : null}
                 {error || !releaseReady
                   ? (
                     <ProviderSurface
@@ -704,7 +837,7 @@ function ProviderManagement(
                   ? (
                     entry.manifest.authentication.required
                       ? (
-                        <ProviderSurface
+                        <ProviderManagementLifecycleSurface
                           manifest={entry.manifest}
                           slot="setup"
                           host={host}
@@ -717,7 +850,7 @@ function ProviderManagement(
                   )
                   : !installed
                   ? (
-                    <ProviderSurface
+                    <ProviderManagementLifecycleSurface
                       manifest={entry.manifest}
                       slot="empty"
                       host={host}
@@ -726,7 +859,7 @@ function ProviderManagement(
                     />
                   )
                   : (
-                    <ProviderSurface
+                    <ProviderManagementLifecycleSurface
                       manifest={entry.manifest}
                       slot="settings"
                       host={host}

@@ -78,4 +78,16 @@ Deno.test("control center tab bar stays sticky on desktop and mobile scroll", ()
     ),
     true,
   );
+  assertEquals(
+    appSource.includes("borderRadius: desktop ? 0 : 3"),
+    true,
+  );
+  assertEquals(
+    appSource.includes("borderTopLeftRadius: 0"),
+    true,
+  );
+  assertEquals(
+    appSource.includes("borderTopRightRadius: 0"),
+    true,
+  );
 });

@@ -17,6 +17,48 @@ Deno.test("Provider lifecycle cards stay collapsed behind a compact summary", ()
   assertEquals(managementSource.includes("borderTop:"), false);
 });
 
+Deno.test("Provider management cards keep geometry in the Cowboy component library", () => {
+  assertEquals(
+    managementSource.includes("data-provider-management-identity"),
+    true,
+  );
+  assertEquals(
+    managementSource.includes(
+      'gridTemplateColumns: "32px minmax(0, 1fr) auto"',
+    ),
+    true,
+  );
+  assertEquals(
+    managementSource.includes(
+      'slot={scope === "service" ? "information" : "card"}',
+    ),
+    false,
+  );
+  for (const slot of ['slot="setup"', 'slot="empty"', 'slot="settings"']) {
+    assertEquals(managementSource.includes(slot), true);
+  }
+  assertEquals(
+    managementSource.includes(
+      'type ProviderManagementLifecycleSlot = "setup" | "empty" | "settings"',
+    ),
+    true,
+  );
+  assertEquals(
+    managementSource.includes("data-provider-management-actions"),
+    true,
+  );
+  assertEquals(managementSource.includes("WebkitLineClamp: 2"), true);
+});
+
+Deno.test("Provider marks preserve host component classes and compact chip spacing", () => {
+  assertEquals(surfaceSource.includes("className?: string | undefined;"), true);
+  assertEquals(surfaceSource.includes("className={className}"), true);
+  assertEquals(
+    managementSource.includes('"& .MuiChip-icon": { ml: 0.625, mr: 0.125 }'),
+    true,
+  );
+});
+
 Deno.test("Provider activity renderer consumes only typed generic strategies", () => {
   for (
     const strategy of [

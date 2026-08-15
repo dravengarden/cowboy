@@ -87,10 +87,12 @@ export function ProviderMark({
   manifest,
   role = "icon",
   size = 24,
+  className,
 }: {
   manifest: ProviderUiManifest;
   role?: UiAsset["role"];
   size?: number;
+  className?: string | undefined;
 }): React.JSX.Element | null {
   const assetId = role === "logo"
     ? manifest.display.logo_asset
@@ -106,6 +108,7 @@ export function ProviderMark({
     <ProviderAssetGraphic
       asset={asset}
       size={size}
+      className={className}
     />
   );
 }
@@ -114,10 +117,12 @@ export function ProviderMark({
 export function ProviderAssetGraphic({
   asset,
   size,
+  className,
   sx,
 }: {
   asset: UiAsset;
   size: number;
+  className?: string | undefined;
   sx?: Record<string, unknown>;
 }): React.JSX.Element {
   const gradientId = `provider-gradient-${useId().replaceAll(":", "")}`;
@@ -125,6 +130,7 @@ export function ProviderAssetGraphic({
     const gradient = asset.content.gradient;
     return (
       <SvgIcon
+        className={className}
         role="img"
         aria-label={asset.accessible_label}
         viewBox={asset.content.view_box}
@@ -169,6 +175,7 @@ export function ProviderAssetGraphic({
   return (
     <Box
       component="img"
+      className={className}
       alt={asset.accessible_label}
       src={`data:${asset.media_type};base64,${asset.content.base64}`}
       sx={{ width: size, height: size, flexShrink: 0, ...sx }}
