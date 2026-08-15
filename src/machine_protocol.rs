@@ -133,6 +133,11 @@ pub struct MachineHello {
     /// developer diagnostic and never define ordinary scheduling on protocol 3+.
     #[serde(default)]
     pub providers: Vec<ProviderInventory>,
+    /// Signed capability inventory used by the Controller to select only
+    /// Provider releases this exact Machine can decode and activate. An absent
+    /// inventory is a legacy Machine and fails closed for install/upgrade.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_contracts: Option<cowboy_provider_sdk::ProviderContractInventory>,
     /// Explicit launch roots exported by the Machine. Cowboy never sends an
     /// arbitrary controller-side path to a remote host.
     #[serde(default)]
@@ -234,6 +239,33 @@ pub fn challenge_proof_v2(
     proof.push(b':');
     proof.extend_from_slice(encryption_key.as_bytes());
     proof.push(b'\n');
+    if let Some(provider_contracts) = &hello.provider_contracts {
+        proof.extend_from_slice(b"provider-contracts:");
+        proof.extend_from_slice(
+            provider_contracts
+                .provider_sdk_version
+                .len()
+                .to_string()
+                .as_bytes(),
+        );
+        proof.push(b':');
+        proof.extend_from_slice(provider_contracts.provider_sdk_version.as_bytes());
+        for value in [
+            provider_contracts.min_package_schema,
+            provider_contracts.max_package_schema,
+            provider_contracts.min_release_schema,
+            provider_contracts.max_release_schema,
+            provider_contracts.min_ui_schema,
+            provider_contracts.max_ui_schema,
+            provider_contracts.min_host_schema,
+            provider_contracts.max_host_schema,
+            provider_contracts.machine_contract,
+        ] {
+            proof.push(b':');
+            proof.extend_from_slice(value.to_string().as_bytes());
+        }
+        proof.push(b'\n');
+    }
     proof
 }
 
@@ -859,6 +891,7 @@ mod tests {
         .unwrap();
         assert_eq!(hello.capacity.max_sessions, 1);
         assert!(!hello.capacity.draining);
+        assert!(hello.provider_contracts.is_none());
     }
 
     #[test]
@@ -879,6 +912,7 @@ mod tests {
             encryption_public_key: None,
             components: Vec::new(),
             providers: Vec::new(),
+            provider_contracts: None,
             workspaces: Vec::new(),
             workspace_revision: None,
             capacity: MachineCapacity::default(),
@@ -896,6 +930,39 @@ mod tests {
             proof,
             challenge_proof_v1("id", "nonce", 42, &other_protocol)
         );
+    }
+
+    #[test]
+    fn challenge_proof_v2_binds_provider_contract_inventory_when_present() {
+        let mut hello: MachineHello = serde_json::from_value(serde_json::json!({
+            "machine_id": "falcon",
+            "display_name": "Falcon",
+            "platform": "linux",
+            "arch": "x86_64",
+            "connection_mode": "outbound_tls",
+            "min_protocol": 3,
+            "max_protocol": 4,
+            "min_runtime_protocol": 1,
+            "max_runtime_protocol": 3,
+            "host_build": "test",
+            "encryption_public_key": "machine-key"
+        }))
+        .unwrap();
+        hello.provider_contracts =
+            Some(cowboy_provider_sdk::ProviderContractInventory::current_machine());
+        let proof = challenge_proof_v2("id", "nonce", 42, &hello);
+
+        let mut downgraded = hello.clone();
+        downgraded
+            .provider_contracts
+            .as_mut()
+            .unwrap()
+            .max_host_schema = 1;
+        assert_ne!(proof, challenge_proof_v2("id", "nonce", 42, &downgraded));
+
+        let mut omitted = hello;
+        omitted.provider_contracts = None;
+        assert_ne!(proof, challenge_proof_v2("id", "nonce", 42, &omitted));
     }
 
     #[test]
@@ -917,6 +984,7 @@ mod tests {
                 encryption_public_key: None,
                 components: Vec::new(),
                 providers: Vec::new(),
+                provider_contracts: None,
                 workspaces: Vec::new(),
                 workspace_revision: None,
                 capacity: MachineCapacity::default(),

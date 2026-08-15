@@ -201,6 +201,17 @@ adopt the latest compatible signed presentation for the same Provider; its
 runtime, options, lifecycle logic, authentication contract, and generation
 remain pinned to the exact package.
 
+Machine compatibility is an attested runtime fact, not a guess from its
+application version. Every current Machine includes a strict
+`ProviderContractInventory` in its signed hello. It declares its Provider SDK,
+package/release/UI/host schema intervals, Machine contract, platform, and
+architecture. Cowboy Controller verifies that inventory, applies the same
+closed compatibility predicate as the TypeScript SDK immediately before every
+install or upgrade, and returns a stable typed incompatibility code plus safe
+detail when the operation is rejected. Web selects the newest compatible ready
+Catalog release and omits unavailable lifecycle actions. A legacy Machine with
+no attested inventory must be updated before Provider lifecycle operations.
+
 ## Typed linked logic
 
 Provider UI behavior is a typed state machine rather than embedded application

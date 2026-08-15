@@ -184,6 +184,15 @@ package and composite digests, publisher signature, URL/archive bounds, and
 probes. The target Machine independently inspects downloaded bytes. An
 incompatible artifact never replaces the active generation.
 
+Each Machine advertises a strict `ProviderContractInventory` in its signed
+hello: Provider SDK version, supported package/release/UI/host schema intervals,
+Machine contract, platform, and architecture. The Controller repeats the same
+compatibility predicate immediately before an install or upgrade, and Web may
+offer only the newest ready release accepted by that inventory. An absent,
+malformed, or insufficient inventory fails closed with a typed compatibility
+code and an update-Machine explanation; Cowboy must not send a newer package to
+an older decoder and expose its raw deserialization error.
+
 ### CR-7: Installation is dynamic and Machine-scoped
 
 The Cowboy UI joins Catalog releases with one Machine's platform, contracts,

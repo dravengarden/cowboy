@@ -426,13 +426,13 @@ function ProviderNode({
       const busy = effectId !== undefined && effectId === busyEffect;
       const blocked = effect !== undefined &&
         blockedCapabilities?.has(effect.capability) === true;
+      if (blocked) return null;
       return (
         <Button
           size="small"
           variant={node.style === "primary" ? "contained" : "outlined"}
           color={node.style === "destructive" ? "error" : "primary"}
-          disabled={busy || blocked ||
-            !evaluateExpression(node.enabled_when, state, host)}
+          disabled={busy || !evaluateExpression(node.enabled_when, state, host)}
           startIcon={busy ? <CircularProgress size={14} /> : undefined}
           onClick={() => void emit(node).catch(() => undefined)}
         >
