@@ -27,6 +27,7 @@ import {
   durableDeliveryAttempt,
   shouldUseTranscriptDelivery,
 } from "./durableDelivery.ts";
+import { shouldApplyHydratedConfigOptions } from "./configOptionsHydration";
 import { pruneDrafts } from "./draftStore";
 import { linkTimeline } from "./derive";
 import { resetExploreAfterContextClear } from "./explore/exploreStore";
@@ -202,6 +203,10 @@ interface SessionHydration {
   controller: AbortController;
 }
 const sessionHydrations = new Map<string, SessionHydration>();
+// Each live config snapshot advances this revision. HTTP bootstrap is allowed
+// to seed the map only if no newer WebSocket snapshot arrived while it was in
+// flight; otherwise its stale response can visibly undo a just-selected preset.
+const configOptionsRevisions = new Map<string, number>();
 // Transcript payloads are the dominant long-lived browser allocation (tool
 // results and inline images can be megabytes). Keep only a small MRU working
 // set; session metadata, queues, drafts, and persisted history remain intact.
@@ -1039,6 +1044,10 @@ function handle(msg: Outbound): void {
       break;
     }
     case "config_options": {
+      configOptionsRevisions.set(
+        msg.session_id,
+        (configOptionsRevisions.get(msg.session_id) ?? 0) + 1,
+      );
       const next = new Map(state.configOptions);
       next.set(msg.session_id, msg.options);
       setState({ ...state, configOptions: next });
@@ -1121,6 +1130,8 @@ async function hydrateSession(sessionId: string, replace = false): Promise<void>
   existing?.controller.abort();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8000);
+  const configOptionsRevisionAtRequestStart =
+    configOptionsRevisions.get(sessionId) ?? 0;
   const promise = (async (): Promise<void> => {
     try {
       const response = await fetch(
@@ -1131,7 +1142,16 @@ async function hydrateSession(sessionId: string, replace = false): Promise<void>
         throw new Error(`session bootstrap failed: ${String(response.status)}`);
       }
       const bootstrap = (await response.json()) as SessionBootstrapResponse;
-      for (const message of bootstrap.messages) handle(message);
+      const applyHydratedConfigOptions = shouldApplyHydratedConfigOptions(
+        configOptionsRevisionAtRequestStart,
+        configOptionsRevisions.get(sessionId) ?? 0,
+      );
+      for (const message of bootstrap.messages) {
+        if (message.type === "config_options" && !applyHydratedConfigOptions) {
+          continue;
+        }
+        handle(message);
+      }
     } catch (error) {
       if (!controller.signal.aborted) console.warn("session bootstrap failed", error);
     } finally {

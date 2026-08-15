@@ -21,6 +21,7 @@
 
 use parking_lot::Mutex;
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -575,6 +576,84 @@ struct GrokConfigChange {
     requested: String,
 }
 
+#[derive(Debug)]
+struct ConfigChange {
+    config_id: String,
+    value: serde_json::Value,
+}
+
+/// Run configuration mutations in submission order.
+///
+/// ACP replies contain the provider's *whole* config snapshot. Sending two
+/// `session/set_config_option` requests concurrently therefore lets the older
+/// snapshot race the newer one back into Cowboy (a preset changes model and
+/// reasoning effort together). Keep the command loop responsive with a FIFO,
+/// but never start request N+1 until request N's authoritative snapshot has
+/// arrived.
+async fn run_serial_config_queue<T, F, Fut>(
+    mut changes: mpsc::UnboundedReceiver<T>,
+    mut apply: F,
+) -> Result<(), Error>
+where
+    F: FnMut(T) -> Fut,
+    Fut: Future<Output = Result<(), Error>>,
+{
+    while let Some(change) = changes.recv().await {
+        apply(change).await?;
+    }
+    Ok(())
+}
+
+async fn run_config_queue(
+    cx: ConnectionTo<Agent>,
+    state: Arc<ClientState>,
+    acp_id: SessionId,
+    changes: mpsc::UnboundedReceiver<ConfigChange>,
+) -> Result<(), Error> {
+    run_serial_config_queue(changes, move |change| {
+        let cx = cx.clone();
+        let state = Arc::clone(&state);
+        let acp_id = acp_id.clone();
+        async move {
+            let ConfigChange { config_id, value } = change;
+            let config_value = match session_config_value(&value) {
+                Ok(value) => value,
+                Err(error) => {
+                    state.sink.broadcast_error(
+                        Some(state.session_id.clone()),
+                        format!("set {config_id}: {error}"),
+                    );
+                    return Ok(());
+                }
+            };
+            let request =
+                SetSessionConfigOptionRequest::new(acp_id, config_id.clone(), config_value);
+            match cx.send_request(request).block_task().await {
+                Ok(response) => {
+                    if config_id == CODEX_FULL_ACCESS_CONFIG_ID {
+                        let selected = codex_full_access_selected(&response.config_options);
+                        state.codex_full_access.store(selected, Ordering::SeqCst);
+                    }
+                    match serde_json::to_value(response.config_options) {
+                        Ok(options) => state.sink.set_config_options(&state.session_id, options),
+                        Err(error) => {
+                            tracing::warn!(error = %error, "serializing set config response");
+                        }
+                    }
+                }
+                Err(error) => {
+                    state.sink.broadcast_error(
+                        Some(state.session_id.clone()),
+                        format!("set {config_id}: {error}"),
+                    );
+                }
+            }
+            Ok(())
+        }
+    })
+    .await
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_grok_config_queue(
     cx: ConnectionTo<Agent>,
@@ -806,20 +885,26 @@ fn load_session_request(
 #[cfg(test)]
 mod startup_mode_tests {
     use super::{
-        ActivePrompt, GrokPermissionMode, GrokSessionConfig, GrokSessionInfoRequest,
+        ActivePrompt, ConfigChange, GrokPermissionMode, GrokSessionConfig, GrokSessionInfoRequest,
         GrokSessionInfoResponse, ResumeMethod, StartupPhase, StartupTimeout,
         codex_full_access_available, codex_full_access_selected, deepseek_session_environment,
         grok_cowboy_options, grok_model_request, grok_permission_notification, grok_session_usage,
         is_empty_stream_message_update, load_session_request, new_session_request,
         permission_auto_approve_enabled, preferred_allow_option, resume_session_request,
-        select_resume_method, session_config_value, startup_full_access_mode,
+        run_serial_config_queue, select_resume_method, session_config_value,
+        startup_full_access_mode,
     };
+    use agent_client_protocol::Error;
     use agent_client_protocol::JsonRpcMessage as _;
     use agent_client_protocol::schema::v1::{
         PermissionOption, PermissionOptionKind, SessionConfigOption, SessionConfigOptionValue,
         SessionConfigSelectOption, SessionId,
     };
     use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+    use tokio::sync::{Notify, mpsc};
 
     #[test]
     fn providers_use_their_native_full_access_mode() {
@@ -1014,6 +1099,64 @@ mod startup_mode_tests {
         let enabled = session_config_value(&serde_json::json!(true)).expect("boolean value");
         assert_eq!(enabled, SessionConfigOptionValue::boolean(true));
         assert!(session_config_value(&serde_json::json!(42)).is_err());
+    }
+
+    #[tokio::test]
+    async fn config_queue_waits_for_each_authoritative_reply() {
+        let (tx, rx): (
+            mpsc::UnboundedSender<ConfigChange>,
+            mpsc::UnboundedReceiver<ConfigChange>,
+        ) = mpsc::unbounded_channel();
+        let first_started = Arc::new(Notify::new());
+        let release_first = Arc::new(Notify::new());
+        let second_started = Arc::new(Notify::new());
+        let second_started_flag = Arc::new(AtomicBool::new(false));
+        let task = tokio::spawn({
+            let first_started = Arc::clone(&first_started);
+            let release_first = Arc::clone(&release_first);
+            let second_started = Arc::clone(&second_started);
+            let second_started_flag = Arc::clone(&second_started_flag);
+            async move {
+                run_serial_config_queue(rx, move |change| {
+                    let first_started = Arc::clone(&first_started);
+                    let release_first = Arc::clone(&release_first);
+                    let second_started = Arc::clone(&second_started);
+                    let second_started_flag = Arc::clone(&second_started_flag);
+                    async move {
+                        if change.config_id == "model" {
+                            first_started.notify_one();
+                            release_first.notified().await;
+                        } else {
+                            second_started_flag.store(true, Ordering::SeqCst);
+                            second_started.notify_one();
+                        }
+                        Ok::<(), Error>(())
+                    }
+                })
+                .await
+            }
+        });
+        tx.send(ConfigChange {
+            config_id: "model".to_owned(),
+            value: serde_json::json!("gpt-5.6-sol"),
+        })
+        .expect("first config change queued");
+        tx.send(ConfigChange {
+            config_id: "reasoning_effort".to_owned(),
+            value: serde_json::json!("medium"),
+        })
+        .expect("second config change queued");
+
+        first_started.notified().await;
+        assert!(!second_started_flag.load(Ordering::SeqCst));
+        release_first.notify_one();
+        tokio::time::timeout(Duration::from_secs(1), second_started.notified())
+            .await
+            .expect("second config change should start after the first reply");
+        drop(tx);
+        task.await
+            .expect("config queue task panicked")
+            .expect("queue completed");
     }
 
     #[test]
@@ -2471,6 +2614,18 @@ async fn run_session(
         None
     };
 
+    // Standard ACP providers all return a complete config snapshot from
+    // `session/set_config_option`. Keep their mutations FIFO for the same
+    // reason Grok has a dedicated queue above; presets otherwise race model
+    // and reasoning requests and let an older snapshot win in the UI.
+    let (config_tx, config_rx) = mpsc::unbounded_channel();
+    let config_connection = cx.clone();
+    let config_state = Arc::clone(state);
+    let config_acp_id = acp_id.clone();
+    cx.clone().spawn(async move {
+        run_config_queue(config_connection, config_state, config_acp_id, config_rx).await
+    })?;
+
     // Command loop. Prompt work runs in spawned tasks so Cancel and Permission
     // answers remain responsive; `prompt_lock` serializes the actual prompt
     // RPCs. Config changes may still run concurrently with a turn.
@@ -2859,55 +3014,12 @@ async fn run_session(
                 }
             }
             AgentCommand::SetConfigOption { config_id, value } => {
-                // claude-agent-acp ≥ 0.31 handles mode / model / effort all
-                // through the same `session/set_config_option` request. The
-                // agent acks with the refreshed `configOptions` array; pushing
-                // it back into Hub keeps the composer dropdowns in sync even
-                // when the upstream chose a different value than we asked for
-                // (e.g. `model=default` resets effort to its model's default).
-                let cx = cx.clone();
-                let sink = Arc::clone(&state.sink);
-                let sid = session_id.clone();
-                let acp = acp_id.clone();
-                let state = Arc::clone(state);
-                cx.clone().spawn(async move {
-                    let config_value = match session_config_value(&value) {
-                        Ok(value) => value,
-                        Err(e) => {
-                            sink.broadcast_error(
-                                Some(sid.clone()),
-                                format!("set {config_id}: {e}"),
-                            );
-                            return Ok(());
-                        }
-                    };
-                    let req =
-                        SetSessionConfigOptionRequest::new(acp, config_id.clone(), config_value);
-                    match cx.send_request(req).block_task().await {
-                        Ok(response) => {
-                            if config_id == CODEX_FULL_ACCESS_CONFIG_ID {
-                                let selected = codex_full_access_selected(&response.config_options);
-                                state.codex_full_access.store(selected, Ordering::SeqCst);
-                            }
-                            match serde_json::to_value(response.config_options) {
-                                Ok(options) => sink.set_config_options(&sid, options),
-                                Err(e) => {
-                                    tracing::warn!(
-                                        error = %e,
-                                        "serializing set config response"
-                                    );
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            sink.broadcast_error(
-                                Some(sid.clone()),
-                                format!("set {config_id}: {e}"),
-                            );
-                        }
-                    }
-                    Ok(())
-                })?;
+                if config_tx.send(ConfigChange { config_id, value }).is_err() {
+                    state.sink.broadcast_error(
+                        Some(session_id.clone()),
+                        "configuration queue closed".to_owned(),
+                    );
+                }
             }
         }
     }
