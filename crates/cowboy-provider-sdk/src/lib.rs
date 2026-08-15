@@ -1118,12 +1118,18 @@ impl ProviderManifest {
             "Provider does not support Machine contract {MACHINE_CONTRACT_VERSION}"
         );
         ensure!(
-            self.compatibility.auth_contract_fingerprint == fingerprint_json(&self.authentication)?,
+            self.compatibility.auth_contract_fingerprint
+                == fingerprint_typed_json(&self.authentication)?,
             "authentication contract fingerprint mismatch"
         );
         ensure!(
             self.compatibility.ui_component_fingerprint
-                == fingerprint_json(&(&self.ui, &self.logic, &self.configuration, &self.host))?,
+                == fingerprint_typed_json(&(
+                    &self.ui,
+                    &self.logic,
+                    &self.configuration,
+                    &self.host,
+                ))?,
             "UI contract fingerprint mismatch"
         );
         Ok(())
@@ -1253,7 +1259,7 @@ impl UiContract {
             );
             validate_digest(&asset.digest, "asset digest")?;
             ensure!(
-                asset.digest == fingerprint_json(&asset.content)?,
+                asset.digest == fingerprint_typed_json(&asset.content)?,
                 "asset digest mismatch"
             );
             match &asset.content {
@@ -2166,7 +2172,7 @@ impl ProviderRelease {
 }
 
 fn runtime_artifacts_fingerprint(release: &ProviderRelease) -> String {
-    fingerprint_json(&(&release.supported_platforms, &release.runtime_artifacts))
+    fingerprint_typed_json(&(&release.supported_platforms, &release.runtime_artifacts))
         .expect("Provider release runtime artifacts serialize")
 }
 
@@ -2298,7 +2304,7 @@ fn validate_runtime_artifacts(
 pub fn build_package(mut manifest: ProviderManifest) -> Result<ProviderPackage> {
     for asset in &mut manifest.ui.assets {
         if asset.digest.is_empty() {
-            asset.digest = fingerprint_json(&asset.content)?;
+            asset.digest = fingerprint_typed_json(&asset.content)?;
         }
     }
     let dependencies = &manifest.runtime.dependencies;
@@ -2308,7 +2314,7 @@ pub fn build_package(mut manifest: ProviderManifest) -> Result<ProviderPackage> 
         }
     }
     if manifest.compatibility.ui_component_fingerprint.is_empty() {
-        manifest.compatibility.ui_component_fingerprint = fingerprint_json(&(
+        manifest.compatibility.ui_component_fingerprint = fingerprint_typed_json(&(
             &manifest.ui,
             &manifest.logic,
             &manifest.configuration,
@@ -2317,7 +2323,7 @@ pub fn build_package(mut manifest: ProviderManifest) -> Result<ProviderPackage> 
     }
     if manifest.compatibility.auth_contract_fingerprint.is_empty() {
         manifest.compatibility.auth_contract_fingerprint =
-            fingerprint_json(&manifest.authentication)?;
+            fingerprint_typed_json(&manifest.authentication)?;
     }
     manifest.validate()?;
     let contract_fingerprint = contract_fingerprint(&manifest)?;
@@ -2759,11 +2765,23 @@ pub fn contract_fingerprint(manifest: &ProviderManifest) -> Result<String> {
     }))
 }
 
-/// Serialize a typed value and return its SHA-256 content identity.
+/// Canonically serialize a JSON value and return its SHA-256 content identity.
 ///
 /// # Errors
 /// Returns an error when the value cannot be serialized.
 pub fn fingerprint_json(value: &impl Serialize) -> Result<String> {
+    let mut value = serde_json::to_value(value)?;
+    value.sort_all_objects();
+    Ok(format!(
+        "sha256:{:x}",
+        Sha256::digest(serde_json::to_vec(&value)?)
+    ))
+}
+
+// Provider v2 typed contracts deliberately preserve Serde's declared struct
+// field order. Keep that existing wire identity while canonicalizing arbitrary
+// JSON objects at the public boundary above.
+fn fingerprint_typed_json(value: &impl Serialize) -> Result<String> {
     Ok(format!(
         "sha256:{:x}",
         Sha256::digest(serde_json::to_vec(value)?)

@@ -381,6 +381,21 @@ mod service_catalog {
         use super::*;
 
         #[test]
+        fn provider_fingerprints_ignore_serde_json_map_order() {
+            let mut first = serde_json::Map::new();
+            first.insert("z".to_owned(), serde_json::json!({ "y": 2, "b": 3 }));
+            first.insert("a".to_owned(), serde_json::json!(1));
+            let mut second = serde_json::Map::new();
+            second.insert("a".to_owned(), serde_json::json!(1));
+            second.insert("z".to_owned(), serde_json::json!({ "b": 3, "y": 2 }));
+
+            assert_eq!(
+                cowboy_provider_sdk::fingerprint_json(&first).unwrap(),
+                cowboy_provider_sdk::fingerprint_json(&second).unwrap(),
+            );
+        }
+
+        #[test]
         fn embedded_catalog_contains_all_six_first_party_providers() {
             let root = std::env::temp_dir().join(format!(
                 "cowboy-provider-catalog-test-{}",
