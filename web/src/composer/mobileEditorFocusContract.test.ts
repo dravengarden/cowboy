@@ -172,17 +172,25 @@ Deno.test("Machine npm updates survive a swallowed Safari click", () => {
   assertEquals(updateButton.includes("{...updateTap}"), true);
 });
 
-Deno.test("mobile recommended presets use the Cowboy control radius", () => {
+Deno.test("mobile recommended presets survive a swallowed Safari click", () => {
   const presetsStart = composerSource.indexOf(
-    "{recommendedPresets.map((preset) => {",
+    "function RecommendedRunConfigPresetButton",
   );
   const presetsEnd = composerSource.indexOf(
-    "<ButtonBase\n                        aria-expanded",
+    "// Unified bottom sheet for touch viewports",
     presetsStart,
   );
   const presets = composerSource.slice(presetsStart, presetsEnd);
 
   assertEquals(presetsStart >= 0 && presetsEnd > presetsStart, true);
+  assertEquals(
+    presets.includes(
+      "useReliableTouchTap<HTMLButtonElement>(onActivate)",
+    ),
+    true,
+  );
+  assertEquals(presets.includes("{...activateTap}"), true);
+  assertEquals(presets.includes('touchAction: "manipulation"'), true);
   assertEquals(presets.includes("borderRadius: 1,"), true);
   assertEquals(presets.includes("borderRadius: 2,"), false);
 });

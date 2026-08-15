@@ -239,6 +239,7 @@ import {
 } from "./providerConfigOptions";
 import {
   activeRunConfigPreset,
+  type RunConfigPreset,
   runConfigPresetChanges,
   runConfigPresets,
 } from "./runConfigPresets";
@@ -6177,6 +6178,72 @@ export function SessionControls({
   );
 }
 
+function RecommendedRunConfigPresetButton({
+  preset,
+  selected,
+  disabled,
+  onActivate,
+}: {
+  preset: RunConfigPreset;
+  selected: boolean;
+  disabled: boolean;
+  onActivate: () => void;
+}): React.JSX.Element {
+  const activateTap = useReliableTouchTap<HTMLButtonElement>(onActivate);
+
+  return (
+    <ButtonBase
+      {...activateTap}
+      disabled={disabled}
+      aria-pressed={selected}
+      data-run-config-preset={preset.id}
+      sx={{
+        minHeight: 58,
+        px: 1.5,
+        py: 1,
+        // Match the theme's 10px control radius used by the other actions in
+        // this settings sheet.
+        borderRadius: 1,
+        border: 1,
+        borderColor: selected ? "primary.main" : "divider",
+        bgcolor: (theme) =>
+          selected
+            ? alpha(theme.palette.primary.main, 0.13)
+            : alpha(theme.palette.background.default, 0.34),
+        textAlign: "left",
+        justifyContent: "flex-start",
+        touchAction: "manipulation",
+        "&:active": { transform: "scale(0.99)" },
+        "&.Mui-disabled": { opacity: 0.46 },
+      }}
+    >
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Stack direction="row" spacing={0.75} alignItems="center">
+          <Typography variant="body2" sx={{ fontWeight: 750 }}>
+            {preset.name}
+          </Typography>
+          {preset.isDefault && (
+            <Chip
+              label="Default"
+              size="small"
+              color="primary"
+              variant="outlined"
+              sx={{ height: 20, fontSize: "0.625rem" }}
+            />
+          )}
+        </Stack>
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ display: "block", mt: 0.2 }}
+        >
+          {preset.detail}
+        </Typography>
+      </Box>
+    </ButtonBase>
+  );
+}
+
 // Unified bottom sheet for touch viewports: every action lives here, none
 // in a visible inline row. ChatGPT / DeepSeek / Gemini all collapse their
 // composer controls behind a single `+` because chip rows wrap awkwardly
@@ -6463,82 +6530,26 @@ function ComposerSheet({
                           gap: 1,
                         }}
                       >
-                        {recommendedPresets.map((preset) => {
-                          const selected = activePreset?.id === preset.id;
-                          return (
-                            <ButtonBase
-                              key={preset.id}
-                              disabled={dead}
-                              aria-pressed={selected}
-                              onClick={(): void => {
-                                haptic();
-                                for (
-                                  const change of runConfigPresetChanges(
-                                    preset,
-                                    options,
-                                  )
-                                ) {
-                                  onSelectOption(change.configId, change.value);
-                                }
-                                setCustomizeAgent(false);
-                              }}
-                              sx={{
-                                minHeight: 58,
-                                px: 1.5,
-                                py: 1,
-                                // Match the theme's 10px control radius used by
-                                // the other actions in this settings sheet.
-                                borderRadius: 1,
-                                border: 1,
-                                borderColor: selected
-                                  ? "primary.main"
-                                  : "divider",
-                                bgcolor: (theme) =>
-                                  selected
-                                    ? alpha(theme.palette.primary.main, 0.13)
-                                    : alpha(
-                                      theme.palette.background.default,
-                                      0.34,
-                                    ),
-                                textAlign: "left",
-                                justifyContent: "flex-start",
-                                "&:active": { transform: "scale(0.99)" },
-                                "&.Mui-disabled": { opacity: 0.46 },
-                              }}
-                            >
-                              <Box sx={{ flex: 1, minWidth: 0 }}>
-                                <Stack
-                                  direction="row"
-                                  spacing={0.75}
-                                  alignItems="center"
-                                >
-                                  <Typography
-                                    variant="body2"
-                                    sx={{ fontWeight: 750 }}
-                                  >
-                                    {preset.name}
-                                  </Typography>
-                                  {preset.isDefault && (
-                                    <Chip
-                                      label="Default"
-                                      size="small"
-                                      color="primary"
-                                      variant="outlined"
-                                      sx={{ height: 20, fontSize: "0.625rem" }}
-                                    />
-                                  )}
-                                </Stack>
-                                <Typography
-                                  variant="caption"
-                                  color="text.secondary"
-                                  sx={{ display: "block", mt: 0.2 }}
-                                >
-                                  {preset.detail}
-                                </Typography>
-                              </Box>
-                            </ButtonBase>
-                          );
-                        })}
+                        {recommendedPresets.map((preset) => (
+                          <RecommendedRunConfigPresetButton
+                            key={preset.id}
+                            preset={preset}
+                            selected={activePreset?.id === preset.id}
+                            disabled={dead}
+                            onActivate={(): void => {
+                              haptic();
+                              for (
+                                const change of runConfigPresetChanges(
+                                  preset,
+                                  options,
+                                )
+                              ) {
+                                onSelectOption(change.configId, change.value);
+                              }
+                              setCustomizeAgent(false);
+                            }}
+                          />
+                        ))}
                       </Box>
                       <ButtonBase
                         aria-expanded={showAgentDetails}

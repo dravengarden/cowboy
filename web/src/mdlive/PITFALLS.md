@@ -1512,7 +1512,10 @@ Desktop Vim + IME checks:
     keyboard and assistive clicks (`detail === 0`) remain native. The Composer draft
     controller also claims a commit synchronously for the current browser task
     so its editor-submit and toolbar-submit entry points cannot both mint a
-    message before React applies the clear.
+    message before React applies the clear. Recommended Agent preset cards in
+    the scrollable Session settings sheet use this same primitive: a user can
+    reach them while sheet momentum is settling, where a click-only
+    `ButtonBase` otherwise appears to ignore the first tap.
 
 66. **A visible native keyboard is stronger evidence than transient DOM focus.**
     WKWebView can briefly move `document.activeElement` to `body` while UIKit's
