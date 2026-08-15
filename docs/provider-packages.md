@@ -375,9 +375,13 @@ ordinary Cowboy database; Machine inventory reports only replica convergence.
 from the package's portable schema. Providers with the same scope (currently the
 Claude Code · DeepSeek and Codex · DeepSeek lanes) accept one bundle and one
 Service API key, but keep separate signed contract fingerprints, projection
-schemas, encrypted vault rows, and Machine materialization receipts. The UI
-groups their authentication state by scope while retaining each Provider's own
-card and runtime settings.
+schemas, encrypted vault rows, and Machine materialization receipts. Service UI
+renders one credential card and one credential action per scope, with every
+member Provider identified on that card; Machine UI retains each Provider's own
+installation card and runtime settings. A future Provider such as DeepSeek
+Harness joins the existing credential card solely by declaring the same
+compatible portable schema. Cowboy UI must not add a Provider-id-specific
+grouping rule.
 
 The Service starts that flow with the exact signed Provider version, composite
 digest, and authentication-contract fingerprint selected by the UI. A connected

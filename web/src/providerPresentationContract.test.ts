@@ -71,6 +71,23 @@ Deno.test("Provider authentication copy dispatches on typed presentation, not Pr
   }
 });
 
+Deno.test("Service credential management renders one card per typed authentication scope", () => {
+  assertEquals(
+    managementSource.includes("groupProviderAuthentications(latestEntries)"),
+    true,
+  );
+  assertEquals(
+    managementSource.includes("data-provider-credential-card"),
+    true,
+  );
+  assertEquals(
+    managementSource.includes(
+      "providerCredentialTitle(credentialGroup.entries)",
+    ),
+    true,
+  );
+});
+
 Deno.test("Provider marks preserve host component classes and compact chip spacing", () => {
   assertEquals(surfaceSource.includes("className?: string | undefined;"), true);
   assertEquals(surfaceSource.includes("className={className}"), true);
