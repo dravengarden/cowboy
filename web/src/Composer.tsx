@@ -5610,22 +5610,28 @@ function PendingRow({
   return (
     <Paper
       variant="outlined"
-      sx={{ p: 0.75, display: "flex", alignItems: "flex-start", gap: 0.5 }}
+      data-pending-edit-target
+      // iOS hit-tests through an unpainted flex child onto this Paper fill.
+      {...pendingEditTap}
+      onClick={(event): void => {
+        const target = event.target instanceof Element ? event.target : null;
+        if (target?.closest("[data-pending-content-action]")) return;
+        pendingEditTap.onClick(event);
+      }}
+      sx={{
+        p: 0.75,
+        display: "flex",
+        alignItems: "flex-start",
+        gap: 0.5,
+        cursor: "text",
+      }}
     >
       <Box
-        data-pending-edit-target
-        {...pendingEditTap}
-        onClick={(event): void => {
-          const target = event.target instanceof Element ? event.target : null;
-          if (target?.closest("[data-pending-content-action]")) return;
-          pendingEditTap.onClick(event);
-        }}
         sx={{
           flex: 1,
           alignSelf: "stretch",
           minWidth: 0,
           minHeight: 38,
-          cursor: "text",
         }}
       >
         {stripImageTokens(message.text).trim() !== "" && (
