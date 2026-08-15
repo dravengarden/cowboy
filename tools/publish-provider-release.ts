@@ -209,7 +209,10 @@ async function copyImmutableText(
 }
 
 async function sha256(path: string): Promise<string> {
-  const output = await new Deno.Command("sha256sum", { args: [path] }).output();
+  const output = await new Deno.Command("sha256sum", {
+    args: [path],
+    clearEnv: true,
+  }).output();
   if (!output.success) throw new Error(`sha256sum failed for ${path}`);
   return new TextDecoder().decode(output.stdout).trim().split(/\s+/)[0]
     .toLowerCase();
