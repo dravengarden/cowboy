@@ -94,7 +94,8 @@ provider-verify PROVIDER PUBLIC_KEY:
 # Cross-language package/linker conformance. This is also the Provider release
 # skill's deterministic pre-publish gate.
 provider-check:
-    deno check tools/build-provider-runtime.ts tools/check-provider-runtime-lock.ts tools/publish-provider-release.ts
+    deno check tools/build-provider-runtime.ts tools/check-provider-runtime-lock.ts tools/provider-publication-receipt.ts tools/publish-provider-release.ts
+    deno test tools/provider-publication-receipt_test.ts
     deno run --allow-read tools/check-provider-runtime-lock.ts
     cargo test --locked -p cowboy-provider-sdk --all-targets
     just provider-build-all

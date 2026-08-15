@@ -1,3 +1,5 @@
+import { resolveImmutableReceipt } from "./provider-publication-receipt.ts";
+
 interface ProviderRelease {
   release_schema: number;
   provider_id: string;
@@ -100,7 +102,7 @@ const catalogRelease = `${catalogRoot}/${catalogStem}.release.json`;
 await copyImmutable(packagePath, catalogPackage, 0o644);
 await copyImmutable(releasePath, catalogRelease, 0o644);
 
-const receipt = {
+const receiptIdentity = {
   schema_version: 1,
   provider_id: providerId,
   provider_version: release.provider_version,
@@ -110,11 +112,17 @@ const receipt = {
   catalog_package: catalogPackage,
   catalog_release: catalogRelease,
   published_urls: [...new Set(published)].sort(),
-  published_at: new Date().toISOString(),
 };
 const receiptPath = `${catalogRoot}/receipts/${catalogStem}.json`;
+const existingReceipt = await exists(receiptPath)
+  ? await Deno.readTextFile(receiptPath)
+  : undefined;
+const { receipt, text: receiptText } = resolveImmutableReceipt(
+  receiptIdentity,
+  existingReceipt,
+);
 await copyImmutableText(
-  `${JSON.stringify(receipt, null, 2)}\n`,
+  receiptText,
   receiptPath,
   0o644,
 );
