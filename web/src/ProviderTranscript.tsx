@@ -28,14 +28,6 @@ const thoughtShimmer = keyframes`
   from { background-position: 100% 0; }
   to { background-position: 0% 0; }
 `;
-const workcellPrompt = keyframes`
-  0%, 100% { transform: translateX(0); opacity: 0.55; }
-  50% { transform: translateX(1.5px); opacity: 1; }
-`;
-const workcellCaret = keyframes`
-  0%, 45% { opacity: 1; }
-  55%, 100% { opacity: 0.24; }
-`;
 const terminalCaret = keyframes`
   0%, 50% { opacity: 1; }
   51%, 100% { opacity: 0; }
@@ -43,48 +35,14 @@ const terminalCaret = keyframes`
 
 function WorkcellGlyph({ size = 16 }: { size?: number }): React.JSX.Element {
   return (
-    <Box
-      component="svg"
-      viewBox="0 0 18 18"
+    <LightbulbOutlined
       aria-hidden
       sx={{
-        width: size,
-        height: size,
+        fontSize: size,
         display: "block",
         flexShrink: 0,
-        overflow: "visible",
-        color: "inherit",
-        "& .provider-workcell-prompt": {
-          animation: `${workcellPrompt} 4.2s ease-in-out infinite`,
-        },
-        "& .provider-workcell-caret": {
-          animation: `${workcellCaret} 4.2s ease-in-out infinite`,
-        },
-        "@media (prefers-reduced-motion: reduce)": {
-          "& .provider-workcell-prompt, & .provider-workcell-caret": {
-            animation: "none",
-          },
-        },
       }}
-    >
-      <path
-        className="provider-workcell-prompt"
-        d="M3.5 5.5 7 9l-3.5 3.5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.7"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path
-        className="provider-workcell-caret"
-        d="M9.5 12.5h5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.7"
-        strokeLinecap="round"
-      />
-    </Box>
+    />
   );
 }
 

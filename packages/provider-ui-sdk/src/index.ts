@@ -463,6 +463,8 @@ export interface ProviderCatalogEntry {
   provider_version: string;
   package_digest: string;
   artifact_digest: string | null;
+  /** Public scope for one credential shared by compatible Providers. */
+  authentication_scope: string;
   release_state: "unbound" | "ready";
   release_detail?: string;
   publisher: string;
@@ -491,6 +493,8 @@ export interface ProviderAuthenticationStatus {
     | "failed"
     | "revoking";
   auth_contract_fingerprint: string;
+  /** Matches ProviderCatalogEntry.authentication_scope. */
+  authentication_scope: string;
   portable_schema: string;
   projection_schema: string;
   account_label?: string;
@@ -688,6 +692,8 @@ export function validateProviderCatalog(
       (raw.artifact_digest !== null &&
         (typeof raw.artifact_digest !== "string" ||
           !isDigest(raw.artifact_digest))) ||
+      typeof raw.authentication_scope !== "string" ||
+      !isIdentifier(raw.authentication_scope) ||
       (raw.release_state !== "unbound" && raw.release_state !== "ready") ||
       (raw.release_detail !== undefined &&
         (typeof raw.release_detail !== "string" ||
@@ -755,6 +761,8 @@ export function validateProviderCatalog(
         String(raw.distribution_state),
       ) || typeof raw.auth_contract_fingerprint !== "string" ||
       !isDigest(raw.auth_contract_fingerprint) ||
+      typeof raw.authentication_scope !== "string" ||
+      !isIdentifier(raw.authentication_scope) ||
       typeof raw.portable_schema !== "string" ||
       !isIdentifier(raw.portable_schema) ||
       typeof raw.projection_schema !== "string" ||

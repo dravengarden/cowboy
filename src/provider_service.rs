@@ -63,6 +63,9 @@ pub(crate) struct ProviderAuthenticationStatus {
     pub authentication_state: ServiceAuthenticationState,
     pub distribution_state: ServiceDistributionState,
     pub auth_contract_fingerprint: String,
+    /// Public credential scope. Providers with the same scope consume the
+    /// same portable bundle while retaining independent projections.
+    pub authentication_scope: String,
     pub portable_schema: String,
     pub projection_schema: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -102,6 +105,7 @@ impl StoredProviderAuthentication {
             authentication_state: self.authentication_state,
             distribution_state: self.distribution_state,
             auth_contract_fingerprint: self.auth_contract_fingerprint.clone(),
+            authentication_scope: self.portable_schema.clone(),
             portable_schema: self.portable_schema.clone(),
             projection_schema: self.projection_schema.clone(),
             account_label: self.account_label.clone(),
@@ -222,6 +226,7 @@ impl ProviderAuthService {
                 .compatibility
                 .auth_contract_fingerprint
                 .clone(),
+            authentication_scope: package.manifest.authentication.portable_schema.clone(),
             portable_schema: package.manifest.authentication.portable_schema.clone(),
             projection_schema: package.manifest.authentication.projection_schema.clone(),
             account_label: current.and_then(|stored| stored.account_label),
@@ -297,94 +302,181 @@ impl ProviderAuthService {
         account_label: Option<String>,
         expected_generation: Option<u64>,
     ) -> Result<ProviderAuthenticationStatus> {
-        validate_bundle(&package.manifest.authentication, bundle)?;
-        let provider_id = &package.manifest.id;
+        self.commit_shared(
+            std::slice::from_ref(package),
+            bundle,
+            account_label,
+            &package.manifest.id,
+            expected_generation,
+        )?
+        .into_iter()
+        .next()
+        .context("Provider authentication commit produced no status")
+    }
+
+    /// Commit one portable credential bundle to every newest Provider package
+    /// in a public authentication scope. Each Provider keeps its own signed
+    /// contract and encrypted vault entry, while the user's secret is entered
+    /// only once at Service scope.
+    pub(crate) fn commit_shared(
+        &self,
+        packages: &[ProviderPackage],
+        bundle: &PortableCredentialBundle,
+        account_label: Option<String>,
+        requested_provider_id: &str,
+        expected_generation: Option<u64>,
+    ) -> Result<Vec<ProviderAuthenticationStatus>> {
+        ensure!(
+            !packages.is_empty(),
+            "authentication scope has no Providers"
+        );
+        ensure!(
+            packages
+                .iter()
+                .any(|package| package.manifest.id == requested_provider_id),
+            "authentication scope does not contain the requested Provider"
+        );
+        for package in packages {
+            validate_bundle(&package.manifest.authentication, bundle)?;
+        }
+        let plaintext = serde_json::to_vec(bundle)?;
+        ensure!(
+            plaintext.len() <= MAX_BUNDLE_BYTES,
+            "credential bundle is too large"
+        );
         let mut providers = self.providers.write();
-        let current = providers.get(provider_id).cloned();
+        let current = providers.get(requested_provider_id).cloned();
         if let Some(expected) = expected_generation {
             ensure!(
                 current.as_ref().map_or(0, |value| value.auth_generation) == expected,
                 "Provider authentication generation changed; restart authentication"
             );
         }
-        let generation = current
-            .as_ref()
-            .map_or(1, |value| value.auth_generation.saturating_add(1));
+        let current_generation = packages
+            .iter()
+            .filter_map(|package| providers.get(&package.manifest.id))
+            .map(|stored| stored.auth_generation)
+            .max()
+            .unwrap_or(0);
+        if let Some(expected) = expected_generation {
+            ensure!(
+                current_generation == expected,
+                "shared Provider authentication generation changed; restart authentication"
+            );
+        }
+        let generation = current_generation.saturating_add(1);
         ensure!(generation != u64::MAX, "Provider auth generation exhausted");
-        let plaintext = serde_json::to_vec(bundle)?;
-        ensure!(
-            plaintext.len() <= MAX_BUNDLE_BYTES,
-            "credential bundle is too large"
-        );
-        let auth = &package.manifest.authentication;
-        let (nonce, ciphertext) = self.seal_vault(
-            provider_id,
-            generation,
-            &package.manifest.compatibility.auth_contract_fingerprint,
-            &plaintext,
-        )?;
-        let stored = StoredProviderAuthentication {
-            vault_schema: VAULT_SCHEMA,
-            provider_id: provider_id.clone(),
-            auth_generation: generation,
-            authentication_state: ServiceAuthenticationState::Ready,
-            distribution_state: ServiceDistributionState::Pending,
-            auth_contract_fingerprint: package
-                .manifest
-                .compatibility
-                .auth_contract_fingerprint
-                .clone(),
-            portable_schema: auth.portable_schema.clone(),
-            projection_schema: auth.projection_schema.clone(),
-            action: ProviderAuthAction::Apply,
-            nonce,
-            ciphertext,
-            account_label: account_label
-                .map(|value| value.trim().to_owned())
-                .filter(|value| !value.is_empty()),
-            updated_at_ms: now_ms(),
-        };
-        let status = self.replace_locked(&mut providers, stored)?;
-        self.transient.write().remove(provider_id);
-        Ok(status)
+        let account_label = account_label
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
+        let mut stored_values = Vec::with_capacity(packages.len());
+        for package in packages {
+            let provider_id = &package.manifest.id;
+            let auth = &package.manifest.authentication;
+            let (nonce, ciphertext) = self.seal_vault(
+                provider_id,
+                generation,
+                &package.manifest.compatibility.auth_contract_fingerprint,
+                &plaintext,
+            )?;
+            stored_values.push(StoredProviderAuthentication {
+                vault_schema: VAULT_SCHEMA,
+                provider_id: provider_id.clone(),
+                auth_generation: generation,
+                authentication_state: ServiceAuthenticationState::Ready,
+                distribution_state: ServiceDistributionState::Pending,
+                auth_contract_fingerprint: package
+                    .manifest
+                    .compatibility
+                    .auth_contract_fingerprint
+                    .clone(),
+                portable_schema: auth.portable_schema.clone(),
+                projection_schema: auth.projection_schema.clone(),
+                action: ProviderAuthAction::Apply,
+                nonce,
+                ciphertext,
+                account_label: account_label.clone(),
+                updated_at_ms: now_ms(),
+            });
+        }
+        let mut statuses = Vec::with_capacity(stored_values.len());
+        for stored in stored_values {
+            statuses.push(self.replace_locked(&mut providers, stored)?);
+        }
+        let mut transient = self.transient.write();
+        for package in packages {
+            transient.remove(&package.manifest.id);
+        }
+        Ok(statuses)
     }
 
     /// Publish a newer wipe generation. Old encrypted vault generations are
     /// no longer addressable and every connected Machine receives this tombstone.
     pub(crate) fn logout(&self, provider_id: &str) -> Result<ProviderAuthenticationStatus> {
+        self.logout_shared(&[provider_id.to_owned()])?
+            .into_iter()
+            .next()
+            .context("Provider logout produced no status")
+    }
+
+    /// Publish one wipe generation for every Provider in a shared
+    /// authentication scope.
+    pub(crate) fn logout_shared(
+        &self,
+        provider_ids: &[String],
+    ) -> Result<Vec<ProviderAuthenticationStatus>> {
+        ensure!(
+            !provider_ids.is_empty(),
+            "authentication scope has no Providers"
+        );
         let mut providers = self.providers.write();
-        let current = providers
-            .get(provider_id)
-            .cloned()
-            .context("Provider is not authenticated at Cowboy Service scope")?;
-        let generation = current.auth_generation.saturating_add(1);
+        let current: Vec<_> = provider_ids
+            .iter()
+            .map(|provider_id| {
+                providers.get(provider_id).cloned().with_context(|| {
+                    format!("Provider {provider_id:?} is not authenticated at Cowboy Service scope")
+                })
+            })
+            .collect::<Result<_>>()?;
+        let generation = current
+            .iter()
+            .map(|stored| stored.auth_generation)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
         ensure!(generation != u64::MAX, "Provider auth generation exhausted");
-        let (nonce, ciphertext) = self.seal_vault(
-            provider_id,
-            generation,
-            &current.auth_contract_fingerprint,
-            &[],
-        )?;
-        let status = self.replace_locked(
-            &mut providers,
-            StoredProviderAuthentication {
-                vault_schema: VAULT_SCHEMA,
-                provider_id: provider_id.to_owned(),
-                auth_generation: generation,
-                authentication_state: ServiceAuthenticationState::SignedOut,
-                distribution_state: ServiceDistributionState::Revoking,
-                auth_contract_fingerprint: current.auth_contract_fingerprint,
-                portable_schema: current.portable_schema,
-                projection_schema: current.projection_schema,
-                action: ProviderAuthAction::Wipe,
-                nonce,
-                ciphertext,
-                account_label: None,
-                updated_at_ms: now_ms(),
-            },
-        )?;
-        self.transient.write().remove(provider_id);
-        Ok(status)
+        let mut statuses = Vec::with_capacity(current.len());
+        for current in current {
+            let (nonce, ciphertext) = self.seal_vault(
+                &current.provider_id,
+                generation,
+                &current.auth_contract_fingerprint,
+                &[],
+            )?;
+            statuses.push(self.replace_locked(
+                &mut providers,
+                StoredProviderAuthentication {
+                    vault_schema: VAULT_SCHEMA,
+                    provider_id: current.provider_id,
+                    auth_generation: generation,
+                    authentication_state: ServiceAuthenticationState::SignedOut,
+                    distribution_state: ServiceDistributionState::Revoking,
+                    auth_contract_fingerprint: current.auth_contract_fingerprint,
+                    portable_schema: current.portable_schema,
+                    projection_schema: current.projection_schema,
+                    action: ProviderAuthAction::Wipe,
+                    nonce,
+                    ciphertext,
+                    account_label: None,
+                    updated_at_ms: now_ms(),
+                },
+            )?);
+        }
+        let mut transient = self.transient.write();
+        for provider_id in provider_ids {
+            transient.remove(provider_id);
+        }
+        Ok(statuses)
     }
 
     /// Encrypt the current Service generation to one enrolled Machine and sign
@@ -775,6 +867,8 @@ mod tests {
     fn package(id: &str) -> ProviderPackage {
         let source: cowboy_provider_sdk::StandardProviderSource = serde_json::from_str(match id {
             "gemini" => include_str!("../providers/gemini/provider.json"),
+            "claude-deepseek" => include_str!("../providers/claude-deepseek/provider.json"),
+            "codex-deepseek" => include_str!("../providers/codex-deepseek/provider.json"),
             _ => panic!("unsupported fixture"),
         })
         .unwrap();
@@ -793,10 +887,18 @@ mod tests {
     }
 
     fn bundle(package: &ProviderPackage) -> PortableCredentialBundle {
-        PortableCredentialBundle {
-            portable_schema: package.manifest.authentication.portable_schema.clone(),
-            method_id: "code-assist".to_owned(),
-            values: ["settings_json", "oauth_creds_json"]
+        let values = if package.manifest.authentication.portable_schema == "deepseek-api-key-v1" {
+            [("api_key", b"deepseek-secret".as_slice())]
+                .into_iter()
+                .map(|(key, value)| {
+                    (
+                        key.to_owned(),
+                        base64::engine::general_purpose::STANDARD.encode(value),
+                    )
+                })
+                .collect()
+        } else {
+            ["settings_json", "oauth_creds_json"]
                 .map(|key| {
                     (
                         key.to_owned(),
@@ -804,7 +906,18 @@ mod tests {
                     )
                 })
                 .into_iter()
-                .collect(),
+                .collect()
+        };
+        PortableCredentialBundle {
+            portable_schema: package.manifest.authentication.portable_schema.clone(),
+            method_id:
+                if package.manifest.authentication.portable_schema == "deepseek-api-key-v1" {
+                    "api-key"
+                } else {
+                    "code-assist"
+                }
+                .to_owned(),
+            values,
         }
     }
 
@@ -933,6 +1046,56 @@ mod tests {
             reopened.authentication_state,
             ServiceAuthenticationState::SignedOut
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn shared_authentication_scope_commits_one_bundle_to_each_projection() {
+        let (root, service) = service();
+        let claude = package("claude-deepseek");
+        let codex = package("codex-deepseek");
+        let bundle = bundle(&claude);
+        let statuses = service
+            .commit_shared(
+                &[claude.clone(), codex.clone()],
+                &bundle,
+                None,
+                "claude-deepseek",
+                None,
+            )
+            .unwrap();
+        assert_eq!(statuses.len(), 2);
+        assert!(statuses.iter().all(|status| {
+            status.auth_generation == 1
+                && status.authentication_state == ServiceAuthenticationState::Ready
+                && status.authentication_scope == "deepseek-api-key-v1"
+        }));
+        let first_machine_secret = StaticSecret::from(random_bytes::<32>().unwrap());
+        let first_machine_public = PublicKey::from(&first_machine_secret);
+        let first = service
+            .seal_for_machine(
+                "claude-deepseek",
+                &base64::engine::general_purpose::STANDARD.encode(first_machine_public.as_bytes()),
+            )
+            .unwrap();
+        let second = service
+            .seal_for_machine(
+                "codex-deepseek",
+                &base64::engine::general_purpose::STANDARD.encode(first_machine_public.as_bytes()),
+            )
+            .unwrap();
+        assert_eq!(first.auth_generation, second.auth_generation);
+        assert_eq!(first.action, ProviderAuthAction::Apply);
+        assert_eq!(second.action, ProviderAuthAction::Apply);
+        assert_ne!(first.ciphertext, second.ciphertext);
+
+        let provider_ids = vec!["claude-deepseek".to_owned(), "codex-deepseek".to_owned()];
+        let logged_out = service.logout_shared(&provider_ids).unwrap();
+        assert_eq!(logged_out.len(), 2);
+        assert!(logged_out.iter().all(|status| {
+            status.auth_generation == 2
+                && status.authentication_state == ServiceAuthenticationState::SignedOut
+        }));
         fs::remove_dir_all(root).unwrap();
     }
 }

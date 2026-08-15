@@ -51,6 +51,13 @@ mod service_catalog {
         pub provider_version: String,
         pub package_digest: String,
         pub artifact_digest: Option<String>,
+        /// Public grouping key for credentials shared by multiple Providers.
+        ///
+        /// This is derived from the package's portable credential schema. It
+        /// never exposes credential paths, environment names, or runtime
+        /// transports, but lets Cowboy render and synchronize one Service
+        /// credential for every compatible Provider surface.
+        pub authentication_scope: String,
         pub release_state: ProviderReleaseState,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub release_detail: Option<String>,
@@ -103,6 +110,7 @@ mod service_catalog {
                     provider_version: package.manifest.version.clone(),
                     package_digest: digest,
                     artifact_digest: None,
+                    authentication_scope: package.manifest.authentication.portable_schema.clone(),
                     release_state: ProviderReleaseState::Unbound,
                     release_detail: Some(
                         "No signed runtime release is published for this Provider version."
@@ -301,6 +309,51 @@ mod service_catalog {
                 .and_then(|bytes| ProviderPackage::from_bytes(&bytes).ok())
         }
 
+        /// Return the newest signed package for each Provider in one public
+        /// credential scope. Provider packages keep their own projection
+        /// contract; only the portable bundle is shared.
+        pub(crate) fn packages_for_authentication_scope(
+            &self,
+            scope: &str,
+        ) -> Vec<ProviderPackage> {
+            let external = self.external.read();
+            let mut latest: BTreeMap<String, &CatalogArtifact> = BTreeMap::new();
+            for artifact in external
+                .values()
+                .filter(|artifact| artifact.entry.authentication_scope == scope)
+            {
+                let replace = latest
+                    .get(&artifact.entry.provider_id)
+                    .is_none_or(|current| {
+                        compare_versions(
+                            &artifact.entry.provider_version,
+                            &current.entry.provider_version,
+                        ) == std::cmp::Ordering::Greater
+                            || (artifact.entry.provider_version == current.entry.provider_version
+                                && artifact.entry.artifact_digest > current.entry.artifact_digest)
+                    });
+                if replace {
+                    latest.insert(artifact.entry.provider_id.clone(), artifact);
+                }
+            }
+            latest
+                .into_values()
+                .filter_map(|artifact| {
+                    base64::engine::general_purpose::STANDARD
+                        .decode(&artifact.desired.package_base64)
+                        .ok()
+                        .and_then(|bytes| ProviderPackage::from_bytes(&bytes).ok())
+                })
+                .collect()
+        }
+
+        pub(crate) fn provider_ids_for_authentication_scope(&self, scope: &str) -> Vec<String> {
+            self.packages_for_authentication_scope(scope)
+                .into_iter()
+                .map(|package| package.manifest.id)
+                .collect()
+        }
+
         pub(crate) fn account_usage_provider(
             &self,
             provider_id: &str,
@@ -334,6 +387,7 @@ mod service_catalog {
             provider_version: release.provider_version.clone(),
             package_digest: release.package_digest.clone(),
             artifact_digest: Some(release.artifact_digest.clone()),
+            authentication_scope: package.manifest.authentication.portable_schema.clone(),
             release_state: ProviderReleaseState::Ready,
             release_detail: None,
             publisher: release.publisher.clone(),

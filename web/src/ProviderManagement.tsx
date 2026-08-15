@@ -92,6 +92,7 @@ type LoginEvent =
 
 interface AuthenticationFlow {
   provider: ProviderCatalogEntry;
+  sharedProviderNames: string[];
   requestId?: string;
   expiresAtMs?: number;
   events: LoginEvent[];
@@ -313,6 +314,22 @@ function ProviderManagement(
       ),
     [catalog],
   );
+  const authenticationsByScope = useMemo(
+    () =>
+      new Map(
+        (catalog?.authentications ?? []).map((status) => [
+          status.authentication_scope,
+          status,
+        ]),
+      ),
+    [catalog],
+  );
+  const authenticationForEntry = useCallback(
+    (entry: ProviderCatalogEntry): ProviderAuthenticationStatus | undefined =>
+      authentications.get(entry.provider_id) ??
+      authenticationsByScope.get(entry.authentication_scope),
+    [authentications, authenticationsByScope],
+  );
   const refreshInventory = useCallback(async (): Promise<void> => {
     if (!machineId) {
       setInventory([]);
@@ -439,7 +456,15 @@ function ProviderManagement(
               "Provider authentication is managed at Cowboy Service scope",
             );
           }
-          setFlow({ provider: entry, events: [] });
+          setFlow({
+            provider: entry,
+            sharedProviderNames: latestEntries
+              .filter((candidate) =>
+                candidate.authentication_scope === entry.authentication_scope
+              )
+              .map((candidate) => candidate.manifest.display.name),
+            events: [],
+          });
           return;
         case "logout_service_authentication": {
           if (scope !== "service") {
@@ -641,7 +666,7 @@ function ProviderManagement(
                   />
                 );
               }
-              const auth = authentications.get(entry.provider_id);
+              const auth = authenticationForEntry(entry);
               const authPresentation =
                 resolveProviderAuthenticationPresentation(
                   entry.manifest.authentication,
@@ -656,7 +681,13 @@ function ProviderManagement(
                 : entry;
               const summary = scope === "service"
                 ? entry.manifest.authentication.required
-                  ? serviceAuthenticationLabel(auth, authPresentation)
+                ? serviceAuthenticationLabel(
+                  auth,
+                  authPresentation,
+                  latestEntries.filter((candidate) =>
+                    candidate.authentication_scope === entry.authentication_scope
+                  ).length > 1,
+                )
                   : "no sign-in"
                 : providerInstallationSummary(row.installed, row.latestEntry);
               const healthy = scope === "service"
@@ -793,7 +824,7 @@ function ProviderManagement(
           }
           if (!latestEntry) return null;
           const entry = installedEntry ?? latestEntry;
-          const auth = authentications.get(entry.provider_id);
+          const auth = authenticationForEntry(entry);
           const authPresentation = resolveProviderAuthenticationPresentation(
             entry.manifest.authentication,
           );
@@ -805,7 +836,13 @@ function ProviderManagement(
             latestEntry.artifact_digest !== null;
           const managementStatus = scope === "service"
             ? entry.manifest.authentication.required
-              ? serviceAuthenticationLabel(auth, authPresentation)
+              ? serviceAuthenticationLabel(
+                auth,
+                authPresentation,
+                latestEntries.filter((candidate) =>
+                  candidate.authentication_scope === entry.authentication_scope
+                ).length > 1,
+              )
                 .split(" · ")[0] ?? authenticationCopy(authPresentation).empty
               : "no sign-in"
             : providerInstallationSummary(installed, latestEntry);
@@ -918,9 +955,12 @@ function ProviderManagement(
         <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1 }}>
           {flow ? <ProviderMark manifest={flow.provider.manifest} /> : null}
           {flow
-            ? authenticationCopy(resolveProviderAuthenticationPresentation(
-              flow.provider.manifest.authentication,
-            )).title
+            ? authenticationCopy(
+              resolveProviderAuthenticationPresentation(
+                flow.provider.manifest.authentication,
+              ),
+              flow.sharedProviderNames.length > 1,
+            ).title
             : "Configure"} {flow?.provider.manifest.display.name ?? "Provider"}
         </DialogTitle>
         <DialogContent>
@@ -928,9 +968,12 @@ function ProviderManagement(
             ? (
               <Stack spacing={1.5} sx={{ pt: 0.5 }}>
                 <Alert severity="info">
-                  {authenticationCopy(resolveProviderAuthenticationPresentation(
-                    flow.provider.manifest.authentication,
-                  )).serviceDetail}
+                  {authenticationCopy(
+                    resolveProviderAuthenticationPresentation(
+                      flow.provider.manifest.authentication,
+                    ),
+                    flow.sharedProviderNames.length > 1,
+                  ).serviceDetail}
                 </Alert>
                 {!flow.requestId
                   ? (
@@ -940,6 +983,7 @@ function ProviderManagement(
                           resolveProviderAuthenticationPresentation(
                             flow.provider.manifest.authentication,
                           ),
+                          flow.sharedProviderNames.length > 1,
                         ).chooseMethod}
                       </Typography>
                       {flow.provider.manifest.authentication.methods.map((
@@ -1189,8 +1233,9 @@ function providerServiceHost(
 function serviceAuthenticationLabel(
   auth: ProviderAuthenticationStatus | undefined,
   presentation: ProviderAuthenticationPresentation,
+  shared = false,
 ): string {
-  const copy = authenticationCopy(presentation);
+  const copy = authenticationCopy(presentation, shared);
   if (!auth) return copy.empty;
   const state = auth.authentication_state.replaceAll("_", " ");
   if (auth.authentication_state !== "ready") {
@@ -1205,11 +1250,12 @@ function serviceAuthenticationLabel(
     }
     return state;
   }
-  return `${copy.ready}${auth.account_label ? ` · ${auth.account_label}` : ""}`;
+  return `${shared ? "shared API key configured" : copy.ready}${auth.account_label ? ` · ${auth.account_label}` : ""}`;
 }
 
 function authenticationCopy(
   presentation: ProviderAuthenticationPresentation,
+  shared = false,
 ): {
   title: string;
   empty: string;
@@ -1238,19 +1284,31 @@ function authenticationCopy(
         waiting: "Waiting for the Provider…",
       };
     case "api_key":
-      return {
-        title: "Configure API key for",
-        empty: "API key missing",
-        ready: "API key configured",
-        serviceDetail:
-          "This API key belongs to Cowboy Service. Cowboy stores one encrypted credential generation and synchronizes it to every enrolled Machine.",
-        chooseMethod: "Choose the Provider-declared API key credential.",
-        externalAction: "Get API key",
-        submit: "Save API key",
-        submitFailed: "Could not save the API key",
-        clearFailed: "Could not clear the API key",
-        waiting: "Preparing secure API key entry…",
-      };
+      {
+        const apiKeyCopy = {
+          title: "Configure API key for",
+          empty: "API key missing",
+          ready: "API key configured",
+          serviceDetail:
+            "This API key belongs to Cowboy Service. Cowboy stores one encrypted credential generation and synchronizes it to every enrolled Machine.",
+          chooseMethod: "Choose the Provider-declared API key credential.",
+          externalAction: "Get API key",
+          submit: "Save API key",
+          submitFailed: "Could not save the API key",
+          clearFailed: "Could not clear the API key",
+          waiting: "Preparing secure API key entry…",
+        };
+        if (!shared) return apiKeyCopy;
+        return {
+          ...apiKeyCopy,
+          title: "Configure shared API key for",
+          empty: "Shared API key missing",
+          serviceDetail:
+            "One DeepSeek API key belongs to Cowboy Service and is shared by every compatible DeepSeek Provider. Cowboy stores one encrypted credential generation and synchronizes each Provider projection to every enrolled Machine.",
+          chooseMethod:
+            "Enter the shared DeepSeek API key once. It will configure every compatible Provider.",
+        };
+      }
     default:
       return assertUnhandled(presentation);
   }
