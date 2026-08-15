@@ -60,6 +60,7 @@ import {
   Search,
   Stop,
   Terminal,
+  Tune,
   UnfoldLess,
   WarningAmberRounded,
 } from "@mui/icons-material";
@@ -158,6 +159,7 @@ import {
 import { FloatingActionIsland, ImageLightbox } from "./_shell";
 import { Sheet } from "./Sheet";
 import { useReliableTouchTap } from "./useReliableTouchTap";
+import { openSessionSettings } from "./sessionSettingsOpen";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 import { DesktopShortcutBar } from "./desktop/DesktopShortcutBar";
 import { isImeKeyEvent } from "./imeKey";
@@ -621,18 +623,32 @@ function ConversationEmptyState({
       Boolean(value) && values.indexOf(value) === index
     );
   const interactive = kind !== "preparing";
+  const settingsTap = useReliableTouchTap<HTMLButtonElement>(() => {
+    openSessionSettings("agent");
+  });
+  const writeFromEmpty = (event: { target: EventTarget | null }): boolean => {
+    if (!(event.target instanceof Element)) return true;
+    return event.target.closest("[data-conversation-empty-settings]") ===
+      null;
+  };
   return (
     <Stack
       data-conversation-empty-state={kind}
-      role={interactive ? "button" : "status"}
+      role={interactive ? "region" : "status"}
       tabIndex={interactive ? 0 : undefined}
       aria-live="polite"
       aria-label={`${title}. ${detail}`}
-      onClick={interactive ? focusPrimaryComposer : undefined}
+      onClick={interactive
+        ? (event): void => {
+          if (!writeFromEmpty(event)) return;
+          focusPrimaryComposer();
+        }
+        : undefined}
       onKeyDown={interactive
         ? (event): void => {
           if (isImeKeyEvent(event.nativeEvent)) return;
           if (event.key !== "Enter" && event.key !== " ") return;
+          if (!writeFromEmpty(event)) return;
           event.preventDefault();
           focusPrimaryComposer();
         }
@@ -715,31 +731,71 @@ function ConversationEmptyState({
         />
       )}
       {facts.length > 0 && (
-        <Stack
-          direction="row"
-          useFlexGap
-          flexWrap="wrap"
-          justifyContent="center"
-          gap={0.75}
+        <ButtonBase
+          data-conversation-empty-settings
+          aria-label={`Change session settings: ${facts.join(", ")}`}
+          disabled={!interactive}
+          {...settingsTap}
+          onPointerDown={(event): void => {
+            event.stopPropagation();
+            settingsTap.onPointerDown(event);
+          }}
+          onPointerUp={(event): void => {
+            event.stopPropagation();
+            settingsTap.onPointerUp(event);
+          }}
+          onClick={(event): void => {
+            event.stopPropagation();
+            settingsTap.onClick(event);
+          }}
+          sx={{
+            maxWidth: "100%",
+            px: 0.75,
+            py: 0.75,
+            borderRadius: 3,
+            cursor: interactive ? "pointer" : "default",
+            "&:active": interactive ? { transform: "scale(0.99)" } : undefined,
+            "&:focus-visible": {
+              outline: "2px solid",
+              outlineColor: "primary.main",
+              outlineOffset: 2,
+            },
+          }}
         >
-          {facts.map((fact) => (
-            <Chip
-              key={fact}
-              label={fact}
-              size="small"
-              variant="outlined"
-              sx={(theme) => ({
-                height: 25,
-                color: "text.secondary",
-                borderColor: alpha(theme.palette.divider, 0.72),
-                bgcolor: alpha(theme.palette.background.paper, 0.42),
-                backdropFilter: "blur(8px)",
-                WebkitBackdropFilter: "blur(8px)",
-                "& .MuiChip-label": { px: 1, fontSize: "0.72rem" },
-              })}
-            />
-          ))}
-        </Stack>
+          <Stack
+            direction="row"
+            useFlexGap
+            flexWrap="wrap"
+            justifyContent="center"
+            alignItems="center"
+            gap={0.75}
+          >
+            {facts.map((fact) => (
+              <Chip
+                key={fact}
+                label={fact}
+                size="small"
+                variant="outlined"
+                sx={(theme) => ({
+                  height: 25,
+                  pointerEvents: "none",
+                  color: "text.secondary",
+                  borderColor: alpha(theme.palette.divider, 0.72),
+                  bgcolor: alpha(theme.palette.background.paper, 0.42),
+                  backdropFilter: "blur(8px)",
+                  WebkitBackdropFilter: "blur(8px)",
+                  "& .MuiChip-label": { px: 1, fontSize: "0.72rem" },
+                })}
+              />
+            ))}
+            {interactive && (
+              <Tune
+                aria-hidden
+                sx={{ fontSize: 16, color: "text.secondary", opacity: 0.78 }}
+              />
+            )}
+          </Stack>
+        </ButtonBase>
       )}
       {interactive && (
         <Typography variant="caption" sx={{ mt: 0.25, opacity: 0.72 }}>
