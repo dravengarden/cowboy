@@ -34,6 +34,25 @@
       };
       shared = shared-utils.lib.${system};
 
+      # Every Rust release source must carry the local Provider SDK path
+      # dependency. The Controller and Machine also compile the first-party
+      # manifests into their typed fallback Catalog, so keep those exact inputs
+      # in the narrow Rust closure without pulling release tooling or npm locks
+      # into component identities.
+      provider-sdk-files = [
+        ./crates/cowboy-provider-sdk/Cargo.toml
+        ./crates/cowboy-provider-sdk/src
+      ];
+      provider-manifest-files = [
+        ./providers/claude-code/provider.json
+        ./providers/claude-deepseek/provider.json
+        ./providers/codex/provider.json
+        ./providers/codex-deepseek/provider.json
+        ./providers/gemini/provider.json
+        ./providers/grok/provider.json
+      ];
+      provider-contract-files = provider-sdk-files ++ provider-manifest-files;
+
       # Backend and frontend are independent deployment artifacts. Keep this
       # closure explicit: docs, Web, native-shell, and operational edits must
       # not change the Rust package's store path and restart the API unit.
@@ -41,13 +60,13 @@
       # deliberately compile-check its wire tags.
       cowboy-src = pkgs.lib.fileset.toSource {
         root = ./.;
-        fileset = pkgs.lib.fileset.unions [
+        fileset = pkgs.lib.fileset.unions ([
           ./Cargo.toml
           ./Cargo.lock
           ./src
           ./migrations
           ./web/src/protocol.ts
-        ];
+        ] ++ provider-contract-files);
       };
 
       # Machine has a deliberately tiny source closure and is packaged
@@ -55,7 +74,7 @@
       # its ExecStart path unchanged.
       machine-src = pkgs.lib.fileset.toSource {
         root = ./.;
-        fileset = pkgs.lib.fileset.unions [
+        fileset = pkgs.lib.fileset.unions ([
           ./Cargo.toml
           ./Cargo.lock
           ./src/lib.rs
@@ -67,8 +86,10 @@
           ./src/machine_components.rs
           ./src/machine_install.rs
           ./src/machine_protocol.rs
+          ./src/machine_providers.rs
           ./src/provider/deepseek_cache.rs
           ./src/provider/deepseek_context.rs
+          ./src/provider_behavior.rs
           ./src/provider_usage_spool.rs
           ./src/provider_catalog.rs
           ./src/runtime_wire.rs
@@ -76,12 +97,12 @@
           ./src/workspace_roots.rs
           ./src/bin/cowboy-machine-install.rs
           ./src/bin/cowboy-machine.rs
-        ];
+        ] ++ provider-contract-files);
       };
 
       code-adapter-src = pkgs.lib.fileset.toSource {
         root = ./.;
-        fileset = pkgs.lib.fileset.unions [
+        fileset = pkgs.lib.fileset.unions ([
           ./Cargo.toml
           ./Cargo.lock
           ./src/lib.rs
@@ -90,7 +111,7 @@
           ./src/files.rs
           ./src/workspace_roots.rs
           ./src/bin/cowboy-code-adapter.rs
-        ];
+        ] ++ provider-sdk-files);
       };
 
       zed-adapter-src = pkgs.lib.cleanSource ./zed-adapter;
@@ -148,7 +169,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-i/wmYXy7XwFBqRWw4jyv6wKxDOL+3qjdegKZVqWQJKc=";
+        hash = "sha256-deASiS6/p15u+k+c2s7I5kauhkJ7CeABRWxnY29g5E4=";
         preBuild = ''
           vendor_util="$(command -v fetch-cargo-vendor-util-v2 || command -v fetch-cargo-vendor-util)"
           if grep -q "https://crates.io/api/v1/crates/" "$vendor_util"; then
@@ -355,9 +376,19 @@
         test ! -e ${cowboy-src}/docs
         test ! -e ${cowboy-src}/web/public
         test -e ${cowboy-src}/web/src/protocol.ts
+        test -e ${cowboy-src}/crates/cowboy-provider-sdk/Cargo.toml
+        test -e ${cowboy-src}/providers/codex/provider.json
+        test ! -e ${cowboy-src}/providers/runtime-lock.json
+        test -e ${machine-src}/crates/cowboy-provider-sdk/Cargo.toml
+        test -e ${machine-src}/providers/gemini/provider.json
+        test ! -e ${machine-src}/providers/runtime-lock.json
+        test -e ${code-adapter-src}/crates/cowboy-provider-sdk/Cargo.toml
+        test ! -e ${code-adapter-src}/providers
         test -e ${machine-src}/src/provider/deepseek_cache.rs
         test -e ${machine-src}/src/grok.rs
         test -e ${machine-src}/src/provider/deepseek_context.rs
+        test -e ${machine-src}/src/machine_providers.rs
+        test -e ${machine-src}/src/provider_behavior.rs
         test -e ${machine-src}/src/provider_catalog.rs
         test -e ${machine-src}/src/provider_usage_spool.rs
         test -e ${machine-src}/src/session_workspace.rs
