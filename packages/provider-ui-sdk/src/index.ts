@@ -7,8 +7,12 @@
  */
 
 export const PROVIDER_PACKAGE_SCHEMA_VERSION = 2 as const;
+export const PROVIDER_RELEASE_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_UI_SCHEMA_MIN_VERSION = 1 as const;
 export const PROVIDER_UI_SCHEMA_VERSION = 2 as const;
+export const PROVIDER_HOST_SCHEMA_MIN_VERSION = 1 as const;
+export const PROVIDER_HOST_SCHEMA_VERSION = 2 as const;
+export const PROVIDER_MACHINE_CONTRACT_VERSION = 4 as const;
 export const PROVIDER_SDK_VERSION = "2.4.0" as const;
 
 export type SurfaceSlot =
@@ -474,6 +478,41 @@ export interface ProviderCatalogEntry {
     architecture: "x86_64" | "aarch64";
   }>;
   manifest: ProviderUiManifest;
+}
+
+export interface ProviderContractInventory {
+  provider_sdk_version: string;
+  min_package_schema: number;
+  max_package_schema: number;
+  min_release_schema: number;
+  max_release_schema: number;
+  min_ui_schema: number;
+  max_ui_schema: number;
+  min_host_schema: number;
+  max_host_schema: number;
+  machine_contract: number;
+}
+
+export type ProviderCompatibilityCode =
+  | "capability_inventory_unavailable"
+  | "capability_inventory_invalid"
+  | "provider_sdk_unsupported"
+  | "package_schema_unsupported"
+  | "release_schema_unsupported"
+  | "ui_schema_unsupported"
+  | "host_schema_unsupported"
+  | "machine_contract_unsupported"
+  | "platform_unsupported";
+
+export interface ProviderCompatibilityProblem {
+  code: ProviderCompatibilityCode;
+  detail: string;
+}
+
+export interface ProviderCompatibilityTarget {
+  platform: "linux" | "macos";
+  architecture: "x86_64" | "aarch64";
+  provider_contracts?: ProviderContractInventory;
 }
 
 export interface ProviderAuthenticationStatus {
@@ -2263,6 +2302,152 @@ export function compareProviderVersions(left: string, right: string): number {
     return leftPart < rightPart ? -1 : 1;
   }
   return 0;
+}
+
+export function validateProviderContractInventory(
+  input: unknown,
+): ProviderContractInventory {
+  const interval = (minimum: unknown, maximum: unknown): boolean =>
+    typeof minimum === "number" && Number.isSafeInteger(minimum) &&
+    typeof maximum === "number" && Number.isSafeInteger(maximum) &&
+    minimum > 0 && minimum <= maximum;
+  if (
+    !isRecord(input) ||
+    !hasOnlyKeys(input, [
+      "provider_sdk_version",
+      "min_package_schema",
+      "max_package_schema",
+      "min_release_schema",
+      "max_release_schema",
+      "min_ui_schema",
+      "max_ui_schema",
+      "min_host_schema",
+      "max_host_schema",
+      "machine_contract",
+    ]) ||
+    typeof input.provider_sdk_version !== "string" ||
+    !parseSemanticVersion(input.provider_sdk_version) ||
+    !interval(input.min_package_schema, input.max_package_schema) ||
+    !interval(input.min_release_schema, input.max_release_schema) ||
+    !interval(input.min_ui_schema, input.max_ui_schema) ||
+    !interval(input.min_host_schema, input.max_host_schema) ||
+    typeof input.machine_contract !== "number" ||
+    !Number.isSafeInteger(input.machine_contract) ||
+    input.machine_contract < 1
+  ) {
+    throw new Error("Invalid Machine Provider capability inventory");
+  }
+  return input as unknown as ProviderContractInventory;
+}
+
+export function providerCompatibilityProblem(
+  entry: ProviderCatalogEntry,
+  target: ProviderCompatibilityTarget,
+): ProviderCompatibilityProblem | undefined {
+  if (target.provider_contracts === undefined) {
+    return {
+      code: "capability_inventory_unavailable",
+      detail:
+        "This Cowboy Machine predates Provider compatibility negotiation. Update Cowboy Machine before installing or upgrading Providers.",
+    };
+  }
+  let inventory: ProviderContractInventory;
+  try {
+    inventory = validateProviderContractInventory(target.provider_contracts);
+  } catch {
+    return {
+      code: "capability_inventory_invalid",
+      detail:
+        "Cowboy Machine reported an invalid Provider capability inventory. Update Cowboy Machine before installing or upgrading Providers.",
+    };
+  }
+  const display = entry.manifest.display.name;
+  const version = entry.provider_version;
+  const update = (requirement: string): string =>
+    `${display} ${version} requires ${requirement}. Update Cowboy Machine before installing or upgrading this Provider.`;
+  if (
+    PROVIDER_PACKAGE_SCHEMA_VERSION < inventory.min_package_schema ||
+    PROVIDER_PACKAGE_SCHEMA_VERSION > inventory.max_package_schema
+  ) {
+    return {
+      code: "package_schema_unsupported",
+      detail: update(
+        `Provider package schema ${PROVIDER_PACKAGE_SCHEMA_VERSION}`,
+      ),
+    };
+  }
+  if (
+    PROVIDER_RELEASE_SCHEMA_VERSION < inventory.min_release_schema ||
+    PROVIDER_RELEASE_SCHEMA_VERSION > inventory.max_release_schema
+  ) {
+    return {
+      code: "release_schema_unsupported",
+      detail: update(
+        `Provider release schema ${PROVIDER_RELEASE_SCHEMA_VERSION}`,
+      ),
+    };
+  }
+  const providerSdk = parseSemanticVersion(entry.manifest.sdk_version);
+  const machineSdk = parseSemanticVersion(inventory.provider_sdk_version);
+  if (
+    providerSdk === null || machineSdk === null ||
+    providerSdk.major !== machineSdk.major ||
+    compareProviderVersions(
+        entry.manifest.sdk_version,
+        inventory.provider_sdk_version,
+      ) > 0
+  ) {
+    return {
+      code: "provider_sdk_unsupported",
+      detail: update(`Cowboy Provider SDK ${entry.manifest.sdk_version}`),
+    };
+  }
+  if (
+    entry.manifest.ui.schema_version < inventory.min_ui_schema ||
+    entry.manifest.ui.schema_version > inventory.max_ui_schema
+  ) {
+    return {
+      code: "ui_schema_unsupported",
+      detail: update(`Provider UI schema ${entry.manifest.ui.schema_version}`),
+    };
+  }
+  if (
+    entry.manifest.host.schema_version < inventory.min_host_schema ||
+    entry.manifest.host.schema_version > inventory.max_host_schema
+  ) {
+    return {
+      code: "host_schema_unsupported",
+      detail: update(
+        `Provider host integration schema ${entry.manifest.host.schema_version}`,
+      ),
+    };
+  }
+  if (
+    inventory.machine_contract <
+      entry.manifest.compatibility.min_machine_contract ||
+    inventory.machine_contract >
+      entry.manifest.compatibility.max_machine_contract
+  ) {
+    return {
+      code: "machine_contract_unsupported",
+      detail: update(
+        `Machine Provider contract ${entry.manifest.compatibility.min_machine_contract}`,
+      ),
+    };
+  }
+  if (
+    !entry.supported_platforms.some((candidate) =>
+      candidate.os === target.platform &&
+      candidate.architecture === target.architecture
+    )
+  ) {
+    return {
+      code: "platform_unsupported",
+      detail:
+        `${display} ${version} is not published for this Cowboy Machine platform.`,
+    };
+  }
+  return undefined;
 }
 
 function parseSemanticVersion(value: string): SemanticVersion | null {

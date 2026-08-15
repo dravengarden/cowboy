@@ -783,6 +783,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
         components: collect_inventory(&config.components, config.zed_adapter_socket.as_deref())
             .await,
         providers: config.providers.inventory()?,
+        provider_contracts: Some(cowboy_provider_sdk::ProviderContractInventory::current_machine()),
         workspaces: workspace_snapshot.workspaces,
         workspace_revision: workspace_snapshot.revision,
         capacity: config.capacity.clone(),

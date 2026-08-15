@@ -20,6 +20,11 @@ Deno.test("Provider lifecycle cards stay collapsed behind a compact summary", ()
   assertEquals(managementSource.includes("borderTop:"), false);
 });
 
+Deno.test("incompatible Provider lifecycle actions are omitted instead of looking actionable", () => {
+  assertEquals(surfaceSource.includes("if (blocked) return null;"), true);
+  assertEquals(surfaceSource.includes("disabled={busy || blocked"), false);
+});
+
 Deno.test("Provider management cards keep geometry in the Cowboy component library", () => {
   assertEquals(
     managementSource.includes("data-provider-management-identity"),

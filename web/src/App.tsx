@@ -147,6 +147,7 @@ import {
 } from "./ProviderManagement";
 import {
     type MachineProviderInventory,
+    type ProviderContractInventory,
     validateMachineProviderInventory,
 } from "../../packages/provider-ui-sdk/src/index.ts";
 import {
@@ -1289,8 +1290,9 @@ type WorkspaceChoice = {
 type MachineChoice = {
     id: string;
     display_name: string;
-    platform: string;
-    architecture: string;
+    platform: "linux" | "macos";
+    architecture: "x86_64" | "aarch64";
+    provider_contracts?: ProviderContractInventory;
     status: MachinePresence;
     local: boolean;
     schedulable: boolean;

@@ -3,6 +3,9 @@ import {
   type MachineProviderInventory,
   type ProviderCatalogEntry,
   type ProviderCatalogResponse,
+  type ProviderCompatibilityProblem,
+  providerCompatibilityProblem,
+  type ProviderCompatibilityTarget,
   validateProviderCatalog,
 } from "../../packages/provider-ui-sdk/src/index.ts";
 
@@ -65,6 +68,27 @@ export function latestProviderEntries(
     }
   }
   return [...latest.values()].sort((left, right) =>
+    left.manifest.display.name.localeCompare(right.manifest.display.name)
+  );
+}
+
+export function latestCompatibleProviderEntries(
+  entries: readonly ProviderCatalogEntry[],
+  target: ProviderCompatibilityTarget,
+): ProviderCatalogEntry[] {
+  const compatible = entries.filter((entry) =>
+    providerCompatibilityProblem(entry, target) === undefined
+  );
+  const ready = latestProviderEntries(
+    compatible.filter((entry) => entry.release_state === "ready"),
+  );
+  const readyIds = new Set(ready.map((entry) => entry.provider_id));
+  return [
+    ...ready,
+    ...latestProviderEntries(
+      compatible.filter((entry) => !readyIds.has(entry.provider_id)),
+    ),
+  ].sort((left, right) =>
     left.manifest.display.name.localeCompare(right.manifest.display.name)
   );
 }
@@ -154,6 +178,8 @@ export function currentProviderEntry(
 export interface ProviderInstallationCatalogJoin {
   providerId: string;
   latestEntry: ProviderCatalogEntry | undefined;
+  latestCompatibleEntry: ProviderCatalogEntry | undefined;
+  latestCompatibility: ProviderCompatibilityProblem | undefined;
   installed: MachineProviderInventory | undefined;
   installedEntry: ProviderCatalogEntry | undefined;
 }
@@ -164,9 +190,18 @@ export interface ProviderInstallationCatalogJoin {
 export function joinProviderInstallations(
   entries: readonly ProviderCatalogEntry[],
   inventory: readonly MachineProviderInventory[],
+  target?: ProviderCompatibilityTarget,
 ): ProviderInstallationCatalogJoin[] {
   const latest = new Map(
     latestProviderEntries(entries).map((entry) => [entry.provider_id, entry]),
+  );
+  const latestCompatible = new Map(
+    (target
+      ? latestCompatibleProviderEntries(entries, target)
+      : latestProviderEntries(entries)).map((entry) => [
+        entry.provider_id,
+        entry,
+      ]),
   );
   const installed = new Map(
     inventory
@@ -188,6 +223,10 @@ export function joinProviderInstallations(
       return {
         providerId,
         latestEntry: latest.get(providerId),
+        latestCompatibleEntry: latestCompatible.get(providerId),
+        latestCompatibility: target && latest.get(providerId)
+          ? providerCompatibilityProblem(latest.get(providerId)!, target)
+          : undefined,
         installed: installedProvider,
         installedEntry,
       };

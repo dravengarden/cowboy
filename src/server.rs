@@ -2786,6 +2786,7 @@ struct MachineSummary {
     workspaces: Vec<crate::machine_protocol::MachineWorkspace>,
     workspace_revision: Option<String>,
     components: Vec<crate::machine_protocol::ComponentInventory>,
+    provider_contracts: Option<cowboy_provider_sdk::ProviderContractInventory>,
     capacity: crate::machine_protocol::MachineCapacity,
     active_sessions: u32,
     pending_updates: Vec<crate::machine_protocol::ComponentId>,
@@ -2823,6 +2824,11 @@ async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
                             .cloned()
                             .and_then(|value| serde_json::from_value(value).ok())
                             .unwrap_or_default();
+                        let provider_contracts = machine
+                            .inventory
+                            .get("provider_contracts")
+                            .cloned()
+                            .and_then(|value| serde_json::from_value(value).ok());
                         let live_sessions: Vec<_> = state
                             .hub
                             .session_list()
@@ -2911,6 +2917,7 @@ async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
                             workspaces,
                             workspace_revision,
                             components,
+                            provider_contracts,
                             capacity,
                             active_sessions,
                             pending_updates,
@@ -3153,6 +3160,69 @@ struct ProviderInstallRequest {
     digest: Option<String>,
 }
 
+async fn provider_install_compatibility(
+    state: &AppState,
+    machine_id: &str,
+    desired: &crate::machine_protocol::DesiredProvider,
+) -> Result<Option<cowboy_provider_sdk::ProviderCompatibilityProblem>, String> {
+    let store = state
+        .store
+        .as_ref()
+        .ok_or_else(|| "Provider lifecycle requires persistence".to_owned())?;
+    let machine = store
+        .list_machines()
+        .await
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|machine| machine.id == machine_id && !machine.revoked)
+        .ok_or_else(|| format!("unknown or revoked Machine {machine_id:?}"))?;
+    let Some(raw_contracts) = machine.inventory.get("provider_contracts").cloned() else {
+        return Ok(Some(
+            cowboy_provider_sdk::ProviderCompatibilityProblem::capability_inventory_unavailable(),
+        ));
+    };
+    let contracts = match serde_json::from_value::<cowboy_provider_sdk::ProviderContractInventory>(
+        raw_contracts,
+    ) {
+        Ok(contracts) => contracts,
+        Err(_) => {
+            return Ok(Some(
+                cowboy_provider_sdk::ProviderCompatibilityProblem::new(
+                    cowboy_provider_sdk::ProviderCompatibilityCode::CapabilityInventoryInvalid,
+                    "Cowboy Machine reported an invalid Provider capability inventory. Update Cowboy Machine before installing or upgrading Providers.",
+                ),
+            ));
+        }
+    };
+    let target = serde_json::from_value::<cowboy_provider_sdk::PlatformTarget>(serde_json::json!({
+        "os": machine.platform,
+        "architecture": machine.architecture,
+    }))
+    .map_err(|error| format!("Machine Provider platform is invalid: {error}"))?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&desired.package_base64)
+        .map_err(|error| format!("Catalog Provider package is invalid: {error}"))?;
+    let package = desired
+        .release
+        .validate_bytes(&bytes)
+        .map_err(|error| format!("Catalog Provider release is invalid: {error}"))?;
+    Ok(contracts.compatibility_problem(&package, &desired.release, &target))
+}
+
+fn provider_compatibility_response(
+    problem: cowboy_provider_sdk::ProviderCompatibilityProblem,
+) -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(serde_json::json!({
+            "error": "provider_incompatible",
+            "code": problem.code,
+            "detail": problem.detail,
+        })),
+    )
+        .into_response()
+}
+
 async fn api_machine_provider_install(
     State(state): State<Arc<AppState>>,
     Path((machine_id, provider_id)): Path<(String, String)>,
@@ -3166,6 +3236,11 @@ async fn api_machine_provider_install(
         Ok(desired) => desired,
         Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
     };
+    match provider_install_compatibility(&state, &machine_id, &desired).await {
+        Ok(None) => {}
+        Ok(Some(problem)) => return provider_compatibility_response(problem),
+        Err(error) => return (StatusCode::CONFLICT, error).into_response(),
+    }
     let fence = (machine_id.clone(), provider_id.clone());
     let previous_fence = {
         let mut fences = state.provider_session_fences.write();
@@ -4354,6 +4429,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     let inventory = serde_json::json!({
         "components": &hello.components,
         "providers": &hello.providers,
+        "provider_contracts": &hello.provider_contracts,
         "workspaces": &hello.workspaces,
         "workspace_revision": &hello.workspace_revision,
         "capacity": &hello.capacity,
@@ -4584,6 +4660,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                 let inventory = serde_json::json!({
                     "components": &current_components,
                     "providers": &current_providers,
+                    "provider_contracts": &hello.provider_contracts,
                     "workspaces": &current_workspaces,
                     "workspace_revision": &current_workspace_revision,
                     "capacity": &hello.capacity,
@@ -4610,6 +4687,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                 let inventory = serde_json::json!({
                     "components": &current_components,
                     "providers": &current_providers,
+                    "provider_contracts": &hello.provider_contracts,
                     "workspaces": &current_workspaces,
                     "workspace_revision": &current_workspace_revision,
                     "capacity": &hello.capacity,

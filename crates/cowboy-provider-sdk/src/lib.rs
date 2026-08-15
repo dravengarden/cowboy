@@ -19,6 +19,8 @@ pub const PACKAGE_SCHEMA_VERSION: u16 = 2;
 pub const PROVIDER_SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const UI_SCHEMA_MIN_VERSION: u16 = 1;
 pub const UI_SCHEMA_VERSION: u16 = 2;
+pub const HOST_SCHEMA_MIN_VERSION: u16 = 1;
+pub const HOST_SCHEMA_VERSION: u16 = 2;
 pub const LOGIC_SCHEMA_VERSION: u16 = 1;
 pub const AUTH_SCHEMA_VERSION: u16 = 1;
 pub const CONTROLLER_CONTRACT_VERSION: u16 = 2;
@@ -1163,6 +1165,223 @@ pub struct PlatformTarget {
     pub architecture: Architecture,
 }
 
+/// Exact Provider contract inventory advertised by one Cowboy Machine.
+///
+/// This is a signed rolling-upgrade capability, not a best-effort version
+/// label. Controllers use it before sending package bytes and Machines still
+/// repeat full package validation before activation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderContractInventory {
+    pub provider_sdk_version: String,
+    pub min_package_schema: u16,
+    pub max_package_schema: u16,
+    pub min_release_schema: u16,
+    pub max_release_schema: u16,
+    pub min_ui_schema: u16,
+    pub max_ui_schema: u16,
+    pub min_host_schema: u16,
+    pub max_host_schema: u16,
+    pub machine_contract: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderCompatibilityCode {
+    CapabilityInventoryUnavailable,
+    CapabilityInventoryInvalid,
+    ProviderSdkUnsupported,
+    PackageSchemaUnsupported,
+    ReleaseSchemaUnsupported,
+    UiSchemaUnsupported,
+    HostSchemaUnsupported,
+    MachineContractUnsupported,
+    PlatformUnsupported,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderCompatibilityProblem {
+    pub code: ProviderCompatibilityCode,
+    pub detail: String,
+}
+
+impl ProviderCompatibilityProblem {
+    #[must_use]
+    pub fn capability_inventory_unavailable() -> Self {
+        Self {
+            code: ProviderCompatibilityCode::CapabilityInventoryUnavailable,
+            detail: "This Cowboy Machine predates Provider compatibility negotiation. Update Cowboy Machine before installing or upgrading Providers."
+                .to_owned(),
+        }
+    }
+
+    #[must_use]
+    pub fn new(code: ProviderCompatibilityCode, detail: impl Into<String>) -> Self {
+        Self {
+            code,
+            detail: detail.into(),
+        }
+    }
+}
+
+impl ProviderContractInventory {
+    #[must_use]
+    pub fn current_machine() -> Self {
+        Self {
+            provider_sdk_version: PROVIDER_SDK_VERSION.to_owned(),
+            min_package_schema: PACKAGE_SCHEMA_VERSION,
+            max_package_schema: PACKAGE_SCHEMA_VERSION,
+            min_release_schema: RELEASE_SCHEMA_VERSION,
+            max_release_schema: RELEASE_SCHEMA_VERSION,
+            min_ui_schema: UI_SCHEMA_MIN_VERSION,
+            max_ui_schema: UI_SCHEMA_VERSION,
+            min_host_schema: HOST_SCHEMA_MIN_VERSION,
+            max_host_schema: HOST_SCHEMA_VERSION,
+            machine_contract: MACHINE_CONTRACT_VERSION,
+        }
+    }
+
+    /// Validate one advertised Machine capability envelope.
+    ///
+    /// # Errors
+    /// Returns when a version is malformed or a supported interval is empty.
+    pub fn validate(&self) -> Result<()> {
+        validate_semantic_version(&self.provider_sdk_version, "Machine Provider SDK version")?;
+        for (label, minimum, maximum) in [
+            (
+                "Provider package schema",
+                self.min_package_schema,
+                self.max_package_schema,
+            ),
+            (
+                "Provider release schema",
+                self.min_release_schema,
+                self.max_release_schema,
+            ),
+            ("Provider UI schema", self.min_ui_schema, self.max_ui_schema),
+            (
+                "Provider host integration schema",
+                self.min_host_schema,
+                self.max_host_schema,
+            ),
+        ] {
+            ensure!(
+                minimum > 0 && minimum <= maximum,
+                "invalid {label} interval"
+            );
+        }
+        ensure!(
+            self.machine_contract > 0,
+            "invalid Machine Provider contract"
+        );
+        Ok(())
+    }
+
+    /// Return a typed incompatibility before a Controller sends this release
+    /// to a Machine. The Machine remains the final trust boundary and repeats
+    /// complete validation on the downloaded bytes.
+    #[must_use]
+    pub fn compatibility_problem(
+        &self,
+        package: &ProviderPackage,
+        release: &ProviderRelease,
+        target: &PlatformTarget,
+    ) -> Option<ProviderCompatibilityProblem> {
+        if let Err(error) = self.validate() {
+            return Some(ProviderCompatibilityProblem::new(
+                ProviderCompatibilityCode::CapabilityInventoryInvalid,
+                format!(
+                    "Cowboy Machine reported an invalid Provider capability inventory: {error}"
+                ),
+            ));
+        }
+        let display = &package.manifest.display.name;
+        let version = &package.manifest.version;
+        let update = |requirement: &str| {
+            format!(
+                "{display} {version} requires {requirement}. Update Cowboy Machine before installing or upgrading this Provider."
+            )
+        };
+        if !(self.min_package_schema..=self.max_package_schema).contains(&package.package_schema) {
+            return Some(ProviderCompatibilityProblem::new(
+                ProviderCompatibilityCode::PackageSchemaUnsupported,
+                update(&format!(
+                    "Provider package schema {}",
+                    package.package_schema
+                )),
+            ));
+        }
+        if !(self.min_release_schema..=self.max_release_schema).contains(&release.release_schema) {
+            return Some(ProviderCompatibilityProblem::new(
+                ProviderCompatibilityCode::ReleaseSchemaUnsupported,
+                update(&format!(
+                    "Provider release schema {}",
+                    release.release_schema
+                )),
+            ));
+        }
+        let Ok(provider_sdk) = semver::Version::parse(&package.manifest.sdk_version) else {
+            return Some(ProviderCompatibilityProblem::new(
+                ProviderCompatibilityCode::ProviderSdkUnsupported,
+                update("a valid Cowboy Provider SDK version"),
+            ));
+        };
+        let Ok(machine_sdk) = semver::Version::parse(&self.provider_sdk_version) else {
+            return Some(ProviderCompatibilityProblem::new(
+                ProviderCompatibilityCode::CapabilityInventoryInvalid,
+                "Cowboy Machine reported an invalid Provider capability inventory. Update Cowboy Machine before installing or upgrading Providers.",
+            ));
+        };
+        if provider_sdk.major != machine_sdk.major || provider_sdk > machine_sdk {
+            return Some(ProviderCompatibilityProblem::new(
+                ProviderCompatibilityCode::ProviderSdkUnsupported,
+                update(&format!("Cowboy Provider SDK {provider_sdk}")),
+            ));
+        }
+        if !(self.min_ui_schema..=self.max_ui_schema).contains(&package.manifest.ui.schema_version)
+        {
+            return Some(ProviderCompatibilityProblem::new(
+                ProviderCompatibilityCode::UiSchemaUnsupported,
+                update(&format!(
+                    "Provider UI schema {}",
+                    package.manifest.ui.schema_version
+                )),
+            ));
+        }
+        if !(self.min_host_schema..=self.max_host_schema)
+            .contains(&package.manifest.host.schema_version)
+        {
+            return Some(ProviderCompatibilityProblem::new(
+                ProviderCompatibilityCode::HostSchemaUnsupported,
+                update(&format!(
+                    "Provider host integration schema {}",
+                    package.manifest.host.schema_version
+                )),
+            ));
+        }
+        if !(package.manifest.compatibility.min_machine_contract
+            ..=package.manifest.compatibility.max_machine_contract)
+            .contains(&self.machine_contract)
+        {
+            return Some(ProviderCompatibilityProblem::new(
+                ProviderCompatibilityCode::MachineContractUnsupported,
+                update(&format!(
+                    "Machine Provider contract {}",
+                    package.manifest.compatibility.min_machine_contract
+                )),
+            ));
+        }
+        if !release.supported_platforms.contains(target) {
+            return Some(ProviderCompatibilityProblem::new(
+                ProviderCompatibilityCode::PlatformUnsupported,
+                format!("{display} {version} is not published for this Cowboy Machine platform."),
+            ));
+        }
+        None
+    }
+}
+
 impl ProviderPackage {
     /// Parse and validate one canonical Provider artifact.
     ///
@@ -1369,7 +1588,7 @@ impl ConfigurationUiContract {
 impl HostIntegrationContract {
     fn validate(&self) -> Result<()> {
         ensure!(
-            matches!(self.schema_version, 1 | 2),
+            (HOST_SCHEMA_MIN_VERSION..=HOST_SCHEMA_VERSION).contains(&self.schema_version),
             "unsupported host integration schema"
         );
         match self.schema_version {
@@ -3690,6 +3909,27 @@ mod tests {
     }
 
     #[test]
+    fn grok_mark_has_a_safe_rendering_margin() {
+        let source: StandardProviderSource =
+            serde_json::from_str(include_str!("../../../providers/grok/provider.json")).unwrap();
+        let package = build_package(source.compile().unwrap()).unwrap();
+        assert_eq!(package.manifest.version, "1.1.2");
+        for role in [AssetRole::Logo, AssetRole::Icon] {
+            let asset = package
+                .manifest
+                .ui
+                .assets
+                .iter()
+                .find(|asset| asset.role == role)
+                .unwrap();
+            let AssetContent::VectorPath { view_box, .. } = &asset.content else {
+                panic!("Grok mark must remain a vector path");
+            };
+            assert_eq!(view_box, "-2 -2 28 28");
+        }
+    }
+
+    #[test]
     fn provider_owns_configuration_and_tool_ui_policy() {
         let source: StandardProviderSource = serde_json::from_str(include_str!(
             "../../../providers/claude-deepseek/provider.json"
@@ -4018,5 +4258,49 @@ mod tests {
         };
         release.artifact_digest = release.computed_artifact_digest().unwrap();
         release
+    }
+
+    #[test]
+    fn machine_contract_inventory_rejects_new_host_schema_before_install() {
+        let package = first_party_package("../../../providers/gemini/provider.json");
+        let bytes = package.canonical_bytes().unwrap();
+        let release = complete_release(&package, &bytes);
+        let target = release.supported_platforms[0].clone();
+        let current = ProviderContractInventory::current_machine();
+        assert_eq!(
+            current.compatibility_problem(&package, &release, &target),
+            None
+        );
+
+        let mut host_schema_one = current.clone();
+        host_schema_one.max_host_schema = 1;
+        let problem = host_schema_one
+            .compatibility_problem(&package, &release, &target)
+            .unwrap();
+        assert_eq!(
+            problem.code,
+            ProviderCompatibilityCode::HostSchemaUnsupported
+        );
+        assert!(problem.detail.contains("host integration schema 2"));
+
+        let mut legacy_package = package.clone();
+        legacy_package.manifest.host.schema_version = 1;
+        legacy_package.manifest.host.transcript = None;
+        assert_eq!(
+            host_schema_one.compatibility_problem(&legacy_package, &release, &target),
+            None
+        );
+    }
+
+    #[test]
+    fn machine_contract_inventory_is_closed_and_validated() {
+        let mut inventory = ProviderContractInventory::current_machine();
+        inventory.min_host_schema = 3;
+        inventory.max_host_schema = 2;
+        assert!(inventory.validate().is_err());
+
+        let mut value = serde_json::to_value(ProviderContractInventory::current_machine()).unwrap();
+        value["future_schema"] = serde_json::json!(3);
+        assert!(serde_json::from_value::<ProviderContractInventory>(value).is_err());
     }
 }

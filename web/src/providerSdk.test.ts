@@ -4,18 +4,22 @@ import {
   evaluateExpression,
   initialProviderState,
   type ProviderCatalogEntry,
+  providerCompatibilityProblem,
+  type ProviderContractInventory,
   type ProviderHostContext,
   type ProviderManifest,
   type ProviderUiManifest,
   transitionProvider,
   validateMachineProviderInventory,
   validateProviderCatalog,
+  validateProviderContractInventory,
   validateProviderManifest,
   validateProviderUiManifest,
 } from "../../packages/provider-ui-sdk/src/index.ts";
 import {
   exactProviderEntry,
   joinProviderInstallations,
+  latestCompatibleProviderEntries,
   providerEntryForIdentity,
   providerPresentationEntry,
 } from "./providerCatalogRegistry.ts";
@@ -681,6 +685,118 @@ Deno.test("Machine Provider UI resolves the exact installed package", () => {
   const orphaned = joinProviderInstallations([], [orphan]);
   assertEquals(orphaned[0]?.providerId, "orphaned-provider");
   assertEquals(orphaned[0]?.latestEntry, undefined);
+});
+
+Deno.test("Machine Provider capabilities select the newest compatible release", () => {
+  const legacyManifest = uiManifest();
+  legacyManifest.host.schema_version = 1;
+  const legacy: ProviderCatalogEntry = {
+    provider_id: legacyManifest.id,
+    provider_version: legacyManifest.version,
+    package_digest: `sha256:${"1".repeat(64)}`,
+    artifact_digest: `sha256:${"2".repeat(64)}`,
+    authentication_scope: "none-v1",
+    release_state: "ready",
+    publisher: legacyManifest.publisher,
+    contract_fingerprint: `sha256:${"3".repeat(64)}`,
+    supported_platforms: [{ os: "linux", architecture: "x86_64" }],
+    manifest: legacyManifest,
+  };
+  const currentManifest = uiManifest();
+  currentManifest.version = "2.0.0";
+  currentManifest.host.schema_version = 2;
+  currentManifest.host.transcript = {
+    schema_version: 1,
+    thought: {
+      variant: "workcell",
+      density: "comfortable",
+      active_label: "Thinking",
+      current_surface: "soft",
+    },
+  };
+  const current: ProviderCatalogEntry = {
+    ...legacy,
+    provider_version: currentManifest.version,
+    package_digest: `sha256:${"4".repeat(64)}`,
+    artifact_digest: `sha256:${"5".repeat(64)}`,
+    manifest: currentManifest,
+  };
+  const legacyMachine: ProviderContractInventory = {
+    provider_sdk_version: "2.4.0",
+    min_package_schema: 1,
+    max_package_schema: 2,
+    min_release_schema: 1,
+    max_release_schema: 2,
+    min_ui_schema: 1,
+    max_ui_schema: 2,
+    min_host_schema: 1,
+    max_host_schema: 1,
+    machine_contract: 4,
+  };
+  const target = {
+    platform: "linux" as const,
+    architecture: "x86_64" as const,
+    provider_contracts: legacyMachine,
+  };
+  assertEquals(latestCompatibleProviderEntries([current, legacy], target), [
+    legacy,
+  ]);
+  assertEquals(
+    providerCompatibilityProblem(current, target)?.code,
+    "host_schema_unsupported",
+  );
+  const [joined] = joinProviderInstallations([current, legacy], [], target);
+  assertEquals(joined?.latestEntry, current);
+  assertEquals(joined?.latestCompatibleEntry, legacy);
+  assertEquals(joined?.latestCompatibility?.code, "host_schema_unsupported");
+
+  const unpublishedCurrent = {
+    ...current,
+    release_state: "unbound" as const,
+    artifact_digest: null,
+  };
+  const [readyFallback] = latestCompatibleProviderEntries(
+    [unpublishedCurrent, legacy],
+    { ...target, provider_contracts: { ...legacyMachine, max_host_schema: 2 } },
+  );
+  assertEquals(readyFallback, legacy);
+
+  const currentMachine = { ...legacyMachine, max_host_schema: 2 };
+  assertEquals(
+    latestCompatibleProviderEntries([current, legacy], {
+      ...target,
+      provider_contracts: currentMachine,
+    }),
+    [current],
+  );
+  assertEquals(
+    providerCompatibilityProblem(current, {
+      platform: "linux",
+      architecture: "x86_64",
+    })?.code,
+    "capability_inventory_unavailable",
+  );
+});
+
+Deno.test("Machine Provider capability inventories reject unknown fields", () => {
+  assertThrows(
+    () =>
+      validateProviderContractInventory({
+        provider_sdk_version: "2.4.0",
+        min_package_schema: 1,
+        max_package_schema: 2,
+        min_release_schema: 1,
+        max_release_schema: 2,
+        min_ui_schema: 1,
+        max_ui_schema: 2,
+        min_host_schema: 1,
+        max_host_schema: 2,
+        machine_contract: 4,
+        future_field: true,
+      }),
+    Error,
+    "Invalid Machine Provider capability inventory",
+  );
 });
 
 Deno.test("Provider SDK rejects unknown behavior profiles and unsafe retry rules", () => {

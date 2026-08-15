@@ -24,6 +24,7 @@ import {
   type ProviderAuthenticationPresentation,
   type ProviderAuthenticationStatus,
   type ProviderCatalogEntry,
+  type ProviderContractInventory,
   type ProviderHostContext,
   type ProviderUiManifest,
   resolveProviderAuthenticationPresentation,
@@ -40,8 +41,11 @@ import { ProviderMark, ProviderSurface } from "./ProviderSurface";
 interface ProviderMachine {
   id: string;
   display_name: string;
+  platform: "linux" | "macos";
+  architecture: "x86_64" | "aarch64";
   status: string;
   schedulable: boolean;
+  provider_contracts?: ProviderContractInventory;
 }
 
 interface AffectedSession {
@@ -296,14 +300,22 @@ function ProviderManagement(
   const providerRows = useMemo(
     () =>
       scope === "machine"
-        ? joinProviderInstallations(catalog?.providers ?? [], inventory)
+        ? joinProviderInstallations(catalog?.providers ?? [], inventory, {
+          platform: machine.platform,
+          architecture: machine.architecture,
+          ...(machine.provider_contracts
+            ? { provider_contracts: machine.provider_contracts }
+            : {}),
+        })
         : latestEntries.map((latestEntry) => ({
           providerId: latestEntry.provider_id,
           latestEntry,
+          latestCompatibleEntry: latestEntry,
+          latestCompatibility: undefined,
           installed: undefined,
           installedEntry: undefined,
         })),
-    [catalog, inventory, latestEntries, scope],
+    [catalog, inventory, latestEntries, machine, scope],
   );
   const authentications = useMemo(
     () =>
@@ -689,7 +701,12 @@ function ProviderManagement(
                   ).length > 1,
                 )
                   : "no sign-in"
-                : providerInstallationSummary(row.installed, row.latestEntry);
+                : providerInstallationSummary(
+                  row.installed,
+                  row.latestCompatibleEntry,
+                  row.latestEntry,
+                  row.latestCompatibility?.detail,
+                );
               const healthy = scope === "service"
                 ? !entry.manifest.authentication.required ||
                   auth?.authentication_state === "ready"
@@ -741,12 +758,21 @@ function ProviderManagement(
         }}
       >
         {providerRows.map((row) => {
-          const { providerId, latestEntry, installed, installedEntry } = row;
+          const {
+            providerId,
+            latestEntry,
+            latestCompatibleEntry,
+            latestCompatibility,
+            installed,
+            installedEntry,
+          } = row;
           if (scope === "machine" && installed && !installedEntry) {
             const operationError = errors[providerId];
-            const canUpgrade = latestEntry?.release_state === "ready" &&
-              latestEntry.artifact_digest !== null &&
-              latestEntry.artifact_digest !== installed.generation_digest;
+            const canUpgrade =
+              latestCompatibleEntry?.release_state === "ready" &&
+              latestCompatibleEntry.artifact_digest !== null &&
+              latestCompatibleEntry.artifact_digest !==
+                installed.generation_digest;
             return (
               <Paper
                 key={`${providerId}:${installed.provider_version}:${installed.generation_digest}`}
@@ -776,7 +802,7 @@ function ProviderManagement(
                     />
                   </Stack>
                   <Alert severity="warning">
-                    {operationError ||
+                    {operationError || latestCompatibility?.detail ||
                       "The exact installed Provider package is missing from the Service Catalog. Cowboy will not render a different release's UI."}
                   </Alert>
                   <Typography
@@ -787,16 +813,16 @@ function ProviderManagement(
                     Installed generation: {installed.generation_digest}
                   </Typography>
                   <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-                    {canUpgrade && latestEntry
+                    {canUpgrade && latestCompatibleEntry
                       ? (
                         <Button
                           variant="contained"
                           onClick={() =>
-                            void run(latestEntry, installed, {
+                            void run(latestCompatibleEntry, installed, {
                               capability: "upgrade_on_machine",
                             }).catch(() => undefined)}
                         >
-                          Upgrade to trusted {latestEntry.provider_version}
+                          Upgrade to trusted {latestCompatibleEntry.provider_version}
                         </Button>
                       )
                       : null}
@@ -823,7 +849,8 @@ function ProviderManagement(
             );
           }
           if (!latestEntry) return null;
-          const entry = installedEntry ?? latestEntry;
+          const operationEntry = latestCompatibleEntry ?? latestEntry;
+          const entry = installedEntry ?? operationEntry;
           const auth = authenticationForEntry(entry);
           const authPresentation = resolveProviderAuthenticationPresentation(
             entry.manifest.authentication,
@@ -831,9 +858,18 @@ function ProviderManagement(
           const error = errors[entry.provider_id] || "";
           const host = scope === "service"
             ? providerServiceHost(entry, auth, error)
-            : providerHost(entry, latestEntry, installed, auth, machine, error);
-          const releaseReady = latestEntry.release_state === "ready" &&
-            latestEntry.artifact_digest !== null;
+            : providerHost(
+              entry,
+              latestCompatibleEntry,
+              installed,
+              auth,
+              machine,
+              error,
+              latestCompatibility?.detail ?? "",
+            );
+          const releaseReady = operationEntry.release_state === "ready" &&
+            operationEntry.artifact_digest !== null &&
+            (scope === "service" || latestCompatibleEntry !== undefined);
           const managementStatus = scope === "service"
             ? entry.manifest.authentication.required
               ? serviceAuthenticationLabel(
@@ -845,7 +881,12 @@ function ProviderManagement(
               )
                 .split(" · ")[0] ?? authenticationCopy(authPresentation).empty
               : "no sign-in"
-            : providerInstallationSummary(installed, latestEntry);
+            : providerInstallationSummary(
+              installed,
+              latestCompatibleEntry,
+              latestEntry,
+              latestCompatibility?.detail,
+            );
           const managementStatusTone: ProviderManagementStatusTone =
             scope === "service"
               ? !entry.manifest.authentication.required ||
@@ -857,7 +898,8 @@ function ProviderManagement(
               : managementStatus === "update available"
               ? "warning"
               : "default";
-          const blockedCapabilities = releaseReady
+          const blockedCapabilities: ReadonlySet<EffectCapability> | undefined =
+            releaseReady
             ? undefined
             : scope === "service"
             ? UNPUBLISHED_AUTH_EFFECTS
@@ -870,7 +912,7 @@ function ProviderManagement(
                   slot="setup"
                   host={host}
                   blockedCapabilities={blockedCapabilities}
-                  onEffect={(effect) => run(latestEntry, undefined, effect)}
+                  onEffect={(effect) => run(operationEntry, undefined, effect)}
                 />
               )
               : null
@@ -881,7 +923,7 @@ function ProviderManagement(
                 slot="empty"
                 host={host}
                 blockedCapabilities={blockedCapabilities}
-                onEffect={(effect) => run(latestEntry, installed, effect)}
+                onEffect={(effect) => run(operationEntry, installed, effect)}
               />
             )
             : (
@@ -890,7 +932,7 @@ function ProviderManagement(
                 slot="settings"
                 host={host}
                 blockedCapabilities={blockedCapabilities}
-                onEffect={(effect) => run(latestEntry, installed, effect)}
+                onEffect={(effect) => run(operationEntry, installed, effect)}
               />
             );
           return (
@@ -929,6 +971,16 @@ function ProviderManagement(
                           : "warning"}
                       />
                     </Box>
+                  )
+                  : null}
+                {scope === "machine" && latestCompatibility &&
+                    (!latestCompatibleEntry ||
+                      latestCompatibleEntry.artifact_digest ===
+                        installed?.generation_digest)
+                  ? (
+                    <Alert severity="warning">
+                      {latestCompatibility.detail}
+                    </Alert>
                   )
                   : null}
                 {error || !releaseReady
@@ -1316,23 +1368,36 @@ function authenticationCopy(
 
 function providerInstallationSummary(
   installed: MachineProviderInventory | undefined,
+  latestCompatible: ProviderCatalogEntry | undefined,
   latest: ProviderCatalogEntry | undefined,
+  compatibilityDetail?: string,
 ): string {
-  if (!installed) return "not installed";
+  if (!installed) {
+    return !latestCompatible && compatibilityDetail
+      ? "Machine update required"
+      : "not installed";
+  }
   if (
-    latest?.release_state === "ready" && latest.artifact_digest !== null &&
-    latest.artifact_digest !== installed.generation_digest
+    latestCompatible?.release_state === "ready" &&
+    latestCompatible.artifact_digest !== null &&
+    latestCompatible.artifact_digest !== installed.generation_digest
   ) return "update available";
+  if (
+    compatibilityDetail && latest?.release_state === "ready" &&
+    latest.artifact_digest !== null &&
+    latest.artifact_digest !== installed.generation_digest
+  ) return "Machine update required";
   return installed.state.replaceAll("_", " ");
 }
 
 function providerHost(
   entry: ProviderCatalogEntry,
-  latestEntry: ProviderCatalogEntry,
+  latestCompatibleEntry: ProviderCatalogEntry | undefined,
   installed: MachineProviderInventory | undefined,
   auth: ProviderAuthenticationStatus | undefined,
   machine: ProviderMachine,
   error: string,
+  compatibilityDetail: string,
 ): ProviderHostContext {
   return {
     provider_version: installed?.provider_version ?? entry.provider_version,
@@ -1340,16 +1405,17 @@ function providerHost(
     authentication_state: auth?.authentication_state ?? "signed out",
     distribution_state: auth?.distribution_state ?? "none",
     machine_name: machine.display_name,
-    error_detail: error || latestEntry.release_detail || "",
+    error_detail: error || compatibilityDetail ||
+      latestCompatibleEntry?.release_detail || "",
     installed: installed !== undefined,
     auth_ready: !entry.manifest.authentication.required ||
       auth?.authentication_state === "ready",
     auth_required: entry.manifest.authentication.required,
     machine_online: machine.status === "online" || machine.schedulable,
-    upgrade_available: latestEntry.release_state === "ready" &&
-      latestEntry.artifact_digest !== null &&
+    upgrade_available: latestCompatibleEntry?.release_state === "ready" &&
+      latestCompatibleEntry.artifact_digest !== null &&
       installed !== undefined &&
-      installed.generation_digest !== latestEntry.artifact_digest,
+      installed.generation_digest !== latestCompatibleEntry.artifact_digest,
   };
 }
 
@@ -1357,7 +1423,19 @@ async function expectSuccess(
   response: Response,
   fallback: string,
 ): Promise<void> {
-  if (!response.ok) throw new Error((await response.text()).trim() || fallback);
+  if (response.ok) return;
+  const body = (await response.text()).trim();
+  let parsed: { detail?: unknown; error?: unknown } | undefined;
+  try {
+    parsed = JSON.parse(body) as { detail?: unknown; error?: unknown };
+  } catch { /* Preserve a non-JSON server response below. */ }
+  if (typeof parsed?.detail === "string" && parsed.detail.trim()) {
+    throw new Error(parsed.detail.trim());
+  }
+  if (typeof parsed?.error === "string" && parsed.error.trim()) {
+    throw new Error(parsed.error.trim());
+  }
+  throw new Error(body || fallback);
 }
 
 function assertUnhandled(value: never): never {
