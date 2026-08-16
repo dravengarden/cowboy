@@ -65,6 +65,12 @@ Deno.test("Agent drawer publishes pager ownership synchronously", () => {
     appSource.includes("onMobileDrawerOpenChange?.(drawerOpen)"),
     false,
   );
+  assertEquals(
+    appSource.includes("}, [activeId, mobile, onMobileDrawerOpenChange, phone]);"),
+    false,
+  );
+  assert(appSource.includes("drawerOpenRef.current = false;"));
+  assert(appSource.includes("settleMobileDrawerRef.current(false);"));
 });
 
 Deno.test("settled drawers retain declarative depth and pager ownership", () => {

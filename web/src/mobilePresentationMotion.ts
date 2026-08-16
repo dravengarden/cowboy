@@ -8,6 +8,9 @@ import { holdStorePresentation } from "./store";
 export const mobileCompositorFlattenSx = {
   "& .cm-scroller, & [data-transcript-session], & [data-mobile-overflow-layer]": {
     WebkitOverflowScrolling: "auto",
+    overflow: "hidden",
+    contain: "paint",
+    pointerEvents: "none",
   },
   "& [data-detent-sheet-chrome], & [data-mobile-backdrop-chrome], & [data-mobile-focus-composer], & [data-mobile-primary-composer], & [data-mobile-pending-editor]": {
     backdropFilter: "none",

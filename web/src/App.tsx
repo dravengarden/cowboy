@@ -2019,7 +2019,7 @@ export function App({
             settleMobileDrawerRef.current = null;
             binding.dispose();
         };
-    }, [activeId, mobile, onMobileDrawerOpenChange, phone]);
+    }, [mobile, onMobileDrawerOpenChange, phone]);
 
     // The native viewport owns full-screen device corners. While the keyboard
     // is present, temporarily square the drawer surface's bottom edge; on
@@ -2275,8 +2275,16 @@ export function App({
         // at once after the motion had finished.
         openSession(id);
         setActiveId(id);
-        if (mobile && settleMobileDrawerRef.current) {
-            settleMobileDrawerRef.current(false);
+        if (mobile) {
+            // Close before React can rebind the drawer. A session switch used
+            // to remount the controller and restore the still-open ref.
+            drawerOpenRef.current = false;
+            onMobileDrawerOpenChange?.(false);
+            if (settleMobileDrawerRef.current) {
+                settleMobileDrawerRef.current(false);
+            } else {
+                setDrawerOpen(false);
+            }
         } else {
             setDrawerOpen(false);
         }
