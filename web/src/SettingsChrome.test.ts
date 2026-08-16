@@ -20,8 +20,8 @@ Deno.test("mobile Settings is a preference list with drill-in destinations", () 
   assertEquals(chromeSource.includes("SettingsProductSwitch"), false);
   assert(appSource.includes("<SettingsNavRow"));
   assert(appSource.includes('data-settings-section="code"'));
-  assert(appSource.includes('aria-label="Back to Settings"'));
   assert(appSource.includes('label: "Back to Settings"'));
+  assertEquals(appSource.includes('aria-label="Back to Settings"'), false);
   assert(appSource.includes('fontSize: "1.25em"'));
   assertEquals(appSource.includes("fontSize: 18, ml:"), false);
   assert(appSource.includes('mobileDismiss={tab === "settings" || !useSheetSurface ? "footer" : "none"}'));
@@ -29,4 +29,8 @@ Deno.test("mobile Settings is a preference list with drill-in destinations", () 
   assertEquals(appSource.includes("<SettingsProductSwitch"), false);
   assert(appSource.includes("portal"));
   assert(appSource.includes("borderRadius: 0"));
+  assert(appSource.includes("(desktop || tab !== \"settings\") && ("));
+  assertEquals(appSource.includes("<ThemeModeControl"), false);
+  assertEquals(appSource.includes('sx={{ width: "100%", minHeight: 40 }}'), false);
+  assert(appSource.includes('variant="subtitle1" fontWeight={740}'));
 });
