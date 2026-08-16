@@ -1,6 +1,11 @@
 import CheckIcon from "@mui/icons-material/Check";
 import { Box, Button, CircularProgress } from "@mui/material";
+import { useEffect, useState } from "react";
 import type { ConnectionStore } from "../_shell";
+import {
+  fetchReadyCowboyVersion,
+  mobileUpdateBannerLabel,
+} from "./mobileUpdateVersion";
 
 /**
  * Mobile owns update activation explicitly. A foreground service-worker check
@@ -15,6 +20,27 @@ export function MobileConnectionBanner(
   if (!banner) return null;
 
   const isUpdate = banner.kind === "update";
+  const [readyVersion, setReadyVersion] = useState<string>();
+  useEffect(() => {
+    if (!isUpdate) {
+      setReadyVersion(undefined);
+      return undefined;
+    }
+    let cancelled = false;
+    void (async (): Promise<void> => {
+      const registration = "serviceWorker" in navigator
+        ? await navigator.serviceWorker.getRegistration()
+        : undefined;
+      const version = await fetchReadyCowboyVersion(
+        undefined,
+        registration?.waiting?.scriptURL,
+      );
+      if (!cancelled) setReadyVersion(version);
+    })();
+    return (): void => {
+      cancelled = true;
+    };
+  }, [isUpdate]);
   const palette = banner.kind === "down"
     ? "warning"
     : banner.kind === "reconnected"
@@ -24,7 +50,7 @@ export function MobileConnectionBanner(
     ? "Connection lost — reconnecting…"
     : banner.kind === "reconnected"
     ? "Reconnected"
-    : "New Cowboy version ready";
+    : mobileUpdateBannerLabel(readyVersion);
 
   return (
     <Box
@@ -41,6 +67,7 @@ export function MobileConnectionBanner(
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
+        flexWrap: "wrap",
         gap: 1,
         px: 2,
         py: 0.75,
