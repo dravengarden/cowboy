@@ -795,7 +795,15 @@ function ProviderManagement(
   );
 
   return (
-    <Stack spacing={1.25}>
+    <Stack
+      spacing={1.25}
+      data-provider-management-root
+      sx={{
+        "& .MuiButton-root": {
+          borderRadius: 999,
+        },
+      }}
+    >
       <Stack
         direction="row"
         spacing={1}
