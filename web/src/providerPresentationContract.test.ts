@@ -163,6 +163,25 @@ Deno.test("Service authentication keeps Cowboy alive while Provider sign-in open
   assertEquals(managementSource.includes("closeAuthenticationBrowser()"), true);
 });
 
+Deno.test("device-code sign-in copies before opening and keeps a manual fallback", () => {
+  const copyIndex = managementSource.indexOf("copyAuthenticationCode();");
+  const openIndex = managementSource.indexOf(
+    "openAuthenticationUrl(challenge.verification_url);",
+  );
+  assertEquals(copyIndex >= 0, true);
+  assertEquals(openIndex > copyIndex, true);
+  assertEquals(managementSource.includes("copyText(code)"), true);
+  assertEquals(
+    managementSource.includes('"Copy code & open sign-in"'),
+    true,
+  );
+  assertEquals(
+    managementSource.includes("onClick={copyAuthenticationCode}"),
+    true,
+  );
+  assertEquals(managementSource.includes("navigator.clipboard.writeText"), false);
+});
+
 Deno.test("Provider sign-in success and expiry leave no stale browser controls", () => {
   assertEquals(
     managementSource.includes(

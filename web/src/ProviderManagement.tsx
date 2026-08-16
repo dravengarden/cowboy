@@ -38,6 +38,7 @@ import {
 } from "./providerCatalog";
 import { groupProviderAuthentications } from "./providerAuthenticationGroups.ts";
 import { ProviderMark, ProviderSurface } from "./ProviderSurface";
+import { copyText } from "./clipboard";
 import {
   closeAuthenticationBrowser,
   hasNativeAuthenticationBrowser,
@@ -440,6 +441,8 @@ function ProviderManagement(
   const [authenticationPendingMethod, setAuthenticationPendingMethod] =
     useState("");
   const [authenticationError, setAuthenticationError] = useState("");
+  const [authenticationClipboardNotice, setAuthenticationClipboardNotice] =
+    useState("");
   const [uninstallPlan, setUninstallPlan] = useState<UninstallPlan | null>(
     null,
   );
@@ -684,6 +687,7 @@ function ProviderManagement(
             events: [],
           });
           setAuthenticationError("");
+          setAuthenticationClipboardNotice("");
           setAuthenticationPendingMethod("");
           return;
         case "logout_service_authentication": {
@@ -734,6 +738,7 @@ function ProviderManagement(
   const startAuthentication = async (method: string): Promise<void> => {
     if (!flow || authenticationPendingMethod) return;
     setAuthenticationError("");
+    setAuthenticationClipboardNotice("");
     setAuthenticationPendingMethod(method);
     try {
       if (!catalog) throw new Error("Provider Catalog is not ready");
@@ -800,6 +805,7 @@ function ProviderManagement(
       closeAuthenticationBrowser();
       setLoginInput("");
       setAuthenticationError("");
+      setAuthenticationClipboardNotice("");
       setAuthenticationPendingMethod("");
       setFlow((value) => {
         if (!value) return value;
@@ -828,6 +834,7 @@ function ProviderManagement(
       closeAuthenticationBrowser();
       setLoginInput("");
       setAuthenticationError("");
+      setAuthenticationClipboardNotice("");
       setAuthenticationPendingMethod("");
       setFlow(null);
       await refreshCatalog();
@@ -884,6 +891,18 @@ function ProviderManagement(
   );
   const loginSucceeded = loginState?.event === "login_state" &&
     (loginState.state === "signed_in" || loginState.state === "ready");
+  const copyAuthenticationCode = (): void => {
+    if (challenge?.event !== "login_challenge" || !challenge.user_code) return;
+    const code = challenge.user_code;
+    setAuthenticationClipboardNotice("Copying device code…");
+    void copyText(code).then((copied) => {
+      setAuthenticationClipboardNotice(
+        copied
+          ? `Device code ${code} copied. Paste it on the Provider page if it is not filled automatically.`
+          : `Could not copy the device code automatically. Close the browser, then tap Copy ${code}.`,
+      );
+    });
+  };
   const authenticationPageTap = useReliableTouchTap<HTMLButtonElement>(() => {
     if (challenge?.event !== "login_challenge") return;
     if (isNativeShell() && !hasNativeAuthenticationBrowser()) {
@@ -893,6 +912,7 @@ function ProviderManagement(
       return;
     }
     setAuthenticationError("");
+    copyAuthenticationCode();
     openAuthenticationUrl(challenge.verification_url);
   });
   useEffect(() => {
@@ -1540,16 +1560,32 @@ function ProviderManagement(
                         variant="contained"
                         {...authenticationPageTap}
                       >
-                        {authenticationCopy(
-                          resolveProviderAuthenticationPresentation(
-                            flow.provider.manifest.authentication,
-                          ),
-                        ).externalAction}
+                        {challenge.user_code
+                          ? "Copy code & open sign-in"
+                          : authenticationCopy(
+                            resolveProviderAuthenticationPresentation(
+                              flow.provider.manifest.authentication,
+                            ),
+                          ).externalAction}
                       </Button>
                       <Typography variant="caption" color="text.secondary">
-                        After completing the Provider page, return to Cowboy.
-                        This dialog will keep waiting securely.
+                        {challenge.user_code
+                          ? "Cowboy copies the device code before opening the Provider page. Paste it only if the page does not fill it automatically. Close the browser to return here; Cowboy will keep waiting securely."
+                          : "After completing the Provider page, return to Cowboy. This dialog will keep waiting securely."}
                       </Typography>
+                      {authenticationClipboardNotice
+                        ? (
+                          <Alert
+                            severity={authenticationClipboardNotice.startsWith(
+                                "Could not",
+                              )
+                              ? "warning"
+                              : "info"}
+                          >
+                            {authenticationClipboardNotice}
+                          </Alert>
+                        )
+                        : null}
                       {authenticationError
                         ? <Alert severity="warning">{authenticationError}</Alert>
                         : null}
@@ -1557,10 +1593,7 @@ function ProviderManagement(
                         ? (
                           <Button
                             variant="outlined"
-                            onClick={() =>
-                              void navigator.clipboard.writeText(
-                                challenge.user_code ?? "",
-                              )}
+                            onClick={copyAuthenticationCode}
                           >
                             Copy {challenge.user_code}
                           </Button>
