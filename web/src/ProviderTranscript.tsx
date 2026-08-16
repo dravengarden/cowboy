@@ -17,7 +17,10 @@ import {
   providerPresentationEntry,
   useProviderCatalog,
 } from "./providerCatalog";
-import { ProviderMark } from "./ProviderSurface";
+import {
+  ProviderMark,
+  readableProviderMarkColor,
+} from "./ProviderSurface";
 
 type ThoughtPresentation = TranscriptPresentationContract["thought"];
 
@@ -126,10 +129,10 @@ function VariantGlyph({
           <Box
             component="span"
             sx={{
-              width: header ? 15 : 14,
-              height: header ? 15 : 14,
+              width: 16,
+              height: 16,
               display: "inline-flex",
-              opacity: current ? 1 : 0.46,
+              opacity: current ? 1 : 0.78,
               animation: current
                 ? `${thoughtPulse} 1.8s ease-in-out infinite`
                 : "none",
@@ -138,7 +141,7 @@ function VariantGlyph({
               },
             }}
           >
-            <ProviderMark manifest={manifest} size={header ? 15 : 14} />
+            <ProviderMark manifest={manifest} size={16} />
           </Box>
         )
         : (
@@ -190,7 +193,7 @@ function markerGeometry(variant: ThoughtPresentation["variant"]): {
     case "workcell":
       return { size: 15, gap: 4, paddingLeft: 3 };
     case "signal":
-      return { size: 15, gap: 5, paddingLeft: 2 };
+      return { size: 16, gap: 5, paddingLeft: 2 };
     case "terminal":
       return { size: 15, gap: 5, paddingLeft: 2 };
   }
@@ -223,8 +226,12 @@ export function ProviderThoughtSteps({
     : DEFAULT_THOUGHT_PRESENTATION;
   const visible = sections.filter((section) => section.trim() !== "");
   const geometry = markerGeometry(presentation.variant);
-  const accent = manifest?.display.accent ?? theme.palette.primary.main;
-  const secondary = manifest?.display.secondary_accent ?? accent;
+  const accent = manifest
+    ? readableProviderMarkColor(manifest.display.accent, theme)
+    : theme.palette.primary.main;
+  const secondary = manifest
+    ? readableProviderMarkColor(manifest.display.secondary_accent, theme)
+    : accent;
   const muted = theme.palette.text.secondary;
   const compact = presentation.density === "compact";
   const currentSurface = presentation.current_surface === "soft";
@@ -344,7 +351,11 @@ export function ProviderThoughtSteps({
                   height: geometry.size,
                   display: "grid",
                   placeItems: "center",
-                  color: current ? accent : "text.disabled",
+                  color: current
+                    ? accent
+                    : presentation.variant === "signal"
+                    ? alpha(accent, 0.72)
+                    : "text.disabled",
                 }}
               >
                 <VariantGlyph
@@ -377,6 +388,8 @@ export function ProviderThoughtSteps({
                   ? 1
                   : presentation.variant === "workcell"
                   ? 0.55
+                  : presentation.variant === "signal"
+                  ? 0.82
                   : 0.68,
                 fontStyle: "normal",
                 color: current ? "text.primary" : "text.secondary",

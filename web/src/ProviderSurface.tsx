@@ -125,7 +125,7 @@ export function ProviderMark({
 
 /** Keep thin monochrome marks legible on dark surfaces without overriding a
  * Provider-authored explicit fill or gradient. */
-function readableProviderMarkColor(
+export function readableProviderMarkColor(
   accent: string,
   theme: Theme,
 ): string {
@@ -466,7 +466,7 @@ const terminalCaretMotion = keyframes`
   55%, 100% { opacity: 0.24; }
 `;
 const assetPulseMotion = keyframes`
-  0%, 100% { transform: scale(0.92); opacity: 0.58; }
+  0%, 100% { transform: scale(0.96); opacity: 0.78; }
   50% { transform: scale(1); opacity: 1; }
 `;
 
@@ -503,6 +503,11 @@ function ProviderActivity({
 }): React.JSX.Element {
   const theme = useTheme();
   const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
+  const primary = readableProviderMarkColor(manifest.display.accent, theme);
+  const secondary = readableProviderMarkColor(
+    manifest.display.secondary_accent,
+    theme,
+  );
   const [frameIndex, setFrameIndex] = useState(0);
   const [phraseIndex, setPhraseIndex] = useState(0);
   const frames = node.indicator.kind === "glyph_cycle"
@@ -556,7 +561,7 @@ function ProviderActivity({
               width: 16,
               flexShrink: 0,
               textAlign: "center",
-              color: manifest.display.accent,
+              color: primary,
               fontSize: 15,
               fontWeight: 700,
               lineHeight: 1,
@@ -581,7 +586,7 @@ function ProviderActivity({
               display: "block",
               flexShrink: 0,
               overflow: "visible",
-              color: manifest.display.accent,
+              color: primary,
               "& .provider-terminal-prompt": {
                 animation: reducedMotion
                   ? "none"
@@ -621,13 +626,13 @@ function ProviderActivity({
             component="span"
             aria-hidden
             sx={{
-              width: 18,
-              height: 18,
+              width: 16,
+              height: 16,
               position: "relative",
               display: "inline-block",
               flexShrink: 0,
               "& .provider-signal-base": {
-                opacity: reducedMotion ? 0.82 : 0.28,
+                opacity: reducedMotion ? 1 : 0.7,
               },
               "& .provider-signal-sweep": reducedMotion
                 ? { display: "none" }
@@ -651,7 +656,7 @@ function ProviderActivity({
             >
               <ProviderAssetGraphic
                 asset={asset}
-                size={18}
+                size={16}
               />
             </Box>
             <Box
@@ -660,7 +665,7 @@ function ProviderActivity({
             >
               <ProviderAssetGraphic
                 asset={asset}
-                size={18}
+                size={16}
               />
             </Box>
           </Box>
@@ -674,8 +679,8 @@ function ProviderActivity({
             component="span"
             aria-hidden
             sx={{
-              width: 18,
-              height: 18,
+              width: 16,
+              height: 16,
               display: "inline-flex",
               animation: reducedMotion
                 ? "none"
@@ -684,7 +689,7 @@ function ProviderActivity({
           >
             <ProviderAssetGraphic
               asset={asset}
-              size={18}
+              size={16}
             />
           </Box>
         );
@@ -707,7 +712,9 @@ function ProviderActivity({
       direction="row"
       spacing={0.8}
       alignItems="center"
-      sx={{ py: 0.5, alignSelf: "flex-start", color: "text.secondary" }}
+      data-provider-activity-indicator={node.indicator.kind}
+      data-provider-activity-effect={node.label.effect}
+      sx={{ py: 0.5, alignSelf: "flex-start", color: primary }}
     >
       {indicator}
       <Typography
@@ -720,7 +727,7 @@ function ProviderActivity({
           ...(effect === "shimmer"
             ? {
               background:
-                `linear-gradient(100deg, ${muted} 0%, ${muted} 24%, ${manifest.display.accent} 44%, ${manifest.display.secondary_accent} 56%, ${muted} 74%, ${muted} 100%)`,
+                `linear-gradient(100deg, ${muted} 0%, ${muted} 24%, ${primary} 44%, ${secondary} 56%, ${muted} 74%, ${muted} 100%)`,
               backgroundSize: "220% 100%",
               WebkitBackgroundClip: "text",
               backgroundClip: "text",
@@ -738,6 +745,7 @@ function ProviderActivity({
                 }ms ease-in-out infinite`,
             }
             : {}),
+          ...(effect === "none" ? { color: primary } : {}),
           ...(reducedMotion && effect === "shimmer"
             ? {
               background: "none",

@@ -3916,7 +3916,7 @@ mod tests {
             serde_json::from_str(include_str!("../../../providers/grok/provider.json")).unwrap();
         let expected_mark_path = source.display.mark_path.clone();
         let package = build_package(source.compile().unwrap()).unwrap();
-        assert_eq!(package.manifest.version, "1.1.6");
+        assert_eq!(package.manifest.version, "1.1.7");
         for role in [AssetRole::Logo, AssetRole::Icon] {
             let asset = package
                 .manifest
