@@ -38,15 +38,9 @@ Deno.test("mobile drawer keeps clipping and shadows off the heavy surface", () =
   assert(widthAt >= 0 && firstTranslate > widthAt);
 });
 
-Deno.test("drawer shadows project back toward each revealed drawer", () => {
-  assertEquals(
-    mobileSpatialDrawerShadow("left"),
-    "-18px 0 42px rgba(0,0,0,0.16)",
-  );
-  assertEquals(
-    mobileSpatialDrawerShadow("right"),
-    "18px 0 42px rgba(0,0,0,0.16)",
-  );
+Deno.test("drawer join is a hard paper|page edge", () => {
+  assertEquals(mobileSpatialDrawerShadow("left"), "none");
+  assertEquals(mobileSpatialDrawerShadow("right"), "none");
 });
 
 Deno.test("Agent drawer publishes pager ownership synchronously", () => {
