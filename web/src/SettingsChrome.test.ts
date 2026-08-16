@@ -33,4 +33,7 @@ Deno.test("mobile Settings is a preference list with drill-in destinations", () 
   assertEquals(appSource.includes("<ThemeModeControl"), false);
   assertEquals(appSource.includes('sx={{ width: "100%", minHeight: 40 }}'), false);
   assert(appSource.includes('variant="subtitle1" fontWeight={740}'));
+  assert(appSource.includes('data-settings-list="true"'));
+  assert(appSource.includes("nextSavedSettingsScroll("));
+  assert(appSource.includes("destinationScrollTop("));
 });
