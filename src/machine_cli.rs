@@ -2202,9 +2202,9 @@ fn login_challenge_tokens(line: &str) -> (Option<String>, Option<String>) {
                 }
             }
         } else if trimmed.len() >= 6
-            && trimmed
-                .chars()
-                .all(|character| character.is_ascii_alphanumeric() || character == '-')
+            && trimmed.chars().all(|character| {
+                character.is_ascii_uppercase() || character.is_ascii_digit() || character == '-'
+            })
             && trimmed.contains('-')
         {
             user_code = Some(trimmed.to_owned());
@@ -2996,6 +2996,10 @@ mod tests {
         let (url, code) = login_challenge_tokens("\u{1b}[94mV3RI-TZLH9\u{1b}[0m");
         assert_eq!(url, None);
         assert_eq!(code.as_deref(), Some("V3RI-TZLH9"));
+
+        let (url, code) = login_challenge_tokens("Authenticate command-line tools");
+        assert_eq!(url, None);
+        assert_eq!(code, None);
     }
 
     #[test]
