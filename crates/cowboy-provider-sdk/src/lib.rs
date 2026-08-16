@@ -3017,7 +3017,7 @@ impl StandardProviderSource {
                 authentication_action(
                     clear_auth_label,
                     "logout",
-                    ButtonStyle::Secondary,
+                    ButtonStyle::Destructive,
                     BoolExpression::HostEquals {
                         field: HostBoolField::AuthReady,
                         value: true,
@@ -3878,6 +3878,8 @@ mod tests {
                 assert!(setup.contains("Clear API key"));
                 assert!(!setup.contains("Sign in"));
             }
+            assert!(setup.contains("\"message\":\"logout\""));
+            assert!(setup.contains("\"style\":\"destructive\""));
             assert_eq!(
                 first
                     .manifest

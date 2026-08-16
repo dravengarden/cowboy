@@ -151,6 +151,27 @@ Deno.test("Provider marks preserve host component classes and compact chip spaci
   );
 });
 
+Deno.test("Provider management buttons share pill geometry and destructive credentials stay red", () => {
+  assertEquals(
+    managementSource.includes("data-provider-management-root"),
+    true,
+  );
+  assertEquals(
+    managementSource.includes('"& .MuiButton-root": {\n          borderRadius: 999,'),
+    true,
+  );
+  assertEquals(
+    surfaceSource.includes(
+      'effect?.capability === "logout_service_authentication"',
+    ),
+    true,
+  );
+  assertEquals(
+    surfaceSource.includes("data-provider-destructive-action={destructive"),
+    true,
+  );
+});
+
 Deno.test("Provider activity renderer consumes only typed generic strategies", () => {
   for (
     const strategy of [

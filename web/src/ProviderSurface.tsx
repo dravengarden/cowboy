@@ -427,11 +427,14 @@ function ProviderNode({
       const blocked = effect !== undefined &&
         blockedCapabilities?.has(effect.capability) === true;
       if (blocked) return null;
+      const destructive = node.style === "destructive" ||
+        effect?.capability === "logout_service_authentication";
       return (
         <Button
           size="small"
           variant={node.style === "primary" ? "contained" : "outlined"}
-          color={node.style === "destructive" ? "error" : "primary"}
+          color={destructive ? "error" : "primary"}
+          data-provider-destructive-action={destructive ? "true" : undefined}
           disabled={busy || !evaluateExpression(node.enabled_when, state, host)}
           startIcon={busy ? <CircularProgress size={14} /> : undefined}
           onClick={() => void emit(node).catch(() => undefined)}
