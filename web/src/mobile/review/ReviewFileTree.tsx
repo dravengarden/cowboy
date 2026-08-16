@@ -33,7 +33,7 @@ import {
   fetchCodeTree,
 } from "./codeApi";
 import { directoryPrefetchTargets } from "./directoryPrefetch";
-import { mobileNativeYScrollSx } from "../mobileNativeOverflow";
+import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
 
 type DirectoryPage = CodeTreePage & { cachedAt: number };
 

@@ -19,7 +19,7 @@ import {
 } from "@mui/material";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { MobileSheetDismiss } from "../../_shell";
-import { mobileNativeYScrollSx } from "../mobileNativeOverflow";
+import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
 import { NetworkIconButton } from "../../NetworkActionFeedback";
 import type { GitReviewEntry } from "./gitReviewModel";
 import {

@@ -25,7 +25,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MobileSheetDismiss } from "../../_shell";
 import { NetworkIconButton } from "../../NetworkActionFeedback";
-import { mobileNativeYScrollSx } from "../mobileNativeOverflow";
+import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
 import { type CodeChangeStatus, fetchCodeChanges } from "./codeApi";
 import {
   type GitReviewEntry,

@@ -16,7 +16,7 @@ import {
   Typography,
 } from "@mui/material";
 import { useEffect, useState } from "react";
-import { mobileNativeYScrollSx } from "../mobileNativeOverflow";
+import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
 import {
   fetchGitCommit,
   fetchGitCommitDiff,

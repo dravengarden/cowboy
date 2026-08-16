@@ -52,7 +52,7 @@ import {
 import { importantHaptic, navigationHaptic } from "../../haptic";
 import { Markdown } from "../../Markdown";
 import { Sheet } from "../../Sheet";
-import { mobileNativeYScrollSx } from "../mobileNativeOverflow";
+import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
 import {
   mutateMobileReview,
   openSession,
