@@ -108,6 +108,8 @@ import { providerName } from "./providerPresentation";
 import { SessionProviderAccess } from "./ProviderManagement";
 import { resolveProviderAuthenticationPresentation } from "../../packages/provider-ui-sdk/src/index.ts";
 import {
+  sessionProviderFacts,
+  sessionProviderManageLabel,
   sessionProviderNeedsAttention,
   sessionProviderSummary,
   workspaceOptionsSummary,
@@ -7233,13 +7235,27 @@ function SessionProviderSection({
     required,
     ready,
   });
-  const [expanded, setExpanded] = useState(needsAttention);
+  const [expanded, setExpanded] = useState(true);
+  const [actionsOpen, setActionsOpen] = useState(needsAttention);
   useEffect(() => {
-    setExpanded(needsAttention);
+    if (needsAttention) setExpanded(true);
+    setActionsOpen(needsAttention);
   }, [needsAttention, session.id]);
   const presentation = entry
     ? resolveProviderAuthenticationPresentation(entry.manifest.authentication)
     : "none";
+  const facts = entry
+    ? sessionProviderFacts({
+      vendor: entry.manifest.display.vendor,
+      version: entry.provider_version,
+      ...(ready && auth?.account_label
+        ? { accountLabel: auth.account_label }
+        : {}),
+    })
+    : [];
+  const manageLabel = sessionProviderManageLabel(
+    presentation === "none" ? "none" : presentation,
+  );
   const summary = sessionProviderSummary({
     displayName: providerName(
       session.provider,
@@ -7299,8 +7315,74 @@ function SessionProviderSection({
           />
         </ButtonBase>
         <Collapse id={panelId} in={expanded}>
-          <Box sx={{ pt: 0.75 }}>
-            <SessionProviderAccess providerId={session.provider} />
+          <Box sx={{ pt: 0.5 }}>
+            {entry && (
+              <>
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{
+                    display: "block",
+                    px: 0.5,
+                    pb: 0.25,
+                    lineHeight: 1.4,
+                  }}
+                >
+                  {entry.manifest.display.summary}
+                </Typography>
+                <List dense disablePadding>
+                  {facts.map((row) => (
+                    <SheetDetailRow
+                      key={row.label}
+                      label={row.label}
+                      value={row.value}
+                      mono={row.mono === true}
+                    />
+                  ))}
+                </List>
+              </>
+            )}
+            {ready && (
+              <ButtonBase
+                aria-label={actionsOpen
+                  ? `Collapse ${manageLabel.toLowerCase()}`
+                  : `Expand ${manageLabel.toLowerCase()}`}
+                aria-expanded={actionsOpen}
+                onClick={(): void => {
+                  haptic();
+                  setActionsOpen((current) => !current);
+                }}
+                sx={{
+                  width: "100%",
+                  minHeight: 44,
+                  px: 0.5,
+                  mt: 0.25,
+                  borderRadius: 1.5,
+                  justifyContent: "space-between",
+                  color: "text.secondary",
+                  textAlign: "left",
+                  "&:active": { bgcolor: "action.hover" },
+                }}
+              >
+                <Typography variant="body2" sx={{ fontWeight: 650 }}>
+                  {manageLabel}
+                </Typography>
+                <ExpandMore
+                  fontSize="small"
+                  sx={{
+                    flexShrink: 0,
+                    transform: actionsOpen ? "rotate(180deg)" : "none",
+                    transition: (theme) =>
+                      theme.transitions.create("transform"),
+                  }}
+                />
+              </ButtonBase>
+            )}
+            <Collapse in={!ready || actionsOpen} unmountOnExit>
+              <Box sx={{ pt: 0.5 }}>
+                <SessionProviderAccess providerId={session.provider} />
+              </Box>
+            </Collapse>
           </Box>
         </Collapse>
       </Box>
