@@ -35,6 +35,31 @@ Deno.test("followed live tails recycle older rows into a height spacer", () => {
   assert(transcriptSource.includes("recycledTranscriptHeight"));
 });
 
+Deno.test("drawer swipe does not React-render on transcript finger-down", () => {
+  assert(transcriptSource.includes("renderPausedRef.current = true"));
+  assert(
+    transcriptSource.includes(
+      "Do not unfollow on finger-down. A Sessions/Review swipe starts as a",
+    ),
+  );
+  assert(
+    transcriptSource.includes(
+      "if (readerOwned && fromBottom > 1 && stick.current) detach()",
+    ),
+  );
+  const touchStart = transcriptSource.indexOf("const onTouchStart = (): void => {");
+  const detachInTouchStart = transcriptSource.indexOf(
+    "detach();",
+    touchStart,
+  );
+  const touchStartEnd = transcriptSource.indexOf(
+    "const onTouchEnd = (): void => {",
+    touchStart,
+  );
+  assert(touchStart >= 0 && touchStartEnd > touchStart);
+  assert(detachInTouchStart === -1 || detachInTouchStart > touchStartEnd);
+});
+
 Deno.test("the growing row stays in the scroller paint flow", () => {
   assertEquals(transcriptRowContainment(true), "none");
   assertEquals(transcriptRowContainment(false), "layout paint");

@@ -52,10 +52,10 @@ Before changing Sessions/Review swipe, peek chrome, composer frost, or
 Transcript paint cost on Mobile, read
 [`docs/mobile-spatial-presentation.md`](../docs/mobile-spatial-presentation.md).
 It is the core contract: 1:1 `translate3d`, complementary rail, follower
-layers for iOS pin, live-row recycle without a JS virtualizer, flatten
-**before** the first translate, and paint/hit split for the dim. Do not
-re-pin the rail, scale the peek, or freeze the session list to make a
-swipe cheaper.
+layers for iOS pin, live-row recycle without a JS virtualizer, a standing
+peek compositor layer (arm on finger-down; first tracking frame only
+writes transform), and paint/hit split for the dim. Do not re-pin the
+rail, scale the peek, or freeze the session list to make a swipe cheaper.
 
 ## Desktop and mobile are separate products
 

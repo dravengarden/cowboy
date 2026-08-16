@@ -58,6 +58,12 @@ Deno.test("gesture roots flatten overflow tiles without a universal selector", (
   assert(motionSource.includes("pointerEvents: \"none\""));
   assert(motionSource.includes("& [data-mobile-drawer-surface] [data-mobile-overflow-layer]"));
   assert(motionSource.includes("& [data-mobile-drawer-surface] [data-key]"));
+  assert(motionSource.includes("mobilePeekRestLayerSx"));
+  assert(appSource.includes("mobilePeekRestLayerSx"));
+  assert(reviewDrawerSource.includes("mobilePeekRestLayerSx"));
+  assert(productShellSource.includes("mobilePeekRestLayerSx"));
+  assert(motionSource.includes("mobileFrostStripSx"));
+  assert(motionSource.includes('attr === "data-mobile-product-moving"'));
   assert(motionSource.includes("& [data-mobile-drawer-surface] .MuiCircularProgress-root"));
   assertEquals(
     motionSource.includes(

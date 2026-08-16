@@ -95,6 +95,7 @@ export function bindMobileSpatialDrawer({
   let currentOffset = 0;
   let commit = false;
   let directManipulationActive = false;
+  let presentationArmed = false;
   let releaseFrame = 0;
   let releaseIdle: number | undefined;
   let releasePresentation: (() => void) | undefined;
@@ -149,15 +150,13 @@ export function bindMobileSpatialDrawer({
     const pageX = `${String(openingSign * offset)}px`;
     const railX = `${String(openingSign * mobileDrawerRailOffset(offset, presentationWidth))}px`;
     const pageTransform = `translate3d(${pageX}, 0, 0)`;
-    // One shared translate for the peek and every follower. Re-assert
-    // transition:none on the gesture path so AppBar / composer focus
-    // `transform` transitions cannot interpolate a frame behind the page.
+    // Touchmove writes only transform (and transition:none). Origin and
+    // will-change are armed before the first tracking frame so this loop
+    // cannot rebuild the compositor tree under the finger.
     for (const layer of slidingLayers()) {
-      prepareLayer(layer);
       if (instant) layer.style.transition = "none";
       layer.style.transform = pageTransform;
     }
-    prepareLayer(drawer);
     if (instant) drawer.style.transition = "none";
     drawer.style.transform = `translate3d(${railX}, 0, 0)`;
   };
@@ -188,6 +187,24 @@ export function bindMobileSpatialDrawer({
       dim.style.opacity = String(visual.dim);
     }
   };
+  const armPresentation = (): void => {
+    if (presentationArmed || directManipulationActive) return;
+    presentationArmed = true;
+    // Hold store and promote the heavy peek before the 2 px claim. Followers
+    // stay unpromoted until the swipe is owned — will-change on bottom chrome
+    // at rest lets iOS pin them to the visual viewport.
+    releasePresentation ??= holdPresentation?.();
+    promoteLayer(page());
+    promoteLayer(drawerMask);
+  };
+  const disarmPresentation = (): void => {
+    if (directManipulationActive) return;
+    presentationArmed = false;
+    demoteLayer(page());
+    demoteLayer(drawerMask);
+    releasePresentation?.();
+    releasePresentation = undefined;
+  };
   const beginDirectManipulation = (): void => {
     if (directManipulationActive) return;
     if (releaseFrame !== 0) cancelAnimationFrame(releaseFrame);
@@ -201,14 +218,15 @@ export function bindMobileSpatialDrawer({
     }
     settleGen += 1;
     globalThis.clearTimeout(settleTimer);
+    armPresentation();
     for (const layer of animatedLayers()) {
-      promoteLayer(layer);
       layer.style.transition = "none";
     }
     if (dim) dim.style.transition = "none";
+    for (const layer of followerLayers()) promoteLayer(layer);
+    promoteLayer(drawer);
     gestureTarget.setAttribute("data-mobile-drawer-moving", "true");
     applyOpenDepth();
-    releasePresentation ??= holdPresentation?.();
     directManipulationActive = true;
     globalThis.dispatchEvent(
       new CustomEvent("cowboy:transcript-direct-manipulation-start"),
@@ -222,6 +240,7 @@ export function bindMobileSpatialDrawer({
     const finish = (): void => {
       releaseIdle = undefined;
       directManipulationActive = false;
+      presentationArmed = false;
       for (const layer of animatedLayers()) demoteLayer(layer);
       gestureTarget.removeAttribute("data-mobile-drawer-moving");
       releasePresentation?.();
@@ -348,6 +367,9 @@ export function bindMobileSpatialDrawer({
       samples: [{ t: now, x: touch.clientX }],
     };
     commit = startOpen;
+    // Assemble the peek layer on finger-down, before the 2 px claim writes
+    // the first translate. Obsidian's workspace is already that layer.
+    armPresentation();
   };
   const onTouchMove = (event: TouchEvent): void => {
     const touch = event.touches[0];
@@ -363,6 +385,8 @@ export function bindMobileSpatialDrawer({
     const deltaX = touch.clientX - gesture.x;
     const deltaY = touch.clientY - gesture.y;
     if (!gesture.locked && obsidianDrawerAbandonsToScroll(deltaX, deltaY)) {
+      if (gesture.prepared) releaseDirectManipulation();
+      else disarmPresentation();
       gesture = null;
       // Preserve the transcript's native vertical scroll while preventing a
       // parent horizontal recognizer from seeing the same touch stream.
@@ -434,6 +458,7 @@ export function bindMobileSpatialDrawer({
     if (!gesture) return;
     if (!gesture.locked) {
       if (gesture.prepared) releaseDirectManipulation();
+      else disarmPresentation();
       gesture = null;
       commit = false;
       return;
@@ -458,6 +483,7 @@ export function bindMobileSpatialDrawer({
     commit = false;
     if (wasLocked) settle(startOpen, 0, releaseDirectManipulation, width);
     else if (wasPrepared) releaseDirectManipulation();
+    else disarmPresentation();
   };
   const onResize = (): void => {
     presentationWidth = drawerWidth();

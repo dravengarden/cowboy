@@ -3210,12 +3210,16 @@ export function Transcript({
   // This removes Markdown/layout work from WebKit's scrolling frames without
   // dropping or delaying transport data; the latest timeline flushes atomically.
   const [renderPausedForScroll, setRenderPausedForScroll] = useState(false);
+  const renderPausedRef = useRef(false);
   const presentedTimelineRef = useRef(timeline);
   const latestTimelineRef = useRef(timeline);
   latestTimelineRef.current = timeline;
   const drawerCatchupActiveRef = useRef(false);
   const [drawerCatchupStep, setDrawerCatchupStep] = useState(0);
-  if (!renderPausedForScroll && !drawerCatchupActiveRef.current) {
+  // A ref, not React state, freezes the presented timeline. setState on
+  // touchstart / swipe-claim is a render on the same frames as the first
+  // translate and is the intermittent drawer hitch.
+  if (!renderPausedRef.current && !drawerCatchupActiveRef.current) {
     presentedTimelineRef.current = timeline;
   } else if (managesScrollHistory) {
     // Native momentum keeps live tail changes frozen, but an older history page
@@ -3248,6 +3252,7 @@ export function Transcript({
       presentedTimelineRef.current = next.timeline;
       if (next.complete) {
         drawerCatchupActiveRef.current = false;
+        renderPausedRef.current = false;
         startTransition(() => setRenderPausedForScroll(false));
         return;
       }
@@ -4148,11 +4153,18 @@ export function Transcript({
     };
     const restoreAnchor = (): void =>
       restoreFreezeAnchor(el, freezeRef.current);
+    const resumePresentedTimeline = (): void => {
+      renderPausedRef.current = false;
+      startTransition(() => {
+        setRenderPausedForScroll(false);
+        setDrawerCatchupStep((step) => step + 1);
+      });
+    };
     const markNativeScrollActive = (): void => {
       cancelHistoryRelease();
       markTranscriptScrollActivity();
       nativeScrollActiveRef.current = true;
-      setRenderPausedForScroll(true);
+      renderPausedRef.current = true;
       // A pending corrective scroll event must never swallow the reader's next
       // real movement. From this point the native gesture is authoritative.
       freezeRef.current.self = false;
@@ -4185,7 +4197,7 @@ export function Transcript({
           scheduleHistoryRelease();
           nativeScrollSettleTimer = globalThis.setTimeout(() => {
             nativeScrollActiveRef.current = false;
-            setRenderPausedForScroll(false);
+            resumePresentedTimeline();
             nativeScrollSettleTimer = undefined;
           }, 360);
           return;
@@ -4195,7 +4207,7 @@ export function Transcript({
         if (!stick.current) captureAnchor();
         saveViewport();
         nativeScrollActiveRef.current = false;
-        setRenderPausedForScroll(false);
+        resumePresentedTimeline();
         nativeScrollSettleTimer = undefined;
       }, 240);
     };
@@ -4212,7 +4224,10 @@ export function Transcript({
       // page without first forcing the reader away from the threshold.
       historyPrefetchArmedRef.current = true;
       markNativeScrollActive();
-      detach();
+      // Do not unfollow on finger-down. A Sessions/Review swipe starts as a
+      // transcript touch; detach + setState here is a React render on the
+      // same frames as the first peek translate. Unfollow when scroll
+      // actually leaves the live edge.
       const fromBottom = Math.abs(el.scrollTop);
       const prefetch = historyPrefetchTransition({
         managed: managesScrollHistoryRef.current,
@@ -4245,7 +4260,7 @@ export function Transcript({
       cancelHistoryRelease();
       markTranscriptScrollActivity();
       nativeScrollActiveRef.current = true;
-      setRenderPausedForScroll(true);
+      renderPausedRef.current = true;
       if (nativeScrollSettleTimer !== undefined) {
         globalThis.clearTimeout(nativeScrollSettleTimer);
         nativeScrollSettleTimer = undefined;
@@ -4317,7 +4332,6 @@ export function Transcript({
         reportScrollableRef.current();
         return;
       }
-      setFollowingLive(Math.abs(el.scrollTop) <= 1);
       // A column-reverse browser adjusts scrollTop when streamed content grows
       // below a detached Page viewport. That trusted scroll event is layout
       // compensation, not reader motion; treating it as input pauses rendering
@@ -4333,6 +4347,8 @@ export function Transcript({
       if (readerOwned) markNativeScrollActive();
       // column-reverse: the bottom is scrollTop 0 (abs handles the sign).
       const fromBottom = Math.abs(el.scrollTop);
+      if (readerOwned && fromBottom > 1 && stick.current) detach();
+      else setFollowingLive(fromBottom <= 1);
       if (!readerOwned) {
         if (!stick.current) captureAnchor();
         saveViewport();
@@ -4611,6 +4627,7 @@ export function Transcript({
       cancelHistoryRelease();
       drawerCatchupActiveRef.current = false;
       nativeScrollActiveRef.current = false;
+      renderPausedRef.current = false;
       setRenderPausedForScroll(false);
       if (roRaf !== 0) cancelAnimationFrame(roRaf);
       if (viewportBackfillRafRef.current !== 0) {

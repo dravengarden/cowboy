@@ -22,6 +22,7 @@ import {
 import type { Mode as ThemeMode } from "../../theme";
 import {
   bindMobileSheetPresentationHold,
+  mobilePeekRestLayerSx,
   mobilePresentationMovingRootSx,
   mobileSheetPresentationSx,
 } from "../../mobilePresentationMotion";
@@ -419,6 +420,7 @@ export function MobileProductShell({
         overflow: "hidden",
         position: "relative",
         bgcolor: "background.default",
+        ...mobilePeekRestLayerSx,
         ...mobilePresentationMovingRootSx("data-mobile-product-moving"),
         ...mobileSheetPresentationSx,
       }}

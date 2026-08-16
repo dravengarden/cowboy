@@ -5,6 +5,7 @@ import { bindMobileSpatialDrawer } from "../../mobileSpatialDrawer";
 import {
   mobileCompositorFlattenSx,
   mobileDrawerRailHitSx,
+  mobilePeekRestLayerSx,
   mobilePresentationMovingRootSx,
 } from "../../mobilePresentationMotion";
 import { holdStorePresentation } from "../../store";
@@ -84,6 +85,7 @@ export function ReviewDrawerShell({
         height: 1,
         overflow: "hidden",
         bgcolor: "background.paper",
+        ...mobilePeekRestLayerSx,
         ...mobilePresentationMovingRootSx("data-mobile-drawer-moving"),
         ...mobileDrawerRailHitSx,
         "&[data-mobile-drawer-open='true']": mobileCompositorFlattenSx,

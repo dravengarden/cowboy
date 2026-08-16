@@ -115,6 +115,7 @@ import { sessionDrawerTargetScroll } from "./mobileDrawerMotion";
 import {
     mobileCompositorFlattenSx,
     mobileDrawerRailHitSx,
+    mobilePeekRestLayerSx,
     mobilePresentationMovingRootSx,
 } from "./mobilePresentationMotion";
 import { frostedChrome } from "./frostedGlass";
@@ -2569,9 +2570,10 @@ export function App({
                     position: "relative",
                     overflow: mobile ? "hidden" : undefined,
                     // Store notifications are already held during a drawer
-                    // gesture. Flatten overflow tiles / frosted chrome and
-                    // pause known CSS loops without a descendant-universal
-                    // style recalc of the whole transcript.
+                    // gesture. Collapse per-row paint tiles at rest so the
+                    // first tracking frame only writes transform. Overflow
+                    // freeze stays on the claimed-swipe / open selectors.
+                    ...mobilePeekRestLayerSx,
                     ...mobilePresentationMovingRootSx(
                         "data-mobile-drawer-moving",
                     ),
@@ -2879,8 +2881,9 @@ export function App({
                             height: floatingPanelHeight,
                             zIndex: 1,
                             pointerEvents: "none",
-                            // Resting glass. Drawer prepare strips the
-                            // filter before the first translate.
+                            // Resting glass. This follower already has its
+                            // own translate3d; keep the filter during the
+                            // swipe so prepare does not rebuild the layer.
                             ...frostedChrome(t),
                         })}
                     />
@@ -3433,7 +3436,9 @@ export function App({
                                     // Transcript-only sliding page. Composer and
                                     // navbar are siblings with their own
                                     // translate3d; iOS pins them if they live
-                                    // inside this transformed box.
+                                    // inside this transformed box. Isolation +
+                                    // overflow keep the peek one compositor
+                                    // layer at rest, matching the Review page.
                                     flex: 1,
                                     minHeight: 0,
                                     minWidth: 0,
@@ -3441,6 +3446,10 @@ export function App({
                                     flexDirection: "column",
                                     position: "relative",
                                     zIndex: 0,
+                                    isolation: "isolate",
+                                    overflow: "hidden",
+                                    backfaceVisibility: "hidden",
+                                    transformOrigin: "left center",
                                     bgcolor: "background.default",
                                     pointerEvents: "auto",
                                 }

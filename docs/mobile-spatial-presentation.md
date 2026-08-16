@@ -47,9 +47,12 @@ gesture root (shell)
 5. Transcript scroll is `column-reverse` and must never be JS-virtualized.
    Recycle by replacing older **mounted** rows with a measured spacer while
    the reader follows the live edge.
-6. Flatten compositor work **before** the first peek translate (prepare at
-   ~2 px). Do not add or remove `backdrop-filter` while the finger is
-   moving.
+6. The peek is already one compositor layer at rest. Collapse per-row
+   `contain` on `[data-mobile-drawer-surface] [data-key]` standing, and
+   arm hold + peek `will-change` on finger-down. The 2 px claim only
+   writes `translate3d` and freezes overflow. Do not add or remove
+   `backdrop-filter` on the dedicated frost follower during a drawer
+   swipe — toggling it rebuilds that layer on the first tracking frames.
 7. Chrome hit-testing and chrome paint are different layers. Never resize a
    painted veil after settle to fix taps.
 8. Chrome Blink on the Mac debug profile cannot prove iOS pin, IME, or
@@ -73,10 +76,17 @@ slop is Cowboy-specific.
 Do not restore the old 4–12 px lock plus 1.15 axis ratio plus 34/66
 magnetic thresholds. Those made the page feel late and sticky.
 
-`web/src/mobileSpatialDrawer.ts` owns prepare, lock, 1:1 write, settle, and
-follower transforms. AppBar/nav CSS must not include `transform` in a
-standing transition; that interpolates the follower and the bottom trails
-the peek by a half-beat.
+`web/src/mobileSpatialDrawer.ts` owns arm, prepare, lock, 1:1 write, settle, and
+follower transforms. Finger-down arms the peek layer (store hold + peek
+`will-change`). Prepare at 2 px only claims the swipe: `transition: none`,
+follower promotion, overflow flatten. AppBar/nav CSS must not include
+`transform` in a standing transition; that interpolates the follower and
+the bottom trails the peek by a half-beat.
+
+Do not `setState` on transcript `touchstart` or swipe-claim. A following
+reader unfollows when scroll actually leaves the live edge, not on
+finger-down. `holdStorePresentation` plus a pause ref freeze the tree;
+React catch-up runs after release.
 
 ### Rail and peek
 
@@ -115,9 +125,12 @@ flatten and reads as a blurry band over the rail. Do not put
 ### Composer frost
 
 Resting composer + navbar sit on one `frostedChrome` slab
-(`web/src/frostedGlass.ts`). Prepare strips `backdrop-filter` before the
-first translate (`mobileCompositorFlattenSx`). Keyboard focus hides the
-slab and uses opaque paper so CM6 cannot sample the transcript.
+(`web/src/frostedGlass.ts`). The slab is a dedicated follower with its
+own `translate3d`. Keep its `backdrop-filter` during a drawer swipe —
+stripping it at prepare was the intermittent first-frame hitch. The
+product pager and detent sheet still strip frost because those surfaces
+*contain* the blur. Keyboard focus hides the slab and uses opaque paper
+so CM6 cannot sample the transcript.
 
 ## 4. Transcript budget
 
@@ -142,8 +155,9 @@ rows breaks the iOS column-reverse anchor and drops local tool-card
 state. Do not use `content-visibility` on rows inside that scroller:
 WebKit can keep the intrinsic height and skip paint, leaving a hole.
 
-During a drawer swipe, flatten also sets `contain: none` on
-`[data-mobile-drawer-surface] [data-key]` so the peek is one tile.
+`contain: none` on `[data-mobile-drawer-surface] [data-key]` is standing
+(`mobilePeekRestLayerSx`), not a prepare-time toggle. Swiping a long
+transcript must not restyle N paint boundaries on the first frame.
 
 ## 5. Hit testing and chrome freeze
 
@@ -192,7 +206,7 @@ These already failed or were rejected:
 | Swipe claim, flick, rubber | `web/src/obsidianDrawerGesture.ts` |
 | 1:1 write, followers, settle | `web/src/mobileSpatialDrawer.ts` |
 | Rail offset, dim progress, settle curve | `web/src/mobileDrawerMotion.ts` |
-| Prepare flatten, rail hit, close layer | `web/src/mobilePresentationMotion.ts` |
+| Standing peek layer, prepare flatten, rail hit, close layer | `web/src/mobilePresentationMotion.ts` |
 | Live-row recycle | `web/src/transcriptLiveWindow.ts` |
 | Column-reverse transcript | `web/src/Transcript.tsx` |
 | Event-tail recycle | `store.releaseFollowedHistory` |

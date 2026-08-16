@@ -43,14 +43,20 @@ Deno.test("mobile drawer keeps clipping and shadows off the heavy surface", () =
   assert(drawerSource.includes("obsidianDrawerRubberOffset"));
   assert(drawerSource.includes("drawer.contains(target)"));
   assert(drawerSource.includes("gesture.prepared = true"));
+  assert(drawerSource.includes("armPresentation"));
+  assert(drawerSource.includes("disarmPresentation"));
   assert(drawerSource.includes("applySlide = (offset: number, instant = false)"));
   assert(drawerSource.includes('if (instant) layer.style.transition = "none"'));
   assert(drawerSource.includes("render(offset, true)"));
   assert(drawerSource.includes("promoteLayer(layer)"));
   assert(drawerSource.includes("demoteLayer(layer)"));
-  const widthAt = drawerSource.indexOf("publishDrawerWidth(width)");
+  assert(drawerSource.includes("armPresentation();"));
+  const armAt = drawerSource.indexOf("armPresentation();");
   const firstTranslate = drawerSource.indexOf("render(offset, true)");
-  assert(widthAt >= 0 && firstTranslate > widthAt);
+  assert(armAt >= 0 && firstTranslate > armAt);
+  const widthAt = drawerSource.indexOf("publishDrawerWidth(width)");
+  const translateAt = drawerSource.indexOf("render(offset, true)");
+  assert(widthAt >= 0 && translateAt > widthAt);
 });
 
 Deno.test("drawer join is a hard paper|page edge", () => {
