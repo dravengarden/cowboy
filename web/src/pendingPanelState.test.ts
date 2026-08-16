@@ -49,3 +49,12 @@ Deno.test("staging a draft or queue item expands that panel and flashes the row"
   assertEquals(composerSource.includes("data-pending-row-flash"), true);
   assertEquals(composerSource.includes("scrollPendingRowIntoView"), true);
 });
+
+Deno.test("queue and draft bulk actions live in the header kebab", () => {
+  assertEquals(composerSource.includes('aria-label={kind === "draft" ? "Draft actions" : "Queue actions"}'), true);
+  assertEquals(composerSource.includes("<MoreVert fontSize=\"small\" />"), true);
+  assertEquals(composerSource.includes("setBulkConfirm(\"send-all\")"), true);
+  assertEquals(composerSource.includes("setBulkConfirm(\"clear-all\")"), true);
+  assertEquals(composerSource.includes('label="Clear All"'), false);
+  assertEquals(composerSource.includes('label="Send all"'), false);
+});

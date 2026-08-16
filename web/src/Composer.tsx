@@ -3871,107 +3871,15 @@ function OptimisticDraftRow({
   );
 }
 
-// A header action that confirms before firing — the bulk panel actions (Clear
-// All, Send all) are one tap from wiping or dispatching the whole list, so they
-// route through a small confirm Popover (same pattern as the row's Force-push
-// confirm) instead of acting instantly.
-function ConfirmButton({
-  label,
-  message,
-  confirmLabel,
-  confirmColor,
-  color = "inherit",
-  muted = false,
-  disabled = false,
-  onConfirm,
-}: {
-  label: string;
-  message: string;
-  confirmLabel: string;
-  confirmColor: "primary" | "error" | "warning";
-  color?: "inherit" | "primary";
-  muted?: boolean;
-  disabled?: boolean;
-  onConfirm: () => Promise<void> | void;
-}): React.JSX.Element {
-  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
-  useEffect(() => {
-    if (disabled) setAnchor(null);
-  }, [disabled]);
-  const confirm = async (): Promise<void> => {
-    // Destructive confirmation (error, e.g. Clear All) is high-consequence;
-    // benign bulk confirmation (Send all) remains lightweight navigation.
-    if (confirmColor === "error") importantHaptic();
-    else navigationHaptic();
-    await onConfirm();
-    setAnchor(null);
-  };
-  useConfirmEnter(anchor !== null, () => {
-    void confirm();
-  });
-  return (
-    <>
-      <Button
-        size="small"
-        color={color}
-        disabled={disabled}
-        onClick={(e): void => setAnchor(e.currentTarget)}
-        sx={{
-          textTransform: "none",
-          minWidth: 0,
-          px: 0.75,
-          ...(muted && { color: "text.secondary" }),
-        }}
-      >
-        {label}
-      </Button>
-      <Popover
-        open={anchor !== null}
-        anchorEl={anchor}
-        onClose={(): void => setAnchor(null)}
-        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
-        transformOrigin={{ vertical: "top", horizontal: "right" }}
-      >
-        <Box sx={{ p: 1.5, maxWidth: 240 }}>
-          <Typography variant="body2" sx={{ mb: 1 }}>
-            {message}
-          </Typography>
-          <Stack direction="row" spacing={1} justifyContent="flex-end">
-            <Button
-              size="small"
-              color="inherit"
-              onClick={(): void => setAnchor(null)}
-              sx={{ textTransform: "none" }}
-            >
-              Cancel
-              <Kbd keys="Esc" />
-            </Button>
-            <NetworkButton
-              size="small"
-              variant="contained"
-              color={confirmColor}
-              networkAction={confirm}
-              sx={{ textTransform: "none" }}
-            >
-              {confirmLabel}
-              <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-            </NetworkButton>
-          </Stack>
-        </Box>
-      </Popover>
-    </>
-  );
-}
-
 interface PendingEditController {
   isDirty: () => boolean;
   save: () => void;
   discard: () => void;
 }
 
-// Collapsible header ("N Queued Messages" / "N Drafts" + Clear All, plus Send all
-// for drafts) over a scroll-capped list of rows. Drafts sit BELOW the queue and
-// above the composer (see the Composer render).
+// Collapsible header ("N Queued Messages" / "N Drafts"). Bulk Send all /
+// Clear all live in the header kebab so the collapsed bar stays one line.
+// Drafts sit BELOW the queue and above the composer (see the Composer render).
 function PendingPanel({
   desktop,
   keyboardOpen,
@@ -4030,6 +3938,10 @@ function PendingPanel({
     [],
   );
   const [confirmCollapseEdit, setConfirmCollapseEdit] = useState(false);
+  const [panelMenuEl, setPanelMenuEl] = useState<HTMLElement | null>(null);
+  const [bulkConfirm, setBulkConfirm] = useState<"send-all" | "clear-all" | null>(
+    null,
+  );
   // Accordion disclosure is a view preference; edit ownership is a transaction.
   // A transaction always wins visually so persisted/local disclosure state can
   // never hide the only active Mobile composer.
@@ -4044,6 +3956,20 @@ function PendingPanel({
     collapse.set(true);
   };
   useConfirmEnter(confirmCollapseEdit, () => settleEditAndCollapse("save"));
+  const runBulkConfirm = async (): Promise<void> => {
+    if (bulkConfirm === "send-all") {
+      navigationHaptic();
+      await activateAllDrafts(sessionId);
+    } else if (bulkConfirm === "clear-all") {
+      importantHaptic();
+      if (kind === "queued") await clearQueue(sessionId);
+      else await clearDrafts(sessionId);
+    }
+    setBulkConfirm(null);
+  };
+  useConfirmEnter(bulkConfirm !== null, () => {
+    void runBulkConfirm();
+  });
   useEffect(() => {
     return subscribePendingArrival((arrival) => {
       if (arrival.kind !== kind) return;
@@ -4453,29 +4379,85 @@ function PendingPanel({
             <SwapVert fontSize="small" />
           </IconButton>
         )}
-        {kind === "draft" && (
-          <ConfirmButton
-            label="Send all"
-            message={`Send all ${String(count)} drafts to the agent?`}
-            confirmLabel="Send all"
-            confirmColor="primary"
-            color="primary"
-            disabled={editingId !== null}
-            onConfirm={() => activateAllDrafts(sessionId)}
-          />
-        )}
-        <ConfirmButton
-          label="Clear All"
-          message={kind === "queued"
-            ? `Clear all ${String(count)} queued messages?`
-            : `Clear all ${String(count)} drafts?`}
-          confirmLabel="Clear all"
-          confirmColor="error"
-          muted
+        <IconButton
+          size="small"
           disabled={editingId !== null}
-          onConfirm={() =>
-            kind === "queued" ? clearQueue(sessionId) : clearDrafts(sessionId)}
-        />
+          aria-label={kind === "draft" ? "Draft actions" : "Queue actions"}
+          onClick={(event): void => {
+            haptic();
+            setPanelMenuEl(event.currentTarget);
+          }}
+          sx={{ flexShrink: 0 }}
+        >
+          <MoreVert fontSize="small" />
+        </IconButton>
+        <Menu
+          open={panelMenuEl !== null}
+          anchorEl={panelMenuEl}
+          onClose={(): void => setPanelMenuEl(null)}
+          anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+          transformOrigin={{ vertical: "top", horizontal: "right" }}
+          disableScrollLock
+        >
+          {kind === "draft" && (
+            <MenuItem
+              disabled={editingId !== null}
+              onClick={(): void => {
+                setPanelMenuEl(null);
+                setBulkConfirm("send-all");
+              }}
+            >
+              <ListItemIcon><Send fontSize="small" /></ListItemIcon>
+              <ListItemText>Send all</ListItemText>
+            </MenuItem>
+          )}
+          <MenuItem
+            disabled={editingId !== null}
+            onClick={(): void => {
+              setPanelMenuEl(null);
+              setBulkConfirm("clear-all");
+            }}
+          >
+            <ListItemIcon><DeleteOutline fontSize="small" /></ListItemIcon>
+            <ListItemText>Clear all</ListItemText>
+          </MenuItem>
+        </Menu>
+        <ConfirmSheet
+          open={bulkConfirm !== null}
+          onClose={(): void => setBulkConfirm(null)}
+          title={bulkConfirm === "send-all" ? "Send all drafts?" : kind === "queued"
+            ? "Clear all queued messages?"
+            : "Clear all drafts?"}
+          actions={
+            <>
+              <Button
+                color="inherit"
+                onClick={(): void => setBulkConfirm(null)}
+                sx={{ textTransform: "none" }}
+              >
+                Cancel
+                <Kbd keys="Esc" />
+              </Button>
+              <NetworkButton
+                variant="contained"
+                color={bulkConfirm === "send-all" ? "primary" : "error"}
+                networkAction={runBulkConfirm}
+                sx={{ textTransform: "none" }}
+              >
+                {bulkConfirm === "send-all" ? "Send all" : "Clear all"}
+                <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+              </NetworkButton>
+            </>
+          }
+        >
+          <DialogContentText>
+            {bulkConfirm === "send-all"
+              ? `Send all ${String(count)} drafts to the agent?`
+              : kind === "queued"
+              ? `Clear all ${String(count)} queued messages?`
+              : `Clear all ${String(count)} drafts?`}
+          </DialogContentText>
+        </ConfirmSheet>
       </Stack>
       {
         /* Match PlanDock's disclosure motion. Non-editing rows stay mounted for
