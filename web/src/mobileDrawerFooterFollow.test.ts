@@ -19,6 +19,7 @@ Deno.test("mobile drawer translates an in-flow page that owns the footer", () =>
   // A transformed position:absolute;inset:0 page lets iOS pin the footer.
   assertEquals(appSource.includes("calc(-1 * var(--navbar-h, 0px))"), false);
   assert(appSource.includes("In-flow fill, not position:absolute;inset:0"));
+  assert(appSource.includes('bgcolor: mobile ? "transparent" : "background.default"'));
   assert(appSource.includes('bottomInset={mobile'));
   assert(appSource.includes('{!mobile && ('));
   assert(reviewDrawerSource.includes("In-flow fill. A transformed position:absolute;inset:0"));

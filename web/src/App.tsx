@@ -2756,7 +2756,10 @@ export function App({
                     position: "relative",
                     overflow: "hidden",
                     zIndex: mobile ? 1 : undefined,
-                    bgcolor: "background.default",
+                    // Mobile paint lives on the sliding page. An opaque
+                    // column here covers the Sessions rail when the page
+                    // translates.
+                    bgcolor: mobile ? "transparent" : "background.default",
                     // Lift the whole column off the on-screen keyboard + its
                     // iOS-native accessory bar: this padding (the keyboard's
                     // overlap, published by useKeyboardInset) reserves space at
