@@ -2,6 +2,7 @@ import {
   AccountTreeOutlined,
   ArrowBack,
   ArrowForward,
+  ChatBubbleOutline,
   CheckCircle,
   CheckCircleOutline,
   ChevronLeft,
@@ -90,10 +91,14 @@ import type { CodeInspectCandidate, CodeRevealRange } from "./CodeViewer";
 import { ReviewDrawerShell } from "./ReviewDrawerShell";
 import { ReviewFileTree } from "./ReviewFileTree";
 import { ReviewOutline } from "./ReviewOutline";
-import { ReviewSettings } from "./ReviewSettings";
 import { isMarkdownReviewPath } from "./reviewMarkdown";
 import type { ReviewMode } from "./reviewMode";
-import { updateReviewSettings, useReviewSettings } from "./reviewSettings";
+import {
+  setReviewLanguageCapabilities,
+  updateReviewSettings,
+  useReviewSettings,
+} from "./reviewSettings";
+import { openMobileProduct } from "../appPagerMotion";
 import { presentHoverBlock } from "./symbolPresentation";
 import type { CodeDiffScope } from "./codeApi";
 import type { CodeLanguage } from "./codeApi";
@@ -1383,9 +1388,6 @@ export function ReviewApp({
     worktree: string | undefined;
     head: string | undefined;
   }>();
-  const [language, setLanguage] = useState<
-    import("./codeApi").CodeLanguageCapabilities
-  >();
   const [languageData, setLanguageData] = useState<CodeLanguage>();
   const [tabs, setTabs] = useState<ReviewTab[]>([]);
   const [tabCloseRequest, setTabCloseRequest] = useState<TabCloseRequest>();
@@ -1501,7 +1503,7 @@ export function ReviewApp({
     setChangeCount(0);
     setRepositoryContext(undefined);
     setGitQueue([]);
-    setLanguage(undefined);
+    setReviewLanguageCapabilities(undefined);
   }, [workspace?.sessionId]);
 
   useEffect(() => {
@@ -1531,7 +1533,7 @@ export function ReviewApp({
             worktree: manifest.worktree,
             head: manifest.head,
           });
-          setLanguage(manifest.language);
+          setReviewLanguageCapabilities(manifest.language);
           const previous = manifestRevision.current;
           manifestRevision.current = manifest.revision;
           if (previous && previous !== manifest.revision) {
@@ -2507,7 +2509,17 @@ export function ReviewApp({
                 "@media (min-width: 600px)": { minHeight: 44 },
               }}
             >
-              <ReviewSettings language={language} />
+              <IconButton
+                data-mobile-open-agent="true"
+                aria-label="Open agent"
+                title="Agent"
+                onClick={(): void => {
+                  navigationHaptic();
+                  openMobileProduct("agent");
+                }}
+              >
+                <ChatBubbleOutline />
+              </IconButton>
               <Button
                 variant="text"
                 color="inherit"
