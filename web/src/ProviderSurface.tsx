@@ -159,6 +159,10 @@ export function ProviderAssetGraphic({
   sx?: Record<string, unknown>;
 }): React.JSX.Element {
   const gradientId = `provider-gradient-${useId().replaceAll(":", "")}`;
+  // Provider manifests express an optical baseline in px, but Cowboy's font
+  // setting is application-wide. Keep the authored baseline while scaling every
+  // rendered mark with the same preference as text and ordinary MUI glyphs.
+  const scaledSize = `calc(${size}px * var(--cowboy-font-scale, 1))`;
   if (asset.content.kind === "vector_path") {
     const gradient = asset.content.gradient;
     return (
@@ -168,8 +172,8 @@ export function ProviderAssetGraphic({
         aria-label={asset.accessible_label}
         viewBox={asset.content.view_box}
         sx={{
-          width: size,
-          height: size,
+          width: scaledSize,
+          height: scaledSize,
           ...(asset.content.fill ? { color: asset.content.fill } : {}),
           flexShrink: 0,
           ...sx,
@@ -211,7 +215,7 @@ export function ProviderAssetGraphic({
       className={className}
       alt={asset.accessible_label}
       src={`data:${asset.media_type};base64,${asset.content.base64}`}
-      sx={{ width: size, height: size, flexShrink: 0, ...sx }}
+      sx={{ width: scaledSize, height: scaledSize, flexShrink: 0, ...sx }}
     />
   );
 }
