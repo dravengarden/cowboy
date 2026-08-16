@@ -36,6 +36,7 @@ import {
   providerPresentationEntry,
   useProviderCatalog,
 } from "./providerCatalog";
+import { groupProviderAuthentications } from "./providerAuthenticationGroups.ts";
 import { ProviderMark, ProviderSurface } from "./ProviderSurface";
 
 interface ProviderMachine {
@@ -97,6 +98,7 @@ type LoginEvent =
 interface AuthenticationFlow {
   provider: ProviderCatalogEntry;
   sharedProviderNames: string[];
+  credentialTitle: string;
   requestId?: string;
   expiresAtMs?: number;
   events: LoginEvent[];
@@ -134,19 +136,28 @@ function ProviderManagementIdentity({
   statusLabel,
   statusTone,
   actions,
+  title = manifest.display.name,
+  summary = manifest.display.summary,
+  mark,
+  consumers = [],
 }: {
   manifest: ProviderUiManifest;
   version: string;
   statusLabel: string;
   statusTone: ProviderManagementStatusTone;
   actions: ReactNode;
+  title?: string;
+  summary?: string;
+  mark?: ReactNode;
+  consumers?: readonly ProviderCatalogEntry[];
 }): React.JSX.Element {
+  const credentialGroup = consumers.length > 1;
   return (
     <Box
       data-provider-management-identity
       sx={{
         display: "grid",
-        gridTemplateColumns: "32px minmax(0, 1fr)",
+        gridTemplateColumns: "40px minmax(0, 1fr)",
         columnGap: 1,
         alignItems: "start",
         minWidth: 0,
@@ -155,15 +166,15 @@ function ProviderManagementIdentity({
       <Box
         data-provider-management-mark
         sx={{
-          width: 32,
-          height: 32,
+          width: 40,
+          height: 40,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
           color: manifest.display.accent,
         }}
       >
-        <ProviderMark manifest={manifest} size={28} />
+        {mark ?? <ProviderMark manifest={manifest} size={30} />}
       </Box>
       <Stack spacing={0.45} sx={{ minWidth: 0 }}>
         <Typography
@@ -178,7 +189,7 @@ function ProviderManagementIdentity({
             overflow: "hidden",
           }}
         >
-          {manifest.display.name}
+          {title}
         </Typography>
         <Typography
           variant="caption"
@@ -192,8 +203,40 @@ function ProviderManagementIdentity({
             overflow: "hidden",
           }}
         >
-          {manifest.display.summary}
+          {summary}
         </Typography>
+        {credentialGroup
+          ? (
+            <Stack
+              data-provider-credential-consumers
+              direction="row"
+              spacing={0.5}
+              flexWrap="wrap"
+              useFlexGap
+              sx={{ pt: 0.2 }}
+            >
+              {consumers.map((entry) => (
+                <Chip
+                  key={entry.provider_id}
+                  size="small"
+                  variant="outlined"
+                  icon={<ProviderMark manifest={entry.manifest} size={14} />}
+                  label={entry.manifest.display.name}
+                  sx={{
+                    height: 25,
+                    maxWidth: "100%",
+                    "& .MuiChip-icon": { ml: 0.6, mr: 0.1 },
+                    "& .MuiChip-label": {
+                      px: 0.65,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    },
+                  }}
+                />
+              ))}
+            </Stack>
+          )
+          : null}
         <Stack
           data-provider-management-footer
           direction="row"
@@ -230,13 +273,19 @@ function ProviderManagementIdentity({
           <Box
             data-provider-management-actions
             sx={{
-              ml: "auto",
+              ml: { xs: 0, sm: "auto" },
+              width: { xs: "100%", sm: "auto" },
               minWidth: 0,
               "& > .MuiStack-root": {
                 alignItems: "center",
-                justifyContent: "flex-end",
+                justifyContent: { xs: "stretch", sm: "flex-end" },
+                width: "100%",
               },
-              "& .MuiButton-root": { minHeight: 36, px: 1.25 },
+              "& .MuiButton-root": {
+                minHeight: 40,
+                px: 1.25,
+                flex: { xs: "1 1 auto", sm: "0 0 auto" },
+              },
             }}
           >
             {actions}
@@ -245,6 +294,59 @@ function ProviderManagementIdentity({
       </Stack>
     </Box>
   );
+}
+
+function ProviderCredentialMarks(
+  { entries, size = 24, className }: {
+    entries: readonly ProviderCatalogEntry[];
+    size?: number;
+    className?: string;
+  },
+): React.JSX.Element {
+  const visible = entries.slice(0, 4);
+  const markSize = Math.max(10, Math.floor(size * 0.54));
+  return (
+    <Box
+      className={className}
+      sx={{
+        width: size,
+        height: size,
+        display: "grid",
+        gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+        placeItems: "center",
+        flexShrink: 0,
+      }}
+    >
+      {visible.map((entry) => (
+        <Box
+          key={entry.provider_id}
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: markSize,
+            height: markSize,
+          }}
+        >
+          <ProviderMark manifest={entry.manifest} size={markSize} />
+        </Box>
+      ))}
+    </Box>
+  );
+}
+
+function providerCredentialTitle(
+  entries: readonly [ProviderCatalogEntry, ...ProviderCatalogEntry[]],
+): string {
+  if (entries.length === 1) return entries[0].manifest.display.name;
+  const methodLabels = new Set(
+    entries.flatMap((entry) =>
+      entry.manifest.authentication.methods.map((method) => method.label)
+    ),
+  );
+  return methodLabels.size === 1
+    ? methodLabels.values().next().value ?? "Shared Provider credentials"
+    : "Shared Provider credentials";
 }
 
 type ProviderManagementLifecycleSlot = "setup" | "empty" | "settings";
@@ -297,6 +399,10 @@ function ProviderManagement(
     () => latestProviderEntries(catalog?.providers ?? []),
     [catalog],
   );
+  const serviceCredentialGroups = useMemo(
+    () => groupProviderAuthentications(latestEntries),
+    [latestEntries],
+  );
   const providerRows = useMemo(
     () =>
       scope === "machine"
@@ -307,15 +413,20 @@ function ProviderManagement(
             ? { provider_contracts: machine.provider_contracts }
             : {}),
         })
-        : latestEntries.map((latestEntry) => ({
-          providerId: latestEntry.provider_id,
-          latestEntry,
-          latestCompatibleEntry: latestEntry,
-          latestCompatibility: undefined,
-          installed: undefined,
-          installedEntry: undefined,
-        })),
-    [catalog, inventory, latestEntries, machine, scope],
+        : serviceCredentialGroups.map((group) => {
+          const latestEntry = group.entries.find((entry) =>
+            entry.release_state === "ready" && entry.artifact_digest !== null
+          ) ?? group.entries[0];
+          return {
+            providerId: group.authenticationScope,
+            latestEntry,
+            latestCompatibleEntry: latestEntry,
+            latestCompatibility: undefined,
+            installed: undefined,
+            installedEntry: undefined,
+          };
+        }),
+    [catalog, inventory, machine, scope, serviceCredentialGroups],
   );
   const authentications = useMemo(
     () =>
@@ -468,13 +579,15 @@ function ProviderManagement(
               "Provider authentication is managed at Cowboy Service scope",
             );
           }
+          const credentialEntries = serviceCredentialGroups.find((group) =>
+            group.authenticationScope === entry.authentication_scope
+          )?.entries ?? [entry];
           setFlow({
             provider: entry,
-            sharedProviderNames: latestEntries
-              .filter((candidate) =>
-                candidate.authentication_scope === entry.authentication_scope
-              )
-              .map((candidate) => candidate.manifest.display.name),
+            sharedProviderNames: credentialEntries.map((candidate) =>
+              candidate.manifest.display.name
+            ),
+            credentialTitle: providerCredentialTitle(credentialEntries),
             events: [],
           });
           return;
@@ -691,6 +804,14 @@ function ProviderManagement(
                   row.installed.generation_digest,
                 ) ?? entry
                 : entry;
+              const credentialGroup = scope === "service"
+                ? serviceCredentialGroups.find((group) =>
+                  group.authenticationScope === entry.authentication_scope
+                )
+                : undefined;
+              const presentationTitle = credentialGroup
+                ? providerCredentialTitle(credentialGroup.entries)
+                : presentationEntry.manifest.display.name;
               const summary = scope === "service"
                 ? entry.manifest.authentication.required
                 ? serviceAuthenticationLabel(
@@ -718,12 +839,21 @@ function ProviderManagement(
                   variant="outlined"
                   color={healthy ? "success" : "default"}
                   icon={
-                    <ProviderMark
-                      manifest={presentationEntry.manifest}
-                      size={17}
-                    />
+                    credentialGroup && credentialGroup.entries.length > 1
+                      ? (
+                        <ProviderCredentialMarks
+                          entries={credentialGroup.entries}
+                          size={16}
+                        />
+                      )
+                      : (
+                        <ProviderMark
+                          manifest={presentationEntry.manifest}
+                          size={16}
+                        />
+                      )
                   }
-                  label={`${presentationEntry.manifest.display.name} · ${summary}`}
+                  label={`${presentationTitle} · ${summary}`}
                   sx={{
                     "& .MuiChip-icon": { ml: 0.625, mr: 0.125 },
                     "& .MuiChip-label": { pl: 0.625, pr: 0.625 },
@@ -856,16 +986,19 @@ function ProviderManagement(
             entry.manifest.authentication,
           );
           const error = errors[entry.provider_id] || "";
+          const releaseError = operationEntry.release_state === "ready"
+            ? ""
+            : operationEntry.release_detail || "Provider release unavailable";
+          const surfaceError = error || releaseError;
           const host = scope === "service"
-            ? providerServiceHost(entry, auth, error)
+            ? providerServiceHost(entry, auth, surfaceError)
             : providerHost(
               entry,
               latestCompatibleEntry,
               installed,
               auth,
               machine,
-              error,
-              latestCompatibility?.detail ?? "",
+              surfaceError,
             );
           const releaseReady = operationEntry.release_state === "ready" &&
             operationEntry.artifact_digest !== null &&
@@ -898,6 +1031,13 @@ function ProviderManagement(
               : managementStatus === "update available"
               ? "warning"
               : "default";
+          const credentialGroup = scope === "service"
+            ? serviceCredentialGroups.find((group) =>
+              group.authenticationScope === entry.authentication_scope
+            )
+            : undefined;
+          const credentialEntries = credentialGroup?.entries ?? [entry];
+          const sharedCredential = credentialEntries.length > 1;
           const blockedCapabilities: ReadonlySet<EffectCapability> | undefined =
             releaseReady
             ? undefined
@@ -947,6 +1087,9 @@ function ProviderManagement(
                 borderRadius: 2,
               }}
               data-provider-management-card
+              data-provider-credential-card={scope === "service"
+                ? "true"
+                : undefined}
             >
               <Stack spacing={1.25}>
                 <ProviderManagementIdentity
@@ -955,17 +1098,33 @@ function ProviderManagement(
                   statusLabel={managementStatus}
                   statusTone={managementStatusTone}
                   actions={lifecycleSurface}
+                  title={credentialGroup
+                    ? providerCredentialTitle(credentialGroup.entries)
+                    : entry.manifest.display.name}
+                  summary={sharedCredential
+                    ? `One Cowboy Service credential shared by ${credentialEntries.length} Providers`
+                    : entry.manifest.display.summary}
+                  mark={sharedCredential
+                    ? (
+                      <ProviderCredentialMarks
+                        entries={credentialEntries}
+                        size={36}
+                      />
+                    )
+                    : <ProviderMark manifest={entry.manifest} size={30} />}
+                  consumers={sharedCredential ? credentialEntries : []}
                 />
                 {scope === "machine" && installed &&
                     entry.manifest.authentication.required
                   ? (
-                    <Box sx={{ pl: 5 }}>
+                    <Box sx={{ pl: 6 }}>
                       <Chip
                         size="small"
                         variant="outlined"
-                        label={`Credentials ${
-                          installed.materialization_state.replaceAll("_", " ")
-                        }`}
+                        label={machineCredentialLabel(
+                          installed.materialization_state,
+                          authPresentation,
+                        )}
                         color={installed.materialization_state === "current"
                           ? "success"
                           : "warning"}
@@ -983,7 +1142,7 @@ function ProviderManagement(
                     </Alert>
                   )
                   : null}
-                {error || !releaseReady
+                {surfaceError
                   ? (
                     <ProviderSurface
                       manifest={entry.manifest}
@@ -1007,13 +1166,16 @@ function ProviderManagement(
         <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1 }}>
           {flow ? <ProviderMark manifest={flow.provider.manifest} /> : null}
           {flow
-            ? authenticationCopy(
-              resolveProviderAuthenticationPresentation(
-                flow.provider.manifest.authentication,
-              ),
-              flow.sharedProviderNames.length > 1,
-            ).title
-            : "Configure"} {flow?.provider.manifest.display.name ?? "Provider"}
+            ? flow.sharedProviderNames.length > 1
+              ? `Configure ${flow.credentialTitle}`
+              : `${
+                authenticationCopy(
+                  resolveProviderAuthenticationPresentation(
+                    flow.provider.manifest.authentication,
+                  ),
+                ).title
+              } ${flow.provider.manifest.display.name}`
+            : "Configure Provider"}
         </DialogTitle>
         <DialogContent>
           {flow
@@ -1366,6 +1528,23 @@ function authenticationCopy(
   }
 }
 
+function machineCredentialLabel(
+  materializationState: string,
+  presentation: ProviderAuthenticationPresentation,
+): string {
+  switch (materializationState) {
+    case "current":
+      return "Credentials ready";
+    case "pending":
+    case "staging":
+      return "Credentials syncing";
+    default:
+      return presentation === "api_key"
+        ? "Credentials missing · Add API key above"
+        : "Credentials missing · Sign in above";
+  }
+}
+
 function providerInstallationSummary(
   installed: MachineProviderInventory | undefined,
   latestCompatible: ProviderCatalogEntry | undefined,
@@ -1397,7 +1576,6 @@ function providerHost(
   auth: ProviderAuthenticationStatus | undefined,
   machine: ProviderMachine,
   error: string,
-  compatibilityDetail: string,
 ): ProviderHostContext {
   return {
     provider_version: installed?.provider_version ?? entry.provider_version,
@@ -1405,8 +1583,7 @@ function providerHost(
     authentication_state: auth?.authentication_state ?? "signed out",
     distribution_state: auth?.distribution_state ?? "none",
     machine_name: machine.display_name,
-    error_detail: error || compatibilityDetail ||
-      latestCompatibleEntry?.release_detail || "",
+    error_detail: error || latestCompatibleEntry?.release_detail || "",
     installed: installed !== undefined,
     auth_ready: !entry.manifest.authentication.required ||
       auth?.authentication_state === "ready",

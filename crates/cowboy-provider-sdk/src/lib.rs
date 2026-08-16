@@ -3912,8 +3912,9 @@ mod tests {
     fn grok_mark_has_a_safe_rendering_margin() {
         let source: StandardProviderSource =
             serde_json::from_str(include_str!("../../../providers/grok/provider.json")).unwrap();
+        let expected_mark_path = source.display.mark_path.clone();
         let package = build_package(source.compile().unwrap()).unwrap();
-        assert_eq!(package.manifest.version, "1.1.2");
+        assert_eq!(package.manifest.version, "1.1.5");
         for role in [AssetRole::Logo, AssetRole::Icon] {
             let asset = package
                 .manifest
@@ -3922,10 +3923,13 @@ mod tests {
                 .iter()
                 .find(|asset| asset.role == role)
                 .unwrap();
-            let AssetContent::VectorPath { view_box, .. } = &asset.content else {
+            let AssetContent::VectorPath { view_box, path, .. } = &asset.content else {
                 panic!("Grok mark must remain a vector path");
             };
             assert_eq!(view_box, "-2 -2 28 28");
+            assert_eq!(path, &expected_mark_path);
+            assert!(path.contains(".06-.082.12-.164.179-.248"));
+            assert!(path.contains("-.599.63-1.199 1.259-1.682 1.925"));
         }
     }
 

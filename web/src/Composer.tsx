@@ -1508,18 +1508,25 @@ export function ComposerWorkspace({
   useLayoutEffect(() => {
     if (!touchInput) {
       mobileComposerKeyboardWasOpenRef.current = false;
-      return;
+      return undefined;
     }
     if (keyboardOpen) {
+      const opening = !mobileComposerKeyboardWasOpenRef.current;
       mobileComposerKeyboardWasOpenRef.current = true;
-      return;
+      if (!opening) return undefined;
+      const frame = globalThis.requestAnimationFrame(() => {
+        if (editorRef.current?.hasFocus()) {
+          editorRef.current.revealSelection();
+        }
+      });
+      return (): void => globalThis.cancelAnimationFrame(frame);
     }
     if (
       !didMobileSoftwareKeyboardClose(
         mobileComposerKeyboardWasOpenRef.current,
         keyboardOpen,
       )
-    ) return;
+    ) return undefined;
 
     mobileComposerKeyboardWasOpenRef.current = false;
     // iOS and third-party keyboards can hide without blurring their surviving
@@ -1527,6 +1534,7 @@ export function ComposerWorkspace({
     // native :focus-within, so end that stale editing session at the actual
     // visualViewport open→closed boundary before the next paint.
     releaseMobileComposerFocus();
+    return undefined;
   }, [keyboardOpen, touchInput]);
   const compactTrayAttachments = attachmentTrayForSurface(
     attachments,
@@ -2122,7 +2130,7 @@ export function ComposerWorkspace({
               {
                 flex: "0 1 auto",
                 minHeight: MOBILE_COMPOSER_INPUT_EDITOR_MIN_H,
-                maxHeight: "100%",
+                maxHeight: "min(42dvh, 22rem)",
                 overflow: "hidden",
               },
             // Keep the compact native field content-tight. Filling leftover
@@ -2149,12 +2157,23 @@ export function ComposerWorkspace({
             // Size that editor to its thumbnail + text, the same way the
             // native field hugs its lines. Stretching CM6 to the leftover
             // viewport left a tall empty canvas around an 80px image.
-            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-theme-none, &[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-editor, &[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-scroller":
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-theme-none, &[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-editor":
               {
                 flex: "0 1 auto",
                 minHeight: 0,
                 height: "auto",
                 overflow: "hidden",
+              },
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-scroller":
+              {
+                flex: "0 1 auto",
+                minHeight: 0,
+                height: "auto",
+                maxHeight: "min(42dvh, 22rem)",
+                overflowX: "hidden",
+                overflowY: "auto",
+                scrollPaddingBlock: "12px",
+                overscrollBehavior: "contain",
               },
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-content":
               {

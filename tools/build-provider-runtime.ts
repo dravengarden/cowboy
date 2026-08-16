@@ -314,7 +314,12 @@ async function buildComponent(
       });
       const sourceRoot = await materializeGitSource(recipe, stage);
       const goArchitecture = target.endsWith("aarch64") ? "arm64" : "amd64";
-      if (!target.startsWith("linux-")) {
+      const goOperatingSystem = target.startsWith("linux-")
+        ? "linux"
+        : target.startsWith("macos-")
+        ? "darwin"
+        : undefined;
+      if (!goOperatingSystem) {
         throw new Error(`${dependency.id} has no ${target} build contract`);
       }
       const output = `${await Deno.realPath(destination)}/${command}`;
@@ -324,7 +329,7 @@ async function buildComponent(
         "-c",
         "env",
         "CGO_ENABLED=0",
-        "GOOS=linux",
+        `GOOS=${goOperatingSystem}`,
         `GOARCH=${goArchitecture}`,
         "go",
         "build",

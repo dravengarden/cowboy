@@ -239,7 +239,12 @@ export function ProviderThoughtSteps({
       sx={{ flex: 1, minWidth: 0 }}
       aria-label="Thinking steps"
     >
-      {streaming && presentation.active_label && (
+      {
+        /* A live thought already has a current-step marker. Showing the
+          Provider activity header above it duplicates both icon and status;
+          reserve the header for the brief state before the first step lands. */
+      }
+      {streaming && visible.length === 0 && presentation.active_label && (
         <Stack
           direction="row"
           alignItems="center"

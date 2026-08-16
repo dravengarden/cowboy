@@ -25,6 +25,18 @@ Deno.test("incompatible Provider lifecycle actions are omitted instead of lookin
   assertEquals(surfaceSource.includes("disabled={busy || blocked"), false);
 });
 
+Deno.test("Machine compatibility renders once in the Cowboy warning shell", () => {
+  assertEquals(
+    managementSource.includes("const surfaceError = error || releaseError;"),
+    true,
+  );
+  assertEquals(managementSource.includes("{error || !releaseReady"), false);
+  assertEquals(
+    managementSource.includes("error || compatibilityDetail"),
+    false,
+  );
+});
+
 Deno.test("Provider management cards keep geometry in the Cowboy component library", () => {
   assertEquals(
     managementSource.includes("data-provider-management-identity"),
@@ -32,7 +44,7 @@ Deno.test("Provider management cards keep geometry in the Cowboy component libra
   );
   assertEquals(
     managementSource.includes(
-      'gridTemplateColumns: "32px minmax(0, 1fr)"',
+      'gridTemplateColumns: "40px minmax(0, 1fr)"',
     ),
     true,
   );
@@ -69,6 +81,47 @@ Deno.test("Provider authentication copy dispatches on typed presentation, not Pr
   for (const provider of ["claude-deepseek", "codex-deepseek"]) {
     assertEquals(managementSource.includes(provider), false);
   }
+});
+
+Deno.test("Service credential management renders one card per typed authentication scope", () => {
+  assertEquals(
+    managementSource.includes("groupProviderAuthentications(latestEntries)"),
+    true,
+  );
+  assertEquals(
+    managementSource.includes("data-provider-credential-card"),
+    true,
+  );
+  assertEquals(
+    managementSource.includes(
+      "providerCredentialTitle(credentialGroup.entries)",
+    ),
+    true,
+  );
+  assertEquals(
+    managementSource.includes("data-provider-credential-consumers"),
+    true,
+  );
+  assertEquals(
+    managementSource.includes(
+      "One Cowboy Service credential shared by ${credentialEntries.length} Providers",
+    ),
+    true,
+  );
+  assertEquals(managementSource.includes("entries.slice(0, 4)"), true);
+});
+
+Deno.test("Machine credential status gives a typed Service-level recovery action", () => {
+  assertEquals(managementSource.includes('case "current"'), true);
+  assertEquals(managementSource.includes('case "pending"'), true);
+  assertEquals(
+    managementSource.includes('"Credentials missing · Add API key above"'),
+    true,
+  );
+  assertEquals(
+    managementSource.includes('"Credentials missing · Sign in above"'),
+    true,
+  );
 });
 
 Deno.test("Provider marks preserve host component classes and compact chip spacing", () => {
@@ -146,6 +199,15 @@ Deno.test("terminal thought rows use a composed icon instead of a raw prompt", (
   assertEquals(
     transcriptPresentationSource.includes('<Box component="span">›</Box>'),
     false,
+  );
+});
+
+Deno.test("streaming thoughts show one active marker once a step exists", () => {
+  assertEquals(
+    transcriptPresentationSource.includes(
+      "streaming && visible.length === 0 && presentation.active_label",
+    ),
+    true,
   );
 });
 

@@ -1054,17 +1054,21 @@ mod tests {
         let (root, service) = service();
         let claude = package("claude-deepseek");
         let codex = package("codex-deepseek");
+        let mut harness = codex.clone();
+        harness.manifest.id = "deepseek-harness".to_owned();
+        harness.manifest.authentication.projection_schema =
+            "deepseek-harness-gateway-v1".to_owned();
         let bundle = bundle(&claude);
         let statuses = service
             .commit_shared(
-                &[claude.clone(), codex.clone()],
+                &[claude.clone(), codex.clone(), harness.clone()],
                 &bundle,
                 None,
                 "claude-deepseek",
                 None,
             )
             .unwrap();
-        assert_eq!(statuses.len(), 2);
+        assert_eq!(statuses.len(), 3);
         assert!(statuses.iter().all(|status| {
             status.auth_generation == 1
                 && status.authentication_state == ServiceAuthenticationState::Ready
@@ -1084,14 +1088,27 @@ mod tests {
                 &base64::engine::general_purpose::STANDARD.encode(first_machine_public.as_bytes()),
             )
             .unwrap();
+        let third = service
+            .seal_for_machine(
+                "deepseek-harness",
+                &base64::engine::general_purpose::STANDARD.encode(first_machine_public.as_bytes()),
+            )
+            .unwrap();
         assert_eq!(first.auth_generation, second.auth_generation);
+        assert_eq!(second.auth_generation, third.auth_generation);
         assert_eq!(first.action, ProviderAuthAction::Apply);
         assert_eq!(second.action, ProviderAuthAction::Apply);
+        assert_eq!(third.action, ProviderAuthAction::Apply);
         assert_ne!(first.ciphertext, second.ciphertext);
+        assert_ne!(second.ciphertext, third.ciphertext);
 
-        let provider_ids = vec!["claude-deepseek".to_owned(), "codex-deepseek".to_owned()];
+        let provider_ids = vec![
+            "claude-deepseek".to_owned(),
+            "codex-deepseek".to_owned(),
+            "deepseek-harness".to_owned(),
+        ];
         let logged_out = service.logout_shared(&provider_ids).unwrap();
-        assert_eq!(logged_out.len(), 2);
+        assert_eq!(logged_out.len(), 3);
         assert!(logged_out.iter().all(|status| {
             status.auth_generation == 2
                 && status.authentication_state == ServiceAuthenticationState::SignedOut

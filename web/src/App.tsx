@@ -154,6 +154,7 @@ import {
     type MachinePresence,
     machinePresencePresentation,
 } from "./machinePresence";
+import { machineCommandResultPresentation } from "./machineCommandResult";
 import {
     ExploreTranscript,
     MobilePageDock,
@@ -3103,7 +3104,7 @@ export function App({
                                     // finger tap. Remember touch activation until a
                                     // real mouse enters, so ordinary content taps do
                                     // not leave this button looking selected.
-                                    "&[data-touch-activated='true']:hover": {
+                                    "&[data-touch-activated='true']:hover, &[data-touch-activated='true'].Mui-focusVisible": {
                                         bgcolor: "transparent",
                                     },
                                     "&[data-touch-activated='true']:active": {
@@ -4025,7 +4026,8 @@ function MachineNpmUpdateButton({
 
 function MachinesContent(): React.JSX.Element {
     const [machines, setMachines] = useState<readonly MachineChoice[]>([]);
-    const [events, setEvents] = useState<Record<string, readonly MachineEventView[]>>({});
+    const [commandFeedback, setCommandFeedback] = useState<Record<string, ReturnType<typeof machineCommandResultPresentation>>>({});
+    const commandFeedbackTimers = useRef<Record<string, number>>({});
     const [expanded, setExpanded] = useState<Record<string, boolean>>({});
     const [busy, setBusy] = useState<Record<string, boolean>>({});
     const [componentErrors, setComponentErrors] = useState<Record<string, string>>({});
@@ -4034,12 +4036,24 @@ function MachinesContent(): React.JSX.Element {
         components: readonly MachineChoice["components"][number][];
         action: "npm" | "reconcile-one";
     } | null>(null);
-    const loadEvents = useCallback((machineId: string): void => {
-        void fetch(`/api/machines/${encodeURIComponent(machineId)}/events`)
-            .then((response) => response.ok ? response.json() : [])
-            .then((value: MachineEventView[]) => {
-                setEvents((current) => ({ ...current, [machineId]: Array.isArray(value) ? value : [] }));
+    const showCommandFeedback = useCallback((machineId: string, accepted: boolean): void => {
+        setCommandFeedback((current) => ({
+            ...current,
+            [machineId]: machineCommandResultPresentation(accepted),
+        }));
+        const previous = commandFeedbackTimers.current[machineId];
+        if (previous !== undefined) globalThis.clearTimeout(previous);
+        commandFeedbackTimers.current[machineId] = globalThis.setTimeout(() => {
+            setCommandFeedback((current) => {
+                const next = { ...current };
+                delete next[machineId];
+                return next;
             });
+            delete commandFeedbackTimers.current[machineId];
+        }, 4_500);
+    }, []);
+    useEffect(() => () => {
+        Object.values(commandFeedbackTimers.current).forEach((timer) => globalThis.clearTimeout(timer));
     }, []);
     const refresh = useCallback(async (): Promise<void> => {
         const response = await fetch("/api/machines");
@@ -4047,8 +4061,7 @@ function MachinesContent(): React.JSX.Element {
         const value = await response.json() as MachineChoice[];
         const next = Array.isArray(value) ? value : [];
         setMachines(next);
-        next.forEach((machine) => loadEvents(machine.id));
-    }, [loadEvents]);
+    }, []);
     useEffect(() => {
         void refresh().catch(() => undefined);
         const timer = globalThis.setInterval(() => void refresh().catch(() => undefined), 2_000);
@@ -4067,14 +4080,14 @@ function MachinesContent(): React.JSX.Element {
                 event.event === "command_result" && event.request_id === requestId
             );
             if (result?.event === "command_result") {
+                showCommandFeedback(machineId, result.accepted);
                 if (!result.accepted) throw new Error(result.detail || "Machine inventory refresh failed");
                 await refresh();
-                loadEvents(machineId);
                 return;
             }
         }
         throw new Error("Machine did not confirm the inventory refresh");
-    }, [loadEvents, refresh]);
+    }, [refresh, showCommandFeedback]);
     const updateOne = (machineId: string, component: MachineChoice["components"][number]): void => {
         const key = `${machineId}:component:${component.id.kind}:${component.id.slot ?? ""}`;
         setBusy((current) => ({ ...current, [key]: true }));
@@ -4108,9 +4121,9 @@ function MachinesContent(): React.JSX.Element {
                         event.event === "command_result" && event.request_id === requestId
                     );
                     if (result?.event === "command_result") {
+                        showCommandFeedback(machineId, result.accepted);
                         if (!result.accepted) throw new Error(result.detail || "Update failed");
                         void refresh().catch(() => undefined);
-                        loadEvents(machineId);
                         return;
                     }
                 }
@@ -4158,7 +4171,6 @@ function MachinesContent(): React.JSX.Element {
                 <ProviderAuthenticationManagement />
             </Paper>
             {machines.map((machine) => {
-                const latest = events[machine.id]?.at(-1);
                 const open = Boolean(expanded[machine.id]);
                 const pending = machine.pending_updates ?? [];
                 const projectWorkspaces = machine.workspaces.filter((workspace) =>
@@ -4198,6 +4210,7 @@ function MachinesContent(): React.JSX.Element {
                     },
                 ].filter((section) => section.components.length > 0);
                 const presence = machinePresencePresentation(machine.status);
+                const commandResult = commandFeedback[machine.id] ?? null;
                 return (
                     <Paper
                         key={machine.id}
@@ -4405,10 +4418,10 @@ function MachinesContent(): React.JSX.Element {
                                     ))}
                                 </Stack>
                             )}
-                            {latest?.event === "command_result" && (
-                                <Typography variant="caption" color="text.secondary">
-                                    {latest.detail ?? (latest.accepted ? "Command accepted" : "Command rejected")}
-                                </Typography>
+                            {commandResult && (
+                                <Alert severity={commandResult.severity} sx={{ py: 0.25 }}>
+                                    {commandResult.message}
+                                </Alert>
                             )}
                         </Stack>
                     </Paper>
