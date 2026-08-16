@@ -561,7 +561,29 @@ function ProviderManagement(
             encodeURIComponent(flow.provider.provider_id)
           }/auth/${encodeURIComponent(flow.requestId ?? "")}`,
         );
-        if (!response.ok) return;
+        if (!response.ok) {
+          if (!active) return;
+          if (response.status === 404 || response.status === 410) {
+            const detail = (await response.text()).trim();
+            closeAuthenticationBrowser();
+            setAuthenticationError(
+              detail ||
+                "This sign-in request ended. Choose a method to try again.",
+            );
+            setFlow((current) => {
+              if (!current || current.requestId !== flow.requestId) {
+                return current;
+              }
+              const {
+                requestId: _requestId,
+                expiresAtMs: _expiresAtMs,
+                ...rest
+              } = current;
+              return { ...rest, events: [] };
+            });
+          }
+          return;
+        }
         const body = await response.json() as { events?: LoginEvent[] };
         if (!active || !Array.isArray(body.events)) return;
         setFlow((current) => {
@@ -863,6 +885,8 @@ function ProviderManagement(
   const loginState = flow?.events.findLast((event) =>
     event.event === "login_state"
   );
+  const loginSucceeded = loginState?.event === "login_state" &&
+    (loginState.state === "signed_in" || loginState.state === "ready");
   const authenticationPageTap = useReliableTouchTap<HTMLButtonElement>(() => {
     if (challenge?.event !== "login_challenge") return;
     if (isNativeShell() && !hasNativeAuthenticationBrowser()) {
@@ -1493,7 +1517,7 @@ function ProviderManagement(
                     </Stack>
                   )
                   : null}
-                {challenge?.event === "login_challenge"
+                {!loginSucceeded && challenge?.event === "login_challenge"
                   ? (
                     <Stack spacing={1}>
                       <Button
@@ -1556,7 +1580,7 @@ function ProviderManagement(
                         : null}
                     </Stack>
                   )
-                  : flow.requestId
+                  : flow.requestId && !loginSucceeded
                   ? (
                     <Typography variant="body2">
                       {authenticationCopy(
@@ -1570,9 +1594,11 @@ function ProviderManagement(
                 {loginState?.event === "login_state"
                   ? (
                     <Alert
-                      severity={loginState.state === "signed_in" ||
-                          loginState.state === "ready"
+                      severity={loginSucceeded
                         ? "success"
+                        : loginState.state === "error" ||
+                            loginState.state === "unsupported"
+                        ? "error"
                         : "info"}
                     >
                       {loginState.detail ??
@@ -1585,7 +1611,7 @@ function ProviderManagement(
             : null}
         </DialogContent>
         <DialogActions>
-          {flow?.requestId
+          {flow?.requestId && !loginSucceeded
             ? (
               <Button
                 color="inherit"
@@ -1596,11 +1622,7 @@ function ProviderManagement(
             )
             : null}
           <Button color="inherit" onClick={() => void cancelAuthentication()}>
-            {loginState?.event === "login_state" &&
-                (loginState.state === "signed_in" ||
-                  loginState.state === "ready")
-              ? "Done"
-              : "Cancel"}
+            {loginSucceeded ? "Done" : "Cancel"}
           </Button>
         </DialogActions>
       </Dialog>

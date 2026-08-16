@@ -163,6 +163,29 @@ Deno.test("Service authentication keeps Cowboy alive while Provider sign-in open
   assertEquals(managementSource.includes("closeAuthenticationBrowser()"), true);
 });
 
+Deno.test("Provider sign-in success and expiry leave no stale browser controls", () => {
+  assertEquals(
+    managementSource.includes(
+      "response.status === 404 || response.status === 410",
+    ),
+    true,
+  );
+  assertEquals(
+    managementSource.includes(
+      '!loginSucceeded && challenge?.event === "login_challenge"',
+    ),
+    true,
+  );
+  assertEquals(
+    managementSource.includes("flow?.requestId && !loginSucceeded"),
+    true,
+  );
+  assertEquals(
+    managementSource.includes('{loginSucceeded ? "Done" : "Cancel"}'),
+    true,
+  );
+});
+
 Deno.test("session settings embed one focused Service authentication card", () => {
   assertEquals(
     managementSource.includes("export function SessionProviderAccess"),

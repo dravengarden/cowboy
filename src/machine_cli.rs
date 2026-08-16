@@ -2188,7 +2188,8 @@ async fn reconcile_components(
 fn login_challenge_tokens(line: &str) -> (Option<String>, Option<String>) {
     let mut verification_url = None;
     let mut user_code = None;
-    for word in line.split_whitespace() {
+    let plain = strip_ansi_csi_sequences(line);
+    for word in plain.split_whitespace() {
         let trimmed = word.trim_matches(|character: char| {
             matches!(character, '(' | ')' | '[' | ']' | ',' | ':' | ';')
         });
@@ -2210,6 +2211,26 @@ fn login_challenge_tokens(line: &str) -> (Option<String>, Option<String>) {
         }
     }
     (verification_url, user_code)
+}
+
+fn strip_ansi_csi_sequences(value: &str) -> String {
+    let mut plain = String::with_capacity(value.len());
+    let mut characters = value.chars();
+    while let Some(character) = characters.next() {
+        if character != '\u{1b}' {
+            plain.push(character);
+            continue;
+        }
+        if characters.next() != Some('[') {
+            continue;
+        }
+        for control in characters.by_ref() {
+            if ('@'..='~').contains(&control) {
+                break;
+            }
+        }
+    }
+    plain
 }
 
 fn authentication_process(
@@ -2963,6 +2984,18 @@ mod tests {
         let (url, code) = login_challenge_tokens("Confirm this code: XDR4-AT53");
         assert_eq!(url, None);
         assert_eq!(code.as_deref(), Some("XDR4-AT53"));
+    }
+
+    #[test]
+    fn codex_device_login_ignores_terminal_color_sequences() {
+        let (url, code) =
+            login_challenge_tokens("\u{1b}[94mhttps://auth.openai.com/codex/device\u{1b}[0m");
+        assert_eq!(url.as_deref(), Some("https://auth.openai.com/codex/device"));
+        assert_eq!(code, None);
+
+        let (url, code) = login_challenge_tokens("\u{1b}[94mV3RI-TZLH9\u{1b}[0m");
+        assert_eq!(url, None);
+        assert_eq!(code.as_deref(), Some("V3RI-TZLH9"));
     }
 
     #[test]
