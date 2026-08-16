@@ -391,6 +391,11 @@ Deno.test("Provider activity keeps motion provider-authored and geometry rendere
     true,
   );
   assertEquals(surfaceSource.includes("const ACTIVITY_MARK_SIZE = 14"), true);
+  assertEquals(surfaceSource.includes("scaleWithFont={false}"), true);
+  assertEquals(
+    transcriptPresentationSource.includes("scaleWithFont={false}"),
+    true,
+  );
   assertEquals(surfaceSource.includes("transform: scale(0.96)"), false);
   assertEquals(
     surfaceSource.includes('effect === "none" ? { color: muted }'),

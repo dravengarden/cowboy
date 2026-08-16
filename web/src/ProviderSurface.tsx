@@ -93,12 +93,14 @@ export function ProviderMark({
   size = 24,
   className,
   appearance = "plain",
+  scaleWithFont = true,
 }: {
   manifest: ProviderUiManifest;
   role?: UiAsset["role"];
   size?: number;
   className?: string | undefined;
   appearance?: "plain" | "accentBadge";
+  scaleWithFont?: boolean;
 }): React.JSX.Element | null {
   const theme = useTheme();
   const assetId = role === "logo"
@@ -120,6 +122,7 @@ export function ProviderMark({
       asset={asset}
       size={appearance === "accentBadge" ? Math.round(size * 0.62) : size}
       className={appearance === "plain" ? className : undefined}
+      scaleWithFont={scaleWithFont}
       {...(appearance === "accentBadge"
         ? { sx: { color: theme.palette.common.white } }
         : markColor
@@ -180,17 +183,21 @@ export function ProviderAssetGraphic({
   size,
   className,
   sx,
+  scaleWithFont = true,
 }: {
   asset: UiAsset;
   size: number;
   className?: string | undefined;
   sx?: Record<string, unknown>;
+  scaleWithFont?: boolean;
 }): React.JSX.Element {
   const gradientId = `provider-gradient-${useId().replaceAll(":", "")}`;
-  // Provider manifests express an optical baseline in px, but Cowboy's font
-  // setting is application-wide. Keep the authored baseline while scaling every
-  // rendered mark with the same preference as text and ordinary MUI glyphs.
-  const scaledSize = `calc(${size}px * var(--cowboy-font-scale, 1))`;
+  // Cards and chrome follow the global font scale. Transcript status marks
+  // stay at their authored optical size so a Grok signal does not become a
+  // heading glyph when reading text is enlarged.
+  const scaledSize = scaleWithFont
+    ? `calc(${size}px * var(--cowboy-font-scale, 1))`
+    : `${size}px`;
   if (asset.content.kind === "vector_path") {
     const gradient = asset.content.gradient;
     return (
@@ -519,7 +526,7 @@ const ACTIVITY_MARK_SIZE = 14;
 const ACTIVITY_TERMINAL_SIZE = 17;
 
 function scaledActivityMark(size: number): string {
-  return `calc(${size}px * var(--cowboy-font-scale, 1))`;
+  return `${size}px`;
 }
 
 function LegacyProviderActivity(): React.JSX.Element {
@@ -716,6 +723,7 @@ function ProviderActivity({
               <ProviderAssetGraphic
                 asset={asset}
                 size={ACTIVITY_MARK_SIZE}
+                scaleWithFont={false}
               />
             </Box>
             <Box
@@ -725,6 +733,7 @@ function ProviderActivity({
               <ProviderAssetGraphic
                 asset={asset}
                 size={ACTIVITY_MARK_SIZE}
+                scaleWithFont={false}
               />
             </Box>
           </Box>
@@ -751,6 +760,7 @@ function ProviderActivity({
             <ProviderAssetGraphic
               asset={asset}
               size={ACTIVITY_MARK_SIZE}
+              scaleWithFont={false}
             />
           </Box>
         );

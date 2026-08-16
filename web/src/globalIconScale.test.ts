@@ -32,8 +32,12 @@ Deno.test("functional Button icons follow Cowboy's global font scale", () => {
 Deno.test("Provider management marks and labels follow Cowboy's global font scale", () => {
   assertEquals(
     providerSurfaceSource.includes(
-      "const scaledSize = `calc(${size}px * var(--cowboy-font-scale, 1))`;",
+      "? `calc(${size}px * var(--cowboy-font-scale, 1))`",
     ),
+    true,
+  );
+  assertEquals(
+    providerSurfaceSource.includes("scaleWithFont={false}"),
     true,
   );
   assertEquals(

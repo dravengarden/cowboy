@@ -147,6 +147,7 @@ function VariantGlyph({
             <ProviderMark
               manifest={manifest}
               size={SIGNAL_THOUGHT_MARK_SIZE}
+              scaleWithFont={false}
             />
           </Box>
         )

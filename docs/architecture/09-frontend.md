@@ -41,7 +41,9 @@ This is a core visual invariant:
 - Size functional icons with `rem`/`em`, or with
   `calc(<baseline px> * var(--cowboy-font-scale, 1))` when browser minimum-font
   behavior requires explicit geometry. Do not introduce a fixed-pixel glyph
-  size for an interactive action.
+  size for an interactive action. Transcript status marks (Provider activity
+  and thought signals) are optical glyphs, not actions: keep their authored
+  pixel size so enlarging reading text does not turn a Grok mark into a heading.
 - Framework defaults are not exempt. MUI `Button` assigns fixed-pixel sizes to
   start/end icons, so the Cowboy theme overrides those descendants globally.
   Component-level `sx` may choose a different optical size, but it must retain a
