@@ -174,6 +174,7 @@ export function ProviderAssetGraphic({
         sx={{
           width: scaledSize,
           height: scaledSize,
+          overflow: "visible",
           ...(asset.content.fill ? { color: asset.content.fill } : {}),
           flexShrink: 0,
           ...sx,

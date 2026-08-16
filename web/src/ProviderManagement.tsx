@@ -17,6 +17,7 @@ import {
   Typography,
 } from "@mui/material";
 import { ArrowBackRounded } from "@mui/icons-material";
+import { alpha } from "@mui/material/styles";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import {
@@ -798,14 +799,24 @@ function ProviderManagement(
     <Stack
       spacing={1.25}
       data-provider-management-root
-      sx={{
+      sx={(theme) => ({
         "& .MuiButton-root": {
-          borderRadius: 999,
+          borderRadius: 1.5,
           // Provider actions keep a fixed touch target, but their labels follow
           // the application-wide font-size setting like the surrounding copy.
           fontSize: "0.8125rem",
+          fontWeight: 700,
+          letterSpacing: "0.035em",
         },
-      }}
+        "& .MuiButton-outlinedPrimary": {
+          backgroundColor: alpha(theme.palette.primary.main, 0.055),
+          boxShadow: theme.shadows[1],
+        },
+        "& .MuiButton-outlinedError": {
+          backgroundColor: alpha(theme.palette.error.main, 0.045),
+          boxShadow: theme.shadows[1],
+        },
+      })}
     >
       <Stack
         direction="row"
