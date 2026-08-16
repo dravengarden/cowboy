@@ -28,12 +28,15 @@ import {
   translatedSurfaceOwnsPagerGesture,
 } from "../../mobileDrawerDepth";
 import {
+  MOBILE_DRAWER_SETTLE_EASING,
+  mobileDrawerSettleDurationMs,
+} from "../../mobileDrawerMotion";
+import {
   nextMobileProduct,
   pagerDirectionAllowed,
   type PagerGesture,
   pagerOffset,
   pagerTargetOffset,
-  predictPagerOffset,
   shouldReservePagerStart,
   type MobileProduct,
 } from "../appPagerMotion";
@@ -146,17 +149,14 @@ export function MobileProductShell({
     if (!shell || !rail || !agentPage || !reviewPage) return undefined;
 
     let gesture: PagerGesture | null = null;
-    let frame = 0;
     let settleTimer = 0;
+    let bookkeepingFrame = 0;
     let releaseFrame = 0;
     let releaseIdle: number | undefined;
     let releasePresentation: (() => void) | undefined;
     let directManipulationActive = false;
     let presentationWidth = shell.clientWidth;
     let currentOffset = pagerTargetOffset(productRef.current, presentationWidth);
-    let pendingOffset = currentOffset;
-    let pendingSampleAt = 0;
-    let pendingVelocity = 0;
 
     const render = (offset: number, width: number): void => {
       currentOffset = offset;
@@ -164,27 +164,23 @@ export function MobileProductShell({
       reviewPage.style.transform =
         `translate3d(${String(width + offset)}px, 0, 0)`;
     };
-    const scheduleRender = (
-      offset: number,
-      sampleAt: number,
-      velocity: number,
-    ): void => {
-      pendingOffset = offset;
-      pendingSampleAt = sampleAt;
-      pendingVelocity = velocity;
-      if (frame !== 0) return;
-      frame = globalThis.requestAnimationFrame((frameAt) => {
-        frame = 0;
-        render(
-          predictPagerOffset(
-            pendingOffset,
-            pendingVelocity,
-            frameAt - pendingSampleAt,
-            presentationWidth,
-          ),
-          presentationWidth,
-        );
-      });
+    const beginDirectManipulation = (): void => {
+      if (directManipulationActive) return;
+      if (releaseFrame !== 0) globalThis.cancelAnimationFrame(releaseFrame);
+      if (releaseIdle !== undefined) {
+        if (typeof globalThis.cancelIdleCallback === "function") {
+          globalThis.cancelIdleCallback(releaseIdle);
+        } else {
+          globalThis.clearTimeout(releaseIdle);
+        }
+        releaseIdle = undefined;
+      }
+      releasePresentation ??= holdStorePresentation();
+      directManipulationActive = true;
+      shell.setAttribute("data-mobile-product-moving", "true");
+      globalThis.dispatchEvent(
+        new CustomEvent("cowboy:transcript-direct-manipulation-start"),
+      );
     };
     const releaseDirectManipulation = (): void => {
       const finish = (): void => {
@@ -212,9 +208,7 @@ export function MobileProductShell({
       cachedWidth?: number,
     ): void => {
       globalThis.clearTimeout(settleTimer);
-      const releaseOffset = frame !== 0 ? pendingOffset : currentOffset;
-      if (frame !== 0) globalThis.cancelAnimationFrame(frame);
-      frame = 0;
+      const releaseOffset = currentOffset;
       // Complete geometry reads before transition/style writes. Both pages are
       // large application surfaces, so a forced layout here is expensive.
       const width = cachedWidth ?? shell.clientWidth;
@@ -224,16 +218,9 @@ export function MobileProductShell({
         1,
         Math.abs(targetOffset - releaseOffset) / width,
       );
-      const duration = Math.max(
-        150,
-        Math.min(
-          260,
-          160 + remaining * 100 -
-            Math.min(70, Math.abs(releaseVelocity) * 45),
-        ),
-      );
+      const duration = mobileDrawerSettleDurationMs(remaining, releaseVelocity);
       const transition =
-        `transform ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1)`;
+        `transform ${String(duration)}ms ${MOBILE_DRAWER_SETTLE_EASING}`;
       agentPage.style.transition = transition;
       reviewPage.style.transition = transition;
       render(targetOffset, width);
@@ -279,14 +266,22 @@ export function MobileProductShell({
     const onTouchMove = (event: TouchEvent): void => {
       const touch = event.touches[0];
       if (!gesture || !touch) return;
-      if (
-        expandedSelection(globalThis.getSelection?.() ?? null) ||
-        modalOwnsGesture() ||
-        spatialDrawerOwnsGesture(shell) ||
-        (productRef.current === "agent" && agentDrawerOpenRef.current) ||
-        (productRef.current === "review" && reviewDrawerOpenRef.current)
-      ) {
+      if (expandedSelection(globalThis.getSelection?.() ?? null)) {
         if (gesture.locked) settle(gesture.product, 0, gesture.width);
+        gesture = null;
+        return;
+      }
+      // Overlay ownership is decided on touchstart. Querying the sheet/drawer
+      // tree on every vertical sample keeps Agent/Code scrolling on the main
+      // thread. Recheck only after this pager already owns the gesture.
+      if (
+        gesture.locked &&
+        (modalOwnsGesture() ||
+          spatialDrawerOwnsGesture(shell) ||
+          (productRef.current === "agent" && agentDrawerOpenRef.current) ||
+          (productRef.current === "review" && reviewDrawerOpenRef.current))
+      ) {
+        settle(gesture.product, 0, gesture.width);
         gesture = null;
         return;
       }
@@ -309,22 +304,7 @@ export function MobileProductShell({
         : horizontalSwipe(deltaX, deltaY, 8, 1.15);
       if (!swipe || !pagerDirectionAllowed(gesture.product, deltaX)) return;
       if (!gesture.locked) {
-        if (releaseFrame !== 0) globalThis.cancelAnimationFrame(releaseFrame);
-        if (releaseIdle !== undefined) {
-          if (typeof globalThis.cancelIdleCallback === "function") {
-            globalThis.cancelIdleCallback(releaseIdle);
-          } else {
-            globalThis.clearTimeout(releaseIdle);
-          }
-          releaseIdle = undefined;
-        }
         gesture.locked = true;
-        releasePresentation ??= holdStorePresentation();
-        directManipulationActive = true;
-        shell.setAttribute("data-mobile-product-moving", "true");
-        globalThis.dispatchEvent(
-          new CustomEvent("cowboy:transcript-direct-manipulation-start"),
-        );
         agentPage.style.transition = "none";
         reviewPage.style.transition = "none";
         agentPage.style.willChange = "transform";
@@ -338,11 +318,16 @@ export function MobileProductShell({
       gesture.velocity = gesture.velocity * 0.65 + velocity * 0.35;
       gesture.lastX = touch.clientX;
       gesture.lastAt = now;
-      scheduleRender(
+      render(
         pagerOffset(gesture.product, deltaX, gesture.width),
-        now,
-        gesture.velocity,
+        gesture.width,
       );
+      if (bookkeepingFrame === 0 && !directManipulationActive) {
+        bookkeepingFrame = globalThis.requestAnimationFrame(() => {
+          bookkeepingFrame = 0;
+          beginDirectManipulation();
+        });
+      }
     };
     const onTouchEnd = (): void => {
       if (!gesture) return;
@@ -401,7 +386,7 @@ export function MobileProductShell({
       shell.removeEventListener("touchcancel", onTouchCancel, true);
       globalThis.removeEventListener("resize", onResize);
       globalThis.clearTimeout(settleTimer);
-      if (frame !== 0) globalThis.cancelAnimationFrame(frame);
+      if (bookkeepingFrame !== 0) globalThis.cancelAnimationFrame(bookkeepingFrame);
       if (releaseFrame !== 0) globalThis.cancelAnimationFrame(releaseFrame);
       if (releaseIdle !== undefined) {
         if (typeof globalThis.cancelIdleCallback === "function") {

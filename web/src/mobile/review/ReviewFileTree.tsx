@@ -33,6 +33,7 @@ import {
   fetchCodeTree,
 } from "./codeApi";
 import { directoryPrefetchTargets } from "./directoryPrefetch";
+import { mobileNativeYScrollSx } from "../mobileNativeOverflow";
 
 type DirectoryPage = CodeTreePage & { cachedAt: number };
 
@@ -578,7 +579,13 @@ export function ReviewFileTree({
       <Box
         ref={treeScrollerRef}
         data-mobile-overflow-layer="true"
-        sx={{ flex: 1, minHeight: 0, overflowY: "auto", px: 0.75, pb: 12 }}
+        sx={{
+          flex: 1,
+          minHeight: 0,
+          px: 0.75,
+          pb: 12,
+          ...mobileNativeYScrollSx,
+        }}
       >
         {query.trim()
           ? searching

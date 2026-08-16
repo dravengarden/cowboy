@@ -1,4 +1,4 @@
-import { assertEquals } from "jsr:@std/assert";
+import { assert, assertEquals } from "jsr:@std/assert";
 import {
   nextMobileProduct,
   pagerDirectionAllowed,
@@ -8,6 +8,10 @@ import {
   shouldReservePagerStart,
 } from "./appPagerMotion.ts";
 import { isDominantVerticalPan } from "../touchGestures.ts";
+
+const pagerSource = await Deno.readTextFile(
+  new URL("./shell/MobileProductShell.tsx", import.meta.url),
+);
 
 Deno.test("pager prediction removes one-frame lag without escaping the rail", () => {
   assertEquals(predictPagerOffset(-120, -0.5, 16, 390), -128);
@@ -44,6 +48,13 @@ Deno.test("interactive content and open spatial drawers keep their gesture", () 
 Deno.test("product transitions are symmetric", () => {
   assertEquals(nextMobileProduct("agent"), "review");
   assertEquals(nextMobileProduct("review"), "agent");
+});
+
+Deno.test("product pager paints the touch sample without a frame of lag", () => {
+  assertEquals(pagerSource.includes("scheduleRender"), false);
+  assertEquals(pagerSource.includes("predictPagerOffset"), false);
+  assert(pagerSource.includes("MOBILE_DRAWER_SETTLE_EASING"));
+  assert(pagerSource.includes("pagerOffset(gesture.product, deltaX, gesture.width)"));
 });
 
 Deno.test("vertical transcript pans release horizontal recognizers", () => {

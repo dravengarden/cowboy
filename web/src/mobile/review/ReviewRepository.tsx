@@ -19,6 +19,7 @@ import {
 } from "@mui/material";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { MobileSheetDismiss } from "../../_shell";
+import { mobileNativeYScrollSx } from "../mobileNativeOverflow";
 import { NetworkIconButton } from "../../NetworkActionFeedback";
 import type { GitReviewEntry } from "./gitReviewModel";
 import {
@@ -253,7 +254,12 @@ export function ReviewRepository({
           ? (
             <Box
               data-mobile-overflow-layer="true"
-              sx={{ height: 1, overflowY: "auto", px: 0.75, pb: 10 }}
+              sx={{
+                height: 1,
+                px: 0.75,
+                pb: 10,
+                ...mobileNativeYScrollSx,
+              }}
             >
               <List disablePadding>
                 {(repository?.commits ?? []).map((commit, index) => (
@@ -321,7 +327,12 @@ export function ReviewRepository({
           : (
             <Box
               data-mobile-overflow-layer="true"
-              sx={{ height: 1, overflowY: "auto", px: 1.25, pb: 10 }}
+              sx={{
+                height: 1,
+                px: 1.25,
+                pb: 10,
+                ...mobileNativeYScrollSx,
+              }}
             >
               <List disablePadding>
                 {(repository?.worktrees ?? []).map((worktree) => (

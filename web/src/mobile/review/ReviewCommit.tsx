@@ -16,6 +16,7 @@ import {
   Typography,
 } from "@mui/material";
 import { useEffect, useState } from "react";
+import { mobileNativeYScrollSx } from "../mobileNativeOverflow";
 import {
   fetchGitCommit,
   fetchGitCommitDiff,
@@ -178,7 +179,13 @@ export function ReviewCommit({
       component="main"
       data-review-commit
       data-mobile-overflow-layer="true"
-      sx={{ flex: 1, minHeight: 0, overflowY: "auto", px: 2, py: 2 }}
+      sx={{
+        flex: 1,
+        minHeight: 0,
+        px: 2,
+        py: 2,
+        ...mobileNativeYScrollSx,
+      }}
     >
       {error
         ? <Alert severity="error">Couldn’t load this commit</Alert>

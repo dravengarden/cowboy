@@ -25,6 +25,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MobileSheetDismiss } from "../../_shell";
 import { NetworkIconButton } from "../../NetworkActionFeedback";
+import { mobileNativeYScrollSx } from "../mobileNativeOverflow";
 import { type CodeChangeStatus, fetchCodeChanges } from "./codeApi";
 import {
   type GitReviewEntry,
@@ -304,7 +305,13 @@ export function ReviewChanges({
       <Box
         ref={scrollRoot}
         data-mobile-overflow-layer="true"
-        sx={{ flex: 1, minHeight: 0, overflowY: "auto", px: 0.75, pb: 8 }}
+        sx={{
+          flex: 1,
+          minHeight: 0,
+          px: 0.75,
+          pb: 8,
+          ...mobileNativeYScrollSx,
+        }}
       >
         {loading
           ? (

@@ -444,6 +444,8 @@ export default function CodeViewer({
           fontSize: `${fontSize}px`,
           overflow: "auto",
           overflowX: softWrap ? "hidden" : "auto",
+          overscrollBehavior: "contain",
+          touchAction: "pan-y pinch-zoom",
           WebkitOverflowScrolling: "touch",
         },
         ".cm-content": {

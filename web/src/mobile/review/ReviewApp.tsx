@@ -52,6 +52,7 @@ import {
 import { importantHaptic, navigationHaptic } from "../../haptic";
 import { Markdown } from "../../Markdown";
 import { Sheet } from "../../Sheet";
+import { mobileNativeYScrollSx } from "../mobileNativeOverflow";
 import {
   mutateMobileReview,
   openSession,
@@ -2732,8 +2733,7 @@ export function ReviewApp({
             sx={{
               height: "calc(100dvh - 148px)",
               minHeight: 0,
-              overflowY: "auto",
-              overscrollBehavior: "contain",
+              ...mobileNativeYScrollSx,
               pb: "calc(88px + env(safe-area-inset-bottom, 0px))",
             }}
           >
