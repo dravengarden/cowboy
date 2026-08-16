@@ -286,7 +286,7 @@ Deno.test("native textarea owns a content-sized mobile canvas", () => {
   );
   assertEquals(
     composerSource.includes(
-      "minHeight: MOBILE_COMPOSER_IDLE_EDITOR_MIN_H",
+      "minHeight: mobileComposerIdleEditorMinHeight",
     ),
     true,
   );

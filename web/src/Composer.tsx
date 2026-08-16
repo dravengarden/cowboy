@@ -148,10 +148,12 @@ import { openLightbox } from "./ResourceLightbox";
 import { PlanDock } from "./PlanDock";
 import {
   mobileComposerFocusMotion,
+  mobileComposerIdleEditorMinHeight,
   mobileComposerKeyboardGap,
   mobileComposerPanelFrameSx,
   mobileComposerPanelHeaderMinHeight,
   mobileComposerStackGap,
+  mobilePendingRowMinHeight,
 } from "./mobileComposerPrimitives";
 import {
   mobileFocusedComposerFill,
@@ -346,7 +348,6 @@ const TOOLBAR_MIN_H = {
   minHeight: 34,
   "@media (pointer: coarse)": { minHeight: 40 },
 } as const;
-const MOBILE_COMPOSER_IDLE_EDITOR_MIN_H = 48;
 
 // MUI's Button start-icon selector assigns a fixed px size with more
 // specificity than an SvgIcon's own sx prop. Own the glyph size at the button
@@ -2213,7 +2214,7 @@ export function ComposerWorkspace({
                 // state above, which promotes this to the two-control height.
                 // Keeping the resting height content-tight prevents a permanent
                 // blank "padding" band regardless of Plan/Queue/Draft presence.
-                minHeight: MOBILE_COMPOSER_IDLE_EDITOR_MIN_H,
+                minHeight: mobileComposerIdleEditorMinHeight,
                 transition:
                   `min-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}`,
                 "@media (prefers-reduced-motion: reduce)": {
@@ -3645,6 +3646,7 @@ function OptimisticDraftRow({
         p: 0.75,
         display: "flex",
         alignItems: "flex-start",
+        minHeight: mobilePendingRowMinHeight,
         gap: 0.5,
         bgcolor: failed
           ? alpha(t.palette.error.main, 0.06)
@@ -5606,6 +5608,7 @@ function PendingRow({
         p: 0.75,
         display: "flex",
         alignItems: "flex-start",
+        minHeight: mobilePendingRowMinHeight,
         gap: 0.5,
         userSelect: "none",
         WebkitUserSelect: "none",
@@ -5628,7 +5631,7 @@ function PendingRow({
           flex: 1,
           alignSelf: "stretch",
           minWidth: 0,
-          minHeight: 38,
+          minHeight: mobileComposerIdleEditorMinHeight,
           cursor: touchInput ? "pointer" : "text",
         }}
       >
