@@ -42,6 +42,7 @@ const terminalCaret = keyframes`
   0%, 50% { opacity: 1; }
   51%, 100% { opacity: 0; }
 `;
+const SIGNAL_THOUGHT_MARK_SIZE = 20;
 
 function WorkcellGlyph({ size = 16 }: { size?: number }): React.JSX.Element {
   return (
@@ -129,8 +130,8 @@ function VariantGlyph({
           <Box
             component="span"
             sx={{
-              width: 16,
-              height: 16,
+              width: SIGNAL_THOUGHT_MARK_SIZE,
+              height: SIGNAL_THOUGHT_MARK_SIZE,
               display: "inline-flex",
               opacity: current ? 1 : 0.78,
               animation: current
@@ -141,7 +142,10 @@ function VariantGlyph({
               },
             }}
           >
-            <ProviderMark manifest={manifest} size={16} />
+            <ProviderMark
+              manifest={manifest}
+              size={SIGNAL_THOUGHT_MARK_SIZE}
+            />
           </Box>
         )
         : (
@@ -193,7 +197,11 @@ function markerGeometry(variant: ThoughtPresentation["variant"]): {
     case "workcell":
       return { size: 15, gap: 4, paddingLeft: 3 };
     case "signal":
-      return { size: 16, gap: 5, paddingLeft: 2 };
+      return {
+        size: SIGNAL_THOUGHT_MARK_SIZE,
+        gap: 6,
+        paddingLeft: 8,
+      };
     case "terminal":
       return { size: 15, gap: 5, paddingLeft: 2 };
   }
@@ -260,6 +268,7 @@ export function ProviderThoughtSteps({
           sx={{
             minHeight: compact ? 19 : 22,
             mb: compact ? 0.125 : 0.25,
+            pl: presentation.variant === "signal" ? 1 : 0,
             color: accent,
           }}
           aria-label={presentation.active_label}
