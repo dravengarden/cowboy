@@ -1,4 +1,4 @@
-/** Session-sheet workspace row. Queue and Page view stay off the first
+/** Session-sheet queue and page-view row. These stay off the first
  *  screen; the collapsed label must still name the live state. */
 export function workspaceOptionsSummary(input: {
   queuePaused: boolean;

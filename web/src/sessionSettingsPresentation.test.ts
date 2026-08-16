@@ -90,9 +90,10 @@ Deno.test("session settings collapse queue and page view behind one disclosure",
   assertEquals(composerSource.includes("WorkspaceOptionsSection"), true);
   assertEquals(composerSource.includes("workspaceOptionsSummary"), true);
   assertEquals(
-    composerSource.includes('"Expand workspace options"'),
+    composerSource.includes('"Expand queue and view"'),
     true,
   );
+  assertEquals(composerSource.includes("Queue & view"), true);
   assertEquals(composerSource.includes("SessionProviderSection"), true);
   assertEquals(composerSource.includes("SessionProviderAccess"), true);
 });

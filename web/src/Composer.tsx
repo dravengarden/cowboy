@@ -7309,8 +7309,9 @@ function SessionProviderSection({
 }
 
 // Queue pause and Page view are infrequent. Keep them behind one disclosure
-// so the sheet opens on identity, Provider, and Agent. A paused queue still
-// names itself on the collapsed row.
+// so the sheet opens on identity, Provider, and Agent. Do not call this
+// Workspace — that word already means a project checkout. A paused queue
+// still names itself on the collapsed row.
 function WorkspaceOptionsSection({
   session,
   expanded,
@@ -7333,8 +7334,8 @@ function WorkspaceOptionsSection({
       <Box sx={{ py: 0.75 }}>
         <ButtonBase
           aria-label={expanded
-            ? "Collapse workspace options"
-            : "Expand workspace options"}
+            ? "Collapse queue and view"
+            : "Expand queue and view"}
           aria-expanded={expanded}
           aria-controls={panelId}
           onClick={(): void => {
@@ -7354,7 +7355,7 @@ function WorkspaceOptionsSection({
         >
           <Box sx={{ minWidth: 0, pr: 1 }}>
             <Typography variant="body2" sx={{ fontWeight: 650 }}>
-              Workspace
+              Queue & view
             </Typography>
             <Typography
               variant="caption"
