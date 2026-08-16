@@ -22,14 +22,14 @@ Deno.test("mobile drawer prediction removes one-frame finger lag without running
 
 Deno.test("drawer settle uses an iOS deceleration window", () => {
   assertEquals(MOBILE_DRAWER_SETTLE_EASING, "cubic-bezier(0.32, 0.72, 0, 1)");
-  assertEquals(mobileDrawerSettleDurationMs(1, 0), 300);
-  assertEquals(mobileDrawerSettleDurationMs(0, 2), 220);
-  assertEquals(mobileDrawerSettleDurationMs(0.5, 0), 275);
+  assertEquals(mobileDrawerSettleDurationMs(1, 0), 360);
+  assertEquals(mobileDrawerSettleDurationMs(0, 2), 260);
+  assertEquals(mobileDrawerSettleDurationMs(0.5, 0), 330);
 });
 
-Deno.test("drawer rail meets the peek from off-screen", () => {
-  assertEquals(mobileDrawerRailOffset(0, 328), -328);
-  assertEquals(mobileDrawerRailOffset(164, 328), -164);
+Deno.test("drawer rail stays still like an Obsidian sidebar", () => {
+  assertEquals(mobileDrawerRailOffset(0, 328), 0);
+  assertEquals(mobileDrawerRailOffset(164, 328), 0);
   assertEquals(mobileDrawerRailOffset(328, 328), 0);
 });
 

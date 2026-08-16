@@ -174,6 +174,11 @@ export function ProviderAssetGraphic({
         sx={{
           width: scaledSize,
           height: scaledSize,
+          minWidth: scaledSize,
+          minHeight: scaledSize,
+          fontSize: scaledSize,
+          display: "block",
+          lineHeight: 0,
           overflow: "visible",
           ...(asset.content.fill ? { color: asset.content.fill } : {}),
           flexShrink: 0,
@@ -216,7 +221,15 @@ export function ProviderAssetGraphic({
       className={className}
       alt={asset.accessible_label}
       src={`data:${asset.media_type};base64,${asset.content.base64}`}
-      sx={{ width: scaledSize, height: scaledSize, flexShrink: 0, ...sx }}
+      sx={{
+        width: scaledSize,
+        height: scaledSize,
+        minWidth: scaledSize,
+        minHeight: scaledSize,
+        display: "block",
+        flexShrink: 0,
+        ...sx,
+      }}
     />
   );
 }
@@ -555,6 +568,7 @@ function ProviderActivity({
             thickness={5}
             color="inherit"
             aria-hidden
+            sx={{ display: "block" }}
           />
         );
       case "glyph_cycle":
@@ -715,13 +729,29 @@ function ProviderActivity({
       role="status"
       aria-label={node.accessible_label}
       direction="row"
-      spacing={0.8}
+      spacing={0.5}
       alignItems="center"
       data-provider-activity-indicator={node.indicator.kind}
       data-provider-activity-effect={node.label.effect}
       sx={{ py: 0.5, alignSelf: "flex-start", color: primary }}
     >
-      {indicator}
+      <Box
+        aria-hidden
+        sx={{
+          width: 16,
+          height: 16,
+          minWidth: 16,
+          minHeight: 16,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          overflow: "hidden",
+          flexShrink: 0,
+          lineHeight: 0,
+        }}
+      >
+        {indicator}
+      </Box>
       <Typography
         key={node.label.kind === "phrase_cycle" ? phraseIndex : undefined}
         aria-hidden

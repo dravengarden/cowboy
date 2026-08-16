@@ -186,7 +186,7 @@ Deno.test("Provider actions stay visually distinct from read-only chips", () => 
 Deno.test("Provider vector marks preserve edge antialiasing inside compact chips", () => {
   assertEquals(
     surfaceSource.includes(
-      'height: scaledSize,\n          overflow: "visible",',
+      'height: scaledSize,\n          minWidth: scaledSize,',
     ),
     true,
   );
@@ -217,6 +217,7 @@ Deno.test("Provider activity renderer consumes only typed generic strategies", (
 });
 
 Deno.test("terminal activity keeps its Provider-defined prompt geometry", () => {
+  assertEquals(surfaceSource.includes("width: 16,\n          height: 16,"), true);
   assertEquals(surfaceSource.includes("provider-terminal-prompt"), true);
   assertEquals(surfaceSource.includes("provider-terminal-caret"), true);
   assertEquals(surfaceSource.includes("terminalPromptMotion"), true);
