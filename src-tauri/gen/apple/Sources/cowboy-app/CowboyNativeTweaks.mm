@@ -533,6 +533,45 @@ static void cowboyPresentAuthenticationBrowser(NSURL *url) {
 }
 @end
 
+static CowboyAuthenticationBrowserHandler *cowboyAuthenticationBrowserHandler(void) {
+    static CowboyAuthenticationBrowserHandler *handler;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        handler = [[CowboyAuthenticationBrowserHandler alloc] init];
+    });
+    return handler;
+}
+
+static NSString *cowboyAuthenticationBrowserScript(void) {
+    return
+        @"window.__cowboyOpenAuthenticationBrowser=function(url){try{"
+        @"window.webkit.messageHandlers.cowboyAuthenticationBrowser."
+        @"postMessage({action:'open',url:url});return true}"
+        @"catch(e){return false}};"
+        @"window.__cowboyCloseAuthenticationBrowser=function(){try{"
+        @"window.webkit.messageHandlers.cowboyAuthenticationBrowser."
+        @"postMessage({action:'close'})}catch(e){}};";
+}
+
+// A SideStore update can restore an already-running Release WKWebView whose
+// document outlives the configuration-time user-script installation. Rebind
+// both sides whenever UIKit brings Cowboy to the foreground: the handler on the
+// current content controller and the callable functions in the current page.
+static void cowboyRepairAuthenticationBrowserBridge(WKWebView *webView) {
+    if (webView == nil) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @try {
+            WKUserContentController *ucc = webView.configuration.userContentController;
+            [ucc removeScriptMessageHandlerForName:@"cowboyAuthenticationBrowser"];
+            [ucc addScriptMessageHandler:cowboyAuthenticationBrowserHandler()
+                                   name:@"cowboyAuthenticationBrowser"];
+        } @catch (__unused NSException *e) {
+        }
+        [webView evaluateJavaScript:cowboyAuthenticationBrowserScript()
+                  completionHandler:nil];
+    });
+}
+
 __attribute__((constructor)) static void cowboyInstallHapticBridge(void) {
     @autoreleasepool {
         Class cls = [WKWebView class];
@@ -571,16 +610,11 @@ __attribute__((constructor)) static void cowboyInstallHapticBridge(void) {
                     } @catch (__unused NSException *e) {
                     }
                     @try {
-                        static CowboyAuthenticationBrowserHandler *authBrowser;
-                        static dispatch_once_t authBrowserOnce;
-                        dispatch_once(&authBrowserOnce, ^{
-                            authBrowser = [[CowboyAuthenticationBrowserHandler alloc] init];
-                        });
-                        [ucc addScriptMessageHandler:authBrowser
+                        [ucc addScriptMessageHandler:cowboyAuthenticationBrowserHandler()
                                                name:@"cowboyAuthenticationBrowser"];
                     } @catch (__unused NSException *e) {
                     }
-                    NSString *js =
+                    NSString *baseJs =
                         @"window.__cowboyHaptic=function(){try{"
                         @"window.webkit.messageHandlers.cowboyHaptic.postMessage('legacy-impact')"
                         @"}catch(e){}};"
@@ -606,24 +640,20 @@ __attribute__((constructor)) static void cowboyInstallHapticBridge(void) {
                         @"{action:'image-status'})}catch(e){return Promise.reject(e)}};"
                         @"window.__cowboyReadClipboardImages=function(){try{"
                         @"return window.webkit.messageHandlers.cowboyClipboard.postMessage("
-                        @"{action:'read-images'})}catch(e){return Promise.reject(e)}};"
-                        // Interactive Provider sign-in belongs in a system Safari
-                        // sheet, never in the shell's sole WKWebView. The boolean
-                        // return lets web code fall back to the Tauri opener when
-                        // running against an older native shell.
-                        @"window.__cowboyOpenAuthenticationBrowser=function(url){try{"
-                        @"window.webkit.messageHandlers.cowboyAuthenticationBrowser."
-                        @"postMessage({action:'open',url:url});return true}"
-                        @"catch(e){return false}};"
-                        @"window.__cowboyCloseAuthenticationBrowser=function(){try{"
-                        @"window.webkit.messageHandlers.cowboyAuthenticationBrowser."
-                        @"postMessage({action:'close'})}catch(e){}};"
+                        @"{action:'read-images'})}catch(e){return Promise.reject(e)}};";
+                    // Interactive Provider sign-in belongs in a system Safari
+                    // sheet, never in the shell's sole WKWebView. Keep this
+                    // fragment reusable so foreground repair installs the exact
+                    // same page-world contract as document-start injection.
+                    NSString *js = [baseJs stringByAppendingString:
+                        cowboyAuthenticationBrowserScript()];
+                    js = [js stringByAppendingString:
                         // ARM the web's native-shell gate (src/nativeShell.ts): the
                         // shell now does native keyboard avoidance (below), so the
                         // web drops its position:fixed/translateZ/IME-composition
                         // hacks. document-start, so it's set before the page's own
                         // boot script reads it. (cowboy-native-keyboard-ime)
-                        @"window.__cowboyNativeShell=true;";
+                        @"window.__cowboyNativeShell=true;"];
                     WKUserScript *script =
                         [[WKUserScript alloc] initWithSource:js
                                                injectionTime:WKUserScriptInjectionTimeAtDocumentStart
@@ -697,6 +727,7 @@ __attribute__((constructor)) static void cowboyInstallHapticBridge(void) {
     (void)note;
     WKWebView *wv = gCowboyWebView;
     if (wv == nil) return;
+    cowboyRepairAuthenticationBrowserBridge(wv);
     [wv evaluateJavaScript:
             @"window.dispatchEvent(new Event('cowboy:native-resume'))"
          completionHandler:nil];
