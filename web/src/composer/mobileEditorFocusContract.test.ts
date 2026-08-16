@@ -306,10 +306,10 @@ Deno.test("native textarea owns a content-sized mobile canvas", () => {
   assertEquals(textareaSource.includes("<TextField"), false);
 });
 
-Deno.test("mobile pending edit exits when a third-party IME never reports an open frame", () => {
+Deno.test("mobile pending edit stays mounted when the keyboard never reports an open frame", () => {
   assertEquals(
     composerSource.includes(
-      "setMobileEditKeyboardSettledClosed(true);\n          finishMobileEditRef.current();\n        },\n        700,",
+      "() => persistEditRef.current(),\n        700,",
     ),
     true,
   );
@@ -321,30 +321,24 @@ Deno.test("mobile pending edit exits when a third-party IME never reports an ope
   );
   assertEquals(
     composerSource.includes(
-      'display: !desktop && mobilePendingKeyboardEditing ? "none" : "flex"',
+      'display: !desktop && mobilePendingEditing ? "none" : "flex"',
     ),
     true,
   );
   assertEquals(
-    composerSource.includes(
-      "const keyboardBoundEditing = editing && (\n    !touchInput || !mobileEditKeyboardSettledClosed",
-    ),
+    composerSource.includes("const keyboardBoundEditing = editing;"),
     true,
   );
   assertEquals(composerSource.includes("if (keyboardBoundEditing) {"), true);
+  assertEquals(composerSource.includes("onClick={hideMobileEditKeyboard}"), true);
+  assertEquals(composerSource.includes("onClick={finishMobileEdit}"), false);
 });
 
 Deno.test("mobile pending editor survives the native long-press keyboard settle window", () => {
   assertEquals(mobilePendingKeyboardCloseSettleMs, 550);
   assertEquals(
     composerSource.includes(
-      "setMobileEditKeyboardSettledClosed(true);\n        finishMobileEditRef.current();",
-    ),
-    true,
-  );
-  assertEquals(
-    composerSource.includes(
-      "mobilePendingKeyboardCloseSettleMs,\n    );",
+      "() => persistEditRef.current(),\n      mobilePendingKeyboardCloseSettleMs,",
     ),
     true,
   );
@@ -885,7 +879,7 @@ Deno.test("pending Force push confirmation keeps the native editor and anchor mo
     'const forcePushConfirmation = kind === "queued"',
   );
   const confirmationEnd = composerSource.indexOf(
-    "// Mobile Queue/Draft edits are continuously buffered",
+    "// Mobile Queue/Draft edits own the writing surface",
     confirmationStart,
   );
   const confirmation = composerSource.slice(confirmationStart, confirmationEnd);
@@ -1074,11 +1068,8 @@ Deno.test("clearing a pending edit removes the row instead of restoring it", () 
     ),
     true,
   );
-  assertEquals(
-    composerSource.includes("if (pendingContentCleared(liveEditText()"),
-    true,
-  );
   assertEquals(composerSource.includes("pendingEditLiveText("), true);
+  assertEquals(composerSource.includes("hideMobileEditKeyboard"), true);
   assertEquals(composerSource.includes("setCommittedText(text)"), true);
   assertEquals(
     composerSource.includes(

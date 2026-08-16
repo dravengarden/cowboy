@@ -2099,7 +2099,7 @@ export function ComposerWorkspace({
         elevation={0}
         sx={{
           position: "relative",
-          display: !desktop && mobilePendingKeyboardEditing ? "none" : "flex",
+          display: !desktop && mobilePendingEditing ? "none" : "flex",
           flexDirection: "column",
           ...(surface === "desktop" && {
             ...desktopSurfaceSx({ interactive: false, focusWithin: true }),
@@ -5034,88 +5034,52 @@ function PendingRow({
       </Popper>
     )
     : null;
-  // Mobile Queue/Draft edits are continuously buffered in this row. Dismissing
-  // the keyboard is therefore the completion gesture: persist a non-empty edit
-  // or remove a row the user cleared, leave fullscreen, and return to the
-  // ordinary pending card. Desktop deliberately keeps its explicit transaction.
+  // Mobile Queue/Draft edits own the writing surface until the user leaves
+  // them. Hiding the keyboard only persists the live buffer; it must not
+  // collapse the row into a card and hand focus to the empty new-message
+  // composer. Desktop still uses an explicit Done/discard transaction.
   const mobileEditSawKeyboardRef = useRef(false);
-  const mobileEditFinishingRef = useRef(false);
-  const [mobileEditKeyboardSettledClosed, setMobileEditKeyboardSettledClosed] =
-    useState(false);
-  const finishMobileEdit = (): void => {
-    if (
-      !touchInput || editAttachmentsPending || mobileEditFinishingRef.current
-    ) return;
-    mobileEditFinishingRef.current = true;
+  const persistEditRef = useRef(persistEdit);
+  persistEditRef.current = persistEdit;
+  const hideMobileEditKeyboard = (): void => {
+    if (!touchInput || editAttachmentsPending) return;
+    persistEditRef.current();
     dismissMobileSoftwareKeyboard();
-    if (pendingContentCleared(liveEditText(), editAttachments)) {
-      if (kind === "draft") removeDraft(sessionId, message.id);
-      else removeQueued(sessionId, message.id);
-      setOverlayOpen(false);
-      onEditDone();
-      return;
-    }
-    saveEdit();
   };
-  const finishMobileEditRef = useRef(finishMobileEdit);
-  finishMobileEditRef.current = finishMobileEdit;
   useEffect(() => {
     if (!touchInput || !editing) {
       mobileEditSawKeyboardRef.current = false;
-      mobileEditFinishingRef.current = false;
-      setMobileEditKeyboardSettledClosed(false);
       return undefined;
     }
     if (keyboardOpen) {
       mobileEditSawKeyboardRef.current = true;
-      setMobileEditKeyboardSettledClosed(false);
       return undefined;
     }
-    // A pasted image placeholder must retain its real editor until durable ACP
-    // bytes replace it. Hiding the keyboard during encoding is not permission to
-    // unmount the selection owner or persist an empty image block; completion
-    // changes this dependency and re-enters the ordinary close-settle path.
     if (editAttachmentsPending) return undefined;
-    // Entering an edit and raising a third-party keyboard are not atomic. Give
-    // WebKit one animation window to report it; if the keyboard remains absent,
-    // end the keyboard-bound edit anyway. This also repairs stale ownership
-    // after an IME dismisses without ever publishing an observable open frame.
+    // Entering an edit and raising a third-party keyboard are not atomic.
+    // Persist after one animation window, but keep the editor mounted so a
+    // late IME frame cannot delete the row or reveal the empty composer.
     if (!mobileEditSawKeyboardRef.current) {
       const timer = globalThis.setTimeout(
-        () => {
-          setMobileEditKeyboardSettledClosed(true);
-          finishMobileEditRef.current();
-        },
+        () => persistEditRef.current(),
         700,
       );
       return () => globalThis.clearTimeout(timer);
     }
     // A native long press can transiently report a closed keyboard while UIKit
     // promotes the textarea gesture into Paste/Select. Keep the REAL textarea
-    // mounted through the same final settle window as keyboardInset; replacing
-    // it in the first false frame cancels the native popup. Explicit Hide
-    // keyboard still calls finishMobileEdit directly and remains immediate.
+    // mounted through that settle window; only persist, never unmount.
     const timer = globalThis.setTimeout(
-      () => {
-        setMobileEditKeyboardSettledClosed(true);
-        finishMobileEditRef.current();
-      },
+      () => persistEditRef.current(),
       mobilePendingKeyboardCloseSettleMs,
     );
     return () => globalThis.clearTimeout(timer);
   }, [editAttachmentsPending, editing, keyboardOpen, touchInput]);
-  // Mobile pending editing chrome is a keyboard-owned presentation state, not
-  // the durable edit ownership itself. Keep it mounted while the initiating
-  // tap is still raising the keyboard, but collapse it in the first render
-  // after a previously visible keyboard closes. Persistence finishes in the
-  // effect above without leaving a keyboard-less expanded editor on screen.
-  const keyboardBoundEditing = editing && (
-    !touchInput || !mobileEditKeyboardSettledClosed
-  );
-  const editDirty = draft !== message.text ||
-    editAttachments.length !== message.attachments.length ||
+  const keyboardBoundEditing = editing;
+  const editDirty = draft !== seedText ||
+    editAttachments.length !== seedAttachments.length ||
     editAttachments.some((attachment, index) =>
-      attachment.id !== message.attachments[index]?.id
+      attachment.id !== seedAttachments[index]?.id
     );
   // Register one stable controller for the lifetime of the active edit. Its
   // methods read this ref, so the panel header always resolves the latest text
@@ -5421,7 +5385,7 @@ function PendingRow({
               onSelectionChange={setHasEditSelection}
               onEscape={(): boolean => {
                 if (desktop) requestDiscardEdit();
-                else finishMobileEdit();
+                else hideMobileEditKeyboard();
                 return true;
               }}
             />
@@ -5486,7 +5450,7 @@ function PendingRow({
                   <MobileComposerAccessoryButton
                     title="Hide keyboard"
                     disabled={editAttachmentsPending}
-                    onClick={finishMobileEdit}
+                    onClick={hideMobileEditKeyboard}
                   >
                     <KeyboardHide />
                   </MobileComposerAccessoryButton>
@@ -5503,8 +5467,8 @@ function PendingRow({
           /* Focused edit overlay: the row's expanded edit reuses the SAME component
             as the main input's expand — FullscreenComposer (the toolbar registry,
             inline images, native caret) — NOT a bespoke DetentSheet. Desktop keeps
-            explicit Done/discard semantics. Mobile auto-commits when its keyboard
-            is dismissed and immediately restores the ordinary pending card. */
+            explicit Done/discard semantics. Mobile collapse leaves the compact
+            row editor in place so hiding the keyboard cannot empty the buffer. */
         }
         {overlayOpen && (
           <FullscreenComposer
@@ -5512,22 +5476,25 @@ function PendingRow({
             value={draft}
             onChange={updateEditDraft}
             onSubmit={(): void => {
-              if (touchInput) finishMobileEdit();
+              persistEdit();
+              if (touchInput) setOverlayOpen(false);
               else {
                 saveEdit();
                 setOverlayOpen(false);
               }
             }}
             onSaveDraft={(): void => {
-              if (touchInput) finishMobileEdit();
+              persistEdit();
+              if (touchInput) setOverlayOpen(false);
               else {
                 saveEdit();
                 setOverlayOpen(false);
               }
             }}
-            onCollapse={touchInput
-              ? finishMobileEdit
-              : (): void => setOverlayOpen(false)}
+            onCollapse={(): void => {
+              persistEdit();
+              setOverlayOpen(false);
+            }}
             onAttach={(): void => editFileInputRef.current?.click()}
             onPasteFiles={(files, selection): void =>
               addEditFiles(
