@@ -8,13 +8,13 @@ import {
   Switch,
   Typography,
 } from "@mui/material";
-import { SettingsSheet } from "../../_shell";
 import {
   REVIEW_CODE_FONT_SIZES,
   REVIEW_CONTEXT_LINES,
 } from "./reviewSettingsModel";
 import {
   updateReviewSettings,
+  useReviewLanguageCapabilities,
   useReviewSettings,
 } from "./reviewSettings";
 
@@ -60,14 +60,16 @@ function SettingToggle({
   );
 }
 
-export function ReviewSettings({
+export function ReviewSettingsContent({
   language,
 }: {
-  language: import("./codeApi").CodeLanguageCapabilities | undefined;
-}): React.JSX.Element {
+  language?: import("./codeApi").CodeLanguageCapabilities | undefined;
+} = {}): React.JSX.Element {
   const settings = useReviewSettings();
+  const publishedLanguage = useReviewLanguageCapabilities();
+  const capabilities = language ?? publishedLanguage;
   return (
-    <SettingsSheet title="Code Review settings" cover>
+    <Stack spacing={3}>
       <Stack spacing={2}>
         <Typography variant="overline" color="text.secondary">
           Code display
@@ -148,14 +150,14 @@ export function ReviewSettings({
           description="Show LSP errors and warnings"
           checked={settings.diagnostics}
           onChange={(diagnostics): void => updateReviewSettings({ diagnostics })}
-          disabled={!language?.diagnostics}
+          disabled={!capabilities?.diagnostics}
         />
         <SettingToggle
           label="Inlay hints"
           description="Show inferred types and parameter names"
           checked={settings.inlayHints}
           onChange={(inlayHints): void => updateReviewSettings({ inlayHints })}
-          disabled={!language?.inlayHints}
+          disabled={!capabilities?.inlayHints}
         />
         <SettingToggle
           label="Semantic highlighting"
@@ -163,15 +165,15 @@ export function ReviewSettings({
           checked={settings.semanticHighlighting}
           onChange={(semanticHighlighting): void =>
             updateReviewSettings({ semanticHighlighting })}
-          disabled={!language?.semanticTokens}
+          disabled={!capabilities?.semanticTokens}
         />
-        {language?.state !== "ready" && (
+        {capabilities?.state !== "ready" && (
           <Typography variant="caption" color="text.secondary">
-            Language intelligence is {language?.state ?? "unavailable"} for this
+            Language intelligence is {capabilities?.state ?? "unavailable"} for this
             worktree. Syntax highlighting remains available locally.
           </Typography>
         )}
       </Stack>
-    </SettingsSheet>
+    </Stack>
   );
 }

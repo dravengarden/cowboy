@@ -75,6 +75,13 @@ import { SessionControls } from "./Composer";
 import { SessionReloadDialog } from "./SessionReloadDialog";
 import { MobileComposer } from "./mobile/MobileComposer";
 import { openMobileProduct } from "./mobile/appPagerMotion";
+import {
+    OPEN_APP_SETTINGS_EVENT,
+    appSettingsFromEvent,
+    openAppSettings,
+    type SettingsProductFocus,
+} from "./appSettings";
+import { ReviewSettingsContent } from "./mobile/review/ReviewSettings";
 import { claimKeyboard } from "./keyboardClaim";
 import { machineVersionPresentation, type MachineComponentUpdate } from "./machineVersions";
 import { DelayedNetworkProgress, NetworkIconButton } from "./NetworkActionFeedback";
@@ -1861,7 +1868,7 @@ const StoreTranscript = memo(function StoreTranscript({
     );
 });
 
-type SettingsTab = "settings" | "info";
+type SettingsTab = ControlCenterTab;
 
 type ControlCenterViewTransition = {
     finished: Promise<void>;
@@ -1877,7 +1884,7 @@ type ControlCenterViewTransitionDocument = Document & {
 };
 
 type SettingsControllerHandle = {
-    open: (tab: SettingsTab) => void;
+    open: (tab: SettingsTab, section?: SettingsProductFocus) => void;
 };
 
 export function App({
@@ -2095,8 +2102,11 @@ export function App({
     // Settings + Info are one merged sheet. Its open state lives in an isolated
     // controller so mounting a cover sheet does not re-render the transcript,
     // CodeMirror composer, session rail, and all of their layout effects.
-    const openSettings = useCallback((tab: SettingsTab): void => {
-        settingsControllerRef.current?.open(tab);
+    const openSettings = useCallback((
+        tab: SettingsTab,
+        section?: SettingsProductFocus,
+    ): void => {
+        settingsControllerRef.current?.open(tab, section);
     }, []);
     const openCodeTap = useReliableTouchTap<HTMLButtonElement>((): void => {
         releaseMobileComposerFocus();
@@ -2383,7 +2393,7 @@ export function App({
                 ? (): void => settleMobileDrawerRef.current?.(false)
                 : undefined}
             onOpenSettings={mobile
-                ? (): void => openSettings("settings")
+                ? (): void => openAppSettings({ section: "agent" })
                 : undefined}
             onRequestDelete={(s): void => setPendingDelete(s)}
             onRequestInfo={(s): void => setPendingInfo(s)}
@@ -4688,20 +4698,38 @@ const SettingsController = memo(forwardRef<
 >(function SettingsController({ mobile, themeMode, onSetThemeMode }, ref) {
     const [open, setOpen] = useState(false);
     const [initialTab, setInitialTab] = useState<SettingsTab>("settings");
-    const openSettings = useCallback((tab: SettingsTab): void => {
+    const [initialSection, setInitialSection] = useState<SettingsProductFocus>(
+        "agent",
+    );
+    const openSettings = useCallback((
+        tab: SettingsTab,
+        section: SettingsProductFocus = "agent",
+    ): void => {
         // A full-cover Mobile sheet ends the current Composer focus session.
         // This stays inside the isolated controller so the focus boundary does
         // not also schedule a render of the transcript/composer owner.
         if (mobile) releaseMobileComposerFocus();
         setInitialTab(tab);
+        setInitialSection(section);
         setOpen(true);
     }, [mobile]);
+    useEffect(() => {
+        const onOpen = (event: Event): void => {
+            const detail = appSettingsFromEvent(event);
+            openSettings(detail.tab ?? "settings", detail.section ?? "agent");
+        };
+        globalThis.addEventListener(OPEN_APP_SETTINGS_EVENT, onOpen);
+        return () => {
+            globalThis.removeEventListener(OPEN_APP_SETTINGS_EVENT, onOpen);
+        };
+    }, [openSettings]);
     useImperativeHandle(ref, () => ({ open: openSettings }), [openSettings]);
     return (
         <SettingsShell
             open={open}
             onClose={(): void => setOpen(false)}
             initialTab={initialTab}
+            initialSection={initialSection}
             themeMode={themeMode}
             onSetThemeMode={onSetThemeMode}
         />
@@ -4712,12 +4740,14 @@ function SettingsShell({
     open,
     onClose,
     initialTab,
+    initialSection,
     themeMode,
     onSetThemeMode,
 }: {
     open: boolean;
     onClose: () => void;
     initialTab: SettingsTab;
+    initialSection: SettingsProductFocus;
     themeMode: ThemeMode;
     onSetThemeMode: (m: ThemeMode) => void;
 }): React.JSX.Element {
@@ -4725,6 +4755,7 @@ function SettingsShell({
     // semantic tablist. Each entry remains independently addressable by key.
     const [tab, setTab] = useState<ControlCenterTab>(initialTab);
     const [renderedTab, setRenderedTab] = useState<ControlCenterTab>(initialTab);
+    const [section, setSection] = useState<SettingsProductFocus>(initialSection);
     const [tabPanelVisible, setTabPanelVisible] = useState(true);
     // Vim and animated workbench tabs are desktop-only: both require a fine
     // pointer/physical-keyboard surface rather than the touch sheet.
@@ -4793,8 +4824,9 @@ function SettingsShell({
         }
         setTab(initialTab);
         setRenderedTab(initialTab);
+        setSection(initialSection);
         setTabPanelVisible(true);
-    }, [open, initialTab]);
+    }, [open, initialTab, initialSection]);
     const vim = useVimSetting();
     const notify = useNotifySetting();
     const vibrate = useVibrateSetting();
@@ -5185,17 +5217,43 @@ function SettingsShell({
                         data-control-center-rendered-tab={renderedTab}
                         sx={controlCenterPanelMotionSx(tabPanelVisible)}
                     >
-                        {renderedTab === "settings" ? <DesktopSettingsContent
-                            themeMode={themeMode}
-                            onSetThemeMode={onSetThemeMode}
-                            shortcutsAvailable={settingsShortcutsAvailable}
-                        /> : renderedTab === "machines" ? <MachinesContent /> : renderedTab === "info" ? (
+                        {renderedTab === "settings" ? (
+                            <Stack spacing={2}>
+                                <SegmentedPill
+                                    value={section}
+                                    onChange={setSection}
+                                    options={[
+                                        { value: "agent", label: "Agent" },
+                                        { value: "code", label: "Code" },
+                                    ]}
+                                />
+                                {section === "code"
+                                    ? <ReviewSettingsContent />
+                                    : (
+                                        <DesktopSettingsContent
+                                            themeMode={themeMode}
+                                            onSetThemeMode={onSetThemeMode}
+                                            shortcutsAvailable={settingsShortcutsAvailable}
+                                        />
+                                    )}
+                            </Stack>
+                        ) : renderedTab === "machines" ? <MachinesContent /> : renderedTab === "info" ? (
                             <InfoContent desktop />
                         ) : <UsageLogs />}
                     </Box>
                 </Box>
             ) : !tabPanelVisible ? null : renderedTab === "machines" ? <MachinesContent /> : renderedTab === "info" ? <InfoContent /> : renderedTab === "logs" ? <UsageLogs /> : (
             <Stack spacing={3}>
+                <SegmentedPill
+                    value={section}
+                    onChange={setSection}
+                    options={[
+                        { value: "agent", label: "Agent" },
+                        { value: "code", label: "Code" },
+                    ]}
+                />
+                {section === "code" ? <ReviewSettingsContent /> : (
+                <>
                 <ThemeModeControl value={themeMode} onChange={onSetThemeMode} />
 
                 {/* Reading comfort — scales only the transcript message content
@@ -5498,6 +5556,8 @@ function SettingsShell({
                 <AutoResumeSettings />
                 {/* Daemon system info (Storage metrics + About) lives in the Info
                     tab — Settings holds user preferences only. */}
+                </>
+                )}
             </Stack>
             )}
             {desktop && (

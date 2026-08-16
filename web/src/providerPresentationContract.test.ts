@@ -15,9 +15,12 @@ const grokProviderSource = await Deno.readTextFile(
 
 Deno.test("Provider lifecycle cards stay collapsed behind a compact summary", () => {
   assertEquals(managementSource.includes("const [detailsOpen"), true);
-  assertEquals(managementSource.includes("hidden={!detailsOpen}"), true);
   assertEquals(
-    managementSource.includes('display: detailsOpen ? "grid" : "none"'),
+    managementSource.includes("hidden={!embedded && !detailsOpen}"),
+    true,
+  );
+  assertEquals(
+    managementSource.includes('display: embedded || detailsOpen ? "grid" : "none"'),
     true,
   );
   assertEquals(managementSource.includes("borderTop:"), false);
@@ -85,7 +88,7 @@ Deno.test("Provider management cards keep geometry in the Cowboy component libra
   );
   assertEquals(
     managementSource.includes(
-      'gridTemplateColumns: "40px minmax(0, 1fr)"',
+      'gridTemplateColumns: "32px minmax(0, 1fr)"',
     ),
     true,
   );
@@ -112,7 +115,12 @@ Deno.test("Provider management cards keep geometry in the Cowboy component libra
     managementSource.includes("data-provider-management-footer"),
     true,
   );
-  assertEquals(managementSource.includes("WebkitLineClamp: 2"), true);
+  assertEquals(managementSource.includes("whiteSpace: \"nowrap\""), true);
+  assertEquals(managementSource.includes("data-provider-session-actions"), true);
+  assertEquals(
+    managementSource.includes('width: { xs: "100%", sm: "auto" }'),
+    false,
+  );
 });
 
 Deno.test("Provider authentication copy dispatches on typed presentation, not Provider id", () => {
@@ -153,6 +161,15 @@ Deno.test("Service authentication keeps Cowboy alive while Provider sign-in open
     true,
   );
   assertEquals(managementSource.includes("closeAuthenticationBrowser()"), true);
+});
+
+Deno.test("session settings embed one focused Service authentication card", () => {
+  assertEquals(
+    managementSource.includes("export function SessionProviderAccess"),
+    true,
+  );
+  assertEquals(managementSource.includes("focusProviderId"), true);
+  assertEquals(managementSource.includes("embedded"), true);
 });
 
 Deno.test("Service credential management renders one card per typed authentication scope", () => {

@@ -4,6 +4,7 @@ import {
   DescriptionOutlined,
   History,
   Refresh,
+  Settings as SettingsIcon,
 } from "@mui/icons-material";
 import {
   Alert,
@@ -18,7 +19,8 @@ import {
   Typography,
 } from "@mui/material";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { MobileSheetDismiss } from "../../_shell";
+import { MobileSheetActionGroup, MobileSheetDismiss } from "../../_shell";
+import { openAppSettings } from "../../appSettings";
 import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
 import { NetworkIconButton } from "../../NetworkActionFeedback";
 import type { GitReviewEntry } from "./gitReviewModel";
@@ -406,7 +408,25 @@ export function ReviewRepository({
           pointerEvents: "none",
         }}
       >
-        <MobileSheetDismiss onClose={onClose} label="Close repository" />
+        <Stack
+          direction="row"
+          justifyContent="center"
+          alignItems="center"
+          spacing={1.25}
+          sx={{ pointerEvents: "none", "& > *": { pointerEvents: "auto" } }}
+        >
+          <MobileSheetActionGroup
+            actions={[
+              {
+                key: "settings",
+                label: "Settings",
+                icon: <SettingsIcon fontSize="small" />,
+                onPress: (): void => openAppSettings({ section: "code" }),
+              },
+            ]}
+          />
+          <MobileSheetDismiss onClose={onClose} label="Close repository" />
+        </Stack>
       </Box>
     </Stack>
   );

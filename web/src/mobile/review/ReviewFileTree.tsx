@@ -6,6 +6,7 @@ import {
   MyLocation,
   Refresh,
   Search,
+  Settings as SettingsIcon,
   UnfoldLess,
   UnfoldMore,
 } from "@mui/icons-material";
@@ -25,6 +26,7 @@ import {
 } from "@mui/material";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MobileSheetActionGroup } from "../../_shell";
+import { openAppSettings } from "../../appSettings";
 import { NetworkIconButton } from "../../NetworkActionFeedback";
 import {
   type CodeTreeEntry as FileTreeEntry,
@@ -690,6 +692,12 @@ export function ReviewFileTree({
       >
         <MobileSheetActionGroup
           actions={[
+            {
+              key: "settings",
+              label: "Settings",
+              icon: <SettingsIcon fontSize="small" />,
+              onPress: (): void => openAppSettings({ section: "code" }),
+            },
             {
               key: "close",
               label: `Close ${contextLabel.toLowerCase()}`,

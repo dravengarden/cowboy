@@ -124,11 +124,36 @@ const UNPUBLISHED_AUTH_EFFECTS: ReadonlySet<EffectCapability> = new Set([
 ]);
 
 type ProviderManagementProps =
-  | { scope: "service"; machine?: never }
-  | { scope: "machine"; machine: ProviderMachine };
+  | {
+    scope: "service";
+    machine?: never;
+    focusProviderId?: string;
+    embedded?: boolean;
+  }
+  | {
+    scope: "machine";
+    machine: ProviderMachine;
+    focusProviderId?: string;
+    embedded?: boolean;
+  };
 
 export function ProviderAuthenticationManagement(): React.JSX.Element {
   return <ProviderManagement scope="service" />;
+}
+
+/** Session-sheet slice of Service authentication. Settings keeps the full
+ *  catalog; this mounts only the current session's Provider and its sign-in
+ *  flow. */
+export function SessionProviderAccess(
+  { providerId }: { providerId: string },
+): React.JSX.Element {
+  return (
+    <ProviderManagement
+      scope="service"
+      focusProviderId={providerId}
+      embedded
+    />
+  );
 }
 
 export function MachineProviderManagement(
@@ -168,50 +193,91 @@ function ProviderManagementIdentity({
       data-provider-management-identity
       sx={{
         display: "grid",
-        gridTemplateColumns: "40px minmax(0, 1fr)",
-        columnGap: 1,
-        alignItems: "start",
+        gridTemplateColumns: "32px minmax(0, 1fr)",
+        columnGap: 1.25,
+        alignItems: "center",
         minWidth: 0,
       }}
     >
       <Box
         data-provider-management-mark
         sx={{
-          width: 40,
-          height: 40,
+          width: 32,
+          height: 32,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
           color: manifest.display.accent,
         }}
       >
-        {mark ?? <ProviderMark manifest={manifest} size={30} />}
+        {mark ?? <ProviderMark manifest={manifest} size={26} />}
       </Box>
-      <Stack spacing={0.45} sx={{ minWidth: 0 }}>
-        <Typography
-          variant="subtitle1"
-          fontWeight={720}
-          sx={{
-            lineHeight: 1.25,
-            overflowWrap: "anywhere",
-            display: "-webkit-box",
-            WebkitBoxOrient: "vertical",
-            WebkitLineClamp: 2,
-            overflow: "hidden",
-          }}
+      <Stack spacing={0.25} sx={{ minWidth: 0 }}>
+        <Stack
+          direction="row"
+          alignItems="center"
+          spacing={1}
+          sx={{ minWidth: 0 }}
         >
-          {title}
-        </Typography>
+          <Typography
+            variant="body2"
+            fontWeight={650}
+            sx={{
+              flex: 1,
+              minWidth: 0,
+              lineHeight: 1.3,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {title}
+          </Typography>
+          <Box
+            data-provider-management-actions
+            sx={{
+              ml: "auto",
+              flex: "0 0 auto",
+              display: "flex",
+              justifyContent: "flex-end",
+              minWidth: 0,
+              "& > .MuiStack-root": {
+                alignItems: "center",
+                justifyContent: "flex-end",
+                flexDirection: "row",
+                flexWrap: "wrap",
+                gap: 0.75,
+                width: "auto",
+              },
+              "& .MuiButton-root": {
+                minHeight: 32,
+                px: 1.25,
+                flex: "0 0 auto",
+                fontWeight: 650,
+                letterSpacing: 0,
+                textTransform: "none",
+                boxShadow: "none",
+              },
+              "& .MuiButton-contained": {
+                bgcolor: "transparent",
+                color: "primary.main",
+                border: "1px solid",
+                borderColor: "divider",
+                "&:hover": { bgcolor: "action.hover" },
+              },
+            }}
+          >
+            {actions}
+          </Box>
+        </Stack>
         <Typography
           variant="caption"
           color="text.secondary"
           sx={{
             lineHeight: 1.35,
-            overflowWrap: "anywhere",
-            display: "-webkit-box",
-            WebkitBoxOrient: "vertical",
-            WebkitLineClamp: 2,
             overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
           }}
         >
           {summary}
@@ -224,7 +290,7 @@ function ProviderManagementIdentity({
               spacing={0.5}
               flexWrap="wrap"
               useFlexGap
-              sx={{ pt: 0.2 }}
+              sx={{ pt: 0.15 }}
             >
               {consumers.map((entry) => (
                 <Chip
@@ -234,7 +300,7 @@ function ProviderManagementIdentity({
                   icon={<ProviderMark manifest={entry.manifest} size={14} />}
                   label={entry.manifest.display.name}
                   sx={{
-                    height: 25,
+                    height: 22,
                     maxWidth: "100%",
                     "& .MuiChip-icon": { ml: 0.6, mr: 0.1 },
                     "& .MuiChip-label": {
@@ -251,56 +317,33 @@ function ProviderManagementIdentity({
         <Stack
           data-provider-management-footer
           direction="row"
-          spacing={0.65}
+          spacing={0.75}
           alignItems="center"
-          flexWrap="wrap"
-          useFlexGap
-          sx={{ minHeight: 36, pt: 0.15 }}
+          sx={{ minWidth: 0 }}
         >
-          <Chip
+          <Typography
             data-provider-management-status
-            size="small"
-            variant="outlined"
-            color={statusTone}
-            label={statusLabel}
+            variant="caption"
+            color={statusTone === "warning"
+              ? "warning.main"
+              : statusTone === "success"
+              ? "success.main"
+              : "text.secondary"}
             sx={{
-              maxWidth: 138,
-              height: 24,
-              "& .MuiChip-label": {
-                px: 0.8,
-                fontSize: "0.68rem",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-              },
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
             }}
-          />
+          >
+            {statusLabel}
+          </Typography>
           <Typography
             variant="caption"
             color="text.secondary"
-            sx={{ fontFamily: "monospace", lineHeight: 1 }}
+            sx={{ flexShrink: 0 }}
           >
             v{version}
           </Typography>
-          <Box
-            data-provider-management-actions
-            sx={{
-              ml: { xs: 0, sm: "auto" },
-              width: { xs: "100%", sm: "auto" },
-              minWidth: 0,
-              "& > .MuiStack-root": {
-                alignItems: "center",
-                justifyContent: { xs: "stretch", sm: "flex-end" },
-                width: "100%",
-              },
-              "& .MuiButton-root": {
-                minHeight: 40,
-                px: 1.25,
-                flex: { xs: "1 1 auto", sm: "0 0 auto" },
-              },
-            }}
-          >
-            {actions}
-          </Box>
         </Stack>
       </Stack>
     </Box>
@@ -389,7 +432,7 @@ function ProviderManagementLifecycleSurface({
 }
 
 function ProviderManagement(
-  { scope, machine }: ProviderManagementProps,
+  { scope, machine, focusProviderId, embedded = false }: ProviderManagementProps,
 ): React.JSX.Element {
   const { catalog, error: catalogError, refresh: refreshCatalog } =
     useProviderCatalog();
@@ -420,7 +463,7 @@ function ProviderManagement(
     () => groupProviderAuthentications(latestEntries),
     [latestEntries],
   );
-  const providerRows = useMemo(
+  const allProviderRows = useMemo(
     () =>
       scope === "machine"
         ? joinProviderInstallations(catalog?.providers ?? [], inventory, {
@@ -445,6 +488,20 @@ function ProviderManagement(
         }),
     [catalog, inventory, machine, scope, serviceCredentialGroups],
   );
+  const providerRows = useMemo(() => {
+    if (!focusProviderId) return allProviderRows;
+    return allProviderRows.filter((row) => {
+      if (row.providerId === focusProviderId) return true;
+      if (row.latestEntry?.provider_id === focusProviderId) return true;
+      if (row.installedEntry?.provider_id === focusProviderId) return true;
+      const group = serviceCredentialGroups.find((candidate) =>
+        candidate.authenticationScope === row.latestEntry?.authentication_scope
+      );
+      return group?.entries.some((entry) =>
+        entry.provider_id === focusProviderId
+      ) === true;
+    });
+  }, [allProviderRows, focusProviderId, serviceCredentialGroups]);
   const authentications = useMemo(
     () =>
       new Map(
@@ -849,6 +906,7 @@ function ProviderManagement(
         },
       })}
     >
+      {!embedded && (
       <Stack
         direction="row"
         spacing={1}
@@ -875,11 +933,12 @@ function ProviderManagement(
           ? <Chip size="small" color="error" label="Catalog unavailable" />
           : null}
       </Stack>
+      )}
       {catalogError ? <Alert severity="error">{catalogError}</Alert> : null}
       {!catalog && !catalogError
         ? <Typography variant="caption">Loading Provider Catalog…</Typography>
         : null}
-      {catalog
+      {!embedded && catalog
         ? (
           <Stack
             direction="row"
@@ -990,13 +1049,22 @@ function ProviderManagement(
         : null}
       <Box
         id={detailsId}
-        hidden={!detailsOpen}
+        hidden={!embedded && !detailsOpen}
         sx={{
-          display: detailsOpen ? "grid" : "none",
-          gridTemplateColumns: { xs: "1fr", md: "repeat(2, minmax(0, 1fr))" },
+          display: embedded || detailsOpen ? "grid" : "none",
+          gridTemplateColumns: embedded
+            ? "1fr"
+            : { xs: "1fr", md: "repeat(2, minmax(0, 1fr))" },
           gap: 1,
         }}
       >
+        {embedded && providerRows.length === 0
+          ? (
+            <Typography variant="body2" color="text.secondary">
+              Provider details are unavailable.
+            </Typography>
+          )
+          : null}
         {providerRows.map((row) => {
           const {
             providerId,
@@ -1219,57 +1287,93 @@ function ProviderManagement(
               }`}
               variant="outlined"
               sx={{
-                p: 1.25,
+                p: embedded ? 0 : 1,
                 minWidth: 0,
                 borderRadius: 1.25,
+                border: embedded ? 0 : 1,
+                bgcolor: "transparent",
+                boxShadow: "none",
               }}
               data-provider-management-card
               data-provider-credential-card={scope === "service"
                 ? "true"
                 : undefined}
             >
-              <Stack spacing={1.25}>
-                <ProviderManagementIdentity
-                  manifest={entry.manifest}
-                  version={host.provider_version}
-                  statusLabel={managementStatus}
-                  statusTone={managementStatusTone}
-                  actions={identityActions}
-                  title={credentialGroup
-                    ? providerCredentialTitle(credentialGroup.entries)
-                    : entry.manifest.display.name}
-                  summary={sharedCredential
-                    ? `One Cowboy Service credential shared by ${credentialEntries.length} Providers`
-                    : entry.manifest.display.summary}
-                  mark={sharedCredential
-                    ? (
-                      <ProviderCredentialMarks
-                        entries={credentialEntries}
-                        size={36}
-                      />
-                    )
-                    : (
-                      <ProviderMark
-                        manifest={entry.manifest}
-                        size={30}
-                        appearance={entry.provider_id === "codex"
-                          ? "accentBadge"
-                          : "plain"}
-                      />
-                    )}
-                  consumers={sharedCredential ? credentialEntries : []}
-                />
-                {readyCredential && credentialManagementOpen
+              <Stack spacing={1}>
+                {embedded
                   ? (
                     <Box
-                      id={`provider-credential-management-${entry.authentication_scope}`}
-                      data-provider-credential-management
-                      sx={{ pl: { xs: 0, sm: 6 } }}
+                      data-provider-session-actions
+                      sx={{
+                        "& .MuiButton-root": {
+                          width: "100%",
+                          minHeight: 44,
+                          justifyContent: "center",
+                          px: 1.5,
+                          borderRadius: 1,
+                          textTransform: "none",
+                          fontWeight: 650,
+                          letterSpacing: 0,
+                          boxShadow: "none",
+                        },
+                        "& .MuiButton-contained": {
+                          bgcolor: "transparent",
+                          color: "primary.main",
+                          border: "1px solid",
+                          borderColor: "divider",
+                          "&:hover": { bgcolor: "action.hover" },
+                        },
+                        "& .MuiStack-root, & .MuiBox-root": { width: "100%" },
+                      }}
                     >
                       {lifecycleSurface}
                     </Box>
                   )
-                  : null}
+                  : (
+                    <>
+                      <ProviderManagementIdentity
+                        manifest={entry.manifest}
+                        version={host.provider_version}
+                        statusLabel={managementStatus}
+                        statusTone={managementStatusTone}
+                        actions={identityActions}
+                        title={credentialGroup
+                          ? providerCredentialTitle(credentialGroup.entries)
+                          : entry.manifest.display.name}
+                        summary={sharedCredential
+                          ? `One Cowboy Service credential shared by ${credentialEntries.length} Providers`
+                          : entry.manifest.display.summary}
+                        mark={sharedCredential
+                          ? (
+                            <ProviderCredentialMarks
+                              entries={credentialEntries}
+                              size={32}
+                            />
+                          )
+                          : (
+                            <ProviderMark
+                              manifest={entry.manifest}
+                              size={26}
+                              appearance={entry.provider_id === "codex"
+                                ? "accentBadge"
+                                : "plain"}
+                            />
+                          )}
+                        consumers={sharedCredential ? credentialEntries : []}
+                      />
+                      {readyCredential && credentialManagementOpen
+                        ? (
+                          <Box
+                            id={`provider-credential-management-${entry.authentication_scope}`}
+                            data-provider-credential-management
+                            sx={{ pl: { xs: 0, sm: 5.25 } }}
+                          >
+                            {lifecycleSurface}
+                          </Box>
+                        )
+                        : null}
+                    </>
+                  )}
                 {scope === "machine" && installed &&
                     entry.manifest.authentication.required
                   ? (
