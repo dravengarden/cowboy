@@ -198,6 +198,17 @@ impl ProviderAuthService {
             .map(StoredProviderAuthentication::status)
     }
 
+    #[must_use]
+    pub(crate) fn active_authentication_request(&self, provider_id: &str) -> Option<String> {
+        self.transient
+            .read()
+            .get(provider_id)
+            .filter(|active| {
+                active.status.authentication_state == ServiceAuthenticationState::Authenticating
+            })
+            .map(|active| active.request_id.clone())
+    }
+
     pub(crate) fn begin_authentication(
         &self,
         package: &ProviderPackage,
@@ -936,6 +947,10 @@ mod tests {
         assert!(service.status("gemini").is_none());
         assert!(service.replica_statuses().is_empty());
         assert_eq!(service.statuses(), vec![authenticating]);
+        assert_eq!(
+            service.active_authentication_request("gemini").as_deref(),
+            Some("first-login")
+        );
         assert!(
             service
                 .begin_authentication(&package, "duplicate-login")
@@ -948,6 +963,7 @@ mod tests {
             service.statuses()[0].authentication_state,
             ServiceAuthenticationState::Error
         );
+        assert!(service.active_authentication_request("gemini").is_none());
         service.cancel_authentication("gemini", "wrong-login");
         assert_eq!(service.statuses().len(), 1);
         service.cancel_authentication("gemini", "first-login");
