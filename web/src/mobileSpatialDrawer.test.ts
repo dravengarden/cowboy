@@ -25,7 +25,8 @@ Deno.test("mobile drawer keeps clipping and shadows off the heavy surface", () =
   assertEquals(drawerSource.includes("applyCardChrome"), false);
   assert(drawerSource.includes("drawerMask.style.boxShadow"));
   assert(drawerSource.includes("mobileDrawerCardVisual"));
-  assert(drawerSource.includes('surface.style.willChange = "transform"'));
+  assert(drawerSource.includes('layer.style.willChange = "transform"'));
+  assert(drawerSource.includes("getFollowers"));
   assert(drawerSource.includes('drawer.style.transform = "translate3d(0, 0, 0)"'));
   assert(drawerSource.includes("--mobile-drawer-width"));
   assertEquals(drawerSource.includes("scheduleRender"), false);

@@ -38,6 +38,7 @@ export function bindMobileSpatialDrawer({
   drawer,
   drawerMask,
   dim,
+  getFollowers,
   side,
   phone,
   getOpen,
@@ -50,6 +51,10 @@ export function bindMobileSpatialDrawer({
   drawer: HTMLElement;
   drawerMask: HTMLElement;
   dim?: HTMLElement | null;
+  // Layers that must share the peek translate but must not live inside
+  // `surface`. iOS pins bottom chrome of a transformed full-screen ancestor
+  // to the visual viewport; those pieces need their own translate3d.
+  getFollowers?: () => Array<HTMLElement | null | undefined>;
   side: MobileSpatialDrawerSide;
   phone: boolean;
   getOpen: () => boolean;
@@ -104,6 +109,30 @@ export function bindMobileSpatialDrawer({
       `${String(width)}px`,
     );
   };
+  const origin = side === "left" ? "left center" : "right center";
+  const followerLayers = (): HTMLElement[] => {
+    const seen = new Set<HTMLElement>([surface, drawerMask]);
+    const layers: HTMLElement[] = [];
+    for (const layer of getFollowers?.() ?? []) {
+      if (!layer || seen.has(layer)) continue;
+      seen.add(layer);
+      layers.push(layer);
+    }
+    return layers;
+  };
+  const slidingLayers = (): HTMLElement[] => [surface, drawerMask, ...followerLayers()];
+  const prepareLayer = (layer: HTMLElement): void => {
+    layer.style.willChange = "transform";
+    layer.style.transformOrigin = origin;
+  };
+  const applySlide = (offset: number): void => {
+    const x = `${String(openingSign * offset)}px`;
+    const transform = `translate3d(${x}, 0, 0)`;
+    for (const layer of slidingLayers()) {
+      prepareLayer(layer);
+      layer.style.transform = transform;
+    }
+  };
   const applyOpenDepth = (): void => {
     // Never clip or shadow the full session surface. On iPhone, WebKit then
     // re-composites the Transcript/CodeMirror viewport while its transform is
@@ -125,9 +154,7 @@ export function bindMobileSpatialDrawer({
     // Touch callback writes only compositor properties. Flatten and store
     // holds happen in prepare(), before the first translate.
     const visual = mobileDrawerCardVisual(offset, presentationWidth, phone);
-    const x = `${String(openingSign * offset)}px`;
-    surface.style.transform = `translate3d(${x}, 0, 0)`;
-    drawerMask.style.transform = `translate3d(${x}, 0, 0)`;
+    applySlide(offset);
     if (dim) dim.style.opacity = String(visual.dim);
   };
   const beginDirectManipulation = (): void => {
@@ -143,8 +170,7 @@ export function bindMobileSpatialDrawer({
     }
     settleGen += 1;
     globalThis.clearTimeout(settleTimer);
-    surface.style.transition = "none";
-    drawerMask.style.transition = "none";
+    for (const layer of slidingLayers()) layer.style.transition = "none";
     if (dim) dim.style.transition = "none";
     gestureTarget.setAttribute("data-mobile-drawer-moving", "true");
     applyOpenDepth();
@@ -155,8 +181,7 @@ export function bindMobileSpatialDrawer({
     );
   };
   const clearTransitions = (): void => {
-    surface.style.removeProperty("transition");
-    drawerMask.style.removeProperty("transition");
+    for (const layer of slidingLayers()) layer.style.removeProperty("transition");
     if (dim) dim.style.removeProperty("transition");
   };
   const releaseDirectManipulation = (): void => {
@@ -216,11 +241,13 @@ export function bindMobileSpatialDrawer({
     const duration = mobileDrawerSettleDurationMs(remaining, releaseVelocity);
     const transition =
       `transform ${String(duration)}ms ${MOBILE_DRAWER_SETTLE_EASING}`;
-    surface.style.transition = transition;
-    drawerMask.style.transition = transition;
+    for (const layer of slidingLayers()) {
+      if (layer === dim) continue;
+      layer.style.transition = transition;
+    }
     if (dim) {
       dim.style.transition =
-        `opacity ${String(duration)}ms ${MOBILE_DRAWER_SETTLE_EASING}`;
+        `transform ${String(duration)}ms ${MOBILE_DRAWER_SETTLE_EASING}, opacity ${String(duration)}ms ${MOBILE_DRAWER_SETTLE_EASING}`;
     }
     const finish = (): void => {
       if (generation !== settleGen) return;
@@ -424,9 +451,7 @@ export function bindMobileSpatialDrawer({
   drawer.style.isolation = "isolate";
   surface.style.removeProperty("border-radius");
   surface.style.removeProperty("overflow");
-  surface.style.willChange = "transform";
-  surface.style.transformOrigin = side === "left" ? "left center" : "right center";
-  drawerMask.style.willChange = "transform";
+  for (const layer of slidingLayers()) prepareLayer(layer);
   render(getOpen() ? presentationWidth : 0);
   gestureTarget.addEventListener("touchstart", onTouchStart, { passive: true });
   gestureTarget.addEventListener("touchmove", onTouchMove, { passive: false });
@@ -453,8 +478,13 @@ export function bindMobileSpatialDrawer({
       gestureTarget.style.removeProperty("--mobile-drawer-width");
       drawer.style.removeProperty("transform");
       drawer.style.removeProperty("isolation");
-      surface.style.removeProperty("will-change");
-      drawerMask.style.removeProperty("will-change");
+      for (const layer of slidingLayers()) {
+        layer.style.removeProperty("will-change");
+        if (layer !== surface && layer !== drawerMask) {
+          layer.style.removeProperty("transform");
+          layer.style.removeProperty("transform-origin");
+        }
+      }
       lastPublishedProgress = null;
       if (releaseFrame !== 0) cancelAnimationFrame(releaseFrame);
       if (releaseIdle !== undefined) {

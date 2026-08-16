@@ -28,7 +28,7 @@ Deno.test("drawer progress only publishes coarse ownership values", () => {
 Deno.test("drawer render stays on a transform-only compositor path", () => {
   assertEquals(drawerSource.includes("drawer.style.opacity"), false);
   assertEquals(drawerSource.includes('willChange = "transform, opacity"'), false);
-  assert(drawerSource.includes('surface.style.willChange = "transform"'));
+  assert(drawerSource.includes('layer.style.willChange = "transform"'));
   assertEquals(drawerSource.includes('drawer.style.willChange = "transform"'), false);
   assert(drawerSource.includes("drawerProgressAttribute("));
   assertEquals(drawerSource.includes("drawer.style.opacity"), false);

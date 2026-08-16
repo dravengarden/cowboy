@@ -1911,6 +1911,9 @@ export function App({
     // no child panel publishes an independent reservation.
     const columnRef = useRef<HTMLDivElement>(null);
     const mobileLayerRef = useRef<HTMLDivElement>(null);
+    const mobilePageRef = useRef<HTMLDivElement>(null);
+    const mobileNavFollowRef = useRef<HTMLElement | null>(null);
+    const mobileComposerFollowRef = useRef<HTMLDivElement | null>(null);
     const { appBarRef, composerRef } = useFloatingComposerGeometry({
         surfaceRef: columnRef,
         navbarAtBottom,
@@ -1976,7 +1979,8 @@ export function App({
     // timing, and idle release stay identical on both surfaces.
     useEffect(() => {
         if (!mobile) return undefined;
-        const surface = mobileLayerRef.current ?? columnRef.current;
+        const surface = mobilePageRef.current ?? mobileLayerRef.current ??
+            columnRef.current;
         const gestureTarget = mobileShellRef.current;
         const drawer = mobileDrawerRef.current;
         const drawerMask = mobileDrawerMaskRef.current;
@@ -1988,6 +1992,11 @@ export function App({
             drawer,
             drawerMask,
             dim,
+            getFollowers: () => [
+                mobileDrawerDimRef.current,
+                mobileComposerFollowRef.current,
+                mobileNavFollowRef.current,
+            ],
             side: "left",
             phone,
             getOpen: () => drawerOpenRef.current,
@@ -2794,7 +2803,6 @@ export function App({
             >
             <Box
                 ref={mobile ? mobileLayerRef : undefined}
-                data-mobile-drawer-surface={mobile ? "true" : undefined}
                 sx={mobile
                     ? {
                         // In-flow fill, not position:absolute;inset:0. iOS
@@ -2966,8 +2974,14 @@ export function App({
                 )}
                 <AppBar
                     data-mobile-session-nav={navbarAtBottom ? "true" : undefined}
+                    data-mobile-drawer-follow={mobile && navbarAtBottom ? "true" : undefined}
                     data-detent-sheet-chrome="true"
-                    ref={appBarRef}
+                    ref={(element): void => {
+                        appBarRef(element);
+                        mobileNavFollowRef.current = mobile && navbarAtBottom
+                            ? element
+                            : null;
+                    }}
                     position="static"
                     // `color="transparent"` + an explicit theme surface, NOT
                     // `color="default"`: MUI's "default" AppBar resolves to a
@@ -3340,11 +3354,14 @@ export function App({
                             Mobile: the same column is in-flow so the footer
                             translates with the page instead of pinning. */}
                         <Box
+                            ref={mobile ? mobilePageRef : undefined}
+                            data-mobile-drawer-surface={mobile ? "true" : undefined}
                             sx={mobile
                                 ? {
-                                    // In-flow transcript. An absolute inset:0
-                                    // sibling of the footer is the other half of
-                                    // the iOS "bottom chrome stays put" pin.
+                                    // Transcript-only sliding page. Composer and
+                                    // navbar are siblings with their own
+                                    // translate3d; iOS pins them if they live
+                                    // inside this transformed box.
                                     flex: 1,
                                     minHeight: 0,
                                     minWidth: 0,
@@ -3391,8 +3408,17 @@ export function App({
                             2 (the very bottom, after the spacer). position:relative + zIndex
                             lifts the frosted composer above the absolute transcript layer. */}
                         <Box
-                            ref={composerRef}
+                            ref={(element): void => {
+                                const node = element instanceof HTMLDivElement
+                                    ? element
+                                    : null;
+                                composerRef(node);
+                                mobileComposerFollowRef.current = mobile
+                                    ? node
+                                    : null;
+                            }}
                             data-mobile-session-footer={mobile ? "true" : undefined}
+                            data-mobile-drawer-follow={mobile ? "true" : undefined}
                             sx={{
                                 order: navbarAtBottom ? 1 : 2,
                                 minWidth: 0,
@@ -3514,7 +3540,11 @@ export function App({
                     // (including the AppBar area), so it reads as the viewport
                     // center even on tall screens. flex-centering would push it
                     // ~24px down (half the AppBar height).
-                    <Box sx={{ flex: 1, position: "relative" }}>
+                    <Box
+                        ref={mobile ? mobilePageRef : undefined}
+                        data-mobile-drawer-surface={mobile ? "true" : undefined}
+                        sx={{ flex: 1, position: "relative" }}
+                    >
                         <Stack
                             spacing={2}
                             alignItems="center"
