@@ -52,11 +52,11 @@ export function mobileDrawerSettleDurationMs(
   );
 }
 
-/** Obsidian keeps the rail still and only slides the workspace. A
- *  complementary `offset - width` made the list enter from off-screen,
- *  which reads as a second moving card. */
-export function mobileDrawerRailOffset(_offset: number, _width: number): number {
-  return 0;
+/** Complementary rail travel. The peek sits at `offset`; the rail starts
+ *  off-screen at `-width` and meets it at 0 when the drawer is open.
+ *  A pinned rail stays under the page and does not ride the swipe. */
+export function mobileDrawerRailOffset(offset: number, width: number): number {
+  return offset - width;
 }
 
 export function mobileDrawerProgress(

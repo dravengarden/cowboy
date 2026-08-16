@@ -27,9 +27,9 @@ Deno.test("drawer settle uses an iOS deceleration window", () => {
   assertEquals(mobileDrawerSettleDurationMs(0.5, 0), 330);
 });
 
-Deno.test("drawer rail stays still like an Obsidian sidebar", () => {
-  assertEquals(mobileDrawerRailOffset(0, 328), 0);
-  assertEquals(mobileDrawerRailOffset(164, 328), 0);
+Deno.test("drawer rail meets the peek from off-screen", () => {
+  assertEquals(mobileDrawerRailOffset(0, 328), -328);
+  assertEquals(mobileDrawerRailOffset(164, 328), -164);
   assertEquals(mobileDrawerRailOffset(328, 328), 0);
 });
 
