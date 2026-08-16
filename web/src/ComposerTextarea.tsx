@@ -11,7 +11,8 @@ import type {
   ComposerEditorHandle,
   ComposerEditorSelection,
 } from "./ComposerEditor";
-import { clipboardFiles } from "./attachments";
+import { type Attachment, clipboardFiles } from "./attachments";
+import { insertNativeInlineImages } from "./composer/mobileCompactEditorPolicy";
 import { attachComposerInputDebug } from "./composer/composerInputDebug";
 import { reportMobileNativePasteEvent } from "./composer/mobileNativePasteTelemetry";
 import { hasDraftMod, hasSendMod } from "./platform";
@@ -176,7 +177,7 @@ export const ComposerTextarea = forwardRef<
     initialSelection,
     onEscape,
     onPasteFiles,
-    onInlineImageInsertion: _onInlineImageInsertion,
+    onInlineImageInsertion,
     onSelectionChange,
     endInset = 0,
     borderless = false,
@@ -502,12 +503,62 @@ export const ComposerTextarea = forwardRef<
       selectedSlashCommandRef.current = null;
       return command;
     },
-    // Touch images stay out of this document (pitfall #69). Callers already
-    // staged the attachment; the composer tray renders it. Inserting a
-    // placement token would promote this textarea to CM6 and bind UIKit's
-    // caret to the thumbnail.
-    insertImage: (): void => undefined,
-    insertImages: (): void => undefined,
+    // Preserve the placement token even though a native textarea cannot render
+    // the widget itself. PlatformComposerEditor sees the controlled value gain
+    // the token and immediately promotes this same document to CM6, where the
+    // registered attachment renders inline at this exact position.
+    insertImage: (attachment: Attachment): void => {
+      const ta = inputRef.current;
+      const current = ta?.value ?? value;
+      const at = ta?.selectionStart ?? current.length;
+      const to = ta?.selectionEnd ?? at;
+      const edit = insertNativeInlineImages(current, at, to, [attachment]);
+      // Record before onChange schedules the render that replaces this textarea.
+      onInlineImageInsertion?.(edit.caret, attachment.pending === true);
+      if (ta) {
+        writeNativeEdit(ta, {
+          value: edit.value,
+          from: edit.caret,
+          to: edit.caret,
+        });
+      }
+      onChange(edit.value);
+    },
+    insertImages: (
+      attachments: Attachment[],
+      capturedSelection?: ComposerEditorSelection,
+    ): void => {
+      if (attachments.length === 0) return;
+      const ta = inputRef.current;
+      // Read the live DOM value: image conversion is asynchronous and React's
+      // render-time `value` may lag text entered while the clipboard was read.
+      const current = ta?.value ?? value;
+      const anchor = capturedSelection?.anchor ??
+        ta?.selectionStart ?? current.length;
+      const head = capturedSelection?.head ?? ta?.selectionEnd ?? anchor;
+      const at = Math.min(anchor, head);
+      const to = Math.max(anchor, head);
+      const edit = insertNativeInlineImages(current, at, to, attachments);
+      // CM6's initial EditorState consumes this exact selection in the same
+      // promotion commit. Defaulting to 0 strands the caret before the image.
+      onInlineImageInsertion?.(
+        edit.caret,
+        attachments.some((attachment) => attachment.pending === true),
+      );
+      if (ta) {
+        // The accessory button prevents pointer-down focus transfer, but iOS may
+        // briefly project BODY while showing its native paste affordance. Restore
+        // the same textarea before the promotion render so the replacement CM6
+        // inherits the still-open keyboard rather than needing delayed refocus.
+        ta.focus();
+        writeNativeEdit(ta, {
+          value: edit.value,
+          from: edit.caret,
+          to: edit.caret,
+        });
+      }
+      onChange(edit.value);
+    },
     refreshImages: (): void => undefined,
     deleteImage: (): void => undefined,
     // The fullscreen touch editor deliberately remains a native textarea while

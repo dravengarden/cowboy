@@ -40,17 +40,6 @@ export function shouldExpandInlineComposer(
 }
 
 /**
- * Pitfall #69 candidate 2. Physical iOS binds `caretRect` to a replaced
- * `<img>` inside contenteditable, so promoting the native textarea to CM6
- * after paste leaves the painted caret on the thumbnail. New touch pastes
- * stay in the attachment tray; the textarea never gains a placement token.
- * Existing token-bearing documents still promote.
- */
-export function touchImagePasteInsertsTokens(): boolean {
-  return false;
-}
-
-/**
  * Native iOS text controls own the reliable long-press edit menu. CM6 owns
  * inline-image widgets. Use the native control on every touch writing surface
  * while the document has no image placement token; the first token promotes
