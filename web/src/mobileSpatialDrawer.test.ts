@@ -83,6 +83,7 @@ Deno.test("settled drawers retain declarative depth and pager ownership", () => 
   assert(productShellSource.includes("translatedSurfaceOwnsPagerGesture"));
   assert(productShellSource.includes("drawerProgressOwnsPagerGesture"));
   assert(appSource.includes("data-mobile-drawer-surface={mobile ? \"true\" : undefined}"));
+  assert(appSource.includes("mobileLayerRef.current ?? columnRef.current"));
   assert(reviewDrawerSource.includes('data-mobile-drawer-surface="true"'));
   assert(appSource.includes("width: 28"));
   assert(reviewDrawerSource.includes("width: 28"));

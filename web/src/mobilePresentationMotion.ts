@@ -18,7 +18,6 @@ export const mobileCompositorFlattenSx = {
   },
   "& [data-mobile-session-nav], & [data-mobile-session-footer], & [data-mobile-composer-shell-material]": {
     transition: "none !important",
-    transform: "none !important",
   },
 };
 

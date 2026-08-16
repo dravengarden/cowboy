@@ -1910,6 +1910,7 @@ export function App({
     // frosted material and the settled Transcript inset consume its two outputs;
     // no child panel publishes an independent reservation.
     const columnRef = useRef<HTMLDivElement>(null);
+    const mobileLayerRef = useRef<HTMLDivElement>(null);
     const { appBarRef, composerRef } = useFloatingComposerGeometry({
         surfaceRef: columnRef,
         navbarAtBottom,
@@ -1975,7 +1976,7 @@ export function App({
     // timing, and idle release stay identical on both surfaces.
     useEffect(() => {
         if (!mobile) return undefined;
-        const surface = columnRef.current;
+        const surface = mobileLayerRef.current ?? columnRef.current;
         const gestureTarget = mobileShellRef.current;
         const drawer = mobileDrawerRef.current;
         const drawerMask = mobileDrawerMaskRef.current;
@@ -2014,7 +2015,7 @@ export function App({
     // shared card radius and a closed drawer remains entirely native-clipped.
     useEffect(() => {
         if (!mobile) return undefined;
-        const surface = columnRef.current;
+        const surface = mobileLayerRef.current ?? columnRef.current;
         if (!surface) return undefined;
         let restoreTimer = 0;
         const ownsKeyboard = (): boolean => {
@@ -2743,7 +2744,6 @@ export function App({
             <Stack
                 ref={columnRef}
                 data-mobile-session-surface={mobile ? "true" : undefined}
-                data-mobile-drawer-surface={mobile ? "true" : undefined}
                 sx={{
                     flex: 1,
                     height: mobile ? "100%" : undefined,
@@ -2757,11 +2757,6 @@ export function App({
                     overflow: "hidden",
                     zIndex: mobile ? 1 : undefined,
                     bgcolor: "background.default",
-                    // Keep the revealed seam exactly under the finger while the
-                    // frozen workspace recedes as one composited layer.
-                    transformOrigin: "left center",
-                    backfaceVisibility: "hidden",
-                    isolation: mobile ? "isolate" : undefined,
                     // Lift the whole column off the on-screen keyboard + its
                     // iOS-native accessory bar: this padding (the keyboard's
                     // overlap, published by useKeyboardInset) reserves space at
@@ -2793,6 +2788,24 @@ export function App({
                         opacity: "0 !important",
                     },
                 }}
+            >
+            <Box
+                ref={mobile ? mobileLayerRef : undefined}
+                data-mobile-drawer-surface={mobile ? "true" : undefined}
+                sx={mobile
+                    ? {
+                        position: "absolute",
+                        inset: 0,
+                        display: "flex",
+                        flexDirection: "column",
+                        minHeight: 0,
+                        width: "100%",
+                        bgcolor: "background.default",
+                        isolation: "isolate",
+                        backfaceVisibility: "hidden",
+                        transformOrigin: "left center",
+                    }
+                    : { display: "contents" }}
             >
                 {mobile && (
                     <Box
@@ -3528,6 +3541,7 @@ export function App({
                         </Stack>
                     </Box>
                 )}
+            </Box>
             </Stack>
             </Box>
 
