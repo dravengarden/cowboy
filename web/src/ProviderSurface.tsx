@@ -484,9 +484,15 @@ const terminalCaretMotion = keyframes`
   55%, 100% { opacity: 0.24; }
 `;
 const assetPulseMotion = keyframes`
-  0%, 100% { transform: scale(0.96); opacity: 0.78; }
-  50% { transform: scale(1); opacity: 1; }
+  0%, 100% { opacity: 0.46; }
+  50% { opacity: 0.92; }
 `;
+const ACTIVITY_MARK_SIZE = 14;
+const ACTIVITY_TERMINAL_SIZE = 17;
+
+function scaledActivityMark(size: number): string {
+  return `calc(${size}px * var(--cowboy-font-scale, 1))`;
+}
 
 function LegacyProviderActivity(): React.JSX.Element {
   return (
@@ -494,11 +500,11 @@ function LegacyProviderActivity(): React.JSX.Element {
       role="status"
       aria-label="Provider is thinking"
       direction="row"
-      spacing={0.8}
+      spacing={0.5}
       alignItems="center"
-      sx={{ py: 0.5, alignSelf: "flex-start", color: "text.secondary" }}
+      sx={{ py: 0, alignSelf: "flex-start", color: "text.secondary" }}
     >
-      <CircularProgress size={16} thickness={5} color="inherit" aria-hidden />
+      <CircularProgress size={13} thickness={5} color="inherit" aria-hidden />
       <Typography variant="caption" aria-hidden>
         Thinking…
       </Typography>
@@ -559,12 +565,16 @@ function ProviderActivity({
     return () => globalThis.clearInterval(timer);
   }, [phraseInterval, phrases.length, reducedMotion]);
 
+  const markSize = node.indicator.kind === "terminal_prompt"
+    ? ACTIVITY_TERMINAL_SIZE
+    : ACTIVITY_MARK_SIZE;
+  const markBox = scaledActivityMark(markSize);
   const indicator = (() => {
     switch (node.indicator.kind) {
       case "progress_ring":
         return (
           <CircularProgress
-            size={16}
+            size={ACTIVITY_MARK_SIZE}
             thickness={5}
             color="inherit"
             aria-hidden
@@ -577,12 +587,12 @@ function ProviderActivity({
             component="span"
             aria-hidden
             sx={{
-              width: 16,
+              width: markBox,
               flexShrink: 0,
               textAlign: "center",
               color: primary,
-              fontSize: 15,
-              fontWeight: 700,
+              fontSize: `calc(13px * var(--cowboy-font-scale, 1))`,
+              fontWeight: 600,
               lineHeight: 1,
               fontFamily:
                 "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
@@ -600,8 +610,8 @@ function ProviderActivity({
             viewBox="0 0 18 18"
             aria-hidden
             sx={{
-              width: 17,
-              height: 17,
+              width: markBox,
+              height: markBox,
               display: "block",
               flexShrink: 0,
               overflow: "visible",
@@ -639,19 +649,21 @@ function ProviderActivity({
         );
       case "asset_signal": {
         const asset = assets.get(node.indicator.asset);
-        if (!asset) return <CircularProgress size={16} aria-hidden />;
+        if (!asset) {
+          return <CircularProgress size={ACTIVITY_MARK_SIZE} aria-hidden />;
+        }
         return (
           <Box
             component="span"
             aria-hidden
             sx={{
-              width: 18,
-              height: 18,
+              width: markBox,
+              height: markBox,
               position: "relative",
               display: "inline-block",
               flexShrink: 0,
               "& .provider-signal-base": {
-                opacity: reducedMotion ? 1 : 0.7,
+                opacity: reducedMotion ? 0.82 : 0.62,
               },
               "& .provider-signal-sweep": reducedMotion
                 ? { display: "none" }
@@ -675,7 +687,7 @@ function ProviderActivity({
             >
               <ProviderAssetGraphic
                 asset={asset}
-                size={18}
+                size={ACTIVITY_MARK_SIZE}
               />
             </Box>
             <Box
@@ -684,7 +696,7 @@ function ProviderActivity({
             >
               <ProviderAssetGraphic
                 asset={asset}
-                size={18}
+                size={ACTIVITY_MARK_SIZE}
               />
             </Box>
           </Box>
@@ -692,14 +704,16 @@ function ProviderActivity({
       }
       case "asset_pulse": {
         const asset = assets.get(node.indicator.asset);
-        if (!asset) return <CircularProgress size={16} aria-hidden />;
+        if (!asset) {
+          return <CircularProgress size={ACTIVITY_MARK_SIZE} aria-hidden />;
+        }
         return (
           <Box
             component="span"
             aria-hidden
             sx={{
-              width: 18,
-              height: 18,
+              width: markBox,
+              height: markBox,
               display: "inline-flex",
               animation: reducedMotion
                 ? "none"
@@ -708,7 +722,7 @@ function ProviderActivity({
           >
             <ProviderAssetGraphic
               asset={asset}
-              size={18}
+              size={ACTIVITY_MARK_SIZE}
             />
           </Box>
         );
@@ -729,24 +743,24 @@ function ProviderActivity({
       role="status"
       aria-label={node.accessible_label}
       direction="row"
-      spacing={0.75}
+      spacing={0.5}
       alignItems="center"
       data-provider-activity-indicator={node.indicator.kind}
       data-provider-activity-effect={node.label.effect}
       sx={{
-        py: 0.25,
+        py: 0,
         alignSelf: "flex-start",
-        color: primary,
-        minHeight: 22,
+        color: "text.secondary",
+        minHeight: markBox,
       }}
     >
       <Box
         aria-hidden
         sx={{
-          width: 18,
-          height: 18,
-          minWidth: 18,
-          minHeight: 18,
+          width: markBox,
+          height: markBox,
+          minWidth: markBox,
+          minHeight: markBox,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -762,8 +776,9 @@ function ProviderActivity({
         aria-hidden
         variant="caption"
         sx={{
-          fontWeight: 650,
-          letterSpacing: "0.015em",
+          fontWeight: 500,
+          letterSpacing: "0.01em",
+          lineHeight: 1.2,
           ...(effect === "shimmer"
             ? {
               background:
@@ -778,6 +793,7 @@ function ProviderActivity({
             }
             : effect === "fade"
             ? {
+              color: muted,
               animation: reducedMotion
                 ? "none"
                 : `${activityFade} ${
@@ -785,7 +801,7 @@ function ProviderActivity({
                 }ms ease-in-out infinite`,
             }
             : {}),
-          ...(effect === "none" ? { color: primary } : {}),
+          ...(effect === "none" ? { color: muted } : {}),
           ...(reducedMotion && effect === "shimmer"
             ? {
               background: "none",

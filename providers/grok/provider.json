@@ -18,8 +18,8 @@
     "indicator": { "kind": "mark_pulse", "interval_ms": 1650 },
     "label": {
       "kind": "text",
-      "value": { "source": "literal", "value": "Working" },
-      "effect": "none"
+      "value": { "source": "literal", "value": "Working…" },
+      "effect": "shimmer"
     },
     "accessible_label": "Grok is working"
   },
@@ -47,7 +47,7 @@
       "thought": {
         "variant": "signal",
         "density": "compact",
-        "active_label": "Working",
+        "active_label": "Working…",
         "current_surface": "soft"
       }
     },

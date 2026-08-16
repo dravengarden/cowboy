@@ -42,7 +42,7 @@ const terminalCaret = keyframes`
   0%, 50% { opacity: 1; }
   51%, 100% { opacity: 0; }
 `;
-const SIGNAL_THOUGHT_MARK_SIZE = 18;
+const SIGNAL_THOUGHT_MARK_SIZE = 14;
 
 function WorkcellGlyph({ size = 16 }: { size?: number }): React.JSX.Element {
   return (
@@ -272,7 +272,7 @@ export function ProviderThoughtSteps({
               : "auto minmax(0, 1fr)",
             alignItems: "center",
             columnGap: signalHeader ? `${geometry.gap}px` : 0.75,
-            minHeight: compact ? 18 : 20,
+            minHeight: compact ? 16 : 18,
             mb: compact ? 0.125 : 0.25,
             pl: signalHeader ? `${geometry.paddingLeft}px` : 0,
             pr: 0,
@@ -293,10 +293,10 @@ export function ProviderThoughtSteps({
             aria-hidden
             variant="caption"
             sx={{
-              fontWeight: 650,
+              fontWeight: 500,
               letterSpacing: presentation.variant === "terminal"
                 ? "0.035em"
-                : "0.025em",
+                : "0.01em",
               backgroundImage: dualAccent
                 ? `linear-gradient(100deg, ${muted} 0%, ${muted} 34%, ${accent} 46%, ${secondary} 54%, ${muted} 66%, ${muted} 100%)`
                 : `linear-gradient(100deg, ${muted} 0%, ${muted} 36%, ${accent} 50%, ${muted} 64%, ${muted} 100%)`,

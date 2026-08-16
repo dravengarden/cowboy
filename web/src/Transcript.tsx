@@ -846,11 +846,11 @@ function ThinkingIndicator({
       fallback={
         <Stack
           direction="row"
-          spacing={1}
+          spacing={0.5}
           alignItems="center"
-          sx={{ py: 0.5, alignSelf: "flex-start" }}
+          sx={{ py: 0, alignSelf: "flex-start" }}
         >
-          <CircularProgress size={16} thickness={5} />
+          <CircularProgress size={13} thickness={5} />
           <Typography variant="caption" color="text.secondary">
             Thinking…
           </Typography>
@@ -5034,7 +5034,8 @@ export function Transcript({
               )}
               {showTrailingDots && (
                 <Box
-                  sx={{ py: 0.625, display: "flex", flexDirection: "column" }}
+                  data-transcript-tail-row="activity"
+                  sx={{ py: 0.25, display: "flex", flexDirection: "column" }}
                 >
                   <ThinkingIndicator
                     provider={provider}

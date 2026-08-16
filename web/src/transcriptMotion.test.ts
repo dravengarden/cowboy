@@ -17,6 +17,12 @@ Deno.test("thinking activity renders the exact Provider loading surface", () => 
   assert(component.includes("providerVersion={providerVersion}"));
   assert(component.includes("providerDigest={providerDigest}"));
   assert(component.includes('slot="loading"'));
+  assert(transcriptSource.includes('data-transcript-tail-row="activity"'));
+  assert(
+    /data-transcript-tail-row="activity"\s+sx=\{\{\s*py: 0\.25/.test(
+      transcriptSource,
+    ),
+  );
 });
 
 Deno.test("thinking activity has no Provider identity branches", () => {
