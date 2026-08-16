@@ -160,7 +160,7 @@ export function CodeView({
   const lightweightWrap = wrapped;
   const lightweightSx = {
     m: 0,
-    p: 1.5,
+    p: "12px 12px 18px",
     maxWidth: "100%",
     overflowX: lightweightWrap ? "hidden" : "auto",
     whiteSpace: lightweightWrap ? "pre-wrap" : "pre",

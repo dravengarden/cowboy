@@ -154,7 +154,11 @@ export function ReviewDrawerShell({
             position: "absolute",
             zIndex: 2,
             inset: 0,
-            bgcolor: "common.black",
+            bgcolor: "transparent",
+            backgroundImage: (t) =>
+              t.palette.mode === "dark"
+                ? "linear-gradient(to left, rgba(0,0,0,0.46), rgba(0,0,0,0.20) 42%, rgba(0,0,0,0.05))"
+                : "linear-gradient(to left, rgba(0,0,0,0.24), rgba(0,0,0,0.10) 46%, rgba(0,0,0,0.03))",
             opacity: 0,
             pointerEvents: open ? "auto" : "none",
           }}

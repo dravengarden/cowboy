@@ -68,20 +68,19 @@ export function mobileDrawerProgress(
     : 0;
 }
 
-/** Obsidian's peeking page stays full size and unscaled. A light black
- *  veil recedes the workspace without changing its layout. The session
- *  surface itself must not clip, or iOS punches holes in the peek. */
+/** Obsidian recedes the workspace with a join-to-edge gradient, not a
+ *  flat black veil. `dim` is the overlay's opacity; the gradient itself
+ *  carries the shade. The session surface must not clip. */
 export function mobileDrawerCardVisual(
   offset: number,
   width: number,
-  phone: boolean,
+  _phone: boolean,
 ): { progress: number; dim: number; radiusPx: number } {
   const progress = mobileDrawerProgress(offset, width);
-  const openDim = phone ? 0.22 : 0.16;
   return {
     progress,
-    dim: openDim * progress,
-    radiusPx: phone ? 20 : 16,
+    dim: progress,
+    radiusPx: 16,
   };
 }
 

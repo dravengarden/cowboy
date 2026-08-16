@@ -21,7 +21,7 @@ export const mobileComposerStackGap = 4;
  * Row internals must never manufacture their own boundary exception: Markdown,
  * Thinking, Judging, optimistic messages, and Page footers all terminate above
  * this same spacer. */
-export const mobileTranscriptTailGap = 6;
+export const mobileTranscriptTailGap = 12;
 
 /** One coordinated timeline for the Mobile composer's focus expansion and
  * collapse. Keep adjacent surfaces on this curve so dismissing the keyboard

@@ -266,7 +266,7 @@ function CodeBlock({
   const lightweightPreview = lightweight ? previewCodeForRendering(code) : "";
   const lightweightSx = {
     m: 0,
-    p: 1.5,
+    p: "12px 12px 18px",
     maxWidth: "100%",
     overflowX: wrapOnTouch ? "hidden" : "auto",
     whiteSpace: wrapOnTouch ? "pre-wrap" : "pre",
@@ -414,7 +414,7 @@ function CodeBlock({
             // depend on the emotion class losing/winning the cascade.
             customStyle={{
               margin: 0,
-              padding: 12,
+              padding: "12px 12px 18px",
               overflowX: wrapOnTouch ? "hidden" : "auto",
               maxWidth: "100%",
             }}
@@ -535,7 +535,7 @@ class MarkdownCodeBoundary extends Component<
         data-markdown-code-fallback
         sx={{
           m: 0,
-          p: 1.5,
+          p: "12px 12px 18px",
           maxWidth: "100%",
           overflowX: "auto",
           bgcolor: this.props.dark ? "#282c34" : "#fafafa",

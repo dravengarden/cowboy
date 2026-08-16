@@ -13,6 +13,7 @@ import {
   useMediaQuery,
   useTheme,
 } from "@mui/material";
+import { alpha } from "@mui/material/styles";
 import type { Theme } from "@mui/material/styles";
 import { useEffect, useId, useMemo, useState } from "react";
 import type { ReactNode } from "react";
@@ -729,11 +730,19 @@ function ProviderActivity({
       role="status"
       aria-label={node.accessible_label}
       direction="row"
-      spacing={0.5}
+      spacing={0.75}
       alignItems="center"
       data-provider-activity-indicator={node.indicator.kind}
       data-provider-activity-effect={node.label.effect}
-      sx={{ py: 0.5, alignSelf: "flex-start", color: primary }}
+      sx={{
+        py: 0.375,
+        px: 0.875,
+        minHeight: 28,
+        alignSelf: "flex-start",
+        color: primary,
+        borderRadius: 1.25,
+        bgcolor: (t) => alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.08 : 0.045),
+      }}
     >
       <Box
         aria-hidden

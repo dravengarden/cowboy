@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { inferKeyboardOpen } from "./keyboardGeometry.ts";
+import { clampKeyboardOverlap, inferKeyboardOpen } from "./keyboardGeometry.ts";
 import { isNativeShell } from "./nativeShell";
 
 // Publish the on-screen keyboard's overlap of the layout viewport as the
@@ -43,7 +43,10 @@ export function useKeyboardInset(): void {
       // NOT add vv.offsetTop: it spikes during an overscroll/rubber-band as the
       // visual viewport pans, which inflated the inset and left the sheet too
       // high above the keyboard. vv.height stays stable under that pan.
-      const overlap = Math.round(Math.max(0, globalThis.innerHeight - vv.height));
+      const overlap = clampKeyboardOverlap(
+        Math.round(Math.max(0, globalThis.innerHeight - vv.height)),
+        globalThis.innerHeight,
+      );
       // Only write on change — the focus poll below runs apply() every 300ms, and
       // a same-value setProperty would still be a needless style touch each tick.
       if (overlap !== lastInset) {

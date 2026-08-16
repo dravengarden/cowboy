@@ -2865,8 +2865,14 @@ export function App({
                             inset: 0,
                             zIndex: (t) => t.zIndex.modal - 1,
                             // Always mounted so opening can dim on the compositor
-                            // without inserting a layer mid-gesture.
-                            bgcolor: "common.black",
+                            // without inserting a layer mid-gesture. Obsidian
+                            // shades the peek with a join-to-edge gradient, not
+                            // a flat black veil.
+                            bgcolor: "transparent",
+                            backgroundImage: (t) =>
+                                t.palette.mode === "dark"
+                                    ? "linear-gradient(to right, rgba(0,0,0,0.46), rgba(0,0,0,0.20) 42%, rgba(0,0,0,0.05))"
+                                    : "linear-gradient(to right, rgba(0,0,0,0.24), rgba(0,0,0,0.10) 46%, rgba(0,0,0,0.03))",
                             opacity: 0,
                             pointerEvents: drawerOpen ? "auto" : "none",
                             cursor: drawerOpen ? "pointer" : "default",

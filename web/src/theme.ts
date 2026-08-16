@@ -51,8 +51,14 @@ function applyThemeColor(dark: boolean): void {
   for (const m of doc.querySelectorAll('meta[name="theme-color"]')) m.remove();
   const meta = doc.createElement("meta");
   meta.setAttribute("name", "theme-color");
-  meta.setAttribute("content", dark ? "#15111d" : "#f4ecf7");
+  const color = dark ? "#15111d" : "#f4ecf7";
+  meta.setAttribute("content", color);
   doc.head.appendChild(meta);
+  // iOS paints the unlaid-out strip under a rising keyboard from the
+  // document background. Keep it on the app surface so that frame is
+  // not a black/white flash.
+  doc.documentElement.style.backgroundColor = color;
+  if (doc.body) doc.body.style.backgroundColor = color;
 }
 
 // Native desktop UIs size their system font per-OS: macOS renders SF at ~13px,

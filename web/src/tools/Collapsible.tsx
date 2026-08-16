@@ -161,6 +161,7 @@ export function Collapsible({
             pointerEvents: "none",
             display: "flex",
             justifyContent: "center",
+            pb: 0.5,
           }}
         >
           <Box sx={{ pointerEvents: "auto", width: "100%" }}>{expandButton()}</Box>

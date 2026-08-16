@@ -35,10 +35,10 @@ Deno.test("drawer rail meets the peek from off-screen", () => {
 
 Deno.test("drawer card recedes like an Obsidian workspace", () => {
   assertEquals(mobileDrawerCardVisual(0, 360, true).dim, 0);
-  assertEquals(mobileDrawerCardVisual(360, 360, true).dim, 0.22);
-  assertEquals(mobileDrawerCardVisual(360, 360, false).dim, 0.16);
-  assertEquals(mobileDrawerCardVisual(180, 360, true).dim, 0.11);
-  assertEquals(mobileDrawerCardVisual(360, 360, true).radiusPx, 20);
+  assertEquals(mobileDrawerCardVisual(360, 360, true).dim, 1);
+  assertEquals(mobileDrawerCardVisual(360, 360, false).dim, 1);
+  assertEquals(mobileDrawerCardVisual(180, 360, true).dim, 0.5);
+  assertEquals(mobileDrawerCardVisual(360, 360, true).radiusPx, 16);
   assertEquals(mobileDrawerCardVisual(360, 360, false).radiusPx, 16);
   assertEquals(Object.hasOwn(mobileDrawerCardVisual(360, 360, true), "scale"), false);
 });
