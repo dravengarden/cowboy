@@ -617,19 +617,13 @@ async fn prepare_package_launch(id: &str) -> Result<PreparedLaunch> {
         .runtime
         .sidecars
         .iter()
-        .flat_map(|sidecar| sidecar.auth_environment.iter())
+        .flat_map(|sidecar| sidecar.auth_environment.iter().cloned())
         .collect();
-    for name in package
-        .manifest
-        .authentication
-        .environment_projection
-        .keys()
-        .filter(|name| !sidecar_auth.contains(name))
-    {
-        let value = std::env::var(name)
-            .with_context(|| format!("Provider auth projection {name:?} is unavailable"))?;
-        environment.insert(name.clone(), value);
-    }
+    environment.extend(projected_auth_environment(
+        &package.manifest.authentication.environment_projection,
+        &sidecar_auth,
+        |name| std::env::var(name).ok(),
+    ));
     let arguments = package
         .manifest
         .runtime
@@ -650,6 +644,18 @@ async fn prepare_package_launch(id: &str) -> Result<PreparedLaunch> {
         },
         sidecars,
     })
+}
+
+fn projected_auth_environment(
+    projection: &BTreeMap<String, String>,
+    sidecar_auth: &BTreeSet<String>,
+    mut lookup: impl FnMut(&str) -> Option<String>,
+) -> HashMap<String, String> {
+    projection
+        .keys()
+        .filter(|name| !sidecar_auth.contains(*name))
+        .filter_map(|name| lookup(name).map(|value| (name.clone(), value)))
+        .collect()
 }
 
 fn verified_component_commands(
@@ -1225,7 +1231,7 @@ fn render_codex_deepseek_config(catalog: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use crate::deepseek_context;
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, BTreeSet, HashMap};
 
     fn lookup_with(overrides: &[(&str, &str)], id: &str) -> Option<super::LaunchSpec> {
         let overrides: HashMap<_, _> = overrides.iter().copied().collect();
@@ -1234,6 +1240,29 @@ mod tests {
             Some("/test/bin/bash".to_owned()),
         )
         .remove(id)
+    }
+
+    #[test]
+    fn auth_environment_accepts_alternative_file_only_credentials() {
+        let projection = BTreeMap::from([("XAI_API_KEY".to_owned(), "api_key".to_owned())]);
+
+        let file_only = super::projected_auth_environment(&projection, &BTreeSet::new(), |_| None);
+        assert!(file_only.is_empty());
+
+        let api_key = super::projected_auth_environment(&projection, &BTreeSet::new(), |name| {
+            (name == "XAI_API_KEY").then(|| "projected-key".to_owned())
+        });
+        assert_eq!(
+            api_key.get("XAI_API_KEY").map(String::as_str),
+            Some("projected-key")
+        );
+
+        let sidecar_owned = super::projected_auth_environment(
+            &projection,
+            &BTreeSet::from(["XAI_API_KEY".to_owned()]),
+            |_| Some("must-not-leak".to_owned()),
+        );
+        assert!(sidecar_owned.is_empty());
     }
 
     #[test]

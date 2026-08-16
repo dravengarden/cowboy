@@ -904,7 +904,7 @@ async fn record_lifecycle_incidents(store: &Store, rows: &[Envelope]) -> anyhow:
                     occurred_at_ms,
                     source: "controller".to_owned(),
                     classification: classification.to_owned(),
-                    severity: "error".to_owned(),
+                    severity: session_error_severity(classification).to_owned(),
                     state: "failed".to_owned(),
                     summary: summary.clone(),
                     fingerprint,
@@ -974,7 +974,7 @@ async fn record_lifecycle_incidents(store: &Store, rows: &[Envelope]) -> anyhow:
                 source: "controller".to_owned(),
                 classification: classification.to_owned(),
                 severity: if *status == Status::Crashed {
-                    "error".to_owned()
+                    "critical".to_owned()
                 } else {
                     "warning".to_owned()
                 },
@@ -1016,7 +1016,18 @@ fn classify_crash_detail(detail: Option<&str>) -> &'static str {
         return "provider_empty_stream";
     }
     let detail = detail.unwrap_or_default().to_ascii_lowercase();
-    if detail.contains("oom") || detail.contains("out of memory") || detail.contains("signal: 9") {
+    if detail.contains("worker")
+        && (detail.contains("before readiness")
+            || detail.contains("did not become ready")
+            || detail.contains("generation launch failed")
+            || detail.contains("spawning worker")
+            || detail.contains("transient worker unit"))
+    {
+        "worker_startup_failure"
+    } else if detail.contains("oom")
+        || detail.contains("out of memory")
+        || detail.contains("signal: 9")
+    {
         "resource_exhaustion"
     } else if detail.contains("protocol") || detail.contains("frame") || detail.contains("json-rpc")
     {
@@ -1069,6 +1080,15 @@ fn classify_session_error(detail: &str) -> &'static str {
     }
 }
 
+fn session_error_severity(classification: &str) -> &'static str {
+    match classification {
+        "worker_startup_failure" | "process_exit" | "resource_exhaustion" | "runtime_failure" => {
+            "critical"
+        }
+        _ => "error",
+    }
+}
+
 fn classify_interruption_detail(detail: Option<&str>) -> &'static str {
     let detail = detail.unwrap_or_default().to_ascii_lowercase();
     if detail.contains("deploy")
@@ -1085,7 +1105,7 @@ fn classify_interruption_detail(detail: Option<&str>) -> &'static str {
 mod incident_classification_tests {
     use super::{
         bounded_incident_summary, classify_crash_detail, classify_interruption_detail,
-        classify_session_error,
+        classify_session_error, session_error_severity,
     };
 
     #[test]
@@ -1117,6 +1137,12 @@ mod incident_classification_tests {
             "provider_empty_stream"
         );
         assert_eq!(classify_crash_detail(None), "runtime_failure");
+        assert_eq!(
+            classify_crash_detail(Some(
+                "fallback after generation launch failed: worker sess-1 exited before readiness with exit status: 1"
+            )),
+            "worker_startup_failure"
+        );
     }
 
     #[test]
@@ -1153,6 +1179,13 @@ mod incident_classification_tests {
             classify_session_error("runtime rejected command"),
             "session_command_error"
         );
+        assert_eq!(
+            classify_session_error("worker sess-1 exited before readiness with exit status: 1"),
+            "worker_startup_failure"
+        );
+        assert_eq!(session_error_severity("worker_startup_failure"), "critical");
+        assert_eq!(session_error_severity("process_exit"), "critical");
+        assert_eq!(session_error_severity("session_command_error"), "error");
     }
 
     #[test]
@@ -1205,7 +1238,7 @@ async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyhow::Result<
                     occurred_at_ms: *occurred_at_ms,
                     source: "controller".to_owned(),
                     classification: classification.to_owned(),
-                    severity: "error".to_owned(),
+                    severity: session_error_severity(classification).to_owned(),
                     state: "failed".to_owned(),
                     summary: message.clone(),
                     fingerprint,

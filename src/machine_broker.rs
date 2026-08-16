@@ -18,7 +18,7 @@ use anyhow::{Context as _, Result, ensure};
 use parking_lot::Mutex;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::process::Command;
-use tokio::sync::{Mutex as AsyncMutex, mpsc};
+use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
 
 use crate::runtime_wire::{
     CoreCommand, Frame, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION, PeerRole, RuntimeEvent,
@@ -1068,7 +1068,7 @@ impl Broker {
         self.session_states
             .lock()
             .insert(session.session_id.clone(), WorkerState::Starting);
-        self.spawn_worker(session).await?;
+        let mut worker_exit = self.spawn_worker(session).await?;
         let deadline = tokio::time::Instant::now() + self.args.worker_ready_timeout;
         loop {
             if self.cancelled_sessions.lock().contains(&session.session_id) {
@@ -1103,7 +1103,26 @@ impl Broker {
                     self.args.worker_ready_timeout
                 );
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            tokio::select! {
+                exit = &mut worker_exit => {
+                    self.force_recycle_failed_start(&session.session_id).await;
+                    match exit {
+                        Ok(Ok(status)) => anyhow::bail!(
+                            "worker {} exited before readiness with {status}",
+                            session.session_id
+                        ),
+                        Ok(Err(error)) => anyhow::bail!(
+                            "waiting for worker {} failed before readiness: {error}",
+                            session.session_id
+                        ),
+                        Err(_) => anyhow::bail!(
+                            "worker {} exit monitor stopped before readiness",
+                            session.session_id
+                        ),
+                    }
+                }
+                () = tokio::time::sleep(Duration::from_millis(50)) => {}
+            }
         }
     }
 
@@ -1426,7 +1445,10 @@ impl Broker {
         });
     }
 
-    async fn spawn_worker(&self, session: &StartSession) -> Result<()> {
+    async fn spawn_worker(
+        &self,
+        session: &StartSession,
+    ) -> Result<oneshot::Receiver<std::result::Result<std::process::ExitStatus, String>>> {
         let provider = (!session.provider_generation_digest.is_empty())
             .then(|| {
                 self.args.provider_store.launch_context(
@@ -1516,6 +1538,7 @@ impl Broker {
                 command.args([
                     "--user",
                     "--quiet",
+                    "--wait",
                     "--collect",
                     "--service-type=exec",
                     "--property=KillMode=control-group",
@@ -1600,32 +1623,27 @@ impl Broker {
         if session.system {
             command.arg("--system");
         }
-        match self.args.spawn_mode {
-            SpawnMode::Direct => {
-                let mut child = command.spawn().context("spawning worker process")?;
-                let session_id = session.session_id.clone();
-                tokio::spawn(async move {
-                    match child.wait().await {
-                        Ok(status) => {
-                            tracing::info!(session = %session_id, %status, "worker process exited")
-                        }
-                        Err(error) => {
-                            tracing::warn!(session = %session_id, %error, "waiting for worker failed")
-                        }
-                    }
-                });
-            }
-            SpawnMode::SystemdUser => {
-                let status = command
-                    .status()
-                    .await
-                    .context("starting transient worker unit")?;
-                if !status.success() {
-                    anyhow::bail!("systemd-run exited {status}");
+        let mut child = command
+            .spawn()
+            .with_context(|| match self.args.spawn_mode {
+                SpawnMode::Direct => "spawning worker process",
+                SpawnMode::SystemdUser => "starting transient worker unit",
+            })?;
+        let session_id = session.session_id.clone();
+        let (exit_tx, exit_rx) = oneshot::channel();
+        tokio::spawn(async move {
+            let result = child.wait().await.map_err(|error| error.to_string());
+            match &result {
+                Ok(status) => {
+                    tracing::info!(session = %session_id, %status, "worker process exited")
+                }
+                Err(error) => {
+                    tracing::warn!(session = %session_id, %error, "waiting for worker failed")
                 }
             }
-        }
-        Ok(())
+            let _ = exit_tx.send(result);
+        });
+        Ok(exit_rx)
     }
 }
 
@@ -2469,6 +2487,51 @@ mod tests {
     fn unit_names_are_safe_and_stable() {
         assert_eq!(worker_unit_name("sess-123"), "cowboy-worker-sess-123");
         assert_eq!(worker_unit_name("weird/id"), "cowboy-worker-weird_id");
+    }
+
+    #[tokio::test]
+    async fn worker_exit_fails_launch_without_waiting_for_readiness_timeout() {
+        let broker = Broker::new(MachineBrokerArgs {
+            socket: PathBuf::from("/tmp/unused.sock"),
+            worker_command: PathBuf::from("false"),
+            desired_generation: "gen-1".to_owned(),
+            spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worker_ready_timeout: Duration::from_secs(10),
+        });
+        let session = StartSession {
+            session_id: "sess-fast-failure".to_owned(),
+            provider: "codex".to_owned(),
+            provider_version: String::new(),
+            provider_generation_digest: String::new(),
+            provider_auth_generation: None,
+            provider_behavior: None,
+            cwd: "/tmp".to_owned(),
+            agent_session_id: None,
+            system: false,
+            context_window: None,
+            auto_compact_token_limit: None,
+            cache_protection: None,
+            generation: "gen-1".to_owned(),
+            fallback_for: None,
+            adopt_only: false,
+        };
+
+        let error = tokio::time::timeout(
+            Duration::from_secs(1),
+            broker.spawn_and_wait_ready(&session),
+        )
+        .await
+        .expect("worker exit must beat the readiness timeout")
+        .expect_err("exited worker must fail launch");
+
+        assert!(
+            error.to_string().contains("exited before readiness"),
+            "unexpected launch error: {error:#}"
+        );
+        assert!(!error.to_string().contains("did not become ready"));
     }
 
     #[test]

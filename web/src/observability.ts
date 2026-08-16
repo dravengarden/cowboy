@@ -27,6 +27,8 @@ interface PendingIncident {
   detail: Record<string, Scalar>;
 }
 
+export const CRASH_INCIDENT_SEVERITY = "critical" as const;
+
 const logs: PendingLog[] = [];
 const metrics: PendingMetric[] = [];
 const incidents: PendingIncident[] = [];
@@ -280,10 +282,16 @@ export function installObservability(): void {
       column: event.colno,
     };
     reportClientLog("error", "window_error", event.error ?? event.message, detail);
+    reportClientIncident(
+      "client_window_error",
+      CRASH_INCIDENT_SEVERITY,
+      event.error ?? event.message,
+      detail,
+    );
   });
   globalThis.addEventListener("unhandledrejection", (event) => {
     reportClientLog("error", "unhandled_rejection", event.reason);
-    reportClientIncident("client_unhandled_rejection", "error", event.reason);
+    reportClientIncident("client_unhandled_rejection", CRASH_INCIDENT_SEVERITY, event.reason);
   });
   globalThis.addEventListener("online", () => {
     reportClientLog("info", "network_online", "Browser network became available");
