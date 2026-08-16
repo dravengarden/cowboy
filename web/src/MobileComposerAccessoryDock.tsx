@@ -46,13 +46,7 @@ export function MobileComposerAccessoryDock({
           ? { borderTop: 1, borderColor: "divider", overflow: "hidden" }
           : mobileComposerPanelFrameSx),
         borderColor: (theme) => alpha(theme.palette.divider, 0.5),
-        bgcolor: (theme) =>
-          alpha(
-            theme.palette.background.paper,
-            theme.palette.mode === "dark" ? 0.96 : 0.94,
-          ),
-        backdropFilter: "blur(18px) saturate(135%)",
-        WebkitBackdropFilter: "blur(18px) saturate(135%)",
+        bgcolor: "background.paper",
         boxShadow: embedded
           ? "none"
           : (theme) =>

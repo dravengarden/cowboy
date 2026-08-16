@@ -2438,13 +2438,7 @@ export function ReviewApp({
             flexShrink: 0,
             borderTop: 1,
             borderColor: "divider",
-            bgcolor: (theme) =>
-              alpha(
-                theme.palette.background.default,
-                theme.palette.mode === "dark" ? 0.72 : 0.76,
-              ),
-            backdropFilter: "blur(30px) saturate(200%)",
-            WebkitBackdropFilter: "blur(30px) saturate(200%)",
+            bgcolor: "background.default",
             boxShadow: (theme) => theme.palette.mode === "dark"
               ? "0 -1px 24px rgba(0,0,0,0.5)"
               : "0 -1px 24px rgba(0,0,0,0.07)",

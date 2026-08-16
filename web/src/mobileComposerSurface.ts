@@ -14,8 +14,6 @@ export const mobileFocusedComposerSurfaceSx = {
   borderColor: (theme: Theme) => alpha(theme.palette.primary.main, 0.42),
   borderRadius: mobileComposerPanelFrameSx.borderRadius,
   bgcolor: mobileFocusedComposerFill,
-  backdropFilter: "blur(24px) saturate(140%)",
-  WebkitBackdropFilter: "blur(24px) saturate(140%)",
   overflow: "hidden",
   boxShadow: (theme: Theme) =>
     `0 10px 28px ${

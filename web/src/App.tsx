@@ -112,7 +112,10 @@ import { useReliableTouchTap } from "./useReliableTouchTap";
 import { bindMobileSpatialDrawer } from "./mobileSpatialDrawer";
 import { mobileSpatialDrawerShadow } from "./mobileDrawerDepth";
 import { sessionDrawerTargetScroll } from "./mobileDrawerMotion";
-import { mobilePresentationMovingRootSx } from "./mobilePresentationMotion";
+import {
+    mobileCompositorFlattenSx,
+    mobilePresentationMovingRootSx,
+} from "./mobilePresentationMotion";
 import { setNotifySetting, setVibrateSetting, useNotifySetting, useVibrateSetting } from "./turnNotify";
 import {
     clampComposerColWidth,
@@ -2547,6 +2550,10 @@ export function App({
                     ...mobilePresentationMovingRootSx(
                         "data-mobile-drawer-moving",
                     ),
+                    "&[data-mobile-drawer-open='true']":
+                        mobileCompositorFlattenSx,
+                    "&[data-mobile-drawer-presented='true']":
+                        mobileCompositorFlattenSx,
                 }}
             >
             {surface === "desktop" && (
@@ -2867,12 +2874,7 @@ export function App({
                         // under the bar (the reported "navbar 底部灰色阴影"). Bottom
                         // mode (mobile status-bar strip) stays frosted — content
                         // scrolls UNDER it, so it needs the translucent blur.
-                        bgcolor: (t) =>
-                            alpha(t.palette.background.default, navbarAtBottom ? 0.8 : 1),
-                        ...(navbarAtBottom && {
-                            backdropFilter: "blur(30px) saturate(200%)",
-                            WebkitBackdropFilter: "blur(30px) saturate(200%)",
-                        }),
+                        bgcolor: "background.default",
                         // Desktop: a hairline delineates the navbar. In LIGHT mode the
                         // old `0 1px 24px` down-shadow smeared a gray cloud across the
                         // lavender (a black shadow on a light tint always reads gray) —
@@ -2927,14 +2929,7 @@ export function App({
                             // if they paint above the composer. Keep the transcript
                             // physically underneath, but make this interaction
                             // surface materially opaque and reduce colour lift.
-                            bgcolor: (t) =>
-                                alpha(
-                                    t.palette.background.default,
-                                    t.palette.mode === "dark" ? 0.86 : 0.92,
-                                ),
-                            backdropFilter: "blur(36px) saturate(125%)",
-                            WebkitBackdropFilter:
-                                "blur(36px) saturate(125%)",
+                            bgcolor: "background.default",
                     }}
                 />
                 )}

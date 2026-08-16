@@ -2,7 +2,10 @@ import { Box } from "@mui/material";
 import { useEffect, useRef, useState } from "react";
 import { mobileSpatialDrawerShadow } from "../../mobileDrawerDepth";
 import { bindMobileSpatialDrawer } from "../../mobileSpatialDrawer";
-import { mobilePresentationMovingRootSx } from "../../mobilePresentationMotion";
+import {
+  mobileCompositorFlattenSx,
+  mobilePresentationMovingRootSx,
+} from "../../mobilePresentationMotion";
 import { holdStorePresentation } from "../../store";
 
 export function ReviewDrawerShell({
@@ -79,6 +82,8 @@ export function ReviewDrawerShell({
         overflow: "hidden",
         bgcolor: "background.paper",
         ...mobilePresentationMovingRootSx("data-mobile-drawer-moving"),
+        "&[data-mobile-drawer-open='true']": mobileCompositorFlattenSx,
+        "&[data-mobile-drawer-presented='true']": mobileCompositorFlattenSx,
       }}
     >
       <Box

@@ -169,16 +169,12 @@ Deno.test("focused mobile composer owns a real frosted material", () => {
     true,
   );
   assertEquals(
-    composerSurfaceSource.includes(
-      'backdropFilter: "blur(24px) saturate(140%)"',
-    ),
-    true,
+    composerSurfaceSource.includes("backdropFilter"),
+    false,
   );
   assertEquals(
-    composerSurfaceSource.includes(
-      'WebkitBackdropFilter: "blur(24px) saturate(140%)"',
-    ),
-    true,
+    composerSurfaceSource.includes("WebkitBackdropFilter"),
+    false,
   );
   assertEquals(
     composerSource.match(/mobileFocusedComposerSurfaceSx/g)?.length,
