@@ -1,7 +1,11 @@
 import {
+  closeAuthenticationBrowser,
   hasNativeExternalOpener,
+  openAuthenticationUrl,
   openExternalUrl,
+  safeAuthenticationUrl,
   safeExternalUrl,
+  shouldRouteAuthenticationClick,
   shouldRouteExternalClick,
 } from "./openExternal";
 
@@ -36,6 +40,42 @@ Deno.test("external links reject relative and malformed values", () => {
     if (safeExternalUrl(url) !== null) {
       throw new Error(`expected invalid external URL: ${url}`);
     }
+  }
+});
+
+Deno.test("Provider authentication accepts web URLs only", () => {
+  if (safeAuthenticationUrl("https://example.com/login") === null) {
+    throw new Error("expected HTTPS authentication URL");
+  }
+  for (const url of ["mailto:user@example.com", "tel:+15551234567"]) {
+    if (safeAuthenticationUrl(url) !== null) {
+      throw new Error(`expected rejected authentication URL: ${url}`);
+    }
+  }
+});
+
+Deno.test("Provider authentication prefers and closes the native Safari sheet", () => {
+  let opened = "";
+  let closes = 0;
+  const root = globalThis as typeof globalThis & {
+    __cowboyOpenAuthenticationBrowser?: (url: string) => boolean;
+    __cowboyCloseAuthenticationBrowser?: () => void;
+  };
+  root.__cowboyOpenAuthenticationBrowser = (url) => {
+    opened = url;
+    return true;
+  };
+  root.__cowboyCloseAuthenticationBrowser = () => closes += 1;
+  try {
+    openAuthenticationUrl("https://example.com/authorize?code=123");
+    closeAuthenticationBrowser();
+    if (opened !== "https://example.com/authorize?code=123") {
+      throw new Error(`unexpected native authentication URL: ${opened}`);
+    }
+    if (closes !== 1) throw new Error(`expected one native close, got ${closes}`);
+  } finally {
+    delete root.__cowboyOpenAuthenticationBrowser;
+    delete root.__cowboyCloseAuthenticationBrowser;
   }
 });
 
@@ -123,5 +163,33 @@ Deno.test("only unmodified native primary clicks override anchor navigation", ()
     }
   } finally {
     delete root.__TAURI_INTERNALS__;
+  }
+});
+
+Deno.test("authentication links route through an iOS sheet when available", () => {
+  const root = globalThis as typeof globalThis & {
+    __cowboyOpenAuthenticationBrowser?: (url: string) => boolean;
+  };
+  const click = {
+    button: 0,
+    defaultPrevented: false,
+    altKey: false,
+    ctrlKey: false,
+    metaKey: false,
+    shiftKey: false,
+  };
+  if (shouldRouteAuthenticationClick(click)) {
+    throw new Error("browser authentication anchor must retain target=_blank");
+  }
+  root.__cowboyOpenAuthenticationBrowser = () => true;
+  try {
+    if (!shouldRouteAuthenticationClick(click)) {
+      throw new Error("native authentication must use the Safari sheet");
+    }
+    if (shouldRouteAuthenticationClick({ ...click, shiftKey: true })) {
+      throw new Error("modified authentication clicks retain anchor semantics");
+    }
+  } finally {
+    delete root.__cowboyOpenAuthenticationBrowser;
   }
 });

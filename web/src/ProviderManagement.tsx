@@ -42,6 +42,11 @@ import {
 } from "./providerCatalog";
 import { groupProviderAuthentications } from "./providerAuthenticationGroups.ts";
 import { ProviderMark, ProviderSurface } from "./ProviderSurface";
+import {
+  closeAuthenticationBrowser,
+  openAuthenticationUrl,
+  shouldRouteAuthenticationClick,
+} from "./openExternal";
 
 interface ProviderMachine {
   id: string;
@@ -711,6 +716,7 @@ function ProviderManagement(
         { method: "DELETE" },
       );
     } finally {
+      closeAuthenticationBrowser();
       setLoginInput("");
       setAuthenticationError("");
       setAuthenticationPendingMethod("");
@@ -738,6 +744,7 @@ function ProviderManagement(
         );
       }
     } finally {
+      closeAuthenticationBrowser();
       setLoginInput("");
       setAuthenticationError("");
       setAuthenticationPendingMethod("");
@@ -794,6 +801,14 @@ function ProviderManagement(
   const loginState = flow?.events.findLast((event) =>
     event.event === "login_state"
   );
+  useEffect(() => {
+    if (
+      loginState?.event === "login_state" &&
+      (loginState.state === "signed_in" || loginState.state === "ready")
+    ) {
+      closeAuthenticationBrowser();
+    }
+  }, [loginState?.state]);
 
   return (
     <Stack
@@ -1318,7 +1333,14 @@ function ProviderManagement(
                       <Button
                         component="a"
                         href={challenge.verification_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
                         variant="contained"
+                        onClick={(event) => {
+                          if (!shouldRouteAuthenticationClick(event)) return;
+                          event.preventDefault();
+                          openAuthenticationUrl(challenge.verification_url);
+                        }}
                       >
                         {authenticationCopy(
                           resolveProviderAuthenticationPresentation(
