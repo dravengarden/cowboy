@@ -36,7 +36,11 @@ import {
   useProviderCatalog,
 } from "./providerCatalog";
 import { groupProviderAuthentications } from "./providerAuthenticationGroups.ts";
-import { ProviderMark, ProviderSurface } from "./ProviderSurface";
+import {
+  ProviderMark,
+  ProviderMarkStack,
+  ProviderSurface,
+} from "./ProviderSurface";
 import { providerVisual } from "./providerVisual";
 import { copyText } from "./clipboard";
 import {
@@ -197,23 +201,27 @@ function ProviderManagementIdentity({
   return (
     <Box
       data-provider-management-identity
+      data-provider-shared-identity={credentialGroup ? "true" : undefined}
       sx={{
         display: "grid",
-        gridTemplateColumns: "32px minmax(0, 1fr)",
+        gridTemplateColumns: credentialGroup
+          ? "auto minmax(0, 1fr)"
+          : "32px minmax(0, 1fr)",
         columnGap: 1.25,
-        alignItems: "center",
+        alignItems: credentialGroup ? "start" : "center",
         minWidth: 0,
       }}
     >
       <Box
         data-provider-management-mark
         sx={{
-          width: 32,
-          height: 32,
+          width: credentialGroup ? "auto" : 32,
+          height: credentialGroup ? "auto" : 32,
           display: "flex",
-          alignItems: "center",
+          alignItems: credentialGroup ? "flex-start" : "center",
           justifyContent: "center",
           color: accent,
+          pt: credentialGroup ? 0.2 : 0,
         }}
       >
         {mark ?? <ProviderMark manifest={manifest} size={26} />}
@@ -292,30 +300,46 @@ function ProviderManagementIdentity({
           ? (
             <Stack
               data-provider-credential-consumers
-              direction="row"
-              spacing={0.5}
-              flexWrap="wrap"
-              useFlexGap
-              sx={{ pt: 0.15 }}
+              spacing={0.65}
+              sx={{ pt: 0.7 }}
             >
               {consumers.map((entry) => (
-                <Chip
+                <Stack
                   key={entry.provider_id}
-                  size="small"
-                  variant="outlined"
-                  icon={<ProviderMark manifest={entry.manifest} size={14} />}
-                  label={entry.manifest.display.name}
+                  data-provider-credential-consumer
+                  direction="row"
+                  spacing={1}
+                  alignItems="center"
                   sx={{
-                    height: 22,
-                    maxWidth: "100%",
-                    "& .MuiChip-icon": { ml: 0.6, mr: 0.1 },
-                    "& .MuiChip-label": {
-                      px: 0.65,
+                    minWidth: 0,
+                    minHeight: 32,
+                    px: 0.9,
+                    py: 0.4,
+                    borderRadius: 1.25,
+                    border: 1,
+                    borderColor: "divider",
+                    bgcolor: (theme) =>
+                      alpha(theme.palette.common.white, theme.palette.mode ===
+                          "dark"
+                        ? 0.03
+                        : 0.4),
+                  }}
+                >
+                  <ProviderMark manifest={entry.manifest} size={20} />
+                  <Typography
+                    variant="caption"
+                    fontWeight={650}
+                    sx={{
+                      minWidth: 0,
+                      lineHeight: 1.3,
                       overflow: "hidden",
                       textOverflow: "ellipsis",
-                    },
-                  }}
-                />
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {entry.manifest.display.name}
+                  </Typography>
+                </Stack>
               ))}
             </Stack>
           )
@@ -352,45 +376,6 @@ function ProviderManagementIdentity({
           </Typography>
         </Stack>
       </Stack>
-    </Box>
-  );
-}
-
-function ProviderCredentialMarks(
-  { entries, size = 24, className }: {
-    entries: readonly ProviderCatalogEntry[];
-    size?: number;
-    className?: string;
-  },
-): React.JSX.Element {
-  const visible = entries.slice(0, 4);
-  const markSize = Math.max(10, Math.floor(size * 0.54));
-  return (
-    <Box
-      className={className}
-      sx={{
-        width: size,
-        height: size,
-        display: "grid",
-        gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-        placeItems: "center",
-        flexShrink: 0,
-      }}
-    >
-      {visible.map((entry) => (
-        <Box
-          key={entry.provider_id}
-          sx={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            width: markSize,
-            height: markSize,
-          }}
-        >
-          <ProviderMark manifest={entry.manifest} size={markSize} />
-        </Box>
-      ))}
     </Box>
   );
 }
@@ -1282,19 +1267,14 @@ function ProviderManagement(
                         summary={sharedCredential
                           ? `One Cowboy Service credential shared by ${credentialEntries.length} Providers`
                           : entry.manifest.display.summary}
-                        mark={sharedCredential
-                          ? (
-                            <ProviderCredentialMarks
-                              entries={credentialEntries}
-                              size={32}
-                            />
-                          )
-                          : (
-                            <ProviderMark
-                              manifest={entry.manifest}
-                              size={26}
-                            />
-                          )}
+                        mark={
+                          <ProviderMarkStack
+                            manifests={credentialEntries.map((candidate) =>
+                              candidate.manifest
+                            )}
+                            size={sharedCredential ? 28 : 26}
+                          />
+                        }
                         consumers={sharedCredential ? credentialEntries : []}
                       />
                       {readyCredential && credentialManagementOpen

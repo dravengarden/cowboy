@@ -154,6 +154,103 @@ export function ProviderMark({
   );
 }
 
+/** One or more Provider marks. A single identity stays a lone glyph; a shared
+ *  credential becomes an overlapping stack instead of a cramped 2×2 grid. */
+export function ProviderMarkStack({
+  manifests,
+  size = 28,
+  maxVisible = 3,
+  className,
+  scaleWithFont = true,
+}: {
+  manifests: readonly ProviderUiManifest[];
+  size?: number;
+  maxVisible?: number;
+  className?: string;
+  scaleWithFont?: boolean;
+}): React.JSX.Element | null {
+  if (manifests.length === 0) return null;
+  if (manifests.length === 1) {
+    const only = manifests[0];
+    if (!only) return null;
+    return (
+      <ProviderMark
+        manifest={only}
+        size={size}
+        className={className}
+        scaleWithFont={scaleWithFont}
+      />
+    );
+  }
+  const visible = manifests.slice(0, maxVisible);
+  const extra = manifests.length - visible.length;
+  const unit = scaleWithFont
+    ? `calc(${size}px * var(--cowboy-font-scale, 1))`
+    : `${size}px`;
+  const pull = scaleWithFont
+    ? `calc(${Math.round(size * 0.38)}px * var(--cowboy-font-scale, 1))`
+    : `${Math.round(size * 0.38)}px`;
+  const inner = Math.max(12, Math.round(size * 0.62));
+  return (
+    <Box
+      className={className}
+      data-provider-mark-stack
+      role="img"
+      aria-label={manifests.map((manifest) => manifest.display.name).join(", ")}
+      sx={{
+        display: "flex",
+        alignItems: "center",
+        flexShrink: 0,
+        minWidth: 0,
+      }}
+    >
+      {visible.map((manifest, index) => (
+        <Box
+          key={`${manifest.display.name}:${index}`}
+          data-provider-mark-stack-item
+          sx={{
+            width: unit,
+            height: unit,
+            minWidth: unit,
+            minHeight: unit,
+            ml: index === 0 ? 0 : `-${pull}`,
+            zIndex: index + 1,
+            borderRadius: "50%",
+            bgcolor: "background.paper",
+            boxShadow: (theme) =>
+              `0 0 0 1.5px ${theme.palette.background.default}`,
+            display: "grid",
+            placeItems: "center",
+            overflow: "hidden",
+          }}
+        >
+          <ProviderMark
+            manifest={manifest}
+            size={inner}
+            scaleWithFont={scaleWithFont}
+          />
+        </Box>
+      ))}
+      {extra > 0
+        ? (
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{
+              ml: 0.5,
+              fontWeight: 700,
+              flexShrink: 0,
+              lineHeight: 1,
+            }}
+          >
+            +{extra}
+          </Typography>
+        )
+        : null}
+    </Box>
+  );
+}
+
 /** Keep thin monochrome marks legible on dark surfaces without overriding a
  * Provider-authored explicit fill or gradient. */
 export function readableProviderMarkColor(

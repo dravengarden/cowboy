@@ -52,4 +52,14 @@ Deno.test("Provider management marks and labels follow Cowboy's global font scal
     providerManagementSource.includes('fontSize: "0.8125rem"'),
     true,
   );
+  assertEquals(
+    providerSurfaceSource.includes("data-provider-mark-stack"),
+    true,
+  );
+  assertEquals(
+    providerSurfaceSource.includes(
+      "? `calc(${size}px * var(--cowboy-font-scale, 1))`",
+    ),
+    true,
+  );
 });
