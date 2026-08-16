@@ -1395,9 +1395,6 @@ function ProviderManagement(
                             <ProviderMark
                               manifest={entry.manifest}
                               size={26}
-                              appearance={entry.provider_id === "codex"
-                                ? "accentBadge"
-                                : "plain"}
                             />
                           )}
                         consumers={sharedCredential ? credentialEntries : []}
