@@ -801,6 +801,9 @@ function ProviderManagement(
       sx={{
         "& .MuiButton-root": {
           borderRadius: 999,
+          // Provider actions keep a fixed touch target, but their labels follow
+          // the application-wide font-size setting like the surrounding copy.
+          fontSize: "0.8125rem",
         },
       }}
     >
