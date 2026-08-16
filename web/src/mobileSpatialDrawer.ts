@@ -15,6 +15,7 @@ import {
   inputOverlayOwnsDrawerGesture,
   isDominantVerticalPan,
   MOBILE_DRAWER_DIRECTION_LOCK_PX,
+  MOBILE_DRAWER_PREPARE_PX,
 } from "./touchGestures";
 
 export type MobileSpatialDrawerSide = "left" | "right";
@@ -33,7 +34,7 @@ export interface MobileSpatialDrawerBinding {
 export function bindMobileSpatialDrawer({
   gestureTarget,
   surface,
-  drawer,
+  drawer: _drawer,
   drawerMask,
   side,
   phone,
@@ -61,13 +62,13 @@ export function bindMobileSpatialDrawer({
     lastAt: number;
     velocity: number;
     locked: boolean;
+    prepared: boolean;
     startOffset: number;
     startOpen: boolean;
     width: number;
     thresholdHaptic: boolean;
   } | null = null;
   let settleTimer = 0;
-  let bookkeepingFrame = 0;
   let pendingThresholdHaptic = false;
   let currentOffset = 0;
   let commit = false;
@@ -111,11 +112,8 @@ export function bindMobileSpatialDrawer({
   };
   const render = (offset: number): void => {
     currentOffset = offset;
-    publishProgress(offset);
-    // Obsidian's workspace-drawer is 1:1 with the finger: the heavy surface
-    // translates, the rail stays put, and nothing else is dirtied in the
-    // touch callback. Parallax/opacity/scale force extra compositor work and
-    // make the card float ahead of the finger.
+    // Touch callback writes only compositor properties. Flatten, shadow, and
+    // store holds happen in prepare(), before the first translate.
     const x = `${String(openingSign * offset)}px`;
     surface.style.transform = `translate3d(${x}, 0, 0)`;
     drawerMask.style.transform = `translate3d(${x}, 0, 0)`;
@@ -131,19 +129,19 @@ export function bindMobileSpatialDrawer({
       }
       releaseIdle = undefined;
     }
+    surface.style.transition = "none";
+    drawerMask.style.transition = "none";
+    gestureTarget.setAttribute("data-mobile-drawer-moving", "true");
+    applyOpenDepth();
+    releasePresentation ??= holdPresentation?.();
+    directManipulationActive = true;
     globalThis.dispatchEvent(
       new CustomEvent("cowboy:transcript-direct-manipulation-start"),
     );
-    releasePresentation ??= holdPresentation?.();
-    directManipulationActive = true;
-    gestureTarget.setAttribute("data-mobile-drawer-moving", "true");
-    applyOpenDepth();
   };
   const clearTransitions = (): void => {
-    for (const element of [surface, drawer, drawerMask]) {
-      element.style.removeProperty("transition");
-      element.style.removeProperty("will-change");
-    }
+    surface.style.removeProperty("transition");
+    drawerMask.style.removeProperty("transition");
   };
   const releaseDirectManipulation = (): void => {
     const finish = (): void => {
@@ -195,6 +193,7 @@ export function bindMobileSpatialDrawer({
       `transform ${String(duration)}ms ${MOBILE_DRAWER_SETTLE_EASING}`;
     surface.style.transition = settleTransition;
     drawerMask.style.transition = settleTransition;
+    publishProgress(targetOffset);
     render(targetOffset);
     if (pendingThresholdHaptic) {
       pendingThresholdHaptic = false;
@@ -235,7 +234,7 @@ export function bindMobileSpatialDrawer({
     }
     const now = performance.now();
     const startOpen = getOpen();
-    const width = drawerWidth();
+    const width = presentationWidth > 1 ? presentationWidth : drawerWidth();
     presentationWidth = width;
     prepareNavigationHaptic();
     gesture = {
@@ -245,6 +244,7 @@ export function bindMobileSpatialDrawer({
       lastAt: now,
       velocity: 0,
       locked: false,
+      prepared: false,
       startOffset: startOpen ? width : 0,
       startOpen,
       width,
@@ -255,7 +255,10 @@ export function bindMobileSpatialDrawer({
   const onTouchMove = (event: TouchEvent): void => {
     const touch = event.touches[0];
     if (!gesture || !touch) return;
-    if (expandedSelection(globalThis.getSelection?.() ?? null)) {
+    if (
+      !gesture.locked &&
+      expandedSelection(globalThis.getSelection?.() ?? null)
+    ) {
       gesture = null;
       commit = false;
       return;
@@ -270,6 +273,21 @@ export function bindMobileSpatialDrawer({
       return;
     }
     const normalizedDelta = deltaX * openingSign;
+    const opening = !gesture.startOpen;
+    const towardOpen = opening
+      ? normalizedDelta > 0
+      : normalizedDelta < 0;
+    if (
+      !gesture.prepared &&
+      towardOpen &&
+      Math.abs(normalizedDelta) >= MOBILE_DRAWER_PREPARE_PX &&
+      Math.abs(normalizedDelta) > Math.abs(deltaY)
+    ) {
+      // Assemble one compositor layer before the first translate. Obsidian's
+      // workspace is already that layer; doing this at lock time hitchs.
+      gesture.prepared = true;
+      beginDirectManipulation();
+    }
     const swipe = gesture.locked
       ? {
         direction: normalizedDelta < 0 ? "left" as const : "right" as const,
@@ -283,16 +301,13 @@ export function bindMobileSpatialDrawer({
       );
     if (
       !swipe ||
-      (!gesture.startOpen && swipe.direction !== "right") ||
-      (gesture.startOpen && swipe.direction !== "left")
+      (opening && swipe.direction !== "right") ||
+      (!opening && swipe.direction !== "left")
     ) return;
     if (!gesture.locked) {
-      surface.style.transition = "none";
-      surface.style.willChange = "transform";
-      drawerMask.style.transition = "none";
-      drawerMask.style.willChange = "transform";
+      gesture.locked = true;
+      publishProgress(gesture.startOffset + normalizedDelta);
     }
-    gesture.locked = true;
     event.preventDefault();
     event.stopPropagation();
     const now = performance.now();
@@ -319,16 +334,11 @@ export function bindMobileSpatialDrawer({
       pendingThresholdHaptic = false;
       navigationHaptic();
     }
-    if (bookkeepingFrame === 0 && !directManipulationActive) {
-      bookkeepingFrame = requestAnimationFrame(() => {
-        bookkeepingFrame = 0;
-        beginDirectManipulation();
-      });
-    }
   };
   const onTouchEnd = (): void => {
     if (!gesture) return;
     if (!gesture.locked) {
+      if (gesture.prepared) releaseDirectManipulation();
       gesture = null;
       commit = false;
       return;
@@ -351,11 +361,13 @@ export function bindMobileSpatialDrawer({
   };
   const onTouchCancel = (): void => {
     const wasLocked = gesture?.locked === true;
+    const wasPrepared = gesture?.prepared === true;
     const startOpen = gesture?.startOpen ?? getOpen();
     const width = gesture?.width;
     gesture = null;
     commit = false;
     if (wasLocked) settle(startOpen, 0, releaseDirectManipulation, width);
+    else if (wasPrepared) releaseDirectManipulation();
   };
   const onResize = (): void => {
     presentationWidth = drawerWidth();
@@ -370,6 +382,8 @@ export function bindMobileSpatialDrawer({
     clearOpenDepth();
   }
   presentationWidth = drawerWidth();
+  surface.style.willChange = "transform";
+  drawerMask.style.willChange = "transform";
   render(getOpen() ? presentationWidth : 0);
   gestureTarget.addEventListener("touchstart", onTouchStart, { passive: true });
   gestureTarget.addEventListener("touchmove", onTouchMove, { passive: false });
@@ -392,8 +406,9 @@ export function bindMobileSpatialDrawer({
       gestureTarget.removeEventListener("touchcancel", onTouchCancel);
       globalThis.removeEventListener("resize", onResize);
       globalThis.clearTimeout(settleTimer);
-      if (bookkeepingFrame !== 0) cancelAnimationFrame(bookkeepingFrame);
       gestureTarget.removeAttribute("data-mobile-drawer-moving");
+      surface.style.removeProperty("will-change");
+      drawerMask.style.removeProperty("will-change");
       lastPublishedProgress = null;
       if (releaseFrame !== 0) cancelAnimationFrame(releaseFrame);
       if (releaseIdle !== undefined) {
