@@ -5157,7 +5157,19 @@ function SettingsShell({
                         actions={[{
                             key: "back",
                             label: "Back to Settings",
-                            icon: <ArrowBackIosNew sx={{ fontSize: "1.25em", ml: "-0.08em" }} />,
+                            icon: (
+                                <ArrowBackIosNew
+                                    sx={{
+                                        // WebKit min-font-size clamps rem/em SVG
+                                        // glyphs, so em on this island never
+                                        // moved with the Settings font scale.
+                                        fontSize: "calc(20px * var(--cowboy-font-scale, 1))",
+                                        width: "calc(20px * var(--cowboy-font-scale, 1))",
+                                        height: "calc(20px * var(--cowboy-font-scale, 1))",
+                                        ml: "calc(-1.6px * var(--cowboy-font-scale, 1))",
+                                    }}
+                                />
+                            ),
                             onPress: (): void => changeTab("settings"),
                         }]}
                     />
