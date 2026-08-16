@@ -3837,7 +3837,7 @@ mod tests {
             ("codex", ThoughtVariant::Workcell),
             ("codex-deepseek", ThoughtVariant::Workcell),
             ("gemini", ThoughtVariant::Signal),
-            ("grok", ThoughtVariant::Terminal),
+            ("grok", ThoughtVariant::Signal),
         ]);
         let expected_auth_presentations = BTreeMap::from([
             ("claude-code", AuthenticationPresentation::Account),
@@ -3914,7 +3914,7 @@ mod tests {
             serde_json::from_str(include_str!("../../../providers/grok/provider.json")).unwrap();
         let expected_mark_path = source.display.mark_path.clone();
         let package = build_package(source.compile().unwrap()).unwrap();
-        assert_eq!(package.manifest.version, "1.1.5");
+        assert_eq!(package.manifest.version, "1.1.6");
         for role in [AssetRole::Logo, AssetRole::Icon] {
             let asset = package
                 .manifest

@@ -13,6 +13,7 @@ export {
   latestProviderEntries,
   loadProviderCatalog,
   providerEntryForIdentity,
+  providerAuthenticationExecutorEntry,
   providerPresentationEntry,
 } from "./providerCatalogRegistry";
 

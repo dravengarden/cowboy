@@ -106,6 +106,40 @@ export function exactProviderEntry(
   );
 }
 
+/** Select the newest trusted release that is active on a connected Machine and
+ * declares the requested authentication method. The presentation may still
+ * come from a newer Catalog release; execution remains pinned to this exact
+ * installed identity as required by the Service-auth contract. */
+export function providerAuthenticationExecutorEntry(
+  catalog: ProviderCatalogResponse,
+  providerId: string,
+  methodId: string,
+): ProviderCatalogEntry | undefined {
+  const available = new Set(
+    catalog.authentication_executors
+      .filter((executor) => executor.provider_id === providerId)
+      .map((executor) =>
+        `${executor.provider_version}:${executor.generation_digest}`
+      ),
+  );
+  return catalog.providers
+    .filter((entry) =>
+      entry.provider_id === providerId &&
+      entry.release_state === "ready" &&
+      entry.artifact_digest !== null &&
+      available.has(`${entry.provider_version}:${entry.artifact_digest}`) &&
+      entry.manifest.authentication.methods.some((method) =>
+        method.id === methodId
+      )
+    )
+    .sort((left, right) =>
+      compareProviderVersions(
+        right.provider_version,
+        left.provider_version,
+      )
+    )[0];
+}
+
 export function providerEntryForIdentity(
   entries: readonly ProviderCatalogEntry[],
   providerId: string,
@@ -127,10 +161,10 @@ export function providerEntryForIdentity(
 /** Resolve presentation-only chrome for an existing session.
  *
  * Runtime behavior and lifecycle surfaces remain pinned to the session's exact
- * package. A session on an older UI or host-presentation schema may adopt the
- * latest compatible signed presentation from the same Provider so corrected
- * brand assets, activity, and Transcript variants do not remain stale for the
- * lifetime of that session.
+ * package. A session may adopt the latest compatible signed presentation from
+ * the same Provider so corrected brand assets, activity, and Transcript
+ * variants do not remain stale for the lifetime of that session. Schema
+ * versions are compatibility floors, not presentation release identities.
  */
 export function providerPresentationEntry(
   entries: readonly ProviderCatalogEntry[],
@@ -154,8 +188,7 @@ export function providerPresentationEntry(
   if (
     latest?.release_state === "ready" &&
     latestUiSchema >= exactUiSchema &&
-    latestHostSchema >= exactHostSchema &&
-    (latestUiSchema > exactUiSchema || latestHostSchema > exactHostSchema)
+    latestHostSchema >= exactHostSchema
   ) {
     return latest;
   }

@@ -390,6 +390,14 @@ active. The exported candidate repeats the version, digest, fingerprint,
 portable schema, and method; Cowboy rejects any upgrade race or identity drift
 before committing a generation.
 
+`GET /api/providers` includes `authentication_executors`, a deduplicated list
+of exact signed Provider release identities active on connected Machines. It
+does not expose which Machine supplies an identity. Service UI may use the
+newest compatible Catalog entry for presentation, but it must select the newest
+advertised exact identity that declares the chosen method for execution. An
+empty eligible set is a visible install-or-upgrade condition, never an implicit
+fallback to a different release.
+
 The Service automatically distributes the current generation to every enrolled,
 authorized, non-revoked Machine. A bundle is sealed to that Machine's enrollment
 public key and stored under a private Service-managed replica root. Every
