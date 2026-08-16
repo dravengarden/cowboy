@@ -6,6 +6,7 @@ import {
   MOBILE_DRAWER_SPRING_RESPONSE,
   mobileDrawerCardVisual,
   mobileDrawerProgress,
+  mobileDrawerRailOffset,
   mobileDrawerSettleDurationMs,
   predictDrawerOffset,
   sessionDrawerTargetScroll,
@@ -24,6 +25,12 @@ Deno.test("drawer settle uses an iOS deceleration window", () => {
   assertEquals(mobileDrawerSettleDurationMs(1, 0), 300);
   assertEquals(mobileDrawerSettleDurationMs(0, 2), 220);
   assertEquals(mobileDrawerSettleDurationMs(0.5, 0), 275);
+});
+
+Deno.test("drawer rail meets the peek from off-screen", () => {
+  assertEquals(mobileDrawerRailOffset(0, 328), -328);
+  assertEquals(mobileDrawerRailOffset(164, 328), -164);
+  assertEquals(mobileDrawerRailOffset(328, 328), 0);
 });
 
 Deno.test("drawer card recedes like an Obsidian workspace", () => {

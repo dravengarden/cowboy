@@ -7,6 +7,7 @@ import {
   drawerProgressAttribute,
   MOBILE_DRAWER_SETTLE_EASING,
   mobileDrawerCardVisual,
+  mobileDrawerRailOffset,
   mobileDrawerSettleDurationMs,
 } from "./mobileDrawerMotion";
 import {
@@ -124,17 +125,21 @@ export function bindMobileSpatialDrawer({
     return layers;
   };
   const slidingLayers = (): HTMLElement[] => [page(), drawerMask, ...followerLayers()];
+  const animatedLayers = (): HTMLElement[] => [drawer, ...slidingLayers()];
   const prepareLayer = (layer: HTMLElement): void => {
     layer.style.willChange = "transform";
     layer.style.transformOrigin = origin;
   };
   const applySlide = (offset: number): void => {
-    const x = `${String(openingSign * offset)}px`;
-    const transform = `translate3d(${x}, 0, 0)`;
+    const pageX = `${String(openingSign * offset)}px`;
+    const railX = `${String(openingSign * mobileDrawerRailOffset(offset, presentationWidth))}px`;
+    const pageTransform = `translate3d(${pageX}, 0, 0)`;
     for (const layer of slidingLayers()) {
       prepareLayer(layer);
-      layer.style.transform = transform;
+      layer.style.transform = pageTransform;
     }
+    prepareLayer(drawer);
+    drawer.style.transform = `translate3d(${railX}, 0, 0)`;
   };
   const applyOpenDepth = (): void => {
     // Never clip or shadow the full session surface. On iPhone, WebKit then
@@ -173,7 +178,7 @@ export function bindMobileSpatialDrawer({
     }
     settleGen += 1;
     globalThis.clearTimeout(settleTimer);
-    for (const layer of slidingLayers()) layer.style.transition = "none";
+    for (const layer of animatedLayers()) layer.style.transition = "none";
     if (dim) dim.style.transition = "none";
     gestureTarget.setAttribute("data-mobile-drawer-moving", "true");
     applyOpenDepth();
@@ -184,7 +189,7 @@ export function bindMobileSpatialDrawer({
     );
   };
   const clearTransitions = (): void => {
-    for (const layer of slidingLayers()) layer.style.removeProperty("transition");
+    for (const layer of animatedLayers()) layer.style.removeProperty("transition");
     if (dim) dim.style.removeProperty("transition");
   };
   const releaseDirectManipulation = (): void => {
@@ -244,7 +249,7 @@ export function bindMobileSpatialDrawer({
     const duration = mobileDrawerSettleDurationMs(remaining, releaseVelocity);
     const transition =
       `transform ${String(duration)}ms ${MOBILE_DRAWER_SETTLE_EASING}`;
-    for (const layer of slidingLayers()) {
+    for (const layer of animatedLayers()) {
       if (layer === dim) continue;
       layer.style.transition = transition;
     }
@@ -448,9 +453,6 @@ export function bindMobileSpatialDrawer({
   }
   presentationWidth = drawerWidth();
   publishDrawerWidth(presentationWidth);
-  // Obsidian's rail is its own layer and never translates. If this drawer
-  // flattens into the sliding page, the session list rides with the peek.
-  drawer.style.transform = "translate3d(0, 0, 0)";
   drawer.style.isolation = "isolate";
   surface.style.removeProperty("border-radius");
   surface.style.removeProperty("overflow");

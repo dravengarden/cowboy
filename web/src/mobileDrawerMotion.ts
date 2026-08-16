@@ -52,6 +52,13 @@ export function mobileDrawerSettleDurationMs(
   );
 }
 
+/** Complementary rail travel. The peek sits at `offset`; the rail starts
+ *  off-screen at `-width` and meets it at 0 when the drawer is open.
+ *  Sharing the peek's translate made the session list ride with the page. */
+export function mobileDrawerRailOffset(offset: number, width: number): number {
+  return offset - width;
+}
+
 export function mobileDrawerProgress(
   offset: number,
   width: number,
