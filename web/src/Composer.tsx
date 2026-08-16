@@ -93,6 +93,8 @@ import {
   isMobileEditorFocusTransferPending,
   releaseMobileComposerFocus,
   shouldPresentMobileKeyboardSurface,
+  noteMobileKeyboardDismissed,
+  clearMobileKeyboardDismissed,
 } from "./composer/mobileComposerFocus";
 import { useKeyboardOpen } from "./keyboardInset";
 import { attachmentTrayForSurface } from "./composer/attachmentPresentation";
@@ -998,9 +1000,11 @@ export function ComposerWorkspace({
   const touchInput = useTouchComposer();
   const keyboardOpen = useKeyboardOpen();
   const [mobileInputResetBlocked, setMobileInputResetBlocked] = useState(false);
+  const [mobileKeyboardDismissed, setMobileKeyboardDismissed] = useState(false);
   const mobileKeyboardPresentationOpen = shouldPresentMobileKeyboardSurface(
     keyboardOpen,
     mobileInputResetBlocked,
+    mobileKeyboardDismissed,
   );
   const preparing = status === "starting";
   const desktopShortcut = (
@@ -1521,6 +1525,10 @@ export function ComposerWorkspace({
       return undefined;
     }
     if (keyboardOpen) {
+      if (mobileKeyboardDismissed) {
+        setMobileKeyboardDismissed(false);
+        clearMobileKeyboardDismissed();
+      }
       const opening = !mobileComposerKeyboardWasOpenRef.current;
       mobileComposerKeyboardWasOpenRef.current = true;
       if (!opening) return undefined;
@@ -1563,7 +1571,7 @@ export function ComposerWorkspace({
     // visualViewport open→closed boundary before the next paint.
     releaseMobileComposerFocus();
     return undefined;
-  }, [keyboardOpen, touchInput]);
+  }, [keyboardOpen, mobileKeyboardDismissed, touchInput]);
   const compactTrayAttachments = attachmentTrayForSurface(
     attachments,
     text,
@@ -2289,6 +2297,13 @@ export function ComposerWorkspace({
           <Box
             ref={editorAreaRef}
             data-mobile-editor-area={touchInput ? "true" : undefined}
+            onPointerDown={touchInput
+              ? (): void => {
+                if (!mobileKeyboardDismissed) return;
+                setMobileKeyboardDismissed(false);
+                clearMobileKeyboardDismissed();
+              }
+              : undefined}
             sx={{
               display: "flex",
               flexDirection: "column",
@@ -2777,7 +2792,13 @@ export function ComposerWorkspace({
                     fixedAction={
                       <MobileComposerAccessoryButton
                         title="Hide keyboard"
-                        onClick={dismissMobileSoftwareKeyboard}
+                        preserveEditorFocus={false}
+                        onClick={(): void => {
+                          noteMobileKeyboardDismissed();
+                          setMobileKeyboardDismissed(true);
+                          dismissMobileSoftwareKeyboard();
+                          releaseMobileComposerFocus();
+                        }}
                       >
                         <KeyboardHide />
                       </MobileComposerAccessoryButton>
@@ -5073,6 +5094,7 @@ function PendingRow({
     if (!touchInput || editAttachmentsPending) return;
     persistEditRef.current();
     dismissMobileSoftwareKeyboard();
+    releaseMobileComposerFocus();
   };
   useEffect(() => {
     if (!touchInput || !editing) {
@@ -5477,6 +5499,7 @@ function PendingRow({
                 fixedAction={
                   <MobileComposerAccessoryButton
                     title="Hide keyboard"
+                    preserveEditorFocus={false}
                     disabled={editAttachmentsPending}
                     onClick={hideMobileEditKeyboard}
                   >

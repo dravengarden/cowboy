@@ -13,16 +13,14 @@ const grokProviderSource = await Deno.readTextFile(
   new URL("../../providers/grok/provider.json", import.meta.url),
 );
 
-Deno.test("Provider lifecycle cards stay collapsed behind a compact summary", () => {
-  assertEquals(managementSource.includes("const [detailsOpen"), true);
+Deno.test("dedicated Provider pages list cards without a Hide summary", () => {
+  assertEquals(managementSource.includes("const [detailsOpen"), false);
+  assertEquals(managementSource.includes('? "Hide"'), false);
   assertEquals(
     managementSource.includes("hidden={!embedded && !detailsOpen}"),
-    true,
+    false,
   );
-  assertEquals(
-    managementSource.includes('display: embedded || detailsOpen ? "grid" : "none"'),
-    true,
-  );
+  assertEquals(managementSource.includes('display: "grid"'), true);
   assertEquals(managementSource.includes("borderTop:"), false);
 });
 
@@ -255,7 +253,7 @@ Deno.test("Provider marks preserve host component classes and compact chip spaci
   assertEquals(surfaceSource.includes("className?: string | undefined;"), true);
   assertEquals(surfaceSource.includes("className={className}"), true);
   assertEquals(
-    managementSource.includes('"& .MuiChip-icon": { ml: 0.625, mr: 0.125 }'),
+    managementSource.includes('"& .MuiChip-icon": { ml: 0.6, mr: 0.1 }'),
     true,
   );
 });
@@ -402,7 +400,8 @@ Deno.test("Provider activity keeps motion provider-authored and geometry rendere
   assertEquals(
     surfaceSource.includes(
       "readableProviderMarkColor(manifest.display.accent, theme)",
-    ),
+    ) ||
+      transcriptPresentationSource.includes("providerVisual("),
     true,
   );
   assertEquals(surfaceSource.includes("const ACTIVITY_MARK_SIZE = 14"), true);

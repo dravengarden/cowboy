@@ -38,7 +38,10 @@ import {
 } from "./MobileComposerAccessoryDock";
 import { mobileComposerKeyboardGap } from "./mobileComposerPrimitives";
 import { useKeyboardOpen } from "./keyboardInset";
-import { releaseMobileComposerFocus } from "./composer/mobileComposerFocus";
+import {
+  isMobileEditorFocusTransferPending,
+  releaseMobileComposerFocus,
+} from "./composer/mobileComposerFocus";
 import type { NativeClipboardImagePasteRequest } from "./composer/nativeClipboardImagePaste";
 import { isNativeShell } from "./nativeShell";
 import type { AvailableCommand } from "./protocol";
@@ -130,6 +133,16 @@ export function FullscreenComposer({
   const nativeShell = isNativeShell();
   const keyboardOpen = useKeyboardOpen();
   const theme = useTheme();
+  const sawKeyboardRef = useRef(false);
+  useEffect(() => {
+    if (keyboardOpen) {
+      sawKeyboardRef.current = true;
+      return;
+    }
+    if (!showCollapse || !sawKeyboardRef.current) return;
+    if (isMobileEditorFocusTransferPending()) return;
+    onCollapse();
+  }, [keyboardOpen, onCollapse, showCollapse]);
 
   // CM6 is UNCONTROLLED, exactly like the inline composer: freeze the open-time
   // text as a one-shot seed and let `onChange` flow text OUT only. Passing the live
@@ -357,10 +370,12 @@ export function FullscreenComposer({
         fixedAction={
           <MobileComposerAccessoryButton
             title="Hide keyboard"
+            preserveEditorFocus={false}
             onClick={act(() => {
               if (document.activeElement instanceof HTMLElement) {
                 document.activeElement.blur();
               }
+              if (showCollapse) onCollapse();
             })}
           >
             <KeyboardHide />

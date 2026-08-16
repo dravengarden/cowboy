@@ -13,7 +13,7 @@ import {
   Typography,
 } from "@mui/material";
 import { ArrowBackRounded } from "@mui/icons-material";
-import { alpha } from "@mui/material/styles";
+import { alpha, useTheme } from "@mui/material/styles";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import {
@@ -33,11 +33,11 @@ import {
   joinProviderInstallations,
   latestProviderEntries,
   providerAuthenticationExecutorEntry,
-  providerPresentationEntry,
   useProviderCatalog,
 } from "./providerCatalog";
 import { groupProviderAuthentications } from "./providerAuthenticationGroups.ts";
 import { ProviderMark, ProviderSurface } from "./ProviderSurface";
+import { providerVisual } from "./providerVisual";
 import { copyText } from "./clipboard";
 import {
   closeAuthenticationBrowser,
@@ -174,6 +174,7 @@ function ProviderManagementIdentity({
   summary = manifest.display.summary,
   mark,
   consumers = [],
+  providerId,
 }: {
   manifest: ProviderUiManifest;
   version: string;
@@ -184,7 +185,14 @@ function ProviderManagementIdentity({
   summary?: string;
   mark?: ReactNode;
   consumers?: readonly ProviderCatalogEntry[];
+  providerId: string;
 }): React.JSX.Element {
+  const theme = useTheme();
+  const accent = providerVisual(
+    providerId,
+    theme.palette.mode,
+    version,
+  ).primary;
   const credentialGroup = consumers.length > 1;
   return (
     <Box
@@ -205,7 +213,7 @@ function ProviderManagementIdentity({
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          color: manifest.display.accent,
+          color: accent,
         }}
       >
         {mark ?? <ProviderMark manifest={manifest} size={26} />}
@@ -447,7 +455,6 @@ function ProviderManagement(
     null,
   );
   const [confirmActive, setConfirmActive] = useState(false);
-  const [detailsOpen, setDetailsOpen] = useState(false);
   const [expandedCredentialScopes, setExpandedCredentialScopes] = useState<
     ReadonlySet<string>
   >(() => new Set());
@@ -979,120 +986,10 @@ function ProviderManagement(
       {!catalog && !catalogError
         ? <Typography variant="caption">Loading Provider Catalog…</Typography>
         : null}
-      {!embedded && catalog
-        ? (
-          <Stack
-            direction="row"
-            spacing={0.75}
-            alignItems="center"
-            flexWrap="wrap"
-            useFlexGap
-          >
-            {providerRows.map((row) => {
-              const entry = row.installedEntry ?? row.latestEntry;
-              if (!entry) {
-                return (
-                  <Chip
-                    key={row.providerId}
-                    size="small"
-                    variant="outlined"
-                    color="warning"
-                    label={`${row.providerId} · package unavailable`}
-                  />
-                );
-              }
-              const auth = authenticationForEntry(entry);
-              const authPresentation =
-                resolveProviderAuthenticationPresentation(
-                  entry.manifest.authentication,
-                );
-              const presentationEntry = scope === "machine" && row.installed
-                ? providerPresentationEntry(
-                  catalog.providers,
-                  row.installed.provider_id,
-                  row.installed.provider_version,
-                  row.installed.generation_digest,
-                ) ?? entry
-                : entry;
-              const credentialGroup = scope === "service"
-                ? serviceCredentialGroups.find((group) =>
-                  group.authenticationScope === entry.authentication_scope
-                )
-                : undefined;
-              const presentationTitle = credentialGroup
-                ? providerCredentialTitle(credentialGroup.entries)
-                : presentationEntry.manifest.display.name;
-              const summary = scope === "service"
-                ? entry.manifest.authentication.required
-                ? serviceAuthenticationLabel(
-                  auth,
-                  authPresentation,
-                  latestEntries.filter((candidate) =>
-                    candidate.authentication_scope === entry.authentication_scope
-                  ).length > 1,
-                )
-                  : "no sign-in"
-                : providerInstallationSummary(
-                  row.installed,
-                  row.latestCompatibleEntry,
-                  row.latestEntry,
-                  row.latestCompatibility?.detail,
-                );
-              const healthy = scope === "service"
-                ? !entry.manifest.authentication.required ||
-                  auth?.authentication_state === "ready"
-                : row.installed?.state === "active";
-              return (
-                <Chip
-                  key={entry.provider_id}
-                  size="small"
-                  variant="outlined"
-                  color={healthy ? "success" : "default"}
-                  icon={
-                    credentialGroup && credentialGroup.entries.length > 1
-                      ? (
-                        <ProviderCredentialMarks
-                          entries={credentialGroup.entries}
-                          size={16}
-                        />
-                      )
-                      : (
-                        <ProviderMark
-                          manifest={presentationEntry.manifest}
-                          size={16}
-                        />
-                      )
-                  }
-                  label={`${presentationTitle} · ${summary}`}
-                  sx={{
-                    "& .MuiChip-icon": { ml: 0.625, mr: 0.125 },
-                    "& .MuiChip-label": { pl: 0.625, pr: 0.625 },
-                  }}
-                />
-              );
-            })}
-            <Button
-              size="small"
-              variant={detailsOpen ? "outlined" : "text"}
-              aria-expanded={detailsOpen}
-              aria-controls={detailsId}
-              onClick={() => setDetailsOpen((current) => !current)}
-              sx={{ ml: "auto" }}
-            >
-              {detailsOpen
-                ? "Hide"
-                : scope === "service"
-                ? "Manage credentials"
-                : "Manage"}
-            </Button>
-          </Stack>
-        )
-        : null}
       <Box
         id={detailsId}
-        hidden={!embedded && !detailsOpen}
         sx={{
-          display: embedded || detailsOpen ? "grid" : "none",
+          display: "grid",
           gridTemplateColumns: embedded
             ? "1fr"
             : { xs: "1fr", md: "repeat(2, minmax(0, 1fr))" },
@@ -1374,6 +1271,7 @@ function ProviderManagement(
                     <>
                       <ProviderManagementIdentity
                         manifest={entry.manifest}
+                        providerId={entry.provider_id}
                         version={host.provider_version}
                         statusLabel={managementStatus}
                         statusTone={managementStatusTone}

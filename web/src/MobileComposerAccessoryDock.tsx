@@ -241,6 +241,7 @@ export function MobileComposerAccessoryButton({
   children,
   disabled = false,
   color = "default",
+  preserveEditorFocus = true,
 }: {
   title: string;
   onClick?: MouseEventHandler<HTMLButtonElement>;
@@ -252,6 +253,8 @@ export function MobileComposerAccessoryButton({
   children: ReactNode;
   disabled?: boolean;
   color?: "default" | "primary" | "warning";
+  /** Format actions keep the textarea first-responder. Hide-keyboard must not. */
+  preserveEditorFocus?: boolean;
 }): React.JSX.Element {
   const buttonSx = {
     width: 44,
@@ -275,10 +278,12 @@ export function MobileComposerAccessoryButton({
               disabled={disabled}
               networkAction={networkAction}
               onPointerDown={(event): void => {
-                event.preventDefault();
+                if (preserveEditorFocus) event.preventDefault();
                 onPointerDown?.(event);
               }}
-              onMouseDown={(event): void => event.preventDefault()}
+              onMouseDown={(event): void => {
+                if (preserveEditorFocus) event.preventDefault();
+              }}
               onPointerMove={onPointerMove}
               onPointerUp={onPointerUp}
               onPointerCancel={onPointerCancel}
@@ -293,10 +298,12 @@ export function MobileComposerAccessoryButton({
               color={color}
               disabled={disabled}
               onPointerDown={(event): void => {
-                event.preventDefault();
+                if (preserveEditorFocus) event.preventDefault();
                 onPointerDown?.(event);
               }}
-              onMouseDown={(event): void => event.preventDefault()}
+              onMouseDown={(event): void => {
+                if (preserveEditorFocus) event.preventDefault();
+              }}
               onPointerMove={onPointerMove}
               onPointerUp={onPointerUp}
               onPointerCancel={onPointerCancel}
