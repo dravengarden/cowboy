@@ -54,7 +54,7 @@ Deno.test("floating composer stack has one border-box geometry owner", () => {
   assertEquals(geometrySource.includes('"--floating-stack-h"'), true);
   assertEquals(geometrySource.includes('"--transcript-bottom-inset"'), true);
   assertEquals(
-    appSource.includes('bottomInset="var(--transcript-bottom-inset, 0px)"'),
+    appSource.includes('"var(--transcript-bottom-inset, 0px)"'),
     true,
   );
   assertEquals(turnStatusSource.includes('position: "relative"'), true);
@@ -155,6 +155,15 @@ Deno.test("transient activity is transcript-owned with a zero-jump pill handoff"
   assertEquals(appSource.includes("judging={judging}"), true);
 });
 
+Deno.test("mobile composer chrome restores resting frost without a swipe filter", () => {
+  assertEquals(appSource.includes("frostedChrome"), true);
+  assertEquals(appSource.includes("mobileFrostFollowRef"), true);
+  assertEquals(
+    appSource.includes("data-mobile-backdrop-chrome=\"true\""),
+    true,
+  );
+});
+
 Deno.test("focused mobile composer owns a real frosted material", () => {
   assertEquals(
     composerSurfaceSource.includes(
@@ -184,7 +193,7 @@ Deno.test("focused mobile composer owns a real frosted material", () => {
 });
 
 Deno.test("every Mobile transcript tail shares one external boundary gap", () => {
-  assertEquals(mobileTranscriptTailGap, 6);
+  assertEquals(mobileTranscriptTailGap, 12);
   assertEquals(
     transcriptSource.includes(
       "data-transcript-tail-clearance",

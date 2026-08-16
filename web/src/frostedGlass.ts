@@ -12,6 +12,18 @@ import { FROSTED_PILL_DROP_SHADOW_GEOMETRY } from "./floatingOverlayPolicy";
 
 const BLUR = "blur(40px) saturate(180%) brightness(1.06)";
 
+/** Resting Mobile chrome (composer + navbar). One blur tile at rest;
+ *  drawer flatten strips the filter at prepare, before the first
+ *  translate, so the swipe does not relocate a backdrop-filter layer. */
+export function frostedChrome(t: Theme): Record<string, unknown> {
+  const dark = t.palette.mode === "dark";
+  return {
+    backgroundColor: alpha(t.palette.background.default, dark ? 0.58 : 0.64),
+    backdropFilter: BLUR,
+    WebkitBackdropFilter: BLUR,
+  };
+}
+
 // The denser panel surface (no tone tint) — for a block of raw text / controls.
 export function frostedPanel(t: Theme): Record<string, unknown> {
   const dark = t.palette.mode === "dark";
