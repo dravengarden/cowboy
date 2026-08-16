@@ -2872,11 +2872,11 @@ export function App({
                     // group (composer, or the navbar in bottom mode) rises clear
                     // of the keyboard. 0 when no keyboard.
                     pb: "var(--kb-inset, 0px)",
-                    // Keyboard Focus Mode is one coordinated transition: the
-                    // persistent composer grows its formatting track while this
-                    // session nav yields the scarce keyboard-adjacent space. CSS
-                    // :has keeps editor focus/IME state out of React render state.
-                    "&:has([data-mobile-focus-composer='true'][data-mobile-keyboard-open='true']:focus-within) [data-mobile-session-nav='true']": {
+                    // Only a Queue/Draft edit uses the two-track dock. The
+                    // new-message composer stays compact, so session nav and
+                    // the frosted slab remain. CSS :has keeps IME state out of
+                    // React render state.
+                    "&:has([data-mobile-pending-editor='true'][data-mobile-keyboard-open='true']:focus-within) [data-mobile-session-nav='true']": {
                         minHeight: 0,
                         maxHeight: 0,
                         opacity: 0,
@@ -2888,11 +2888,7 @@ export function App({
                         transition:
                             `max-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, min-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, opacity 90ms ease, transform ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, padding ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}`,
                     },
-                    // When a real touch editor owns the visible keyboard, the
-                    // Composer card becomes the only floating material. Keep the
-                    // measured shell height for transcript clearance, but remove
-                    // the old full-width slab and boundary hairline behind it.
-                    "&:has([data-mobile-primary-composer='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within, [data-mobile-pending-editor='true'][data-mobile-keyboard-open='true']:focus-within) [data-mobile-composer-shell-material='true']": {
+                    "&:has([data-mobile-pending-editor='true'][data-mobile-keyboard-open='true']:focus-within) [data-mobile-composer-shell-material='true']": {
                         opacity: "0 !important",
                     },
                 }}
