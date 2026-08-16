@@ -132,6 +132,11 @@ import {
   wheelLeavesLatest,
 } from "./transcriptFollowIntent";
 import { transcriptRowContainment } from "./transcriptMotion";
+import {
+  liveTranscriptWindow,
+  recycledTranscriptHeight,
+  shouldWindowLiveTranscript,
+} from "./transcriptLiveWindow";
 import { markTranscriptScrollActivity } from "./transcriptRenderPacing";
 import {
   historyPrefetchTransition,
@@ -3205,12 +3210,16 @@ export function Transcript({
   // This removes Markdown/layout work from WebKit's scrolling frames without
   // dropping or delaying transport data; the latest timeline flushes atomically.
   const [renderPausedForScroll, setRenderPausedForScroll] = useState(false);
+  const renderPausedRef = useRef(false);
   const presentedTimelineRef = useRef(timeline);
   const latestTimelineRef = useRef(timeline);
   latestTimelineRef.current = timeline;
   const drawerCatchupActiveRef = useRef(false);
   const [drawerCatchupStep, setDrawerCatchupStep] = useState(0);
-  if (!renderPausedForScroll && !drawerCatchupActiveRef.current) {
+  // A ref, not React state, freezes the presented timeline. setState on
+  // touchstart / swipe-claim is a render on the same frames as the first
+  // translate and is the intermittent drawer hitch.
+  if (!renderPausedRef.current && !drawerCatchupActiveRef.current) {
     presentedTimelineRef.current = timeline;
   } else if (managesScrollHistory) {
     // Native momentum keeps live tail changes frozen, but an older history page
@@ -3243,6 +3252,7 @@ export function Transcript({
       presentedTimelineRef.current = next.timeline;
       if (next.complete) {
         drawerCatchupActiveRef.current = false;
+        renderPausedRef.current = false;
         startTransition(() => setRenderPausedForScroll(false));
         return;
       }
@@ -3415,6 +3425,7 @@ export function Transcript({
     const el = parentRef.current;
     if (!el) return;
     const v = el.scrollHeight > el.clientHeight + 1;
+    setTranscriptOverflowing((current) => current === v ? current : v);
     if (v === lastScrollableRef.current) return;
     lastScrollableRef.current = v;
     onScrollableChangeRef.current?.(v);
@@ -3895,6 +3906,31 @@ export function Transcript({
   //   composer's sticky toggle reflects + drives it (it shows active when
   //   stuck, and a tap bumps scrollNonce → we scroll to the bottom below).
   const stick = useRef(true);
+  const [followingLive, setFollowingLive] = useState(true);
+  const [transcriptOverflowing, setTranscriptOverflowing] = useState(false);
+  const rowHeightsRef = useRef<Map<string, number>>(new Map());
+  const windowLive = shouldWindowLiveTranscript({
+    following: followingLive,
+    rowCount: items.length,
+    overflowing: transcriptOverflowing,
+  }) && selectedToolKey === null && locatedToolKey === null;
+  const liveWindow = liveTranscriptWindow(items.length);
+  const mountedItems = windowLive ? items.slice(-liveWindow.mounted) : items;
+  const recycledItemKeys = windowLive
+    ? items.slice(0, liveWindow.recycled).map((item) => item.key)
+    : [];
+  const recycledHeight = recycledTranscriptHeight(
+    recycledItemKeys,
+    rowHeightsRef.current,
+  );
+  useLayoutEffect(() => {
+    const root = parentRef.current;
+    if (!root) return;
+    for (const node of root.querySelectorAll<HTMLElement>("[data-key]")) {
+      const key = node.dataset["key"];
+      if (key) rowHeightsRef.current.set(key, node.offsetHeight);
+    }
+  });
   const workingRef = useRef(working);
   workingRef.current = working;
   // Transcript is NOT remounted per session (it re-pins via the sessionId
@@ -4087,6 +4123,7 @@ export function Transcript({
         // inactive. setSticky no-ops when already off, so this is cheap even
         // though `wheel`/`scroll` fire often.
         setSticky(sessionIdRef.current, false);
+        setFollowingLive(false);
       }
     };
 
@@ -4116,11 +4153,18 @@ export function Transcript({
     };
     const restoreAnchor = (): void =>
       restoreFreezeAnchor(el, freezeRef.current);
+    const resumePresentedTimeline = (): void => {
+      renderPausedRef.current = false;
+      startTransition(() => {
+        setRenderPausedForScroll(false);
+        setDrawerCatchupStep((step) => step + 1);
+      });
+    };
     const markNativeScrollActive = (): void => {
       cancelHistoryRelease();
       markTranscriptScrollActivity();
       nativeScrollActiveRef.current = true;
-      setRenderPausedForScroll(true);
+      renderPausedRef.current = true;
       // A pending corrective scroll event must never swallow the reader's next
       // real movement. From this point the native gesture is authoritative.
       freezeRef.current.self = false;
@@ -4153,7 +4197,7 @@ export function Transcript({
           scheduleHistoryRelease();
           nativeScrollSettleTimer = globalThis.setTimeout(() => {
             nativeScrollActiveRef.current = false;
-            setRenderPausedForScroll(false);
+            resumePresentedTimeline();
             nativeScrollSettleTimer = undefined;
           }, 360);
           return;
@@ -4163,7 +4207,7 @@ export function Transcript({
         if (!stick.current) captureAnchor();
         saveViewport();
         nativeScrollActiveRef.current = false;
-        setRenderPausedForScroll(false);
+        resumePresentedTimeline();
         nativeScrollSettleTimer = undefined;
       }, 240);
     };
@@ -4180,7 +4224,10 @@ export function Transcript({
       // page without first forcing the reader away from the threshold.
       historyPrefetchArmedRef.current = true;
       markNativeScrollActive();
-      detach();
+      // Do not unfollow on finger-down. A Sessions/Review swipe starts as a
+      // transcript touch; detach + setState here is a React render on the
+      // same frames as the first peek translate. Unfollow when scroll
+      // actually leaves the live edge.
       const fromBottom = Math.abs(el.scrollTop);
       const prefetch = historyPrefetchTransition({
         managed: managesScrollHistoryRef.current,
@@ -4213,7 +4260,7 @@ export function Transcript({
       cancelHistoryRelease();
       markTranscriptScrollActivity();
       nativeScrollActiveRef.current = true;
-      setRenderPausedForScroll(true);
+      renderPausedRef.current = true;
       if (nativeScrollSettleTimer !== undefined) {
         globalThis.clearTimeout(nativeScrollSettleTimer);
         nativeScrollSettleTimer = undefined;
@@ -4300,6 +4347,8 @@ export function Transcript({
       if (readerOwned) markNativeScrollActive();
       // column-reverse: the bottom is scrollTop 0 (abs handles the sign).
       const fromBottom = Math.abs(el.scrollTop);
+      if (readerOwned && fromBottom > 1 && stick.current) detach();
+      else setFollowingLive(fromBottom <= 1);
       if (!readerOwned) {
         if (!stick.current) captureAnchor();
         saveViewport();
@@ -4370,6 +4419,7 @@ export function Transcript({
     const followLatest = (): void => {
       markNativeScrollActive();
       stick.current = true;
+      setFollowingLive(true);
       freezeRef.current.key = null;
       scheduleHistoryRelease();
       requestStickToBottom(sessionIdRef.current);
@@ -4577,6 +4627,7 @@ export function Transcript({
       cancelHistoryRelease();
       drawerCatchupActiveRef.current = false;
       nativeScrollActiveRef.current = false;
+      renderPausedRef.current = false;
       setRenderPausedForScroll(false);
       if (roRaf !== 0) cancelAnimationFrame(roRaf);
       if (viewportBackfillRafRef.current !== 0) {
@@ -5020,7 +5071,7 @@ export function Transcript({
                     <OptimisticUserBubble sessionId={sessionId} message={om} />
                   </Box>
                 ))}
-              {items
+              {mountedItems
                 .slice()
                 .reverse()
                 .map((item) => (
@@ -5074,6 +5125,17 @@ export function Transcript({
                     />
                   </Box>
                 ))}
+              {recycledHeight > 0 && (
+                <Box
+                  aria-hidden
+                  data-transcript-recycled-spacer
+                  sx={{
+                    height: recycledHeight,
+                    flex: `0 0 ${recycledHeight}px`,
+                    pointerEvents: "none",
+                  }}
+                />
+              )}
               {managesScrollHistory && !backfillingViewport && paging != null &&
                 paging.beforeSeq !== null && !paging.reachedStart && (
                 <ScrollbackLoadingSkeleton

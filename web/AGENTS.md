@@ -46,6 +46,17 @@ routinely breaks another.
 - Quality gate before commit: `deno check` + `oxlint` (the cowboy web gate). Do
   not run repo-wide `deno fmt`.
 
+## Mobile drawers and long transcripts
+
+Before changing Sessions/Review swipe, peek chrome, composer frost, or
+Transcript paint cost on Mobile, read
+[`docs/mobile-spatial-presentation.md`](../docs/mobile-spatial-presentation.md).
+It is the core contract: 1:1 `translate3d`, complementary rail, follower
+layers for iOS pin, live-row recycle without a JS virtualizer, a standing
+peek compositor layer (arm on finger-down; first tracking frame only
+writes transform), and paint/hit split for the dim. Do not re-pin the
+rail, scale the peek, or freeze the session list to make a swipe cheaper.
+
 ## Desktop and mobile are separate products
 
 - Mobile is touch-first: single-task focus, large targets, progressive

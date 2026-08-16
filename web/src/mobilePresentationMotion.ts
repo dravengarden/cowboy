@@ -1,10 +1,32 @@
 import { subscribeAnyDetentSheetOpen } from "./_shell/detent-sheet-open";
 import { holdStorePresentation } from "./store";
 
-/** Flatten iOS overflow tiles and backdrop filters into one cached layer.
- *  Nested `-webkit-overflow-scrolling: touch` and `backdrop-filter` each
- *  become their own compositor tile; translating a parent then relocates
- *  that whole tile tree every frame even when JS is idle. */
+/** Standing peek paint collapse. Settled rows each own `contain: layout
+ *  paint`; leaving that in place until the 2 px claim restyles N tiles on
+ *  the same frames as the first translate. Overflow and frost stay live so
+ *  vertical scroll and Working marks still work at rest. */
+export const mobilePeekRestLayerSx = {
+  "& [data-mobile-drawer-surface] [data-key]": {
+    contain: "none",
+  },
+};
+
+/** Strip backdrop-filter only when the moving surface *contains* the frost
+ *  (product pager, detent sheet). A dedicated drawer frost follower already
+ *  has its own translate3d; toggling its filter at prepare rebuilds that
+ *  layer and is the intermittent first-frame hitch. */
+export const mobileFrostStripSx = {
+  "& [data-detent-sheet-chrome], & [data-mobile-backdrop-chrome], & [data-mobile-composer-shell-material], & [data-mobile-focus-composer], & [data-mobile-primary-composer], & [data-mobile-pending-editor]": {
+    backdropFilter: "none",
+    WebkitBackdropFilter: "none",
+  },
+};
+
+/** Flatten iOS overflow tiles into one cached layer.
+ *  Nested `-webkit-overflow-scrolling: touch` each become their own
+ *  compositor tile; translating a parent then relocates that whole tile
+ *  tree every frame even when JS is idle. Apply this only after the
+ *  swipe is claimed — overflow:hidden would break vertical scroll. */
 export const mobileCompositorFlattenSx = {
   // Only the peeking page. The Sessions/Review rail uses the same
   // overflow-layer marker so it can scroll; freezing it while the
@@ -15,9 +37,10 @@ export const mobileCompositorFlattenSx = {
     contain: "paint",
     pointerEvents: "none",
   },
-  "& [data-detent-sheet-chrome], & [data-mobile-backdrop-chrome], & [data-mobile-composer-shell-material], & [data-mobile-focus-composer], & [data-mobile-primary-composer], & [data-mobile-pending-editor]": {
-    backdropFilter: "none",
-    WebkitBackdropFilter: "none",
+  // Settled rows each own a paint layer. Flatten them into the peek so a
+  // long transcript is one tile during the swipe, not N independent ones.
+  "& [data-mobile-drawer-surface] [data-key]": {
+    contain: "none",
   },
   "& [data-mobile-drawer-surface] .MuiCircularProgress-root, & [data-mobile-drawer-surface] .MuiSkeleton-root, & [data-mobile-drawer-surface] [data-mobile-css-animation]": {
     animationPlayState: "paused",
@@ -26,9 +49,14 @@ export const mobileCompositorFlattenSx = {
 
 export function mobilePresentationMovingRootSx(
   attr: "data-mobile-drawer-moving" | "data-mobile-product-moving",
-): Record<string, typeof mobileCompositorFlattenSx> {
+): Record<string, typeof mobileCompositorFlattenSx | (
+  & typeof mobileCompositorFlattenSx
+  & typeof mobileFrostStripSx
+)> {
   return {
-    [`&[${attr}='true']`]: mobileCompositorFlattenSx,
+    [`&[${attr}='true']`]: attr === "data-mobile-product-moving"
+      ? { ...mobileCompositorFlattenSx, ...mobileFrostStripSx }
+      : mobileCompositorFlattenSx,
   };
 }
 
@@ -64,7 +92,10 @@ export const mobileSheetPresentationSx = {
     backdropFilter: "none !important",
     WebkitBackdropFilter: "none !important",
   },
-  "&[data-mobile-sheet-presented='true']": mobileCompositorFlattenSx,
+  "&[data-mobile-sheet-presented='true']": {
+    ...mobileCompositorFlattenSx,
+    ...mobileFrostStripSx,
+  },
 };
 
 /** Freeze store subscribers and flatten the page for the whole time a sheet

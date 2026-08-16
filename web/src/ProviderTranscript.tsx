@@ -42,7 +42,7 @@ const terminalCaret = keyframes`
   0%, 50% { opacity: 1; }
   51%, 100% { opacity: 0; }
 `;
-const SIGNAL_THOUGHT_MARK_SIZE = 14;
+const SIGNAL_THOUGHT_MARK_SIZE = 18;
 
 function WorkcellGlyph({ size = 16 }: { size?: number }): React.JSX.Element {
   return (
@@ -201,7 +201,7 @@ function markerGeometry(variant: ThoughtPresentation["variant"]): {
     case "signal":
       return {
         size: SIGNAL_THOUGHT_MARK_SIZE,
-        gap: 4,
+        gap: 6,
         paddingLeft: 0,
       };
     case "terminal":
