@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "claude-code",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "publisher": "cowboy-first-party",
   "sdk_version": "2.4.0",
   "display": {
@@ -193,7 +193,7 @@
     "methods": [
       {
         "id": "claude-account",
-        "label": "Claude account",
+        "label": "Claude subscription",
         "flow": "browser_code",
         "executor": {
           "kind": "command_v1",

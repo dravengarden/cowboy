@@ -1815,3 +1815,16 @@ Desktop Vim + IME checks:
     `value` sync resets the live doc back to the first-image seed and
     the second thumbnail disappears after one frame. This does not
     claim pitfall #69 fixed.
+
+71. **A long inline-image prompt needs its own bounded editor scroll
+    viewport when the software keyboard opens.** Keeping `.cm-scroller`
+    at `overflow: hidden` clips the live selection under the fixed
+    composer actions once several thumbnails make the document taller
+    than the keyboard-open canvas. Keep the outer composer shell and
+    editor wrapper clipped, but allow only the focused CM6 scroller to
+    scroll within a viewport-height bound. On the closed-to-open
+    keyboard transition, reveal the current CM6 selection without
+    changing focus or selection; the native textarea implementation is
+    intentionally a no-op so UIKit continues to own its selection and
+    IME. This is a viewport-reveal fix only and does not claim the
+    physical painted-caret behavior in pitfall #69 is fixed.

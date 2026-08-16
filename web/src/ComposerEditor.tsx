@@ -75,6 +75,9 @@ export interface ComposerEditorHandle {
   focus: () => void;
   /** Whether this exact editor currently owns browser/native input focus. */
   hasFocus: () => boolean;
+  /** Reveal the current selection after a visual-viewport resize without
+   * changing focus, selection, IME composition, or native input ownership. */
+  revealSelection: () => void;
   /** Read the logical selection before replacing one editor surface with another. */
   getSelection: () => ComposerEditorSelection;
   /** Focus this editor and restore a selection captured from the replaced surface. */
@@ -410,6 +413,16 @@ export const ComposerEditor = forwardRef<
   useImperativeHandle(ref, () => ({
     focus: (): void => cmRef.current?.view?.focus(),
     hasFocus: (): boolean => cmRef.current?.view?.hasFocus ?? false,
+    revealSelection: (): void => {
+      const view = cmRef.current?.view;
+      if (!view?.hasFocus) return;
+      view.dispatch({
+        effects: EditorView.scrollIntoView(view.state.selection.main.head, {
+          y: "nearest",
+          yMargin: 12,
+        }),
+      });
+    },
     getSelection: (): ComposerEditorSelection => {
       const selection = cmRef.current?.view?.state.selection.main;
       return selection

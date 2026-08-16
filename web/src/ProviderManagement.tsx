@@ -139,6 +139,7 @@ function ProviderManagementIdentity({
   title = manifest.display.name,
   summary = manifest.display.summary,
   mark,
+  consumers = [],
 }: {
   manifest: ProviderUiManifest;
   version: string;
@@ -148,13 +149,15 @@ function ProviderManagementIdentity({
   title?: string;
   summary?: string;
   mark?: ReactNode;
+  consumers?: readonly ProviderCatalogEntry[];
 }): React.JSX.Element {
+  const credentialGroup = consumers.length > 1;
   return (
     <Box
       data-provider-management-identity
       sx={{
         display: "grid",
-        gridTemplateColumns: "32px minmax(0, 1fr)",
+        gridTemplateColumns: "40px minmax(0, 1fr)",
         columnGap: 1,
         alignItems: "start",
         minWidth: 0,
@@ -163,15 +166,15 @@ function ProviderManagementIdentity({
       <Box
         data-provider-management-mark
         sx={{
-          width: 32,
-          height: 32,
+          width: 40,
+          height: 40,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
           color: manifest.display.accent,
         }}
       >
-        {mark ?? <ProviderMark manifest={manifest} size={28} />}
+        {mark ?? <ProviderMark manifest={manifest} size={30} />}
       </Box>
       <Stack spacing={0.45} sx={{ minWidth: 0 }}>
         <Typography
@@ -202,6 +205,38 @@ function ProviderManagementIdentity({
         >
           {summary}
         </Typography>
+        {credentialGroup
+          ? (
+            <Stack
+              data-provider-credential-consumers
+              direction="row"
+              spacing={0.5}
+              flexWrap="wrap"
+              useFlexGap
+              sx={{ pt: 0.2 }}
+            >
+              {consumers.map((entry) => (
+                <Chip
+                  key={entry.provider_id}
+                  size="small"
+                  variant="outlined"
+                  icon={<ProviderMark manifest={entry.manifest} size={14} />}
+                  label={entry.manifest.display.name}
+                  sx={{
+                    height: 25,
+                    maxWidth: "100%",
+                    "& .MuiChip-icon": { ml: 0.6, mr: 0.1 },
+                    "& .MuiChip-label": {
+                      px: 0.65,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    },
+                  }}
+                />
+              ))}
+            </Stack>
+          )
+          : null}
         <Stack
           data-provider-management-footer
           direction="row"
@@ -238,13 +273,19 @@ function ProviderManagementIdentity({
           <Box
             data-provider-management-actions
             sx={{
-              ml: "auto",
+              ml: { xs: 0, sm: "auto" },
+              width: { xs: "100%", sm: "auto" },
               minWidth: 0,
               "& > .MuiStack-root": {
                 alignItems: "center",
-                justifyContent: "flex-end",
+                justifyContent: { xs: "stretch", sm: "flex-end" },
+                width: "100%",
               },
-              "& .MuiButton-root": { minHeight: 36, px: 1.25 },
+              "& .MuiButton-root": {
+                minHeight: 40,
+                px: 1.25,
+                flex: { xs: "1 1 auto", sm: "0 0 auto" },
+              },
             }}
           >
             {actions}
@@ -262,24 +303,35 @@ function ProviderCredentialMarks(
     className?: string;
   },
 ): React.JSX.Element {
+  const visible = entries.slice(0, 4);
+  const markSize = Math.max(10, Math.floor(size * 0.54));
   return (
-    <Stack direction="row" alignItems="center" className={className}>
-      {entries.slice(0, 3).map((entry, index) => (
+    <Box
+      className={className}
+      sx={{
+        width: size,
+        height: size,
+        display: "grid",
+        gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+        placeItems: "center",
+        flexShrink: 0,
+      }}
+    >
+      {visible.map((entry) => (
         <Box
           key={entry.provider_id}
           sx={{
             display: "flex",
-            ml: index === 0 ? 0 : -0.75,
-            p: 0.15,
-            borderRadius: "50%",
-            bgcolor: "background.paper",
-            zIndex: entries.length - index,
+            alignItems: "center",
+            justifyContent: "center",
+            width: markSize,
+            height: markSize,
           }}
         >
-          <ProviderMark manifest={entry.manifest} size={size} />
+          <ProviderMark manifest={entry.manifest} size={markSize} />
         </Box>
       ))}
-    </Stack>
+    </Box>
   );
 }
 
@@ -791,13 +843,13 @@ function ProviderManagement(
                       ? (
                         <ProviderCredentialMarks
                           entries={credentialGroup.entries}
-                          size={17}
+                          size={16}
                         />
                       )
                       : (
                         <ProviderMark
                           manifest={presentationEntry.manifest}
-                          size={17}
+                          size={16}
                         />
                       )
                   }
@@ -1050,31 +1102,29 @@ function ProviderManagement(
                     ? providerCredentialTitle(credentialGroup.entries)
                     : entry.manifest.display.name}
                   summary={sharedCredential
-                    ? `One Cowboy Service credential used by ${
-                      credentialEntries.map((candidate) =>
-                        candidate.manifest.display.name
-                      ).join(", ")
-                    }`
+                    ? `One Cowboy Service credential shared by ${credentialEntries.length} Providers`
                     : entry.manifest.display.summary}
                   mark={sharedCredential
                     ? (
                       <ProviderCredentialMarks
                         entries={credentialEntries}
-                        size={24}
+                        size={36}
                       />
                     )
-                    : <ProviderMark manifest={entry.manifest} size={28} />}
+                    : <ProviderMark manifest={entry.manifest} size={30} />}
+                  consumers={sharedCredential ? credentialEntries : []}
                 />
                 {scope === "machine" && installed &&
                     entry.manifest.authentication.required
                   ? (
-                    <Box sx={{ pl: 5 }}>
+                    <Box sx={{ pl: 6 }}>
                       <Chip
                         size="small"
                         variant="outlined"
-                        label={`Credentials ${
-                          installed.materialization_state.replaceAll("_", " ")
-                        }`}
+                        label={machineCredentialLabel(
+                          installed.materialization_state,
+                          authPresentation,
+                        )}
                         color={installed.materialization_state === "current"
                           ? "success"
                           : "warning"}
@@ -1475,6 +1525,23 @@ function authenticationCopy(
       }
     default:
       return assertUnhandled(presentation);
+  }
+}
+
+function machineCredentialLabel(
+  materializationState: string,
+  presentation: ProviderAuthenticationPresentation,
+): string {
+  switch (materializationState) {
+    case "current":
+      return "Credentials ready";
+    case "pending":
+    case "staging":
+      return "Credentials syncing";
+    default:
+      return presentation === "api_key"
+        ? "Credentials missing · Add API key above"
+        : "Credentials missing · Sign in above";
   }
 }
 

@@ -142,6 +142,20 @@ export function useThemeMode(): ThemeControls {
                 width: 44,
                 height: 44,
                 "& .MuiSvgIcon-root": { fontSize: "1.5rem" },
+                // WebKit synthesizes hover/focus paint after a finger tap and
+                // can keep it latched until another control is touched. Icon
+                // buttons have a transparent resting surface, so coarse/touch
+                // pointers can safely return to it after release while :active
+                // still supplies immediate pressed feedback. ToggleButton and
+                // selected controls keep their own explicit state styling.
+                "@media (hover: none), (pointer: coarse)": {
+                  "&:not(.Mui-selected):hover, &:not(.Mui-selected).Mui-focusVisible": {
+                    backgroundColor: "transparent",
+                  },
+                  "&:not(.Mui-selected):active": {
+                    backgroundColor: "action.selected",
+                  },
+                },
               },
             },
           },

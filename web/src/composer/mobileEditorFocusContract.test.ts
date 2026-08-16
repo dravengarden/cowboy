@@ -27,6 +27,9 @@ const accessoryDockSource = await Deno.readTextFile(
 const formatActionsSource = await Deno.readTextFile(
   new URL("../MobileComposerFormatActions.tsx", import.meta.url),
 );
+const editorSource = await Deno.readTextFile(
+  new URL("../ComposerEditor.tsx", import.meta.url),
+);
 const settingsPointerDown = appSource.lastIndexOf(
   "settingsTap.onPointerDown",
 );
@@ -64,6 +67,28 @@ Deno.test("mobile keyboard keeps the writing material opaque across transient We
     composerSource.includes(
       "\"&[data-mobile-keyboard-open='true']\": {\n              ...mobileFocusedComposerSurfaceSx",
     ),
+    true,
+  );
+});
+
+Deno.test("multi-image mobile composers scroll the focused caret above the keyboard", () => {
+  assertEquals(
+    composerSource.includes('maxHeight: "min(42dvh, 22rem)"'),
+    true,
+  );
+  assertEquals(composerSource.includes('overflowY: "auto"'), true);
+  assertEquals(composerSource.includes('scrollPaddingBlock: "12px"'), true);
+  assertEquals(
+    composerSource.includes("editorRef.current.revealSelection();"),
+    true,
+  );
+  assertEquals(editorSource.includes("revealSelection: (): void =>"), true);
+  assertEquals(
+    editorSource.includes("EditorView.scrollIntoView(view.state.selection.main.head"),
+    true,
+  );
+  assertEquals(
+    textareaSource.includes("revealSelection: (): void => undefined"),
     true,
   );
 });

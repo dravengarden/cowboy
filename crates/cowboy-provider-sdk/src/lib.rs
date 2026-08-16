@@ -3913,7 +3913,7 @@ mod tests {
         let source: StandardProviderSource =
             serde_json::from_str(include_str!("../../../providers/grok/provider.json")).unwrap();
         let package = build_package(source.compile().unwrap()).unwrap();
-        assert_eq!(package.manifest.version, "1.1.3");
+        assert_eq!(package.manifest.version, "1.1.4");
         for role in [AssetRole::Logo, AssetRole::Icon] {
             let asset = package
                 .manifest

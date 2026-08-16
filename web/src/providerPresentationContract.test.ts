@@ -44,7 +44,7 @@ Deno.test("Provider management cards keep geometry in the Cowboy component libra
   );
   assertEquals(
     managementSource.includes(
-      'gridTemplateColumns: "32px minmax(0, 1fr)"',
+      'gridTemplateColumns: "40px minmax(0, 1fr)"',
     ),
     true,
   );
@@ -96,6 +96,30 @@ Deno.test("Service credential management renders one card per typed authenticati
     managementSource.includes(
       "providerCredentialTitle(credentialGroup.entries)",
     ),
+    true,
+  );
+  assertEquals(
+    managementSource.includes("data-provider-credential-consumers"),
+    true,
+  );
+  assertEquals(
+    managementSource.includes(
+      "One Cowboy Service credential shared by ${credentialEntries.length} Providers",
+    ),
+    true,
+  );
+  assertEquals(managementSource.includes("entries.slice(0, 4)"), true);
+});
+
+Deno.test("Machine credential status gives a typed Service-level recovery action", () => {
+  assertEquals(managementSource.includes('case "current"'), true);
+  assertEquals(managementSource.includes('case "pending"'), true);
+  assertEquals(
+    managementSource.includes('"Credentials missing · Add API key above"'),
+    true,
+  );
+  assertEquals(
+    managementSource.includes('"Credentials missing · Sign in above"'),
     true,
   );
 });
