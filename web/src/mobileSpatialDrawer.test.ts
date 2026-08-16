@@ -94,4 +94,5 @@ Deno.test("settled drawers retain declarative depth and pager ownership", () => 
   ));
   assert(appSource.includes('bgcolor: "background.default"'));
   assert(reviewDrawerSource.includes('bgcolor: "background.default"'));
+  assert(appSource.includes('data-mobile-session-footer="true"'));
 });

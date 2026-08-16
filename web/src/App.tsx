@@ -2761,6 +2761,7 @@ export function App({
                     // frozen workspace recedes as one composited layer.
                     transformOrigin: "left center",
                     backfaceVisibility: "hidden",
+                    isolation: mobile ? "isolate" : undefined,
                     // Lift the whole column off the on-screen keyboard + its
                     // iOS-native accessory bar: this padding (the keyboard's
                     // overlap, published by useKeyboardInset) reserves space at
@@ -2904,7 +2905,7 @@ export function App({
                     diffusing under it. Height tracks the measured vars per mode.
                     DROPPED in split mode: the composer is a real left column, not a float,
                     so there's no glass to lay behind it. */}
-                {!splitActive && (
+                {!splitActive && !mobile && (
                 <Box
                     aria-hidden
                     data-mobile-composer-shell-material="true"
@@ -2917,28 +2918,12 @@ export function App({
                             height: floatingPanelHeight,
                             zIndex: 1,
                             pointerEvents: "none",
-                            // Hide under an open cover sheet — its own frosted surface
-                            // replaces this chrome; leaving it on double-frosts.
                             transition: "opacity 200ms ease",
-                            // Milkier than a clear pane + heavy blur + saturate → thick
-                            // iOS frosted material; content scrolling under it diffuses
-                            // (not shows) through the blur. Up-shadow + top hairline give
-                            // the "floating above the scroll" depth, now on the slab.
-                            // Saturated image bubbles remain visually loud through
-                            // a thin, highly saturated glass layer and can look as
-                            // if they paint above the composer. Keep the transcript
-                            // physically underneath, but make this interaction
-                            // surface materially opaque and reduce colour lift.
                             bgcolor: "background.default",
                     }}
                 />
                 )}
-                {/* Keep the glass edge out of the backdrop-filter layer. WebKit
-                    invalidates filtered ancestors whenever its native caret
-                    blinks; painting the hairline + shadow on that same layer made
-                    the whole composer edge pulse with the caret. This independent
-                    composited strip stays rasterized while the editor repaints. */}
-                {!splitActive && (
+                {!splitActive && !mobile && (
                 <Box
                     aria-hidden
                     data-mobile-composer-shell-material="true"
@@ -2953,8 +2938,6 @@ export function App({
                         pointerEvents: "none",
                         transition: "opacity 200ms ease",
                         bgcolor: "divider",
-                        transform: "translateZ(0)",
-                        backfaceVisibility: "hidden",
                         boxShadow: transcriptScrollable
                             ? (t) =>
                                 `0 -1px 24px ${t.palette.mode === "dark" ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.07)"}`
@@ -2989,7 +2972,7 @@ export function App({
                         // bar. (Was a solid `background.default` in top mode.)
                         bgcolor: "transparent",
                         position: "relative",
-                        zIndex: 2,
+                        zIndex: mobile ? 3 : 2,
                         // DetentSheet is intentionally inline, so this AppBar's
                         // stacking context can otherwise sit above a sheet's
                         // bottom action island and receive the tap instead.
@@ -3398,6 +3381,49 @@ export function App({
                                 zIndex: 2,
                             }}
                         >
+                            {mobile && !splitActive && (
+                                <>
+                                    <Box
+                                        aria-hidden
+                                        data-mobile-composer-shell-material="true"
+                                        data-mobile-session-footer="true"
+                                        sx={{
+                                            position: "absolute",
+                                            left: 0,
+                                            right: 0,
+                                            top: 0,
+                                            bottom: navbarAtBottom
+                                                ? "calc(-1 * var(--navbar-h, 0px))"
+                                                : 0,
+                                            zIndex: 0,
+                                            pointerEvents: "none",
+                                            bgcolor: "background.default",
+                                        }}
+                                    />
+                                    <Box
+                                        aria-hidden
+                                        data-mobile-composer-shell-material="true"
+                                        sx={{
+                                            position: "absolute",
+                                            left: 0,
+                                            right: 0,
+                                            top: 0,
+                                            height: "1px",
+                                            zIndex: 0,
+                                            pointerEvents: "none",
+                                            bgcolor: "divider",
+                                            boxShadow: transcriptScrollable
+                                                ? (t) =>
+                                                    `0 -1px 24px ${
+                                                        t.palette.mode === "dark"
+                                                            ? "rgba(0,0,0,0.5)"
+                                                            : "rgba(0,0,0,0.07)"
+                                                    }`
+                                                : "none",
+                                        }}
+                                    />
+                                </>
+                            )}
                             {active.system ? (
                                 <Box sx={{ p: 1.5, textAlign: "center", fontSize: 13, opacity: 0.6 }}>
                                     View-only system session — managed by cowboy
