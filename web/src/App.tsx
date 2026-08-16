@@ -227,6 +227,11 @@ import {
     type ControlCenterTab,
 } from "./desktop/controlCenterTabs";
 import {
+    SettingsDestinationRail,
+    SettingsProductSwitch,
+    settingsDestinationLabel,
+} from "./SettingsChrome";
+import {
     CONTROL_CENTER_PANEL_EXIT_MS,
     controlCenterViewTransitionStyles,
     controlCenterPanelMotionSx,
@@ -5080,11 +5085,12 @@ function SettingsShell({
             forceSheet={useSheetSurface}
             wide
             cover
+            portal
             desktopMaxWidth={1440}
         >
             <GlobalStyles styles={controlCenterViewTransitionStyles} />
-            {/* Touch keeps its compact segmented control. Desktop uses native
-                tabs so the active section is visible, focusable, and keyable. */}
+            {/* Touch uses a titled icon rail. Desktop uses native tabs so the
+                active section is visible, focusable, and keyable. */}
             <Box
                 sx={{
                     position: "sticky",
@@ -5115,20 +5121,30 @@ function SettingsShell({
                         <Typography variant="caption" color="text.secondary">Preferences, runtime information, and automation history</Typography>
                     </Box>
                 ) : null}
-                {!desktop && <SegmentedPill
-                    value={tab}
-                    onChange={changeTab}
-                    options={[{ value: "settings", label: "Settings" }, { value: "machines", label: "Machines" }, { value: "info", label: "Info" }, { value: "logs", label: "Logs" }]}
-                    sx={{
-                        width: "100%",
-                        justifySelf: "center",
-                        "& .MuiButtonBase-root": {
-                            flex: 1,
-                            minWidth: 0,
-                            px: 0.75,
-                        },
-                    }}
-                />}
+                {!desktop && (
+                    <Stack spacing={1.25} sx={{ width: "100%" }}>
+                        <Stack
+                            direction="row"
+                            alignItems="baseline"
+                            justifyContent="space-between"
+                            spacing={1.5}
+                        >
+                            <Typography variant="h6" fontWeight={740} sx={{ letterSpacing: -0.2 }}>
+                                {settingsDestinationLabel(tab)}
+                            </Typography>
+                            {tab === "settings" && (
+                                <SettingsProductSwitch
+                                    value={section}
+                                    onChange={setSection}
+                                />
+                            )}
+                        </Stack>
+                        <SettingsDestinationRail
+                            value={tab}
+                            onChange={changeTab}
+                        />
+                    </Stack>
+                )}
                 {desktop && <Box
                     sx={{
                         flex: 1,
@@ -5254,14 +5270,6 @@ function SettingsShell({
                 </Box>
             ) : !tabPanelVisible ? null : renderedTab === "machines" ? <MachinesContent /> : renderedTab === "info" ? <InfoContent /> : renderedTab === "logs" ? <UsageLogs /> : (
             <Stack spacing={3}>
-                <SegmentedPill
-                    value={section}
-                    onChange={setSection}
-                    options={[
-                        { value: "agent", label: "Agent" },
-                        { value: "code", label: "Code" },
-                    ]}
-                />
                 {section === "code" ? <ReviewSettingsContent /> : (
                 <>
                 <ThemeModeControl value={themeMode} onChange={onSetThemeMode} />

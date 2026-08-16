@@ -30,6 +30,7 @@ Deno.test("Code settings open on the Code section and Agent settings stay on Age
   assert(appSource.includes('label: "Code"'));
   assert(appSource.includes("<ReviewSettingsContent"));
   assert(appSource.includes('openAppSettings({ section: "agent" })'));
+  assert(appSource.includes("portal"));
 });
 
 Deno.test("Code chrome uses Agent instead of a local settings sheet", () => {
