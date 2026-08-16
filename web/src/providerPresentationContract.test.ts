@@ -110,6 +110,10 @@ Deno.test("Service authentication keeps Cowboy alive while Provider sign-in open
     managementSource.includes("openAuthenticationUrl(challenge.verification_url)"),
     true,
   );
+  assertEquals(
+    managementSource.includes("Update Cowboy in SideStore"),
+    true,
+  );
   assertEquals(managementSource.includes("closeAuthenticationBrowser()"), true);
 });
 

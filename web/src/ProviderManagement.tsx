@@ -44,9 +44,11 @@ import { groupProviderAuthentications } from "./providerAuthenticationGroups.ts"
 import { ProviderMark, ProviderSurface } from "./ProviderSurface";
 import {
   closeAuthenticationBrowser,
+  hasNativeAuthenticationBrowser,
   openAuthenticationUrl,
   shouldRouteAuthenticationClick,
 } from "./openExternal";
+import { isNativeShell } from "./nativeShell";
 
 interface ProviderMachine {
   id: string;
@@ -1337,8 +1339,16 @@ function ProviderManagement(
                         rel="noopener noreferrer"
                         variant="contained"
                         onClick={(event) => {
+                          if (isNativeShell() && !hasNativeAuthenticationBrowser()) {
+                            event.preventDefault();
+                            setAuthenticationError(
+                              "Update Cowboy in SideStore, reopen the app, then try sign-in again.",
+                            );
+                            return;
+                          }
                           if (!shouldRouteAuthenticationClick(event)) return;
                           event.preventDefault();
+                          setAuthenticationError("");
                           openAuthenticationUrl(challenge.verification_url);
                         }}
                       >
@@ -1352,6 +1362,9 @@ function ProviderManagement(
                         After completing the Provider page, return to Cowboy.
                         This dialog will keep waiting securely.
                       </Typography>
+                      {authenticationError
+                        ? <Alert severity="warning">{authenticationError}</Alert>
+                        : null}
                       {challenge.user_code
                         ? (
                           <Button

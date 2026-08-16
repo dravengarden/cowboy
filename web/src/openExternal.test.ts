@@ -1,5 +1,6 @@
 import {
   closeAuthenticationBrowser,
+  hasNativeAuthenticationBrowser,
   hasNativeExternalOpener,
   openAuthenticationUrl,
   openExternalUrl,
@@ -183,6 +184,9 @@ Deno.test("authentication links route through an iOS sheet when available", () =
   }
   root.__cowboyOpenAuthenticationBrowser = () => true;
   try {
+    if (!hasNativeAuthenticationBrowser()) {
+      throw new Error("expected native authentication browser detection");
+    }
     if (!shouldRouteAuthenticationClick(click)) {
       throw new Error("native authentication must use the Safari sheet");
     }
@@ -191,5 +195,8 @@ Deno.test("authentication links route through an iOS sheet when available", () =
     }
   } finally {
     delete root.__cowboyOpenAuthenticationBrowser;
+  }
+  if (hasNativeAuthenticationBrowser()) {
+    throw new Error("native authentication browser must clear with the bridge");
   }
 });
