@@ -1,146 +1,73 @@
 import {
   ArticleOutlined,
+  ChevronRight,
   DnsOutlined,
   InfoOutlined,
-  TuneOutlined,
 } from "@mui/icons-material";
 import { Box, ButtonBase, Stack, Typography } from "@mui/material";
-import { alpha } from "@mui/material/styles";
 import type { ReactNode } from "react";
 import type { ControlCenterTab } from "./desktop/controlCenterTabs";
-import type { SettingsProductFocus } from "./appSettings";
 
-const DESTINATIONS: readonly {
-  value: ControlCenterTab;
-  label: string;
-  icon: ReactNode;
-}[] = [
-  { value: "settings", label: "Settings", icon: <TuneOutlined fontSize="small" /> },
-  { value: "machines", label: "Machines", icon: <DnsOutlined fontSize="small" /> },
-  { value: "info", label: "Info", icon: <InfoOutlined fontSize="small" /> },
-  { value: "logs", label: "Logs", icon: <ArticleOutlined fontSize="small" /> },
-];
-
-const PRODUCTS: readonly { value: SettingsProductFocus; label: string }[] = [
-  { value: "agent", label: "Agent" },
-  { value: "code", label: "Code" },
-];
+const DESTINATION_LABELS: Record<ControlCenterTab, string> = {
+  settings: "Settings",
+  machines: "Machines",
+  info: "About",
+  logs: "Logs",
+};
 
 export function settingsDestinationLabel(tab: ControlCenterTab): string {
-  return DESTINATIONS.find((item) => item.value === tab)?.label ?? "Settings";
+  return DESTINATION_LABELS[tab];
 }
 
-/** Icon rail for the four Settings destinations. Replaces a cramped 4-way pill. */
-export function SettingsDestinationRail({
-  value,
-  onChange,
+export function SettingsNavRow({
+  icon,
+  label,
+  onPress,
 }: {
-  value: ControlCenterTab;
-  onChange: (value: ControlCenterTab) => void;
+  icon: ReactNode;
+  label: string;
+  onPress: () => void;
 }): React.JSX.Element {
   return (
-    <Box
-      role="tablist"
-      aria-label="Settings destinations"
+    <ButtonBase
+      onClick={onPress}
+      onPointerDown={(event): void => event.stopPropagation()}
       sx={{
-        display: "grid",
-        gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-        gap: 0.25,
+        width: "100%",
+        minHeight: 48,
+        px: 0.25,
+        borderRadius: 1.5,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        textAlign: "left",
+        "&:active": { bgcolor: "action.hover" },
       }}
     >
-      {DESTINATIONS.map((item) => {
-        const selected = item.value === value;
-        return (
-          <ButtonBase
-            key={item.value}
-            role="tab"
-            aria-selected={selected}
-            onClick={(): void => onChange(item.value)}
-            onPointerDown={(event): void => event.stopPropagation()}
-            sx={{
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              gap: 0.5,
-              py: 0.5,
-              borderRadius: 2,
-              color: selected ? "primary.main" : "text.secondary",
-            }}
-          >
-            <Box
-              aria-hidden
-              sx={{
-                width: 44,
-                height: 32,
-                borderRadius: 1.75,
-                display: "grid",
-                placeItems: "center",
-                bgcolor: selected
-                  ? (theme) =>
-                    alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.2 : 0.12)
-                  : "transparent",
-              }}
-            >
-              {item.icon}
-            </Box>
-            <Typography
-              variant="caption"
-              sx={{
-                fontWeight: selected ? 700 : 550,
-                letterSpacing: 0.1,
-                lineHeight: 1,
-              }}
-            >
-              {item.label}
-            </Typography>
-          </ButtonBase>
-        );
-      })}
-    </Box>
+      <Stack direction="row" spacing={1.25} alignItems="center" sx={{ minWidth: 0 }}>
+        <Box
+          aria-hidden
+          sx={{
+            width: 28,
+            height: 28,
+            display: "grid",
+            placeItems: "center",
+            color: "text.secondary",
+          }}
+        >
+          {icon}
+        </Box>
+        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+          {label}
+        </Typography>
+      </Stack>
+      <ChevronRight fontSize="small" sx={{ color: "text.disabled" }} />
+    </ButtonBase>
   );
 }
 
-/** Quiet Agent / Code switch. Not a second full-width pill. */
-export function SettingsProductSwitch({
-  value,
-  onChange,
-}: {
-  value: SettingsProductFocus;
-  onChange: (value: SettingsProductFocus) => void;
-}): React.JSX.Element {
-  return (
-    <Stack
-      role="tablist"
-      aria-label="Settings product"
-      direction="row"
-      spacing={2}
-      alignItems="center"
-    >
-      {PRODUCTS.map((item) => {
-        const selected = item.value === value;
-        return (
-          <ButtonBase
-            key={item.value}
-            role="tab"
-            aria-selected={selected}
-            onClick={(): void => onChange(item.value)}
-            onPointerDown={(event): void => event.stopPropagation()}
-            sx={{
-              pb: 0.4,
-              color: selected ? "text.primary" : "text.secondary",
-              borderBottom: "2px solid",
-              borderColor: selected ? "primary.main" : "transparent",
-            }}
-          >
-            <Typography
-              variant="body2"
-              sx={{ fontWeight: selected ? 720 : 550, lineHeight: 1.2 }}
-            >
-              {item.label}
-            </Typography>
-          </ButtonBase>
-        );
-      })}
-    </Stack>
-  );
-}
+export const SETTINGS_MORE_ROWS = [
+  { tab: "machines" as const, label: "Machines", icon: <DnsOutlined fontSize="small" /> },
+  { tab: "info" as const, label: "About", icon: <InfoOutlined fontSize="small" /> },
+  { tab: "logs" as const, label: "Logs", icon: <ArticleOutlined fontSize="small" /> },
+];

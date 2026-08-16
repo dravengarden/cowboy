@@ -7,15 +7,16 @@ const appSource = await Deno.readTextFile(
   new URL("./App.tsx", import.meta.url),
 );
 
-Deno.test("mobile Settings chrome is a title, product switch, and icon rail", () => {
-  assert(chromeSource.includes("SettingsDestinationRail"));
-  assert(chromeSource.includes("SettingsProductSwitch"));
-  assert(chromeSource.includes("settingsDestinationLabel"));
-  assert(chromeSource.includes('aria-label="Settings destinations"'));
-  assert(chromeSource.includes('aria-label="Settings product"'));
-  assertEquals(chromeSource.includes("SegmentedPill"), false);
-  assert(appSource.includes("<SettingsDestinationRail"));
-  assert(appSource.includes("<SettingsProductSwitch"));
-  assert(appSource.includes("settingsDestinationLabel(tab)"));
+Deno.test("mobile Settings is a preference list with drill-in destinations", () => {
+  assert(chromeSource.includes("SettingsNavRow"));
+  assert(chromeSource.includes("SETTINGS_MORE_ROWS"));
+  assert(chromeSource.includes('label: "About"'));
+  assertEquals(chromeSource.includes("SettingsDestinationRail"), false);
+  assertEquals(chromeSource.includes("SettingsProductSwitch"), false);
+  assert(appSource.includes("<SettingsNavRow"));
+  assert(appSource.includes('data-settings-section="code"'));
+  assert(appSource.includes('aria-label="Back to Settings"'));
+  assertEquals(appSource.includes("<SettingsDestinationRail"), false);
+  assertEquals(appSource.includes("<SettingsProductSwitch"), false);
   assert(appSource.includes("portal"));
 });

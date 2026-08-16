@@ -53,6 +53,7 @@ import {
 import type { SxProps, Theme } from "@mui/material";
 import {
     Add,
+    ArrowBackIosNew,
     Bolt,
     Check as CheckIcon,
     Circle,
@@ -227,8 +228,8 @@ import {
     type ControlCenterTab,
 } from "./desktop/controlCenterTabs";
 import {
-    SettingsDestinationRail,
-    SettingsProductSwitch,
+    SETTINGS_MORE_ROWS,
+    SettingsNavRow,
     settingsDestinationLabel,
 } from "./SettingsChrome";
 import {
@@ -4776,6 +4777,7 @@ function SettingsShell({
     // pointer/physical-keyboard surface rather than the touch sheet.
     const desktop = useMediaQuery("(pointer: fine) and (hover: hover)");
     const settingsPanelRef = useRef<HTMLDivElement>(null);
+    const codeSectionRef = useRef<HTMLDivElement>(null);
     const viewTransitionRef = useRef<ControlCenterViewTransition | null>(null);
     const changeTab = useCallback((next: ControlCenterTab): void => {
         if (next === tab) return;
@@ -4842,6 +4844,15 @@ function SettingsShell({
         setSection(initialSection);
         setTabPanelVisible(true);
     }, [open, initialTab, initialSection]);
+    useEffect(() => {
+        if (!open || desktop || initialSection !== "code" || tab !== "settings") {
+            return undefined;
+        }
+        const frame = globalThis.requestAnimationFrame(() => {
+            codeSectionRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+        });
+        return (): void => globalThis.cancelAnimationFrame(frame);
+    }, [desktop, initialSection, open, tab]);
     const vim = useVimSetting();
     const notify = useNotifySetting();
     const vibrate = useVibrateSetting();
@@ -5089,8 +5100,8 @@ function SettingsShell({
             desktopMaxWidth={1440}
         >
             <GlobalStyles styles={controlCenterViewTransitionStyles} />
-            {/* Touch uses a titled icon rail. Desktop uses native tabs so the
-                active section is visible, focusable, and keyable. */}
+            {/* Touch is one Settings list with drill-in pages. Desktop keeps
+                native tabs so Machines / Info / Logs stay first-class. */}
             <Box
                 sx={{
                     position: "sticky",
@@ -5122,27 +5133,25 @@ function SettingsShell({
                     </Box>
                 ) : null}
                 {!desktop && (
-                    <Stack spacing={1.25} sx={{ width: "100%" }}>
-                        <Stack
-                            direction="row"
-                            alignItems="baseline"
-                            justifyContent="space-between"
-                            spacing={1.5}
-                        >
-                            <Typography variant="h6" fontWeight={740} sx={{ letterSpacing: -0.2 }}>
-                                {settingsDestinationLabel(tab)}
-                            </Typography>
-                            {tab === "settings" && (
-                                <SettingsProductSwitch
-                                    value={section}
-                                    onChange={setSection}
-                                />
-                            )}
-                        </Stack>
-                        <SettingsDestinationRail
-                            value={tab}
-                            onChange={changeTab}
-                        />
+                    <Stack
+                        direction="row"
+                        alignItems="center"
+                        spacing={0.5}
+                        sx={{ width: "100%", minHeight: 40 }}
+                    >
+                        {tab !== "settings" && (
+                            <IconButton
+                                aria-label="Back to Settings"
+                                onClick={(): void => changeTab("settings")}
+                                onPointerDown={(event): void => event.stopPropagation()}
+                                sx={{ ml: -0.75 }}
+                            >
+                                <ArrowBackIosNew sx={{ fontSize: 18 }} />
+                            </IconButton>
+                        )}
+                        <Typography variant="h6" fontWeight={740} sx={{ letterSpacing: -0.2 }}>
+                            {settingsDestinationLabel(tab)}
+                        </Typography>
                     </Stack>
                 )}
                 {desktop && <Box
@@ -5270,8 +5279,6 @@ function SettingsShell({
                 </Box>
             ) : !tabPanelVisible ? null : renderedTab === "machines" ? <MachinesContent /> : renderedTab === "info" ? <InfoContent /> : renderedTab === "logs" ? <UsageLogs /> : (
             <Stack spacing={3}>
-                {section === "code" ? <ReviewSettingsContent /> : (
-                <>
                 <ThemeModeControl value={themeMode} onChange={onSetThemeMode} />
 
                 {/* Reading comfort — scales only the transcript message content
@@ -5572,10 +5579,28 @@ function SettingsShell({
                 )}
                 <Divider />
                 <AutoResumeSettings />
-                {/* Daemon system info (Storage metrics + About) lives in the Info
-                    tab — Settings holds user preferences only. */}
-                </>
-                )}
+                <Divider />
+                <Box
+                    ref={codeSectionRef}
+                    data-settings-section="code"
+                    sx={{ scrollMarginTop: 16 }}
+                >
+                    <ReviewSettingsContent />
+                </Box>
+                <Divider />
+                <Stack spacing={0.25}>
+                    <Typography variant="overline" color="text.secondary">
+                        More
+                    </Typography>
+                    {SETTINGS_MORE_ROWS.map((row) => (
+                        <SettingsNavRow
+                            key={row.tab}
+                            icon={row.icon}
+                            label={row.label}
+                            onPress={(): void => changeTab(row.tab)}
+                        />
+                    ))}
+                </Stack>
             </Stack>
             )}
             {desktop && (
