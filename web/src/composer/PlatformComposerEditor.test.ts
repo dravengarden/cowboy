@@ -12,6 +12,7 @@ import {
   shouldFocusDemotedEditor,
   shouldFocusPromotedEditor,
   shouldUseNativeTouchEditor,
+  touchImagePasteInsertsTokens,
 } from "./mobileCompactEditorPolicy";
 
 Deno.test("only a pending Desktop Vim runtime starts the preload promise", () => {
@@ -67,6 +68,21 @@ Deno.test("only inline-image touch composers promote to CM6", () => {
   assertEquals(shouldUseNativeTouchEditor("mobile", token), false);
   assertEquals(shouldUseNativeTouchEditor("mobile", "hello"), true);
   assertEquals(shouldUseNativeTouchEditor("tablet", "hello"), true);
+});
+
+Deno.test("new touch image pastes stay out of the native document", async () => {
+  assertEquals(touchImagePasteInsertsTokens(), false);
+  const textareaSource = await Deno.readTextFile(
+    new URL("../ComposerTextarea.tsx", import.meta.url),
+  );
+  assertEquals(
+    textareaSource.includes("insertImage: (): void => undefined"),
+    true,
+  );
+  assertEquals(
+    textareaSource.includes("insertImages: (): void => undefined"),
+    true,
+  );
 });
 
 Deno.test("native to CM6 promotion freezes the token-bearing live document", () => {

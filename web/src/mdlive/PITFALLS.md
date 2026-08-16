@@ -1618,11 +1618,19 @@ Desktop Vim + IME checks:
     first few Returns wrong. Same Return-after-image shape in
     Obsidian.
 
-    ### Current code (cowboy-v1269 / `a9aaa415`)
-    Token is `![name](cowboy-att:<id>)`. Touch promotes to CM6 on the
-    first token. The token is replaced by an inline thumbnail widget
-    (not `block: true`). Paste inserts a real following line with a
-    trailing space and lands the caret there:
+    ### Current code (cowboy-v1304)
+    New touch pastes no longer insert `![name](cowboy-att:<id>)` into
+    the native textarea (`touchImagePasteInsertsTokens()` is false).
+    The attachment stays in the composer tray; the textarea never
+    promotes to CM6. That is pitfall #69 candidate 2 (images out of
+    contenteditable), not a claim that Return-after-image on an
+    already-tokenized CM6 document is fixed. Existing token-bearing
+    drafts still promote.
+
+    Historical (cowboy-v1269 / `a9aaa415`) token path, still used by
+    those older documents: first token promoted to CM6. The token was
+    replaced by an inline thumbnail widget (not `block: true`). Paste
+    inserted a following line with a trailing space:
 
     ```
     lead + token(s) + "\\n " + optional trail

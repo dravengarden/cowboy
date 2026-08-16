@@ -459,9 +459,7 @@ Deno.test("native image and text paste action is shared by every mobile editor s
     true,
   );
   assertEquals(
-    textareaSource.includes(
-      "attachments.some((attachment) => attachment.pending === true)",
-    ),
+    textareaSource.includes("insertImages: (): void => undefined"),
     true,
   );
   assertEquals(
@@ -475,10 +473,6 @@ Deno.test("native image and text paste action is shared by every mobile editor s
       /onMouseDown=\{\(event\): void => event\.preventDefault\(\)\}/g,
     )?.length,
     3,
-  );
-  assertEquals(
-    textareaSource.includes("ta.focus();\n        writeNativeEdit(ta"),
-    true,
   );
 });
 
