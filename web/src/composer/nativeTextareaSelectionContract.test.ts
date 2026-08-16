@@ -34,12 +34,14 @@ Deno.test("ordinary native input bypasses MUI trailing-newline selection rewrite
 });
 
 Deno.test("native textarea and CM6 expose the same logical selection handoff", () => {
+  assertEquals(textareaSource.includes("getValue: (): string =>"), true);
   assertEquals(textareaSource.includes("getSelection: ()"), true);
   assertEquals(
     textareaSource.includes('selectionDirection === "backward"'),
     true,
   );
   assertEquals(textareaSource.includes("focusSelection: (selection"), true);
+  assertEquals(editorSource.includes("getValue: (): string =>"), true);
   assertEquals(editorSource.includes("getSelection: ()"), true);
   assertEquals(editorSource.includes("focusSelection: (selection"), true);
   assertEquals(editorSource.includes("scrollIntoView: true"), true);

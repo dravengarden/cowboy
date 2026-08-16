@@ -435,6 +435,7 @@ export const ComposerTextarea = forwardRef<
     // The browser owns selection reveal for the native textarea. Keep this a
     // no-op so a viewport resize never rewrites UIKit selection or IME state.
     revealSelection: (): void => undefined,
+    getValue: (): string => inputRef.current?.value ?? value,
     getSelection: (): ComposerEditorSelection => {
       const ta = inputRef.current;
       if (!ta) return lastSelectionRef.current;

@@ -4,6 +4,23 @@ export type PendingPanelDisclosureDecision =
   | "discard-clean-edit-and-collapse"
   | "confirm-dirty-edit";
 
+/** Prefer the mounted editor document. React's draft mirror can lag IME or a
+ *  native-textarea keystroke, and treating that stale empty string as "cleared"
+ *  deletes the row when the keyboard dismisses. */
+export function pendingEditLiveText(
+  editorValue: string | undefined,
+  mirroredText: string,
+): string {
+  return editorValue !== undefined ? editorValue : mirroredText;
+}
+
+export function pendingRowVisibleText(
+  messageText: string,
+  committedText: string | null,
+): string {
+  return committedText ?? messageText;
+}
+
 /**
  * Resolve a Queue/Draft header disclosure without ever hiding a live edit.
  *

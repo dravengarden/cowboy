@@ -134,7 +134,11 @@ import {
 import { MessagePreview } from "./MessagePreview";
 import { useTouchComposer } from "./ComposerTextarea";
 import { shouldExpandInlineComposer } from "./composer/mobileCompactEditorPolicy";
-import { pendingPanelDisclosureDecision } from "./pendingEditLifecycle";
+import {
+  pendingEditLiveText,
+  pendingPanelDisclosureDecision,
+  pendingRowVisibleText,
+} from "./pendingEditLifecycle";
 import { isImeKeyEvent } from "./imeKey";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { ALT_LABEL, ENTER_LABEL, MOD_LABEL } from "./platform";
@@ -4752,6 +4756,12 @@ function PendingRow({
 }): React.JSX.Element {
   const [draft, setDraft] = useState(message.text);
   const editTextRef = useRef(message.text);
+  const [committedText, setCommittedText] = useState<string | null>(null);
+  const [committedAttachments, setCommittedAttachments] = useState<
+    Attachment[] | null
+  >(null);
+  const seedText = pendingRowVisibleText(message.text, committedText);
+  const seedAttachments = committedAttachments ?? message.attachments;
   // Per-row kebab (⋮) position. Click coordinates, not the button node: the
   // peek/footer keep a translate3d layer, and hiding the kebab via container
   // query can detach the element so MUI's anchorEl lands at (0, 0).
@@ -4845,17 +4855,17 @@ function PendingRow({
     // recognizer; a hidden keyboard claim or rAF focus cannot do that.
     if (touchInput) {
       flushSync(() => {
-        setDraft(message.text);
-        editTextRef.current = message.text;
-        setEditAttachments(message.attachments);
+        setDraft(seedText);
+        editTextRef.current = seedText;
+        setEditAttachments(seedAttachments);
         onEdit();
       });
       editorRef.current?.focusEnd();
       return;
     }
-    setDraft(message.text);
-    editTextRef.current = message.text;
-    setEditAttachments(message.attachments);
+    setDraft(seedText);
+    editTextRef.current = seedText;
+    setEditAttachments(seedAttachments);
     onEdit();
   };
   const pendingEditTap = useReliableTouchTap<HTMLDivElement>(() => {
@@ -4863,18 +4873,26 @@ function PendingRow({
   });
   const discardEdit = (): void => {
     setConfirmDiscardEdit(false);
-    setDraft(message.text);
-    editTextRef.current = message.text;
-    setEditAttachments(message.attachments);
+    setDraft(seedText);
+    editTextRef.current = seedText;
+    setEditAttachments(seedAttachments);
     setOverlayOpen(false);
     onEditDone();
   };
+  const liveEditText = (): string =>
+    pendingEditLiveText(
+      overlayEditorRef.current?.getValue() ?? editorRef.current?.getValue(),
+      editTextRef.current,
+    );
   const persistEdit = (): boolean => {
     // A synchronous paste placeholder has no ACP bytes yet. Keep the editor
     // alive until encoding either promotes or removes it; persisting the empty
     // block would make the pending row restore a broken inline token.
     if (editAttachmentsPending) return false;
-    if (pendingContentCleared(draft, editAttachments)) {
+    const text = liveEditText();
+    editTextRef.current = text;
+    setDraft(text);
+    if (pendingContentCleared(text, editAttachments)) {
       if (kind === "draft") removeDraft(sessionId, message.id);
       else removeQueued(sessionId, message.id);
       setOverlayOpen(false);
@@ -4882,15 +4900,25 @@ function PendingRow({
       return false;
     }
     if (kind === "draft") {
-      editDraft(sessionId, message.id, draft, editAttachments);
-    } else editQueued(sessionId, message.id, draft, editAttachments);
+      editDraft(sessionId, message.id, text, editAttachments);
+    } else editQueued(sessionId, message.id, text, editAttachments);
+    setCommittedText(text);
+    setCommittedAttachments(editAttachments);
     return true;
   };
   useEffect(() => {
     if (!editing || !pendingEditDirtyRef.current || editAttachmentsPending) {
       return;
     }
-    if (!pendingContentCleared(draft, editAttachments)) return;
+    if (
+      !pendingContentCleared(
+        pendingEditLiveText(
+          overlayEditorRef.current?.getValue() ?? editorRef.current?.getValue(),
+          editTextRef.current,
+        ),
+        editAttachments,
+      )
+    ) return;
     if (kind === "draft") removeDraft(sessionId, message.id);
     else removeQueued(sessionId, message.id);
     setOverlayOpen(false);
@@ -5020,7 +5048,7 @@ function PendingRow({
     ) return;
     mobileEditFinishingRef.current = true;
     dismissMobileSoftwareKeyboard();
-    if (pendingContentCleared(draft, editAttachments)) {
+    if (pendingContentCleared(liveEditText(), editAttachments)) {
       if (kind === "draft") removeDraft(sessionId, message.id);
       else removeQueued(sessionId, message.id);
       setOverlayOpen(false);
@@ -5747,11 +5775,11 @@ function PendingRow({
           cursor: touchInput ? "pointer" : "text",
         }}
       >
-        {stripImageTokens(message.text).trim() !== "" && (
-          <MessagePreview text={stripImageTokens(message.text)} />
+        {stripImageTokens(seedText).trim() !== "" && (
+          <MessagePreview text={stripImageTokens(seedText)} />
         )}
-        {message.attachments.length > 0 && (
-          <QueuedAttachmentChips attachments={message.attachments} />
+        {seedAttachments.length > 0 && (
+          <QueuedAttachmentChips attachments={seedAttachments} />
         )}
         {
           /* Scheduled-draft badge: a calm info chip showing when it auto-fires;

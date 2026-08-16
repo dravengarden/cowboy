@@ -78,6 +78,8 @@ export interface ComposerEditorHandle {
   /** Reveal the current selection after a visual-viewport resize without
    * changing focus, selection, IME composition, or native input ownership. */
   revealSelection: () => void;
+  /** Live document text, including keystrokes that have not reached React yet. */
+  getValue: () => string;
   /** Read the logical selection before replacing one editor surface with another. */
   getSelection: () => ComposerEditorSelection;
   /** Focus this editor and restore a selection captured from the replaced surface. */
@@ -423,6 +425,7 @@ export const ComposerEditor = forwardRef<
         }),
       });
     },
+    getValue: (): string => cmRef.current?.view?.state.doc.toString() ?? "",
     getSelection: (): ComposerEditorSelection => {
       const selection = cmRef.current?.view?.state.selection.main;
       return selection

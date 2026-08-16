@@ -1070,10 +1070,16 @@ Deno.test("clearing a pending edit removes the row instead of restoring it", () 
   assertEquals(composerSource.includes("function pendingContentCleared"), true);
   assertEquals(
     composerSource.includes(
-      "if (pendingContentCleared(draft, editAttachments))",
+      "if (pendingContentCleared(text, editAttachments))",
     ),
     true,
   );
+  assertEquals(
+    composerSource.includes("if (pendingContentCleared(liveEditText()"),
+    true,
+  );
+  assertEquals(composerSource.includes("pendingEditLiveText("), true);
+  assertEquals(composerSource.includes("setCommittedText(text)"), true);
   assertEquals(
     composerSource.includes(
       "if (draft.trim() || editAttachments.length > 0) saveEdit();\n    else discardEdit();",
