@@ -2794,12 +2794,15 @@ export function App({
                 data-mobile-drawer-surface={mobile ? "true" : undefined}
                 sx={mobile
                     ? {
-                        position: "absolute",
-                        inset: 0,
-                        display: "flex",
-                        flexDirection: "column",
+                        // In-flow fill, not position:absolute;inset:0. iOS
+                        // pins bottom chrome of a viewport-sized absolutely
+                        // positioned layer while its transform is changing.
+                        flex: 1,
                         minHeight: 0,
                         width: "100%",
+                        display: "flex",
+                        flexDirection: "column",
+                        position: "relative",
                         bgcolor: "background.default",
                         isolation: "isolate",
                         backfaceVisibility: "hidden",
@@ -2983,8 +2986,11 @@ export function App({
                         // (zIndex 2 > the frosted slab's 1 > transcript's 0), so the
                         // slab behind provides the glass and content scrolls under the
                         // bar. (Was a solid `background.default` in top mode.)
-                        bgcolor: "transparent",
+                        bgcolor: mobile && navbarAtBottom
+                            ? "background.default"
+                            : "transparent",
                         position: "relative",
+                        flexShrink: mobile && navbarAtBottom ? 0 : undefined,
                         zIndex: mobile ? 3 : 2,
                         // DetentSheet is intentionally inline, so this AppBar's
                         // stacking context can otherwise sit above a sheet's
@@ -3326,13 +3332,31 @@ export function App({
                         </>
                     ) : (
                     <>
-                        {/* BOTH modes → the transcript is the FULL-height background
-                            layer (absolute, zIndex 0) and the navbar + composer float
-                            over it as frosted glass; content scrolls UNDER them. The
-                            absolute layer is a flex column so the Transcript's own
-                            flex:1 fills it. */}
+                        {/* Desktop: transcript is the full-height background
+                            (absolute) and the navbar + composer float over it.
+                            Mobile: the same column is in-flow so the footer
+                            translates with the page instead of pinning. */}
                         <Box
-                            sx={{ position: "absolute", inset: 0, zIndex: 0, display: "flex", flexDirection: "column" }}
+                            sx={mobile
+                                ? {
+                                    // In-flow transcript. An absolute inset:0
+                                    // sibling of the footer is the other half of
+                                    // the iOS "bottom chrome stays put" pin.
+                                    flex: 1,
+                                    minHeight: 0,
+                                    minWidth: 0,
+                                    display: "flex",
+                                    flexDirection: "column",
+                                    position: "relative",
+                                    zIndex: 0,
+                                }
+                                : {
+                                    position: "absolute",
+                                    inset: 0,
+                                    zIndex: 0,
+                                    display: "flex",
+                                    flexDirection: "column",
+                                }}
                         >
                             <StoreTranscript
                                 desktopNavigation={false}
@@ -3347,22 +3371,25 @@ export function App({
                                 // content clears it at rest: the status-bar strip in
                                 // mobile mode, the full navbar height in desktop mode.
                                 topInset={navbarAtBottom ? "env(safe-area-inset-top, 0px)" : "var(--navbar-h, 0px)"}
-                                // The geometry owner has already resolved whether
-                                // this is Composer alone or Composer + navbar.
-                                bottomInset="var(--transcript-bottom-inset, 0px)"
+                                // Mobile footer is in-flow, so the transcript
+                                // already ends above it. Desktop still floats.
+                                bottomInset={mobile
+                                    ? "0px"
+                                    : "var(--transcript-bottom-inset, 0px)"}
                             />
                         </Box>
-                        {/* A flex:1 spacer takes the place the (now absolute) transcript
-                            vacated, so the floating bars sit at the column edges. Bottom
-                            mode (order 0): pushes composer(1) + navbar(2) to the bottom.
-                            Top mode (order 1): sits BETWEEN the navbar(0, top) and the
-                            composer(2), pushing the composer to the bottom. */}
+                        {/* Desktop still floats the composer over an absolute
+                            transcript, so a flex spacer keeps the bars at the
+                            column edges. Mobile owns a real in-flow column. */}
+                        {!mobile && (
                         <Box aria-hidden sx={{ order: navbarAtBottom ? 0 : 1, flex: 1 }} />
+                        )}
                         {/* Composer order: mobile = 1 (above the bottom navbar); desktop =
                             2 (the very bottom, after the spacer). position:relative + zIndex
                             lifts the frosted composer above the absolute transcript layer. */}
                         <Box
                             ref={composerRef}
+                            data-mobile-session-footer={mobile ? "true" : undefined}
                             sx={{
                                 order: navbarAtBottom ? 1 : 2,
                                 minWidth: 0,
@@ -3377,6 +3404,7 @@ export function App({
                                     maxHeight: "100%",
                                     display: "flex",
                                     flexDirection: "column",
+                                    bgcolor: "background.default",
                                     // Explore's Page Dock is an editor launcher and
                                     // navigation aid, not part of the writing
                                     // surface. Remove it from the floating stack
@@ -3395,24 +3423,6 @@ export function App({
                             }}
                         >
                             {mobile && !splitActive && (
-                                <>
-                                    <Box
-                                        aria-hidden
-                                        data-mobile-composer-shell-material="true"
-                                        data-mobile-session-footer="true"
-                                        sx={{
-                                            position: "absolute",
-                                            left: 0,
-                                            right: 0,
-                                            top: 0,
-                                            bottom: navbarAtBottom
-                                                ? "calc(-1 * var(--navbar-h, 0px))"
-                                                : 0,
-                                            zIndex: 0,
-                                            pointerEvents: "none",
-                                            bgcolor: "background.default",
-                                        }}
-                                    />
                                     <Box
                                         aria-hidden
                                         data-mobile-composer-shell-material="true"
@@ -3435,7 +3445,6 @@ export function App({
                                                 : "none",
                                         }}
                                     />
-                                </>
                             )}
                             {active.system ? (
                                 <Box sx={{ p: 1.5, textAlign: "center", fontSize: 13, opacity: 0.6 }}>

@@ -77,6 +77,8 @@ export function ReviewDrawerShell({
       data-mobile-drawer-presented={open ? "true" : undefined}
       sx={{
         position: "relative",
+        display: "flex",
+        flexDirection: "column",
         width: 1,
         height: 1,
         overflow: "hidden",
@@ -126,9 +128,13 @@ export function ReviewDrawerShell({
         ref={surfaceRef}
         data-mobile-drawer-surface="true"
         sx={{
-          position: "absolute",
+          // In-flow fill. A transformed position:absolute;inset:0 surface
+          // lets iOS pin the Review footer to the visual viewport.
+          position: "relative",
           zIndex: 1,
-          inset: 0,
+          flex: 1,
+          minHeight: 0,
+          width: "100%",
           overflow: "hidden",
           bgcolor: "background.default",
           backfaceVisibility: "hidden",
