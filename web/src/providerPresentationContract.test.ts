@@ -50,7 +50,7 @@ Deno.test("Provider management cards keep geometry in the Cowboy component libra
   );
   assertEquals(
     managementSource.includes(
-      'gridTemplateColumns: "40px minmax(0, 1fr)"',
+      'gridTemplateColumns: "32px minmax(0, 1fr)"',
     ),
     true,
   );
@@ -77,7 +77,11 @@ Deno.test("Provider management cards keep geometry in the Cowboy component libra
     managementSource.includes("data-provider-management-footer"),
     true,
   );
-  assertEquals(managementSource.includes("WebkitLineClamp: 2"), true);
+  assertEquals(managementSource.includes("whiteSpace: \"nowrap\""), true);
+  assertEquals(
+    managementSource.includes('width: { xs: "100%", sm: "auto" }'),
+    false,
+  );
 });
 
 Deno.test("Provider authentication copy dispatches on typed presentation, not Provider id", () => {

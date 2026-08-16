@@ -7272,7 +7272,7 @@ function SessionProviderSection({
             px: 0.5,
             borderRadius: 1.5,
             justifyContent: "space-between",
-            color: needsAttention ? "warning.main" : "text.secondary",
+            color: "text.secondary",
             textAlign: "left",
             "&:active": { bgcolor: "action.hover" },
           }}
