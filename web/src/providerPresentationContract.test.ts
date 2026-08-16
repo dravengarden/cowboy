@@ -9,6 +9,9 @@ const surfaceSource = await Deno.readTextFile(
 const transcriptPresentationSource = await Deno.readTextFile(
   new URL("./ProviderTranscript.tsx", import.meta.url),
 );
+const grokProviderSource = await Deno.readTextFile(
+  new URL("../../providers/grok/provider.json", import.meta.url),
+);
 
 Deno.test("Provider lifecycle cards stay collapsed behind a compact summary", () => {
   assertEquals(managementSource.includes("const [detailsOpen"), true);
@@ -259,4 +262,36 @@ Deno.test("Provider UI v1 loading uses a compact neutral compatibility fallback"
   );
   assertEquals(surfaceSource.includes("<LegacyProviderActivity />"), true);
   assertEquals(surfaceSource.includes("const legacyResponsive"), true);
+});
+
+Deno.test("Provider activity keeps motion provider-authored and geometry renderer-owned", () => {
+  assertEquals(
+    surfaceSource.includes(
+      "data-provider-activity-indicator={node.indicator.kind}",
+    ),
+    true,
+  );
+  assertEquals(
+    surfaceSource.includes("data-provider-activity-effect={node.label.effect}"),
+    true,
+  );
+  assertEquals(
+    surfaceSource.includes(
+      "readableProviderMarkColor(manifest.display.accent, theme)",
+    ),
+    true,
+  );
+  assertEquals(
+    transcriptPresentationSource.includes(
+      '<ProviderMark manifest={manifest} size={16} />',
+    ),
+    true,
+  );
+  const grok = JSON.parse(grokProviderSource) as {
+    activity: { indicator: { kind: string; interval_ms: number } };
+  };
+  assertEquals(grok.activity.indicator, {
+    kind: "mark_pulse",
+    interval_ms: 1650,
+  });
 });

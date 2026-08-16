@@ -4351,21 +4351,12 @@ function MachinesContent(): React.JSX.Element {
                                                             px: 1,
                                                             borderRadius: 1.5,
                                                             bgcolor: "action.hover",
-                                                            "@media (pointer: coarse), (max-width: 600px)": {
-                                                                flexDirection: "column",
-                                                                alignItems: "stretch",
-                                                                flexWrap: "nowrap",
-                                                            },
                                                         }}
                                                     >
                                                         <Box
                                                             sx={{
                                                                 minWidth: 0,
                                                                 flex: 1,
-                                                                "@media (pointer: coarse), (max-width: 600px)": {
-                                                                    width: "100%",
-                                                                    flex: "none",
-                                                                },
                                                             }}
                                                         >
                                                             <Typography variant="body2" fontWeight={650}>

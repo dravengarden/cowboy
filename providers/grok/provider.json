@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "grok",
-  "version": "1.1.6",
+  "version": "1.1.7",
   "publisher": "cowboy-first-party",
   "sdk_version": "2.4.0",
   "display": {
@@ -15,7 +15,7 @@
   },
   "card_layout": "mark_leading",
   "activity": {
-    "indicator": { "kind": "mark_signal", "interval_ms": 1800 },
+    "indicator": { "kind": "mark_pulse", "interval_ms": 1650 },
     "label": {
       "kind": "text",
       "value": { "source": "literal", "value": "Working" },
