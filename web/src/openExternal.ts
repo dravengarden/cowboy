@@ -90,6 +90,11 @@ export function closeAuthenticationBrowser(): void {
   }
 }
 
+export function hasNativeAuthenticationBrowser(): boolean {
+  const root = globalThis as typeof globalThis & NativeGlobals;
+  return typeof root.__cowboyOpenAuthenticationBrowser === "function";
+}
+
 export function shouldRouteAuthenticationClick(event: {
   button: number;
   defaultPrevented: boolean;
@@ -98,10 +103,7 @@ export function shouldRouteAuthenticationClick(event: {
   metaKey: boolean;
   shiftKey: boolean;
 }): boolean {
-  const root = globalThis as typeof globalThis & NativeGlobals;
-  const hasAuthenticationSheet =
-    typeof root.__cowboyOpenAuthenticationBrowser === "function";
-  return (hasAuthenticationSheet || hasNativeExternalOpener()) &&
+  return (hasNativeAuthenticationBrowser() || hasNativeExternalOpener()) &&
     event.button === 0 && !event.defaultPrevented && !event.altKey &&
     !event.ctrlKey && !event.metaKey && !event.shiftKey;
 }
