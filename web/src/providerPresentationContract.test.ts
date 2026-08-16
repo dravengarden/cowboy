@@ -47,19 +47,15 @@ Deno.test("ready credentials progressively disclose destructive management actio
   );
 });
 
-Deno.test("Codex management identity uses a white mark on its accent badge", () => {
+Deno.test("Codex management identity uses the same authored mark as session chrome", () => {
   assertEquals(
     managementSource.includes(
       'appearance={entry.provider_id === "codex"',
     ),
-    true,
+    false,
   );
   assertEquals(
     surfaceSource.includes('appearance?: "plain" | "accentBadge"'),
-    true,
-  );
-  assertEquals(
-    surfaceSource.includes("color: theme.palette.common.white"),
     true,
   );
 });
