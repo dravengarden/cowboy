@@ -2,6 +2,7 @@ import { assertEquals } from "jsr:@std/assert";
 import {
   drawerProgressAttribute,
   MOBILE_DRAWER_SETTLE_EASING,
+  mobileDrawerCardVisual,
   mobileDrawerProgress,
   mobileDrawerSettleDurationMs,
   predictDrawerOffset,
@@ -20,6 +21,15 @@ Deno.test("drawer settle uses an iOS deceleration window", () => {
   assertEquals(mobileDrawerSettleDurationMs(1, 0), 380);
   assertEquals(mobileDrawerSettleDurationMs(0, 2), 220);
   assertEquals(mobileDrawerSettleDurationMs(0.5, 0), 320);
+});
+
+Deno.test("drawer card recedes like an Obsidian workspace", () => {
+  assertEquals(mobileDrawerCardVisual(0, 360, true).scale, 1);
+  assertEquals(mobileDrawerCardVisual(0, 360, true).dim, 0);
+  assertEquals(mobileDrawerCardVisual(360, 360, true).scale, 0.92);
+  assertEquals(mobileDrawerCardVisual(360, 360, true).radiusPx, 20);
+  assertEquals(mobileDrawerCardVisual(360, 360, false).scale, 0.955);
+  assertEquals(mobileDrawerCardVisual(180, 360, true).scale, 0.96);
 });
 
 Deno.test("mobile drawer progress follows the finger", () => {

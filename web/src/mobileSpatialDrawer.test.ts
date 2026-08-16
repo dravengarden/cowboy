@@ -20,18 +20,19 @@ Deno.test("dispose keeps seam shadow while a drawer is still translated", () => 
 });
 
 Deno.test("mobile drawer keeps clipping and shadows off the heavy surface", () => {
-  assertEquals(drawerSource.includes("surface.style.borderRadius"), false);
   assertEquals(drawerSource.includes("surface.style.boxShadow"), false);
   assert(drawerSource.includes("drawerMask.style.boxShadow"));
+  assert(drawerSource.includes("applyCardChrome"));
+  assert(drawerSource.includes("mobileDrawerCardVisual"));
   assert(drawerSource.includes('surface.style.willChange = "transform"'));
   assertEquals(drawerSource.includes("scheduleRender"), false);
   assertEquals(drawerSource.includes("drawerParallax"), false);
   assert(drawerSource.includes("MOBILE_DRAWER_SETTLE_EASING"));
   assert(drawerSource.includes("MOBILE_DRAWER_PREPARE_PX"));
   assert(drawerSource.includes("gesture.prepared = true"));
-  const prepareAt = drawerSource.indexOf("beginDirectManipulation()");
+  const chromeAt = drawerSource.indexOf("applyCardChrome()");
   const firstTranslate = drawerSource.indexOf("render(offset)");
-  assert(prepareAt >= 0 && firstTranslate > prepareAt);
+  assert(chromeAt >= 0 && firstTranslate > chromeAt);
 });
 
 Deno.test("drawer shadows project back toward each revealed drawer", () => {

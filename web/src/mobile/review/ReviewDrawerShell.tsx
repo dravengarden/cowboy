@@ -21,6 +21,7 @@ export function ReviewDrawerShell({
   const rootRef = useRef<HTMLDivElement>(null);
   const drawerRef = useRef<HTMLDivElement>(null);
   const maskRef = useRef<HTMLDivElement>(null);
+  const dimRef = useRef<HTMLDivElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<() => void>(() => undefined);
   const toggleRef = useRef<() => void>(() => undefined);
@@ -39,13 +40,15 @@ export function ReviewDrawerShell({
     const root = rootRef.current;
     const drawerElement = drawerRef.current;
     const mask = maskRef.current;
+    const dim = dimRef.current;
     const surface = surfaceRef.current;
-    if (!root || !drawerElement || !mask || !surface) return undefined;
+    if (!root || !drawerElement || !mask || !dim || !surface) return undefined;
     const binding = bindMobileSpatialDrawer({
       gestureTarget: root,
       surface,
       drawer: drawerElement,
       drawerMask: mask,
+      dim,
       side: "right",
       phone: root.clientWidth < 768,
       getOpen: () => openRef.current,
@@ -74,6 +77,10 @@ export function ReviewDrawerShell({
         width: 1,
         height: 1,
         overflow: "hidden",
+        bgcolor: (theme) =>
+          theme.palette.mode === "dark"
+            ? theme.palette.grey[900]
+            : theme.palette.grey[200],
         ...mobilePresentationMovingRootSx("data-mobile-drawer-moving"),
       }}
     >
@@ -85,7 +92,7 @@ export function ReviewDrawerShell({
           zIndex: 0,
           inset: 0,
           pl: "calc(100% - min(84%, 360px))",
-          bgcolor: "background.default",
+          bgcolor: "background.paper",
           backfaceVisibility: "hidden",
           "@media (min-width: 768px)": {
             pl: "calc(100% - min(52%, 440px))",
@@ -104,7 +111,10 @@ export function ReviewDrawerShell({
           bottom: 0,
           right: 0,
           width: 28,
-          bgcolor: "background.default",
+          bgcolor: (theme) =>
+            theme.palette.mode === "dark"
+              ? theme.palette.grey[900]
+              : theme.palette.grey[200],
           boxShadow: open ? mobileSpatialDrawerShadow("right") : "none",
           pointerEvents: "none",
           backfaceVisibility: "hidden",
@@ -119,18 +129,26 @@ export function ReviewDrawerShell({
           zIndex: 1,
           inset: 0,
           overflow: "hidden",
-          bgcolor: "background.default",
+          bgcolor: "background.paper",
           backfaceVisibility: "hidden",
-          transformOrigin: "left center",
+          transformOrigin: "right center",
         }}
       >
-        {open && (
-          <Box
-            aria-label="Close worktree drawer"
-            onClick={() => closeRef.current()}
-            sx={{ position: "absolute", zIndex: 2, inset: 0 }}
-          />
-        )}
+        <Box
+          ref={dimRef}
+          aria-label="Close worktree drawer"
+          onClick={() => {
+            if (open) closeRef.current();
+          }}
+          sx={{
+            position: "absolute",
+            zIndex: 2,
+            inset: 0,
+            bgcolor: "common.black",
+            opacity: 0,
+            pointerEvents: open ? "auto" : "none",
+          }}
+        />
         {children}
       </Box>
     </Box>

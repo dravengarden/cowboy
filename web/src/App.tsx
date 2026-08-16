@@ -1941,6 +1941,7 @@ export function App({
     const mobileShellRef = useRef<HTMLDivElement>(null);
     const mobileDrawerRef = useRef<HTMLDivElement>(null);
     const mobileDrawerMaskRef = useRef<HTMLDivElement>(null);
+    const mobileDrawerDimRef = useRef<HTMLDivElement>(null);
     const settleMobileDrawerRef = useRef<(
         (
             open: boolean,
@@ -1975,12 +1976,14 @@ export function App({
         const gestureTarget = mobileShellRef.current;
         const drawer = mobileDrawerRef.current;
         const drawerMask = mobileDrawerMaskRef.current;
-        if (!surface || !gestureTarget || !drawer || !drawerMask) return undefined;
+        const dim = mobileDrawerDimRef.current;
+        if (!surface || !gestureTarget || !drawer || !drawerMask || !dim) return undefined;
         const binding = bindMobileSpatialDrawer({
             gestureTarget,
             surface,
             drawer,
             drawerMask,
+            dim,
             side: "left",
             phone,
             getOpen: () => drawerOpenRef.current,
@@ -2563,7 +2566,10 @@ export function App({
                         zIndex: 0,
                         inset: 0,
                         overflow: "hidden",
-                        bgcolor: "background.default",
+                        bgcolor: (t) =>
+                            t.palette.mode === "dark"
+                                ? t.palette.grey[900]
+                                : t.palette.grey[200],
                         backfaceVisibility: "hidden",
                     }}
                 >
@@ -2575,6 +2581,7 @@ export function App({
                             height: "100%",
                             minWidth: 0,
                             overflow: "hidden",
+                            bgcolor: "background.paper",
                             pt: "env(safe-area-inset-top, 0px)",
                             pl: "env(safe-area-inset-left, 0px)",
                             "@media (min-width: 768px)": {
@@ -2599,7 +2606,10 @@ export function App({
                         bottom: 0,
                         left: 0,
                         width: 28,
-                        bgcolor: "background.default",
+                        bgcolor: (t) =>
+                            t.palette.mode === "dark"
+                                ? t.palette.grey[900]
+                                : t.palette.grey[200],
                         // A full-viewport mask's box-shadow is ink overflow of a
                         // composited layer; iOS WebKit sometimes drops it. A
                         // thin seam at the sliding card's inner edge keeps the
@@ -2747,7 +2757,7 @@ export function App({
                     position: "relative",
                     overflow: "hidden",
                     zIndex: mobile ? 1 : undefined,
-                    bgcolor: "background.default",
+                    bgcolor: mobile ? "background.paper" : "background.default",
                     // Keep the revealed seam exactly under the finger while the
                     // frozen workspace recedes as one composited layer.
                     transformOrigin: "left center",
@@ -2787,6 +2797,7 @@ export function App({
             >
                 {mobile && (
                     <Box
+                        ref={mobileDrawerDimRef}
                         role="button"
                         tabIndex={drawerOpen ? 0 : -1}
                         aria-label="Close sessions"
@@ -2807,11 +2818,10 @@ export function App({
                             position: "absolute",
                             inset: 0,
                             zIndex: (t) => t.zIndex.modal - 1,
-                            // Keep this hit layer mounted across close so WebKit
-                            // does not rebuild the foreground stacking tree on
-                            // the animation's final frame. It is intentionally
-                            // transparent; depth comes from the stable edge.
-                            bgcolor: "transparent",
+                            // Always mounted so opening can dim on the compositor
+                            // without inserting a layer mid-gesture.
+                            bgcolor: "common.black",
+                            opacity: 0,
                             pointerEvents: drawerOpen ? "auto" : "none",
                             cursor: drawerOpen ? "pointer" : "default",
                         }}

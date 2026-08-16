@@ -36,6 +36,25 @@ export function mobileDrawerProgress(
     : 0;
 }
 
+/** Obsidian/iOS receding-card look for the sliding workspace. Scale is linear
+ *  with the finger; dim uses a smoothstep so the veil does not flash on. */
+export function mobileDrawerCardVisual(
+  offset: number,
+  width: number,
+  phone: boolean,
+): { progress: number; scale: number; dim: number; radiusPx: number } {
+  const progress = mobileDrawerProgress(offset, width);
+  const openScale = phone ? 0.92 : 0.955;
+  const openDim = phone ? 0.22 : 0.16;
+  const fade = progress * progress * (3 - 2 * progress);
+  return {
+    progress,
+    scale: 1 - (1 - openScale) * progress,
+    dim: openDim * fade,
+    radiusPx: phone ? 20 : 16,
+  };
+}
+
 /** Publish drawer progress only when ownership flips. A per-frame
  *  `setAttribute` dirties style even when no CSS reads the attribute.
  *  Presence is ownership: a two-decimal string can round 0.021 to "0.02",

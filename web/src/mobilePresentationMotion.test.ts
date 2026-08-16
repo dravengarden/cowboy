@@ -31,10 +31,8 @@ Deno.test("drawer render stays on a transform-only compositor path", () => {
   assert(drawerSource.includes('surface.style.willChange = "transform"'));
   assertEquals(drawerSource.includes('drawer.style.willChange = "transform"'), false);
   assert(drawerSource.includes("drawerProgressAttribute("));
-  assertEquals(
-    drawerSource.includes("`opacity ${String(duration)}ms"),
-    false,
-  );
+  assertEquals(drawerSource.includes("drawer.style.opacity"), false);
+  assert(drawerSource.includes("dim.style.opacity"));
 });
 
 Deno.test("gesture roots flatten overflow tiles without a universal selector", () => {

@@ -6,6 +6,7 @@ import {
 import {
   drawerProgressAttribute,
   MOBILE_DRAWER_SETTLE_EASING,
+  mobileDrawerCardVisual,
   mobileDrawerSettleDurationMs,
 } from "./mobileDrawerMotion";
 import {
@@ -36,6 +37,7 @@ export function bindMobileSpatialDrawer({
   surface,
   drawer: _drawer,
   drawerMask,
+  dim,
   side,
   phone,
   getOpen,
@@ -47,6 +49,7 @@ export function bindMobileSpatialDrawer({
   surface: HTMLElement;
   drawer: HTMLElement;
   drawerMask: HTMLElement;
+  dim?: HTMLElement | null;
   side: MobileSpatialDrawerSide;
   phone: boolean;
   getOpen: () => boolean;
@@ -110,13 +113,25 @@ export function bindMobileSpatialDrawer({
     }
     drawerMask.style.removeProperty("box-shadow");
   };
+  const applyCardChrome = (): void => {
+    const radius = `${String(phone ? 20 : 16)}px`;
+    surface.style.borderRadius = radius;
+    surface.style.overflow = "hidden";
+  };
+  const clearCardChrome = (): void => {
+    if (shouldKeepDrawerDepth(getOpen(), currentOffset)) return;
+    surface.style.removeProperty("border-radius");
+  };
   const render = (offset: number): void => {
     currentOffset = offset;
-    // Touch callback writes only compositor properties. Flatten, shadow, and
+    // Touch callback writes only compositor properties. Flatten, radius, and
     // store holds happen in prepare(), before the first translate.
+    const visual = mobileDrawerCardVisual(offset, presentationWidth, phone);
     const x = `${String(openingSign * offset)}px`;
-    surface.style.transform = `translate3d(${x}, 0, 0)`;
+    surface.style.transform =
+      `translate3d(${x}, 0, 0) scale(${String(visual.scale)})`;
     drawerMask.style.transform = `translate3d(${x}, 0, 0)`;
+    if (dim) dim.style.opacity = String(visual.dim);
   };
   const beginDirectManipulation = (): void => {
     if (directManipulationActive) return;
@@ -131,6 +146,8 @@ export function bindMobileSpatialDrawer({
     }
     surface.style.transition = "none";
     drawerMask.style.transition = "none";
+    if (dim) dim.style.transition = "none";
+    applyCardChrome();
     gestureTarget.setAttribute("data-mobile-drawer-moving", "true");
     applyOpenDepth();
     releasePresentation ??= holdPresentation?.();
@@ -142,6 +159,7 @@ export function bindMobileSpatialDrawer({
   const clearTransitions = (): void => {
     surface.style.removeProperty("transition");
     drawerMask.style.removeProperty("transition");
+    if (dim) dim.style.removeProperty("transition");
   };
   const releaseDirectManipulation = (): void => {
     const finish = (): void => {
@@ -182,6 +200,7 @@ export function bindMobileSpatialDrawer({
     // layout here particularly expensive on Review, and Agent benefits from
     // keeping the same read-then-write phase ordering.
     applyOpenDepth();
+    applyCardChrome();
     presentationWidth = width;
     const targetOffset = open ? width : 0;
     const remaining = Math.min(
@@ -193,6 +212,10 @@ export function bindMobileSpatialDrawer({
       `transform ${String(duration)}ms ${MOBILE_DRAWER_SETTLE_EASING}`;
     surface.style.transition = settleTransition;
     drawerMask.style.transition = settleTransition;
+    if (dim) {
+      dim.style.transition =
+        `opacity ${String(duration)}ms ${MOBILE_DRAWER_SETTLE_EASING}`;
+    }
     publishProgress(targetOffset);
     render(targetOffset);
     if (pendingThresholdHaptic) {
@@ -209,6 +232,7 @@ export function bindMobileSpatialDrawer({
         // WKWebView clip it to the real device corners instead of leaving a
         // guessed phone/tablet radius that cuts a visible wedge from iPad.
         clearOpenDepth();
+        clearCardChrome();
       }
       onSettled?.();
     }, duration + 20);
@@ -377,12 +401,14 @@ export function bindMobileSpatialDrawer({
   if (getOpen()) {
     gestureTarget.setAttribute("data-mobile-drawer-open", "true");
     applyOpenDepth();
+    applyCardChrome();
   } else {
     gestureTarget.removeAttribute("data-mobile-drawer-open");
     clearOpenDepth();
   }
   presentationWidth = drawerWidth();
   surface.style.willChange = "transform";
+  surface.style.transformOrigin = side === "left" ? "left center" : "right center";
   drawerMask.style.willChange = "transform";
   render(getOpen() ? presentationWidth : 0);
   gestureTarget.addEventListener("touchstart", onTouchStart, { passive: true });
