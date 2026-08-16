@@ -1040,3 +1040,12 @@ Deno.test("a context reset gate can only reopen from a new input interaction", (
   assertEquals(shouldPresentMobileKeyboardSurface(false, true), false);
   assertEquals(shouldPresentMobileKeyboardSurface(true, true), false);
 });
+
+Deno.test("pending kebab menus pin to the tap instead of a live button node", () => {
+  assertEquals(composerSource.includes('anchorReference="anchorPosition"'), true);
+  assertEquals(composerSource.includes("disableScrollLock"), true);
+  assertEquals(
+    composerSource.includes("rect.height > 0 ? rect.bottom : e.clientY"),
+    true,
+  );
+});

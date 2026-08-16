@@ -4,7 +4,7 @@
 export const mobileComposerPanelFrameSx = {
   border: 1,
   borderColor: "divider",
-  borderRadius: 1,
+  borderRadius: 0.75,
   overflow: "hidden",
 } as const;
 

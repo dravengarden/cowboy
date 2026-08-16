@@ -4261,7 +4261,7 @@ function MachinesContent(): React.JSX.Element {
                 <Typography fontWeight={760}>Machines</Typography>
                 <Typography variant="caption" color="text.secondary">Where Cowboy sessions run</Typography>
             </Box>
-            <Paper variant="outlined" sx={{ borderRadius: 3, p: 1.5 }}>
+            <Paper variant="outlined" sx={{ borderRadius: 1.5, p: 1.5 }}>
                 <ProviderAuthenticationManagement />
             </Paper>
             {machines.map((machine) => {
@@ -4310,7 +4310,7 @@ function MachinesContent(): React.JSX.Element {
                         key={machine.id}
                         variant="outlined"
                         sx={{
-                            borderRadius: 3,
+                            borderRadius: 1.5,
                             overflow: "hidden",
                             borderColor: open ? "primary.main" : "divider",
                             transition: "border-color .2s",

@@ -801,7 +801,7 @@ function ProviderManagement(
       data-provider-management-root
       sx={(theme) => ({
         "& .MuiButton-root": {
-          borderRadius: 1.5,
+          borderRadius: 1,
           // Provider actions keep a fixed touch target, but their labels follow
           // the application-wide font-size setting like the surrounding copy.
           fontSize: "0.8125rem",
@@ -986,7 +986,7 @@ function ProviderManagement(
               <Paper
                 key={`${providerId}:${installed.provider_version}:${installed.generation_digest}`}
                 variant="outlined"
-                sx={{ p: 1.25, minWidth: 0, borderRadius: 2 }}
+                sx={{ p: 1.25, minWidth: 0, borderRadius: 1.25 }}
               >
                 <Stack spacing={1.1}>
                   <Typography variant="subtitle1" fontWeight={700}>
@@ -1163,7 +1163,7 @@ function ProviderManagement(
               sx={{
                 p: 1.25,
                 minWidth: 0,
-                borderRadius: 2,
+                borderRadius: 1.25,
               }}
               data-provider-management-card
               data-provider-credential-card={scope === "service"

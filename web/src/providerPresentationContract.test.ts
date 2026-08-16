@@ -160,7 +160,7 @@ Deno.test("Provider actions stay visually distinct from read-only chips", () => 
     true,
   );
   assertEquals(
-    managementSource.includes('"& .MuiButton-root": {\n          borderRadius: 1.5,'),
+    managementSource.includes('"& .MuiButton-root": {\n          borderRadius: 1,'),
     true,
   );
   assertEquals(

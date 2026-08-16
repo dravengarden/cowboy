@@ -4711,9 +4711,12 @@ function PendingRow({
 }): React.JSX.Element {
   const [draft, setDraft] = useState(message.text);
   const editTextRef = useRef(message.text);
-  // Per-row kebab (⋮) anchor — holds the draft's secondary actions (Edit / Move
-  // / Remove) so the row shows only Send inline and stays uncluttered.
-  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
+  // Per-row kebab (⋮) position. Click coordinates, not the button node: the
+  // peek/footer keep a translate3d layer, and hiding the kebab via container
+  // query can detach the element so MUI's anchorEl lands at (0, 0).
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(
+    null,
+  );
   // Local attachments while editing, seeded from the queued message. The edit
   // box is the SAME ComposerEditor as the main composer, so a queued prompt can
   // gain/lose images here too (pasted screenshots, picked files).
@@ -5773,30 +5776,39 @@ function PendingRow({
               aria-label={kind === "draft"
                 ? "draft actions"
                 : "message actions"}
-              onClick={(e): void => setMenuAnchor(e.currentTarget)}
+              onClick={(e): void => {
+                const rect = e.currentTarget.getBoundingClientRect();
+                setMenuPos({
+                  top: rect.height > 0 ? rect.bottom : e.clientY,
+                  left: rect.width > 0 ? rect.right : e.clientX,
+                });
+              }}
             >
               <MoreVert fontSize="small" />
             </IconButton>
           </Tooltip>
-          <Menu
-            anchorEl={menuAnchor}
-            open={menuAnchor !== null}
-            onClose={(): void => setMenuAnchor(null)}
-          >
-            {secondary.map((a) => (
-              <MenuItem
-                key={a.key}
-                onClick={(): void => {
-                  setMenuAnchor(null);
-                  a.onClick();
-                }}
-              >
-                <ListItemIcon>{a.icon}</ListItemIcon>
-                <ListItemText>{a.label}</ListItemText>
-              </MenuItem>
-            ))}
-          </Menu>
         </Box>
+        <Menu
+          open={menuPos !== null}
+          onClose={(): void => setMenuPos(null)}
+          anchorReference="anchorPosition"
+          anchorPosition={menuPos ?? { top: 0, left: 0 }}
+          transformOrigin={{ vertical: "top", horizontal: "right" }}
+          disableScrollLock
+        >
+          {secondary.map((a) => (
+            <MenuItem
+              key={a.key}
+              onClick={(): void => {
+                setMenuPos(null);
+                a.onClick();
+              }}
+            >
+              <ListItemIcon>{a.icon}</ListItemIcon>
+              <ListItemText>{a.label}</ListItemText>
+            </MenuItem>
+          ))}
+        </Menu>
       </Stack>
       <Dialog
         open={confirmRemove}
