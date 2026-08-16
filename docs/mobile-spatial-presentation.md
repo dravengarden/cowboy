@@ -101,8 +101,10 @@ box glued to the visual viewport. Give composer, navbar, dim, and frost
 their own `translate3d` with the peek matrix. Wrappers that span the
 viewport stay `pointer-events: none` so taps reach the rail.
 
-Promote `will-change: transform` only during direct manipulation. Leave it
-on at rest and iOS treats the bottom chrome as a viewport-attached layer.
+Promote `will-change: transform` on the peek and mask at finger-down, and
+on composer/nav/frost only after the swipe is claimed. Leave follower
+`will-change` on at rest and iOS treats the bottom chrome as a
+viewport-attached layer.
 
 ### Dim
 
@@ -187,19 +189,68 @@ These already failed or were rejected:
 - html2canvas or a fake bitmap as the first swipe optimization. Recycle
   and flatten first.
 - U+200B / beforeinput / drawSelection retries for the iOS image caret.
+- Retune settle easing, flick thresholds, or 1:1 math to fix *intermittent*
+  first-frame drops. That hitch is assemble-at-prepare, not tracking.
+- Strip `backdrop-filter` on the dedicated frost follower at prepare
+  "because translating a blur is expensive". The toggle rebuilds the
+  layer on the first tracking frames and is why silk was uneven.
+- `setState` on transcript `touchstart` or swipe-claim to freeze the
+  tree (`detach`, `setFollowingLive`, `setRenderPausedForScroll`). The
+  React commit *is* the hitch. Use a pause ref; unfollow when
+  reader-owned scroll leaves the live edge.
+- Apply overflow flatten on finger-down. That steals the first vertical
+  scroll pixel. Overflow freeze waits for the 2 px horizontal claim.
+- Write `transform-origin`, `box-shadow`, or `setAttribute` inside
+  `applySlide`. Touchmove writes only `transform` (and `transition: none`).
 
-## 7. Verification
+## 7. Uneven silk
+
+Obsidian is already one workspace layer. Cowboy's remaining hitch is not the
+1:1 tracker. **"Sometimes silky, sometimes a dropped frame"** means the first
+tracking frames sometimes rebuild the compositor tree.
+
+Open-from-rest hitching while close-while-open stays cheap is the signature:
+`data-mobile-drawer-open` / `presented` already apply flatten, so the close
+path is pre-assembled. The expensive open path used to do all of this on the
+same frames as the first `translate3d`:
+
+- restyle `contain` on every `[data-key]`
+- add/remove `backdrop-filter` on the frost slab
+- `setState` in transcript `touchstart` (`detach`, unfollow, pause render)
+- `will-change`, overflow freeze, moving attr, store hold, and a custom event
+
+Do not retune easing or claim thresholds to chase that. Split the work:
+
+| When | Do | Do not |
+|---|---|---|
+| Rest | `contain: none` on peek rows (`mobilePeekRestLayerSx`); identity translate on the page | `overflow: hidden` on the scroller; `will-change` on bottom chrome; strip a dedicated frost follower |
+| Finger-down | `holdStorePresentation`; `will-change` on peek + mask | React commit; unfollow; overflow freeze |
+| 2 px claim | `transition: none`; promote followers; freeze overflow | Restyle N rows; toggle frost |
+| Each `touchmove` | `transform` (+ `transition: none`) | `setAttribute`, `setState`, `transform-origin`, `box-shadow` |
+
+`holdStorePresentation` plus `renderPausedRef` freeze the tree. Catch-up
+React after release. A following reader unfollows when reader-owned scroll
+leaves the live edge — a Sessions swipe starts as a transcript `touchstart`.
+
+Dedicated frost (`frostedChrome` on its own follower) keeps its filter for
+the whole drawer gesture. Product pager and detent sheet still strip frost
+because those surfaces *contain* the blur.
+
+## 8. Verification
 
 - Unit/source tests lock the contracts in `obsidianDrawerGesture`,
   `transcriptLiveWindow`, `mobilePresentationMotion`, and
   `mobileSpatialDrawer`.
-- Chrome CDP on `https://cowboy.stormbird.xyz/` with an iPhone UA can
-  prove 1:1 matrices, hit targets, and gradient CSS. It cannot prove iOS
-  visual-viewport pin, frost hitch, or keyboard flash.
+- Chrome CDP on `https://cowboy.stormbird.xyz/` with an iPhone UA
+  (`platform: iPhone`, `maxTouchPoints > 1`, `pointer: coarse`, width
+  under 600 or Cowboy stays Desktop/tablet) can prove 1:1 matrices, a
+  shared peek/frost/composer translate, standing `contain: none`, frost
+  staying on during a drawer swipe, hit targets, and gradient CSS. It
+  cannot prove iOS visual-viewport pin, 60 fps, or keyboard flash.
 - After `cowboy-web-activate`, bump `web/public/sw.js` `VERSION` and tap
   PWA **Update**. A WS reconnect keeps stale JS.
 
-## Code map
+## 9. Code map
 
 | Concern | Owner |
 |---|---|
@@ -208,7 +259,7 @@ These already failed or were rejected:
 | Rail offset, dim progress, settle curve | `web/src/mobileDrawerMotion.ts` |
 | Standing peek layer, prepare flatten, rail hit, close layer | `web/src/mobilePresentationMotion.ts` |
 | Live-row recycle | `web/src/transcriptLiveWindow.ts` |
-| Column-reverse transcript | `web/src/Transcript.tsx` |
+| Column-reverse transcript; pause ref (no `setState` on finger-down) | `web/src/Transcript.tsx` |
 | Event-tail recycle | `store.releaseFollowedHistory` |
 | Resting frost | `web/src/frostedGlass.ts` `frostedChrome` |
 | Keyboard inset clamp | `web/src/keyboardGeometry.ts` |

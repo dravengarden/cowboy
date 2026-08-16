@@ -54,7 +54,9 @@ Transcript paint cost on Mobile, read
 It is the core contract: 1:1 `translate3d`, complementary rail, follower
 layers for iOS pin, live-row recycle without a JS virtualizer, a standing
 peek compositor layer (arm on finger-down; first tracking frame only
-writes transform), and paint/hit split for the dim. Do not re-pin the
+writes transform), and paint/hit split for the dim. Intermittent frame
+drops are assemble-at-prepare, not tracking math — do not retune the
+cubic or `setState` on `touchstart` to chase them. Do not re-pin the
 rail, scale the peek, or freeze the session list to make a swipe cheaper.
 
 ## Desktop and mobile are separate products
