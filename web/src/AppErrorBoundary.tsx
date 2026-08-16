@@ -17,7 +17,7 @@
 import { Box, Button, Typography } from "@mui/material";
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { isModuleLoadError } from "./moduleRecovery";
-import { reportClientIncident, reportClientLog } from "./observability";
+import { CRASH_INCIDENT_SEVERITY, reportClientIncident, reportClientLog } from "./observability";
 
 interface State {
   readonly error: Error | undefined;
@@ -74,7 +74,7 @@ export class AppErrorBoundary extends Component<{ children: ReactNode }, State> 
     reportClientLog("error", "react_render_error", error, {
       component_stack: componentStack,
     });
-    reportClientIncident("client_render_failure", "error", error, {
+    reportClientIncident("client_render_failure", CRASH_INCIDENT_SEVERITY, error, {
       component_stack: componentStack,
     });
     if (isModuleLoadError(error)) void recoverLatestBundle();

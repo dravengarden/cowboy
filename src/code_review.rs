@@ -1267,11 +1267,9 @@ mod tests {
         let second = provider
             .history_page(Some(&first.commits[1].oid), 2)
             .unwrap();
-        assert!(
-            second.commits.iter().all(|commit| {
-                commit.oid != first.commits[0].oid && commit.oid != first.commits[1].oid
-            })
-        );
+        assert!(second.commits.iter().all(|commit| {
+            commit.oid != first.commits[0].oid && commit.oid != first.commits[1].oid
+        }));
         assert!(!second.commits.is_empty());
 
         Command::new("git")
