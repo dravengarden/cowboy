@@ -37,7 +37,10 @@ Deno.test("mobile drawer keeps clipping and shadows off the heavy surface", () =
   assertEquals(drawerSource.includes("stepDrawerSpring"), false);
   assert(drawerSource.includes("MOBILE_DRAWER_SETTLE_EASING"));
   assert(drawerSource.includes("mobileDrawerSettleDurationMs"));
-  assert(drawerSource.includes("MOBILE_DRAWER_PREPARE_PX"));
+  assert(drawerSource.includes("obsidianDrawerShouldPrepare"));
+  assert(drawerSource.includes("obsidianDrawerClaimsSwipe"));
+  assert(drawerSource.includes("obsidianDrawerShouldOpen"));
+  assert(drawerSource.includes("obsidianDrawerRubberOffset"));
   assert(drawerSource.includes("drawer.contains(target)"));
   assert(drawerSource.includes("gesture.prepared = true"));
   assert(drawerSource.includes("applySlide = (offset: number, instant = false)"));

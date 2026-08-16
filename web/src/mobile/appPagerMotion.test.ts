@@ -7,7 +7,7 @@ import {
   predictPagerOffset,
   shouldReservePagerStart,
 } from "./appPagerMotion.ts";
-import { isDominantVerticalPan } from "../touchGestures.ts";
+import { obsidianDrawerAbandonsToScroll } from "../obsidianDrawerGesture.ts";
 
 const pagerSource = await Deno.readTextFile(
   new URL("./shell/MobileProductShell.tsx", import.meta.url),
@@ -58,7 +58,8 @@ Deno.test("product pager paints the touch sample without a frame of lag", () => 
 });
 
 Deno.test("vertical transcript pans release horizontal recognizers", () => {
-  assertEquals(isDominantVerticalPan(10, 11), false);
-  assertEquals(isDominantVerticalPan(7, 13), true);
-  assertEquals(isDominantVerticalPan(30, 8), false);
+  assertEquals(obsidianDrawerAbandonsToScroll(10, 11), true);
+  assertEquals(obsidianDrawerAbandonsToScroll(7, 13), true);
+  assertEquals(obsidianDrawerAbandonsToScroll(30, 8), false);
+  assertEquals(pagerSource.includes("obsidianDrawerClaimsSwipe"), true);
 });

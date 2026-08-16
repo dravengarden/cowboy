@@ -11,13 +11,21 @@ import {
   mobileDrawerSettleDurationMs,
 } from "./mobileDrawerMotion";
 import {
+  type DrawerVelocitySample,
+  OBSIDIAN_DRAWER_COMMIT_PROGRESS,
+  obsidianDrawerAbandonsToScroll,
+  obsidianDrawerClaimsSwipe,
+  obsidianDrawerLockPx,
+  obsidianDrawerRubberOffset,
+  obsidianDrawerShouldOpen,
+  obsidianDrawerShouldPrepare,
+  obsidianDrawerVelocityPxPerMs,
+  pushDrawerVelocitySample,
+} from "./obsidianDrawerGesture";
+import {
   expandedSelection,
   hasHorizontalScroller,
-  horizontalSwipe,
   inputOverlayOwnsDrawerGesture,
-  isDominantVerticalPan,
-  MOBILE_DRAWER_DIRECTION_LOCK_PX,
-  MOBILE_DRAWER_PREPARE_PX,
 } from "./touchGestures";
 
 export type MobileSpatialDrawerSide = "left" | "right";
@@ -79,6 +87,7 @@ export function bindMobileSpatialDrawer({
     width: number;
     lockPx: number;
     thresholdHaptic: boolean;
+    samples: DrawerVelocitySample[];
   } | null = null;
   let settleTimer = 0;
   let settleGen = 0;
@@ -317,11 +326,11 @@ export function bindMobileSpatialDrawer({
     presentationWidth = width;
     publishDrawerWidth(width);
     prepareNavigationHaptic();
-    // Session-row taps live on the rail and need the 12px lock. The peeking
-    // page must track as soon as horizontal intent is visible, like Obsidian.
-    const lockPx = target && drawer.contains(target)
-      ? MOBILE_DRAWER_DIRECTION_LOCK_PX
-      : MOBILE_DRAWER_PREPARE_PX;
+    // Session-row taps live on the rail and keep a tap-sized slop. The
+    // peeking page uses Obsidian's two-pixel |dx| > |dy| claim.
+    const lockPx = obsidianDrawerLockPx(
+      target !== null && drawer.contains(target),
+    );
     gesture = {
       x: touch.clientX,
       y: touch.clientY,
@@ -335,6 +344,7 @@ export function bindMobileSpatialDrawer({
       width,
       lockPx,
       thresholdHaptic: false,
+      samples: [{ t: now, x: touch.clientX }],
     };
     commit = startOpen;
   };
@@ -351,7 +361,7 @@ export function bindMobileSpatialDrawer({
     }
     const deltaX = touch.clientX - gesture.x;
     const deltaY = touch.clientY - gesture.y;
-    if (!gesture.locked && isDominantVerticalPan(deltaX, deltaY)) {
+    if (!gesture.locked && obsidianDrawerAbandonsToScroll(deltaX, deltaY)) {
       gesture = null;
       // Preserve the transcript's native vertical scroll while preventing a
       // parent horizontal recognizer from seeing the same touch stream.
@@ -365,9 +375,7 @@ export function bindMobileSpatialDrawer({
       : normalizedDelta < 0;
     if (
       !gesture.prepared &&
-      towardOpen &&
-      Math.abs(normalizedDelta) >= MOBILE_DRAWER_PREPARE_PX &&
-      Math.abs(normalizedDelta) > Math.abs(deltaY)
+      obsidianDrawerShouldPrepare(normalizedDelta, deltaY, towardOpen)
     ) {
       // Assemble one compositor layer before the first translate. Obsidian's
       // workspace is already that layer; doing this at lock time hitchs.
@@ -379,11 +387,10 @@ export function bindMobileSpatialDrawer({
         direction: normalizedDelta < 0 ? "left" as const : "right" as const,
         distance: Math.abs(normalizedDelta),
       }
-      : horizontalSwipe(
+      : obsidianDrawerClaimsSwipe(
         normalizedDelta,
         deltaY,
         gesture.lockPx,
-        1.15,
       );
     if (
       !swipe ||
@@ -397,19 +404,20 @@ export function bindMobileSpatialDrawer({
     event.preventDefault();
     event.stopPropagation();
     const now = performance.now();
-    const elapsed = Math.max(1, now - gesture.lastAt);
-    const instantaneousVelocity = (touch.clientX - gesture.lastX) / elapsed *
-      openingSign;
-    gesture.velocity = gesture.velocity * 0.35 +
-      instantaneousVelocity * 0.65;
+    pushDrawerVelocitySample(gesture.samples, now, touch.clientX);
+    gesture.velocity = obsidianDrawerVelocityPxPerMs(
+      gesture.samples,
+      openingSign,
+    );
     gesture.lastX = touch.clientX;
     gesture.lastAt = now;
     const width = gesture.width;
-    let offset = gesture.startOffset + normalizedDelta;
-    if (offset < 0) offset *= 0.18;
-    if (offset > width) offset = width + (offset - width) * 0.18;
+    const offset = obsidianDrawerRubberOffset(
+      gesture.startOffset + normalizedDelta,
+      width,
+    );
     const progress = Math.max(0, Math.min(1, offset / width));
-    const nextCommit = gesture.startOpen ? progress > 0.66 : progress >= 0.34;
+    const nextCommit = progress >= OBSIDIAN_DRAWER_COMMIT_PROGRESS;
     if (nextCommit !== commit && !gesture.thresholdHaptic) {
       gesture.thresholdHaptic = true;
       pendingThresholdHaptic = true;
@@ -429,15 +437,10 @@ export function bindMobileSpatialDrawer({
       commit = false;
       return;
     }
-    const startOpen = gesture.startOpen;
     const width = gesture.width;
-    const velocityCommit = startOpen
-      ? gesture.velocity > -0.45
-      : gesture.velocity > 0.45;
     const releaseVelocity = gesture.velocity;
-    const shouldOpen = Math.abs(gesture.velocity) >= 0.45
-      ? velocityCommit
-      : commit;
+    const progress = Math.max(0, Math.min(1, currentOffset / width));
+    const shouldOpen = obsidianDrawerShouldOpen(progress, releaseVelocity);
     if (shouldOpen !== commit && !gesture.thresholdHaptic) {
       navigationHaptic();
     }

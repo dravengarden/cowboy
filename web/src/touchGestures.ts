@@ -10,10 +10,9 @@ export interface HorizontalSwipe {
 // pointerup from selecting a session only for touchend to replace that pending
 // selection with a drawer settle.
 export const RELIABLE_TOUCH_TAP_MOVE_SLOP_PX = 10;
+/** Generic horizontal recognizer slop. The Sessions/Review drawer uses
+ *  `obsidianDrawerGesture` instead of these defaults. */
 export const MOBILE_DRAWER_DIRECTION_LOCK_PX = 12;
-/** Flatten compositor tiles before the first translate, once horizontal
- *  intent is visible but before the lock distance. Obsidian's workspace
- *  is already a single layer; Cowboy has to assemble that layer first. */
 export const MOBILE_DRAWER_PREPARE_PX = 4;
 
 /**

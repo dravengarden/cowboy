@@ -9,10 +9,14 @@ import { NativeReleaseUpdatePrompt } from "../../_shell";
 import { isAnyDetentSheetOpen } from "../../_shell/detent-sheet-open";
 import { MobileConnectionBanner } from "../MobileConnectionBanner";
 import {
+  OBSIDIAN_DRAWER_FLICK_PX_PER_MS,
+  OBSIDIAN_DRAWER_TRACK_PX,
+  obsidianDrawerAbandonsToScroll,
+  obsidianDrawerClaimsSwipe,
+} from "../../obsidianDrawerGesture";
+import {
   expandedSelection,
   hasHorizontalScroller,
-  horizontalSwipe,
-  isDominantVerticalPan,
   swipeCommits,
 } from "../../touchGestures";
 import type { Mode as ThemeMode } from "../../theme";
@@ -43,7 +47,7 @@ import {
 import { ReviewApp } from "../review/ReviewApp";
 
 const PRODUCT_STORAGE_KEY = "cowboy:mobile-product";
-const VELOCITY_COMMIT_PX_PER_MS = 0.45;
+const VELOCITY_COMMIT_PX_PER_MS = OBSIDIAN_DRAWER_FLICK_PX_PER_MS;
 const MODAL_OVERLAY_SELECTOR = [
   ".MuiModal-root",
   ".MuiPopover-root",
@@ -287,7 +291,7 @@ export function MobileProductShell({
       }
       const deltaX = touch.clientX - gesture.startX;
       const deltaY = touch.clientY - gesture.startY;
-      if (!gesture.locked && isDominantVerticalPan(deltaX, deltaY)) {
+      if (!gesture.locked && obsidianDrawerAbandonsToScroll(deltaX, deltaY)) {
         gesture = null;
         // The spatial drawer is a descendant and has its own non-passive
         // horizontal recognizer. Keep this stream's native vertical scroll
@@ -301,7 +305,7 @@ export function MobileProductShell({
           direction: deltaX < 0 ? "left" as const : "right" as const,
           distance: Math.abs(deltaX),
         }
-        : horizontalSwipe(deltaX, deltaY, 8, 1.15);
+        : obsidianDrawerClaimsSwipe(deltaX, deltaY, OBSIDIAN_DRAWER_TRACK_PX);
       if (!swipe || !pagerDirectionAllowed(gesture.product, deltaX)) return;
       if (!gesture.locked) {
         gesture.locked = true;
