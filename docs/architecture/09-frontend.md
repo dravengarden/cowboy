@@ -160,6 +160,10 @@ the wrong modal grammar next to Cowboy's bottom sheets. Desktop-only
 chrome such as `DesktopTopBarControls` may keep Dialog because that
 product never becomes Mobile by shrinking the window.
 
+A Settings drill-in (Machines, About, Logs) keeps the same sheet and
+turns the footer island into Back. Do not dismiss the whole sheet from
+that island while a nested page is showing.
+
 Composer controls, editor chrome, and inline image surfaces must derive colors,
 contrast, borders, and state layers from MUI theme tokens. Do not add hardcoded
 light- or dark-only colors; visually verify both themes when these surfaces

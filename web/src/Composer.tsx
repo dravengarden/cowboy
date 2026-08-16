@@ -1522,12 +1522,25 @@ export function ComposerWorkspace({
       const opening = !mobileComposerKeyboardWasOpenRef.current;
       mobileComposerKeyboardWasOpenRef.current = true;
       if (!opening) return undefined;
-      const frame = globalThis.requestAnimationFrame(() => {
+      const reveal = (): void => {
         if (editorRef.current?.hasFocus()) {
           editorRef.current.revealSelection();
         }
+      };
+      // Keyboard height, composer max-height, and inline-image layout all
+      // settle after the first frame. One rAF under-scrolls the caret behind
+      // the keyboard when a tall image is still measuring.
+      let laterFrame = 0;
+      const frame = globalThis.requestAnimationFrame(() => {
+        reveal();
+        laterFrame = globalThis.requestAnimationFrame(reveal);
       });
-      return (): void => globalThis.cancelAnimationFrame(frame);
+      const timer = globalThis.setTimeout(reveal, 260);
+      return (): void => {
+        globalThis.cancelAnimationFrame(frame);
+        if (laterFrame !== 0) globalThis.cancelAnimationFrame(laterFrame);
+        globalThis.clearTimeout(timer);
+      };
     }
     if (
       !didMobileSoftwareKeyboardClose(

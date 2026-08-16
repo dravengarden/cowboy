@@ -2005,6 +2005,9 @@ export function App({
             cachedWidth?: number,
         ) => void
     ) | null>(null);
+    const closeSessionsPeek = useReliableTouchTap<HTMLDivElement>((): void => {
+        if (drawerOpen) settleMobileDrawerRef.current?.(false);
+    });
     const [dialogOpen, setDialogOpen] = useState(false);
     const openNewSession = (): void => {
         // iOS only raises the software keyboard for an in-gesture focus. The
@@ -2947,9 +2950,11 @@ export function App({
                         tabIndex={drawerOpen ? 0 : -1}
                         aria-label="Close sessions"
                         aria-hidden={!drawerOpen}
-                        onClick={(): void => {
-                            if (drawerOpen) settleMobileDrawerRef.current?.(false);
-                        }}
+                        onPointerDown={closeSessionsPeek.onPointerDown}
+                        onPointerMove={closeSessionsPeek.onPointerMove}
+                        onPointerUp={closeSessionsPeek.onPointerUp}
+                        onPointerCancel={closeSessionsPeek.onPointerCancel}
+                        onClick={closeSessionsPeek.onClick}
                         onKeyDown={(event): void => {
                             if (
                                 !isImeKeyEvent(event.nativeEvent) &&
@@ -2966,7 +2971,7 @@ export function App({
                             bottom: 0,
                             left: 0,
                             zIndex: (t) => t.zIndex.modal - 1,
-                            pointerEvents: "none",
+                            pointerEvents: drawerOpen ? "auto" : "none",
                             cursor: drawerOpen ? "pointer" : "default",
                         }}
                     />
@@ -5094,6 +5099,19 @@ function SettingsShell({
             cover
             portal
             desktopMaxWidth={1440}
+            mobileDismiss={tab === "settings" || !useSheetSurface ? "footer" : "none"}
+            actions={tab === "settings" || !useSheetSurface ? undefined : (
+                <Box sx={{ width: "100%", display: "flex", justifyContent: "center" }}>
+                    <MobileSheetActionGroup
+                        actions={[{
+                            key: "back",
+                            label: "Back to Settings",
+                            icon: <ArrowBackIosNew sx={{ fontSize: 18, ml: "-2px" }} />,
+                            onPress: (): void => changeTab("settings"),
+                        }]}
+                    />
+                </Box>
+            )}
         >
             <GlobalStyles styles={controlCenterViewTransitionStyles} />
             {/* Touch is one Settings list with drill-in pages. Desktop keeps

@@ -84,6 +84,10 @@ Deno.test("multi-image mobile composers scroll the focused caret above the keybo
     composerSource.includes("editorRef.current.revealSelection();"),
     true,
   );
+  assertEquals(
+    composerSource.includes("const timer = globalThis.setTimeout(reveal, 260);"),
+    true,
+  );
   assertEquals(editorSource.includes("revealSelection: (): void =>"), true);
   assertEquals(
     editorSource.includes("EditorView.scrollIntoView(view.state.selection.main.head"),

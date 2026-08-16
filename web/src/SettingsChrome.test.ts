@@ -16,6 +16,8 @@ Deno.test("mobile Settings is a preference list with drill-in destinations", () 
   assert(appSource.includes("<SettingsNavRow"));
   assert(appSource.includes('data-settings-section="code"'));
   assert(appSource.includes('aria-label="Back to Settings"'));
+  assert(appSource.includes('label: "Back to Settings"'));
+  assert(appSource.includes('mobileDismiss={tab === "settings" || !useSheetSurface ? "footer" : "none"}'));
   assertEquals(appSource.includes("<SettingsDestinationRail"), false);
   assertEquals(appSource.includes("<SettingsProductSwitch"), false);
   assert(appSource.includes("portal"));
