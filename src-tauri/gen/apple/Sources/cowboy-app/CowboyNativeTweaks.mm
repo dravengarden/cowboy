@@ -10,6 +10,7 @@
 #import <Foundation/Foundation.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
+#import <SafariServices/SafariServices.h>
 #import <UIKit/UIKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <WebKit/WebKit.h>
@@ -439,8 +440,98 @@ static void cowboyLoadProviderImages(
 @end
 
 // The shell's main WKWebView, captured at creation (below) for the keyboard
-// avoider. Weak: the avoider just no-ops if it's gone.
+// avoider and Provider authentication presenter. Weak: both just no-op if it is
+// gone.
 static __weak WKWebView *gCowboyWebView = nil;
+
+// (2c) Provider authentication browser. Browser-code flows do not redirect
+// back into Cowboy, so ASWebAuthenticationSession is the wrong lifecycle: the
+// Cowboy dialog must keep polling while the user completes an arbitrary number
+// of Provider pages. SFSafariViewController provides a trusted Safari surface
+// with native Done, back, forward, and Open in Safari controls without replacing
+// the shell's one WKWebView or losing its authentication state.
+static __weak SFSafariViewController *gCowboyAuthenticationBrowser = nil;
+
+static UIViewController *cowboyTopViewController(void) {
+    UIWindow *window = gCowboyWebView.window;
+    UIViewController *controller = window.rootViewController;
+    while (controller != nil) {
+        UIViewController *next = controller.presentedViewController;
+        if (next != nil) {
+            controller = next;
+            continue;
+        }
+        if ([controller isKindOfClass:UINavigationController.class]) {
+            controller = ((UINavigationController *)controller).visibleViewController;
+            continue;
+        }
+        if ([controller isKindOfClass:UITabBarController.class]) {
+            controller = ((UITabBarController *)controller).selectedViewController;
+            continue;
+        }
+        break;
+    }
+    return controller;
+}
+
+static void cowboyDismissAuthenticationBrowser(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        SFSafariViewController *browser = gCowboyAuthenticationBrowser;
+        if (browser.presentingViewController != nil) {
+            [browser dismissViewControllerAnimated:YES completion:nil];
+        }
+        gCowboyAuthenticationBrowser = nil;
+    });
+}
+
+static void cowboyPresentAuthenticationBrowser(NSURL *url) {
+    if (url == nil ||
+        !([url.scheme.lowercaseString isEqualToString:@"https"] ||
+          [url.scheme.lowercaseString isEqualToString:@"http"])) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        void (^present)(void) = ^{
+            UIViewController *presenter = cowboyTopViewController();
+            if (presenter == nil) return;
+            SFSafariViewController *browser =
+                [[SFSafariViewController alloc] initWithURL:url];
+            browser.dismissButtonStyle = SFSafariViewControllerDismissButtonStyleDone;
+            gCowboyAuthenticationBrowser = browser;
+            [presenter presentViewController:browser animated:YES completion:nil];
+        };
+        SFSafariViewController *existing = gCowboyAuthenticationBrowser;
+        if (existing.presentingViewController != nil) {
+            [existing dismissViewControllerAnimated:NO completion:present];
+        } else {
+            present();
+        }
+    });
+}
+
+@interface CowboyAuthenticationBrowserHandler : NSObject <WKScriptMessageHandler>
+@end
+
+@implementation CowboyAuthenticationBrowserHandler
+- (void)userContentController:(WKUserContentController *)ucc
+      didReceiveScriptMessage:(WKScriptMessage *)message {
+    (void)ucc;
+    if (![message.body isKindOfClass:NSDictionary.class]) return;
+    NSDictionary *payload = (NSDictionary *)message.body;
+    NSString *action = [payload[@"action"] isKindOfClass:NSString.class]
+        ? payload[@"action"]
+        : nil;
+    if ([action isEqualToString:@"close"]) {
+        cowboyDismissAuthenticationBrowser();
+        return;
+    }
+    if (![action isEqualToString:@"open"]) return;
+    NSString *rawUrl = [payload[@"url"] isKindOfClass:NSString.class]
+        ? payload[@"url"]
+        : nil;
+    cowboyPresentAuthenticationBrowser(
+        rawUrl.length > 0 ? [NSURL URLWithString:rawUrl] : nil
+    );
+}
+@end
 
 __attribute__((constructor)) static void cowboyInstallHapticBridge(void) {
     @autoreleasepool {
@@ -479,6 +570,16 @@ __attribute__((constructor)) static void cowboyInstallHapticBridge(void) {
                         }
                     } @catch (__unused NSException *e) {
                     }
+                    @try {
+                        static CowboyAuthenticationBrowserHandler *authBrowser;
+                        static dispatch_once_t authBrowserOnce;
+                        dispatch_once(&authBrowserOnce, ^{
+                            authBrowser = [[CowboyAuthenticationBrowserHandler alloc] init];
+                        });
+                        [ucc addScriptMessageHandler:authBrowser
+                                               name:@"cowboyAuthenticationBrowser"];
+                    } @catch (__unused NSException *e) {
+                    }
                     NSString *js =
                         @"window.__cowboyHaptic=function(){try{"
                         @"window.webkit.messageHandlers.cowboyHaptic.postMessage('legacy-impact')"
@@ -506,6 +607,17 @@ __attribute__((constructor)) static void cowboyInstallHapticBridge(void) {
                         @"window.__cowboyReadClipboardImages=function(){try{"
                         @"return window.webkit.messageHandlers.cowboyClipboard.postMessage("
                         @"{action:'read-images'})}catch(e){return Promise.reject(e)}};"
+                        // Interactive Provider sign-in belongs in a system Safari
+                        // sheet, never in the shell's sole WKWebView. The boolean
+                        // return lets web code fall back to the Tauri opener when
+                        // running against an older native shell.
+                        @"window.__cowboyOpenAuthenticationBrowser=function(url){try{"
+                        @"window.webkit.messageHandlers.cowboyAuthenticationBrowser."
+                        @"postMessage({action:'open',url:url});return true}"
+                        @"catch(e){return false}};"
+                        @"window.__cowboyCloseAuthenticationBrowser=function(){try{"
+                        @"window.webkit.messageHandlers.cowboyAuthenticationBrowser."
+                        @"postMessage({action:'close'})}catch(e){}};"
                         // ARM the web's native-shell gate (src/nativeShell.ts): the
                         // shell now does native keyboard avoidance (below), so the
                         // web drops its position:fixed/translateZ/IME-composition
