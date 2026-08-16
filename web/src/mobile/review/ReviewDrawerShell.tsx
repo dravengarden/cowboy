@@ -91,6 +91,8 @@ export function ReviewDrawerShell({
           pl: "calc(100% - var(--mobile-drawer-width, min(84%, 360px)))",
           bgcolor: "background.paper",
           backfaceVisibility: "hidden",
+          isolation: "isolate",
+          transform: "translate3d(0, 0, 0)",
           "@media (min-width: 768px)": {
             pl: "calc(100% - var(--mobile-drawer-width, min(52%, 440px)))",
           },
@@ -138,7 +140,7 @@ export function ReviewDrawerShell({
             position: "absolute",
             zIndex: 2,
             inset: 0,
-            bgcolor: "transparent",
+            bgcolor: "common.black",
             opacity: 0,
             pointerEvents: open ? "auto" : "none",
           }}

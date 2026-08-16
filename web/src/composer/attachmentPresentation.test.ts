@@ -69,6 +69,20 @@ Deno.test("attachment-only pending rows retain a full content edit target", () =
     composerSource.includes(
       'target?.closest("[data-pending-content-action]")',
     ),
+    false,
+  );
+  assertEquals(
+    composerSource.includes(
+      '"button, a, input, select, textarea, [role=\'button\'], [data-pending-content-action]"',
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes('data-pending-content-action="row-actions"'),
+    true,
+  );
+  assertEquals(
+    composerSource.includes('cursor: touchInput ? "pointer" : "text"'),
     true,
   );
 });

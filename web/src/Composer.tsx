@@ -5639,7 +5639,11 @@ function PendingRow({
       {...pendingEditTap}
       onClick={(event): void => {
         const target = event.target instanceof Element ? event.target : null;
-        if (target?.closest("[data-pending-content-action]")) return;
+        if (
+          target?.closest(
+            "button, a, input, select, textarea, [role='button'], [data-pending-content-action]",
+          )
+        ) return;
         pendingEditTap.onClick(event);
       }}
       sx={{
@@ -5647,7 +5651,10 @@ function PendingRow({
         display: "flex",
         alignItems: "flex-start",
         gap: 0.5,
-        cursor: "text",
+        cursor: touchInput ? "pointer" : "text",
+        userSelect: "none",
+        WebkitUserSelect: "none",
+        caretColor: "transparent",
       }}
     >
       <Box
@@ -5694,7 +5701,12 @@ function PendingRow({
           />
         )}
       </Box>
-      <Stack direction="row" alignItems="center" sx={{ flexShrink: 0 }}>
+      <Stack
+        direction="row"
+        alignItems="center"
+        data-pending-content-action="row-actions"
+        sx={{ flexShrink: 0 }}
+      >
         {primary}
         {/* Force-push confirm — only the queued row has the force path. */}
         {forcePushConfirmation}

@@ -2568,6 +2568,8 @@ export function App({
                         overflow: "hidden",
                         bgcolor: "background.paper",
                         backfaceVisibility: "hidden",
+                        isolation: "isolate",
+                        transform: "translate3d(0, 0, 0)",
                     }}
                 >
                     <Stack
@@ -2809,7 +2811,7 @@ export function App({
                             zIndex: (t) => t.zIndex.modal - 1,
                             // Always mounted so opening can dim on the compositor
                             // without inserting a layer mid-gesture.
-                            bgcolor: "transparent",
+                            bgcolor: "common.black",
                             opacity: 0,
                             pointerEvents: drawerOpen ? "auto" : "none",
                             cursor: drawerOpen ? "pointer" : "default",

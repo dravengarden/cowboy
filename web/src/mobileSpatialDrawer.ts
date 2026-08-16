@@ -34,7 +34,7 @@ export interface MobileSpatialDrawerBinding {
 export function bindMobileSpatialDrawer({
   gestureTarget,
   surface,
-  drawer: _drawer,
+  drawer,
   drawerMask,
   dim,
   side,
@@ -246,9 +246,17 @@ export function bindMobileSpatialDrawer({
       }
       springFrame = requestAnimationFrame(tick);
     };
+    const first = stepDrawerSpring(position, velocity, targetOffset, 16);
+    position = first.position;
+    velocity = first.velocity;
+    lastAt = performance.now();
     render(position);
+    if (first.settled) {
+      finish();
+      return;
+    }
     springFrame = requestAnimationFrame(tick);
-    settleTimer = globalThis.setTimeout(finish, 700);
+    settleTimer = globalThis.setTimeout(finish, 450);
   };
 
   const onTouchStart = (event: TouchEvent): void => {
@@ -352,8 +360,8 @@ export function bindMobileSpatialDrawer({
     const elapsed = Math.max(1, now - gesture.lastAt);
     const instantaneousVelocity = (touch.clientX - gesture.lastX) / elapsed *
       openingSign;
-    gesture.velocity = gesture.velocity * 0.65 +
-      instantaneousVelocity * 0.35;
+    gesture.velocity = gesture.velocity * 0.55 +
+      instantaneousVelocity * 0.45;
     gesture.lastX = touch.clientX;
     gesture.lastAt = now;
     const width = gesture.width;
@@ -422,6 +430,10 @@ export function bindMobileSpatialDrawer({
   }
   presentationWidth = drawerWidth();
   publishDrawerWidth(presentationWidth);
+  // Obsidian's rail is its own layer and never translates. If this drawer
+  // flattens into the sliding page, the session list rides with the peek.
+  drawer.style.transform = "translate3d(0, 0, 0)";
+  drawer.style.isolation = "isolate";
   surface.style.removeProperty("border-radius");
   surface.style.removeProperty("overflow");
   surface.style.willChange = "transform";
@@ -452,6 +464,8 @@ export function bindMobileSpatialDrawer({
       if (springFrame !== 0) cancelAnimationFrame(springFrame);
       gestureTarget.removeAttribute("data-mobile-drawer-moving");
       gestureTarget.style.removeProperty("--mobile-drawer-width");
+      drawer.style.removeProperty("transform");
+      drawer.style.removeProperty("isolation");
       surface.style.removeProperty("will-change");
       drawerMask.style.removeProperty("will-change");
       lastPublishedProgress = null;
