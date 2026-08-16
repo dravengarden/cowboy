@@ -113,6 +113,55 @@ impl ProviderAuthExecutor {
     }
 }
 
+struct ProviderAuthReconciliation {
+    expired: Vec<(String, String)>,
+    active: Option<(String, ProviderAuthExecutor)>,
+}
+
+impl ProviderAuthReconciliation {
+    fn resumable(&self, active_request_id: Option<&str>) -> Option<(String, ProviderAuthExecutor)> {
+        self.active
+            .as_ref()
+            .filter(|(request_id, _)| active_request_id == Some(request_id.as_str()))
+            .cloned()
+    }
+}
+
+fn reconcile_provider_auth_executors(
+    executors: &mut HashMap<String, ProviderAuthExecutor>,
+    provider_id: &str,
+    timestamp: i64,
+) -> ProviderAuthReconciliation {
+    let expired: Vec<_> = executors
+        .iter()
+        .filter(|(_, executor)| executor.expires_at_ms < timestamp)
+        .map(|(request_id, executor)| (executor.provider_id.clone(), request_id.clone()))
+        .collect();
+    executors.retain(|_, executor| executor.expires_at_ms >= timestamp);
+    let active = executors
+        .iter()
+        .filter(|(_, executor)| executor.provider_id == provider_id)
+        .max_by_key(|(_, executor)| executor.expires_at_ms)
+        .map(|(request_id, executor)| (request_id.clone(), executor.clone()));
+    ProviderAuthReconciliation { expired, active }
+}
+
+fn resumed_provider_authentication_response(
+    request_id: String,
+    executor: &ProviderAuthExecutor,
+) -> Response {
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "request_id": request_id,
+            "expires_at_ms": executor.expires_at_ms,
+            "method": executor.auth_method,
+            "resumed": true,
+        })),
+    )
+        .into_response()
+}
+
 struct AppState {
     hub: Hub,
     supervisor: Arc<Supervisor>,
@@ -3852,6 +3901,23 @@ async fn api_provider_auth_start(
         )
             .into_response();
     }
+    let timestamp = now_ms();
+    let reconciliation = {
+        let mut executors = state.provider_auth_executors.lock();
+        reconcile_provider_auth_executors(&mut executors, &provider_id, timestamp)
+    };
+    let active_request_id = state
+        .provider_auth
+        .active_authentication_request(&provider_id);
+    let resumable = reconciliation.resumable(active_request_id.as_deref());
+    for (expired_provider, expired_request) in reconciliation.expired {
+        state
+            .provider_auth
+            .cancel_authentication(&expired_provider, &expired_request);
+    }
+    if let Some((request_id, executor)) = resumable {
+        return resumed_provider_authentication_response(request_id, &executor);
+    }
     let candidates = state.machine_control.connected_machine_ids();
     let mut executor = None;
     for machine_id in candidates {
@@ -3881,12 +3947,21 @@ async fn api_provider_auth_start(
     let timestamp = now_ms();
     let expires_at_ms = timestamp.saturating_add(15 * 60 * 1_000);
     let mut executors = state.provider_auth_executors.lock();
-    let expired: Vec<_> = executors
-        .iter()
-        .filter(|(_, executor)| executor.expires_at_ms < timestamp)
-        .map(|(request_id, executor)| (executor.provider_id.clone(), request_id.clone()))
-        .collect();
-    executors.retain(|_, executor| executor.expires_at_ms >= timestamp);
+    let reconciliation = reconcile_provider_auth_executors(&mut executors, &provider_id, timestamp);
+    let active_request_id = state
+        .provider_auth
+        .active_authentication_request(&provider_id);
+    if let Some((active_request_id, active_executor)) =
+        reconciliation.resumable(active_request_id.as_deref())
+    {
+        drop(executors);
+        for (expired_provider, expired_request) in reconciliation.expired {
+            state
+                .provider_auth
+                .cancel_authentication(&expired_provider, &expired_request);
+        }
+        return resumed_provider_authentication_response(active_request_id, &active_executor);
+    }
     executors.insert(
         request_id.clone(),
         ProviderAuthExecutor {
@@ -3906,7 +3981,7 @@ async fn api_provider_auth_start(
         },
     );
     drop(executors);
-    for (expired_provider, expired_request) in expired {
+    for (expired_provider, expired_request) in reconciliation.expired {
         state
             .provider_auth
             .cancel_authentication(&expired_provider, &expired_request);
@@ -3923,7 +3998,7 @@ async fn api_provider_auth_start(
         crate::machine_protocol::MachineCommand::BeginLogin {
             request_id: request_id.clone(),
             provider: provider_id.clone(),
-            auth_method: Some(request.method),
+            auth_method: Some(request.method.clone()),
         },
     ) {
         state.provider_auth_executors.lock().remove(&request_id);
@@ -3937,6 +4012,8 @@ async fn api_provider_auth_start(
         Json(serde_json::json!({
             "request_id": request_id,
             "expires_at_ms": expires_at_ms,
+            "method": request.method,
+            "resumed": false,
         })),
     )
         .into_response()
@@ -8823,5 +8900,79 @@ mod provider_uninstall_tests {
         ] {
             assert!(!provider_session_has_active_turn(idle_or_terminal));
         }
+    }
+}
+
+#[cfg(test)]
+mod provider_auth_resume_tests {
+    use super::{ProviderAuthExecutor, reconcile_provider_auth_executors};
+    use std::collections::HashMap;
+
+    fn executor(provider_id: &str, method: &str, expires_at_ms: i64) -> ProviderAuthExecutor {
+        ProviderAuthExecutor {
+            machine_id: "machine".to_owned(),
+            provider_id: provider_id.to_owned(),
+            provider_version: "1.0.0".to_owned(),
+            generation_digest: "sha256:generation".to_owned(),
+            auth_contract_fingerprint: "sha256:contract".to_owned(),
+            auth_method: method.to_owned(),
+            expected_generation: 0,
+            promotion_started: false,
+            expires_at_ms,
+        }
+    }
+
+    #[test]
+    fn page_reload_recovers_the_existing_provider_authentication() {
+        let mut executors = HashMap::from([
+            (
+                "claude-request".to_owned(),
+                executor("claude-code", "claude-account", 2_000),
+            ),
+            (
+                "codex-request".to_owned(),
+                executor("codex", "chatgpt-account", 3_000),
+            ),
+        ]);
+
+        let reconciliation =
+            reconcile_provider_auth_executors(&mut executors, "claude-code", 1_000);
+
+        assert!(reconciliation.expired.is_empty());
+        let (request_id, active) = reconciliation
+            .active
+            .as_ref()
+            .expect("existing Claude authentication");
+        assert_eq!(request_id, "claude-request");
+        assert_eq!(active.auth_method, "claude-account");
+        assert!(reconciliation.resumable(Some("claude-request")).is_some());
+        assert!(reconciliation.resumable(None).is_none());
+        assert!(reconciliation.resumable(Some("failed-request")).is_none());
+        assert_eq!(executors.len(), 2);
+    }
+
+    #[test]
+    fn expired_authentication_is_removed_instead_of_resumed() {
+        let mut executors = HashMap::from([
+            (
+                "expired-claude".to_owned(),
+                executor("claude-code", "claude-account", 999),
+            ),
+            (
+                "current-codex".to_owned(),
+                executor("codex", "chatgpt-account", 2_000),
+            ),
+        ]);
+
+        let reconciliation =
+            reconcile_provider_auth_executors(&mut executors, "claude-code", 1_000);
+
+        assert_eq!(
+            reconciliation.expired,
+            vec![("claude-code".to_owned(), "expired-claude".to_owned())]
+        );
+        assert!(reconciliation.active.is_none());
+        assert_eq!(executors.len(), 1);
+        assert!(executors.contains_key("current-codex"));
     }
 }
