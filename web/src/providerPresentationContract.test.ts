@@ -25,6 +25,18 @@ Deno.test("incompatible Provider lifecycle actions are omitted instead of lookin
   assertEquals(surfaceSource.includes("disabled={busy || blocked"), false);
 });
 
+Deno.test("Machine compatibility renders once in the Cowboy warning shell", () => {
+  assertEquals(
+    managementSource.includes("const surfaceError = error || releaseError;"),
+    true,
+  );
+  assertEquals(managementSource.includes("{error || !releaseReady"), false);
+  assertEquals(
+    managementSource.includes("error || compatibilityDetail"),
+    false,
+  );
+});
+
 Deno.test("Provider management cards keep geometry in the Cowboy component library", () => {
   assertEquals(
     managementSource.includes("data-provider-management-identity"),

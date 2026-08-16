@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "codex-deepseek",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "publisher": "cowboy-first-party",
   "sdk_version": "2.4.0",
   "display": {
@@ -216,6 +216,32 @@
       {
         "os": "linux",
         "architecture": "x86_64",
+        "payload_digest": "",
+        "launch_command": "codex-acp",
+        "private_components": [
+          {
+            "kind": "provider_cli",
+            "slot": "codex",
+            "dependency": "openai-codex",
+            "command": "codex"
+          },
+          {
+            "kind": "provider_adapter",
+            "slot": "codex",
+            "dependency": "codex-acp",
+            "command": "codex-acp"
+          },
+          {
+            "kind": "provider_gateway",
+            "slot": "codex-deepseek",
+            "dependency": "codex-deepseek-gateway",
+            "command": "codex-deepseek-gateway"
+          }
+        ]
+      },
+      {
+        "os": "macos",
+        "architecture": "aarch64",
         "payload_digest": "",
         "launch_command": "codex-acp",
         "private_components": [

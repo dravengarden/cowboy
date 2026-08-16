@@ -183,7 +183,7 @@ for (const providerId of providerIds) {
           break;
         case "git_go_static":
           assert(
-            target.startsWith("linux-"),
+            target.startsWith("linux-") || target === "macos-aarch64",
             `${providerId}: ${dependencyId} cannot build for ${target}`,
           );
           break;

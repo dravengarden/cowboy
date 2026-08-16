@@ -934,16 +934,19 @@ function ProviderManagement(
             entry.manifest.authentication,
           );
           const error = errors[entry.provider_id] || "";
+          const releaseError = operationEntry.release_state === "ready"
+            ? ""
+            : operationEntry.release_detail || "Provider release unavailable";
+          const surfaceError = error || releaseError;
           const host = scope === "service"
-            ? providerServiceHost(entry, auth, error)
+            ? providerServiceHost(entry, auth, surfaceError)
             : providerHost(
               entry,
               latestCompatibleEntry,
               installed,
               auth,
               machine,
-              error,
-              latestCompatibility?.detail ?? "",
+              surfaceError,
             );
           const releaseReady = operationEntry.release_state === "ready" &&
             operationEntry.artifact_digest !== null &&
@@ -1089,7 +1092,7 @@ function ProviderManagement(
                     </Alert>
                   )
                   : null}
-                {error || !releaseReady
+                {surfaceError
                   ? (
                     <ProviderSurface
                       manifest={entry.manifest}
@@ -1506,7 +1509,6 @@ function providerHost(
   auth: ProviderAuthenticationStatus | undefined,
   machine: ProviderMachine,
   error: string,
-  compatibilityDetail: string,
 ): ProviderHostContext {
   return {
     provider_version: installed?.provider_version ?? entry.provider_version,
@@ -1514,8 +1516,7 @@ function providerHost(
     authentication_state: auth?.authentication_state ?? "signed out",
     distribution_state: auth?.distribution_state ?? "none",
     machine_name: machine.display_name,
-    error_detail: error || compatibilityDetail ||
-      latestCompatibleEntry?.release_detail || "",
+    error_detail: error || latestCompatibleEntry?.release_detail || "",
     installed: installed !== undefined,
     auth_ready: !entry.manifest.authentication.required ||
       auth?.authentication_state === "ready",

@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "claude-deepseek",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "publisher": "cowboy-first-party",
   "sdk_version": "2.4.0",
   "display": {
@@ -241,6 +241,32 @@
       {
         "os": "linux",
         "architecture": "x86_64",
+        "payload_digest": "",
+        "launch_command": "claude-agent-acp",
+        "private_components": [
+          {
+            "kind": "provider_cli",
+            "slot": "claude",
+            "dependency": "anthropic-claude-code",
+            "command": "claude"
+          },
+          {
+            "kind": "provider_adapter",
+            "slot": "claude",
+            "dependency": "claude-agent-acp",
+            "command": "claude-agent-acp"
+          },
+          {
+            "kind": "provider_gateway",
+            "slot": "claude-deepseek",
+            "dependency": "claude-deepseek-gateway",
+            "command": "claude-deepseek-gateway"
+          }
+        ]
+      },
+      {
+        "os": "macos",
+        "architecture": "aarch64",
         "payload_digest": "",
         "launch_command": "claude-agent-acp",
         "private_components": [
