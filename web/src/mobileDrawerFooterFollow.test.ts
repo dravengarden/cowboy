@@ -17,6 +17,7 @@ Deno.test("mobile drawer translates an in-flow page that owns the footer", () =>
   assert(appSource.includes('data-mobile-session-footer={mobile ? "true" : undefined}'));
   assert(appSource.includes('data-mobile-drawer-follow={mobile ? "true" : undefined}'));
   assert(appSource.includes("getFollowers: () => ["));
+  assert(appSource.includes("getSurface: () =>"));
   assert(appSource.includes("mobileComposerFollowRef.current"));
   assert(appSource.includes("mobileNavFollowRef.current"));
   assert(appSource.includes('isolation: "isolate"'));

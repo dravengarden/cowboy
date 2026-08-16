@@ -1992,6 +1992,9 @@ export function App({
             drawer,
             drawerMask,
             dim,
+            getSurface: () =>
+                mobilePageRef.current ?? mobileLayerRef.current ??
+                columnRef.current,
             getFollowers: () => [
                 mobileDrawerDimRef.current,
                 mobileComposerFollowRef.current,
@@ -2814,8 +2817,8 @@ export function App({
                         display: "flex",
                         flexDirection: "column",
                         position: "relative",
-                        bgcolor: "background.default",
                         isolation: "isolate",
+                        bgcolor: "transparent",
                         backfaceVisibility: "hidden",
                         transformOrigin: "left center",
                     }
@@ -3369,6 +3372,7 @@ export function App({
                                     flexDirection: "column",
                                     position: "relative",
                                     zIndex: 0,
+                                    bgcolor: "background.default",
                                 }
                                 : {
                                     position: "absolute",

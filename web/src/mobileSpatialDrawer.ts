@@ -39,6 +39,7 @@ export function bindMobileSpatialDrawer({
   drawerMask,
   dim,
   getFollowers,
+  getSurface,
   side,
   phone,
   getOpen,
@@ -55,6 +56,7 @@ export function bindMobileSpatialDrawer({
   // `surface`. iOS pins bottom chrome of a transformed full-screen ancestor
   // to the visual viewport; those pieces need their own translate3d.
   getFollowers?: () => Array<HTMLElement | null | undefined>;
+  getSurface?: () => HTMLElement | null | undefined;
   side: MobileSpatialDrawerSide;
   phone: boolean;
   getOpen: () => boolean;
@@ -110,8 +112,9 @@ export function bindMobileSpatialDrawer({
     );
   };
   const origin = side === "left" ? "left center" : "right center";
+  const page = (): HTMLElement => getSurface?.() ?? surface;
   const followerLayers = (): HTMLElement[] => {
-    const seen = new Set<HTMLElement>([surface, drawerMask]);
+    const seen = new Set<HTMLElement>([page(), drawerMask]);
     const layers: HTMLElement[] = [];
     for (const layer of getFollowers?.() ?? []) {
       if (!layer || seen.has(layer)) continue;
@@ -120,7 +123,7 @@ export function bindMobileSpatialDrawer({
     }
     return layers;
   };
-  const slidingLayers = (): HTMLElement[] => [surface, drawerMask, ...followerLayers()];
+  const slidingLayers = (): HTMLElement[] => [page(), drawerMask, ...followerLayers()];
   const prepareLayer = (layer: HTMLElement): void => {
     layer.style.willChange = "transform";
     layer.style.transformOrigin = origin;
