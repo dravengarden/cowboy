@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "grok",
-  "version": "1.1.7",
+  "version": "1.1.8",
   "publisher": "cowboy-first-party",
   "sdk_version": "2.4.0",
   "display": {
@@ -69,7 +69,7 @@
       },
       "error_rules": []
     },
-    "arguments": ["--no-auto-update", "agent", "stdio", "--yolo"],
+    "arguments": ["--no-auto-update", "agent", "stdio"],
     "environment": { "GROK_FOLDER_TRUST": "0" },
     "remove_environment": [],
     "remove_environment_prefixes": ["GROK_", "XAI_"],
