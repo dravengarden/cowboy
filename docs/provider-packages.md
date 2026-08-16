@@ -134,7 +134,10 @@ mechanics. Its indicator is one of `progress_ring`, `glyph_cycle`,
 a bounded phrase cycle with a `none`, `fade`, or `shimmer` effect. Assets,
 intervals, frames, phrases, colors, and accessible labels are validated. Cowboy
 implements reduced motion, animation timing, layout, theme behavior, and ARIA
-semantics without a Provider-ID branch. This restores distinct Claude, Codex,
+semantics without a Provider-ID branch. The live-turn loading slot is a compact
+status line: Cowboy owns mark size, gap, caption weight, and pulse geometry so a
+Provider mark stays a quiet signal rather than a brand stamp. Asset pulses
+breathe opacity only and do not scale. This restores distinct Claude, Codex,
 Gemini, and Grok activity language without allowing executable Provider UI.
 
 Transcript thought presentation is a sibling host contract rather than a

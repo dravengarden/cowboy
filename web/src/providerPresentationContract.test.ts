@@ -285,7 +285,7 @@ Deno.test("Provider activity renderer consumes only typed generic strategies", (
 });
 
 Deno.test("terminal activity keeps its Provider-defined prompt geometry", () => {
-  assertEquals(surfaceSource.includes("width: 18,\n          height: 18,"), true);
+  assertEquals(surfaceSource.includes("const ACTIVITY_TERMINAL_SIZE = 17"), true);
   assertEquals(surfaceSource.includes("provider-terminal-prompt"), true);
   assertEquals(surfaceSource.includes("provider-terminal-caret"), true);
   assertEquals(surfaceSource.includes("terminalPromptMotion"), true);
@@ -367,9 +367,21 @@ Deno.test("Provider activity keeps motion provider-authored and geometry rendere
     ),
     true,
   );
+  assertEquals(surfaceSource.includes("const ACTIVITY_MARK_SIZE = 14"), true);
+  assertEquals(surfaceSource.includes("transform: scale(0.96)"), false);
+  assertEquals(
+    surfaceSource.includes('effect === "none" ? { color: muted }'),
+    true,
+  );
   assertEquals(
     transcriptPresentationSource.includes(
       "size={SIGNAL_THOUGHT_MARK_SIZE}",
+    ),
+    true,
+  );
+  assertEquals(
+    transcriptPresentationSource.includes(
+      "const SIGNAL_THOUGHT_MARK_SIZE = 14",
     ),
     true,
   );
@@ -398,10 +410,17 @@ Deno.test("Provider activity keeps motion provider-authored and geometry rendere
     true,
   );
   const grok = JSON.parse(grokProviderSource) as {
-    activity: { indicator: { kind: string; interval_ms: number } };
+    activity: {
+      indicator: { kind: string; interval_ms: number };
+      label: { effect: string; value: { value: string } };
+    };
+    host: { transcript: { thought: { active_label: string } } };
   };
   assertEquals(grok.activity.indicator, {
     kind: "mark_pulse",
     interval_ms: 1650,
   });
+  assertEquals(grok.activity.label.effect, "shimmer");
+  assertEquals(grok.activity.label.value.value, "Working…");
+  assertEquals(grok.host.transcript.thought.active_label, "Working…");
 });

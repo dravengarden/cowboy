@@ -95,6 +95,12 @@ layer, and the no-React-on-finger-down rule are the contract in
 that before changing drawer motion or Transcript paint budget. Do not
 `setState` on transcript `touchstart` to make a swipe cheaper.
 
+The live-turn waiting row above the composer is a compact status line, not a
+brand stamp. `ThinkingIndicator` renders the Provider `loading` activity with
+Cowboy-owned mark size, caption weight, and pulse geometry: the mark stays a
+quiet signal, asset pulses breathe opacity only, and the wrapper keeps a tight
+`py` so the row sits with the transcript instead of floating as a padded badge.
+
 User-role rows are not all human. `derive` attaches a `promptOrigin` (`human` /
 `cowboy` / `agent`) from the persisted update, or recovers it from the older
 `autoResumed` flag and `<system-reminder>` markup. Only `actor: human` uses the
