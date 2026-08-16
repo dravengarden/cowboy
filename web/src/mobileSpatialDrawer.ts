@@ -89,7 +89,7 @@ export function bindMobileSpatialDrawer({
   let presentationWidth = 1;
   let lastPublishedProgress: string | null = null;
   const drawerWidth = (): number => {
-    const width = surface.clientWidth;
+    const width = gestureTarget.clientWidth || surface.clientWidth;
     return phone ? Math.min(360, width * 0.84) : Math.min(440, width * 0.52);
   };
   const publishProgress = (offset: number): void => {

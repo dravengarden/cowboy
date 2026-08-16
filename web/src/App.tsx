@@ -2016,7 +2016,7 @@ export function App({
             settleMobileDrawerRef.current = null;
             binding.dispose();
         };
-    }, [mobile, onMobileDrawerOpenChange, phone]);
+    }, [activeId, mobile, onMobileDrawerOpenChange, phone]);
 
     // The native viewport owns full-screen device corners. While the keyboard
     // is present, temporarily square the drawer surface's bottom edge; on
