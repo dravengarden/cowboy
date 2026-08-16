@@ -97,14 +97,19 @@ export function bindMobileSpatialDrawer({
       gestureTarget.removeAttribute("data-mobile-drawer-progress");
     }
   };
+  const publishDrawerWidth = (width: number): void => {
+    gestureTarget.style.setProperty(
+      "--mobile-drawer-width",
+      `${String(width)}px`,
+    );
+  };
   const applyOpenDepth = (): void => {
     // Never clip or shadow the full session surface. On iPhone, WebKit then
     // re-composites the Transcript/CodeMirror viewport while its transform is
-    // changing, which turns a compositor-only drag into visible frame drops.
-    // The mask is an opaque, content-free layer that follows the same offset,
-    // so its narrow shadow preserves the depth cue without touching the heavy
-    // foreground raster. iPad usually has enough GPU headroom to hide the
-    // mistake, but keeping both sizes on the cheap path is more predictable.
+    // changing, which punches holes in the peek and drops frames. The mask is
+    // an opaque, content-free layer that follows the same offset, so its
+    // narrow shadow preserves the depth cue without touching the heavy
+    // foreground raster.
     drawerMask.style.boxShadow = mobileSpatialDrawerShadow(side);
   };
   const clearOpenDepth = (): void => {
@@ -114,19 +119,10 @@ export function bindMobileSpatialDrawer({
     }
     drawerMask.style.removeProperty("box-shadow");
   };
-  const applyCardChrome = (): void => {
-    const radius = `${String(phone ? 20 : 16)}px`;
-    surface.style.borderRadius = radius;
-    surface.style.overflow = "hidden";
-  };
-  const clearCardChrome = (): void => {
-    if (shouldKeepDrawerDepth(getOpen(), currentOffset)) return;
-    surface.style.removeProperty("border-radius");
-  };
   const render = (offset: number): void => {
     currentOffset = offset;
-    // Touch callback writes only compositor properties. Flatten, radius, and
-    // store holds happen in prepare(), before the first translate.
+    // Touch callback writes only compositor properties. Flatten and store
+    // holds happen in prepare(), before the first translate.
     const visual = mobileDrawerCardVisual(offset, presentationWidth, phone);
     const x = `${String(openingSign * offset)}px`;
     surface.style.transform = `translate3d(${x}, 0, 0)`;
@@ -151,7 +147,6 @@ export function bindMobileSpatialDrawer({
     }
     surface.style.transition = "none";
     drawerMask.style.transition = "none";
-    applyCardChrome();
     gestureTarget.setAttribute("data-mobile-drawer-moving", "true");
     applyOpenDepth();
     releasePresentation ??= holdPresentation?.();
@@ -204,8 +199,8 @@ export function bindMobileSpatialDrawer({
     // layout here particularly expensive on Review, and Agent benefits from
     // keeping the same read-then-write phase ordering.
     applyOpenDepth();
-    applyCardChrome();
     presentationWidth = width;
+    publishDrawerWidth(width);
     const targetOffset = open ? width : 0;
     publishProgress(targetOffset);
     if (pendingThresholdHaptic) {
@@ -235,7 +230,6 @@ export function bindMobileSpatialDrawer({
         // WKWebView clip it to the real device corners instead of leaving a
         // guessed phone/tablet radius that cuts a visible wedge from iPad.
         clearOpenDepth();
-        clearCardChrome();
       }
       onSettled?.();
     };
@@ -279,6 +273,7 @@ export function bindMobileSpatialDrawer({
     const startOpen = getOpen();
     const width = presentationWidth > 1 ? presentationWidth : drawerWidth();
     presentationWidth = width;
+    publishDrawerWidth(width);
     prepareNavigationHaptic();
     gesture = {
       x: touch.clientX,
@@ -414,18 +409,21 @@ export function bindMobileSpatialDrawer({
   };
   const onResize = (): void => {
     presentationWidth = drawerWidth();
+    publishDrawerWidth(presentationWidth);
     render(getOpen() ? presentationWidth : 0);
   };
 
   if (getOpen()) {
     gestureTarget.setAttribute("data-mobile-drawer-open", "true");
     applyOpenDepth();
-    applyCardChrome();
   } else {
     gestureTarget.removeAttribute("data-mobile-drawer-open");
     clearOpenDepth();
   }
   presentationWidth = drawerWidth();
+  publishDrawerWidth(presentationWidth);
+  surface.style.removeProperty("border-radius");
+  surface.style.removeProperty("overflow");
   surface.style.willChange = "transform";
   surface.style.transformOrigin = side === "left" ? "left center" : "right center";
   drawerMask.style.willChange = "transform";
@@ -453,6 +451,7 @@ export function bindMobileSpatialDrawer({
       globalThis.clearTimeout(settleTimer);
       if (springFrame !== 0) cancelAnimationFrame(springFrame);
       gestureTarget.removeAttribute("data-mobile-drawer-moving");
+      gestureTarget.style.removeProperty("--mobile-drawer-width");
       surface.style.removeProperty("will-change");
       drawerMask.style.removeProperty("will-change");
       lastPublishedProgress = null;

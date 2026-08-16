@@ -2566,10 +2566,7 @@ export function App({
                         zIndex: 0,
                         inset: 0,
                         overflow: "hidden",
-                        bgcolor: (t) =>
-                            t.palette.mode === "dark"
-                                ? t.palette.grey[900]
-                                : t.palette.grey[200],
+                        bgcolor: "background.paper",
                         backfaceVisibility: "hidden",
                     }}
                 >
@@ -2577,7 +2574,7 @@ export function App({
                         role="navigation"
                         aria-label="Sessions"
                         sx={{
-                            width: "min(84%, 360px)",
+                            width: "var(--mobile-drawer-width, min(84%, 360px))",
                             height: "100%",
                             minWidth: 0,
                             overflow: "hidden",
@@ -2585,7 +2582,8 @@ export function App({
                             pt: "env(safe-area-inset-top, 0px)",
                             pl: "env(safe-area-inset-left, 0px)",
                             "@media (min-width: 768px)": {
-                                width: "min(52%, 440px)",
+                                width:
+                                    "var(--mobile-drawer-width, min(52%, 440px))",
                             },
                         }}
                     >
@@ -2606,14 +2604,12 @@ export function App({
                         bottom: 0,
                         left: 0,
                         width: 28,
-                        bgcolor: (t) =>
-                            t.palette.mode === "dark"
-                                ? t.palette.grey[900]
-                                : t.palette.grey[200],
+                        bgcolor: "background.default",
                         // A full-viewport mask's box-shadow is ink overflow of a
                         // composited layer; iOS WebKit sometimes drops it. A
                         // thin seam at the sliding card's inner edge keeps the
-                        // same depth cue without that clip.
+                        // same depth cue without that clip. Paint the strip
+                        // the peek color so a sliver never reads as a hole.
                         // React owns the settled depth cue. The gesture binding
                         // may add the same inline shadow while opening, but its
                         // cleanup must never make an already-open drawer look
@@ -2762,7 +2758,6 @@ export function App({
                     // frozen workspace recedes as one composited layer.
                     transformOrigin: "left center",
                     backfaceVisibility: "hidden",
-                    contain: mobile ? "paint" : undefined,
                     // Lift the whole column off the on-screen keyboard + its
                     // iOS-native accessory bar: this padding (the keyboard's
                     // overlap, published by useKeyboardInset) reserves space at

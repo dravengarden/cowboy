@@ -58,8 +58,9 @@ export function mobileDrawerProgress(
     : 0;
 }
 
-/** Obsidian's peeking page stays full size and undimmed. Only the corner
- *  radius marks it as a card against the stage. */
+/** Obsidian's peeking page stays full size, undimmed, and unscaled. Radius
+ *  stays in the helper for callers that want a card cue; the session
+ *  surface itself must not clip, or iOS punches holes in the peek. */
 export function mobileDrawerCardVisual(
   offset: number,
   width: number,
