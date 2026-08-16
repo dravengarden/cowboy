@@ -329,22 +329,20 @@ Deno.test("mobile pending edit stays mounted when the keyboard never reports an 
   );
   assertEquals(composerSource.includes("if (keyboardBoundEditing) {"), true);
   assertEquals(composerSource.includes("onClick={hideMobileEditKeyboard}"), true);
-  assertEquals(composerSource.includes("onClick={finishMobileEdit}"), false);
+  assertEquals(composerSource.includes("const finishMobileEdit = (): void =>"), true);
 });
 
 Deno.test("mobile pending editor survives the native long-press keyboard settle window", () => {
   assertEquals(mobilePendingKeyboardCloseSettleMs, 550);
   assertEquals(
     composerSource.includes(
-      "() => persistEditRef.current(),\n      mobilePendingKeyboardCloseSettleMs,",
+      "() => finishMobileEditRef.current(),\n      mobilePendingKeyboardCloseSettleMs,",
     ),
     true,
   );
   assertEquals(
-    composerSource.includes(
-      "const frame = globalThis.requestAnimationFrame(() =>\n      finishMobileEditRef.current()",
-    ),
-    false,
+    composerSource.includes("const finishMobileEditRef = useRef(finishMobileEdit);"),
+    true,
   );
 });
 
