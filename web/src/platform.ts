@@ -48,3 +48,31 @@ export function hasSendMod(e: Mods): boolean {
 export function hasDraftMod(e: Mods): boolean {
   return isMac ? e.ctrlKey && !e.metaKey : e.altKey && !e.ctrlKey;
 }
+
+/** Document root class that owns touch hover/focus paint, not a live media query. */
+export const COARSE_POINTER_ROOT_CLASS = "cowboy-coarse-pointer";
+
+export function prefersCoarsePointer(
+  input: {
+    readonly maxTouchPoints?: number;
+    readonly anyPointerCoarse?: boolean;
+  } = {
+    maxTouchPoints: globalThis.navigator?.maxTouchPoints,
+    anyPointerCoarse: globalThis.matchMedia?.("(any-pointer: coarse)").matches ??
+      false,
+  },
+): boolean {
+  return (input.maxTouchPoints ?? 0) > 0 || input.anyPointerCoarse === true;
+}
+
+export function syncCoarsePointerRootClass(
+  doc: {
+    readonly documentElement?: {
+      readonly classList: { toggle(name: string, force: boolean): boolean };
+    };
+  } | null = globalThis.document,
+): boolean {
+  const coarse = prefersCoarsePointer();
+  doc?.documentElement?.classList.toggle(COARSE_POINTER_ROOT_CLASS, coarse);
+  return coarse;
+}

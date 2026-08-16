@@ -12,6 +12,11 @@ import { useEffect, useMemo } from "react";
 import { alpha, createTheme, type Theme } from "@mui/material";
 
 import { type ThemeChoice, useThemeMode as useSharedThemeMode } from "./_shell";
+import {
+  COARSE_POINTER_ROOT_CLASS,
+  prefersCoarsePointer,
+  syncCoarsePointerRootClass,
+} from "./platform";
 import { browserTooltipListenerPolicy } from "./tooltipPolicy";
 
 // cowboy's selection surface (Settings dialog, theme toggle) speaks the same
@@ -82,6 +87,7 @@ function osBaseFontSize(): number {
 }
 
 const OS_BASE_FONT_SIZE = osBaseFontSize();
+syncCoarsePointerRootClass();
 
 export interface ThemeControls {
   theme: Theme;
@@ -96,6 +102,7 @@ export function useThemeMode(): ThemeControls {
   const { choice, resolved, setChoice, cycle } = useSharedThemeMode("cowboy");
   const dark = resolved === "dark";
   useEffect(() => {
+    syncCoarsePointerRootClass();
     applyThemeColor(dark);
     // An iOS standalone PWA latches the status-bar colour and IGNORES later
     // updates across a background→resume: leave the app in dark, switch away,
@@ -143,18 +150,38 @@ export function useThemeMode(): ThemeControls {
           // tuned to match it. An instance can override size + its own
           // `& .MuiSvgIcon-root` rule via sx (e.g. the compact copy button).
           MuiIconButton: {
+            defaultProps: {
+              // Overlay dismiss can leave Mui-focusVisible + the color=primary
+              // focus ripple latched on the control that was under the finger
+              // (Session settings × sits over the composer send/queue button).
+              disableFocusRipple: prefersCoarsePointer(),
+            },
             styleOverrides: {
               root: {
                 width: 44,
                 height: 44,
                 "& .MuiSvgIcon-root": { fontSize: "1.5rem" },
-                // WebKit synthesizes hover/focus paint after a finger tap and
-                // can keep it latched until another control is touched. Icon
-                // buttons have a transparent resting surface, so coarse/touch
-                // pointers can safely return to it after release while :active
-                // still supplies immediate pressed feedback. ToggleButton and
-                // selected controls keep their own explicit state styling.
-                "@media (hover: none), (pointer: coarse)": {
+                // WebKit synthesizes hover/focus after a finger tap. A later
+                // unscoped MUI v6 color variant sets --IconButton-hoverBg and
+                // wins a same-specificity media-query reset; iOS can also flip
+                // the primary pointer to `fine`/`hover` after the first tap so
+                // `(pointer: coarse)` stops matching. Pin the kill to the
+                // document class (snapshotted at load) and beat color=primary
+                // with an extra class.
+                [`html.${COARSE_POINTER_ROOT_CLASS} &`]: {
+                  "--IconButton-hoverBg": "transparent",
+                  "&.MuiIconButton-root.MuiIconButton-colorPrimary, &.MuiIconButton-root.MuiIconButton-colorSecondary, &.MuiIconButton-root.MuiIconButton-colorError, &.MuiIconButton-root.MuiIconButton-colorInfo, &.MuiIconButton-root.MuiIconButton-colorSuccess, &.MuiIconButton-root.MuiIconButton-colorWarning": {
+                    "--IconButton-hoverBg": "transparent",
+                  },
+                  "&:hover, &.Mui-focusVisible": {
+                    backgroundColor: "transparent",
+                  },
+                  "&:not(.Mui-selected):active": {
+                    backgroundColor: "action.selected",
+                  },
+                },
+                "@media (hover: none), (pointer: coarse), (any-pointer: coarse)": {
+                  "--IconButton-hoverBg": "transparent",
                   "&:not(.Mui-selected):hover, &:not(.Mui-selected).Mui-focusVisible": {
                     backgroundColor: "transparent",
                   },
