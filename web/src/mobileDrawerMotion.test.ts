@@ -21,9 +21,9 @@ Deno.test("mobile drawer prediction removes one-frame finger lag without running
 
 Deno.test("drawer settle uses an iOS deceleration window", () => {
   assertEquals(MOBILE_DRAWER_SETTLE_EASING, "cubic-bezier(0.32, 0.72, 0, 1)");
-  assertEquals(mobileDrawerSettleDurationMs(1, 0), 380);
+  assertEquals(mobileDrawerSettleDurationMs(1, 0), 300);
   assertEquals(mobileDrawerSettleDurationMs(0, 2), 220);
-  assertEquals(mobileDrawerSettleDurationMs(0.5, 0), 320);
+  assertEquals(mobileDrawerSettleDurationMs(0.5, 0), 275);
 });
 
 Deno.test("drawer card recedes like an Obsidian workspace", () => {

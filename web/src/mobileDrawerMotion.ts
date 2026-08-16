@@ -11,8 +11,8 @@ export function predictDrawerOffset(
   return sampledOffset + lead;
 }
 
-/** CSS fallback used by the product pager. The session drawer settle is a
- *  velocity-preserving spring instead, matching Obsidian/iOS. */
+/** Obsidian/iOS panel settle. Drag stays 1:1; release is this cubic on the
+ *  compositor so the page does not hitch on a JS spring tick. */
 export const MOBILE_DRAWER_SETTLE_EASING = "cubic-bezier(0.32, 0.72, 0, 1)";
 
 /** iOS snappy panel: critically damped, perceptual ~200ms. The previous
@@ -46,8 +46,8 @@ export function mobileDrawerSettleDurationMs(
   return Math.max(
     220,
     Math.min(
-      380,
-      260 + remaining * 120 - Math.min(80, Math.abs(velocityPxPerMs) * 50),
+      300,
+      250 + remaining * 50 - Math.min(40, Math.abs(velocityPxPerMs) * 40),
     ),
   );
 }

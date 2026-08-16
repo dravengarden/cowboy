@@ -31,7 +31,9 @@ Deno.test("mobile drawer keeps clipping and shadows off the heavy surface", () =
   assertEquals(drawerSource.includes("scheduleRender"), false);
   assertEquals(drawerSource.includes("drawerParallax"), false);
   assertEquals(drawerSource.includes("scale("), false);
-  assert(drawerSource.includes("stepDrawerSpring"));
+  assertEquals(drawerSource.includes("stepDrawerSpring"), false);
+  assert(drawerSource.includes("MOBILE_DRAWER_SETTLE_EASING"));
+  assert(drawerSource.includes("mobileDrawerSettleDurationMs"));
   assert(drawerSource.includes("MOBILE_DRAWER_PREPARE_PX"));
   assert(drawerSource.includes("gesture.prepared = true"));
   const widthAt = drawerSource.indexOf("publishDrawerWidth(width)");
