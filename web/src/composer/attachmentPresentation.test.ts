@@ -61,10 +61,11 @@ Deno.test("attachment-only pending rows retain a full content edit target", () =
     true,
   );
   assertEquals(
-    /<Paper[\s\S]*?data-pending-edit-target[\s\S]*?\{\.\.\.pendingEditTap\}/
-      .test(composerSource),
+    composerSource.includes("data-pending-edit-target\n        {...pendingEditTap}"),
     true,
   );
+  assertEquals(composerSource.includes("suppressPendingEditTap"), true);
+  assertEquals(composerSource.includes("pendingContentCleared"), true);
   assertEquals(
     composerSource.includes(
       'target?.closest("[data-pending-content-action]")',

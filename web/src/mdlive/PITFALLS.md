@@ -1834,10 +1834,11 @@ Desktop Vim + IME checks:
 
 72. **A Queue/Draft kebab or Force tap must not start an edit.** The
     pending card's empty fill is an edit hit target (`pendingEditTap` on
-    the Paper). iOS still delivers a bubbling `click` after a nested
-    `IconButton`. The Paper `onClick` used to forward that click into
-    `beginEdit`, so opening More also `flushSync`-mounted the row
-    editor and painted a UIKit caret on the card behind the menu.
-    Ignore the same nested-control selector as `useReliableTouchTap`,
-    and do not use `cursor: text` on the unread-only card. This does
-    not claim pitfall #69 fixed.
+    the preview box, not the whole Paper). iOS still delivers a
+    bubbling `click` / `pointerup` after a nested `IconButton`, and a
+    dismiss of the More menu can ghost-click the card underneath.
+    Keep the tap target on the preview/attachments only, ignore the
+    same nested-control selector as `useReliableTouchTap`, suppress
+    edit for one gesture after the kebab opens or closes, and do not
+    use `cursor: text` on the unread-only card. This does not claim
+    pitfall #69 fixed.

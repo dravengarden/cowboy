@@ -1049,3 +1049,19 @@ Deno.test("pending kebab menus pin to the tap instead of a live button node", ()
     true,
   );
 });
+
+Deno.test("clearing a pending edit removes the row instead of restoring it", () => {
+  assertEquals(composerSource.includes("function pendingContentCleared"), true);
+  assertEquals(
+    composerSource.includes(
+      "if (pendingContentCleared(draft, editAttachments))",
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "if (draft.trim() || editAttachments.length > 0) saveEdit();\n    else discardEdit();",
+    ),
+    false,
+  );
+});

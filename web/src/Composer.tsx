@@ -4676,6 +4676,13 @@ function PendingPanel({
 // is correct too — exactly what keying on real width (not device class) buys.
 const ROW_ACTIONS_INLINE = "@container pendingPanel (min-width: 520px)";
 
+function pendingContentCleared(
+  text: string,
+  attachments: Attachment[],
+): boolean {
+  return stripImageTokens(text).trim() === "" && attachments.length === 0;
+}
+
 function PendingRow({
   desktop,
   kind,
@@ -4717,6 +4724,11 @@ function PendingRow({
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(
     null,
   );
+  const suppressEditTapUntilRef = useRef(0);
+  const pendingEditDirtyRef = useRef(false);
+  const suppressPendingEditTap = (): void => {
+    suppressEditTapUntilRef.current = performance.now() + 480;
+  };
   // Local attachments while editing, seeded from the queued message. The edit
   // box is the SAME ComposerEditor as the main composer, so a queued prompt can
   // gain/lose images here too (pasted screenshots, picked files).
@@ -4733,6 +4745,7 @@ function PendingRow({
   const updateEditDraft = (next: string): void => {
     const previous = editTextRef.current;
     editTextRef.current = next;
+    pendingEditDirtyRef.current = true;
     setEditAttachments((current) =>
       reconcileDeletedInlineImages(previous, next, current)
     );
@@ -4788,6 +4801,8 @@ function PendingRow({
   const overlayEditorRef = useRef<ComposerEditorHandle>(null);
   const editFileInputRef = useRef<HTMLInputElement>(null);
   const beginEdit = (): void => {
+    if (performance.now() < suppressEditTapUntilRef.current) return;
+    pendingEditDirtyRef.current = false;
     // iOS will only open its software keyboard when the real editable control is
     // focused inside the originating tap. React normally batches `onEdit()` and
     // mounts the row editor after that activation window, leaving a visible edit
@@ -4825,11 +4840,37 @@ function PendingRow({
     // alive until encoding either promotes or removes it; persisting the empty
     // block would make the pending row restore a broken inline token.
     if (editAttachmentsPending) return false;
+    if (pendingContentCleared(draft, editAttachments)) {
+      if (kind === "draft") removeDraft(sessionId, message.id);
+      else removeQueued(sessionId, message.id);
+      setOverlayOpen(false);
+      onEditDone();
+      return false;
+    }
     if (kind === "draft") {
       editDraft(sessionId, message.id, draft, editAttachments);
     } else editQueued(sessionId, message.id, draft, editAttachments);
     return true;
   };
+  useEffect(() => {
+    if (!editing || !pendingEditDirtyRef.current || editAttachmentsPending) {
+      return;
+    }
+    if (!pendingContentCleared(draft, editAttachments)) return;
+    if (kind === "draft") removeDraft(sessionId, message.id);
+    else removeQueued(sessionId, message.id);
+    setOverlayOpen(false);
+    onEditDone();
+  }, [
+    draft,
+    editAttachments,
+    editAttachmentsPending,
+    editing,
+    kind,
+    message.id,
+    onEditDone,
+    sessionId,
+  ]);
   const saveEdit = (): void => {
     if (!persistEdit()) return;
     setOverlayOpen(false);
@@ -4933,7 +4974,7 @@ function PendingRow({
     : null;
   // Mobile Queue/Draft edits are continuously buffered in this row. Dismissing
   // the keyboard is therefore the completion gesture: persist a non-empty edit
-  // (or restore an edit that was cleared), leave fullscreen, and return to the
+  // or remove a row the user cleared, leave fullscreen, and return to the
   // ordinary pending card. Desktop deliberately keeps its explicit transaction.
   const mobileEditSawKeyboardRef = useRef(false);
   const mobileEditFinishingRef = useRef(false);
@@ -4945,8 +4986,14 @@ function PendingRow({
     ) return;
     mobileEditFinishingRef.current = true;
     dismissMobileSoftwareKeyboard();
-    if (draft.trim() || editAttachments.length > 0) saveEdit();
-    else discardEdit();
+    if (pendingContentCleared(draft, editAttachments)) {
+      if (kind === "draft") removeDraft(sessionId, message.id);
+      else removeQueued(sessionId, message.id);
+      setOverlayOpen(false);
+      onEditDone();
+      return;
+    }
+    saveEdit();
   };
   const finishMobileEditRef = useRef(finishMobileEdit);
   finishMobileEditRef.current = finishMobileEdit;
@@ -5637,35 +5684,34 @@ function PendingRow({
   return (
     <Paper
       variant="outlined"
-      data-pending-edit-target
-      // iOS hit-tests through an unpainted flex child onto this Paper fill.
-      {...pendingEditTap}
-      onClick={(event): void => {
-        const target = event.target instanceof Element ? event.target : null;
-        if (
-          target?.closest(
-            "button, a, input, select, textarea, [role='button'], [data-pending-content-action]",
-          )
-        ) return;
-        pendingEditTap.onClick(event);
-      }}
       sx={{
         p: 0.75,
         display: "flex",
         alignItems: "flex-start",
         gap: 0.5,
-        cursor: touchInput ? "pointer" : "text",
         userSelect: "none",
         WebkitUserSelect: "none",
         caretColor: "transparent",
       }}
     >
       <Box
+        data-pending-edit-target
+        {...pendingEditTap}
+        onClick={(event): void => {
+          const target = event.target instanceof Element ? event.target : null;
+          if (
+            target?.closest(
+              "button, a, input, select, textarea, [role='button'], [data-pending-content-action]",
+            )
+          ) return;
+          pendingEditTap.onClick(event);
+        }}
         sx={{
           flex: 1,
           alignSelf: "stretch",
           minWidth: 0,
           minHeight: 38,
+          cursor: touchInput ? "pointer" : "text",
         }}
       >
         {stripImageTokens(message.text).trim() !== "" && (
@@ -5778,6 +5824,7 @@ function PendingRow({
                 : "message actions"}
               onClick={(e): void => {
                 const rect = e.currentTarget.getBoundingClientRect();
+                suppressPendingEditTap();
                 setMenuPos({
                   top: rect.height > 0 ? rect.bottom : e.clientY,
                   left: rect.width > 0 ? rect.right : e.clientX,
@@ -5790,7 +5837,10 @@ function PendingRow({
         </Box>
         <Menu
           open={menuPos !== null}
-          onClose={(): void => setMenuPos(null)}
+          onClose={(): void => {
+            suppressPendingEditTap();
+            setMenuPos(null);
+          }}
           anchorReference="anchorPosition"
           anchorPosition={menuPos ?? { top: 0, left: 0 }}
           transformOrigin={{ vertical: "top", horizontal: "right" }}
@@ -5800,6 +5850,7 @@ function PendingRow({
             <MenuItem
               key={a.key}
               onClick={(): void => {
+                suppressPendingEditTap();
                 setMenuPos(null);
                 a.onClick();
               }}
