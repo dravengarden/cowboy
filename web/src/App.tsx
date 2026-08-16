@@ -899,6 +899,7 @@ function SessionList({
                     return (
                     <ReliableListItemButton
                         key={s.id}
+                        data-haptic="selection"
                         data-desktop-item={s.id}
                         data-desktop-session-row={desktop ? "true" : undefined}
                         data-desktop-current={desktop && s.id === activeId ? "true" : undefined}

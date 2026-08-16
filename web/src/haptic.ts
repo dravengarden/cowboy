@@ -57,11 +57,11 @@ function fireIntent(intent: CowboyHapticIntent): void {
 
 /**
  * Cowboy's product-level haptic hierarchy. Features choose meaning, never an
- * arbitrary duration:
- * - navigation: lightweight movement, selection, disclosure
+ * arbitrary duration. Strength follows danger / consequence:
+ * - navigation: browse, disclose, pick a session, open a tool card
  * - magnetic: a spatial target or sticky boundary has engaged
- * - confirmation: a deliberate, meaningful but non-destructive commitment
- * - important: a high-consequence destructive/interruption confirmation
+ * - confirmation: a constructive commit (send, schedule, apply)
+ * - important: a destructive or interrupting confirmation
  *
  * Async outcomes use `notifyHaptic` below because their patterned feedback is
  * semantically different from impact strength.
