@@ -1059,18 +1059,20 @@ function SessionList({
                         right: 0,
                         bottom: "max(env(safe-area-inset-bottom, 0px), 12px)",
                         display: "flex",
-                        justifyContent: "center",
+                        justifyContent: "space-between",
                         alignItems: "center",
-                        gap: 1.25,
-                        // The open foreground card keeps a deep edge shadow over
-                        // the revealed rail. On iPad the rail is capped at 440px,
-                        // so a centred two-action island can otherwise put its
-                        // trailing Close action under that edge. Reserve the
-                        // shadow/gesture seam inside the rail; phones have enough
-                        // proportional reveal and retain true centring.
                         boxSizing: "border-box",
-                        pr: phone ? 0 : 4,
+                        // Session actions stay on the reading edge; Settings
+                        // stays on the trailing edge. Each MobileSheetActionGroup
+                        // defaults to width 100%, which would split this row
+                        // into two half-width columns instead of two islands.
+                        pl: 2,
+                        pr: phone ? 2 : 4,
                         pointerEvents: "none",
+                        "& > [data-mobile-sheet-footer-shield]": {
+                            width: "auto",
+                            flex: "0 0 auto",
+                        },
                     }}
                 >
                     <MobileSheetActionGroup

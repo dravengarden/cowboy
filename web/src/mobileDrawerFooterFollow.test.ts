@@ -66,6 +66,12 @@ Deno.test("mobile Settings lives on the Sessions island and Code takes the old s
   assert(appSource.includes('key: "settings"'));
   assert(appSource.includes('label: "Settings"'));
   assert(appSource.includes("onOpenSettings={mobile"));
+  assert(appSource.includes('justifyContent: "space-between"'));
+  assert(
+    appSource.includes(
+      '"& > [data-mobile-sheet-footer-shield]": {\n                            width: "auto",',
+    ),
+  );
   const newSessionAt = appSource.indexOf('key: "new"');
   const settingsAt = appSource.indexOf('key: "settings"');
   assert(newSessionAt >= 0 && settingsAt > newSessionAt);

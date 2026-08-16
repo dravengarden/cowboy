@@ -410,10 +410,16 @@ export function ReviewRepository({
       >
         <Stack
           direction="row"
-          justifyContent="center"
+          justifyContent="space-between"
           alignItems="center"
-          spacing={1.25}
-          sx={{ pointerEvents: "none", "& > *": { pointerEvents: "auto" } }}
+          sx={{
+            pointerEvents: "none",
+            "& > [data-mobile-sheet-footer-shield]": {
+              width: "auto",
+              flex: "0 0 auto",
+              pointerEvents: "auto",
+            },
+          }}
         >
           <MobileSheetActionGroup
             actions={[

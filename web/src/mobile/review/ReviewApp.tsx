@@ -1,8 +1,8 @@
 import {
   AccountTreeOutlined,
   ArrowBack,
+  ArrowBackIosNew,
   ArrowForward,
-  ChatBubbleOutline,
   CheckCircle,
   CheckCircleOutline,
   ChevronLeft,
@@ -2166,11 +2166,27 @@ export function ReviewApp({
           alignItems="center"
           sx={{
             minHeight: 52,
-            px: 2,
+            pl: 0.5,
+            pr: 1.5,
             borderBottom: 1,
             borderColor: "divider",
           }}
         >
+          <IconButton
+            data-mobile-open-agent="true"
+            aria-label="Back to Agent"
+            title="Agent"
+            onClick={(): void => {
+              navigationHaptic();
+              openMobileProduct("agent");
+            }}
+            sx={{
+              mr: 0.25,
+              color: "text.primary",
+            }}
+          >
+            <ArrowBackIosNew sx={{ fontSize: 18 }} />
+          </IconButton>
           <Box sx={{ flex: 1, minWidth: 0 }}>
             <Typography
               variant="body2"
@@ -2509,17 +2525,6 @@ export function ReviewApp({
                 "@media (min-width: 600px)": { minHeight: 44 },
               }}
             >
-              <IconButton
-                data-mobile-open-agent="true"
-                aria-label="Open agent"
-                title="Agent"
-                onClick={(): void => {
-                  navigationHaptic();
-                  openMobileProduct("agent");
-                }}
-              >
-                <ChatBubbleOutline />
-              </IconButton>
               <Button
                 variant="text"
                 color="inherit"
@@ -2542,7 +2547,6 @@ export function ReviewApp({
                   }
                 }}
                 sx={{
-                  ml: 0.25,
                   minWidth: 0,
                   height: 40,
                   px: 1,

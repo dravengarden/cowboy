@@ -1,5 +1,7 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
+  sessionProviderFacts,
+  sessionProviderManageLabel,
   sessionProviderNeedsAttention,
   sessionProviderSummary,
   workspaceOptionsSummary,
@@ -83,6 +85,29 @@ Deno.test("signed-in Providers collapse to a brief account summary", () => {
       presentation: "none",
     }),
     "Grok · no sign-in",
+  );
+});
+
+Deno.test("signed-in session Providers show facts and keep account actions folded", () => {
+  assertEquals(
+    sessionProviderFacts({
+      vendor: "xAI",
+      version: "1.1.7",
+      accountLabel: "draven",
+    }),
+    [
+      { label: "Vendor", value: "xAI" },
+      { label: "Version", value: "1.1.7", mono: true },
+      { label: "Account", value: "draven" },
+    ],
+  );
+  assertEquals(sessionProviderManageLabel("account"), "Manage account");
+  assertEquals(sessionProviderManageLabel("api_key"), "Manage API key");
+  assertEquals(composerSource.includes("sessionProviderFacts"), true);
+  assertEquals(composerSource.includes("setActionsOpen(needsAttention)"), true);
+  assertEquals(
+    composerSource.includes("<Collapse in={!ready || actionsOpen}"),
+    true,
   );
 });
 
