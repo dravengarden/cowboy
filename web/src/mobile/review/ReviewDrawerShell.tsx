@@ -4,6 +4,7 @@ import { mobileSpatialDrawerShadow } from "../../mobileDrawerDepth";
 import { bindMobileSpatialDrawer } from "../../mobileSpatialDrawer";
 import {
   mobileCompositorFlattenSx,
+  mobileDrawerRailHitSx,
   mobilePresentationMovingRootSx,
 } from "../../mobilePresentationMotion";
 import { holdStorePresentation } from "../../store";
@@ -84,6 +85,7 @@ export function ReviewDrawerShell({
         overflow: "hidden",
         bgcolor: "background.paper",
         ...mobilePresentationMovingRootSx("data-mobile-drawer-moving"),
+        ...mobileDrawerRailHitSx,
         "&[data-mobile-drawer-open='true']": mobileCompositorFlattenSx,
         "&[data-mobile-drawer-presented='true']": mobileCompositorFlattenSx,
       }}
@@ -143,6 +145,7 @@ export function ReviewDrawerShell({
       >
         <Box
           ref={dimRef}
+          data-mobile-drawer-dim="right"
           aria-label="Close worktree drawer"
           onClick={() => {
             if (open) closeRef.current();

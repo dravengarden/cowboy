@@ -20,6 +20,10 @@ Deno.test("mobile drawer translates an in-flow page that owns the footer", () =>
   assert(appSource.includes("getSurface: () =>"));
   assert(appSource.includes("would swallow\n                    // Sessions-row taps"));
   assert(appSource.includes('pointerEvents: mobile ? "none" : undefined'));
+  assert(appSource.includes('data-mobile-drawer-dim="left"'));
+  assert(appSource.includes("mobileDrawerRailHitSx"));
+  assert(reviewDrawerSource.includes('data-mobile-drawer-dim="right"'));
+  assert(reviewDrawerSource.includes("mobileDrawerRailHitSx"));
   assert(appSource.includes("mobileComposerFollowRef.current"));
   assert(appSource.includes("mobileNavFollowRef.current"));
   assert(appSource.includes('isolation: "isolate"'));

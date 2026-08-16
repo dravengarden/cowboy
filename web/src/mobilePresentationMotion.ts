@@ -6,7 +6,10 @@ import { holdStorePresentation } from "./store";
  *  become their own compositor tile; translating a parent then relocates
  *  that whole tile tree every frame even when JS is idle. */
 export const mobileCompositorFlattenSx = {
-  "& .cm-scroller, & [data-transcript-session], & [data-mobile-overflow-layer]": {
+  // Only the peeking page. The Sessions/Review rail uses the same
+  // overflow-layer marker so it can scroll; freezing it while the
+  // drawer is open makes every session row un-tappable.
+  "& [data-mobile-drawer-surface] .cm-scroller, & [data-mobile-drawer-surface] [data-transcript-session], & [data-mobile-drawer-surface] [data-mobile-overflow-layer]": {
     WebkitOverflowScrolling: "auto",
     overflow: "hidden",
     contain: "paint",
@@ -28,6 +31,26 @@ export function mobilePresentationMovingRootSx(
     [`&[${attr}='true']`]: mobileCompositorFlattenSx,
   };
 }
+
+/** Settled-open hit testing. Peek layers stay full-width in layout and
+ *  only translate visually, so iOS would send rail taps to the dim/page.
+ *  Park the dim on the peek with a layout inset and let the rail receive
+ *  the rest. */
+export const mobileDrawerRailHitSx = {
+  "&[data-mobile-drawer-open='true']:not([data-mobile-drawer-moving='true']) [data-mobile-drawer-surface], &[data-mobile-drawer-open='true']:not([data-mobile-drawer-moving='true']) [data-mobile-drawer-follow]": {
+    pointerEvents: "none",
+  },
+  "&[data-mobile-drawer-open='true']:not([data-mobile-drawer-moving='true']) [data-mobile-drawer-dim]": {
+    pointerEvents: "auto",
+    transform: "none !important",
+  },
+  "&[data-mobile-drawer-open='true']:not([data-mobile-drawer-moving='true']) [data-mobile-drawer-dim='left']": {
+    left: "var(--mobile-drawer-width, min(84%, 360px))",
+  },
+  "&[data-mobile-drawer-open='true']:not([data-mobile-drawer-moving='true']) [data-mobile-drawer-dim='right']": {
+    right: "var(--mobile-drawer-width, min(84%, 360px))",
+  },
+};
 
 /** DetentSheet already disables its own blur while `data-detent-moving` is
  *  set. The remaining hitch is the Paper elevation shadow plus the page

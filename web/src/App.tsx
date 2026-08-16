@@ -114,6 +114,7 @@ import { mobileSpatialDrawerShadow } from "./mobileDrawerDepth";
 import { sessionDrawerTargetScroll } from "./mobileDrawerMotion";
 import {
     mobileCompositorFlattenSx,
+    mobileDrawerRailHitSx,
     mobilePresentationMovingRootSx,
 } from "./mobilePresentationMotion";
 import { setNotifySetting, setVibrateSetting, useNotifySetting, useVibrateSetting } from "./turnNotify";
@@ -2571,6 +2572,7 @@ export function App({
                     ...mobilePresentationMovingRootSx(
                         "data-mobile-drawer-moving",
                     ),
+                    ...mobileDrawerRailHitSx,
                     "&[data-mobile-drawer-open='true']":
                         mobileCompositorFlattenSx,
                     "&[data-mobile-drawer-presented='true']":
@@ -2609,6 +2611,7 @@ export function App({
                             minWidth: 0,
                             overflow: "hidden",
                             bgcolor: "background.paper",
+                            pointerEvents: "auto",
                             pt: "env(safe-area-inset-top, 0px)",
                             pl: "env(safe-area-inset-left, 0px)",
                             "@media (min-width: 768px)": {
@@ -2840,6 +2843,7 @@ export function App({
                 {mobile && (
                     <Box
                         ref={mobileDrawerDimRef}
+                        data-mobile-drawer-dim="left"
                         role="button"
                         tabIndex={drawerOpen ? 0 : -1}
                         aria-label="Close sessions"
