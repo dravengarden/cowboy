@@ -151,7 +151,10 @@ Deno.test("signed-in session Providers show this account's usage windows", () =>
   });
   assertEquals(weekly[0]?.label, "Weekly");
   assertEquals(weekly[0]?.value, "63% remaining");
-  assertEquals(weekly[0]?.detail?.startsWith("Resets "), true);
+  assertEquals(weekly[0]?.remaining, 63);
+  assertEquals(weekly[1]?.label, "Resets");
+  assertEquals((weekly[1]?.value ?? "").length > 0, true);
+  assertEquals(composerSource.includes("row.remaining"), true);
 
   assertEquals(
     sessionProviderUsageRows({
@@ -186,8 +189,8 @@ Deno.test("signed-in session Providers show this account's usage windows", () =>
       },
     }),
     [
-      { label: "Balance", value: "¥108.80" },
-      { label: "24h spend", value: "¥2.51" },
+      { id: "deepseek-balance", label: "Balance", value: "¥108.80" },
+      { id: "deepseek-spend", label: "24h spend", value: "¥2.51" },
     ],
   );
 

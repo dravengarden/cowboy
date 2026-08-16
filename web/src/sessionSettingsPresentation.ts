@@ -77,9 +77,10 @@ export function sessionProviderShowsUsage(input: {
 }
 
 export type SessionProviderUsageRow = {
+  id: string;
   label: string;
   value: string;
-  detail?: string;
+  remaining?: number;
 };
 
 function compactCny(value: number): string {
@@ -87,7 +88,8 @@ function compactCny(value: number): string {
 }
 
 /** Compact account windows for the session Provider facts list.
- *  DeepSeek exposes balance rather than a remaining-percent window. */
+ *  Remaining-percent windows keep a sibling Resets row so the sheet stays a
+ *  two-column list. DeepSeek exposes balance rather than a percent window. */
 export function sessionProviderUsageRows(
   usage: ProviderUsage | undefined,
 ): SessionProviderUsageRow[] {
@@ -95,17 +97,23 @@ export function sessionProviderUsageRows(
   const widget = usageWidgetForAccount(usage);
   if (widget?.kind === "deepseek") {
     return [
-      { label: "Balance", value: compactCny(widget.balanceCny) },
-      { label: "24h spend", value: compactCny(widget.spend24hCny) },
+      { id: "deepseek-balance", label: "Balance", value: compactCny(widget.balanceCny) },
+      { id: "deepseek-spend", label: "24h spend", value: compactCny(widget.spend24hCny) },
     ];
   }
-  return topBarUsageLimits(usage).map((limit) => ({
-    label: limit.label,
-    value: `${String(limit.remaining)}% remaining`,
-    ...(limit.resetsAt === undefined
-      ? {}
-      : { detail: `Resets ${shortResetTime(limit.resetsAt)}` }),
-  }));
+  return topBarUsageLimits(usage).flatMap((limit) => [
+    {
+      id: limit.id,
+      label: limit.label,
+      value: `${String(limit.remaining)}% remaining`,
+      remaining: limit.remaining,
+    },
+    ...(limit.resetsAt === undefined ? [] : [{
+      id: `${limit.id}-resets`,
+      label: "Resets",
+      value: shortResetTime(limit.resetsAt),
+    }]),
+  ]);
 }
 
 export function sessionProviderUsageEmptyMessage(

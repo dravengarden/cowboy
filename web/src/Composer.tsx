@@ -7610,12 +7610,23 @@ function SessionProviderUsage({
   return (
     <>
       {rows.map((row) => (
-        <SheetDetailRow
-          key={row.label}
-          label={row.label}
-          value={row.value}
-          {...(row.detail === undefined ? {} : { detail: row.detail })}
-        />
+        <Box key={row.id}>
+          <SheetDetailRow label={row.label} value={row.value} />
+          {row.remaining !== undefined && (
+            <LinearProgress
+              variant="determinate"
+              value={row.remaining}
+              aria-label={`${row.label} remaining`}
+              sx={{
+                height: 5,
+                mb: 0.75,
+                borderRadius: 99,
+                bgcolor: "action.selected",
+                "& .MuiLinearProgress-bar": { borderRadius: 99 },
+              }}
+            />
+          )}
+        </Box>
       ))}
     </>
   );
@@ -7625,56 +7636,39 @@ function SheetDetailRow({
   label,
   value,
   mono = false,
-  detail,
 }: {
   label: string;
   value: string;
   mono?: boolean;
-  detail?: string;
 }): React.JSX.Element {
   return (
-    <Box sx={{ py: 0.75 }}>
-      <Box
+    <Box
+      sx={{
+        py: 0.75,
+        display: "flex",
+        gap: 2,
+        alignItems: "baseline",
+      }}
+    >
+      <Typography
+        variant="caption"
+        color="text.secondary"
+        sx={{ minWidth: 96, flexShrink: 0 }}
+      >
+        {label}
+      </Typography>
+      <Typography
+        variant="body2"
         sx={{
-          display: "flex",
-          gap: 2,
-          alignItems: "baseline",
+          flex: 1,
+          minWidth: 0,
+          wordBreak: "break-word",
+          fontFamily: mono ? MONO : "inherit",
+          fontVariantNumeric: "tabular-nums",
         }}
       >
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          sx={{ minWidth: 96, flexShrink: 0 }}
-        >
-          {label}
-        </Typography>
-        <Typography
-          variant="body2"
-          sx={{
-            flex: 1,
-            minWidth: 0,
-            wordBreak: "break-word",
-            fontFamily: mono ? MONO : "inherit",
-            fontVariantNumeric: "tabular-nums",
-          }}
-        >
-          {value}
-        </Typography>
-      </Box>
-      {detail && (
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          sx={{
-            display: "block",
-            pl: "calc(96px + 16px)",
-            mt: 0.15,
-            lineHeight: 1.35,
-          }}
-        >
-          {detail}
-        </Typography>
-      )}
+        {value}
+      </Typography>
     </Box>
   );
 }
