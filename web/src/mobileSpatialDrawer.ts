@@ -246,9 +246,17 @@ export function bindMobileSpatialDrawer({
       }
       springFrame = requestAnimationFrame(tick);
     };
+    const first = stepDrawerSpring(position, velocity, targetOffset, 16);
+    position = first.position;
+    velocity = first.velocity;
+    lastAt = performance.now();
     render(position);
+    if (first.settled) {
+      finish();
+      return;
+    }
     springFrame = requestAnimationFrame(tick);
-    settleTimer = globalThis.setTimeout(finish, 700);
+    settleTimer = globalThis.setTimeout(finish, 450);
   };
 
   const onTouchStart = (event: TouchEvent): void => {
@@ -352,8 +360,8 @@ export function bindMobileSpatialDrawer({
     const elapsed = Math.max(1, now - gesture.lastAt);
     const instantaneousVelocity = (touch.clientX - gesture.lastX) / elapsed *
       openingSign;
-    gesture.velocity = gesture.velocity * 0.65 +
-      instantaneousVelocity * 0.35;
+    gesture.velocity = gesture.velocity * 0.55 +
+      instantaneousVelocity * 0.45;
     gesture.lastX = touch.clientX;
     gesture.lastAt = now;
     const width = gesture.width;

@@ -15,6 +15,11 @@ export function predictDrawerOffset(
  *  velocity-preserving spring instead, matching Obsidian/iOS. */
 export const MOBILE_DRAWER_SETTLE_EASING = "cubic-bezier(0.32, 0.72, 0, 1)";
 
+/** iOS snappy panel: critically damped, perceptual ~200ms. The previous
+ *  0.30/0.88 spring settled later and still had a floaty tail. */
+export const MOBILE_DRAWER_SPRING_RESPONSE = 0.2;
+export const MOBILE_DRAWER_SPRING_DAMPING = 1;
+
 /** Obsidian/iOS interactive spring. `velocity` is px/ms, matching the drawer
  *  finger tracker, so a flick continues into the settle instead of dying. */
 export function stepDrawerSpring(
@@ -24,14 +29,12 @@ export function stepDrawerSpring(
   dtMs: number,
 ): { position: number; velocity: number; settled: boolean } {
   const dt = Math.min(0.032, Math.max(0.004, dtMs / 1000));
-  const response = 0.3;
-  const dampingRatio = 0.88;
-  const stiffness = (2 * Math.PI / response) ** 2;
-  const damping = 2 * dampingRatio * Math.sqrt(stiffness);
+  const stiffness = (2 * Math.PI / MOBILE_DRAWER_SPRING_RESPONSE) ** 2;
+  const damping = 2 * MOBILE_DRAWER_SPRING_DAMPING * Math.sqrt(stiffness);
   let speed = velocity * 1000;
   speed += ((target - position) * stiffness - speed * damping) * dt;
   const next = position + speed * dt;
-  const settled = Math.abs(target - next) < 0.4 && Math.abs(speed) < 12;
+  const settled = Math.abs(target - next) < 0.8 && Math.abs(speed) < 28;
   if (settled) return { position: target, velocity: 0, settled: true };
   return { position: next, velocity: speed / 1000, settled: false };
 }
@@ -68,10 +71,9 @@ export function mobileDrawerCardVisual(
 ): { progress: number; dim: number; radiusPx: number } {
   const progress = mobileDrawerProgress(offset, width);
   const openDim = phone ? 0.22 : 0.16;
-  const fade = progress * progress * (3 - 2 * progress);
   return {
     progress,
-    dim: openDim * fade,
+    dim: openDim * progress,
     radiusPx: phone ? 20 : 16,
   };
 }

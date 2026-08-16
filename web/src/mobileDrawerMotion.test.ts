@@ -2,6 +2,8 @@ import { assertEquals } from "jsr:@std/assert";
 import {
   drawerProgressAttribute,
   MOBILE_DRAWER_SETTLE_EASING,
+  MOBILE_DRAWER_SPRING_DAMPING,
+  MOBILE_DRAWER_SPRING_RESPONSE,
   mobileDrawerCardVisual,
   mobileDrawerProgress,
   mobileDrawerSettleDurationMs,
@@ -28,20 +30,42 @@ Deno.test("drawer card recedes like an Obsidian workspace", () => {
   assertEquals(mobileDrawerCardVisual(0, 360, true).dim, 0);
   assertEquals(mobileDrawerCardVisual(360, 360, true).dim, 0.22);
   assertEquals(mobileDrawerCardVisual(360, 360, false).dim, 0.16);
-  assertEquals(mobileDrawerCardVisual(180, 360, true).dim > 0, true);
-  assertEquals(mobileDrawerCardVisual(180, 360, true).dim < 0.22, true);
+  assertEquals(mobileDrawerCardVisual(180, 360, true).dim, 0.11);
   assertEquals(mobileDrawerCardVisual(360, 360, true).radiusPx, 20);
   assertEquals(mobileDrawerCardVisual(360, 360, false).radiusPx, 16);
   assertEquals(Object.hasOwn(mobileDrawerCardVisual(360, 360, true), "scale"), false);
 });
 
 Deno.test("drawer spring continues velocity toward the target", () => {
+  assertEquals(MOBILE_DRAWER_SPRING_RESPONSE, 0.2);
+  assertEquals(MOBILE_DRAWER_SPRING_DAMPING, 1);
   const step = stepDrawerSpring(40, 0.8, 360, 16);
   assertEquals(step.settled, false);
   assertEquals(step.position > 40, true);
   const rest = stepDrawerSpring(360, 0, 360, 16);
   assertEquals(rest.settled, true);
   assertEquals(rest.position, 360);
+});
+
+Deno.test("drawer spring reaches the page in an iOS snappy window", () => {
+  let position = 0;
+  let velocity = 0;
+  for (let i = 0; i < 8; i++) {
+    const stepped = stepDrawerSpring(position, velocity, 360, 16);
+    position = stepped.position;
+    velocity = stepped.velocity;
+  }
+  assertEquals(position > 320, true);
+  for (let i = 0; i < 16; i++) {
+    const stepped = stepDrawerSpring(position, velocity, 360, 16);
+    position = stepped.position;
+    velocity = stepped.velocity;
+    if (stepped.settled) {
+      assertEquals(position, 360);
+      return;
+    }
+  }
+  assertEquals(position > 355, true);
 });
 
 Deno.test("mobile drawer progress follows the finger", () => {
