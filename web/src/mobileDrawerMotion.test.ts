@@ -1,7 +1,9 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
   drawerProgressAttribute,
+  MOBILE_DRAWER_SETTLE_EASING,
   mobileDrawerProgress,
+  mobileDrawerSettleDurationMs,
   predictDrawerOffset,
   sessionDrawerTargetScroll,
 } from "./mobileDrawerMotion.ts";
@@ -11,6 +13,13 @@ Deno.test("mobile drawer prediction removes one-frame finger lag without running
   assertEquals(predictDrawerOffset(120, 4, 16), 130);
   assertEquals(predictDrawerOffset(120, -4, 16), 110);
   assertEquals(predictDrawerOffset(120, 1, -5), 120);
+});
+
+Deno.test("drawer settle uses an iOS deceleration window", () => {
+  assertEquals(MOBILE_DRAWER_SETTLE_EASING, "cubic-bezier(0.32, 0.72, 0, 1)");
+  assertEquals(mobileDrawerSettleDurationMs(1, 0), 380);
+  assertEquals(mobileDrawerSettleDurationMs(0, 2), 220);
+  assertEquals(mobileDrawerSettleDurationMs(0.5, 0), 320);
 });
 
 Deno.test("mobile drawer progress follows the finger", () => {

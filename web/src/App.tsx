@@ -1966,8 +1966,8 @@ export function App({
 
     // Mobile Sessions and Code Review use the same spatial-drawer controller.
     // Product code supplies only the side and presentation-freeze hook; sampling,
-    // prediction, magnetic thresholds, haptics, rubber-band, depth, settle timing,
-    // and idle release stay identical on both surfaces.
+    // finger-tracking, magnetic thresholds, haptics, rubber-band, depth, settle
+    // timing, and idle release stay identical on both surfaces.
     useEffect(() => {
         if (!mobile) return undefined;
         const surface = columnRef.current;

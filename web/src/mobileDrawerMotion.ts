@@ -1,6 +1,6 @@
-/** Compensate for the one-frame delay between an iOS touch sample and the
- * requestAnimationFrame that presents it. The bounded lead puts the surface
- * back under a fast finger without making a slow drag feel spring-loaded. */
+/** Compensate for a delayed compositor sample. Live drawer tracking now
+ *  paints the touch sample immediately; keep this bound for callers that
+ *  still present on the next animation frame. */
 export function predictDrawerOffset(
   sampledOffset: number,
   velocityPxPerMs: number,
@@ -9,6 +9,22 @@ export function predictDrawerOffset(
   const age = Math.max(0, Math.min(12, sampleAgeMs));
   const lead = Math.max(-10, Math.min(10, velocityPxPerMs * age));
   return sampledOffset + lead;
+}
+
+/** iOS / Obsidian drawer settle: decelerate into place instead of a 200ms snap. */
+export const MOBILE_DRAWER_SETTLE_EASING = "cubic-bezier(0.32, 0.72, 0, 1)";
+
+export function mobileDrawerSettleDurationMs(
+  remaining: number,
+  velocityPxPerMs: number,
+): number {
+  return Math.max(
+    220,
+    Math.min(
+      380,
+      260 + remaining * 120 - Math.min(80, Math.abs(velocityPxPerMs) * 50),
+    ),
+  );
 }
 
 export function mobileDrawerProgress(
