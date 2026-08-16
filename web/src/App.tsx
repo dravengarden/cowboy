@@ -2568,6 +2568,8 @@ export function App({
                         overflow: "hidden",
                         bgcolor: "background.paper",
                         backfaceVisibility: "hidden",
+                        isolation: "isolate",
+                        transform: "translate3d(0, 0, 0)",
                     }}
                 >
                     <Stack

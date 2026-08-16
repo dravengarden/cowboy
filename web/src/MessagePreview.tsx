@@ -3,6 +3,7 @@ import { Box, Button, useTheme } from "@mui/material";
 import { ExpandLess, ExpandMore } from "@mui/icons-material";
 import CodeMirror from "@uiw/react-codemirror";
 import type { Extension } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
 import { cmTheme } from "./cmTheme";
 import { livePreviewExtensions } from "./composerExtensions";
 import { useReliableTouchTap } from "./useReliableTouchTap";
@@ -58,7 +59,11 @@ function MessagePreviewImpl({
   // The SAME extensions the input uses (reused, not re-declared, so the preview
   // can never visually drift from the editor). Memoised per theme.
   const extensions = useMemo<Extension[]>(
-    () => [cmTheme(theme), ...livePreviewExtensions()],
+    () => [
+      cmTheme(theme),
+      ...livePreviewExtensions(),
+      EditorView.contentAttributes.of({ tabindex: "-1" }),
+    ],
     [theme],
   );
   const display = useMemo(() => compactForPreview(text), [text]);
@@ -95,7 +100,12 @@ function MessagePreviewImpl({
           // The preview is non-interactive — taps select the row to edit, they
           // don't place a caret or follow a link inside the read-only editor.
           "& .cm-editor": { backgroundColor: "transparent", pointerEvents: "none" },
-          "& .cm-content": { padding: 0 },
+          "& .cm-content": {
+            padding: 0,
+            caretColor: "transparent",
+            userSelect: "none",
+            WebkitUserSelect: "none",
+          },
           "& .cm-scroller": { lineHeight: "var(--cowboy-reading-line-height, 1.5)" },
         }}
       >

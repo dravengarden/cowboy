@@ -34,7 +34,7 @@ export interface MobileSpatialDrawerBinding {
 export function bindMobileSpatialDrawer({
   gestureTarget,
   surface,
-  drawer: _drawer,
+  drawer,
   drawerMask,
   dim,
   side,
@@ -430,6 +430,10 @@ export function bindMobileSpatialDrawer({
   }
   presentationWidth = drawerWidth();
   publishDrawerWidth(presentationWidth);
+  // Obsidian's rail is its own layer and never translates. If this drawer
+  // flattens into the sliding page, the session list rides with the peek.
+  drawer.style.transform = "translate3d(0, 0, 0)";
+  drawer.style.isolation = "isolate";
   surface.style.removeProperty("border-radius");
   surface.style.removeProperty("overflow");
   surface.style.willChange = "transform";
@@ -460,6 +464,8 @@ export function bindMobileSpatialDrawer({
       if (springFrame !== 0) cancelAnimationFrame(springFrame);
       gestureTarget.removeAttribute("data-mobile-drawer-moving");
       gestureTarget.style.removeProperty("--mobile-drawer-width");
+      drawer.style.removeProperty("transform");
+      drawer.style.removeProperty("isolation");
       surface.style.removeProperty("will-change");
       drawerMask.style.removeProperty("will-change");
       lastPublishedProgress = null;

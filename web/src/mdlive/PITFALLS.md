@@ -1828,3 +1828,13 @@ Desktop Vim + IME checks:
     intentionally a no-op so UIKit continues to own its selection and
     IME. This is a viewport-reveal fix only and does not claim the
     physical painted-caret behavior in pitfall #69 is fixed.
+
+72. **A Queue/Draft kebab or Force tap must not start an edit.** The
+    pending card's empty fill is an edit hit target (`pendingEditTap` on
+    the Paper). iOS still delivers a bubbling `click` after a nested
+    `IconButton`. The Paper `onClick` used to forward that click into
+    `beginEdit`, so opening More also `flushSync`-mounted the row
+    editor and painted a UIKit caret on the card behind the menu.
+    Ignore the same nested-control selector as `useReliableTouchTap`,
+    and do not use `cursor: text` on the unread-only card. This does
+    not claim pitfall #69 fixed.
