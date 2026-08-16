@@ -9,7 +9,7 @@ export const mobileCompositorFlattenSx = {
   "& .cm-scroller, & [data-transcript-session], & [data-mobile-overflow-layer]": {
     WebkitOverflowScrolling: "auto",
   },
-  "& [data-detent-sheet-chrome], & [data-mobile-backdrop-chrome]": {
+  "& [data-detent-sheet-chrome], & [data-mobile-backdrop-chrome], & [data-mobile-focus-composer], & [data-mobile-primary-composer], & [data-mobile-pending-editor]": {
     backdropFilter: "none",
     WebkitBackdropFilter: "none",
   },

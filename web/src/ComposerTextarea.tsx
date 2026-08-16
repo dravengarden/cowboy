@@ -12,6 +12,7 @@ import type {
   ComposerEditorSelection,
 } from "./ComposerEditor";
 import { type Attachment, clipboardFiles } from "./attachments";
+import { insertNativeInlineImages } from "./composer/mobileCompactEditorPolicy";
 import { attachComposerInputDebug } from "./composer/composerInputDebug";
 import { reportMobileNativePasteEvent } from "./composer/mobileNativePasteTelemetry";
 import { hasDraftMod, hasSendMod } from "./platform";
@@ -35,8 +36,6 @@ import {
   toggleNativeWrap,
   wrapNativeSelection,
 } from "./composer/nativeTextareaEditing";
-import { insertNativeInlineImages } from "./composer/mobileCompactEditorPolicy";
-
 // Compatibility hook for composer call sites. Platform classification is owned
 // centrally by SurfaceProvider so every part of the app agrees on the active
 // interaction model (especially iPad + trackpad and hybrid devices).

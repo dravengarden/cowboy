@@ -5,8 +5,9 @@ import {
 } from "./mobileDrawerDepth";
 import {
   drawerProgressAttribute,
+  MOBILE_DRAWER_SETTLE_EASING,
   mobileDrawerCardVisual,
-  stepDrawerSpring,
+  mobileDrawerSettleDurationMs,
 } from "./mobileDrawerMotion";
 import {
   expandedSelection,
@@ -68,10 +69,10 @@ export function bindMobileSpatialDrawer({
     startOffset: number;
     startOpen: boolean;
     width: number;
+    lockPx: number;
     thresholdHaptic: boolean;
   } | null = null;
   let settleTimer = 0;
-  let springFrame = 0;
   let settleGen = 0;
   let pendingThresholdHaptic = false;
   let currentOffset = 0;
@@ -141,12 +142,10 @@ export function bindMobileSpatialDrawer({
       releaseIdle = undefined;
     }
     settleGen += 1;
-    if (springFrame !== 0) {
-      cancelAnimationFrame(springFrame);
-      springFrame = 0;
-    }
+    globalThis.clearTimeout(settleTimer);
     surface.style.transition = "none";
     drawerMask.style.transition = "none";
+    if (dim) dim.style.transition = "none";
     gestureTarget.setAttribute("data-mobile-drawer-moving", "true");
     applyOpenDepth();
     releasePresentation ??= holdPresentation?.();
@@ -208,18 +207,23 @@ export function bindMobileSpatialDrawer({
       requestAnimationFrame(() => navigationHaptic());
     }
     if (open) setOpen(true);
-    if (springFrame !== 0) cancelAnimationFrame(springFrame);
     globalThis.clearTimeout(settleTimer);
-    surface.style.transition = "none";
-    drawerMask.style.transition = "none";
     const generation = settleGen += 1;
-    let position = releaseOffset;
-    let velocity = releaseVelocity;
-    let lastAt = performance.now();
+    const remaining = Math.min(
+      1,
+      Math.abs(targetOffset - releaseOffset) / Math.max(1, width),
+    );
+    const duration = mobileDrawerSettleDurationMs(remaining, releaseVelocity);
+    const transition =
+      `transform ${String(duration)}ms ${MOBILE_DRAWER_SETTLE_EASING}`;
+    surface.style.transition = transition;
+    drawerMask.style.transition = transition;
+    if (dim) {
+      dim.style.transition =
+        `opacity ${String(duration)}ms ${MOBILE_DRAWER_SETTLE_EASING}`;
+    }
     const finish = (): void => {
       if (generation !== settleGen) return;
-      if (springFrame !== 0) cancelAnimationFrame(springFrame);
-      springFrame = 0;
       globalThis.clearTimeout(settleTimer);
       render(targetOffset);
       clearTransitions();
@@ -233,30 +237,8 @@ export function bindMobileSpatialDrawer({
       }
       onSettled?.();
     };
-    const tick = (now: number): void => {
-      if (generation !== settleGen) return;
-      const stepped = stepDrawerSpring(position, velocity, targetOffset, now - lastAt);
-      lastAt = now;
-      position = stepped.position;
-      velocity = stepped.velocity;
-      render(position);
-      if (stepped.settled) {
-        finish();
-        return;
-      }
-      springFrame = requestAnimationFrame(tick);
-    };
-    const first = stepDrawerSpring(position, velocity, targetOffset, 16);
-    position = first.position;
-    velocity = first.velocity;
-    lastAt = performance.now();
-    render(position);
-    if (first.settled) {
-      finish();
-      return;
-    }
-    springFrame = requestAnimationFrame(tick);
-    settleTimer = globalThis.setTimeout(finish, 450);
+    render(targetOffset);
+    settleTimer = globalThis.setTimeout(finish, duration + 20);
   };
 
   const onTouchStart = (event: TouchEvent): void => {
@@ -283,6 +265,11 @@ export function bindMobileSpatialDrawer({
     presentationWidth = width;
     publishDrawerWidth(width);
     prepareNavigationHaptic();
+    // Session-row taps live on the rail and need the 12px lock. The peeking
+    // page must track as soon as horizontal intent is visible, like Obsidian.
+    const lockPx = target && drawer.contains(target)
+      ? MOBILE_DRAWER_DIRECTION_LOCK_PX
+      : MOBILE_DRAWER_PREPARE_PX;
     gesture = {
       x: touch.clientX,
       y: touch.clientY,
@@ -294,6 +281,7 @@ export function bindMobileSpatialDrawer({
       startOffset: startOpen ? width : 0,
       startOpen,
       width,
+      lockPx,
       thresholdHaptic: false,
     };
     commit = startOpen;
@@ -342,7 +330,7 @@ export function bindMobileSpatialDrawer({
       : horizontalSwipe(
         normalizedDelta,
         deltaY,
-        MOBILE_DRAWER_DIRECTION_LOCK_PX,
+        gesture.lockPx,
         1.15,
       );
     if (
@@ -360,8 +348,8 @@ export function bindMobileSpatialDrawer({
     const elapsed = Math.max(1, now - gesture.lastAt);
     const instantaneousVelocity = (touch.clientX - gesture.lastX) / elapsed *
       openingSign;
-    gesture.velocity = gesture.velocity * 0.55 +
-      instantaneousVelocity * 0.45;
+    gesture.velocity = gesture.velocity * 0.35 +
+      instantaneousVelocity * 0.65;
     gesture.lastX = touch.clientX;
     gesture.lastAt = now;
     const width = gesture.width;
@@ -461,7 +449,6 @@ export function bindMobileSpatialDrawer({
       gestureTarget.removeEventListener("touchcancel", onTouchCancel);
       globalThis.removeEventListener("resize", onResize);
       globalThis.clearTimeout(settleTimer);
-      if (springFrame !== 0) cancelAnimationFrame(springFrame);
       gestureTarget.removeAttribute("data-mobile-drawer-moving");
       gestureTarget.style.removeProperty("--mobile-drawer-width");
       drawer.style.removeProperty("transform");

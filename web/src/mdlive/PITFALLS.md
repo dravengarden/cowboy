@@ -1618,8 +1618,10 @@ Desktop Vim + IME checks:
     first few Returns wrong. Same Return-after-image shape in
     Obsidian.
 
-    ### Current code (cowboy-v1269 / `a9aaa415`)
-    Token is `![name](cowboy-att:<id>)`. Touch promotes to CM6 on the
+    ### Current code (cowboy-v1305+)
+    Tray-only touch paste (v1304, candidate 2) was withdrawn: it
+    bypassed the inline image instead of fixing the caret. Token is
+    again `![name](cowboy-att:<id>)`. Touch promotes to CM6 on the
     first token. The token is replaced by an inline thumbnail widget
     (not `block: true`). Paste inserts a real following line with a
     trailing space and lands the caret there:
@@ -1767,6 +1769,7 @@ Desktop Vim + IME checks:
     | v1265 | Trailing space on the image line | 88px caret bar; Return `<br>` `88→102`; then `caret_height=0` |
     | v1266 | Space on the *next* line + preventDefault adjacent Return | Telemetry sometimes kept `caret_height=12`; user: Return still wrong |
     | v1268 | Full Obsidian source-line reveal | User: too clumsy for chat. Withdrawn in v1269 |
+    | v1304 | Keep new touch images in the tray; never promote | User: bypass, restore inline |
     | event patches in general | consume Enter, remap DOM Selection, focus/blur | Double bounce, dead Range, or paste-menu regressions |
 
     ### Do not retry
