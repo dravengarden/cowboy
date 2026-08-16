@@ -92,11 +92,13 @@ export function ProviderMark({
   role = "icon",
   size = 24,
   className,
+  appearance = "plain",
 }: {
   manifest: ProviderUiManifest;
   role?: UiAsset["role"];
   size?: number;
   className?: string | undefined;
+  appearance?: "plain" | "accentBadge";
 }): React.JSX.Element | null {
   const theme = useTheme();
   const assetId = role === "logo"
@@ -113,13 +115,39 @@ export function ProviderMark({
       asset.content.gradient === undefined && asset.content.fill === undefined
     ? readableProviderMarkColor(manifest.display.accent, theme)
     : undefined;
-  return (
+  const graphic = (
     <ProviderAssetGraphic
       asset={asset}
-      size={size}
-      className={className}
-      {...(markColor ? { sx: { color: markColor } } : {})}
+      size={appearance === "accentBadge" ? Math.round(size * 0.62) : size}
+      className={appearance === "plain" ? className : undefined}
+      {...(appearance === "accentBadge"
+        ? { sx: { color: theme.palette.common.white } }
+        : markColor
+        ? { sx: { color: markColor } }
+        : {})}
     />
+  );
+  if (appearance === "plain") return graphic;
+  const scaledBadgeSize = `calc(${size}px * var(--cowboy-font-scale, 1))`;
+  return (
+    <Box
+      className={className}
+      sx={{
+        width: scaledBadgeSize,
+        height: scaledBadgeSize,
+        minWidth: scaledBadgeSize,
+        minHeight: scaledBadgeSize,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        borderRadius: "30%",
+        bgcolor: manifest.display.accent,
+        color: theme.palette.common.white,
+        flexShrink: 0,
+      }}
+    >
+      {graphic}
+    </Box>
   );
 }
 

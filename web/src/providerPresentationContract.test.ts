@@ -26,6 +26,44 @@ Deno.test("Provider lifecycle cards stay collapsed behind a compact summary", ()
   assertEquals(managementSource.includes("borderTop:"), false);
 });
 
+Deno.test("ready credentials progressively disclose destructive management actions", () => {
+  assertEquals(
+    managementSource.includes('const readyCredential = scope === "service"'),
+    true,
+  );
+  assertEquals(
+    managementSource.includes("expandedCredentialScopes.has"),
+    true,
+  );
+  assertEquals(
+    managementSource.includes("data-provider-credential-management"),
+    true,
+  );
+  assertEquals(
+    managementSource.includes(
+      '{credentialManagementOpen ? "Done" : "Manage"}',
+    ),
+    true,
+  );
+});
+
+Deno.test("Codex management identity uses a white mark on its accent badge", () => {
+  assertEquals(
+    managementSource.includes(
+      'appearance={entry.provider_id === "codex"',
+    ),
+    true,
+  );
+  assertEquals(
+    surfaceSource.includes('appearance?: "plain" | "accentBadge"'),
+    true,
+  );
+  assertEquals(
+    surfaceSource.includes("color: theme.palette.common.white"),
+    true,
+  );
+});
+
 Deno.test("incompatible Provider lifecycle actions are omitted instead of looking actionable", () => {
   assertEquals(surfaceSource.includes("if (blocked) return null;"), true);
   assertEquals(surfaceSource.includes("disabled={busy || blocked"), false);

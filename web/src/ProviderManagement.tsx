@@ -448,6 +448,9 @@ function ProviderManagement(
   );
   const [confirmActive, setConfirmActive] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [expandedCredentialScopes, setExpandedCredentialScopes] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
   const machineId = machine?.id;
   const detailsId = scope === "service"
     ? "provider-service-management"
@@ -1213,6 +1216,11 @@ function ProviderManagement(
             : undefined;
           const credentialEntries = credentialGroup?.entries ?? [entry];
           const sharedCredential = credentialEntries.length > 1;
+          const readyCredential = scope === "service" &&
+            entry.manifest.authentication.required &&
+            auth?.authentication_state === "ready";
+          const credentialManagementOpen = readyCredential &&
+            expandedCredentialScopes.has(entry.authentication_scope);
           const blockedCapabilities: ReadonlySet<EffectCapability> | undefined =
             releaseReady
             ? undefined
@@ -1250,6 +1258,28 @@ function ProviderManagement(
                 onEffect={(effect) => run(operationEntry, installed, effect)}
               />
             );
+          const identityActions = readyCredential
+            ? (
+              <Button
+                size="small"
+                variant={credentialManagementOpen ? "text" : "outlined"}
+                aria-expanded={credentialManagementOpen}
+                aria-controls={`provider-credential-management-${entry.authentication_scope}`}
+                onClick={() =>
+                  setExpandedCredentialScopes((current) => {
+                    const next = new Set(current);
+                    if (next.has(entry.authentication_scope)) {
+                      next.delete(entry.authentication_scope);
+                    } else {
+                      next.add(entry.authentication_scope);
+                    }
+                    return next;
+                  })}
+              >
+                {credentialManagementOpen ? "Done" : "Manage"}
+              </Button>
+            )
+            : lifecycleSurface;
           return (
             <Paper
               key={`${entry.provider_id}:${entry.provider_version}:${
@@ -1300,28 +1330,49 @@ function ProviderManagement(
                     </Box>
                   )
                   : (
-                    <ProviderManagementIdentity
-                      manifest={entry.manifest}
-                      version={host.provider_version}
-                      statusLabel={managementStatus}
-                      statusTone={managementStatusTone}
-                      actions={lifecycleSurface}
-                      title={credentialGroup
-                        ? providerCredentialTitle(credentialGroup.entries)
-                        : entry.manifest.display.name}
-                      summary={sharedCredential
-                        ? `One Cowboy Service credential shared by ${credentialEntries.length} Providers`
-                        : entry.manifest.display.summary}
-                      mark={sharedCredential
+                    <>
+                      <ProviderManagementIdentity
+                        manifest={entry.manifest}
+                        version={host.provider_version}
+                        statusLabel={managementStatus}
+                        statusTone={managementStatusTone}
+                        actions={identityActions}
+                        title={credentialGroup
+                          ? providerCredentialTitle(credentialGroup.entries)
+                          : entry.manifest.display.name}
+                        summary={sharedCredential
+                          ? `One Cowboy Service credential shared by ${credentialEntries.length} Providers`
+                          : entry.manifest.display.summary}
+                        mark={sharedCredential
+                          ? (
+                            <ProviderCredentialMarks
+                              entries={credentialEntries}
+                              size={32}
+                            />
+                          )
+                          : (
+                            <ProviderMark
+                              manifest={entry.manifest}
+                              size={26}
+                              appearance={entry.provider_id === "codex"
+                                ? "accentBadge"
+                                : "plain"}
+                            />
+                          )}
+                        consumers={sharedCredential ? credentialEntries : []}
+                      />
+                      {readyCredential && credentialManagementOpen
                         ? (
-                          <ProviderCredentialMarks
-                            entries={credentialEntries}
-                            size={32}
-                          />
+                          <Box
+                            id={`provider-credential-management-${entry.authentication_scope}`}
+                            data-provider-credential-management
+                            sx={{ pl: { xs: 0, sm: 5.25 } }}
+                          >
+                            {lifecycleSurface}
+                          </Box>
                         )
-                        : <ProviderMark manifest={entry.manifest} size={26} />}
-                      consumers={sharedCredential ? credentialEntries : []}
-                    />
+                        : null}
+                    </>
                   )}
                 {scope === "machine" && installed &&
                     entry.manifest.authentication.required
