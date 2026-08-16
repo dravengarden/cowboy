@@ -60,8 +60,26 @@ export const mobilePendingKeyboardCloseSettleMs = 550;
 export function shouldPresentMobileKeyboardSurface(
   keyboardOpen: boolean,
   resetBlocked: boolean,
+  dismissed = isMobileKeyboardDismissed(),
 ): boolean {
-  return keyboardOpen && !resetBlocked;
+  return keyboardOpen && !resetBlocked && !dismissed;
+}
+
+/** User hid the software keyboard. Keep the writing chrome collapsed until
+ *  they tap the editor again — iOS can leave the textarea focused after a
+ *  swipe-down or a preventDefault accessory tap. */
+let mobileKeyboardDismissed = false;
+
+export function noteMobileKeyboardDismissed(): void {
+  mobileKeyboardDismissed = true;
+}
+
+export function clearMobileKeyboardDismissed(): void {
+  mobileKeyboardDismissed = false;
+}
+
+export function isMobileKeyboardDismissed(): boolean {
+  return mobileKeyboardDismissed;
 }
 
 /** Compact ↔ fullscreen remounts the editor. A one-frame visualViewport

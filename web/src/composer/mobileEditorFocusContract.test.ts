@@ -472,9 +472,9 @@ Deno.test("native image and text paste action is shared by every mobile editor s
   );
   assertEquals(
     accessoryDockSource.match(
-      /onMouseDown=\{\(event\): void => event\.preventDefault\(\)\}/g,
+      /if \(preserveEditorFocus\) event\.preventDefault\(\);/g,
     )?.length,
-    3,
+    4,
   );
   assertEquals(
     textareaSource.includes("ta.focus();\n        writeNativeEdit(ta"),
@@ -927,6 +927,11 @@ Deno.test("mobile keyboard dismissal belongs to the fixed lower editing rail", (
   assertEquals(utilityRail.includes('title="Hide keyboard"'), false);
   assertEquals(editingRail.includes("<MobileComposerEditingBar"), true);
   assertEquals(editingRail.includes('title="Hide keyboard"'), true);
+  assertEquals(composerSource.includes("preserveEditorFocus={false}"), true);
+  assertEquals(
+    accessoryDockSource.includes("preserveEditorFocus = true"),
+    true,
+  );
   assertEquals(actionRow.includes('title="Hide keyboard"'), false);
   assertEquals(actionRow.includes("data-mobile-composer-clear"), true);
   assertEquals(actionRow.includes("disabled={!clearable}"), true);
@@ -1045,10 +1050,11 @@ Deno.test("clearing session context always ends the mobile input interaction", (
 });
 
 Deno.test("a context reset gate can only reopen from a new input interaction", () => {
-  assertEquals(shouldPresentMobileKeyboardSurface(false, false), false);
-  assertEquals(shouldPresentMobileKeyboardSurface(true, false), true);
-  assertEquals(shouldPresentMobileKeyboardSurface(false, true), false);
-  assertEquals(shouldPresentMobileKeyboardSurface(true, true), false);
+  assertEquals(shouldPresentMobileKeyboardSurface(false, false, false), false);
+  assertEquals(shouldPresentMobileKeyboardSurface(true, false, false), true);
+  assertEquals(shouldPresentMobileKeyboardSurface(false, true, false), false);
+  assertEquals(shouldPresentMobileKeyboardSurface(true, true, false), false);
+  assertEquals(shouldPresentMobileKeyboardSurface(true, false, true), false);
 });
 
 Deno.test("pending kebab menus pin to the tap instead of a live button node", () => {

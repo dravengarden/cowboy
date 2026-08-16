@@ -17,10 +17,8 @@ import {
   providerPresentationEntry,
   useProviderCatalog,
 } from "./providerCatalog";
-import {
-  ProviderMark,
-  readableProviderMarkColor,
-} from "./ProviderSurface";
+import { ProviderMark } from "./ProviderSurface";
+import { providerVisual } from "./providerVisual";
 
 type ThoughtPresentation = TranscriptPresentationContract["thought"];
 
@@ -237,12 +235,14 @@ export function ProviderThoughtSteps({
     : DEFAULT_THOUGHT_PRESENTATION;
   const visible = sections.filter((section) => section.trim() !== "");
   const geometry = markerGeometry(presentation.variant);
-  const accent = manifest
-    ? readableProviderMarkColor(manifest.display.accent, theme)
-    : theme.palette.primary.main;
-  const secondary = manifest
-    ? readableProviderMarkColor(manifest.display.secondary_accent, theme)
-    : accent;
+  const visual = providerVisual(
+    provider,
+    theme.palette.mode,
+    providerVersion,
+    providerDigest,
+  );
+  const accent = visual.primary;
+  const secondary = visual.secondary;
   const muted = theme.palette.text.secondary;
   const compact = presentation.density === "compact";
   const currentSurface = presentation.current_surface === "soft";
