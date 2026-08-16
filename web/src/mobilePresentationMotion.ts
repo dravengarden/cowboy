@@ -19,7 +19,7 @@ export const mobileCompositorFlattenSx = {
     backdropFilter: "none",
     WebkitBackdropFilter: "none",
   },
-  "& .MuiCircularProgress-root, & .MuiSkeleton-root, & [data-mobile-css-animation]": {
+  "& [data-mobile-drawer-surface] .MuiCircularProgress-root, & [data-mobile-drawer-surface] .MuiSkeleton-root, & [data-mobile-drawer-surface] [data-mobile-css-animation]": {
     animationPlayState: "paused",
   },
 };
