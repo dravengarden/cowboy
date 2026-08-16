@@ -57,6 +57,13 @@ Deno.test("gesture roots flatten overflow tiles without a universal selector", (
   assert(motionSource.includes("contain: \"paint\""));
   assert(motionSource.includes("pointerEvents: \"none\""));
   assert(motionSource.includes("& [data-mobile-drawer-surface] [data-mobile-overflow-layer]"));
+  assert(motionSource.includes("& [data-mobile-drawer-surface] .MuiCircularProgress-root"));
+  assertEquals(
+    motionSource.includes(
+      "& .MuiCircularProgress-root, & .MuiSkeleton-root, & [data-mobile-css-animation]",
+    ),
+    false,
+  );
   assertEquals(
     motionSource.includes(
       "& .cm-scroller, & [data-transcript-session], & [data-mobile-overflow-layer]",
@@ -70,6 +77,7 @@ Deno.test("gesture roots flatten overflow tiles without a universal selector", (
     false,
   );
   assert(motionSource.includes("& [data-detent-sheet][data-detent-moving]"));
+  assert(motionSource.includes("[data-mobile-composer-shell-material]"));
   assert(motionSource.includes("[data-mobile-focus-composer]"));
   assert(motionSource.includes("holdStorePresentation"));
 });

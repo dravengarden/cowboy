@@ -15,11 +15,11 @@ export const mobileCompositorFlattenSx = {
     contain: "paint",
     pointerEvents: "none",
   },
-  "& [data-detent-sheet-chrome], & [data-mobile-backdrop-chrome], & [data-mobile-focus-composer], & [data-mobile-primary-composer], & [data-mobile-pending-editor]": {
+  "& [data-detent-sheet-chrome], & [data-mobile-backdrop-chrome], & [data-mobile-composer-shell-material], & [data-mobile-focus-composer], & [data-mobile-primary-composer], & [data-mobile-pending-editor]": {
     backdropFilter: "none",
     WebkitBackdropFilter: "none",
   },
-  "& .MuiCircularProgress-root, & .MuiSkeleton-root, & [data-mobile-css-animation]": {
+  "& [data-mobile-drawer-surface] .MuiCircularProgress-root, & [data-mobile-drawer-surface] .MuiSkeleton-root, & [data-mobile-drawer-surface] [data-mobile-css-animation]": {
     animationPlayState: "paused",
   },
 };

@@ -13,7 +13,6 @@ import {
   useMediaQuery,
   useTheme,
 } from "@mui/material";
-import { alpha } from "@mui/material/styles";
 import type { Theme } from "@mui/material/styles";
 import { useEffect, useId, useMemo, useState } from "react";
 import type { ReactNode } from "react";
@@ -646,8 +645,8 @@ function ProviderActivity({
             component="span"
             aria-hidden
             sx={{
-              width: 16,
-              height: 16,
+              width: 14,
+              height: 14,
               position: "relative",
               display: "inline-block",
               flexShrink: 0,
@@ -676,7 +675,7 @@ function ProviderActivity({
             >
               <ProviderAssetGraphic
                 asset={asset}
-                size={16}
+                size={14}
               />
             </Box>
             <Box
@@ -685,7 +684,7 @@ function ProviderActivity({
             >
               <ProviderAssetGraphic
                 asset={asset}
-                size={16}
+                size={14}
               />
             </Box>
           </Box>
@@ -699,8 +698,8 @@ function ProviderActivity({
             component="span"
             aria-hidden
             sx={{
-              width: 16,
-              height: 16,
+              width: 14,
+              height: 14,
               display: "inline-flex",
               animation: reducedMotion
                 ? "none"
@@ -709,7 +708,7 @@ function ProviderActivity({
           >
             <ProviderAssetGraphic
               asset={asset}
-              size={16}
+              size={14}
             />
           </Box>
         );
@@ -735,26 +734,22 @@ function ProviderActivity({
       data-provider-activity-indicator={node.indicator.kind}
       data-provider-activity-effect={node.label.effect}
       sx={{
-        py: 0.375,
-        px: 0.875,
-        minHeight: 28,
+        py: 0.25,
         alignSelf: "flex-start",
         color: primary,
-        borderRadius: 1.25,
-        bgcolor: (t) => alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.08 : 0.045),
       }}
     >
       <Box
         aria-hidden
         sx={{
-          width: 16,
-          height: 16,
-          minWidth: 16,
-          minHeight: 16,
+          width: 14,
+          height: 14,
+          minWidth: 14,
+          minHeight: 14,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          overflow: "hidden",
+          overflow: "visible",
           flexShrink: 0,
           lineHeight: 0,
         }}

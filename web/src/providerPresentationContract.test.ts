@@ -226,7 +226,7 @@ Deno.test("Provider activity renderer consumes only typed generic strategies", (
 });
 
 Deno.test("terminal activity keeps its Provider-defined prompt geometry", () => {
-  assertEquals(surfaceSource.includes("width: 16,\n          height: 16,"), true);
+  assertEquals(surfaceSource.includes("width: 14,\n          height: 14,"), true);
   assertEquals(surfaceSource.includes("provider-terminal-prompt"), true);
   assertEquals(surfaceSource.includes("provider-terminal-caret"), true);
   assertEquals(surfaceSource.includes("terminalPromptMotion"), true);
@@ -316,7 +316,7 @@ Deno.test("Provider activity keeps motion provider-authored and geometry rendere
   );
   assertEquals(
     transcriptPresentationSource.includes(
-      "size: SIGNAL_THOUGHT_MARK_SIZE,\n        gap: 6,\n        paddingLeft: 8,",
+      "size: SIGNAL_THOUGHT_MARK_SIZE,\n        gap: 4,\n        paddingLeft: 0,",
     ),
     true,
   );
@@ -334,7 +334,7 @@ Deno.test("Provider activity keeps motion provider-authored and geometry rendere
   );
   assertEquals(
     transcriptPresentationSource.includes(
-      "borderRadius: signalHeader && currentSurface ? 1.25 : 0",
+      "borderRadius: 0",
     ),
     true,
   );

@@ -117,6 +117,7 @@ import {
     mobileDrawerRailHitSx,
     mobilePresentationMovingRootSx,
 } from "./mobilePresentationMotion";
+import { frostedChrome } from "./frostedGlass";
 import { setNotifySetting, setVibrateSetting, useNotifySetting, useVibrateSetting } from "./turnNotify";
 import {
     clampComposerColWidth,
@@ -1915,6 +1916,7 @@ export function App({
     const mobilePageRef = useRef<HTMLDivElement>(null);
     const mobileNavFollowRef = useRef<HTMLElement | null>(null);
     const mobileComposerFollowRef = useRef<HTMLDivElement | null>(null);
+    const mobileFrostFollowRef = useRef<HTMLDivElement | null>(null);
     const { appBarRef, composerRef } = useFloatingComposerGeometry({
         surfaceRef: columnRef,
         navbarAtBottom,
@@ -1998,6 +2000,7 @@ export function App({
                 columnRef.current,
             getFollowers: () => [
                 mobileDrawerDimRef.current,
+                mobileFrostFollowRef.current,
                 mobileComposerFollowRef.current,
                 mobileNavFollowRef.current,
             ],
@@ -2596,7 +2599,7 @@ export function App({
                         zIndex: 0,
                         inset: 0,
                         overflow: "hidden",
-                        bgcolor: "background.paper",
+                        bgcolor: "background.default",
                         backfaceVisibility: "hidden",
                         isolation: "isolate",
                         transform: "translate3d(0, 0, 0)",
@@ -2610,7 +2613,7 @@ export function App({
                             height: "100%",
                             minWidth: 0,
                             overflow: "hidden",
-                            bgcolor: "background.paper",
+                            bgcolor: "background.default",
                             pointerEvents: "auto",
                             pt: "env(safe-area-inset-top, 0px)",
                             pl: "env(safe-area-inset-left, 0px)",
@@ -2861,6 +2864,27 @@ export function App({
                         }}
                     />
                 )}
+                {mobile && !splitActive && (
+                    <Box
+                        ref={mobileFrostFollowRef}
+                        aria-hidden
+                        data-mobile-composer-shell-material="true"
+                        data-mobile-backdrop-chrome="true"
+                        data-mobile-drawer-follow="true"
+                        sx={(t) => ({
+                            position: "absolute",
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            height: floatingPanelHeight,
+                            zIndex: 1,
+                            pointerEvents: "none",
+                            // Resting glass. Drawer prepare strips the
+                            // filter before the first translate.
+                            ...frostedChrome(t),
+                        })}
+                    />
+                )}
                 {mobile && (
                     <Box
                         data-mobile-drawer-close="left"
@@ -2941,7 +2965,12 @@ export function App({
                         // under the bar (the reported "navbar 底部灰色阴影"). Bottom
                         // mode (mobile status-bar strip) stays frosted — content
                         // scrolls UNDER it, so it needs the translucent blur.
-                        bgcolor: "background.default",
+                        bgcolor: navbarAtBottom ? "transparent" : "background.default",
+                        ...(navbarAtBottom ? {
+                            backdropFilter: "blur(40px) saturate(180%) brightness(1.06)",
+                            WebkitBackdropFilter:
+                                "blur(40px) saturate(180%) brightness(1.06)",
+                        } : {}),
                         // Desktop: a hairline delineates the navbar. In LIGHT mode the
                         // old `0 1px 24px` down-shadow smeared a gray cloud across the
                         // lavender (a black shadow on a light tint always reads gray) —
@@ -2985,7 +3014,11 @@ export function App({
                             zIndex: 1,
                             pointerEvents: "none",
                             transition: "opacity 200ms ease",
-                            bgcolor: "background.default",
+                            bgcolor: "transparent",
+                            backdropFilter:
+                                "blur(40px) saturate(180%) brightness(1.06)",
+                            WebkitBackdropFilter:
+                                "blur(40px) saturate(180%) brightness(1.06)",
                     }}
                 />
                 )}
@@ -3042,9 +3075,7 @@ export function App({
                         // (zIndex 2 > the frosted slab's 1 > transcript's 0), so the
                         // slab behind provides the glass and content scrolls under the
                         // bar. (Was a solid `background.default` in top mode.)
-                        bgcolor: mobile && navbarAtBottom
-                            ? "background.default"
-                            : "transparent",
+                        bgcolor: "transparent",
                         position: "relative",
                         pointerEvents: mobile ? "auto" : undefined,
                         flexShrink: mobile && navbarAtBottom ? 0 : undefined,
@@ -3479,7 +3510,7 @@ export function App({
                                     maxHeight: "100%",
                                     display: "flex",
                                     flexDirection: "column",
-                                    bgcolor: "background.default",
+                                    bgcolor: "transparent",
                                     pointerEvents: "auto",
                                     // Explore's Page Dock is an editor launcher and
                                     // navigation aid, not part of the writing

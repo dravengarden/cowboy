@@ -42,7 +42,7 @@ const terminalCaret = keyframes`
   0%, 50% { opacity: 1; }
   51%, 100% { opacity: 0; }
 `;
-const SIGNAL_THOUGHT_MARK_SIZE = 20;
+const SIGNAL_THOUGHT_MARK_SIZE = 14;
 
 function WorkcellGlyph({ size = 16 }: { size?: number }): React.JSX.Element {
   return (
@@ -201,8 +201,8 @@ function markerGeometry(variant: ThoughtPresentation["variant"]): {
     case "signal":
       return {
         size: SIGNAL_THOUGHT_MARK_SIZE,
-        gap: 6,
-        paddingLeft: 8,
+        gap: 4,
+        paddingLeft: 0,
       };
     case "terminal":
       return { size: 15, gap: 5, paddingLeft: 2 };
@@ -272,20 +272,13 @@ export function ProviderThoughtSteps({
               : "auto minmax(0, 1fr)",
             alignItems: "center",
             columnGap: signalHeader ? `${geometry.gap}px` : 0.75,
-            minHeight: compact ? 19 : 22,
+            minHeight: compact ? 18 : 20,
             mb: compact ? 0.125 : 0.25,
             pl: signalHeader ? `${geometry.paddingLeft}px` : 0,
-            pr: signalHeader && currentSurface ? 1 : 0,
-            py: signalHeader && currentSurface
-              ? compact ? 0.375 : 0.5
-              : 0,
-            borderRadius: signalHeader && currentSurface ? 1.25 : 0,
-            bgcolor: signalHeader && currentSurface
-              ? alpha(
-                accent,
-                theme.palette.mode === "dark" ? 0.13 : 0.07,
-              )
-              : "transparent",
+            pr: 0,
+            py: 0,
+            borderRadius: 0,
+            bgcolor: "transparent",
             color: accent,
           }}
           aria-label={presentation.active_label}
