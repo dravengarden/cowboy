@@ -65,7 +65,7 @@ export function openExternalUrl(url: string): void {
 
 /** Open an interactive Provider sign-in without replacing Cowboy's main view.
  * The iOS shell presents SFSafariViewController, Desktop uses the Tauri opener,
- * and browser/PWA callers retain an ordinary target=_blank anchor. */
+ * and browser/PWA callers open a new tab from the originating user gesture. */
 export function openAuthenticationUrl(url: string): void {
   const resolved = safeAuthenticationUrl(url);
   if (!resolved) return;

@@ -46,9 +46,9 @@ import {
   closeAuthenticationBrowser,
   hasNativeAuthenticationBrowser,
   openAuthenticationUrl,
-  shouldRouteAuthenticationClick,
 } from "./openExternal";
 import { isNativeShell } from "./nativeShell";
+import { useReliableTouchTap } from "./useReliableTouchTap";
 
 interface ProviderMachine {
   id: string;
@@ -803,6 +803,17 @@ function ProviderManagement(
   const loginState = flow?.events.findLast((event) =>
     event.event === "login_state"
   );
+  const authenticationPageTap = useReliableTouchTap<HTMLButtonElement>(() => {
+    if (challenge?.event !== "login_challenge") return;
+    if (isNativeShell() && !hasNativeAuthenticationBrowser()) {
+      setAuthenticationError(
+        "Update Cowboy in SideStore, reopen the app, then try sign-in again.",
+      );
+      return;
+    }
+    setAuthenticationError("");
+    openAuthenticationUrl(challenge.verification_url);
+  });
   useEffect(() => {
     if (
       loginState?.event === "login_state" &&
@@ -1333,24 +1344,8 @@ function ProviderManagement(
                   ? (
                     <Stack spacing={1}>
                       <Button
-                        component="a"
-                        href={challenge.verification_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
                         variant="contained"
-                        onClick={(event) => {
-                          if (isNativeShell() && !hasNativeAuthenticationBrowser()) {
-                            event.preventDefault();
-                            setAuthenticationError(
-                              "Update Cowboy in SideStore, reopen the app, then try sign-in again.",
-                            );
-                            return;
-                          }
-                          if (!shouldRouteAuthenticationClick(event)) return;
-                          event.preventDefault();
-                          setAuthenticationError("");
-                          openAuthenticationUrl(challenge.verification_url);
-                        }}
+                        {...authenticationPageTap}
                       >
                         {authenticationCopy(
                           resolveProviderAuthenticationPresentation(

@@ -100,10 +100,10 @@ Deno.test("Service authentication keeps Cowboy alive while Provider sign-in open
     managementSource.includes('aria-label="Back to sign-in methods"'),
     true,
   );
-  assertEquals(managementSource.includes('component="a"'), true);
-  assertEquals(managementSource.includes('target="_blank"'), true);
   assertEquals(
-    managementSource.includes("shouldRouteAuthenticationClick(event)"),
+    managementSource.includes(
+      "useReliableTouchTap<HTMLButtonElement>(() =>",
+    ),
     true,
   );
   assertEquals(
