@@ -3,6 +3,7 @@ import {
   CommitOutlined,
   DescriptionOutlined,
   History,
+  Close,
   Refresh,
   Settings as SettingsIcon,
 } from "@mui/icons-material";
@@ -19,7 +20,7 @@ import {
   Typography,
 } from "@mui/material";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { MobileSheetActionGroup, MobileSheetDismiss } from "../../_shell";
+import { MobileSheetActionGroup } from "../../_shell";
 import { openAppSettings } from "../../appSettings";
 import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
 import { NetworkIconButton } from "../../NetworkActionFeedback";
@@ -408,31 +409,27 @@ export function ReviewRepository({
           pointerEvents: "none",
         }}
       >
-        <Stack
-          direction="row"
-          justifyContent="space-between"
-          alignItems="center"
-          sx={{
-            pointerEvents: "none",
-            "& > [data-mobile-sheet-footer-shield]": {
-              width: "auto",
-              flex: "0 0 auto",
-              pointerEvents: "auto",
+        <MobileSheetActionGroup
+          actions={[
+            {
+              key: "settings",
+              label: "Settings",
+              icon: <SettingsIcon fontSize="small" />,
+              onPress: (): void => openAppSettings({ section: "code" }),
             },
-          }}
-        >
-          <MobileSheetActionGroup
-            actions={[
-              {
-                key: "settings",
-                label: "Settings",
-                icon: <SettingsIcon fontSize="small" />,
-                onPress: (): void => openAppSettings({ section: "code" }),
-              },
-            ]}
-          />
-          <MobileSheetDismiss onClose={onClose} label="Close repository" />
-        </Stack>
+            {
+              key: "close",
+              label: "Close repository",
+              icon: (
+                <Close
+                  fontSize="small"
+                  sx={{ transform: "translate(-0.75px, -0.5px)" }}
+                />
+              ),
+              onPress: onClose,
+            },
+          ]}
+        />
       </Box>
     </Stack>
   );

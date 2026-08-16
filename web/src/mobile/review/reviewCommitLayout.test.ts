@@ -17,6 +17,14 @@ Deno.test("repository history opens commit content on the main review surface", 
   assertStringIncludes(appSource, 'mode === "git" && commitTarget');
 });
 
+Deno.test("repository footer keeps Settings and close in one capsule", () => {
+  assertStringIncludes(repositorySource, 'key: "settings"');
+  assertStringIncludes(repositorySource, 'key: "close"');
+  if (repositorySource.includes("MobileSheetDismiss")) {
+    throw new Error("Repository close belongs in the Settings capsule");
+  }
+});
+
 Deno.test("commit patches are not rendered inside the repository drawer", () => {
   assertStringIncludes(commitSource, "data-review-commit-patch");
   assertStringIncludes(commitSource, 'component="main"');

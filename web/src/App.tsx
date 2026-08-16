@@ -1083,18 +1083,26 @@ function SessionList({
                                 onPress: onNew,
                                 icon: <Add aria-hidden sx={{ fontSize: "1.35em" }} />,
                             },
+                        ]}
+                    />
+                    <MobileSheetActionGroup
+                        actions={[
                             {
                                 key: "close",
                                 label: "Close sessions",
                                 onPress: onClose ?? (() => undefined),
-                                icon: <CloseIcon aria-hidden sx={{ fontSize: "1.25em" }} />,
+                                icon: (
+                                    <CloseIcon
+                                        aria-hidden
+                                        sx={{
+                                            fontSize: "1.25em",
+                                            transform: "translate(-0.75px, -0.5px)",
+                                        }}
+                                    />
+                                ),
                             },
-                        ]}
-                    />
-                    {onOpenSettings && (
-                        <MobileSheetActionGroup
-                            actions={[
-                                {
+                            ...(onOpenSettings
+                                ? [{
                                     key: "settings",
                                     label: "Settings",
                                     onPress: onOpenSettings,
@@ -1104,10 +1112,10 @@ function SessionList({
                                             sx={{ fontSize: "1.25em" }}
                                         />
                                     ),
-                                },
-                            ]}
-                        />
-                    )}
+                                }]
+                                : []),
+                        ]}
+                    />
                 </Box>
             )}
             <Menu
