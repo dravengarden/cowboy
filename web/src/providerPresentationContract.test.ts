@@ -452,7 +452,7 @@ Deno.test("Provider activity keeps motion provider-authored and geometry rendere
   );
   assertEquals(
     transcriptPresentationSource.includes(
-      "size: SIGNAL_THOUGHT_MARK_SIZE,\n        gap: 6,\n        paddingLeft: 0,",
+      "size: SIGNAL_THOUGHT_MARK_SIZE,\n        gap: 8,\n        paddingLeft: 10,",
     ),
     true,
   );
