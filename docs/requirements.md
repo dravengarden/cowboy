@@ -227,6 +227,13 @@ Machine with that exact release active as its temporary executor. The returned
 candidate must repeat the same immutable identity before Service commit; an
 upgrade race or mismatched method fails closed.
 
+The Service Catalog advertises the deduplicated signed release identities that
+are active on connected Machines without exposing Machine identity. The UI may
+render newer compatible presentation assets, but it starts a selected method
+with the newest advertised exact release that declares that method. If no such
+executor exists, the UI must show an actionable install-or-upgrade error rather
+than swallowing the failed request or weakening exact-release validation.
+
 Cowboy automatically reconciles that generation to every enrolled, authorized,
 non-revoked Machine. Each credential bundle is sealed to the target Machine's
 enrollment key, stored in a private Service-managed replica area, and exposed

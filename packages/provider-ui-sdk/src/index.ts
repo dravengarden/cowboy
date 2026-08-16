@@ -555,6 +555,16 @@ export function resolveProviderAuthenticationPresentation(
 export interface ProviderCatalogResponse {
   providers: ProviderCatalogEntry[];
   authentications: ProviderAuthenticationStatus[];
+  authentication_executors: ProviderAuthenticationExecutor[];
+}
+
+/** Exact active Provider generations on connected Machines that may execute a
+ * temporary Cowboy Service authentication flow. Machine identity stays
+ * private because the Service UI only needs a trusted release identity. */
+export interface ProviderAuthenticationExecutor {
+  provider_id: string;
+  provider_version: string;
+  generation_digest: string;
 }
 
 export interface MachineProviderInventory {
@@ -717,7 +727,8 @@ export function validateProviderCatalog(
 ): ProviderCatalogResponse {
   if (
     !isRecord(input) || !Array.isArray(input.providers) ||
-    !Array.isArray(input.authentications)
+    !Array.isArray(input.authentications) ||
+    !Array.isArray(input.authentication_executors)
   ) {
     throw new Error("Invalid Provider Catalog response");
   }
@@ -813,6 +824,30 @@ export function validateProviderCatalog(
     ) {
       throw new Error("Invalid Provider authentication status");
     }
+  }
+  const executorIdentities = new Set<string>();
+  for (const raw of input.authentication_executors) {
+    if (
+      !isRecord(raw) ||
+      !hasOnlyKeys(raw, [
+        "provider_id",
+        "provider_version",
+        "generation_digest",
+      ]) ||
+      typeof raw.provider_id !== "string" ||
+      !isIdentifier(raw.provider_id) ||
+      typeof raw.provider_version !== "string" ||
+      !parseSemanticVersion(raw.provider_version) ||
+      typeof raw.generation_digest !== "string" ||
+      !isDigest(raw.generation_digest)
+    ) {
+      throw new Error("Invalid Provider authentication executor");
+    }
+    const identity = `${raw.provider_id}:${raw.provider_version}:${raw.generation_digest}`;
+    if (executorIdentities.has(identity)) {
+      throw new Error("Duplicate Provider authentication executor");
+    }
+    executorIdentities.add(identity);
   }
   return input as unknown as ProviderCatalogResponse;
 }

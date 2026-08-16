@@ -10,7 +10,7 @@
 //! use one-time enrollment plus an OpenSSH Ed25519 challenge before WebSocket
 //! protocol negotiation.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Read as _;
 use std::path::{Component, Path as FsPath, PathBuf};
 use std::sync::Arc;
@@ -3104,11 +3104,68 @@ async fn api_machine_revoke(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+struct ProviderAuthenticationExecutorIdentity {
+    provider_id: String,
+    provider_version: String,
+    generation_digest: String,
+}
+
+async fn connected_provider_authentication_executors(
+    state: &AppState,
+) -> Vec<ProviderAuthenticationExecutorIdentity> {
+    let Some(store) = state.store.as_ref() else {
+        return Vec::new();
+    };
+    let Ok(machines) = store.list_machines().await else {
+        return Vec::new();
+    };
+    let connected = state.machine_control.connected_machine_ids();
+    let mut executors = BTreeSet::new();
+    for machine in machines
+        .into_iter()
+        .filter(|machine| !machine.revoked && connected.contains(&machine.id))
+    {
+        let Ok(providers) = serde_json::from_value::<Vec<crate::machine_protocol::ProviderInventory>>(
+            machine
+                .inventory
+                .get("providers")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!([])),
+        ) else {
+            continue;
+        };
+        for installed in providers.into_iter().filter(|provider| {
+            provider.state == crate::machine_protocol::ProviderInstallationState::Active
+        }) {
+            if state
+                .provider_catalog
+                .resolve(
+                    &installed.provider_id,
+                    Some(&installed.provider_version),
+                    Some(&installed.generation_digest),
+                )
+                .is_err()
+            {
+                continue;
+            }
+            executors.insert(ProviderAuthenticationExecutorIdentity {
+                provider_id: installed.provider_id,
+                provider_version: installed.provider_version,
+                generation_digest: installed.generation_digest,
+            });
+        }
+    }
+    executors.into_iter().collect()
+}
+
 async fn api_providers(State(state): State<Arc<AppState>>) -> Response {
     let providers = state.provider_catalog.entries();
+    let authentication_executors = connected_provider_authentication_executors(&state).await;
     Json(serde_json::json!({
         "providers": providers,
         "authentications": state.provider_auth.statuses(),
+        "authentication_executors": authentication_executors,
     }))
     .into_response()
 }

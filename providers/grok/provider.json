@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "grok",
-  "version": "1.1.5",
+  "version": "1.1.6",
   "publisher": "cowboy-first-party",
   "sdk_version": "2.4.0",
   "display": {
@@ -45,7 +45,7 @@
     "transcript": {
       "schema_version": 1,
       "thought": {
-        "variant": "terminal",
+        "variant": "signal",
         "density": "compact",
         "active_label": "Working",
         "current_surface": "soft"

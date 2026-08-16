@@ -83,6 +83,24 @@ Deno.test("Provider authentication copy dispatches on typed presentation, not Pr
   }
 });
 
+Deno.test("Service authentication exposes progress, failure, native external navigation, and back", () => {
+  assertEquals(
+    managementSource.includes("providerAuthenticationExecutorEntry("),
+    true,
+  );
+  assertEquals(
+    managementSource.includes("authenticationPendingMethod"),
+    true,
+  );
+  assertEquals(managementSource.includes("authenticationError"), true);
+  assertEquals(
+    managementSource.includes('aria-label="Back to sign-in methods"'),
+    true,
+  );
+  assertEquals(managementSource.includes('component="a"'), true);
+  assertEquals(managementSource.includes('target="_blank"'), false);
+});
+
 Deno.test("Service credential management renders one card per typed authentication scope", () => {
   assertEquals(
     managementSource.includes("groupProviderAuthentications(latestEntries)"),

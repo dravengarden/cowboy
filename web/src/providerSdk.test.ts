@@ -20,6 +20,7 @@ import {
   exactProviderEntry,
   joinProviderInstallations,
   latestCompatibleProviderEntries,
+  providerAuthenticationExecutorEntry,
   providerEntryForIdentity,
   providerPresentationEntry,
 } from "./providerCatalogRegistry.ts";
@@ -491,11 +492,13 @@ Deno.test("Provider Catalog distinguishes typed unbound packages from installabl
       manifest: fixture,
     }],
     authentications: [],
+    authentication_executors: [],
   };
   validateProviderCatalog(catalog);
   const leaked = structuredClone(catalog) as unknown as {
     providers: Array<{ manifest: Record<string, unknown> }>;
     authentications: unknown[];
+    authentication_executors: unknown[];
   };
   leaked.providers[0]!.manifest.runtime = {};
   assertThrows(
@@ -524,12 +527,92 @@ Deno.test("Provider Catalog accepts a first Service authentication in progress",
     projection_schema: fixture.authentication.projection_schema,
     updated_at_ms: 1,
   };
-  validateProviderCatalog({ providers: [], authentications: [status] });
+  validateProviderCatalog({
+    providers: [],
+    authentications: [status],
+    authentication_executors: [],
+  });
   status.authentication_state = "ready";
   assertThrows(
-    () => validateProviderCatalog({ providers: [], authentications: [status] }),
+    () =>
+      validateProviderCatalog({
+        providers: [],
+        authentications: [status],
+        authentication_executors: [],
+      }),
     Error,
     "Invalid Provider authentication status",
+  );
+});
+
+Deno.test("Provider Catalog validates exact temporary authentication executors", () => {
+  const executor = {
+    provider_id: "codex",
+    provider_version: "1.1.1",
+    generation_digest: `sha256:${"a".repeat(64)}`,
+  };
+  validateProviderCatalog({
+    providers: [],
+    authentications: [],
+    authentication_executors: [executor],
+  });
+  assertThrows(
+    () =>
+      validateProviderCatalog({
+        providers: [],
+        authentications: [],
+        authentication_executors: [executor, executor],
+      }),
+    Error,
+    "Duplicate Provider authentication executor",
+  );
+});
+
+Deno.test("Service authentication selects the newest exact active executor", () => {
+  const olderManifest = uiManifest();
+  olderManifest.authentication.required = true;
+  olderManifest.authentication.presentation = "account";
+  olderManifest.authentication.methods = [{
+    id: "account",
+    label: "Account",
+    flow: "device_code",
+  }];
+  const older: ProviderCatalogEntry = {
+    provider_id: olderManifest.id,
+    provider_version: "1.0.0",
+    package_digest: `sha256:${"1".repeat(64)}`,
+    artifact_digest: `sha256:${"2".repeat(64)}`,
+    authentication_scope: "example-auth-v1",
+    release_state: "ready",
+    publisher: olderManifest.publisher,
+    contract_fingerprint: `sha256:${"3".repeat(64)}`,
+    supported_platforms: [{ os: "linux", architecture: "x86_64" }],
+    manifest: olderManifest,
+  };
+  const latestManifest = structuredClone(olderManifest);
+  latestManifest.version = "1.1.0";
+  const latest: ProviderCatalogEntry = {
+    ...older,
+    provider_version: latestManifest.version,
+    package_digest: `sha256:${"4".repeat(64)}`,
+    artifact_digest: `sha256:${"5".repeat(64)}`,
+    manifest: latestManifest,
+  };
+  assertEquals(
+    providerAuthenticationExecutorEntry(
+      {
+        providers: [latest, older],
+        authentications: [],
+        authentication_executors: [{
+          provider_id: older.provider_id,
+          provider_version: older.provider_version,
+          generation_digest: older.artifact_digest!,
+        }],
+      },
+      older.provider_id,
+      "account",
+    ),
+    older,
   );
 });
 
@@ -594,7 +677,7 @@ Deno.test("Machine Provider UI resolves the exact installed package", () => {
       first.provider_version,
       first.artifact_digest!,
     ),
-    first,
+    second,
   );
   second.manifest.ui.schema_version = 2;
   second.release_state = "unbound";

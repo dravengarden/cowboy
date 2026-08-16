@@ -4,17 +4,19 @@ import {
   Button,
   Checkbox,
   Chip,
+  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
   FormControlLabel,
-  Link,
+  IconButton,
   Paper,
   Stack,
   TextField,
   Typography,
 } from "@mui/material";
+import { ArrowBackRounded } from "@mui/icons-material";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import {
@@ -33,6 +35,7 @@ import {
 import {
   joinProviderInstallations,
   latestProviderEntries,
+  providerAuthenticationExecutorEntry,
   providerPresentationEntry,
   useProviderCatalog,
 } from "./providerCatalog";
@@ -386,6 +389,9 @@ function ProviderManagement(
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [flow, setFlow] = useState<AuthenticationFlow | null>(null);
   const [loginInput, setLoginInput] = useState("");
+  const [authenticationPendingMethod, setAuthenticationPendingMethod] =
+    useState("");
+  const [authenticationError, setAuthenticationError] = useState("");
   const [uninstallPlan, setUninstallPlan] = useState<UninstallPlan | null>(
     null,
   );
@@ -590,6 +596,8 @@ function ProviderManagement(
             credentialTitle: providerCredentialTitle(credentialEntries),
             events: [],
           });
+          setAuthenticationError("");
+          setAuthenticationPendingMethod("");
           return;
         case "logout_service_authentication": {
           if (scope !== "service") {
@@ -637,38 +645,85 @@ function ProviderManagement(
   };
 
   const startAuthentication = async (method: string): Promise<void> => {
-    if (!flow) return;
-    if (!flow.provider.artifact_digest) {
-      throw new Error(
-        "Provider authentication requires a signed runtime release",
+    if (!flow || authenticationPendingMethod) return;
+    setAuthenticationError("");
+    setAuthenticationPendingMethod(method);
+    try {
+      if (!catalog) throw new Error("Provider Catalog is not ready");
+      const executor = providerAuthenticationExecutorEntry(
+        catalog,
+        flow.provider.provider_id,
+        method,
       );
+      if (!executor?.artifact_digest) {
+        throw new Error(
+          "No online Machine has a compatible installed Provider for this sign-in method. Install or upgrade the Provider on one Machine, then try again.",
+        );
+      }
+      const response = await fetch(
+        `/api/providers/${
+          encodeURIComponent(flow.provider.provider_id)
+        }/auth/start`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            method,
+            provider_version: executor.provider_version,
+            generation_digest: executor.artifact_digest,
+          }),
+        },
+      );
+      await expectSuccess(response, "Could not start Provider authentication");
+      const body = await response.json() as {
+        request_id: string;
+        expires_at_ms: number;
+      };
+      setFlow((current) => current
+        ? {
+          ...current,
+          requestId: body.request_id,
+          expiresAtMs: body.expires_at_ms,
+          events: [],
+        }
+        : current);
+      await refreshCatalog();
+    } catch (cause) {
+      setAuthenticationError(
+        cause instanceof Error
+          ? cause.message
+          : "Could not start Provider authentication",
+      );
+    } finally {
+      setAuthenticationPendingMethod("");
     }
-    const response = await fetch(
-      `/api/providers/${
-        encodeURIComponent(flow.provider.provider_id)
-      }/auth/start`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          method,
-          provider_version: flow.provider.provider_version,
-          generation_digest: flow.provider.artifact_digest,
-        }),
-      },
-    );
-    await expectSuccess(response, "Could not start Provider authentication");
-    const body = await response.json() as {
-      request_id: string;
-      expires_at_ms: number;
-    };
-    setFlow({
-      ...flow,
-      requestId: body.request_id,
-      expiresAtMs: body.expires_at_ms,
-      events: [],
-    });
-    await refreshCatalog();
+  };
+
+  const returnToAuthenticationMethods = async (): Promise<void> => {
+    const current = flow;
+    if (!current?.requestId) return;
+    try {
+      await fetch(
+        `/api/providers/${
+          encodeURIComponent(current.provider.provider_id)
+        }/auth/${encodeURIComponent(current.requestId)}`,
+        { method: "DELETE" },
+      );
+    } finally {
+      setLoginInput("");
+      setAuthenticationError("");
+      setAuthenticationPendingMethod("");
+      setFlow((value) => {
+        if (!value) return value;
+        const {
+          requestId: _requestId,
+          expiresAtMs: _expiresAtMs,
+          ...rest
+        } = value;
+        return { ...rest, events: [] };
+      });
+      await refreshCatalog();
+    }
   };
 
   const cancelAuthentication = async (): Promise<void> => {
@@ -683,6 +738,8 @@ function ProviderManagement(
       }
     } finally {
       setLoginInput("");
+      setAuthenticationError("");
+      setAuthenticationPendingMethod("");
       setFlow(null);
       await refreshCatalog();
     }
@@ -1164,6 +1221,18 @@ function ProviderManagement(
         maxWidth="sm"
       >
         <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          {flow?.requestId
+            ? (
+              <IconButton
+                size="small"
+                aria-label="Back to sign-in methods"
+                onClick={() => void returnToAuthenticationMethods()}
+                sx={{ ml: -0.5 }}
+              >
+                <ArrowBackRounded fontSize="small" />
+              </IconButton>
+            )
+            : null}
           {flow ? <ProviderMark manifest={flow.provider.manifest} /> : null}
           {flow
             ? flow.sharedProviderNames.length > 1
@@ -1206,11 +1275,18 @@ function ProviderManagement(
                         <Button
                           key={method.id}
                           variant="contained"
+                          disabled={Boolean(authenticationPendingMethod)}
+                          startIcon={authenticationPendingMethod === method.id
+                            ? <CircularProgress size={16} color="inherit" />
+                            : undefined}
                           onClick={() => void startAuthentication(method.id)}
                         >
                           {method.label}
                         </Button>
                       ))}
+                      {authenticationError
+                        ? <Alert severity="error">{authenticationError}</Alert>
+                        : null}
                     </Stack>
                   )
                   : null}
@@ -1218,10 +1294,8 @@ function ProviderManagement(
                   ? (
                     <Stack spacing={1}>
                       <Button
-                        component={Link}
+                        component="a"
                         href={challenge.verification_url}
-                        target="_blank"
-                        rel="noreferrer"
                         variant="contained"
                       >
                         {authenticationCopy(
@@ -1230,6 +1304,10 @@ function ProviderManagement(
                           ),
                         ).externalAction}
                       </Button>
+                      <Typography variant="caption" color="text.secondary">
+                        After completing the Provider page, return to Cowboy.
+                        This dialog will keep waiting securely.
+                      </Typography>
                       {challenge.user_code
                         ? (
                           <Button
@@ -1302,6 +1380,16 @@ function ProviderManagement(
             : null}
         </DialogContent>
         <DialogActions>
+          {flow?.requestId
+            ? (
+              <Button
+                color="inherit"
+                onClick={() => void returnToAuthenticationMethods()}
+              >
+                Back
+              </Button>
+            )
+            : null}
           <Button color="inherit" onClick={() => void cancelAuthentication()}>
             {loginState?.event === "login_state" &&
                 (loginState.state === "signed_in" ||
