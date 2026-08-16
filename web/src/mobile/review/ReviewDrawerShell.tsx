@@ -138,7 +138,7 @@ export function ReviewDrawerShell({
             position: "absolute",
             zIndex: 2,
             inset: 0,
-            bgcolor: "transparent",
+            bgcolor: "common.black",
             opacity: 0,
             pointerEvents: open ? "auto" : "none",
           }}

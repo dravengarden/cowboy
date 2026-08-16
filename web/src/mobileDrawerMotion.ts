@@ -58,17 +58,20 @@ export function mobileDrawerProgress(
     : 0;
 }
 
-/** Obsidian's peeking page stays full size, undimmed, and unscaled. Radius
- *  stays in the helper for callers that want a card cue; the session
+/** Obsidian's peeking page stays full size and unscaled. A light black
+ *  veil recedes the workspace without changing its layout. The session
  *  surface itself must not clip, or iOS punches holes in the peek. */
 export function mobileDrawerCardVisual(
   offset: number,
   width: number,
   phone: boolean,
 ): { progress: number; dim: number; radiusPx: number } {
+  const progress = mobileDrawerProgress(offset, width);
+  const openDim = phone ? 0.22 : 0.16;
+  const fade = progress * progress * (3 - 2 * progress);
   return {
-    progress: mobileDrawerProgress(offset, width),
-    dim: 0,
+    progress,
+    dim: openDim * fade,
     radiusPx: phone ? 20 : 16,
   };
 }
