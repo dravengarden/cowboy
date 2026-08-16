@@ -2605,15 +2605,9 @@ export function App({
                         left: 0,
                         width: 28,
                         bgcolor: "background.default",
-                        // A full-viewport mask's box-shadow is ink overflow of a
-                        // composited layer; iOS WebKit sometimes drops it. A
-                        // thin seam at the sliding card's inner edge keeps the
-                        // same depth cue without that clip. Paint the strip
-                        // the peek color so a sliver never reads as a hole.
-                        // React owns the settled depth cue. The gesture binding
-                        // may add the same inline shadow while opening, but its
-                        // cleanup must never make an already-open drawer look
-                        // closed or release the outer product pager.
+                        // The mask used to carry a projected shadow. Obsidian
+                        // keeps a hard paper|page join, so the strip is only
+                        // paint insurance in the peek color.
                         boxShadow: drawerOpen
                             ? mobileSpatialDrawerShadow("left")
                             : "none",

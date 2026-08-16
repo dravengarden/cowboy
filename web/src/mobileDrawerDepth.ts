@@ -1,12 +1,11 @@
 import type { MobileSpatialDrawerSide } from "./mobileSpatialDrawer.ts";
 
 export function mobileSpatialDrawerShadow(
-  side: MobileSpatialDrawerSide,
+  _side: MobileSpatialDrawerSide,
 ): string {
-  // The full-viewport mask moves with the foreground surface. Its inner edge
-  // is the left edge for a left drawer and the right edge for a right drawer,
-  // so the shadow must project back toward the revealed drawer.
-  return `${side === "left" ? "-" : ""}18px 0 42px rgba(0,0,0,0.16)`;
+  // Obsidian's peek is a full-size page with a hard paper|page join.
+  // A projected shadow turns that edge into a floating card.
+  return "none";
 }
 
 /** Keep the seam shadow while React still thinks the drawer is open, or while
