@@ -1,5 +1,9 @@
 import { assertEquals } from "jsr:@std/assert";
-import { clampKeyboardOverlap, inferKeyboardOpen } from "./keyboardGeometry.ts";
+import {
+  clampKeyboardOverlap,
+  inferKeyboardOpen,
+  isUnreliableVisualViewport,
+} from "./keyboardGeometry.ts";
 
 Deno.test("keyboard geometry detects visual viewport overlap", () => {
   assertEquals(inferKeyboardOpen({
@@ -29,7 +33,11 @@ Deno.test("keyboard geometry ignores layout changes without editable focus", () 
 });
 
 Deno.test("keyboard overlap ignores a one-frame collapsed visual viewport", () => {
-  assertEquals(clampKeyboardOverlap(844, 844), 439);
+  assertEquals(isUnreliableVisualViewport(844, 0), true);
+  assertEquals(isUnreliableVisualViewport(844, 10), true);
+  assertEquals(isUnreliableVisualViewport(844, 510), false);
+  assertEquals(isUnreliableVisualViewport(510, 510), false);
+  assertEquals(clampKeyboardOverlap(844, 844), 0);
   assertEquals(clampKeyboardOverlap(334, 844), 334);
   assertEquals(clampKeyboardOverlap(0, 844), 0);
 });
