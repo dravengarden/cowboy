@@ -29,6 +29,7 @@ import {
 } from "./durableDelivery.ts";
 import { shouldApplyHydratedConfigOptions } from "./configOptionsHydration";
 import { pruneDrafts } from "./draftStore";
+import { revealPendingArrival } from "./pendingPanelState";
 import { linkTimeline } from "./derive";
 import { resetExploreAfterContextClear } from "./explore/exploreStore";
 import { notifyHaptic } from "./haptic";
@@ -1900,6 +1901,11 @@ function qAdd(
     ? "frontQueue"
     : "addQueue";
   store.mutate(mutator, { row }, cmid);
+  revealPendingArrival({
+    kind: target === "drafts" ? "draft" : "queued",
+    id: row.id,
+    cmid,
+  });
   return waitForState(
     () => !store.pending().some((mutation) => mutation.id === cmid),
     target === "drafts" ? "Save draft" : "Send message",
@@ -2363,15 +2369,23 @@ export function scheduleDraft(
   opts: { id?: string; text?: string; attachments?: Attachment[]; fireAtMs: number; delivery?: Delivery },
 ): void {
   const { id, text = "", attachments = [], fireAtMs, delivery = "back" } = opts;
+  const cmid = id === undefined ? newCmid() : undefined;
   send({
     type: "schedule_draft",
     session_id: sessionId,
-    ...(id !== undefined ? { id } : { cmid: newCmid() }),
+    ...(id !== undefined ? { id } : cmid === undefined ? {} : { cmid }),
     text: text.trimEnd(),
     content: contentOf(text.trimEnd(), attachments),
     fire_at_ms: fireAtMs,
     delivery,
   });
+  if (cmid !== undefined) {
+    revealPendingArrival({
+      kind: "draft",
+      id: `opt-${cmid}`,
+      cmid,
+    });
+  }
 }
 
 // Strip the schedule off a draft (it stays a plain parked draft).

@@ -186,7 +186,6 @@ import {
     MobileSheetActionGroup,
     MobileSheetDismiss,
     NativeReleaseUpdatePrompt,
-    ThemeModeControl,
 } from "./_shell";
 import { ConfirmSheet, Sheet } from "./Sheet";
 import { Kbd, useConfirmEnter } from "./Kbd";
@@ -3840,8 +3839,9 @@ export function App({
 
 // Settings surface. Uses the shared BottomSheet (DetentSheet momentum sheet on
 // mobile, centred Dialog on desktop) so it looks/behaves identically to every
-// other app's settings + the portal's launcher. Content is the shared
-// ThemeModeControl + a small About blurb.
+// other app's settings + the portal's launcher. Touch is a preference list;
+// the root page has no in-flow title because the sheet handle already marks
+// the surface and the floating footer dismisses it.
 // Sample values for the continuation-template live preview, so the preview works
 // even with no real interruption on hand (the "示例数据" source).
 const AUTO_RESUME_SAMPLE: Record<string, string> = {
@@ -5145,7 +5145,13 @@ function SettingsShell({
         >
             <GlobalStyles styles={controlCenterViewTransitionStyles} />
             {/* Touch is one Settings list with drill-in pages. Desktop keeps
-                native tabs so Machines / Info / Logs stay first-class. */}
+                native tabs so Machines / Info / Logs stay first-class. The
+                root mobile list starts at the first preference: a fat
+                "Settings" title only repeats the sheet and leaves a dead
+                band under the handle, especially at a reduced font scale.
+                Drill-in pages keep a one-line sticky label; Back lives in
+                the floating footer so the header is not a second chrome. */}
+            {(desktop || tab !== "settings") && (
             <Box
                 sx={{
                     position: "sticky",
@@ -5153,7 +5159,7 @@ function SettingsShell({
                     zIndex: 4,
                     bgcolor: desktop ? "background.paper" : "background.default",
                     pt: desktop ? 0 : 0.25,
-                    pb: desktop ? 0 : 0.75,
+                    pb: desktop ? 0 : 0.5,
                     borderRadius: 0,
                     borderBottom: desktop ? 0 : 1,
                     borderColor: "divider",
@@ -5164,8 +5170,8 @@ function SettingsShell({
                     display: desktop ? "flex" : "grid",
                     gridTemplateColumns: desktop ? "none" : "1fr",
                     alignItems: "center",
-                    mt: 0.25,
-                    mb: desktop ? 1 : 1.5,
+                    mt: desktop ? 0.25 : 0,
+                    mb: desktop ? 1 : 0,
                     py: desktop ? 0.5 : 0,
                     width: "100%",
                 }}
@@ -5175,28 +5181,10 @@ function SettingsShell({
                         <Typography variant="h6" fontWeight={780}>Cowboy control center</Typography>
                         <Typography variant="caption" color="text.secondary">Preferences, runtime information, and automation history</Typography>
                     </Box>
-                ) : null}
-                {!desktop && (
-                    <Stack
-                        direction="row"
-                        alignItems="center"
-                        spacing={0.5}
-                        sx={{ width: "100%", minHeight: 40 }}
-                    >
-                        {tab !== "settings" && (
-                            <IconButton
-                                aria-label="Back to Settings"
-                                onClick={(): void => changeTab("settings")}
-                                onPointerDown={(event): void => event.stopPropagation()}
-                                sx={{ ml: -0.75 }}
-                            >
-                                <ArrowBackIosNew />
-                            </IconButton>
-                        )}
-                        <Typography variant="h6" fontWeight={740} sx={{ letterSpacing: -0.2 }}>
-                            {settingsDestinationLabel(tab)}
-                        </Typography>
-                    </Stack>
+                ) : (
+                    <Typography variant="subtitle1" fontWeight={740} sx={{ letterSpacing: -0.2 }}>
+                        {settingsDestinationLabel(tab)}
+                    </Typography>
                 )}
                 {desktop && <Box
                     sx={{
@@ -5259,6 +5247,7 @@ function SettingsShell({
                 </Tabs>
             )}
             </Box>
+            )}
             {desktop ? (
                 <Box
                     ref={settingsPanelRef}
@@ -5322,18 +5311,37 @@ function SettingsShell({
                     </Box>
                 </Box>
             ) : !tabPanelVisible ? null : renderedTab === "providers" ? <ProvidersContent /> : renderedTab === "machines" ? <MachinesContent /> : renderedTab === "info" ? <InfoContent /> : renderedTab === "logs" ? <UsageLogs /> : (
-            <Stack spacing={3}>
-                <ThemeModeControl value={themeMode} onChange={onSetThemeMode} />
+            <Stack spacing={2}>
+                <Stack
+                    direction="row"
+                    alignItems="center"
+                    justifyContent="space-between"
+                    spacing={2}
+                >
+                    <Stack>
+                        <Typography variant="body2">Theme</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                            Follow the system or pin a palette
+                        </Typography>
+                    </Stack>
+                    <Select
+                        size="small"
+                        value={themeMode}
+                        onChange={(event): void =>
+                            onSetThemeMode(event.target.value as ThemeMode)}
+                        sx={{ minWidth: 104 }}
+                    >
+                        {(["system", "light", "dark"] as const).map((mode) => (
+                            <MenuItem key={mode} value={mode}>
+                                {mode.charAt(0).toUpperCase() + mode.slice(1)}
+                            </MenuItem>
+                        ))}
+                    </Select>
+                </Stack>
 
                 {/* Reading comfort — scales only the transcript message content
                     and its side gutter (chrome stays put). Dropdowns, not a
                     slider: they tap cleanly on touch (see readingSettings). */}
-                <Divider />
-                <Stack spacing={2}>
-                    <Typography variant="overline" color="text.secondary">
-                        Reading
-                    </Typography>
-
                     {/* Font family — collapsible. Collapsed shows the current
                         face previewed in itself (so the selection is always
                         visible without the 7-card list filling the screen);
@@ -5524,7 +5532,6 @@ function SettingsShell({
                             ))}
                         </Select>
                     </Stack>
-                </Stack>
                 <Divider />
                 <Stack
                     direction="row"
