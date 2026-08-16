@@ -5124,9 +5124,9 @@ function SettingsShell({
                     bgcolor: desktop ? "background.paper" : "background.default",
                     pt: desktop ? 0 : 0.25,
                     pb: desktop ? 0 : 0.75,
-                    borderRadius: desktop ? 0 : 3,
-                    borderTopLeftRadius: 0,
-                    borderTopRightRadius: 0,
+                    borderRadius: 0,
+                    borderBottom: desktop ? 0 : 1,
+                    borderColor: "divider",
                 }}
             >
             <Box

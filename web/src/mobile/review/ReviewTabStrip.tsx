@@ -30,6 +30,7 @@ export function ReviewTabStrip({
   onTogglePin,
   allowCloseActions = true,
   allowReorder = true,
+  allowPin = true,
   onReorder,
 }: {
   tabs: ReviewTab[];
@@ -41,6 +42,7 @@ export function ReviewTabStrip({
   onTogglePin: (key: string) => void;
   allowCloseActions?: boolean;
   allowReorder?: boolean;
+  allowPin?: boolean;
   onReorder?: (movingKey: string, targetKey: string) => void;
 }): React.JSX.Element | null {
   const strip = useRef<HTMLDivElement>(null);
@@ -100,7 +102,8 @@ export function ReviewTabStrip({
     press.current = undefined;
     setDraggingKey(undefined);
     if (
-      openMenu && current?.dragging && !current.moved
+      openMenu && current?.dragging && !current.moved &&
+      (allowPin || allowCloseActions)
     ) {
       setMenu({ anchor: current.anchor, tab: current.tab });
     }
@@ -283,14 +286,16 @@ export function ReviewTabStrip({
         open={menu !== undefined}
         onClose={() => setMenu(undefined)}
       >
-        <MenuItem
-          onClick={() => {
-            if (menu) onTogglePin(reviewTabKey(menu.tab));
-            setMenu(undefined);
-          }}
-        >
-          {menu?.tab.pinned ? "Unpin" : "Pin"}
-        </MenuItem>
+        {allowPin && (
+          <MenuItem
+            onClick={() => {
+              if (menu) onTogglePin(reviewTabKey(menu.tab));
+              setMenu(undefined);
+            }}
+          >
+            {menu?.tab.pinned ? "Unpin" : "Pin"}
+          </MenuItem>
+        )}
         {allowCloseActions && (
           <MenuItem
             onClick={() => {

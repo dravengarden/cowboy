@@ -171,32 +171,38 @@ export function ReviewDrawerShell({
           }}
         />
         {children}
-        <Box
-          data-mobile-drawer-close="right"
-          role="button"
-          tabIndex={open ? 0 : -1}
-          aria-label="Close review sidebar"
-          aria-hidden={!open}
-          onPointerDown={closePeek.onPointerDown}
-          onPointerMove={closePeek.onPointerMove}
-          onPointerUp={closePeek.onPointerUp}
-          onPointerCancel={closePeek.onPointerCancel}
-          onClick={closePeek.onClick}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" || event.key === " ") {
-              event.preventDefault();
-              if (openRef.current) closeRef.current();
-            }
-          }}
-          sx={{
-            position: "absolute",
-            zIndex: (t) => t.zIndex.modal - 1,
-            inset: 0,
-            pointerEvents: open ? "auto" : "none",
-            cursor: open ? "pointer" : "default",
-          }}
-        />
       </Box>
+      <Box
+        data-mobile-drawer-close="right"
+        role="button"
+        tabIndex={open ? 0 : -1}
+        aria-label="Close review sidebar"
+        aria-hidden={!open}
+        onPointerDown={closePeek.onPointerDown}
+        onPointerMove={closePeek.onPointerMove}
+        onPointerUp={closePeek.onPointerUp}
+        onPointerCancel={closePeek.onPointerCancel}
+        onClick={closePeek.onClick}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            if (openRef.current) closeRef.current();
+          }
+        }}
+        sx={{
+          // Screen-space peek hit target. Do not put this inside the
+          // translated surface: iOS hit-tests the transformed box and the
+          // visible strip then misses the close layer.
+          position: "absolute",
+          zIndex: (t) => t.zIndex.modal - 1,
+          top: 0,
+          bottom: 0,
+          left: 0,
+          width: "calc(100% - var(--mobile-drawer-width, min(84%, 360px)))",
+          pointerEvents: open ? "auto" : "none",
+          cursor: open ? "pointer" : "default",
+        }}
+      />
     </Box>
   );
 }

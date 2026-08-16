@@ -10,12 +10,17 @@ export type ReviewTab =
     path: string;
     scope: CodeDiffScope;
     pinned: boolean;
-  };
+  }
+  | { kind: "commit"; path: string; pinned: boolean };
 
 export function reviewTabKey(tab: ReviewTab): string {
-  return tab.kind === "source"
-    ? `source:${tab.path}`
-    : `diff:${tab.scope}:${tab.path}`;
+  if (tab.kind === "source") return `source:${tab.path}`;
+  if (tab.kind === "diff") return `diff:${tab.scope}:${tab.path}`;
+  return `commit:${tab.path}`;
+}
+
+export function commitFileTabs(paths: readonly string[]): ReviewTab[] {
+  return paths.map((path) => ({ kind: "commit", path, pinned: false }));
 }
 
 export function reorderReviewTabs(

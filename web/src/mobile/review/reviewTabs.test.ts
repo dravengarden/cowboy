@@ -4,6 +4,7 @@ import {
   closeAllReviewTabs,
   closeOtherReviewTabs,
   closeReviewTab,
+  commitFileTabs,
   openReviewTab,
   reorderReviewTabs,
   retainChangedDiffTabs,
@@ -16,6 +17,17 @@ const source = (path: string, pinned = false): ReviewTab => ({
   kind: "source",
   path,
   pinned,
+});
+
+Deno.test("commit files use a closeless tab identity", () => {
+  assertEquals(
+    reviewTabKey({ kind: "commit", path: "src/main.rs", pinned: false }),
+    "commit:src/main.rs",
+  );
+  assertEquals(
+    commitFileTabs(["a.rs", "b.rs"]).map(reviewTabKey),
+    ["commit:a.rs", "commit:b.rs"],
+  );
 });
 
 Deno.test("opening an existing tab preserves its position", () => {

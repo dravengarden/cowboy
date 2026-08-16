@@ -23,4 +23,5 @@ Deno.test("mobile Settings is a preference list with drill-in destinations", () 
   assertEquals(appSource.includes("<SettingsDestinationRail"), false);
   assertEquals(appSource.includes("<SettingsProductSwitch"), false);
   assert(appSource.includes("portal"));
+  assert(appSource.includes("borderRadius: 0"));
 });

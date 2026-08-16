@@ -29,6 +29,8 @@ Deno.test("mobile drawer translates an in-flow page that owns the footer", () =>
   assert(reviewDrawerSource.includes('data-mobile-drawer-close="right"'));
   assert(reviewDrawerSource.includes('role="button"'));
   assert(reviewDrawerSource.includes("useReliableTouchTap"));
+  assert(reviewDrawerSource.includes("Screen-space peek hit target"));
+  assert(reviewDrawerSource.includes("width: \"calc(100% - var(--mobile-drawer-width"));
   assert(reviewDrawerSource.includes('pointerEvents: "none"'));
   assert(reviewDrawerSource.includes('"& > *": { pointerEvents: "auto" }'));
   assert(reviewDrawerSource.includes("{children}"));

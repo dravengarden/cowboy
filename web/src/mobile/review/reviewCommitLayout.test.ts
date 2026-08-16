@@ -22,6 +22,18 @@ Deno.test("repository history pages older commits instead of a 128-commit wall",
   }
 });
 
+Deno.test("a commit patch has no inner back chrome and lists files in the strip", () => {
+  if (commitSource.includes("Back to commit files")) {
+    throw new Error("Commit patch should not add a second back control");
+  }
+  if (!appSource.includes("commitFileTabs(commitPaths)")) {
+    throw new Error("Commit view must put involved files in the tab strip");
+  }
+  if (!appSource.includes("allowPin={mode === \"files\"}")) {
+    throw new Error("Commit file tabs must not offer close or pin");
+  }
+});
+
 Deno.test("repository history opens commit content on the main review surface", () => {
   assertStringIncludes(repositorySource, "onOpenCommit(commit);");
   assertStringIncludes(repositorySource, "onClose();");
