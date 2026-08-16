@@ -20,6 +20,7 @@ Deno.test("repository history opens commit content on the main review surface", 
 Deno.test("repository footer keeps Settings and close in one capsule", () => {
   assertStringIncludes(repositorySource, 'key: "settings"');
   assertStringIncludes(repositorySource, 'key: "close"');
+  assertStringIncludes(repositorySource, 'justifyContent: "flex-start"');
   if (repositorySource.includes("MobileSheetDismiss")) {
     throw new Error("Repository close belongs in the Settings capsule");
   }

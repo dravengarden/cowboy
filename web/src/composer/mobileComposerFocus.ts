@@ -63,3 +63,15 @@ export function shouldPresentMobileKeyboardSurface(
 ): boolean {
   return keyboardOpen && !resetBlocked;
 }
+
+/** Compact ↔ fullscreen remounts the editor. A one-frame visualViewport
+ *  close must not blur the surviving first-responder. */
+let mobileEditorFocusTransferUntil = 0;
+
+export function beginMobileEditorFocusTransfer(): void {
+  mobileEditorFocusTransferUntil = Date.now() + 800;
+}
+
+export function isMobileEditorFocusTransferPending(): boolean {
+  return Date.now() < mobileEditorFocusTransferUntil;
+}

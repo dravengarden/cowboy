@@ -405,8 +405,14 @@ export function ReviewRepository({
           left: 0,
           right: 0,
           bottom: "max(env(safe-area-inset-bottom, 0px), 12px)",
+          display: "flex",
+          justifyContent: "flex-start",
           px: 2,
           pointerEvents: "none",
+          "& > [data-mobile-sheet-footer-shield]": {
+            width: "auto",
+            flex: "0 0 auto",
+          },
         }}
       >
         <MobileSheetActionGroup

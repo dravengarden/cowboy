@@ -93,6 +93,8 @@ import {
   didMobileSoftwareKeyboardClose,
   dismissMobileSoftwareKeyboard,
   mobilePendingKeyboardCloseSettleMs,
+  beginMobileEditorFocusTransfer,
+  isMobileEditorFocusTransferPending,
   releaseMobileComposerFocus,
   shouldPresentMobileKeyboardSurface,
 } from "./composer/mobileComposerFocus";
@@ -1540,6 +1542,11 @@ export function ComposerWorkspace({
       )
     ) return undefined;
 
+    if (isMobileEditorFocusTransferPending()) {
+      mobileComposerKeyboardWasOpenRef.current = keyboardOpen;
+      return undefined;
+    }
+
     mobileComposerKeyboardWasOpenRef.current = false;
     // iOS and third-party keyboards can hide without blurring their surviving
     // textarea/contenteditable. The Composer chrome is intentionally driven by
@@ -2378,12 +2385,14 @@ export function ComposerWorkspace({
                     "& .MuiSvgIcon-root": { fontSize: "1.25rem" },
                   }}
                   onPointerDown={(event): void => event.preventDefault()}
+                  onMouseDown={(event): void => event.preventDefault()}
                   onClick={(): void => {
                     // Snapshot the logical selection before replacing the compact
                     // editor. Pointer-down keeps the old editor focused, then the
                     // same tap mounts and focuses fullscreen exactly once so UIKit
                     // retains both its keyboard transaction and caret/range.
                     const selection = editorRef.current?.getSelection();
+                    beginMobileEditorFocusTransfer();
                     flushSync(() => setComposeFs(true));
                     if (selection) {
                       editorRef.current?.focusSelection(selection);
@@ -3418,6 +3427,7 @@ export function ComposerWorkspace({
             // then restore its exact selection before UIKit ends the keyboard
             // transaction. A delayed effect or focusEnd() loses the user's caret.
             const selection = editorRef.current?.getSelection();
+            beginMobileEditorFocusTransfer();
             flushSync(() => setComposeFs(false));
             if (selection) editorRef.current?.focusSelection(selection);
             else editorRef.current?.focusEnd();
@@ -5260,6 +5270,7 @@ function PendingRow({
     const expandMobileEdit = (): void => {
       haptic();
       const selection = editorRef.current?.getSelection();
+      beginMobileEditorFocusTransfer();
       flushSync(() => setOverlayOpen(true));
       if (selection) overlayEditorRef.current?.focusSelection(selection);
       else overlayEditorRef.current?.focusEnd();

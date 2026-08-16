@@ -162,20 +162,24 @@ export function ReviewDrawerShell({
             pointerEvents: "none",
           }}
         />
+        {children}
         <Box
           data-mobile-drawer-close="right"
+          role="button"
+          tabIndex={open ? 0 : -1}
           aria-label="Close worktree drawer"
+          aria-hidden={!open}
           onClick={() => {
             if (open) closeRef.current();
           }}
           sx={{
             position: "absolute",
-            zIndex: 2,
+            zIndex: (t) => t.zIndex.modal - 1,
             inset: 0,
             pointerEvents: "none",
+            cursor: open ? "pointer" : "default",
           }}
         />
-        {children}
       </Box>
     </Box>
   );
