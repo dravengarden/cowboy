@@ -5106,7 +5106,7 @@ function SettingsShell({
                         actions={[{
                             key: "back",
                             label: "Back to Settings",
-                            icon: <ArrowBackIosNew sx={{ fontSize: 18, ml: "-2px" }} />,
+                            icon: <ArrowBackIosNew sx={{ fontSize: "1.25em", ml: "-0.08em" }} />,
                             onPress: (): void => changeTab("settings"),
                         }]}
                     />
@@ -5160,7 +5160,7 @@ function SettingsShell({
                                 onPointerDown={(event): void => event.stopPropagation()}
                                 sx={{ ml: -0.75 }}
                             >
-                                <ArrowBackIosNew sx={{ fontSize: 18 }} />
+                                <ArrowBackIosNew />
                             </IconButton>
                         )}
                         <Typography variant="h6" fontWeight={740} sx={{ letterSpacing: -0.2 }}>
