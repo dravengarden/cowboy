@@ -61,3 +61,19 @@ Deno.test("mobile drawer translates an in-flow page that owns the footer", () =>
     false,
   );
 });
+
+Deno.test("mobile Settings lives on the Sessions island and Code takes the old slot", () => {
+  assert(appSource.includes('key: "settings"'));
+  assert(appSource.includes('label: "Settings"'));
+  assert(appSource.includes("onOpenSettings={mobile"));
+  assert(appSource.includes('data-mobile-open-code="true"'));
+  assert(appSource.includes('aria-label="Open code"'));
+  assert(appSource.includes("openMobileProduct(\"review\")"));
+  const mobileCode = appSource.indexOf('data-mobile-open-code="true"');
+  const mobileSettingsGear = appSource.indexOf(
+    "aria-label=\"settings\"",
+    mobileCode,
+  );
+  assert(mobileCode >= 0);
+  assertEquals(mobileSettingsGear, -1);
+});

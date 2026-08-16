@@ -30,20 +30,20 @@ const formatActionsSource = await Deno.readTextFile(
 const editorSource = await Deno.readTextFile(
   new URL("../ComposerEditor.tsx", import.meta.url),
 );
-const settingsPointerDown = appSource.lastIndexOf(
-  "settingsTap.onPointerDown",
+const codePointerDown = appSource.lastIndexOf(
+  "openCodeTap.onPointerDown",
 );
-const mobileSettingsStart = appSource.lastIndexOf(
+const mobileCodeStart = appSource.lastIndexOf(
   "<IconButton",
-  settingsPointerDown,
+  codePointerDown,
 );
-const mobileSettingsEnd = appSource.indexOf(
+const mobileCodeEnd = appSource.indexOf(
   "</IconButton>",
-  settingsPointerDown,
+  codePointerDown,
 );
-const mobileSettingsSource = appSource.slice(
-  mobileSettingsStart,
-  mobileSettingsEnd,
+const mobileCodeSource = appSource.slice(
+  mobileCodeStart,
+  mobileCodeEnd,
 );
 
 Deno.test("mobile composer promotion requires a visible keyboard and real editor focus", () => {
@@ -133,43 +133,43 @@ Deno.test("mobile session navigation stays tappable after keyboard dismissal", (
   );
 });
 
-Deno.test("mobile settings commits touch taps when Safari drops synthetic click", () => {
+Deno.test("mobile Code commits touch taps when Safari drops synthetic click", () => {
   assertEquals(
-    mobileSettingsStart >= 0 && mobileSettingsEnd > mobileSettingsStart,
+    mobileCodeStart >= 0 && mobileCodeEnd > mobileCodeStart,
     true,
   );
   assertEquals(
-    mobileSettingsSource.includes("settingsTap.onPointerUp"),
+    mobileCodeSource.includes("openCodeTap.onPointerUp"),
     true,
   );
   assertEquals(
-    mobileSettingsSource.includes("settingsTap.onPointerCancel"),
+    mobileCodeSource.includes("openCodeTap.onPointerCancel"),
     true,
   );
-  assertEquals(mobileSettingsSource.includes("settingsTap.onClick"), true);
+  assertEquals(mobileCodeSource.includes("openCodeTap.onClick"), true);
 });
 
-Deno.test("mobile settings does not retain synthetic touch hover paint", () => {
+Deno.test("mobile Code does not retain synthetic touch hover paint", () => {
   assertEquals(
-    mobileSettingsSource.includes(
+    mobileCodeSource.includes(
       'event.currentTarget.dataset.touchActivated = "true"',
     ),
     true,
   );
   assertEquals(
-    mobileSettingsSource.includes(
+    mobileCodeSource.includes(
       "&[data-touch-activated='true']:hover, &[data-touch-activated='true'].Mui-focusVisible",
     ),
     true,
   );
   assertEquals(
-    mobileSettingsSource.match(
+    mobileCodeSource.match(
       /delete event\.currentTarget\.dataset\.touchActivated/g,
     )?.length,
     3,
   );
   assertEquals(
-    mobileSettingsSource.includes(
+    mobileCodeSource.includes(
       "&[data-touch-activated='true']:active",
     ),
     true,

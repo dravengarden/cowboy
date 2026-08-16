@@ -1,5 +1,7 @@
 import { assert, assertEquals } from "jsr:@std/assert";
 import {
+  MOBILE_OPEN_PRODUCT_EVENT,
+  mobileProductFromEvent,
   nextMobileProduct,
   pagerDirectionAllowed,
   pagerOffset,
@@ -48,6 +50,20 @@ Deno.test("interactive content and open spatial drawers keep their gesture", () 
 Deno.test("product transitions are symmetric", () => {
   assertEquals(nextMobileProduct("agent"), "review");
   assertEquals(nextMobileProduct("review"), "agent");
+});
+
+Deno.test("an explicit Code tap asks the pager to settle without stealing swipe", () => {
+  const event = new CustomEvent(MOBILE_OPEN_PRODUCT_EVENT, {
+    detail: { product: "review" },
+  });
+  assertEquals(mobileProductFromEvent(event), "review");
+  assertEquals(
+    mobileProductFromEvent(new CustomEvent(MOBILE_OPEN_PRODUCT_EVENT)),
+    null,
+  );
+  assert(pagerSource.includes("MOBILE_OPEN_PRODUCT_EVENT"));
+  assert(pagerSource.includes("mobileProductFromEvent"));
+  assertEquals(pagerSource.includes("openMobileProduct("), false);
 });
 
 Deno.test("product pager paints the touch sample without a frame of lag", () => {
