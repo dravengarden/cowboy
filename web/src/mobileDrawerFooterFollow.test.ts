@@ -26,6 +26,20 @@ Deno.test("mobile drawer translates an in-flow page that owns the footer", () =>
   // A transformed position:absolute;inset:0 page lets iOS pin the footer.
   assertEquals(appSource.includes("calc(-1 * var(--navbar-h, 0px))"), false);
   assert(appSource.includes("Transcript-only sliding page"));
+  // Persistent AppBar motion may change height/opacity, never transform.
+  // A transform transition interpolates the drawer's 1:1 translate3d and
+  // makes the bottom chrome trail the peek.
+  assertEquals(
+    appSource.includes(
+      "opacity 110ms ease 70ms, transform ${mobileComposerFocusMotion.duration}",
+    ),
+    false,
+  );
+  assert(
+    appSource.includes(
+      "opacity 110ms ease 70ms, padding ${mobileComposerFocusMotion.duration}",
+    ),
+  );
   assert(appSource.includes('bgcolor: mobile ? "transparent" : "background.default"'));
   assert(appSource.includes('bottomInset={mobile'));
   assert(appSource.includes('{!mobile && ('));

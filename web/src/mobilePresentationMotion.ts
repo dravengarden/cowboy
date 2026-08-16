@@ -19,9 +19,6 @@ export const mobileCompositorFlattenSx = {
   "& .MuiCircularProgress-root, & .MuiSkeleton-root, & [data-mobile-css-animation]": {
     animationPlayState: "paused",
   },
-  "& [data-mobile-session-nav], & [data-mobile-session-footer], & [data-mobile-composer-shell-material]": {
-    transition: "none !important",
-  },
 };
 
 export function mobilePresentationMovingRootSx(

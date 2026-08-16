@@ -3031,8 +3031,12 @@ export function App({
                         // bottom action island and receive the tap instead.
                         color: "text.primary",
                         maxHeight: navbarAtBottom ? 96 : undefined,
+                        // Do not transition `transform` here. The Sessions
+                        // drawer writes translate3d onto this bar every
+                        // touchmove; a 240ms transform transition makes the
+                        // bottom chrome trail the peek by a half-beat.
                         transition:
-                            `max-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, min-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, opacity 110ms ease 70ms, transform ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, padding ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}`,
+                            `max-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, min-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, opacity 110ms ease 70ms, padding ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}`,
                         "@media (prefers-reduced-motion: reduce)": {
                             transition: "none",
                         },

@@ -40,8 +40,13 @@ Deno.test("mobile drawer keeps clipping and shadows off the heavy surface", () =
   assert(drawerSource.includes("MOBILE_DRAWER_PREPARE_PX"));
   assert(drawerSource.includes("drawer.contains(target)"));
   assert(drawerSource.includes("gesture.prepared = true"));
+  assert(drawerSource.includes("applySlide = (offset: number, instant = false)"));
+  assert(drawerSource.includes('if (instant) layer.style.transition = "none"'));
+  assert(drawerSource.includes("render(offset, true)"));
+  assert(drawerSource.includes("promoteLayer(layer)"));
+  assert(drawerSource.includes("demoteLayer(layer)"));
   const widthAt = drawerSource.indexOf("publishDrawerWidth(width)");
-  const firstTranslate = drawerSource.indexOf("render(offset)");
+  const firstTranslate = drawerSource.indexOf("render(offset, true)");
   assert(widthAt >= 0 && firstTranslate > widthAt);
 });
 

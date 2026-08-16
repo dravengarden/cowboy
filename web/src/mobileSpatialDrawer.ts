@@ -127,18 +127,28 @@ export function bindMobileSpatialDrawer({
   const slidingLayers = (): HTMLElement[] => [page(), drawerMask, ...followerLayers()];
   const animatedLayers = (): HTMLElement[] => [drawer, ...slidingLayers()];
   const prepareLayer = (layer: HTMLElement): void => {
-    layer.style.willChange = "transform";
     layer.style.transformOrigin = origin;
   };
-  const applySlide = (offset: number): void => {
+  const promoteLayer = (layer: HTMLElement): void => {
+    layer.style.willChange = "transform";
+  };
+  const demoteLayer = (layer: HTMLElement): void => {
+    layer.style.removeProperty("will-change");
+  };
+  const applySlide = (offset: number, instant = false): void => {
     const pageX = `${String(openingSign * offset)}px`;
     const railX = `${String(openingSign * mobileDrawerRailOffset(offset, presentationWidth))}px`;
     const pageTransform = `translate3d(${pageX}, 0, 0)`;
+    // One shared translate for the peek and every follower. Re-assert
+    // transition:none on the gesture path so AppBar / composer focus
+    // `transform` transitions cannot interpolate a frame behind the page.
     for (const layer of slidingLayers()) {
       prepareLayer(layer);
+      if (instant) layer.style.transition = "none";
       layer.style.transform = pageTransform;
     }
     prepareLayer(drawer);
+    if (instant) drawer.style.transition = "none";
     drawer.style.transform = `translate3d(${railX}, 0, 0)`;
   };
   const applyOpenDepth = (): void => {
@@ -157,13 +167,16 @@ export function bindMobileSpatialDrawer({
     }
     drawerMask.style.removeProperty("box-shadow");
   };
-  const render = (offset: number): void => {
+  const render = (offset: number, instant = false): void => {
     currentOffset = offset;
     // Touch callback writes only compositor properties. Flatten and store
     // holds happen in prepare(), before the first translate.
     const visual = mobileDrawerCardVisual(offset, presentationWidth, phone);
-    applySlide(offset);
-    if (dim) dim.style.opacity = String(visual.dim);
+    applySlide(offset, instant);
+    if (dim) {
+      if (instant) dim.style.transition = "none";
+      dim.style.opacity = String(visual.dim);
+    }
   };
   const beginDirectManipulation = (): void => {
     if (directManipulationActive) return;
@@ -178,7 +191,10 @@ export function bindMobileSpatialDrawer({
     }
     settleGen += 1;
     globalThis.clearTimeout(settleTimer);
-    for (const layer of animatedLayers()) layer.style.transition = "none";
+    for (const layer of animatedLayers()) {
+      promoteLayer(layer);
+      layer.style.transition = "none";
+    }
     if (dim) dim.style.transition = "none";
     gestureTarget.setAttribute("data-mobile-drawer-moving", "true");
     applyOpenDepth();
@@ -196,6 +212,7 @@ export function bindMobileSpatialDrawer({
     const finish = (): void => {
       releaseIdle = undefined;
       directManipulationActive = false;
+      for (const layer of animatedLayers()) demoteLayer(layer);
       gestureTarget.removeAttribute("data-mobile-drawer-moving");
       releasePresentation?.();
       releasePresentation = undefined;
@@ -398,7 +415,7 @@ export function bindMobileSpatialDrawer({
       pendingThresholdHaptic = true;
     }
     commit = nextCommit;
-    render(offset);
+    render(offset, true);
     if (pendingThresholdHaptic) {
       pendingThresholdHaptic = false;
       navigationHaptic();
