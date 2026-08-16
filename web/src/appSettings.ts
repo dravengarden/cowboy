@@ -1,9 +1,11 @@
+import type { ControlCenterTab } from "./desktop/controlCenterTabs";
+
 export type SettingsProductFocus = "agent" | "code";
 
 export const OPEN_APP_SETTINGS_EVENT = "cowboy:open-app-settings";
 
 export function openAppSettings(input?: {
-  tab?: "settings" | "machines" | "info" | "logs";
+  tab?: ControlCenterTab;
   section?: SettingsProductFocus;
 }): void {
   globalThis.dispatchEvent(
@@ -12,11 +14,11 @@ export function openAppSettings(input?: {
 }
 
 export function appSettingsFromEvent(event: Event): {
-  tab?: "settings" | "machines" | "info" | "logs";
+  tab?: ControlCenterTab;
   section?: SettingsProductFocus;
 } {
   const detail = (event as CustomEvent<{
-    tab?: "settings" | "machines" | "info" | "logs";
+    tab?: ControlCenterTab;
     section?: SettingsProductFocus;
   }>).detail;
   return detail ?? {};

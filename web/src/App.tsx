@@ -226,6 +226,7 @@ import {
 } from "./desktop/controlCenterTabs";
 import {
     SETTINGS_MORE_ROWS,
+    SETTINGS_PROVIDER_ROW,
     SettingsNavRow,
     settingsDestinationLabel,
 } from "./SettingsChrome";
@@ -558,6 +559,7 @@ function SessionList({
     onNew,
     onClose,
     onOpenSettings,
+    onOpenAbout,
     onRequestDelete,
     onRequestInfo,
     onRequestReload,
@@ -575,6 +577,7 @@ function SessionList({
     onNew: () => void;
     onClose?: (() => void) | undefined;
     onOpenSettings?: (() => void) | undefined;
+    onOpenAbout?: (() => void) | undefined;
     onRequestDelete: (s: SessionMeta) => void;
     onRequestInfo: (s: SessionMeta) => void;
     onRequestReload: (s: SessionMeta) => void;
@@ -1105,6 +1108,19 @@ function SessionList({
                                     />
                                 ),
                             },
+                            ...(onOpenAbout
+                                ? [{
+                                    key: "info",
+                                    label: "About",
+                                    onPress: onOpenAbout,
+                                    icon: (
+                                        <InfoOutlined
+                                            aria-hidden
+                                            sx={{ fontSize: "1.25em" }}
+                                        />
+                                    ),
+                                }]
+                                : []),
                             ...(onOpenSettings
                                 ? [{
                                     key: "settings",
@@ -2411,6 +2427,9 @@ export function App({
                 : undefined}
             onOpenSettings={mobile
                 ? (): void => openAppSettings({ section: "agent" })
+                : undefined}
+            onOpenAbout={mobile
+                ? (): void => openAppSettings({ tab: "info" })
                 : undefined}
             onRequestDelete={(s): void => setPendingDelete(s)}
             onRequestInfo={(s): void => setPendingInfo(s)}
@@ -4248,6 +4267,20 @@ function MachineNpmUpdateButton({
     );
 }
 
+function ProvidersContent(): React.JSX.Element {
+    return (
+        <Stack spacing={2}>
+            <Box>
+                <Typography fontWeight={760}>Providers</Typography>
+                <Typography variant="caption" color="text.secondary">
+                    Sign in and manage provider accounts
+                </Typography>
+            </Box>
+            <ProviderAuthenticationManagement />
+        </Stack>
+    );
+}
+
 function MachinesContent(): React.JSX.Element {
     const [machines, setMachines] = useState<readonly MachineChoice[]>([]);
     const [commandFeedback, setCommandFeedback] = useState<Record<string, ReturnType<typeof machineCommandResultPresentation>>>({});
@@ -4391,9 +4424,6 @@ function MachinesContent(): React.JSX.Element {
                 <Typography fontWeight={760}>Machines</Typography>
                 <Typography variant="caption" color="text.secondary">Where Cowboy sessions run</Typography>
             </Box>
-            <Paper variant="outlined" sx={{ borderRadius: 1.5, p: 1.5 }}>
-                <ProviderAuthenticationManagement />
-            </Paper>
             {machines.map((machine) => {
                 const open = Boolean(expanded[machine.id]);
                 const pending = machine.pending_updates ?? [];
@@ -5286,12 +5316,12 @@ function SettingsShell({
                                         />
                                     )}
                             </Stack>
-                        ) : renderedTab === "machines" ? <MachinesContent /> : renderedTab === "info" ? (
+                        ) : renderedTab === "providers" ? <ProvidersContent /> : renderedTab === "machines" ? <MachinesContent /> : renderedTab === "info" ? (
                             <InfoContent desktop />
                         ) : <UsageLogs />}
                     </Box>
                 </Box>
-            ) : !tabPanelVisible ? null : renderedTab === "machines" ? <MachinesContent /> : renderedTab === "info" ? <InfoContent /> : renderedTab === "logs" ? <UsageLogs /> : (
+            ) : !tabPanelVisible ? null : renderedTab === "providers" ? <ProvidersContent /> : renderedTab === "machines" ? <MachinesContent /> : renderedTab === "info" ? <InfoContent /> : renderedTab === "logs" ? <UsageLogs /> : (
             <Stack spacing={3}>
                 <ThemeModeControl value={themeMode} onChange={onSetThemeMode} />
 
@@ -5601,6 +5631,17 @@ function SettingsShell({
                 >
                     <ReviewSettingsContent />
                 </Box>
+                <Divider />
+                <Stack spacing={0.25}>
+                    <Typography variant="overline" color="text.secondary">
+                        Providers
+                    </Typography>
+                    <SettingsNavRow
+                        icon={SETTINGS_PROVIDER_ROW.icon}
+                        label={SETTINGS_PROVIDER_ROW.label}
+                        onPress={(): void => changeTab(SETTINGS_PROVIDER_ROW.tab)}
+                    />
+                </Stack>
                 <Divider />
                 <Stack spacing={0.25}>
                     <Typography variant="overline" color="text.secondary">

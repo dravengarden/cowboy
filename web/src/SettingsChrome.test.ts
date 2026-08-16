@@ -10,7 +10,12 @@ const appSource = await Deno.readTextFile(
 Deno.test("mobile Settings is a preference list with drill-in destinations", () => {
   assert(chromeSource.includes("SettingsNavRow"));
   assert(chromeSource.includes("SETTINGS_MORE_ROWS"));
+  assert(chromeSource.includes("SETTINGS_PROVIDER_ROW"));
   assert(chromeSource.includes('label: "About"'));
+  assert(chromeSource.includes('label: "Accounts & sign-in"'));
+  assert(appSource.includes("SETTINGS_PROVIDER_ROW"));
+  assert(appSource.includes("<ProvidersContent"));
+  assert(appSource.includes("key: \"info\""));
   assertEquals(chromeSource.includes("SettingsDestinationRail"), false);
   assertEquals(chromeSource.includes("SettingsProductSwitch"), false);
   assert(appSource.includes("<SettingsNavRow"));

@@ -1,4 +1,5 @@
 import {
+  AccountCircleOutlined,
   ArticleOutlined,
   ChevronRight,
   DnsOutlined,
@@ -10,6 +11,7 @@ import type { ControlCenterTab } from "./desktop/controlCenterTabs";
 
 const DESTINATION_LABELS: Record<ControlCenterTab, string> = {
   settings: "Settings",
+  providers: "Providers",
   machines: "Machines",
   info: "About",
   logs: "Logs",
@@ -65,6 +67,12 @@ export function SettingsNavRow({
     </ButtonBase>
   );
 }
+
+export const SETTINGS_PROVIDER_ROW = {
+  tab: "providers" as const,
+  label: "Accounts & sign-in",
+  icon: <AccountCircleOutlined fontSize="small" />,
+};
 
 export const SETTINGS_MORE_ROWS = [
   { tab: "machines" as const, label: "Machines", icon: <DnsOutlined fontSize="small" /> },
