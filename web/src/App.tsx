@@ -2965,12 +2965,9 @@ export function App({
                         // under the bar (the reported "navbar 底部灰色阴影"). Bottom
                         // mode (mobile status-bar strip) stays frosted — content
                         // scrolls UNDER it, so it needs the translucent blur.
-                        bgcolor: navbarAtBottom ? "transparent" : "background.default",
-                        ...(navbarAtBottom ? {
-                            backdropFilter: "blur(40px) saturate(180%) brightness(1.06)",
-                            WebkitBackdropFilter:
-                                "blur(40px) saturate(180%) brightness(1.06)",
-                        } : {}),
+                        // Solid page/sidebar colour. Frost here returns after a
+                        // swipe flatten and reads as a blurry status-bar band.
+                        bgcolor: "background.default",
                         // Desktop: a hairline delineates the navbar. In LIGHT mode the
                         // old `0 1px 24px` down-shadow smeared a gray cloud across the
                         // lavender (a black shadow on a light tint always reads gray) —

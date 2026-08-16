@@ -132,6 +132,11 @@ import {
   wheelLeavesLatest,
 } from "./transcriptFollowIntent";
 import { transcriptRowContainment } from "./transcriptMotion";
+import {
+  liveTranscriptWindow,
+  recycledTranscriptHeight,
+  shouldWindowLiveTranscript,
+} from "./transcriptLiveWindow";
 import { markTranscriptScrollActivity } from "./transcriptRenderPacing";
 import {
   historyPrefetchTransition,
@@ -3415,6 +3420,7 @@ export function Transcript({
     const el = parentRef.current;
     if (!el) return;
     const v = el.scrollHeight > el.clientHeight + 1;
+    setTranscriptOverflowing((current) => current === v ? current : v);
     if (v === lastScrollableRef.current) return;
     lastScrollableRef.current = v;
     onScrollableChangeRef.current?.(v);
@@ -3895,6 +3901,31 @@ export function Transcript({
   //   composer's sticky toggle reflects + drives it (it shows active when
   //   stuck, and a tap bumps scrollNonce → we scroll to the bottom below).
   const stick = useRef(true);
+  const [followingLive, setFollowingLive] = useState(true);
+  const [transcriptOverflowing, setTranscriptOverflowing] = useState(false);
+  const rowHeightsRef = useRef<Map<string, number>>(new Map());
+  const windowLive = shouldWindowLiveTranscript({
+    following: followingLive,
+    rowCount: items.length,
+    overflowing: transcriptOverflowing,
+  }) && selectedToolKey === null && locatedToolKey === null;
+  const liveWindow = liveTranscriptWindow(items.length);
+  const mountedItems = windowLive ? items.slice(-liveWindow.mounted) : items;
+  const recycledItemKeys = windowLive
+    ? items.slice(0, liveWindow.recycled).map((item) => item.key)
+    : [];
+  const recycledHeight = recycledTranscriptHeight(
+    recycledItemKeys,
+    rowHeightsRef.current,
+  );
+  useLayoutEffect(() => {
+    const root = parentRef.current;
+    if (!root) return;
+    for (const node of root.querySelectorAll<HTMLElement>("[data-key]")) {
+      const key = node.dataset["key"];
+      if (key) rowHeightsRef.current.set(key, node.offsetHeight);
+    }
+  });
   const workingRef = useRef(working);
   workingRef.current = working;
   // Transcript is NOT remounted per session (it re-pins via the sessionId
@@ -4087,6 +4118,7 @@ export function Transcript({
         // inactive. setSticky no-ops when already off, so this is cheap even
         // though `wheel`/`scroll` fire often.
         setSticky(sessionIdRef.current, false);
+        setFollowingLive(false);
       }
     };
 
@@ -4285,6 +4317,7 @@ export function Transcript({
         reportScrollableRef.current();
         return;
       }
+      setFollowingLive(Math.abs(el.scrollTop) <= 1);
       // A column-reverse browser adjusts scrollTop when streamed content grows
       // below a detached Page viewport. That trusted scroll event is layout
       // compensation, not reader motion; treating it as input pauses rendering
@@ -4370,6 +4403,7 @@ export function Transcript({
     const followLatest = (): void => {
       markNativeScrollActive();
       stick.current = true;
+      setFollowingLive(true);
       freezeRef.current.key = null;
       scheduleHistoryRelease();
       requestStickToBottom(sessionIdRef.current);
@@ -5020,7 +5054,7 @@ export function Transcript({
                     <OptimisticUserBubble sessionId={sessionId} message={om} />
                   </Box>
                 ))}
-              {items
+              {mountedItems
                 .slice()
                 .reverse()
                 .map((item) => (
@@ -5074,6 +5108,17 @@ export function Transcript({
                     />
                   </Box>
                 ))}
+              {recycledHeight > 0 && (
+                <Box
+                  aria-hidden
+                  data-transcript-recycled-spacer
+                  sx={{
+                    height: recycledHeight,
+                    flex: `0 0 ${recycledHeight}px`,
+                    pointerEvents: "none",
+                  }}
+                />
+              )}
               {managesScrollHistory && !backfillingViewport && paging != null &&
                 paging.beforeSeq !== null && !paging.reachedStart && (
                 <ScrollbackLoadingSkeleton

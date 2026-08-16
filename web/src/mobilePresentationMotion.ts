@@ -15,6 +15,11 @@ export const mobileCompositorFlattenSx = {
     contain: "paint",
     pointerEvents: "none",
   },
+  // Settled rows each own a paint layer. Flatten them into the peek so a
+  // long transcript is one tile during the swipe, not N independent ones.
+  "& [data-mobile-drawer-surface] [data-key]": {
+    contain: "none",
+  },
   "& [data-detent-sheet-chrome], & [data-mobile-backdrop-chrome], & [data-mobile-composer-shell-material], & [data-mobile-focus-composer], & [data-mobile-primary-composer], & [data-mobile-pending-editor]": {
     backdropFilter: "none",
     WebkitBackdropFilter: "none",

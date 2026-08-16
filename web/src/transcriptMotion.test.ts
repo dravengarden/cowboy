@@ -29,6 +29,12 @@ Deno.test("thinking activity has no Provider identity branches", () => {
   }
 });
 
+Deno.test("followed live tails recycle older rows into a height spacer", () => {
+  assert(transcriptSource.includes("data-transcript-recycled-spacer"));
+  assert(transcriptSource.includes("shouldWindowLiveTranscript"));
+  assert(transcriptSource.includes("recycledTranscriptHeight"));
+});
+
 Deno.test("the growing row stays in the scroller paint flow", () => {
   assertEquals(transcriptRowContainment(true), "none");
   assertEquals(transcriptRowContainment(false), "layout paint");

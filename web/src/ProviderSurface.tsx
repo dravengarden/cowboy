@@ -645,8 +645,8 @@ function ProviderActivity({
             component="span"
             aria-hidden
             sx={{
-              width: 14,
-              height: 14,
+              width: 18,
+              height: 18,
               position: "relative",
               display: "inline-block",
               flexShrink: 0,
@@ -675,7 +675,7 @@ function ProviderActivity({
             >
               <ProviderAssetGraphic
                 asset={asset}
-                size={14}
+                size={18}
               />
             </Box>
             <Box
@@ -684,7 +684,7 @@ function ProviderActivity({
             >
               <ProviderAssetGraphic
                 asset={asset}
-                size={14}
+                size={18}
               />
             </Box>
           </Box>
@@ -698,8 +698,8 @@ function ProviderActivity({
             component="span"
             aria-hidden
             sx={{
-              width: 14,
-              height: 14,
+              width: 18,
+              height: 18,
               display: "inline-flex",
               animation: reducedMotion
                 ? "none"
@@ -708,7 +708,7 @@ function ProviderActivity({
           >
             <ProviderAssetGraphic
               asset={asset}
-              size={14}
+              size={18}
             />
           </Box>
         );
@@ -737,15 +737,16 @@ function ProviderActivity({
         py: 0.25,
         alignSelf: "flex-start",
         color: primary,
+        minHeight: 22,
       }}
     >
       <Box
         aria-hidden
         sx={{
-          width: 14,
-          height: 14,
-          minWidth: 14,
-          minHeight: 14,
+          width: 18,
+          height: 18,
+          minWidth: 18,
+          minHeight: 18,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -761,7 +762,7 @@ function ProviderActivity({
         aria-hidden
         variant="caption"
         sx={{
-          fontWeight: 550,
+          fontWeight: 650,
           letterSpacing: "0.015em",
           ...(effect === "shimmer"
             ? {
