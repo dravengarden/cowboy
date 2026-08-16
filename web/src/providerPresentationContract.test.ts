@@ -86,7 +86,7 @@ Deno.test("Provider authentication copy dispatches on typed presentation, not Pr
   }
 });
 
-Deno.test("Service authentication exposes progress, failure, native external navigation, and back", () => {
+Deno.test("Service authentication keeps Cowboy alive while Provider sign-in opens externally", () => {
   assertEquals(
     managementSource.includes("providerAuthenticationExecutorEntry("),
     true,
@@ -101,7 +101,16 @@ Deno.test("Service authentication exposes progress, failure, native external nav
     true,
   );
   assertEquals(managementSource.includes('component="a"'), true);
-  assertEquals(managementSource.includes('target="_blank"'), false);
+  assertEquals(managementSource.includes('target="_blank"'), true);
+  assertEquals(
+    managementSource.includes("shouldRouteAuthenticationClick(event)"),
+    true,
+  );
+  assertEquals(
+    managementSource.includes("openAuthenticationUrl(challenge.verification_url)"),
+    true,
+  );
+  assertEquals(managementSource.includes("closeAuthenticationBrowser()"), true);
 });
 
 Deno.test("Service credential management renders one card per typed authentication scope", () => {

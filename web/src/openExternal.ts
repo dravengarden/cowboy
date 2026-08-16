@@ -13,6 +13,8 @@ type TauriInternals = {
 type NativeGlobals = {
   __TAURI__?: TauriGlobal;
   __TAURI_INTERNALS__?: TauriInternals;
+  __cowboyOpenAuthenticationBrowser?: (url: string) => boolean;
+  __cowboyCloseAuthenticationBrowser?: () => void;
 };
 
 /** True only for a native shell that can hand an URL to the operating system.
@@ -61,6 +63,49 @@ export function openExternalUrl(url: string): void {
   openInBrowser(resolved);
 }
 
+/** Open an interactive Provider sign-in without replacing Cowboy's main view.
+ * The iOS shell presents SFSafariViewController, Desktop uses the Tauri opener,
+ * and browser/PWA callers retain an ordinary target=_blank anchor. */
+export function openAuthenticationUrl(url: string): void {
+  const resolved = safeAuthenticationUrl(url);
+  if (!resolved) return;
+  const root = globalThis as typeof globalThis & NativeGlobals;
+  try {
+    if (
+      typeof root.__cowboyOpenAuthenticationBrowser === "function" &&
+      root.__cowboyOpenAuthenticationBrowser(resolved) !== false
+    ) return;
+  } catch {
+    // An older or partially initialized shell can still use the Tauri opener.
+  }
+  openExternalUrl(resolved);
+}
+
+export function closeAuthenticationBrowser(): void {
+  const root = globalThis as typeof globalThis & NativeGlobals;
+  try {
+    root.__cowboyCloseAuthenticationBrowser?.();
+  } catch {
+    // Closing the Cowboy dialog must never depend on the optional native sheet.
+  }
+}
+
+export function shouldRouteAuthenticationClick(event: {
+  button: number;
+  defaultPrevented: boolean;
+  altKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+}): boolean {
+  const root = globalThis as typeof globalThis & NativeGlobals;
+  const hasAuthenticationSheet =
+    typeof root.__cowboyOpenAuthenticationBrowser === "function";
+  return (hasAuthenticationSheet || hasNativeExternalOpener()) &&
+    event.button === 0 && !event.defaultPrevented && !event.altKey &&
+    !event.ctrlKey && !event.metaKey && !event.shiftKey;
+}
+
 const EXTERNAL_PROTOCOLS = new Set(["http:", "https:", "mailto:", "tel:"]);
 
 export function safeExternalUrl(url: string): string | null {
@@ -70,6 +115,13 @@ export function safeExternalUrl(url: string): string | null {
   } catch {
     return null;
   }
+}
+
+export function safeAuthenticationUrl(url: string): string | null {
+  const resolved = safeExternalUrl(url);
+  if (!resolved) return null;
+  const protocol = new URL(resolved).protocol;
+  return protocol === "https:" || protocol === "http:" ? resolved : null;
 }
 
 function openInBrowser(url: string): void {
