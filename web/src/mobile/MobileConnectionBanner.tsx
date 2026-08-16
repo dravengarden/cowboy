@@ -17,9 +17,7 @@ export function MobileConnectionBanner(
   { store }: { readonly store: ConnectionStore },
 ): React.JSX.Element | null {
   const banner = store.useConnectionBanner();
-  if (!banner) return null;
-
-  const isUpdate = banner.kind === "update";
+  const isUpdate = banner?.kind === "update";
   const [readyVersion, setReadyVersion] = useState<string>();
   useEffect(() => {
     if (!isUpdate) {
@@ -41,6 +39,7 @@ export function MobileConnectionBanner(
       cancelled = true;
     };
   }, [isUpdate]);
+  if (!banner) return null;
   const palette = banner.kind === "down"
     ? "warning"
     : banner.kind === "reconnected"

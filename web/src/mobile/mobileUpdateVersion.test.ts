@@ -28,6 +28,9 @@ Deno.test("the mobile banner reads the ready service-worker version", async () =
   );
   assertEquals(bannerSource.includes("mobileUpdateBannerLabel(readyVersion)"), true);
   assertEquals(bannerSource.includes("registration?.waiting?.scriptURL"), true);
+  const hooksEnd = bannerSource.indexOf("}, [isUpdate]);");
+  const earlyReturn = bannerSource.indexOf("if (!banner) return null;");
+  assertEquals(hooksEnd > 0 && earlyReturn > hooksEnd, true);
 });
 
 Deno.test("a waiting worker script wins over the current /sw.js", async () => {
