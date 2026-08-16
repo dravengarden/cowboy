@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert";
-import { usageWidgetProviders } from "./usageWidget";
+import { usageWidgetForAccount, usageWidgetProviders } from "./usageWidget";
 
 Deno.test("usage widget aggregates supported providers and drops unsupported placeholders", () => {
   const providers = usageWidgetProviders({
@@ -181,4 +181,40 @@ Deno.test("usage widget removes providers without complete account-level core da
     }],
   });
   assertEquals(providers, []);
+});
+
+Deno.test("usage widget projects one available account", () => {
+  assertEquals(
+    usageWidgetForAccount({
+      provider: "xai",
+      status: "available",
+      source: "test",
+      observed_at_ms: 1,
+      rate_limits: {
+        config: {
+          creditUsagePercent: 25,
+          currentPeriod: {
+            type: "USAGE_PERIOD_TYPE_MONTHLY",
+            end: "2026-09-01T00:00:00Z",
+          },
+        },
+      },
+    }),
+    {
+      kind: "xai",
+      label: "xAI",
+      remaining: 75,
+      periodLabel: "Monthly",
+      resetsAt: Date.parse("2026-09-01T00:00:00Z") / 1000,
+    },
+  );
+  assertEquals(
+    usageWidgetForAccount({
+      provider: "anthropic",
+      status: "available",
+      source: "test",
+      observed_at_ms: 1,
+    }),
+    undefined,
+  );
 });

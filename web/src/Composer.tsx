@@ -109,9 +109,16 @@ import {
   sessionProviderFacts,
   sessionProviderManageLabel,
   sessionProviderNeedsAttention,
+  sessionProviderShowsUsage,
   sessionProviderSummary,
+  sessionProviderUsageEmptyMessage,
+  sessionProviderUsageRows,
   workspaceOptionsSummary,
 } from "./sessionSettingsPresentation";
+import {
+  providerUsage,
+  type UsageSnapshot,
+} from "./usageLimits";
 import { SessionReloadDialog } from "./SessionReloadDialog";
 import { createPortal, flushSync } from "react-dom";
 import { FullscreenComposer } from "./FullscreenComposer";
@@ -7354,6 +7361,27 @@ function SessionProviderSection({
                       mono={row.mono === true}
                     />
                   ))}
+                  {sessionProviderShowsUsage({
+                    ready,
+                    ...(entry.manifest.host.account_usage?.provider
+                      ? {
+                        accountUsageProvider:
+                          entry.manifest.host.account_usage.provider,
+                      }
+                      : {}),
+                  }) && (
+                    <SessionProviderUsage
+                      provider={session.provider}
+                      {...(session.provider_version === undefined
+                        ? {}
+                        : { providerVersion: session.provider_version })}
+                      {...(session.provider_generation_digest === undefined
+                        ? {}
+                        : {
+                          providerDigest: session.provider_generation_digest,
+                        })}
+                    />
+                  )}
                 </List>
               </>
             )}
@@ -7531,42 +7559,122 @@ function WorkspaceOptionsSection({
   );
 }
 
+function SessionProviderUsage({
+  provider,
+  providerVersion,
+  providerDigest,
+}: {
+  provider: string;
+  providerVersion?: string;
+  providerDigest?: string;
+}): React.JSX.Element {
+  const [snapshot, setSnapshot] = useState<UsageSnapshot | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    const ctrl = new AbortController();
+    void fetch("/api/usage", { signal: ctrl.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${String(response.status)}`);
+        setSnapshot(await response.json() as UsageSnapshot);
+        setError(null);
+      })
+      .catch((cause: unknown) => {
+        if (ctrl.signal.aborted) return;
+        setError(
+          cause instanceof Error ? cause.message : "Could not load usage",
+        );
+      });
+    return (): void => ctrl.abort();
+  }, [provider]);
+  const usage = providerUsage(
+    snapshot,
+    provider,
+    providerVersion,
+    providerDigest,
+  );
+  const rows = sessionProviderUsageRows(usage);
+  if (error) {
+    return <SheetDetailRow label="Usage" value={error} />;
+  }
+  if (!snapshot) {
+    return <SheetDetailRow label="Usage" value="Loading…" />;
+  }
+  if (rows.length === 0) {
+    return (
+      <SheetDetailRow
+        label="Usage"
+        value={sessionProviderUsageEmptyMessage(usage)}
+      />
+    );
+  }
+  return (
+    <>
+      {rows.map((row) => (
+        <SheetDetailRow
+          key={row.label}
+          label={row.label}
+          value={row.value}
+          {...(row.detail === undefined ? {} : { detail: row.detail })}
+        />
+      ))}
+    </>
+  );
+}
+
 function SheetDetailRow({
   label,
   value,
   mono = false,
+  detail,
 }: {
   label: string;
   value: string;
   mono?: boolean;
+  detail?: string;
 }): React.JSX.Element {
   return (
-    <Box
-      sx={{
-        py: 0.75,
-        display: "flex",
-        gap: 2,
-        alignItems: "baseline",
-      }}
-    >
-      <Typography
-        variant="caption"
-        color="text.secondary"
-        sx={{ minWidth: 96, flexShrink: 0 }}
-      >
-        {label}
-      </Typography>
-      <Typography
-        variant="body2"
+    <Box sx={{ py: 0.75 }}>
+      <Box
         sx={{
-          flex: 1,
-          minWidth: 0,
-          wordBreak: "break-word",
-          fontFamily: mono ? MONO : "inherit",
+          display: "flex",
+          gap: 2,
+          alignItems: "baseline",
         }}
       >
-        {value}
-      </Typography>
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ minWidth: 96, flexShrink: 0 }}
+        >
+          {label}
+        </Typography>
+        <Typography
+          variant="body2"
+          sx={{
+            flex: 1,
+            minWidth: 0,
+            wordBreak: "break-word",
+            fontFamily: mono ? MONO : "inherit",
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
+          {value}
+        </Typography>
+      </Box>
+      {detail && (
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{
+            display: "block",
+            pl: "calc(96px + 16px)",
+            mt: 0.15,
+            lineHeight: 1.35,
+          }}
+        >
+          {detail}
+        </Typography>
+      )}
     </Box>
   );
 }
