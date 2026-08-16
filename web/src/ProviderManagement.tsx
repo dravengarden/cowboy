@@ -166,8 +166,9 @@ export function MachineProviderManagement(
 
 type ProviderManagementStatusTone = "default" | "success" | "warning";
 
-/** Cowboy owns management-card geometry; Providers supply only typed brand and
- * content slots. This keeps independently authored packages visually stable. */
+/** One management card for every authentication surface. Extra identities
+ * grow inside the leading mark and the subtitle; they must not fork a
+ * second inner-card layout. */
 function ProviderManagementIdentity({
   manifest,
   version,
@@ -197,36 +198,39 @@ function ProviderManagementIdentity({
     theme.palette.mode,
     version,
   ).primary;
-  const credentialGroup = consumers.length > 1;
+  const shared = consumers.length > 1;
+  const subtitle = shared
+    ? `Used by ${
+      consumers.map((entry) => entry.manifest.display.name).join(", ")
+    }`
+    : summary;
   return (
     <Box
       data-provider-management-identity
-      data-provider-shared-identity={credentialGroup ? "true" : undefined}
+      data-provider-shared-identity={shared ? "true" : undefined}
       sx={{
         display: "grid",
-        gridTemplateColumns: credentialGroup
-          ? "auto minmax(0, 1fr)"
-          : "32px minmax(0, 1fr)",
+        gridTemplateColumns: "auto minmax(0, 1fr)",
         columnGap: 1.25,
-        alignItems: credentialGroup ? "start" : "center",
+        alignItems: "start",
         minWidth: 0,
       }}
     >
       <Box
         data-provider-management-mark
         sx={{
-          width: credentialGroup ? "auto" : 32,
-          height: credentialGroup ? "auto" : 32,
           display: "flex",
-          alignItems: credentialGroup ? "flex-start" : "center",
+          alignItems: "center",
           justifyContent: "center",
+          minWidth: 32,
+          minHeight: 32,
+          mt: 0.15,
           color: accent,
-          pt: credentialGroup ? 0.2 : 0,
         }}
       >
-        {mark ?? <ProviderMark manifest={manifest} size={26} />}
+        {mark ?? <ProviderMarkStack manifests={[manifest]} size={28} />}
       </Box>
-      <Stack spacing={0.25} sx={{ minWidth: 0 }}>
+      <Stack spacing={0.3} sx={{ minWidth: 0 }}>
         <Stack
           direction="row"
           alignItems="center"
@@ -285,70 +289,26 @@ function ProviderManagementIdentity({
           </Box>
         </Stack>
         <Typography
+          data-provider-credential-consumers={shared ? "true" : undefined}
           variant="caption"
           color="text.secondary"
           sx={{
             lineHeight: 1.35,
             overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
+            display: "-webkit-box",
+            WebkitBoxOrient: "vertical",
+            WebkitLineClamp: shared ? 3 : 2,
           }}
         >
-          {summary}
+          {subtitle}
         </Typography>
-        {credentialGroup
-          ? (
-            <Stack
-              data-provider-credential-consumers
-              spacing={0.65}
-              sx={{ pt: 0.7 }}
-            >
-              {consumers.map((entry) => (
-                <Stack
-                  key={entry.provider_id}
-                  data-provider-credential-consumer
-                  direction="row"
-                  spacing={1}
-                  alignItems="center"
-                  sx={{
-                    minWidth: 0,
-                    minHeight: 32,
-                    px: 0.9,
-                    py: 0.4,
-                    borderRadius: 1.25,
-                    border: 1,
-                    borderColor: "divider",
-                    bgcolor: (theme) =>
-                      alpha(theme.palette.common.white, theme.palette.mode ===
-                          "dark"
-                        ? 0.03
-                        : 0.4),
-                  }}
-                >
-                  <ProviderMark manifest={entry.manifest} size={20} />
-                  <Typography
-                    variant="caption"
-                    fontWeight={650}
-                    sx={{
-                      minWidth: 0,
-                      lineHeight: 1.3,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {entry.manifest.display.name}
-                  </Typography>
-                </Stack>
-              ))}
-            </Stack>
-          )
-          : null}
         <Stack
           data-provider-management-footer
           direction="row"
           spacing={0.75}
           alignItems="center"
+          flexWrap="wrap"
+          useFlexGap
           sx={{ minWidth: 0 }}
         >
           <Typography
@@ -1264,15 +1224,13 @@ function ProviderManagement(
                         title={credentialGroup
                           ? providerCredentialTitle(credentialGroup.entries)
                           : entry.manifest.display.name}
-                        summary={sharedCredential
-                          ? `One Cowboy Service credential shared by ${credentialEntries.length} Providers`
-                          : entry.manifest.display.summary}
+                        summary={entry.manifest.display.summary}
                         mark={
                           <ProviderMarkStack
                             manifests={credentialEntries.map((candidate) =>
                               candidate.manifest
                             )}
-                            size={sharedCredential ? 28 : 26}
+                            size={28}
                           />
                         }
                         consumers={sharedCredential ? credentialEntries : []}

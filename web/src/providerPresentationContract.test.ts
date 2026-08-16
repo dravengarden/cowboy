@@ -82,15 +82,15 @@ Deno.test("Provider management cards keep geometry in the Cowboy component libra
   );
   assertEquals(
     managementSource.includes(
-      ': "32px minmax(0, 1fr)"',
+      'gridTemplateColumns: "auto minmax(0, 1fr)"',
     ),
     true,
   );
   assertEquals(
     managementSource.includes(
-      'gridTemplateColumns: credentialGroup\n          ? "auto minmax(0, 1fr)"',
+      'gridTemplateColumns: credentialGroup',
     ),
-    true,
+    false,
   );
   assertEquals(
     managementSource.includes(
@@ -234,14 +234,21 @@ Deno.test("Service credential management renders one card per typed authenticati
     true,
   );
   assertEquals(
-    managementSource.includes("data-provider-credential-consumer"),
+    managementSource.includes("data-provider-credential-consumer="),
+    false,
+  );
+  assertEquals(managementSource.includes("Used by ${"), true);
+  assertEquals(
+    managementSource.includes(
+      'consumers.map((entry) => entry.manifest.display.name).join(", ")',
+    ),
     true,
   );
   assertEquals(
     managementSource.includes(
       "One Cowboy Service credential shared by ${credentialEntries.length} Providers",
     ),
-    true,
+    false,
   );
   assertEquals(managementSource.includes("<ProviderMarkStack"), true);
   assertEquals(managementSource.includes("ProviderCredentialMarks"), false);
@@ -267,7 +274,7 @@ Deno.test("Provider marks preserve host component classes and compact chip spaci
   assertEquals(surfaceSource.includes("data-provider-mark-stack"), true);
   assertEquals(surfaceSource.includes("manifests.slice(0, maxVisible)"), true);
   assertEquals(
-    managementSource.includes("data-provider-credential-consumer"),
+    managementSource.includes('data-provider-credential-consumers={shared ? "true" : undefined}'),
     true,
   );
 });
