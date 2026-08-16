@@ -1,5 +1,21 @@
 export type MobileProduct = "agent" | "review";
 
+export const MOBILE_OPEN_PRODUCT_EVENT = "cowboy:mobile-open-product";
+
+/** Ask the product pager to settle onto a page. Swipe tracking is unchanged;
+ *  this is the explicit Code / Agent button path. */
+export function openMobileProduct(product: MobileProduct): void {
+  globalThis.dispatchEvent(
+    new CustomEvent(MOBILE_OPEN_PRODUCT_EVENT, { detail: { product } }),
+  );
+}
+
+export function mobileProductFromEvent(event: Event): MobileProduct | null {
+  const product = (event as CustomEvent<{ product?: MobileProduct }>).detail
+    ?.product;
+  return product === "agent" || product === "review" ? product : null;
+}
+
 export interface PagerGesture {
   product: MobileProduct;
   width: number;

@@ -80,18 +80,20 @@ types so the wire contract is checked at both ends.
 ## Transcript
 
 `Transcript.tsx` renders the session timeline (user messages, agent chunks, tool
-calls, plan, permissions) as a **column-reverse, paged list**. Settled rows use
-paint containment at rest. A followed live tail recycles older **mounted** rows
-into a measured spacer; do not JS-virtualize this scroller. It must handle
-three chat-log realities: variable row heights (dynamic measurement),
-stick-to-bottom during live streaming (releasing when the user scrolls up), and
-scroll anchoring on prepend so loading older history (via
-`GET /api/history/:id/:page`) never jumps the view.
+calls, plan, permissions) as a **column-reverse, paged list**. Desktop settled
+rows keep paint containment. On Mobile the peek collapses that containment at
+rest so a swipe does not restyle N tiles on the first frame. A followed live
+tail recycles older **mounted** rows into a measured spacer; do not
+JS-virtualize this scroller. It must handle three chat-log realities: variable
+row heights (dynamic measurement), stick-to-bottom during live streaming
+(releasing when the user scrolls up), and scroll anchoring on prepend so
+loading older history (via `GET /api/history/:id/:page`) never jumps the view.
 
-Mobile Sessions/Review drawers, swipe tracking, frost, and the swipe-time
-flatten of those row layers are the contract in
-[`mobile-spatial-presentation.md`](../mobile-spatial-presentation.md). Read that
-before changing drawer motion or Transcript paint budget.
+Mobile Sessions/Review drawers, swipe tracking, frost, the standing peek
+layer, and the no-React-on-finger-down rule are the contract in
+[`mobile-spatial-presentation.md`](../mobile-spatial-presentation.md). Read
+that before changing drawer motion or Transcript paint budget. Do not
+`setState` on transcript `touchstart` to make a swipe cheaper.
 
 User-role rows are not all human. `derive` attaches a `promptOrigin` (`human` /
 `cowboy` / `agent`) from the persisted update, or recovers it from the older

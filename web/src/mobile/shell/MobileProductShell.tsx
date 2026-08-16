@@ -37,6 +37,8 @@ import {
   mobileDrawerSettleDurationMs,
 } from "../../mobileDrawerMotion";
 import {
+  MOBILE_OPEN_PRODUCT_EVENT,
+  mobileProductFromEvent,
   nextMobileProduct,
   pagerDirectionAllowed,
   type PagerGesture,
@@ -364,7 +366,14 @@ export function MobileProductShell({
       render(pagerTargetOffset(productRef.current, width), width);
     };
 
+    const onOpenProduct = (event: Event): void => {
+      const next = mobileProductFromEvent(event);
+      if (next === null || next === productRef.current) return;
+      settle(next);
+    };
+
     render(currentOffset, presentationWidth);
+    globalThis.addEventListener(MOBILE_OPEN_PRODUCT_EVENT, onOpenProduct);
     shell.addEventListener("touchstart", onTouchStart, {
       capture: true,
       passive: true,
@@ -385,6 +394,7 @@ export function MobileProductShell({
     const releaseSheetHold = bindMobileSheetPresentationHold(shell);
     return () => {
       releaseSheetHold();
+      globalThis.removeEventListener(MOBILE_OPEN_PRODUCT_EVENT, onOpenProduct);
       shell.removeEventListener("touchstart", onTouchStart, true);
       shell.removeEventListener("touchmove", onTouchMove, true);
       shell.removeEventListener("touchend", onTouchEnd, true);

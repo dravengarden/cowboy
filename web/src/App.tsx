@@ -57,6 +57,7 @@ import {
     Check as CheckIcon,
     Circle,
     Close as CloseIcon,
+    Code as CodeIcon,
     DeleteOutline,
     DragIndicator,
     DriveFileRenameOutline,
@@ -73,6 +74,7 @@ import {
 import { SessionControls } from "./Composer";
 import { SessionReloadDialog } from "./SessionReloadDialog";
 import { MobileComposer } from "./mobile/MobileComposer";
+import { openMobileProduct } from "./mobile/appPagerMotion";
 import { claimKeyboard } from "./keyboardClaim";
 import { machineVersionPresentation, type MachineComponentUpdate } from "./machineVersions";
 import { DelayedNetworkProgress, NetworkIconButton } from "./NetworkActionFeedback";
@@ -545,6 +547,7 @@ function SessionList({
     onPick,
     onNew,
     onClose,
+    onOpenSettings,
     onRequestDelete,
     onRequestInfo,
     onRequestReload,
@@ -561,6 +564,7 @@ function SessionList({
     onPick: (id: string) => void;
     onNew: () => void;
     onClose?: (() => void) | undefined;
+    onOpenSettings?: (() => void) | undefined;
     onRequestDelete: (s: SessionMeta) => void;
     onRequestInfo: (s: SessionMeta) => void;
     onRequestReload: (s: SessionMeta) => void;
@@ -1049,6 +1053,8 @@ function SessionList({
                         bottom: "max(env(safe-area-inset-bottom, 0px), 12px)",
                         display: "flex",
                         justifyContent: "center",
+                        alignItems: "center",
+                        gap: 1.25,
                         // The open foreground card keeps a deep edge shadow over
                         // the revealed rail. On iPad the rail is capped at 440px,
                         // so a centred two-action island can otherwise put its
@@ -1076,6 +1082,23 @@ function SessionList({
                             },
                         ]}
                     />
+                    {onOpenSettings && (
+                        <MobileSheetActionGroup
+                            actions={[
+                                {
+                                    key: "settings",
+                                    label: "Settings",
+                                    onPress: onOpenSettings,
+                                    icon: (
+                                        <SettingsIcon
+                                            aria-hidden
+                                            sx={{ fontSize: "1.25em" }}
+                                        />
+                                    ),
+                                },
+                            ]}
+                        />
+                    )}
                 </Box>
             )}
             <Menu
@@ -2075,13 +2098,15 @@ export function App({
     const openSettings = useCallback((tab: SettingsTab): void => {
         settingsControllerRef.current?.open(tab);
     }, []);
-    // Mobile Safari can deliver the touch pointerup while dropping the later
-    // synthetic click when the tap first dismisses keyboard/composer focus.
-    // Commit the settings action from pointerup as well; mouse and keyboard
-    // activation continue through the hook's normal click path.
-    const settingsTap = useReliableTouchTap<HTMLButtonElement>(() =>
-        openSettings("settings")
-    );
+    const openCodeTap = useReliableTouchTap<HTMLButtonElement>((): void => {
+        releaseMobileComposerFocus();
+        if (drawerOpenRef.current) {
+            drawerOpenRef.current = false;
+            onMobileDrawerOpenChange?.(false);
+            settleMobileDrawerRef.current?.(false);
+        }
+        openMobileProduct("review");
+    });
     // (The no-judge-key warning now lives in the unified TurnStatusOverlay — the
     // blue "no key" pill — so it's no longer a separate top-of-content Notice.)
     // Desktop sidebar width + live-drag flag. Width is a pixel value (not the
@@ -2356,6 +2381,9 @@ export function App({
             onNew={openNewSession}
             onClose={mobile
                 ? (): void => settleMobileDrawerRef.current?.(false)
+                : undefined}
+            onOpenSettings={mobile
+                ? (): void => openSettings("settings")
                 : undefined}
             onRequestDelete={(s): void => setPendingDelete(s)}
             onRequestInfo={(s): void => setPendingInfo(s)}
@@ -3164,10 +3192,10 @@ export function App({
                             leads the bar. This does not change the product surface. */}
                         {sessionsInDrawer && (
                             // No `edge="start"`: its negative left margin pulled the
-                            // hamburger tight to the screen edge, while Settings (no
+                            // hamburger tight to the screen edge, while Code (no
                             // edge="end") sits at the Toolbar's normal gutter — so the
                             // bar read lopsided. Dropping it gives the hamburger the
-                            // same gutter, symmetric with the gear on the right.
+                            // same gutter, symmetric with the Code control on the right.
                             <IconButton
                                 aria-label={drawerOpen ? "Close sessions" : "Open sessions"}
                                 onClick={(): void => {
@@ -3328,6 +3356,7 @@ export function App({
                                     />
                                 )}
                                 <IconButton
+                                    data-mobile-open-code="true"
                                     onPointerDown={(event): void => {
                                         if (event.pointerType === "touch") {
                                             event.currentTarget.dataset.touchActivated = "true";
@@ -3341,7 +3370,7 @@ export function App({
                                         // its :focus-within height cannot outlive
                                         // the software keyboard.
                                         releaseMobileComposerFocus();
-                                        settingsTap.onPointerDown(event);
+                                        openCodeTap.onPointerDown(event);
                                     }}
                                     onPointerEnter={(event): void => {
                                         if (event.pointerType === "mouse") {
@@ -3351,17 +3380,17 @@ export function App({
                                     onKeyDown={(event): void => {
                                         delete event.currentTarget.dataset.touchActivated;
                                     }}
-                                    onPointerMove={settingsTap.onPointerMove}
-                                    onPointerUp={settingsTap.onPointerUp}
-                                    onPointerCancel={settingsTap.onPointerCancel}
-                                    onClick={settingsTap.onClick}
-                                    aria-label="settings"
-                                    title="Settings"
+                                    onPointerMove={openCodeTap.onPointerMove}
+                                    onPointerUp={openCodeTap.onPointerUp}
+                                    onPointerCancel={openCodeTap.onPointerCancel}
+                                    onClick={openCodeTap.onClick}
+                                    aria-label="Open code"
+                                    title="Code"
                                     sx={{
                                         // iOS WebKit latches the synthetic hover
                                         // generated by a finger tap. Keep the
-                                        // pressed frame, then return the gear to
-                                        // its neutral material after release.
+                                        // pressed frame, then return the control
+                                        // to its neutral material after release.
                                         "&[data-touch-activated='true']:hover, &[data-touch-activated='true'].Mui-focusVisible": {
                                             bgcolor: "transparent",
                                         },
@@ -3370,7 +3399,7 @@ export function App({
                                         },
                                     }}
                                 >
-                                    <SettingsIcon />
+                                    <CodeIcon />
                                 </IconButton>
                             </>
                         )}
