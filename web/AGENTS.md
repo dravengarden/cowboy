@@ -86,6 +86,10 @@ rail, scale the peek, or freeze the session list to make a swipe cheaper.
 - Never decide whether Desktop controls are visible from a mobile breakpoint or
   from the fact that a pane is in split mode. Use the pane's actual available
   space and the Desktop workflow's efficiency needs.
+- Confirmation modals (Clear, Compact, Stop, Reload, discard, delete, update,
+  Provider auth/uninstall) use `ConfirmSheet`. Mobile and tablet always get
+  DetentSheet; Desktop keeps a centered dialog. Do not add a raw MUI `Dialog`
+  for a phone-facing confirm.
 
 ## Deploy (web changes reach the installed PWA only via a SW version bump)
 

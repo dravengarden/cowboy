@@ -21,11 +21,7 @@ import {
   CircularProgress,
   ClickAwayListener,
   Collapse,
-  Dialog,
-  DialogActions,
-  DialogContent,
   DialogContentText,
-  DialogTitle,
   Divider,
   IconButton,
   keyframes,
@@ -270,7 +266,7 @@ import type {
   Status,
 } from "./protocol";
 import { sessionProjectLabel } from "./sessionProject";
-import { Sheet } from "./Sheet";
+import { ConfirmSheet, Sheet } from "./Sheet";
 import { FloatingActionIsland, MobileSheetDismiss } from "./_shell";
 import {
   OPEN_SESSION_SETTINGS_EVENT,
@@ -546,67 +542,65 @@ function SessionActionConfirmDialog({
   onClose: () => void;
   onConfirm: () => Promise<void>;
 }): React.JSX.Element {
+  void disableRestoreFocus;
   return (
-    <Dialog
+    <ConfirmSheet
       open={action !== null}
       onClose={onClose}
-      disableRestoreFocus={disableRestoreFocus}
-      maxWidth="xs"
-      fullWidth
+      title={action !== null ? `${action.label}?` : undefined}
+      actions={action === null ? undefined : (
+        <>
+          <Button
+            color="inherit"
+            onClick={onClose}
+            sx={{ textTransform: "none" }}
+          >
+            Cancel
+            <Kbd keys="Esc" />
+          </Button>
+          <NetworkButton
+            variant="contained"
+            color={action.destructive ? "error" : "primary"}
+            networkAction={onConfirm}
+            sx={{ textTransform: "none" }}
+          >
+            {action.destructive ? "Clear" : "Compact"}
+            <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+          </NetworkButton>
+        </>
+      )}
     >
       {action !== null && (
         <>
-          <DialogTitle>{action.label}?</DialogTitle>
-          <DialogContent>
-            <DialogContentText>{action.detail}</DialogContentText>
-            <DialogContentText sx={{ mt: 1.5, fontSize: "0.8125rem" }}>
-              {action.kind === "slash" && action.command !== undefined
-                ? (
-                  <>
-                    Sends{" "}
-                    <Box
-                      component="code"
-                      sx={{
-                        fontFamily: "ui-monospace, monospace",
-                        px: 0.5,
-                        py: 0.125,
-                        borderRadius: 0.75,
-                        bgcolor: "action.hover",
-                      }}
-                    >
-                      {action.command}
-                    </Box>{" "}
-                    to {provider || "the agent"}
-                    {activeTurn ? " (queued — the agent is mid-turn)" : ""}.
-                  </>
-                )
-                : `Resets ${provider || "the agent"} to a fresh context now${
-                  activeTurn ? " (ends the current turn)" : ""
-                }.`}
-            </DialogContentText>
-          </DialogContent>
-          <DialogActions>
-            <Button
-              color="inherit"
-              onClick={onClose}
-              sx={{ textTransform: "none" }}
-            >
-              Cancel
-              <Kbd keys="Esc" />
-            </Button>
-            <NetworkButton
-              variant="contained"
-              color={action.destructive ? "error" : "primary"}
-              networkAction={onConfirm}
-              sx={{ textTransform: "none" }}
-            >
-              {action.destructive ? "Clear" : "Compact"}
-              <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-            </NetworkButton>
-          </DialogActions>
+          <DialogContentText>{action.detail}</DialogContentText>
+          <DialogContentText sx={{ mt: 1.5, fontSize: "0.8125rem" }}>
+            {action.kind === "slash" && action.command !== undefined
+              ? (
+                <>
+                  Sends{" "}
+                  <Box
+                    component="code"
+                    sx={{
+                      fontFamily: "ui-monospace, monospace",
+                      px: 0.5,
+                      py: 0.125,
+                      borderRadius: 0.75,
+                      bgcolor: "action.hover",
+                    }}
+                  >
+                    {action.command}
+                  </Box>{" "}
+                  to {provider || "the agent"}
+                  {activeTurn ? " (queued — the agent is mid-turn)" : ""}.
+                </>
+              )
+              : `Resets ${provider || "the agent"} to a fresh context now${
+                activeTurn ? " (ends the current turn)" : ""
+              }.`}
+          </DialogContentText>
         </>
       )}
-    </Dialog>
+    </ConfirmSheet>
   );
 }
 
@@ -4641,43 +4635,41 @@ function PendingPanel({
           })}
         </Stack>
       </Collapse>
-      <Dialog
+      <ConfirmSheet
         open={confirmCollapseEdit}
         onClose={(): void => setConfirmCollapseEdit(false)}
-        fullWidth
-        maxWidth="xs"
+        title="Save edits before closing?"
+        actions={
+          <>
+            <Button
+              color="inherit"
+              onClick={(): void => setConfirmCollapseEdit(false)}
+            >
+              Keep editing
+              <Kbd keys="Esc" />
+            </Button>
+            <Button
+              color="error"
+              onClick={(): void => settleEditAndCollapse("discard")}
+            >
+              Discard
+            </Button>
+            <Button
+              variant="contained"
+              onClick={(): void => settleEditAndCollapse("save")}
+            >
+              Save &amp; collapse
+              <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+            </Button>
+          </>
+        }
       >
-        <DialogTitle>Save edits before closing?</DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            This {kind === "queued" ? "queued message" : "draft"}{" "}
-            has unsaved changes. Save or discard them before collapsing the
-            panel.
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions sx={{ flexWrap: "wrap", gap: 0.5 }}>
-          <Button
-            color="inherit"
-            onClick={(): void => setConfirmCollapseEdit(false)}
-          >
-            Keep editing
-            <Kbd keys="Esc" />
-          </Button>
-          <Button
-            color="error"
-            onClick={(): void => settleEditAndCollapse("discard")}
-          >
-            Discard
-          </Button>
-          <Button
-            variant="contained"
-            onClick={(): void => settleEditAndCollapse("save")}
-          >
-            Save &amp; collapse
-            <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-          </Button>
-        </DialogActions>
-      </Dialog>
+        <DialogContentText>
+          This {kind === "queued" ? "queued message" : "draft"}{" "}
+          has unsaved changes. Save or discard them before collapsing the
+          panel.
+        </DialogContentText>
+      </ConfirmSheet>
     </Box>
   );
 }
@@ -5526,30 +5518,28 @@ function PendingRow({
           open={mobileToolbarSettingsOpen}
           onClose={(): void => setMobileToolbarSettingsOpen(false)}
         />
-        <Dialog
+        <ConfirmSheet
           open={confirmDiscardEdit}
           onClose={(): void => setConfirmDiscardEdit(false)}
-          fullWidth
-          maxWidth="xs"
+          title="Discard message edits?"
+          actions={
+            <>
+              <Button onClick={(): void => setConfirmDiscardEdit(false)}>
+                Keep editing
+                <Kbd keys="Esc" />
+              </Button>
+              <Button color="error" onClick={discardEdit}>
+                Discard changes
+                <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+              </Button>
+            </>
+          }
         >
-          <DialogTitle>Discard message edits?</DialogTitle>
-          <DialogContent>
-            <DialogContentText>
-              Your unsaved changes to this{" "}
-              {kind === "queued" ? "queued message" : "draft"} will be lost.
-            </DialogContentText>
-          </DialogContent>
-          <DialogActions>
-            <Button onClick={(): void => setConfirmDiscardEdit(false)}>
-              Keep editing
-              <Kbd keys="Esc" />
-            </Button>
-            <Button color="error" onClick={discardEdit}>
-              Discard changes
-              <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-            </Button>
-          </DialogActions>
-        </Dialog>
+          <DialogContentText>
+            Your unsaved changes to this{" "}
+            {kind === "queued" ? "queued message" : "draft"} will be lost.
+          </DialogContentText>
+        </ConfirmSheet>
       </>
     );
   }
@@ -5884,19 +5874,36 @@ function PendingRow({
           ))}
         </Menu>
       </Stack>
-      <Dialog
+      <ConfirmSheet
         open={confirmRemove}
         onClose={(): void => setConfirmRemove(false)}
-        maxWidth="xs"
-        fullWidth
+        title={kind === "draft"
+          ? "Delete this draft?"
+          : "Delete this queued message?"}
+        actions={
+          <>
+            <Button
+              color="inherit"
+              onClick={(): void => setConfirmRemove(false)}
+              sx={{ textTransform: "none" }}
+            >
+              Cancel
+              <Kbd keys="Esc" />
+            </Button>
+            <Button
+              color="error"
+              variant="contained"
+              onClick={doRemove}
+              sx={{ textTransform: "none" }}
+            >
+              Delete
+              <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+            </Button>
+          </>
+        }
       >
-        <DialogTitle>
-          {kind === "draft"
-            ? "Delete this draft?"
-            : "Delete this queued message?"}
-        </DialogTitle>
-        {message.text && (
-          <DialogContent>
+        {message.text
+          ? (
             <DialogContentText
               sx={{
                 display: "-webkit-box",
@@ -5909,28 +5916,9 @@ function PendingRow({
             >
               {stripImageTokens(message.text)}
             </DialogContentText>
-          </DialogContent>
-        )}
-        <DialogActions>
-          <Button
-            color="inherit"
-            onClick={(): void => setConfirmRemove(false)}
-            sx={{ textTransform: "none" }}
-          >
-            Cancel
-            <Kbd keys="Esc" />
-          </Button>
-          <Button
-            color="error"
-            variant="contained"
-            onClick={doRemove}
-            sx={{ textTransform: "none" }}
-          >
-            Delete
-            <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-          </Button>
-        </DialogActions>
-      </Dialog>
+          )
+          : null}
+      </ConfirmSheet>
     </Paper>
   );
 }
@@ -5950,34 +5938,37 @@ function StopConfirmDialog({
 }): React.JSX.Element {
   useConfirmEnter(open, onConfirm);
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
-      <DialogTitle>Stop the running turn?</DialogTitle>
-      <DialogContent>
-        <DialogContentText>
-          The agent is still working. Stopping ends the current turn; whatever
-          it produced so far stays in the transcript.
-        </DialogContentText>
-      </DialogContent>
-      <DialogActions>
-        <Button
-          color="inherit"
-          onClick={onClose}
-          sx={{ textTransform: "none" }}
-        >
-          Keep running
-          <Kbd keys="Esc" />
-        </Button>
-        <Button
-          color="error"
-          variant="contained"
-          onClick={onConfirm}
-          sx={{ textTransform: "none" }}
-        >
-          Stop
-          <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-        </Button>
-      </DialogActions>
-    </Dialog>
+    <ConfirmSheet
+      open={open}
+      onClose={onClose}
+      title="Stop the running turn?"
+      actions={
+        <>
+          <Button
+            color="inherit"
+            onClick={onClose}
+            sx={{ textTransform: "none" }}
+          >
+            Keep running
+            <Kbd keys="Esc" />
+          </Button>
+          <Button
+            color="error"
+            variant="contained"
+            onClick={onConfirm}
+            sx={{ textTransform: "none" }}
+          >
+            Stop
+            <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+          </Button>
+        </>
+      }
+    >
+      <DialogContentText>
+        The agent is still working. Stopping ends the current turn; whatever
+        it produced so far stays in the transcript.
+      </DialogContentText>
+    </ConfirmSheet>
   );
 }
 

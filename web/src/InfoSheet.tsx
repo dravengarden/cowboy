@@ -6,11 +6,7 @@ import {
   Box,
   Button,
   ButtonBase,
-  Dialog,
-  DialogActions,
-  DialogContent,
   DialogContentText,
-  DialogTitle,
   Divider,
   LinearProgress,
   Stack,
@@ -66,7 +62,7 @@ import {
   timeRangeQuery,
   validTimeRange,
 } from "./observabilityTimeRange";
-import { Sheet } from "./Sheet";
+import { ConfirmSheet, Sheet } from "./Sheet";
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${String(n)} B`;
@@ -1507,92 +1503,88 @@ function ProviderUsageCard({
           {usage.source} · Updated {relativeUpdateTime(usage.observed_at_ms)}
         </Typography>
       </Stack>
-      <Dialog
+      <ConfirmSheet
         open={resetOpen}
         onClose={closeResetDialog}
-        fullWidth
-        maxWidth="xs"
+        title={resetMode === "schedule"
+          ? "Schedule nearest reset"
+          : "Use nearest reset now?"}
+        actions={
+          <>
+            <Button onClick={closeResetDialog} disabled={resetBusy}>
+              Cancel
+              <Kbd
+                keys="Esc"
+                availability={resetBusy ? "inactive" : "available"}
+              />
+            </Button>
+            <NetworkButton
+              variant="contained"
+              color={resetMode === "now" ? "error" : "primary"}
+              disabled={resetBusy || confirmText !== "confirm" ||
+                (resetMode === "schedule" && !scheduleValid)}
+              networkAction={submitReset}
+            >
+              {resetMode === "schedule" ? "Schedule reset" : "Reset now"}
+              <Kbd
+                keys={`${MOD_LABEL}${ENTER_LABEL}`}
+                availability={resetBusy || confirmText !== "confirm" ||
+                    (resetMode === "schedule" && !scheduleValid)
+                  ? "inactive"
+                  : "available"}
+              />
+            </NetworkButton>
+          </>
+        }
       >
-        <DialogTitle>
+        <DialogContentText>
           {resetMode === "schedule"
-            ? "Schedule nearest reset"
-            : "Use nearest reset now?"}
-        </DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            {resetMode === "schedule"
-              ? "At the selected time, Cowboy will use the earliest-expiring reset then available."
-              : "Cowboy will immediately use the earliest-expiring available reset. This cannot be undone."}
-          </DialogContentText>
-          <ToggleButtonGroup
-            exclusive
-            fullWidth
-            value={resetMode}
-            onChange={(_event, value: "schedule" | "now" | null) => {
-              if (!value || value === resetMode || resetBusy) return;
-              setResetMode(value);
-              setConfirmText("");
-              setResetError(null);
-            }}
-            aria-label="Reset timing"
-            sx={{ mt: 2 }}
-          >
-            <ToggleButton value="schedule">Schedule</ToggleButton>
-            <ToggleButton value="now" color="error">Now</ToggleButton>
-          </ToggleButtonGroup>
-          {resetError && (
-            <Typography color="error.main" variant="body2" sx={{ mt: 1 }}>
-              {resetError}
-            </Typography>
-          )}
-          {resetMode === "schedule" && (
-            <TextField
-              type="datetime-local"
-              fullWidth
-              label="Run at"
-              value={fireAt}
-              onChange={(event) =>
-                setFireAt(acceptedScheduleTime(event.target.value))}
-              slotProps={{ inputLabel: { shrink: true } }}
-              helperText="Choose a time at least one minute ahead"
-              sx={{ mt: 2 }}
-            />
-          )}
+            ? "At the selected time, Cowboy will use the earliest-expiring reset then available."
+            : "Cowboy will immediately use the earliest-expiring available reset. This cannot be undone."}
+        </DialogContentText>
+        <ToggleButtonGroup
+          exclusive
+          fullWidth
+          value={resetMode}
+          onChange={(_event, value: "schedule" | "now" | null) => {
+            if (!value || value === resetMode || resetBusy) return;
+            setResetMode(value);
+            setConfirmText("");
+            setResetError(null);
+          }}
+          aria-label="Reset timing"
+          sx={{ mt: 2 }}
+        >
+          <ToggleButton value="schedule">Schedule</ToggleButton>
+          <ToggleButton value="now" color="error">Now</ToggleButton>
+        </ToggleButtonGroup>
+        {resetError && (
+          <Typography color="error.main" variant="body2" sx={{ mt: 1 }}>
+            {resetError}
+          </Typography>
+        )}
+        {resetMode === "schedule" && (
           <TextField
-            autoComplete="off"
+            type="datetime-local"
             fullWidth
-            label="Type confirm to continue"
-            value={confirmText}
-            onChange={(event) => setConfirmText(event.target.value)}
+            label="Run at"
+            value={fireAt}
+            onChange={(event) =>
+              setFireAt(acceptedScheduleTime(event.target.value))}
+            slotProps={{ inputLabel: { shrink: true } }}
+            helperText="Choose a time at least one minute ahead"
             sx={{ mt: 2 }}
           />
-        </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2 }}>
-          <Button onClick={closeResetDialog} disabled={resetBusy}>
-            Cancel
-            <Kbd
-              keys="Esc"
-              availability={resetBusy ? "inactive" : "available"}
-            />
-          </Button>
-          <NetworkButton
-            variant="contained"
-            color={resetMode === "now" ? "error" : "primary"}
-            disabled={resetBusy || confirmText !== "confirm" ||
-              (resetMode === "schedule" && !scheduleValid)}
-            networkAction={submitReset}
-          >
-            {resetMode === "schedule" ? "Schedule reset" : "Reset now"}
-            <Kbd
-              keys={`${MOD_LABEL}${ENTER_LABEL}`}
-              availability={resetBusy || confirmText !== "confirm" ||
-                  (resetMode === "schedule" && !scheduleValid)
-                ? "inactive"
-                : "available"}
-            />
-          </NetworkButton>
-        </DialogActions>
-      </Dialog>
+        )}
+        <TextField
+          autoComplete="off"
+          fullWidth
+          label="Type confirm to continue"
+          value={confirmText}
+          onChange={(event) => setConfirmText(event.target.value)}
+          sx={{ mt: 2 }}
+        />
+      </ConfirmSheet>
     </Box>
   );
 }

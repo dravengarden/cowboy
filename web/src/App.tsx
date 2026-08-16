@@ -22,9 +22,6 @@ import {
     ButtonBase,
     Chip,
     CircularProgress,
-    Dialog,
-    DialogContent,
-    DialogTitle,
     Divider,
     GlobalStyles,
     IconButton,
@@ -191,7 +188,7 @@ import {
     NativeReleaseUpdatePrompt,
     ThemeModeControl,
 } from "./_shell";
-import { Sheet } from "./Sheet";
+import { ConfirmSheet, Sheet } from "./Sheet";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { isImeKeyEvent } from "./imeKey";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
@@ -4640,47 +4637,45 @@ function MachinesContent(): React.JSX.Element {
                     </Paper>
                 );
             })}
-            <Dialog
+            <ConfirmSheet
                 open={updateConfirmation !== null}
                 onClose={() => setUpdateConfirmation(null)}
-                fullWidth
-                maxWidth="xs"
+                title="Roll out this update?"
+                actions={
+                    <>
+                        <Button color="inherit" onClick={() => setUpdateConfirmation(null)}>
+                            Cancel
+                            <Kbd keys="Esc" />
+                        </Button>
+                        <Button
+                            variant="contained"
+                            color="warning"
+                            onClick={confirmMachineUpdate}
+                        >
+                            Update and roll out
+                            <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+                        </Button>
+                    </>
+                }
             >
-                <DialogTitle>Roll out this update?</DialogTitle>
-                <DialogContent>
-                    {updateConfirmation && (
-                        <Stack spacing={2} sx={{ pt: 0.5 }}>
-                            <Typography variant="body2">
-                                {updateConfirmation.components.map(machineComponentName).join(", ")} {updateConfirmation.components.length === 1 ? "is" : "are"} used by active sessions on this Machine.
-                            </Typography>
-                            <Stack spacing={0.5}>
-                                {updateConfirmation.components.map((component) => (
-                                    <Typography key={`${component.id.kind}:${component.id.slot ?? ""}`} variant="caption" color="text.secondary">
-                                        {machineComponentName(component)} · {component.active_leases} active {component.active_leases === 1 ? "session" : "sessions"}
-                                    </Typography>
-                                ))}
-                            </Stack>
-                            <Alert severity="warning">
-                                Current turns will finish first. Cowboy will then replace affected workers gradually. Each session may be briefly unavailable while it reconnects; its transcript and agent session are preserved. Machine host or runtime updates may also reconnect the Machine service.
-                            </Alert>
-                            <Stack direction="row" spacing={1} justifyContent="flex-end">
-                                <Button color="inherit" onClick={() => setUpdateConfirmation(null)}>
-                                    Cancel
-                                    <Kbd keys="Esc" />
-                                </Button>
-                                <Button
-                                    variant="contained"
-                                    color="warning"
-                                    onClick={confirmMachineUpdate}
-                                >
-                                    Update and roll out
-                                    <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-                                </Button>
-                            </Stack>
+                {updateConfirmation && (
+                    <Stack spacing={2} sx={{ pt: 0.5 }}>
+                        <Typography variant="body2">
+                            {updateConfirmation.components.map(machineComponentName).join(", ")} {updateConfirmation.components.length === 1 ? "is" : "are"} used by active sessions on this Machine.
+                        </Typography>
+                        <Stack spacing={0.5}>
+                            {updateConfirmation.components.map((component) => (
+                                <Typography key={`${component.id.kind}:${component.id.slot ?? ""}`} variant="caption" color="text.secondary">
+                                    {machineComponentName(component)} · {component.active_leases} active {component.active_leases === 1 ? "session" : "sessions"}
+                                </Typography>
+                            ))}
                         </Stack>
-                    )}
-                </DialogContent>
-            </Dialog>
+                        <Alert severity="warning">
+                            Current turns will finish first. Cowboy will then replace affected workers gradually. Each session may be briefly unavailable while it reconnects; its transcript and agent session are preserved. Machine host or runtime updates may also reconnect the Machine service.
+                        </Alert>
+                    </Stack>
+                )}
+            </ConfirmSheet>
         </Stack>
     );
 }

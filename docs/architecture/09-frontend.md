@@ -148,6 +148,18 @@ independent persistence across reload, both expanded overflow modes at phone
 width, and an empty collapsed command list with the fixed action cluster still
 visible.
 
+### Confirmation surfaces
+
+Clear / Compact / Stop / Reload / discard / delete / update / Provider
+auth-or-uninstall prompts are compact decisions, not workbenches. On the
+Mobile and tablet products they always rise as the shared frosted
+DetentSheet (`ConfirmSheet` in `web/src/Sheet.tsx`), including iPhone
+landscape. Desktop keeps the centered dialog. Do not open a raw MUI
+`Dialog` for these prompts on a phone-width surface: a floating card is
+the wrong modal grammar next to Cowboy's bottom sheets. Desktop-only
+chrome such as `DesktopTopBarControls` may keep Dialog because that
+product never becomes Mobile by shrinking the window.
+
 Composer controls, editor chrome, and inline image surfaces must derive colors,
 contrast, borders, and state layers from MUI theme tokens. Do not add hardcoded
 light- or dark-only colors; visually verify both themes when these surfaces

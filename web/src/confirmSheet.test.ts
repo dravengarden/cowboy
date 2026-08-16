@@ -1,0 +1,68 @@
+import { assert, assertEquals } from "jsr:@std/assert";
+
+const sheetSource = await Deno.readTextFile(
+  new URL("./Sheet.tsx", import.meta.url),
+);
+const composerSource = await Deno.readTextFile(
+  new URL("./Composer.tsx", import.meta.url),
+);
+const reloadSource = await Deno.readTextFile(
+  new URL("./SessionReloadDialog.tsx", import.meta.url),
+);
+const fullscreenSource = await Deno.readTextFile(
+  new URL("./FullscreenComposer.tsx", import.meta.url),
+);
+const appSource = await Deno.readTextFile(
+  new URL("./App.tsx", import.meta.url),
+);
+const infoSource = await Deno.readTextFile(
+  new URL("./InfoSheet.tsx", import.meta.url),
+);
+const providerSource = await Deno.readTextFile(
+  new URL("./ProviderManagement.tsx", import.meta.url),
+);
+const desktopTopBarSource = await Deno.readTextFile(
+  new URL("./desktop/DesktopTopBarControls.tsx", import.meta.url),
+);
+
+Deno.test("ConfirmSheet forces DetentSheet on mobile and tablet products", () => {
+  assert(sheetSource.includes("export function ConfirmSheet("));
+  assert(sheetSource.includes("export function useConfirmSheetSurface("));
+  assert(
+    sheetSource.includes("return useSurfaceProfile().kind !== \"desktop\""),
+  );
+  assert(sheetSource.includes("forceSheet={forceSheet}"));
+  assert(sheetSource.includes("portal"));
+  assert(
+    sheetSource.includes('mobileDismiss={actions == null ? "footer" : "none"}'),
+  );
+});
+
+Deno.test("phone-facing confirmation prompts use ConfirmSheet, not a raw Dialog", () => {
+  const phoneFacing = [
+    composerSource,
+    reloadSource,
+    fullscreenSource,
+    appSource,
+    infoSource,
+    providerSource,
+  ];
+  for (const source of phoneFacing) {
+    assert(source.includes("<ConfirmSheet"));
+    assertEquals(source.includes("<Dialog\n"), false);
+    assertEquals(source.includes("<Dialog "), false);
+  }
+  assert(composerSource.includes('title="Stop the running turn?"'));
+  assert(composerSource.includes("title={action !== null ? `${action.label}?`"));
+  assert(reloadSource.includes('title="Reload this session?"'));
+  assert(fullscreenSource.includes('title="Ignore modifications?"'));
+  assert(appSource.includes('title="Roll out this update?"'));
+  assert(infoSource.includes("Use nearest reset now?"));
+  assert(providerSource.includes("Uninstall ${"));
+});
+
+Deno.test("desktop-owned session confirms stay centered dialogs", () => {
+  assert(desktopTopBarSource.includes("<DialogTitle>Clear conversation?</DialogTitle>"));
+  assert(desktopTopBarSource.includes("<DialogTitle>Compact conversation?</DialogTitle>"));
+  assertEquals(desktopTopBarSource.includes("<ConfirmSheet"), false);
+});
