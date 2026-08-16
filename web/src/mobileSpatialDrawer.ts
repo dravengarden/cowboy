@@ -128,8 +128,7 @@ export function bindMobileSpatialDrawer({
     // store holds happen in prepare(), before the first translate.
     const visual = mobileDrawerCardVisual(offset, presentationWidth, phone);
     const x = `${String(openingSign * offset)}px`;
-    surface.style.transform =
-      `translate3d(${x}, 0, 0) scale(${String(visual.scale)})`;
+    surface.style.transform = `translate3d(${x}, 0, 0)`;
     drawerMask.style.transform = `translate3d(${x}, 0, 0)`;
     if (dim) dim.style.opacity = String(visual.dim);
   };

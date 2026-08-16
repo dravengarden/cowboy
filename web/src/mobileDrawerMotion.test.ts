@@ -24,12 +24,10 @@ Deno.test("drawer settle uses an iOS deceleration window", () => {
 });
 
 Deno.test("drawer card recedes like an Obsidian workspace", () => {
-  assertEquals(mobileDrawerCardVisual(0, 360, true).scale, 1);
   assertEquals(mobileDrawerCardVisual(0, 360, true).dim, 0);
-  assertEquals(mobileDrawerCardVisual(360, 360, true).scale, 0.92);
   assertEquals(mobileDrawerCardVisual(360, 360, true).radiusPx, 20);
-  assertEquals(mobileDrawerCardVisual(360, 360, false).scale, 0.955);
-  assertEquals(mobileDrawerCardVisual(180, 360, true).scale, 0.96);
+  assertEquals(mobileDrawerCardVisual(360, 360, false).radiusPx, 16);
+  assertEquals(Object.hasOwn(mobileDrawerCardVisual(360, 360, true), "scale"), false);
 });
 
 Deno.test("mobile drawer progress follows the finger", () => {

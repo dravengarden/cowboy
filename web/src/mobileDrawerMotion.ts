@@ -36,20 +36,18 @@ export function mobileDrawerProgress(
     : 0;
 }
 
-/** Obsidian/iOS receding-card look for the sliding workspace. Scale is linear
- *  with the finger; dim uses a smoothstep so the veil does not flash on. */
+/** Obsidian/iOS receding-card look for the sliding workspace. The page
+ *  translates at full size; only the veil and corner radius change. */
 export function mobileDrawerCardVisual(
   offset: number,
   width: number,
   phone: boolean,
-): { progress: number; scale: number; dim: number; radiusPx: number } {
+): { progress: number; dim: number; radiusPx: number } {
   const progress = mobileDrawerProgress(offset, width);
-  const openScale = phone ? 0.92 : 0.955;
   const openDim = phone ? 0.22 : 0.16;
   const fade = progress * progress * (3 - 2 * progress);
   return {
     progress,
-    scale: 1 - (1 - openScale) * progress,
     dim: openDim * fade,
     radiusPx: phone ? 20 : 16,
   };
