@@ -29,7 +29,10 @@ pub enum CodeOperation {
         limit: usize,
     },
     Changes,
-    Repository,
+    Repository {
+        #[serde(default)]
+        after: Option<String>,
+    },
     Commit {
         oid: String,
     },
@@ -141,9 +144,11 @@ fn execute(request: CodeAdapterRequest, roots: &[PathBuf]) -> Result<CodeAdapter
         CodeOperation::Changes => {
             CodeAdapterResponse::Changes(provider.changes().map_err(anyhow::Error::msg)?)
         }
-        CodeOperation::Repository => {
-            CodeAdapterResponse::Repository(provider.repository().map_err(anyhow::Error::msg)?)
-        }
+        CodeOperation::Repository { after } => CodeAdapterResponse::Repository(
+            provider
+                .repository(after.as_deref())
+                .map_err(anyhow::Error::msg)?,
+        ),
         CodeOperation::Commit { oid } => {
             CodeAdapterResponse::Commit(provider.commit(&oid).map_err(anyhow::Error::msg)?)
         }

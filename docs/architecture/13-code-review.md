@@ -117,7 +117,10 @@ checkout when that ignored child is absent from the isolated session worktree.
 Only names with both `project-defs/<name>/project.toml` and a matching project
 directory are eligible; canonical containment is checked again for every page
 and file read. Session execution, Git changes, history, and diffs remain scoped
-to the isolated worktree. Git porcelain and Zed RPC values never cross this
+to the isolated worktree. History is a newest-first page of 128 commits;
+`GET /repository?after=<oid>` appends the next older page. The Code History
+tab loads that page when the list approaches the bottom, with commit-shaped
+skeletons instead of a hard cap banner. Git porcelain and Zed RPC values never cross this
 boundary. Server handlers depend on the product-level
 `CodeProvider` interface for manifests, directory pages, changes, diffs, and
 file windows. The first implementation reads the local worktree; a future

@@ -12,14 +12,14 @@ import {
   Box,
   Button,
   Chip,
-  CircularProgress,
   List,
   ListItemButton,
   ListItemText,
+  Skeleton,
   Stack,
   Typography,
 } from "@mui/material";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MobileSheetActionGroup } from "../../_shell";
 import { openAppSettings } from "../../appSettings";
 import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
@@ -31,6 +31,11 @@ import {
   type GitRepositorySnapshot,
 } from "./codeApi";
 import { buildGitGraph, type GitGraphRow } from "./gitGraphModel";
+import {
+  HISTORY_PAGE_SIZE,
+  historyPageCursor,
+  mergeHistoryPage,
+} from "./reviewHistoryPaging";
 import { ReviewChanges } from "./ReviewChanges";
 
 type RepositorySection = "changes" | "history" | "worktrees";
@@ -111,6 +116,55 @@ function GraphCell(
   );
 }
 
+function HistoryCommitSkeleton(
+  { count, loading }: { count: number; loading: boolean },
+): React.JSX.Element {
+  const widths = ["72%", "58%", "64%", "51%", "69%", "46%"];
+  return (
+    <Stack
+      role="status"
+      aria-live="polite"
+      aria-label={loading ? "Loading older commits" : "Loading commit history"}
+      spacing={0}
+      sx={{ pointerEvents: "none", userSelect: "none" }}
+    >
+      {widths.slice(0, count).map((width, index) => (
+        <Stack
+          key={width}
+          direction="row"
+          alignItems="center"
+          spacing={1}
+          sx={{ height: 58, px: 0.5 }}
+        >
+          <Skeleton
+            variant="circular"
+            animation={loading ? "wave" : false}
+            width={10}
+            height={10}
+            sx={{ ml: 0.75, flexShrink: 0 }}
+          />
+          <Stack spacing={0.6} sx={{ flex: 1, minWidth: 0 }}>
+            <Skeleton
+              variant="text"
+              animation={loading && index >= count - 2 ? "wave" : false}
+              width={width}
+              height={14}
+              sx={{ transform: "none" }}
+            />
+            <Skeleton
+              variant="text"
+              animation={loading && index >= count - 2 ? "wave" : false}
+              width="42%"
+              height={10}
+              sx={{ transform: "none", opacity: 0.7 }}
+            />
+          </Stack>
+        </Stack>
+      ))}
+    </Stack>
+  );
+}
+
 export function ReviewRepository({
   sessionId,
   machineLabel,
@@ -132,11 +186,17 @@ export function ReviewRepository({
 }): React.JSX.Element {
   const [section, setSection] = useState<RepositorySection>("changes");
   const [repository, setRepository] = useState<GitRepositorySnapshot>();
+  const [commits, setCommits] = useState<GitCommitSummary[]>([]);
+  const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [moreError, setMoreError] = useState(false);
   const [error, setError] = useState(false);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const loadingMoreRef = useRef(false);
   const graph = useMemo(
-    () => buildGitGraph(repository?.commits ?? []),
-    [repository?.commits],
+    () => buildGitGraph(commits),
+    [commits],
   );
   const graphWidth = useMemo(() => {
     const lanes = graph.reduce(
@@ -149,8 +209,12 @@ export function ReviewRepository({
     if (!sessionId) return;
     setLoading(true);
     setError(false);
+    setMoreError(false);
     try {
-      setRepository(await fetchGitRepository(sessionId, signal));
+      const snapshot = await fetchGitRepository(sessionId, signal);
+      setRepository(snapshot);
+      setCommits(snapshot.commits);
+      setTruncated(snapshot.historyTruncated);
     } catch (reason) {
       if (!(reason instanceof DOMException && reason.name === "AbortError")) {
         setError(true);
@@ -159,11 +223,44 @@ export function ReviewRepository({
       if (!signal?.aborted) setLoading(false);
     }
   }, [sessionId]);
+  const loadMore = useCallback(async (): Promise<void> => {
+    if (!sessionId || loadingMoreRef.current || !truncated) return;
+    const after = historyPageCursor(commits);
+    if (!after) return;
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+    setMoreError(false);
+    try {
+      const page = await fetchGitRepository(sessionId, undefined, after);
+      const merged = mergeHistoryPage(commits, page.commits, page.historyTruncated);
+      setCommits(merged.commits);
+      setTruncated(merged.truncated);
+    } catch {
+      setMoreError(true);
+    } finally {
+      loadingMoreRef.current = false;
+      setLoadingMore(false);
+    }
+  }, [commits, sessionId, truncated]);
   useEffect(() => {
     const controller = new AbortController();
     void load(controller.signal);
     return () => controller.abort();
   }, [load, refreshToken]);
+  useEffect(() => {
+    if (section !== "history" || !truncated || moreError) return undefined;
+    const sentinel = sentinelRef.current;
+    const root = sentinel?.closest("[data-mobile-overflow-layer='true']");
+    if (!sentinel || !(root instanceof Element)) return undefined;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) void loadMore();
+      },
+      { root, rootMargin: "180px 0px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [loadMore, moreError, section, truncated]);
 
   return (
     <Stack sx={{ position: "relative", height: 1, minHeight: 0 }}>
@@ -233,8 +330,8 @@ export function ReviewRepository({
           )
           : loading
           ? (
-            <Box sx={{ display: "grid", placeItems: "center", pt: 8 }}>
-              <CircularProgress size={24} />
+            <Box sx={{ height: 1, px: 0.75, pt: 0.5 }}>
+              <HistoryCommitSkeleton count={6} loading />
             </Box>
           )
           : error
@@ -265,7 +362,7 @@ export function ReviewRepository({
               }}
             >
               <List disablePadding>
-                {(repository?.commits ?? []).map((commit, index) => (
+                {commits.map((commit, index) => (
                   <ListItemButton
                     key={commit.oid}
                     onClick={() => {
@@ -320,10 +417,34 @@ export function ReviewRepository({
                   </ListItemButton>
                 ))}
               </List>
-              {repository?.historyTruncated && (
-                <Alert severity="info">
-                  Showing the newest 128 commits across all refs
-                </Alert>
+              {truncated && (
+                <Box ref={sentinelRef} sx={{ pb: 1 }}>
+                  {moreError
+                    ? (
+                      <Button
+                        fullWidth
+                        color="inherit"
+                        onClick={() => void loadMore()}
+                        sx={{
+                          minHeight: 44,
+                          textTransform: "none",
+                          color: "text.secondary",
+                        }}
+                      >
+                        Couldn't load older commits · Retry
+                      </Button>
+                    )
+                    : <HistoryCommitSkeleton count={3} loading={loadingMore} />}
+                </Box>
+              )}
+              {!truncated && commits.length > HISTORY_PAGE_SIZE && (
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ display: "block", px: 1.5, py: 1.25 }}
+                >
+                  That's the start of this history
+                </Typography>
               )}
             </Box>
           )
