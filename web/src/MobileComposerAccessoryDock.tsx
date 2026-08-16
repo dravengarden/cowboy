@@ -71,8 +71,7 @@ export function MobileComposerAccessoryDock({
         alignItems="center"
         sx={{
           minWidth: 0,
-          pl: 1.25,
-          pr: 0.25,
+          pl: 0.5,
           borderBottom: 1,
           borderColor: (theme) => alpha(theme.palette.divider, 0.34),
         }}
@@ -164,7 +163,7 @@ export function MobileComposerEditingBar({
           flex: 1,
           minWidth: 0,
           height: 48,
-          pl: 1.25,
+          pl: 0.5,
           overflowX: "auto",
           overflowY: "hidden",
           overscrollBehaviorX: "contain",

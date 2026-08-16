@@ -48,17 +48,20 @@ const mobileCodeSource = appSource.slice(
   mobileCodeEnd,
 );
 
-Deno.test("the new-message composer never promotes into the two-track edit dock", () => {
-  assertEquals(composerSource.includes("data-mobile-focus-format-row"), false);
-  assertEquals(composerSource.includes("<MobileComposerEditingBar"), false);
+Deno.test("mobile composer promotion requires a visible keyboard and real editor focus", () => {
   assertEquals(
     composerSource.includes(
-      "\"&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-focus-format-row]\"",
+      "\"&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within)\"",
+    ),
+    true,
+  );
+  assertEquals(composerSource.includes("data-mobile-keyboard-open={"), true);
+  assertEquals(
+    composerSource.includes(
+      '"&:has([data-mobile-editor-area]:focus-within)"',
     ),
     false,
   );
-  assertEquals(composerSource.includes("data-mobile-keyboard-open={"), true);
-  assertEquals(composerSource.includes("<MobileComposerAccessoryDock"), true);
 });
 
 Deno.test("mobile keyboard keeps the writing material opaque across transient WebKit focus loss", () => {
@@ -73,7 +76,7 @@ Deno.test("mobile keyboard keeps the writing material opaque across transient We
 Deno.test("multi-image mobile composers scroll the focused caret above the keyboard", () => {
   assertEquals(
     composerSource.includes('maxHeight: "min(42dvh, 22rem)"'),
-    false,
+    true,
   );
   assertEquals(
     composerSource.includes("editorRef.current.revealSelection();"),
@@ -288,7 +291,7 @@ Deno.test("native textarea owns a content-sized mobile canvas", () => {
     composerSource.includes(
       "minHeight: MOBILE_COMPOSER_INPUT_EDITOR_MIN_H",
     ),
-    false,
+    true,
   );
   assertEquals(
     composerSource.includes(
@@ -326,20 +329,22 @@ Deno.test("mobile pending edit stays mounted when the keyboard never reports an 
   );
   assertEquals(composerSource.includes("if (keyboardBoundEditing) {"), true);
   assertEquals(composerSource.includes("onClick={hideMobileEditKeyboard}"), true);
-  assertEquals(composerSource.includes("const finishMobileEdit = (): void =>"), true);
+  assertEquals(composerSource.includes("onClick={finishMobileEdit}"), false);
 });
 
 Deno.test("mobile pending editor survives the native long-press keyboard settle window", () => {
   assertEquals(mobilePendingKeyboardCloseSettleMs, 550);
   assertEquals(
     composerSource.includes(
-      "() => finishMobileEditRef.current(),\n      mobilePendingKeyboardCloseSettleMs,",
+      "() => persistEditRef.current(),\n      mobilePendingKeyboardCloseSettleMs,",
     ),
     true,
   );
   assertEquals(
-    composerSource.includes("const finishMobileEditRef = useRef(finishMobileEdit);"),
-    true,
+    composerSource.includes(
+      "const frame = globalThis.requestAnimationFrame(() =>\n      finishMobileEditRef.current()",
+    ),
+    false,
   );
 });
 
@@ -410,7 +415,7 @@ Deno.test("pending-row image paste stages synchronously before encoding", () => 
 Deno.test("native image and text paste action is shared by every mobile editor surface", () => {
   assertEquals(
     composerSource.match(/<MobileComposerFormatActions/g)?.length,
-    1,
+    2,
   );
   assertEquals(
     fullscreenComposerSource.includes("<MobileComposerFormatActions"),
@@ -588,7 +593,7 @@ Deno.test("every focused mobile editor uses two semantic bars with a fixed keybo
     true,
   );
   assertEquals(accessoryDockSource.includes("<MobileComposerEditingBar"), true);
-  assertEquals(composerSource.includes("<MobileComposerEditingBar"), false);
+  assertEquals(composerSource.includes("<MobileComposerEditingBar"), true);
   assertEquals(composerSource.includes("data-mobile-keyboard-hide"), false);
   assertEquals(
     fullscreenComposerSource.includes(
@@ -724,7 +729,7 @@ Deno.test("long touch prompts scroll inside the editor without hiding chrome", (
     composerSource.includes(
       "\"&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor] [data-mobile-native-textarea='true']\"",
     ),
-    false,
+    true,
   );
   assertEquals(
     composerSource.includes('height: "100% !important"'),
@@ -762,7 +767,7 @@ Deno.test("mobile keyboard focus presents one floating composer surface", () => 
       .test(
         composerSource,
       ),
-    false,
+    true,
   );
   assertEquals(
     /> \[data-composer-stack-slot\]:not\(\[data-composer-stack-slot='pending'\]\)":\s*{\s*display: "none"/
@@ -819,7 +824,7 @@ Deno.test("mobile keyboard focus presents one floating composer surface", () => 
   );
   assertEquals(
     composerSource.match(/mobileFocusedComposerSurfaceSx/g)?.length,
-    3,
+    4,
   );
 });
 
@@ -881,7 +886,7 @@ Deno.test("pending Force push confirmation keeps the native editor and anchor mo
   );
 });
 
-Deno.test("mobile keyboard dismissal belongs to the edit dock, not the new-message card", () => {
+Deno.test("mobile keyboard dismissal belongs to the fixed lower editing rail", () => {
   const utilityStart = composerSource.indexOf(
     '<MobileComposerFixedActionSlot region="primary" overlay>',
   );
@@ -892,31 +897,32 @@ Deno.test("mobile keyboard dismissal belongs to the edit dock, not the new-messa
   const actionStart = composerSource.indexOf(
     "data-mobile-action-row={touchInput",
   );
+  const editingStart = composerSource.indexOf("data-mobile-focus-format-row\n");
   const actionEnd = composerSource.indexOf(
-    "data-mobile-composer-clear",
+    "<ComposerToolbarSettings",
     actionStart,
-  ) + "data-mobile-composer-clear".length;
+  );
   const utilityRail = composerSource.slice(utilityStart, utilityEnd);
+  const editingRail = composerSource.slice(editingStart, actionStart);
   const actionRow = composerSource.slice(actionStart, actionEnd);
-  const pendingStart = composerSource.indexOf("if (keyboardBoundEditing) {");
-  const pending = composerSource.slice(pendingStart);
 
   assertEquals(utilityStart >= 0 && utilityEnd > utilityStart, true);
+  assertEquals(editingStart >= 0 && actionStart > editingStart, true);
   assertEquals(actionStart >= 0 && actionEnd > actionStart, true);
   assertEquals(utilityRail.includes('title="Hide keyboard"'), false);
-  assertEquals(actionRow.includes('title="Hide keyboard"'), false);
-  assertEquals(pending.includes('title="Hide keyboard"'), true);
+  assertEquals(editingRail.includes("<MobileComposerEditingBar"), true);
+  assertEquals(editingRail.includes('title="Hide keyboard"'), true);
   assertEquals(composerSource.includes("preserveEditorFocus={false}"), true);
   assertEquals(
     accessoryDockSource.includes("preserveEditorFocus = true"),
     true,
   );
-  assertEquals(composerSource.includes("data-mobile-composer-clear"), true);
-  assertEquals(composerSource.includes("disabled={!clearable}"), true);
-  assertEquals(composerSource.includes("data-mobile-scrollable-actions"), true);
-  assertEquals(composerSource.includes('justifyContent: "flex-start"'), true);
-  assertEquals(composerSource.includes("WebkitMaskImage:"), true);
-  assertEquals(composerSource.includes("mobileActionEdges.left"), true);
+  assertEquals(actionRow.includes('title="Hide keyboard"'), false);
+  assertEquals(actionRow.includes("data-mobile-composer-clear"), true);
+  assertEquals(actionRow.includes("disabled={!clearable}"), true);
+  assertEquals(actionRow.includes("data-mobile-scrollable-actions"), true);
+  assertEquals(actionRow.includes('justifyContent: "flex-start"'), true);
+  assertEquals(actionRow.includes("WebkitMaskImage:"), true);
   assertEquals(actionRow.includes('columnGap: "clamp(2px, 1vw, 5px)"'), true);
   assertEquals(actionRow.includes('position: "sticky"'), false);
   assertEquals(

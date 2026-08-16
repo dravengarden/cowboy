@@ -187,7 +187,7 @@ Deno.test("focused mobile composer owns a real frosted material", () => {
   );
   assertEquals(
     composerSource.match(/mobileFocusedComposerSurfaceSx/g)?.length,
-    3,
+    4,
   );
   assertEquals(composerSource.includes("mobileFocusedComposerFill"), true);
 });

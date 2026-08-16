@@ -130,6 +130,7 @@ import { MobileComposerFormatActions } from "./MobileComposerFormatActions";
 import {
   MobileComposerAccessoryButton,
   MobileComposerAccessoryDock,
+  MobileComposerEditingBar,
   MobileComposerFixedActionSlot,
 } from "./MobileComposerAccessoryDock";
 import { MessagePreview } from "./MessagePreview";
@@ -348,6 +349,7 @@ const TOOLBAR_MIN_H = {
   minHeight: 34,
   "@media (pointer: coarse)": { minHeight: 40 },
 } as const;
+const MOBILE_COMPOSER_INPUT_EDITOR_MIN_H = 80;
 
 // MUI's Button start-icon selector assigns a fixed px size with more
 // specificity than an SvgIcon's own sx prop. Own the glyph size at the button
@@ -1161,6 +1163,10 @@ export function ComposerWorkspace({
   // the sheet pattern wins on every sub-desktop viewport. Desktop keeps the
   // inline chip row — there's room.
   const compact = useMediaQuery(theme.breakpoints.down("lg"));
+  const mobileToolbarIds = useComposerToolbar();
+  const [mobileToolbarSettingsOpen, setMobileToolbarSettingsOpen] = useState(
+    false,
+  );
   // A Queue/Draft edit is itself a complete composer. Mobile must expose one
   // writing focus at a time: leaving the new-message composer underneath the
   // active row editor creates two large, nearly identical cards above the
@@ -1738,12 +1744,22 @@ export function ComposerWorkspace({
             maxWidth: "100%",
             boxSizing: "border-box",
           },
-          // Queue/Draft editing owns the two-track dock. The new-message
-          // composer stays a compact card even with the keyboard up; do not
-          // promote it into that editing chrome.
-          // A Queue/Draft edit's containing scrollport must stay mounted
-          // because it owns the transaction, so hide Plan and the inactive
-          // sibling panel instead of the scrollport.
+          "&:has(> [data-mobile-primary-composer='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within)":
+            {
+              flex: "0 1 auto",
+              overflow: "hidden",
+            },
+          // Keyboard Focus Mode is a single floating writing surface. Keep the
+          // auxiliary state mounted so Plan/Queue/Draft disclosure and edit
+          // ownership survive, but remove it from presentation while the main
+          // Composer owns the visible software keyboard.
+          "&:has(> [data-mobile-primary-composer='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within) > [data-composer-stack-slot]:not([data-composer-stack-slot='primary'])":
+            {
+              display: "none",
+            },
+          // A Queue/Draft edit follows the same focus model. Its containing
+          // scrollport must stay mounted because it owns the transaction, so
+          // hide Plan and the inactive sibling panel instead of the scrollport.
           "&:has([data-mobile-pending-editor='true'][data-mobile-keyboard-open='true']:focus-within) > [data-composer-stack-slot]:not([data-composer-stack-slot='pending'])":
             {
               display: "none",
@@ -2106,14 +2122,21 @@ export function ComposerWorkspace({
             borderRadius: mobileComposerPanelFrameSx.borderRadius,
             transition:
               `border-color ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, background-color ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, box-shadow ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}`,
-            // Keep the compact card opaque while the keyboard is up so a
-            // transient WebKit focus loss cannot paint the transcript through
-            // the writing field. Do not grow a second dock or hide Drafts.
+            // visualViewport is the keyboard authority on iOS. WebKit can move
+            // DOM focus to <body> while its keyboard and caret remain visible
+            // (notably after an attachment/IME transition), so :focus-within
+            // alone made this card transparent and let the transcript paint
+            // legibly through the writing canvas. Keep the material whenever
+            // the measured keyboard presentation is active; the more specific
+            // editor-focus rule below still owns expansion geometry.
             "&[data-mobile-keyboard-open='true']": {
               ...mobileFocusedComposerSurfaceSx,
               backgroundImage: "none",
             },
-            "&[data-mobile-keyboard-open='true'] [data-mobile-editor-area], &[data-mobile-keyboard-open='true'] [data-mobile-action-row]":
+            // Do not gate this fill on :focus-within. iOS can move DOM focus to
+            // body while the keyboard stays up; the CM6 scroller would then
+            // become a transparent hole over the transcript.
+            "&[data-mobile-keyboard-open='true'] [data-mobile-editor-area], &[data-mobile-keyboard-open='true'] [data-mobile-action-row], &[data-mobile-keyboard-open='true'] [data-mobile-focus-format-row]":
               {
                 bgcolor: mobileFocusedComposerFill,
                 backgroundImage: "none",
@@ -2123,6 +2146,85 @@ export function ComposerWorkspace({
                 bgcolor: mobileFocusedComposerFill,
                 backgroundImage: "none",
                 WebkitOverflowScrolling: "auto",
+              },
+            // Only the editor is allowed to promote the compact card. Utility
+            // buttons also live inside this Paper, so plain :focus-within can
+            // leave a tall, inert canvas after Settings or another action takes
+            // focus while the native textarea has already blurred.
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within)":
+              {
+                flex: "0 1 auto",
+                minHeight: 0,
+                maxHeight: "100%",
+                // Focus changes hierarchy inside the same card. Keep the outer
+                // edge fixed so opening the keyboard does not look like a second
+                // component replacing the compact composer.
+                // Clip the filtered sample to the same rounded card. Without this,
+                // WebKit leaves a sharp readable fringe around the glass edge.
+                ...mobileFocusedComposerSurfaceSx,
+              },
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area]":
+              {
+                flex: "0 1 auto",
+                minHeight: MOBILE_COMPOSER_INPUT_EDITOR_MIN_H,
+                maxHeight: "min(42dvh, 22rem)",
+                overflow: "hidden",
+              },
+            // Keep the compact native field content-tight. Filling leftover
+            // viewport with height 100% left a blank band under short text
+            // (and the Force-push row) whenever the transcript did not occupy
+            // the rest of the screen.
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor]":
+              {
+                flex: "0 1 auto",
+                minHeight: 0,
+                height: "auto",
+                maxHeight: "100%",
+                overflow: "hidden",
+                display: "flex",
+                flexDirection: "column",
+              },
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor] [data-mobile-native-textarea='true']":
+              {
+                height: "auto",
+                minHeight: 48,
+                maxHeight: "100%",
+              },
+            // An inline image promotes the compact native textarea to CM6.
+            // Size that editor to its thumbnail + text, the same way the
+            // native field hugs its lines. Stretching CM6 to the leftover
+            // viewport left a tall empty canvas around an 80px image.
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-theme-none, &[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-editor":
+              {
+                flex: "0 1 auto",
+                minHeight: 0,
+                height: "auto",
+                overflow: "hidden",
+              },
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-scroller":
+              {
+                flex: "0 1 auto",
+                minHeight: 0,
+                height: "auto",
+                maxHeight: "min(42dvh, 22rem)",
+                overflowX: "hidden",
+                overflowY: "auto",
+                scrollPaddingBlock: "12px",
+                overscrollBehavior: "contain",
+              },
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-content":
+              {
+                minHeight: 0,
+              },
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-focus-format-row]":
+              {
+                maxHeight: 48,
+                opacity: 1,
+                transform: "translateY(0)",
+                pointerEvents: "auto",
+                borderTopColor: (t) => alpha(t.palette.divider, 0.42),
+                transition:
+                  `max-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, opacity 110ms ease 55ms, transform ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, border-color 120ms ease`,
               },
             "@media (prefers-reduced-motion: reduce)": {
               transition: "none",
@@ -2653,9 +2755,62 @@ export function ComposerWorkspace({
           )
           : (
             <>
+              {touchInput && (
+                <Box
+                  data-mobile-focus-format-row
+                  sx={{
+                    order: 2,
+                    flexShrink: 0,
+                    maxHeight: 0,
+                    minHeight: 0,
+                    opacity: 0,
+                    overflow: "hidden",
+                    pointerEvents: "none",
+                    transform: "translateY(8px)",
+                    borderTop: 1,
+                    borderTopColor: "transparent",
+                    transition:
+                      `max-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, opacity 90ms ease, transform ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, border-color 120ms ease`,
+                    "@media (prefers-reduced-motion: reduce)": {
+                      transition: "none",
+                      transform: "none",
+                    },
+                  }}
+                >
+                  <MobileComposerEditingBar
+                    actions={
+                      <MobileComposerFormatActions
+                        commandIds={mobileToolbarIds}
+                        editorRef={editorRef}
+                        onAttach={(): void => fileInputRef.current?.click()}
+                        onPasteImages={pasteClipboardImages}
+                        onCustomize={(): void => {
+                          releaseMobileComposerFocus();
+                          setMobileToolbarSettingsOpen(true);
+                        }}
+                      />
+                    }
+                    fixedAction={
+                      <MobileComposerAccessoryButton
+                        title="Hide keyboard"
+                        preserveEditorFocus={false}
+                        onClick={(): void => {
+                          noteMobileKeyboardDismissed();
+                          setMobileKeyboardDismissed(true);
+                          dismissMobileSoftwareKeyboard();
+                          releaseMobileComposerFocus();
+                        }}
+                      >
+                        <KeyboardHide />
+                      </MobileComposerAccessoryButton>
+                    }
+                  />
+                </Box>
+              )}
               <Box
                 data-mobile-action-row={touchInput ? "true" : undefined}
                 sx={{
+                  order: touchInput ? 1 : undefined,
                   display: "flex",
                   alignItems: "center",
                   flexShrink: 0,
@@ -3010,6 +3165,12 @@ export function ComposerWorkspace({
                   </Tooltip>
                 </Stack>
               </Box>
+              {touchInput && (
+                <ComposerToolbarSettings
+                  open={mobileToolbarSettingsOpen}
+                  onClose={(): void => setMobileToolbarSettingsOpen(false)}
+                />
+              )}
             </>
           )}
         {
@@ -4924,24 +5085,18 @@ function PendingRow({
       </Popper>
     )
     : null;
-  // Mobile Queue/Draft edits own the writing surface while the keyboard is
-  // up. Dismissing it must persist the live buffer, then return to the
-  // compact card — never leave the two-track dock over an empty canvas.
+  // Mobile Queue/Draft edits own the writing surface until the user leaves
+  // them. Hiding the keyboard only persists the live buffer; it must not
+  // collapse the row into a card and hand focus to the empty new-message
+  // composer. Desktop still uses an explicit Done/discard transaction.
   const mobileEditSawKeyboardRef = useRef(false);
   const persistEditRef = useRef(persistEdit);
   persistEditRef.current = persistEdit;
-  const finishMobileEdit = (): void => {
+  const hideMobileEditKeyboard = (): void => {
     if (!touchInput || editAttachmentsPending) return;
     persistEditRef.current();
-    setOverlayOpen(false);
-    onEditDone();
     dismissMobileSoftwareKeyboard();
     releaseMobileComposerFocus();
-  };
-  const finishMobileEditRef = useRef(finishMobileEdit);
-  finishMobileEditRef.current = finishMobileEdit;
-  const hideMobileEditKeyboard = (): void => {
-    finishMobileEdit();
   };
   useEffect(() => {
     if (!touchInput || !editing) {
@@ -4964,10 +5119,10 @@ function PendingRow({
       return () => globalThis.clearTimeout(timer);
     }
     // A native long press can transiently report a closed keyboard while UIKit
-    // promotes the textarea gesture into Paste/Select. After that settle
-    // window, leave the two-track chrome and restore the compact card.
+    // promotes the textarea gesture into Paste/Select. Keep the REAL textarea
+    // mounted through that settle window; only persist, never unmount.
     const timer = globalThis.setTimeout(
-      () => finishMobileEditRef.current(),
+      () => persistEditRef.current(),
       mobilePendingKeyboardCloseSettleMs,
     );
     return () => globalThis.clearTimeout(timer);
