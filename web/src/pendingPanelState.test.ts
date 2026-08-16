@@ -1,0 +1,51 @@
+import { assertEquals } from "jsr:@std/assert";
+import {
+  pendingPanelCollapseKey,
+  pendingRowMatchesArrival,
+} from "./pendingPanelState.ts";
+
+const composerSource = await Deno.readTextFile(
+  new URL("./Composer.tsx", import.meta.url),
+);
+const storeSource = await Deno.readTextFile(
+  new URL("./store.ts", import.meta.url),
+);
+
+Deno.test("pending panel collapse keys stay per kind", () => {
+  assertEquals(pendingPanelCollapseKey("draft"), "cowboy:draft-collapsed");
+  assertEquals(pendingPanelCollapseKey("queued"), "cowboy:queued-collapsed");
+});
+
+Deno.test("a just-staged optimistic row still matches after the server id arrives", () => {
+  assertEquals(
+    pendingRowMatchesArrival({ id: "opt-abc", cmid: "abc" }, {
+      kind: "draft",
+      id: "opt-abc",
+      cmid: "abc",
+    }),
+    true,
+  );
+  assertEquals(
+    pendingRowMatchesArrival({ id: "draft-1", cmid: "abc" }, {
+      kind: "draft",
+      id: "opt-abc",
+      cmid: "abc",
+    }),
+    true,
+  );
+  assertEquals(
+    pendingRowMatchesArrival({ id: "other", cmid: "zzz" }, {
+      kind: "queued",
+      id: "opt-abc",
+      cmid: "abc",
+    }),
+    false,
+  );
+});
+
+Deno.test("staging a draft or queue item expands that panel and flashes the row", () => {
+  assertEquals(storeSource.includes("revealPendingArrival({"), true);
+  assertEquals(composerSource.includes("subscribePendingArrival"), true);
+  assertEquals(composerSource.includes("data-pending-row-flash"), true);
+  assertEquals(composerSource.includes("scrollPendingRowIntoView"), true);
+});

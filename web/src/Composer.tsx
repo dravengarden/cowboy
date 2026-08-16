@@ -284,11 +284,16 @@ import {
   type SessionSettingsFocus,
   sessionSettingsFocusFromEvent,
 } from "./sessionSettingsOpen";
+import { useStore as usePrefStore } from "./_store/mod.ts";
 import {
-  persisted,
-  type Store,
-  useStore as usePrefStore,
-} from "./_store/mod.ts";
+  collapseStore,
+  PENDING_ARRIVAL_FLASH_MS,
+  type PendingArrival,
+  pendingPanelCollapseKey,
+  pendingRowMatchesArrival,
+  scrollPendingRowIntoView,
+  subscribePendingArrival,
+} from "./pendingPanelState";
 
 const DesktopContextShortcut = lazy(async () => {
   const module = await import("./desktop/commands/DesktopContextShortcut");
@@ -314,21 +319,7 @@ const DesktopListJumpKeycap = lazy(async () => {
 const EMPTY_CONFIG_OPTIONS: ConfigOption[] = [];
 const EMPTY_QUEUED_MESSAGES: QueuedMessage[] = [];
 
-// Per-panel-kind collapse pref (app-level, per-device, never synced). One
-// persisted store per key ("cowboy:<kind>-collapsed"), "1"/"0" legacy format
-// preserved. Memoized so each kind has a single shared store instance.
-const collapseStores = new Map<string, Store<boolean>>();
-function collapseStore(key: string): Store<boolean> {
-  let s = collapseStores.get(key);
-  if (s === undefined) {
-    s = persisted(key, false, {
-      serialize: (v) => (v ? "1" : "0"),
-      deserialize: (raw) => raw === "1",
-    });
-    collapseStores.set(key, s);
-  }
-  return s;
-}
+
 
 // Cmd/Ctrl + Enter = send. Plain Enter = newline.
 //
@@ -4023,8 +4014,9 @@ function PendingPanel({
   // persists in localStorage per panel kind so it survives reloads + session
   // switches, but is never synced across terminals (mirrors PlanDock's
   // `cowboy:plan-expanded`). Default expanded; the count stays visible either way.
-  const collapse = collapseStore(`cowboy:${kind}-collapsed`);
+  const collapse = collapseStore(pendingPanelCollapseKey(kind));
   const collapsed = usePrefStore(collapse);
+  const [arrivalFlash, setArrivalFlash] = useState<PendingArrival | null>(null);
   // One viewport/focus observer per panel, not per message row. A long queue can
   // contain dozens of rows; registering the iOS keyboard listeners in every row
   // makes one dismissal fan out through unnecessary handlers and causes jank.
@@ -4052,6 +4044,36 @@ function PendingPanel({
     collapse.set(true);
   };
   useConfirmEnter(confirmCollapseEdit, () => settleEditAndCollapse("save"));
+  useEffect(() => {
+    return subscribePendingArrival((arrival) => {
+      if (arrival.kind !== kind) return;
+      setArrivalFlash(arrival);
+    });
+  }, [kind]);
+  useEffect(() => {
+    if (arrivalFlash === null) return undefined;
+    const timer = globalThis.setTimeout(
+      () => setArrivalFlash(null),
+      PENDING_ARRIVAL_FLASH_MS,
+    );
+    const reveal = (): void => {
+      const row = scrollRef.current?.querySelector<HTMLElement>(
+        '[data-pending-row-flash="true"]',
+      );
+      if (row) scrollPendingRowIntoView(row);
+    };
+    let laterFrame = 0;
+    const frame = globalThis.requestAnimationFrame(() => {
+      laterFrame = globalThis.requestAnimationFrame(reveal);
+    });
+    const settle = globalThis.setTimeout(reveal, 180);
+    return (): void => {
+      globalThis.clearTimeout(timer);
+      globalThis.clearTimeout(settle);
+      globalThis.cancelAnimationFrame(frame);
+      if (laterFrame !== 0) globalThis.cancelAnimationFrame(laterFrame);
+    };
+  }, [arrivalFlash]);
   const toggleCollapsed = (): void => {
     // Explicit haptic: the collapse/expand header is a custom clickable row, NOT a
     // MuiButtonBase, so the global delegation doesn't see it. Light disclosure tap.
@@ -4529,11 +4551,18 @@ function PendingPanel({
                 transform: "none",
               },
             } as const;
+            const arrivalFlashActive = pendingRowMatchesArrival(
+              m,
+              arrivalFlash,
+            );
             return (
               <Stack
                 key={m.id}
                 data-mobile-pending-row={!desktop ? "true" : undefined}
                 data-mobile-pending-row-editing={!desktop && editingId === m.id
+                  ? "true"
+                  : undefined}
+                data-pending-row-flash={arrivalFlashActive
                   ? "true"
                   : undefined}
                 {...(desktop
@@ -4614,7 +4643,24 @@ function PendingPanel({
                     )}
                   </Box>
                 )}
-                <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Box
+                  sx={{
+                    flex: 1,
+                    minWidth: 0,
+                    borderRadius: 1,
+                    outline: "2px solid",
+                    outlineColor: arrivalFlashActive
+                      ? "primary.main"
+                      : "transparent",
+                    transition: (theme) =>
+                      theme.transitions.create("outline-color", {
+                        duration: 400,
+                      }),
+                    "@media (prefers-reduced-motion: reduce)": {
+                      transition: "none",
+                    },
+                  }}
+                >
                   {optimistic
                     ? <OptimisticDraftRow sessionId={sessionId} message={m} />
                     : (
