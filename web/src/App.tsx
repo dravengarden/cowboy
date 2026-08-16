@@ -2757,7 +2757,7 @@ export function App({
                     position: "relative",
                     overflow: "hidden",
                     zIndex: mobile ? 1 : undefined,
-                    bgcolor: mobile ? "background.paper" : "background.default",
+                    bgcolor: "background.default",
                     // Keep the revealed seam exactly under the finger while the
                     // frozen workspace recedes as one composited layer.
                     transformOrigin: "left center",
@@ -2820,7 +2820,7 @@ export function App({
                             zIndex: (t) => t.zIndex.modal - 1,
                             // Always mounted so opening can dim on the compositor
                             // without inserting a layer mid-gesture.
-                            bgcolor: "common.black",
+                            bgcolor: "transparent",
                             opacity: 0,
                             pointerEvents: drawerOpen ? "auto" : "none",
                             cursor: drawerOpen ? "pointer" : "default",

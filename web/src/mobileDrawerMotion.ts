@@ -11,8 +11,30 @@ export function predictDrawerOffset(
   return sampledOffset + lead;
 }
 
-/** iOS / Obsidian drawer settle: decelerate into place instead of a 200ms snap. */
+/** CSS fallback used by the product pager. The session drawer settle is a
+ *  velocity-preserving spring instead, matching Obsidian/iOS. */
 export const MOBILE_DRAWER_SETTLE_EASING = "cubic-bezier(0.32, 0.72, 0, 1)";
+
+/** Obsidian/iOS interactive spring. `velocity` is px/ms, matching the drawer
+ *  finger tracker, so a flick continues into the settle instead of dying. */
+export function stepDrawerSpring(
+  position: number,
+  velocity: number,
+  target: number,
+  dtMs: number,
+): { position: number; velocity: number; settled: boolean } {
+  const dt = Math.min(0.032, Math.max(0.004, dtMs / 1000));
+  const response = 0.3;
+  const dampingRatio = 0.88;
+  const stiffness = (2 * Math.PI / response) ** 2;
+  const damping = 2 * dampingRatio * Math.sqrt(stiffness);
+  let speed = velocity * 1000;
+  speed += ((target - position) * stiffness - speed * damping) * dt;
+  const next = position + speed * dt;
+  const settled = Math.abs(target - next) < 0.4 && Math.abs(speed) < 12;
+  if (settled) return { position: target, velocity: 0, settled: true };
+  return { position: next, velocity: speed / 1000, settled: false };
+}
 
 export function mobileDrawerSettleDurationMs(
   remaining: number,
@@ -36,19 +58,16 @@ export function mobileDrawerProgress(
     : 0;
 }
 
-/** Obsidian/iOS receding-card look for the sliding workspace. The page
- *  translates at full size; only the veil and corner radius change. */
+/** Obsidian's peeking page stays full size and undimmed. Only the corner
+ *  radius marks it as a card against the stage. */
 export function mobileDrawerCardVisual(
   offset: number,
   width: number,
   phone: boolean,
 ): { progress: number; dim: number; radiusPx: number } {
-  const progress = mobileDrawerProgress(offset, width);
-  const openDim = phone ? 0.22 : 0.16;
-  const fade = progress * progress * (3 - 2 * progress);
   return {
-    progress,
-    dim: openDim * fade,
+    progress: mobileDrawerProgress(offset, width),
+    dim: 0,
     radiusPx: phone ? 20 : 16,
   };
 }

@@ -5,9 +5,8 @@ import {
 } from "./mobileDrawerDepth";
 import {
   drawerProgressAttribute,
-  MOBILE_DRAWER_SETTLE_EASING,
   mobileDrawerCardVisual,
-  mobileDrawerSettleDurationMs,
+  stepDrawerSpring,
 } from "./mobileDrawerMotion";
 import {
   expandedSelection,
@@ -72,6 +71,8 @@ export function bindMobileSpatialDrawer({
     thresholdHaptic: boolean;
   } | null = null;
   let settleTimer = 0;
+  let springFrame = 0;
+  let settleGen = 0;
   let pendingThresholdHaptic = false;
   let currentOffset = 0;
   let commit = false;
@@ -143,9 +144,13 @@ export function bindMobileSpatialDrawer({
       }
       releaseIdle = undefined;
     }
+    settleGen += 1;
+    if (springFrame !== 0) {
+      cancelAnimationFrame(springFrame);
+      springFrame = 0;
+    }
     surface.style.transition = "none";
     drawerMask.style.transition = "none";
-    if (dim) dim.style.transition = "none";
     applyCardChrome();
     gestureTarget.setAttribute("data-mobile-drawer-moving", "true");
     applyOpenDepth();
@@ -202,27 +207,26 @@ export function bindMobileSpatialDrawer({
     applyCardChrome();
     presentationWidth = width;
     const targetOffset = open ? width : 0;
-    const remaining = Math.min(
-      1,
-      Math.abs(targetOffset - releaseOffset) / width,
-    );
-    const duration = mobileDrawerSettleDurationMs(remaining, releaseVelocity);
-    const settleTransition =
-      `transform ${String(duration)}ms ${MOBILE_DRAWER_SETTLE_EASING}`;
-    surface.style.transition = settleTransition;
-    drawerMask.style.transition = settleTransition;
-    if (dim) {
-      dim.style.transition =
-        `opacity ${String(duration)}ms ${MOBILE_DRAWER_SETTLE_EASING}`;
-    }
     publishProgress(targetOffset);
-    render(targetOffset);
     if (pendingThresholdHaptic) {
       pendingThresholdHaptic = false;
       requestAnimationFrame(() => navigationHaptic());
     }
     if (open) setOpen(true);
-    settleTimer = globalThis.setTimeout(() => {
+    if (springFrame !== 0) cancelAnimationFrame(springFrame);
+    globalThis.clearTimeout(settleTimer);
+    surface.style.transition = "none";
+    drawerMask.style.transition = "none";
+    const generation = settleGen += 1;
+    let position = releaseOffset;
+    let velocity = releaseVelocity;
+    let lastAt = performance.now();
+    const finish = (): void => {
+      if (generation !== settleGen) return;
+      if (springFrame !== 0) cancelAnimationFrame(springFrame);
+      springFrame = 0;
+      globalThis.clearTimeout(settleTimer);
+      render(targetOffset);
       clearTransitions();
       if (!open) {
         setOpen(false);
@@ -234,7 +238,23 @@ export function bindMobileSpatialDrawer({
         clearCardChrome();
       }
       onSettled?.();
-    }, duration + 20);
+    };
+    const tick = (now: number): void => {
+      if (generation !== settleGen) return;
+      const stepped = stepDrawerSpring(position, velocity, targetOffset, now - lastAt);
+      lastAt = now;
+      position = stepped.position;
+      velocity = stepped.velocity;
+      render(position);
+      if (stepped.settled) {
+        finish();
+        return;
+      }
+      springFrame = requestAnimationFrame(tick);
+    };
+    render(position);
+    springFrame = requestAnimationFrame(tick);
+    settleTimer = globalThis.setTimeout(finish, 700);
   };
 
   const onTouchStart = (event: TouchEvent): void => {
@@ -431,6 +451,7 @@ export function bindMobileSpatialDrawer({
       gestureTarget.removeEventListener("touchcancel", onTouchCancel);
       globalThis.removeEventListener("resize", onResize);
       globalThis.clearTimeout(settleTimer);
+      if (springFrame !== 0) cancelAnimationFrame(springFrame);
       gestureTarget.removeAttribute("data-mobile-drawer-moving");
       surface.style.removeProperty("will-change");
       drawerMask.style.removeProperty("will-change");

@@ -129,7 +129,7 @@ export function ReviewDrawerShell({
           zIndex: 1,
           inset: 0,
           overflow: "hidden",
-          bgcolor: "background.paper",
+          bgcolor: "background.default",
           backfaceVisibility: "hidden",
           transformOrigin: "right center",
         }}
@@ -144,7 +144,7 @@ export function ReviewDrawerShell({
             position: "absolute",
             zIndex: 2,
             inset: 0,
-            bgcolor: "common.black",
+            bgcolor: "transparent",
             opacity: 0,
             pointerEvents: open ? "auto" : "none",
           }}

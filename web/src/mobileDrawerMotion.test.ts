@@ -7,6 +7,7 @@ import {
   mobileDrawerSettleDurationMs,
   predictDrawerOffset,
   sessionDrawerTargetScroll,
+  stepDrawerSpring,
 } from "./mobileDrawerMotion.ts";
 
 Deno.test("mobile drawer prediction removes one-frame finger lag without running away", () => {
@@ -25,9 +26,19 @@ Deno.test("drawer settle uses an iOS deceleration window", () => {
 
 Deno.test("drawer card recedes like an Obsidian workspace", () => {
   assertEquals(mobileDrawerCardVisual(0, 360, true).dim, 0);
+  assertEquals(mobileDrawerCardVisual(360, 360, true).dim, 0);
   assertEquals(mobileDrawerCardVisual(360, 360, true).radiusPx, 20);
   assertEquals(mobileDrawerCardVisual(360, 360, false).radiusPx, 16);
   assertEquals(Object.hasOwn(mobileDrawerCardVisual(360, 360, true), "scale"), false);
+});
+
+Deno.test("drawer spring continues velocity toward the target", () => {
+  const step = stepDrawerSpring(40, 0.8, 360, 16);
+  assertEquals(step.settled, false);
+  assertEquals(step.position > 40, true);
+  const rest = stepDrawerSpring(360, 0, 360, 16);
+  assertEquals(rest.settled, true);
+  assertEquals(rest.position, 360);
 });
 
 Deno.test("mobile drawer progress follows the finger", () => {
