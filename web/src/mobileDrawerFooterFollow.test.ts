@@ -66,6 +66,9 @@ Deno.test("mobile Settings lives on the Sessions island and Code takes the old s
   assert(appSource.includes('key: "settings"'));
   assert(appSource.includes('label: "Settings"'));
   assert(appSource.includes("onOpenSettings={mobile"));
+  const newSessionAt = appSource.indexOf('key: "new"');
+  const settingsAt = appSource.indexOf('key: "settings"');
+  assert(newSessionAt >= 0 && settingsAt > newSessionAt);
   assert(appSource.includes('data-mobile-open-code="true"'));
   assert(appSource.includes('aria-label="Open code"'));
   assert(appSource.includes("openMobileProduct(\"review\")"));

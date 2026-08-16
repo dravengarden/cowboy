@@ -1066,6 +1066,22 @@ function SessionList({
                         pointerEvents: "none",
                     }}
                 >
+                    <MobileSheetActionGroup
+                        actions={[
+                            {
+                                key: "new",
+                                label: "New session",
+                                onPress: onNew,
+                                icon: <Add aria-hidden sx={{ fontSize: "1.35em" }} />,
+                            },
+                            {
+                                key: "close",
+                                label: "Close sessions",
+                                onPress: onClose ?? (() => undefined),
+                                icon: <CloseIcon aria-hidden sx={{ fontSize: "1.25em" }} />,
+                            },
+                        ]}
+                    />
                     {onOpenSettings && (
                         <MobileSheetActionGroup
                             actions={[
@@ -1083,22 +1099,6 @@ function SessionList({
                             ]}
                         />
                     )}
-                    <MobileSheetActionGroup
-                        actions={[
-                            {
-                                key: "new",
-                                label: "New session",
-                                onPress: onNew,
-                                icon: <Add aria-hidden sx={{ fontSize: "1.35em" }} />,
-                            },
-                            {
-                                key: "close",
-                                label: "Close sessions",
-                                onPress: onClose ?? (() => undefined),
-                                icon: <CloseIcon aria-hidden sx={{ fontSize: "1.25em" }} />,
-                            },
-                        ]}
-                    />
                 </Box>
             )}
             <Menu
