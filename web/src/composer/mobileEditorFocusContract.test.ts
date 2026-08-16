@@ -122,15 +122,9 @@ Deno.test("native fullscreen keyboard spacing follows measured keyboard state", 
 Deno.test("mobile session navigation stays tappable after keyboard dismissal", () => {
   assertEquals(
     appSource.includes(
-      "[data-mobile-pending-editor='true'][data-mobile-keyboard-open='true']:focus-within) [data-mobile-session-nav='true']",
-    ),
-    true,
-  );
-  assertEquals(
-    appSource.includes(
       "[data-mobile-focus-composer='true'][data-mobile-keyboard-open='true']:focus-within) [data-mobile-session-nav='true']",
     ),
-    false,
+    true,
   );
   assertEquals(
     appSource.includes(
@@ -821,7 +815,7 @@ Deno.test("mobile keyboard focus presents one floating composer surface", () => 
   );
   assertEquals(
     appSource.includes(
-      "[data-mobile-pending-editor='true'][data-mobile-keyboard-open='true']:focus-within",
+      "[data-mobile-focus-composer='true'][data-mobile-keyboard-open='true']:focus-within) [data-mobile-composer-shell-material='true']",
     ),
     true,
   );
