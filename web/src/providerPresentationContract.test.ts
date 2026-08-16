@@ -154,13 +154,21 @@ Deno.test("Provider marks preserve host component classes and compact chip spaci
   );
 });
 
-Deno.test("Provider management buttons share pill geometry and destructive credentials stay red", () => {
+Deno.test("Provider actions stay visually distinct from read-only chips", () => {
   assertEquals(
     managementSource.includes("data-provider-management-root"),
     true,
   );
   assertEquals(
-    managementSource.includes('"& .MuiButton-root": {\n          borderRadius: 999,'),
+    managementSource.includes('"& .MuiButton-root": {\n          borderRadius: 1.5,'),
+    true,
+  );
+  assertEquals(
+    managementSource.includes('"& .MuiButton-outlinedPrimary"'),
+    true,
+  );
+  assertEquals(
+    managementSource.includes('"& .MuiButton-outlinedError"'),
     true,
   );
   assertEquals(
@@ -171,6 +179,15 @@ Deno.test("Provider management buttons share pill geometry and destructive crede
   );
   assertEquals(
     surfaceSource.includes("data-provider-destructive-action={destructive"),
+    true,
+  );
+});
+
+Deno.test("Provider vector marks preserve edge antialiasing inside compact chips", () => {
+  assertEquals(
+    surfaceSource.includes(
+      'height: scaledSize,\n          overflow: "visible",',
+    ),
     true,
   );
 });
@@ -295,7 +312,19 @@ Deno.test("Provider activity keeps motion provider-authored and geometry rendere
   );
   assertEquals(
     transcriptPresentationSource.includes(
-      'pl: presentation.variant === "signal" ? 1 : 0',
+      "gridTemplateColumns: signalHeader",
+    ),
+    true,
+  );
+  assertEquals(
+    transcriptPresentationSource.includes(
+      'pl: signalHeader ? `${geometry.paddingLeft}px` : 0',
+    ),
+    true,
+  );
+  assertEquals(
+    transcriptPresentationSource.includes(
+      "borderRadius: signalHeader && currentSurface ? 1.25 : 0",
     ),
     true,
   );

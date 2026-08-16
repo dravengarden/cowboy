@@ -133,6 +133,8 @@ function VariantGlyph({
               width: SIGNAL_THOUGHT_MARK_SIZE,
               height: SIGNAL_THOUGHT_MARK_SIZE,
               display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
               opacity: current ? 1 : 0.78,
               animation: current
                 ? `${thoughtPulse} 1.8s ease-in-out infinite`
@@ -243,6 +245,7 @@ export function ProviderThoughtSteps({
   const muted = theme.palette.text.secondary;
   const compact = presentation.density === "compact";
   const currentSurface = presentation.current_surface === "soft";
+  const signalHeader = presentation.variant === "signal";
   const dualAccent = presentation.variant === "workcell" ||
     presentation.variant === "signal";
 
@@ -260,15 +263,29 @@ export function ProviderThoughtSteps({
           reserve the header for the brief state before the first step lands. */
       }
       {streaming && visible.length === 0 && presentation.active_label && (
-        <Stack
-          direction="row"
-          alignItems="center"
-          spacing={0.75}
+        <Box
           data-provider-thought-header={presentation.variant}
           sx={{
+            display: "grid",
+            gridTemplateColumns: signalHeader
+              ? `${geometry.size}px minmax(0, 1fr)`
+              : "auto minmax(0, 1fr)",
+            alignItems: "center",
+            columnGap: signalHeader ? `${geometry.gap}px` : 0.75,
             minHeight: compact ? 19 : 22,
             mb: compact ? 0.125 : 0.25,
-            pl: presentation.variant === "signal" ? 1 : 0,
+            pl: signalHeader ? `${geometry.paddingLeft}px` : 0,
+            pr: signalHeader && currentSurface ? 1 : 0,
+            py: signalHeader && currentSurface
+              ? compact ? 0.375 : 0.5
+              : 0,
+            borderRadius: signalHeader && currentSurface ? 1.25 : 0,
+            bgcolor: signalHeader && currentSurface
+              ? alpha(
+                accent,
+                theme.palette.mode === "dark" ? 0.13 : 0.07,
+              )
+              : "transparent",
             color: accent,
           }}
           aria-label={presentation.active_label}
@@ -305,7 +322,7 @@ export function ProviderThoughtSteps({
           >
             {presentation.active_label}
           </Typography>
-        </Stack>
+        </Box>
       )}
       {visible.map((section, index) => {
         const current = streaming && index === visible.length - 1;
