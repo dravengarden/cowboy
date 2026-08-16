@@ -139,6 +139,7 @@ export function bindMobileSpatialDrawer({
     layer.style.transformOrigin = origin;
   };
   const promoteLayer = (layer: HTMLElement): void => {
+    if (layer === dim) return;
     layer.style.willChange = "transform";
   };
   const demoteLayer = (layer: HTMLElement): void => {

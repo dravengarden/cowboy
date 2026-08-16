@@ -64,7 +64,11 @@ Deno.test("gesture roots flatten overflow tiles without a universal selector", (
     false,
   );
   assert(motionSource.includes("mobileDrawerRailHitSx"));
-  assert(motionSource.includes("[data-mobile-drawer-dim='left']"));
+  assert(motionSource.includes("[data-mobile-drawer-close='left']"));
+  assertEquals(
+    motionSource.includes("transform: \"none !important\""),
+    false,
+  );
   assert(motionSource.includes("& [data-detent-sheet][data-detent-moving]"));
   assert(motionSource.includes("[data-mobile-focus-composer]"));
   assert(motionSource.includes("holdStorePresentation"));

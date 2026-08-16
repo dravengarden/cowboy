@@ -2844,6 +2844,26 @@ export function App({
                     <Box
                         ref={mobileDrawerDimRef}
                         data-mobile-drawer-dim="left"
+                        aria-hidden
+                        sx={{
+                            position: "absolute",
+                            inset: 0,
+                            zIndex: (t) => t.zIndex.modal - 1,
+                            // Paint only. A post-settle left/transform rewrite
+                            // restretches the gradient and makes the veil jump.
+                            bgcolor: "transparent",
+                            backgroundImage: (t) =>
+                                t.palette.mode === "dark"
+                                    ? "linear-gradient(to right, rgba(0,0,0,0.46), rgba(0,0,0,0.20) 42%, rgba(0,0,0,0.05))"
+                                    : "linear-gradient(to right, rgba(0,0,0,0.24), rgba(0,0,0,0.10) 46%, rgba(0,0,0,0.03))",
+                            opacity: 0,
+                            pointerEvents: "none",
+                        }}
+                    />
+                )}
+                {mobile && (
+                    <Box
+                        data-mobile-drawer-close="left"
                         role="button"
                         tabIndex={drawerOpen ? 0 : -1}
                         aria-label="Close sessions"
@@ -2862,19 +2882,12 @@ export function App({
                         }}
                         sx={{
                             position: "absolute",
-                            inset: 0,
+                            top: 0,
+                            right: 0,
+                            bottom: 0,
+                            left: 0,
                             zIndex: (t) => t.zIndex.modal - 1,
-                            // Always mounted so opening can dim on the compositor
-                            // without inserting a layer mid-gesture. Obsidian
-                            // shades the peek with a join-to-edge gradient, not
-                            // a flat black veil.
-                            bgcolor: "transparent",
-                            backgroundImage: (t) =>
-                                t.palette.mode === "dark"
-                                    ? "linear-gradient(to right, rgba(0,0,0,0.46), rgba(0,0,0,0.20) 42%, rgba(0,0,0,0.05))"
-                                    : "linear-gradient(to right, rgba(0,0,0,0.24), rgba(0,0,0,0.10) 46%, rgba(0,0,0,0.03))",
-                            opacity: 0,
-                            pointerEvents: drawerOpen ? "auto" : "none",
+                            pointerEvents: "none",
                             cursor: drawerOpen ? "pointer" : "default",
                         }}
                     />

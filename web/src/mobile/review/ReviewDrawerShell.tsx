@@ -146,10 +146,7 @@ export function ReviewDrawerShell({
         <Box
           ref={dimRef}
           data-mobile-drawer-dim="right"
-          aria-label="Close worktree drawer"
-          onClick={() => {
-            if (open) closeRef.current();
-          }}
+          aria-hidden
           sx={{
             position: "absolute",
             zIndex: 2,
@@ -160,7 +157,20 @@ export function ReviewDrawerShell({
                 ? "linear-gradient(to left, rgba(0,0,0,0.46), rgba(0,0,0,0.20) 42%, rgba(0,0,0,0.05))"
                 : "linear-gradient(to left, rgba(0,0,0,0.24), rgba(0,0,0,0.10) 46%, rgba(0,0,0,0.03))",
             opacity: 0,
-            pointerEvents: open ? "auto" : "none",
+            pointerEvents: "none",
+          }}
+        />
+        <Box
+          data-mobile-drawer-close="right"
+          aria-label="Close worktree drawer"
+          onClick={() => {
+            if (open) closeRef.current();
+          }}
+          sx={{
+            position: "absolute",
+            zIndex: 2,
+            inset: 0,
+            pointerEvents: "none",
           }}
         />
         {children}

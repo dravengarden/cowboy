@@ -33,21 +33,24 @@ export function mobilePresentationMovingRootSx(
 }
 
 /** Settled-open hit testing. Peek layers stay full-width in layout and
- *  only translate visually, so iOS would send rail taps to the dim/page.
- *  Park the dim on the peek with a layout inset and let the rail receive
- *  the rest. */
+ *  only translate visually, so iOS would send rail taps to the page.
+ *  The painted dim keeps its swipe translate — resizing it after settle
+ *  restretches the gradient and makes the veil jump. A separate close
+ *  hit layer covers only the peek. */
 export const mobileDrawerRailHitSx = {
   "&[data-mobile-drawer-open='true']:not([data-mobile-drawer-moving='true']) [data-mobile-drawer-surface], &[data-mobile-drawer-open='true']:not([data-mobile-drawer-moving='true']) [data-mobile-drawer-follow]": {
     pointerEvents: "none",
   },
-  "&[data-mobile-drawer-open='true']:not([data-mobile-drawer-moving='true']) [data-mobile-drawer-dim]": {
-    pointerEvents: "auto",
-    transform: "none !important",
+  "& [data-mobile-drawer-dim]": {
+    pointerEvents: "none",
   },
-  "&[data-mobile-drawer-open='true']:not([data-mobile-drawer-moving='true']) [data-mobile-drawer-dim='left']": {
+  "&[data-mobile-drawer-open='true']:not([data-mobile-drawer-moving='true']) [data-mobile-drawer-close]": {
+    pointerEvents: "auto",
+  },
+  "&[data-mobile-drawer-open='true']:not([data-mobile-drawer-moving='true']) [data-mobile-drawer-close='left']": {
     left: "var(--mobile-drawer-width, min(84%, 360px))",
   },
-  "&[data-mobile-drawer-open='true']:not([data-mobile-drawer-moving='true']) [data-mobile-drawer-dim='right']": {
+  "&[data-mobile-drawer-open='true']:not([data-mobile-drawer-moving='true']) [data-mobile-drawer-close='right']": {
     right: "var(--mobile-drawer-width, min(84%, 360px))",
   },
 };
