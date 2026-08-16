@@ -78,6 +78,7 @@ Deno.test("Provider management cards keep geometry in the Cowboy component libra
     true,
   );
   assertEquals(managementSource.includes("whiteSpace: \"nowrap\""), true);
+  assertEquals(managementSource.includes("data-provider-session-actions"), true);
   assertEquals(
     managementSource.includes('width: { xs: "100%", sm: "auto" }'),
     false,
