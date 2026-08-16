@@ -450,7 +450,11 @@ static __weak WKWebView *gCowboyWebView = nil;
 // of Provider pages. SFSafariViewController provides a trusted Safari surface
 // with native Done, back, forward, and Open in Safari controls without replacing
 // the shell's one WKWebView or losing its authentication state.
-static __weak SFSafariViewController *gCowboyAuthenticationBrowser = nil;
+// Retain a user-dismissed browser until the web flow completes or is cancelled.
+// This turns Done / swipe-down into a temporary collapse: tapping Open again
+// resumes the same Safari controller, including its current page and history.
+static SFSafariViewController *gCowboyAuthenticationBrowser = nil;
+static NSURL *gCowboyAuthenticationURL = nil;
 
 static UIViewController *cowboyTopViewController(void) {
     UIWindow *window = gCowboyWebView.window;
@@ -477,11 +481,33 @@ static UIViewController *cowboyTopViewController(void) {
 static void cowboyDismissAuthenticationBrowser(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         SFSafariViewController *browser = gCowboyAuthenticationBrowser;
+        gCowboyAuthenticationBrowser = nil;
+        gCowboyAuthenticationURL = nil;
         if (browser.presentingViewController != nil) {
             [browser dismissViewControllerAnimated:YES completion:nil];
         }
-        gCowboyAuthenticationBrowser = nil;
     });
+}
+
+static SFSafariViewController *cowboyNewAuthenticationBrowser(NSURL *url) {
+    SFSafariViewController *browser =
+        [[SFSafariViewController alloc] initWithURL:url];
+    browser.dismissButtonStyle = SFSafariViewControllerDismissButtonStyleDone;
+    browser.modalPresentationStyle = UIModalPresentationPageSheet;
+    browser.modalInPresentation = NO;
+    if (@available(iOS 15.0, *)) {
+        UISheetPresentationController *sheet = browser.sheetPresentationController;
+        sheet.detents = @[
+            UISheetPresentationControllerDetent.mediumDetent,
+            UISheetPresentationControllerDetent.largeDetent,
+        ];
+        sheet.selectedDetentIdentifier = UISheetPresentationControllerDetentIdentifierLarge;
+        sheet.prefersGrabberVisible = YES;
+        sheet.prefersScrollingExpandsWhenScrolledToEdge = YES;
+        sheet.prefersEdgeAttachedInCompactHeight = YES;
+        sheet.widthFollowsPreferredContentSizeWhenEdgeAttached = YES;
+    }
+    return browser;
 }
 
 static void cowboyPresentAuthenticationBrowser(NSURL *url) {
@@ -492,16 +518,30 @@ static void cowboyPresentAuthenticationBrowser(NSURL *url) {
         void (^present)(void) = ^{
             UIViewController *presenter = cowboyTopViewController();
             if (presenter == nil) return;
-            SFSafariViewController *browser =
-                [[SFSafariViewController alloc] initWithURL:url];
-            browser.dismissButtonStyle = SFSafariViewControllerDismissButtonStyleDone;
+            SFSafariViewController *browser = cowboyNewAuthenticationBrowser(url);
             gCowboyAuthenticationBrowser = browser;
+            gCowboyAuthenticationURL = url;
             [presenter presentViewController:browser animated:YES completion:nil];
         };
         SFSafariViewController *existing = gCowboyAuthenticationBrowser;
+        if (existing != nil && [gCowboyAuthenticationURL isEqual:url]) {
+            if (existing.presentingViewController == nil) {
+                UIViewController *presenter = cowboyTopViewController();
+                if (presenter != nil) {
+                    [presenter presentViewController:existing animated:YES completion:nil];
+                }
+            }
+            return;
+        }
         if (existing.presentingViewController != nil) {
-            [existing dismissViewControllerAnimated:NO completion:present];
+            [existing dismissViewControllerAnimated:NO completion:^{
+                gCowboyAuthenticationBrowser = nil;
+                gCowboyAuthenticationURL = nil;
+                present();
+            }];
         } else {
+            gCowboyAuthenticationBrowser = nil;
+            gCowboyAuthenticationURL = nil;
             present();
         }
     });

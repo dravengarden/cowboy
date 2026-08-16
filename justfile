@@ -53,6 +53,10 @@ native-shell-check:
     rg -q 'cowboyRepairAuthenticationBrowserBridge\(wv\)' src-tauri/gen/apple/Sources/cowboy-app/CowboyNativeTweaks.mm
     rg -q 'removeScriptMessageHandlerForName:@"cowboyAuthenticationBrowser"' src-tauri/gen/apple/Sources/cowboy-app/CowboyNativeTweaks.mm
     test "$(rg -c '__cowboyOpenAuthenticationBrowser=function' src-tauri/gen/apple/Sources/cowboy-app/CowboyNativeTweaks.mm)" = 1
+    rg -q 'modalPresentationStyle = UIModalPresentationPageSheet' src-tauri/gen/apple/Sources/cowboy-app/CowboyNativeTweaks.mm
+    rg -q 'prefersGrabberVisible = YES' src-tauri/gen/apple/Sources/cowboy-app/CowboyNativeTweaks.mm
+    rg -q '\[gCowboyAuthenticationURL isEqual:url\]' src-tauri/gen/apple/Sources/cowboy-app/CowboyNativeTweaks.mm
+    ! rg -q 'static __weak SFSafariViewController \*gCowboyAuthenticationBrowser' src-tauri/gen/apple/Sources/cowboy-app/CowboyNativeTweaks.mm
     tools/check-keyboard-geometry.sh
 
 check: fmt lint typecheck native-shell-check
