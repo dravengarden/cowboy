@@ -5945,6 +5945,11 @@ struct CodeCommitResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct CodeRepositoryQuery {
+    after: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct CodeCommitQuery {
     oid: String,
 }
@@ -6778,16 +6783,21 @@ async fn api_code_changes(
 async fn api_code_repository(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
+    Query(query): Query<CodeRepositoryQuery>,
 ) -> Response {
     let Some(context) = resolve_code_context(&state, &session_id).await else {
         return (StatusCode::NOT_FOUND, "unknown code context").into_response();
     };
     let cwd = context.cwd;
+    let after = query.after;
     let result = match remote_code_request(
         &state,
         &context.machine_id,
         &cwd,
-        serde_json::json!({ "type": "repository" }),
+        match after.as_deref() {
+            Some(oid) => serde_json::json!({ "type": "repository", "after": oid }),
+            None => serde_json::json!({ "type": "repository" }),
+        },
     )
     .await
     {
@@ -6797,7 +6807,8 @@ async fn api_code_repository(
         }
         Ok(None) => {
             let result = tokio::task::spawn_blocking(move || {
-                crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd)).repository()
+                crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd))
+                    .repository(after.as_deref())
             })
             .await;
             let Ok(Ok(repository)) = result else {

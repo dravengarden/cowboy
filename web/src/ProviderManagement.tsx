@@ -5,10 +5,6 @@ import {
   Checkbox,
   Chip,
   CircularProgress,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
   FormControlLabel,
   IconButton,
   Paper,
@@ -50,6 +46,7 @@ import {
 } from "./openExternal";
 import { isNativeShell } from "./nativeShell";
 import { useReliableTouchTap } from "./useReliableTouchTap";
+import { ConfirmSheet } from "./Sheet";
 
 interface ProviderMachine {
   id: string;
@@ -1461,39 +1458,58 @@ function ProviderManagement(
         })}
       </Box>
 
-      <Dialog
+      <ConfirmSheet
         open={flow !== null}
         onClose={() => void cancelAuthentication()}
-        fullWidth
-        maxWidth="sm"
+        wide
+        title={
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0 }}>
+            {flow?.requestId
+              ? (
+                <IconButton
+                  size="small"
+                  aria-label="Back to sign-in methods"
+                  onClick={() => void returnToAuthenticationMethods()}
+                  sx={{ ml: -0.5 }}
+                >
+                  <ArrowBackRounded fontSize="small" />
+                </IconButton>
+              )
+              : null}
+            {flow ? <ProviderMark manifest={flow.provider.manifest} /> : null}
+            <Box component="span" sx={{ minWidth: 0 }}>
+              {flow
+                ? flow.sharedProviderNames.length > 1
+                  ? `Configure ${flow.credentialTitle}`
+                  : `${
+                    authenticationCopy(
+                      resolveProviderAuthenticationPresentation(
+                        flow.provider.manifest.authentication,
+                      ),
+                    ).title
+                  } ${flow.provider.manifest.display.name}`
+                : "Configure Provider"}
+            </Box>
+          </Box>
+        }
+        actions={
+          <>
+            {flow?.requestId && !loginSucceeded
+              ? (
+                <Button
+                  color="inherit"
+                  onClick={() => void returnToAuthenticationMethods()}
+                >
+                  Back
+                </Button>
+              )
+              : null}
+            <Button color="inherit" onClick={() => void cancelAuthentication()}>
+              {loginSucceeded ? "Done" : "Cancel"}
+            </Button>
+          </>
+        }
       >
-        <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-          {flow?.requestId
-            ? (
-              <IconButton
-                size="small"
-                aria-label="Back to sign-in methods"
-                onClick={() => void returnToAuthenticationMethods()}
-                sx={{ ml: -0.5 }}
-              >
-                <ArrowBackRounded fontSize="small" />
-              </IconButton>
-            )
-            : null}
-          {flow ? <ProviderMark manifest={flow.provider.manifest} /> : null}
-          {flow
-            ? flow.sharedProviderNames.length > 1
-              ? `Configure ${flow.credentialTitle}`
-              : `${
-                authenticationCopy(
-                  resolveProviderAuthenticationPresentation(
-                    flow.provider.manifest.authentication,
-                  ),
-                ).title
-              } ${flow.provider.manifest.display.name}`
-            : "Configure Provider"}
-        </DialogTitle>
-        <DialogContent>
           {flow
             ? (
               <Stack spacing={1.5} sx={{ pt: 0.5 }}>
@@ -1642,38 +1658,45 @@ function ProviderManagement(
               </Stack>
             )
             : null}
-        </DialogContent>
-        <DialogActions>
-          {flow?.requestId && !loginSucceeded
-            ? (
-              <Button
-                color="inherit"
-                onClick={() => void returnToAuthenticationMethods()}
-              >
-                Back
-              </Button>
-            )
-            : null}
-          <Button color="inherit" onClick={() => void cancelAuthentication()}>
-            {loginSucceeded ? "Done" : "Cancel"}
-          </Button>
-        </DialogActions>
-      </Dialog>
+      </ConfirmSheet>
 
-      <Dialog
+      <ConfirmSheet
         open={uninstallPlan !== null}
         onClose={() => setUninstallPlan(null)}
-        fullWidth
-        maxWidth="sm"
-      >
-        <DialogTitle>
-          Uninstall{" "}
-          {latestEntries.find((entry) =>
+        wide
+        title={`Uninstall ${
+          latestEntries.find((entry) =>
             entry.provider_id === uninstallPlan?.provider_id
-          )?.manifest.display.name ?? "Provider"} from{" "}
-          {machine?.display_name ?? "Machine"}?
-        </DialogTitle>
-        <DialogContent>
+          )?.manifest.display.name ?? "Provider"
+        } from ${machine?.display_name ?? "Machine"}?`}
+        actions={
+          <>
+            <Button color="inherit" onClick={() => setUninstallPlan(null)}>
+              Cancel
+            </Button>
+            <Button
+              color="error"
+              variant="contained"
+              disabled={Boolean(uninstallPlan?.active_session_ids.length) &&
+                !confirmActive}
+              onClick={() =>
+                void confirmUninstall().catch((cause: unknown) => {
+                  const detail = cause instanceof Error
+                    ? cause.message
+                    : "Provider uninstall failed";
+                  if (uninstallPlan) {
+                    setErrors((current) => ({
+                      ...current,
+                      [uninstallPlan.provider_id]: detail,
+                    }));
+                  }
+                })}
+            >
+              Uninstall and remove sessions
+            </Button>
+          </>
+        }
+      >
           {uninstallPlan
             ? (
               <Stack spacing={1.5} sx={{ pt: 0.5 }}>
@@ -1740,33 +1763,7 @@ function ProviderManagement(
               </Stack>
             )
             : null}
-        </DialogContent>
-        <DialogActions>
-          <Button color="inherit" onClick={() => setUninstallPlan(null)}>
-            Cancel
-          </Button>
-          <Button
-            color="error"
-            variant="contained"
-            disabled={Boolean(uninstallPlan?.active_session_ids.length) &&
-              !confirmActive}
-            onClick={() =>
-              void confirmUninstall().catch((cause: unknown) => {
-                const detail = cause instanceof Error
-                  ? cause.message
-                  : "Provider uninstall failed";
-                if (uninstallPlan) {
-                  setErrors((current) => ({
-                    ...current,
-                    [uninstallPlan.provider_id]: detail,
-                  }));
-                }
-              })}
-          >
-            Uninstall and remove sessions
-          </Button>
-        </DialogActions>
-      </Dialog>
+      </ConfirmSheet>
     </Stack>
   );
 }

@@ -9,6 +9,7 @@ import {
   mobilePresentationMovingRootSx,
 } from "../../mobilePresentationMotion";
 import { holdStorePresentation } from "../../store";
+import { useReliableTouchTap } from "../../useReliableTouchTap";
 
 export function ReviewDrawerShell({
   drawer,
@@ -32,6 +33,9 @@ export function ReviewDrawerShell({
   const toggleRef = useRef<() => void>(() => undefined);
   const openRef = useRef(false);
   const [open, setOpen] = useState(false);
+  const closePeek = useReliableTouchTap<HTMLDivElement>(() => {
+    if (openRef.current) closeRef.current();
+  });
 
   useEffect(() => {
     if (closeRequest > 0) closeRef.current();
@@ -104,6 +108,10 @@ export function ReviewDrawerShell({
           backfaceVisibility: "hidden",
           isolation: "isolate",
           transform: "translate3d(0, 0, 0)",
+          // The drawer box is full-width with left padding for the peek.
+          // Hits in that padding must fall through to the peek close layer.
+          pointerEvents: "none",
+          "& > *": { pointerEvents: "auto" },
           "@media (min-width: 768px)": {
             pl: "calc(100% - var(--mobile-drawer-width, min(52%, 440px)))",
           },
@@ -162,21 +170,39 @@ export function ReviewDrawerShell({
             pointerEvents: "none",
           }}
         />
-        <Box
-          data-mobile-drawer-close="right"
-          aria-label="Close worktree drawer"
-          onClick={() => {
-            if (open) closeRef.current();
-          }}
-          sx={{
-            position: "absolute",
-            zIndex: 2,
-            inset: 0,
-            pointerEvents: "none",
-          }}
-        />
         {children}
       </Box>
+      <Box
+        data-mobile-drawer-close="right"
+        role="button"
+        tabIndex={open ? 0 : -1}
+        aria-label="Close review sidebar"
+        aria-hidden={!open}
+        onPointerDown={closePeek.onPointerDown}
+        onPointerMove={closePeek.onPointerMove}
+        onPointerUp={closePeek.onPointerUp}
+        onPointerCancel={closePeek.onPointerCancel}
+        onClick={closePeek.onClick}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            if (openRef.current) closeRef.current();
+          }
+        }}
+        sx={{
+          // Screen-space peek hit target. Do not put this inside the
+          // translated surface: iOS hit-tests the transformed box and the
+          // visible strip then misses the close layer.
+          position: "absolute",
+          zIndex: (t) => t.zIndex.modal - 1,
+          top: 0,
+          bottom: 0,
+          left: 0,
+          width: "calc(100% - var(--mobile-drawer-width, min(84%, 360px)))",
+          pointerEvents: open ? "auto" : "none",
+          cursor: open ? "pointer" : "default",
+        }}
+      />
     </Box>
   );
 }

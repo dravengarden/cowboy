@@ -160,7 +160,7 @@ pub trait CodeProvider {
     fn directory(&self, relative: &str, limit: usize) -> Result<CodeTreePage, String>;
     fn search(&self, query: &str, limit: usize) -> Vec<String>;
     fn changes(&self) -> Result<ChangeList, String>;
-    fn repository(&self) -> Result<GitRepositorySnapshot, String>;
+    fn repository(&self, after: Option<&str>) -> Result<GitRepositorySnapshot, String>;
     fn commit(&self, oid: &str) -> Result<GitCommitDetail, String>;
     fn commit_diff(&self, oid: &str, relative: &str) -> Result<DiffDocument, String>;
     fn diff_snapshot(
@@ -354,6 +354,58 @@ impl LocalCodeProvider {
     fn file(&self, relative: &str) -> Result<FileDocument, String> {
         self.file_page(relative, None)
     }
+
+    fn history_page(
+        &self,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<GitRepositorySnapshot, String> {
+        ensure_git_worktree(&self.root)?;
+        let limit = limit.max(1);
+        let skip = match after {
+            None => 0,
+            Some(oid) => history_skip_after(
+                &git_output(
+                    &self.root,
+                    &["rev-list", "--all", "--topo-order"],
+                    8 * 1024 * 1024,
+                )?,
+                safe_oid(oid)?,
+            )?,
+        };
+        let max_count = format!("--max-count={}", limit + 1);
+        let skip_flag = format!("--skip={skip}");
+        let log = git_output(
+            &self.root,
+            &[
+                "log",
+                "--all",
+                "--topo-order",
+                "--date=iso-strict",
+                &skip_flag,
+                &max_count,
+                "--format=%H%x1f%P%x1f%an%x1f%aI%x1f%s%x1f%D%x1e",
+            ],
+            4 * 1024 * 1024,
+        )?;
+        let mut commits = parse_git_history(&log);
+        let history_truncated = commits.len() > limit;
+        commits.truncate(limit);
+        let worktree_bytes = git_output(
+            &self.root,
+            &["worktree", "list", "--porcelain"],
+            1024 * 1024,
+        )?;
+        let current = self
+            .root
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        Ok(GitRepositorySnapshot {
+            commits,
+            history_truncated,
+            worktrees: parse_git_worktrees(&worktree_bytes, &current),
+        })
+    }
 }
 
 impl CodeProvider for LocalCodeProvider {
@@ -498,37 +550,8 @@ impl CodeProvider for LocalCodeProvider {
         })
     }
 
-    fn repository(&self) -> Result<GitRepositorySnapshot, String> {
-        ensure_git_worktree(&self.root)?;
-        let log = git_output(
-            &self.root,
-            &[
-                "log",
-                "--all",
-                "--topo-order",
-                "--date=iso-strict",
-                &format!("--max-count={}", MAX_HISTORY_COMMITS + 1),
-                "--format=%H%x1f%P%x1f%an%x1f%aI%x1f%s%x1f%D%x1e",
-            ],
-            4 * 1024 * 1024,
-        )?;
-        let mut commits = parse_git_history(&log);
-        let history_truncated = commits.len() > MAX_HISTORY_COMMITS;
-        commits.truncate(MAX_HISTORY_COMMITS);
-        let worktree_bytes = git_output(
-            &self.root,
-            &["worktree", "list", "--porcelain"],
-            1024 * 1024,
-        )?;
-        let current = self
-            .root
-            .canonicalize()
-            .map_err(|error| error.to_string())?;
-        Ok(GitRepositorySnapshot {
-            commits,
-            history_truncated,
-            worktrees: parse_git_worktrees(&worktree_bytes, &current),
-        })
+    fn repository(&self, after: Option<&str>) -> Result<GitRepositorySnapshot, String> {
+        self.history_page(after, MAX_HISTORY_COMMITS)
     }
 
     fn commit(&self, oid: &str) -> Result<GitCommitDetail, String> {
@@ -837,6 +860,22 @@ fn classify_status(xy: &[u8]) -> ChangeStatus {
 fn utf8_field(field: Option<&[u8]>, name: &str) -> Result<String, String> {
     let field = field.ok_or_else(|| format!("missing {name}"))?;
     String::from_utf8(field.to_vec()).map_err(|_| format!("invalid {name}"))
+}
+
+fn history_skip_after(listed: &[u8], after: &str) -> Result<usize, String> {
+    let after = after.as_bytes();
+    let mut skip = 0;
+    for line in listed.split(|&byte| byte == b'\n') {
+        let hash = line.trim_ascii();
+        if hash.is_empty() {
+            continue;
+        }
+        skip += 1;
+        if hash == after || (after.len() >= 7 && hash.starts_with(after)) {
+            return Ok(skip);
+        }
+    }
+    Err("history cursor is not in this repository".to_owned())
 }
 
 fn safe_oid(oid: &str) -> Result<&str, String> {
@@ -1189,7 +1228,7 @@ mod tests {
             .unwrap();
 
         let provider = LocalCodeProvider::new(&dir);
-        let repository = provider.repository().unwrap();
+        let repository = provider.repository(None).unwrap();
         assert_eq!(repository.commits[0].subject, "second commit");
         assert!(repository.commits[0].parents.len() == 1);
         assert_eq!(repository.worktrees.len(), 2);
@@ -1213,6 +1252,27 @@ mod tests {
                 .commit_diff(&repository.commits[0].oid, "../tracked.rs")
                 .is_err()
         );
+
+        for index in 0..3 {
+            fs::write(dir.join("tracked.rs"), format!("fn n{index}() {{}}\n")).unwrap();
+            Command::new("git")
+                .args(["commit", "-qam", &format!("page {index}")])
+                .current_dir(&dir)
+                .status()
+                .unwrap();
+        }
+        let first = provider.history_page(None, 2).unwrap();
+        assert_eq!(first.commits.len(), 2);
+        assert!(first.history_truncated);
+        let second = provider
+            .history_page(Some(&first.commits[1].oid), 2)
+            .unwrap();
+        assert!(
+            second.commits.iter().all(|commit| {
+                commit.oid != first.commits[0].oid && commit.oid != first.commits[1].oid
+            })
+        );
+        assert!(!second.commits.is_empty());
 
         Command::new("git")
             .args(["worktree", "remove", "--force", linked.to_str().unwrap()])

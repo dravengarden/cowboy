@@ -1,3 +1,11 @@
+import {
+  providerUsageErrorMessage,
+  type ProviderUsage,
+  shortResetTime,
+  topBarUsageLimits,
+} from "./usageLimits";
+import { usageWidgetForAccount } from "./usageWidget";
+
 /** Session-sheet queue and page-view row. These stay off the first
  *  screen; the collapsed label must still name the live state. */
 export function workspaceOptionsSummary(input: {
@@ -59,4 +67,60 @@ export function sessionProviderSummary(input: {
   return input.accountLabel
     ? `${input.displayName} · ${state} · ${input.accountLabel}`
     : `${input.displayName} · ${state}`;
+}
+
+export function sessionProviderShowsUsage(input: {
+  ready: boolean;
+  accountUsageProvider?: string;
+}): boolean {
+  return input.ready && Boolean(input.accountUsageProvider);
+}
+
+export type SessionProviderUsageRow = {
+  id: string;
+  label: string;
+  value: string;
+  remaining?: number;
+};
+
+function compactCny(value: number): string {
+  return `¥${value < 0.01 ? value.toFixed(3) : value.toFixed(2)}`;
+}
+
+/** Compact account windows for the session Provider facts list.
+ *  Remaining-percent windows keep a sibling Resets row so the sheet stays a
+ *  two-column list. DeepSeek exposes balance rather than a percent window. */
+export function sessionProviderUsageRows(
+  usage: ProviderUsage | undefined,
+): SessionProviderUsageRow[] {
+  if (!usage) return [];
+  const widget = usageWidgetForAccount(usage);
+  if (widget?.kind === "deepseek") {
+    return [
+      { id: "deepseek-balance", label: "Balance", value: compactCny(widget.balanceCny) },
+      { id: "deepseek-spend", label: "24h spend", value: compactCny(widget.spend24hCny) },
+    ];
+  }
+  return topBarUsageLimits(usage).flatMap((limit) => [
+    {
+      id: limit.id,
+      label: limit.label,
+      value: `${String(limit.remaining)}% remaining`,
+      remaining: limit.remaining,
+    },
+    ...(limit.resetsAt === undefined ? [] : [{
+      id: `${limit.id}-resets`,
+      label: "Resets",
+      value: shortResetTime(limit.resetsAt),
+    }]),
+  ]);
+}
+
+export function sessionProviderUsageEmptyMessage(
+  usage: ProviderUsage | undefined,
+): string {
+  return providerUsageErrorMessage(
+    usage,
+    "This account has not exposed usage limits.",
+  );
 }

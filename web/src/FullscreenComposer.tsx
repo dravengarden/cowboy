@@ -9,10 +9,6 @@ import { createPortal } from "react-dom";
 import {
   Box,
   Button,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
   IconButton,
   Tooltip,
   useTheme,
@@ -49,6 +45,7 @@ import type { AvailableCommand } from "./protocol";
 import { haptic } from "./haptic";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
+import { ConfirmSheet } from "./Sheet";
 
 // Brand-new full-screen mobile compose surface (NOT a DetentSheet): a fixed
 // 100dvh overlay modeled on Obsidian's mobile note editor — a full-height native
@@ -380,25 +377,25 @@ export function FullscreenComposer({
         open={settingsOpen}
         onClose={(): void => setSettingsOpen(false)}
       />
-      <Dialog
+      <ConfirmSheet
         open={discardOpen}
         onClose={(): void => setDiscardOpen(false)}
-        fullWidth
-        maxWidth="xs"
+        title="Ignore modifications?"
+        actions={
+          <>
+            <Button onClick={(): void => setDiscardOpen(false)}>
+              Keep editing
+              <Kbd keys="Esc" />
+            </Button>
+            <Button color="error" onClick={onDiscard}>
+              Ignore modifications
+              <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+            </Button>
+          </>
+        }
       >
-        <DialogTitle>Ignore modifications?</DialogTitle>
-        <DialogContent>Your unsaved changes will be discarded.</DialogContent>
-        <DialogActions>
-          <Button onClick={(): void => setDiscardOpen(false)}>
-            Keep editing
-            <Kbd keys="Esc" />
-          </Button>
-          <Button color="error" onClick={onDiscard}>
-            Ignore modifications
-            <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-          </Button>
-        </DialogActions>
-      </Dialog>
+        Your unsaved changes will be discarded.
+      </ConfirmSheet>
     </Box>,
     document.body,
   );

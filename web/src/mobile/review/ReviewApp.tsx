@@ -120,6 +120,7 @@ import {
   closeAllReviewTabs,
   closeOtherReviewTabs,
   closeReviewTab,
+  commitFileTabs,
   openReviewTab,
   reorderReviewTabs,
   retainChangedDiffTabs,
@@ -1359,6 +1360,7 @@ export function ReviewApp({
     commit: GitCommitSummary;
     path?: string;
   }>();
+  const [commitPaths, setCommitPaths] = useState<readonly string[]>([]);
   const target: ReviewTarget = mode === "files"
     ? sourceTarget ?? { kind: "changes" }
     : diffTarget ?? { kind: "changes" };
@@ -1751,12 +1753,20 @@ export function ReviewApp({
       openSource(tab.path);
       return;
     }
+    if (tab.kind === "commit") {
+      setCommitTarget((current) =>
+        current ? { commit: current.commit, path: tab.path } : current
+      );
+      return;
+    }
     const entry = gitQueue.find((candidate) =>
       candidate.change.path === tab.path && candidate.scope === tab.scope
     );
     if (entry) openDiff(entry, gitQueue);
   };
-  const activeTabKey = target.kind === "source"
+  const activeTabKey = commitTarget?.path
+    ? reviewTabKey({ kind: "commit", path: commitTarget.path, pinned: false })
+    : target.kind === "source"
     ? reviewTabKey({ ...target, pinned: false })
     : target.kind === "diff"
     ? reviewTabKey({ ...target, pinned: false })
@@ -1782,7 +1792,11 @@ export function ReviewApp({
     if (reviewTabKey(tab) === activeTabKey) {
       navigationHaptic();
       if (tab.kind === "source") setSourceTarget(undefined);
-      else setDiffTarget(undefined);
+      else if (tab.kind === "commit") {
+        setCommitTarget((current) =>
+          current ? { commit: current.commit } : current
+        );
+      } else setDiffTarget(undefined);
       return;
     }
     activateTab(tab);
@@ -2339,6 +2353,7 @@ export function ReviewApp({
                 setCommitTarget((current) => current
                   ? { commit: current.commit, ...(path ? { path } : {}) }
                   : current)}
+              onFiles={setCommitPaths}
             />
           )
           : target.kind === "changes"
@@ -2463,7 +2478,9 @@ export function ReviewApp({
           }}
         >
           <ReviewTabStrip
-            tabs={mode === "git" && commitTarget ? [] : modeTabs}
+            tabs={mode === "git" && commitTarget
+              ? commitFileTabs(commitPaths)
+              : modeTabs}
             activeKey={activeTabKey}
             onActivate={activateOrCollapseTab}
             onClose={requestCloseTab}
@@ -2497,6 +2514,7 @@ export function ReviewApp({
             }}
             allowCloseActions={mode === "files"}
             allowReorder={mode === "files"}
+            allowPin={mode === "files"}
             onReorder={(movingKey, targetKey) => {
               const next = reorderReviewTabs(tabs, movingKey, targetKey);
               setTabs(next);

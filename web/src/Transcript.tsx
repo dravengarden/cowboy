@@ -1530,6 +1530,7 @@ function ToolCard({
             ...openTap,
             role: "button",
             tabIndex: desktop ? -1 : 0,
+            "data-haptic": "selection",
             "aria-expanded": selected,
             "aria-haspopup": "dialog" as const,
             onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>): void => {

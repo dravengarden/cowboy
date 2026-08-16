@@ -1,6 +1,8 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
+  beginMobileEditorFocusTransfer,
   didMobileSoftwareKeyboardClose,
+  isMobileEditorFocusTransferPending,
   mobilePendingKeyboardCloseSettleMs,
   shouldPresentMobileKeyboardSurface,
 } from "./mobileComposerFocus.ts";
@@ -80,6 +82,10 @@ Deno.test("multi-image mobile composers scroll the focused caret above the keybo
   assertEquals(composerSource.includes('scrollPaddingBlock: "12px"'), true);
   assertEquals(
     composerSource.includes("editorRef.current.revealSelection();"),
+    true,
+  );
+  assertEquals(
+    composerSource.includes("const timer = globalThis.setTimeout(reveal, 260);"),
     true,
   );
   assertEquals(editorSource.includes("revealSelection: (): void =>"), true);
@@ -368,7 +374,7 @@ Deno.test("fullscreen pending edit distinguishes collapse from keyboard dismissa
 Deno.test("mobile compact and fullscreen handoffs preserve selection with one focus transfer", () => {
   assertEquals(
     composerSource.includes(
-      "const selection = editorRef.current?.getSelection();\n                    flushSync(() => setComposeFs(true));",
+      "const selection = editorRef.current?.getSelection();\n                    beginMobileEditorFocusTransfer();\n                    flushSync(() => setComposeFs(true));",
     ),
     true,
   );
@@ -1005,6 +1011,16 @@ Deno.test("mobile composer releases stale focus only after a visible keyboard cl
     composerSource.includes("releaseMobileComposerFocus();"),
     true,
   );
+  assertEquals(
+    composerSource.includes("isMobileEditorFocusTransferPending()"),
+    true,
+  );
+  assertEquals(
+    composerSource.includes("beginMobileEditorFocusTransfer()"),
+    true,
+  );
+  beginMobileEditorFocusTransfer();
+  assertEquals(isMobileEditorFocusTransferPending(), true);
 });
 
 Deno.test("clearing session context always ends the mobile input interaction", () => {

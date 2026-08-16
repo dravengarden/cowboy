@@ -8,10 +8,40 @@ import {
   fetchCodeOutline,
   fetchCodeSearch,
   fetchCodeTree,
+  fetchGitRepository,
   isTransientCodeApiStatus,
   openCodeBuffer,
   shouldCloseUnavailableSource,
 } from "./codeApi.ts";
+
+Deno.test("git history pages pass the after cursor", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: string[] = [];
+  globalThis.fetch = ((input: string | URL | Request) => {
+    requests.push(String(input));
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          apiVersion: 1,
+          commits: [],
+          historyTruncated: false,
+          worktrees: [],
+        }),
+        { status: 200 },
+      ),
+    );
+  }) as typeof fetch;
+  try {
+    await fetchGitRepository("session/id");
+    await fetchGitRepository("session/id", undefined, "abc1234");
+    assertEquals(requests, [
+      "/api/code/sessions/session%2Fid/repository",
+      "/api/code/sessions/session%2Fid/repository?after=abc1234",
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 
 Deno.test("tree requests preserve paths and explicit refresh bypasses caches", async () => {
   const originalFetch = globalThis.fetch;

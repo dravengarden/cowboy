@@ -2,6 +2,7 @@ import { Dialog, DialogContent, useMediaQuery, useTheme } from "@mui/material";
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { BottomSheet, type BottomSheetProps } from "./_shell";
+import { useSurfaceProfile } from "./surface/SurfaceProfile";
 
 // cowboy's BottomSheet: always the frosted 磨砂玻璃 material (no per-app toggle —
 // the translucent surface is the house look). Drop-in for the shared BottomSheet.
@@ -72,4 +73,46 @@ export function Sheet(
   return portal && globalThis.document?.body
     ? createPortal(sheet, globalThis.document.body)
     : sheet;
+}
+
+/**
+ * Confirmation and other compact decision modals follow product identity.
+ * Mobile and tablet always rise as DetentSheet — including iPhone landscape.
+ * Desktop keeps the shared centered dialog. Do not open a raw MUI Dialog for
+ * these prompts: a phone-width surface must never be a floating card.
+ */
+export function useConfirmSheetSurface(): boolean {
+  return useSurfaceProfile().kind !== "desktop";
+}
+
+export function ConfirmSheet({
+  open,
+  onClose,
+  title,
+  children,
+  actions,
+  wide = false,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title?: ReactNode;
+  children: ReactNode;
+  actions?: ReactNode;
+  wide?: boolean;
+}): ReactNode {
+  const forceSheet = useConfirmSheetSurface();
+  return (
+    <Sheet
+      open={open}
+      onClose={onClose}
+      title={title}
+      actions={actions}
+      wide={wide}
+      portal
+      forceSheet={forceSheet}
+      mobileDismiss={actions == null ? "footer" : "none"}
+    >
+      {children}
+    </Sheet>
+  );
 }

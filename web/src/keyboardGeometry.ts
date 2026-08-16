@@ -29,11 +29,23 @@ export function inferKeyboardOpen(geometry: KeyboardGeometry): boolean {
 
 /** iOS can report visualViewport.height ≈ 0 for one keyboard frame.
  *  Publishing that as --kb-inset pads the column off-screen and flashes. */
+export function isUnreliableVisualViewport(
+  layoutHeight: number,
+  visualHeight: number,
+): boolean {
+  if (!(layoutHeight > 0) || !(visualHeight >= 0)) return true;
+  if (visualHeight < 80) return true;
+  return layoutHeight - visualHeight > layoutHeight * 0.55;
+}
+
 export function clampKeyboardOverlap(
   overlap: number,
   layoutHeight: number,
 ): number {
   if (overlap <= 0 || layoutHeight <= 0) return 0;
+  if (isUnreliableVisualViewport(layoutHeight, layoutHeight - overlap)) {
+    return 0;
+  }
   const max = Math.round(layoutHeight * 0.52);
   return Math.min(overlap, max);
 }

@@ -1,5 +1,4 @@
 import {
-  ArrowBack,
   CommitOutlined,
   DescriptionOutlined,
 } from "@mui/icons-material";
@@ -8,7 +7,6 @@ import {
   Box,
   Chip,
   CircularProgress,
-  IconButton,
   List,
   ListItemButton,
   ListItemText,
@@ -39,12 +37,10 @@ function CommitPatch({
   sessionId,
   oid,
   path,
-  onBack,
 }: {
   sessionId: string;
   oid: string;
   path: string;
-  onBack: () => void;
 }): React.JSX.Element {
   const [patch, setPatch] = useState<
     Awaited<ReturnType<typeof fetchGitCommitDiff>>
@@ -69,24 +65,6 @@ function CommitPatch({
   const lines = allLines.slice(0, 5_000);
   return (
     <Stack component="main" sx={{ height: 1, minHeight: 0 }}>
-      <Stack
-        direction="row"
-        alignItems="center"
-        spacing={1}
-        sx={{ minHeight: 52, px: 1, borderBottom: 1, borderColor: "divider" }}
-      >
-        <IconButton aria-label="Back to commit files" onClick={onBack}>
-          <ArrowBack />
-        </IconButton>
-        <Box sx={{ minWidth: 0, flex: 1 }}>
-          <Typography variant="body2" fontWeight={700} noWrap>
-            {path}
-          </Typography>
-          <Typography variant="caption" color="text.secondary">
-            {patch ? `+${patch.added} −${patch.removed}` : "Loading patch…"}
-          </Typography>
-        </Box>
-      </Stack>
       <Box
         data-review-commit-patch
         sx={{
@@ -139,11 +117,13 @@ export function ReviewCommit({
   commit,
   selectedPath,
   onSelectPath,
+  onFiles,
 }: {
   sessionId: string;
   commit: GitCommitSummary;
   selectedPath?: string | undefined;
   onSelectPath: (path: string | undefined) => void;
+  onFiles?: (paths: readonly string[]) => void;
 }): React.JSX.Element {
   const [detail, setDetail] = useState<GitCommitDetail>();
   const [error, setError] = useState(false);
@@ -161,6 +141,10 @@ export function ReviewCommit({
       });
     return () => controller.abort();
   }, [commit.oid, sessionId]);
+  useEffect(() => {
+    onFiles?.(detail?.files.map((file) => file.path) ?? []);
+  }, [detail, onFiles]);
+  useEffect(() => () => onFiles?.([]), [onFiles]);
 
   if (selectedPath) {
     return (
@@ -168,7 +152,6 @@ export function ReviewCommit({
         sessionId={sessionId}
         oid={commit.oid}
         path={selectedPath}
-        onBack={() => onSelectPath(undefined)}
       />
     );
   }

@@ -120,6 +120,16 @@ function deepseekWidget(usage: ProviderUsage): UsageWidgetProvider | undefined {
   };
 }
 
+export function usageWidgetForAccount(
+  usage: ProviderUsage | undefined,
+): UsageWidgetProvider | undefined {
+  if (!usage || usage.status !== "available") return undefined;
+  if (usage.provider === "openai") return openAiWidget(usage);
+  if (usage.provider === "deepseek") return deepseekWidget(usage);
+  if (usage.provider === "xai") return xAiWidget(usage);
+  return undefined;
+}
+
 /**
  * Account-level provider summaries for the persistent Desktop widget.
  * Session-only and unavailable providers are intentionally absent: the widget
@@ -133,16 +143,9 @@ export function usageWidgetProviders(
     snapshot.providers.map((usage) => [usage.provider, usage]),
   );
   return [
-    byProvider.get("openai") && byProvider.get("openai")?.status === "available"
-      ? openAiWidget(byProvider.get("openai") as ProviderUsage)
-      : undefined,
-    byProvider.get("deepseek") &&
-      byProvider.get("deepseek")?.status === "available"
-      ? deepseekWidget(byProvider.get("deepseek") as ProviderUsage)
-      : undefined,
-    byProvider.get("xai") && byProvider.get("xai")?.status === "available"
-      ? xAiWidget(byProvider.get("xai") as ProviderUsage)
-      : undefined,
+    usageWidgetForAccount(byProvider.get("openai")),
+    usageWidgetForAccount(byProvider.get("deepseek")),
+    usageWidgetForAccount(byProvider.get("xai")),
     // Anthropic is currently session-only and Gemini exposes no account quota.
     // Add their account-level projection here when their provider contracts do.
   ].filter((provider): provider is UsageWidgetProvider =>

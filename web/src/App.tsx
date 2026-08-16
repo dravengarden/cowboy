@@ -22,9 +22,6 @@ import {
     ButtonBase,
     Chip,
     CircularProgress,
-    Dialog,
-    DialogContent,
-    DialogTitle,
     Divider,
     GlobalStyles,
     IconButton,
@@ -53,6 +50,7 @@ import {
 import type { SxProps, Theme } from "@mui/material";
 import {
     Add,
+    ArrowBackIosNew,
     Bolt,
     Check as CheckIcon,
     Circle,
@@ -190,7 +188,7 @@ import {
     NativeReleaseUpdatePrompt,
     ThemeModeControl,
 } from "./_shell";
-import { Sheet } from "./Sheet";
+import { ConfirmSheet, Sheet } from "./Sheet";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { isImeKeyEvent } from "./imeKey";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
@@ -226,6 +224,11 @@ import {
     CONTROL_CENTER_TABS,
     type ControlCenterTab,
 } from "./desktop/controlCenterTabs";
+import {
+    SETTINGS_MORE_ROWS,
+    SettingsNavRow,
+    settingsDestinationLabel,
+} from "./SettingsChrome";
 import {
     CONTROL_CENTER_PANEL_EXIT_MS,
     controlCenterViewTransitionStyles,
@@ -893,6 +896,7 @@ function SessionList({
                     return (
                     <ReliableListItemButton
                         key={s.id}
+                        data-haptic="selection"
                         data-desktop-item={s.id}
                         data-desktop-session-row={desktop ? "true" : undefined}
                         data-desktop-current={desktop && s.id === activeId ? "true" : undefined}
@@ -1083,18 +1087,26 @@ function SessionList({
                                 onPress: onNew,
                                 icon: <Add aria-hidden sx={{ fontSize: "1.35em" }} />,
                             },
+                        ]}
+                    />
+                    <MobileSheetActionGroup
+                        actions={[
                             {
                                 key: "close",
                                 label: "Close sessions",
                                 onPress: onClose ?? (() => undefined),
-                                icon: <CloseIcon aria-hidden sx={{ fontSize: "1.25em" }} />,
+                                icon: (
+                                    <CloseIcon
+                                        aria-hidden
+                                        sx={{
+                                            fontSize: "1.25em",
+                                            transform: "translate(-0.75px, -0.5px)",
+                                        }}
+                                    />
+                                ),
                             },
-                        ]}
-                    />
-                    {onOpenSettings && (
-                        <MobileSheetActionGroup
-                            actions={[
-                                {
+                            ...(onOpenSettings
+                                ? [{
                                     key: "settings",
                                     label: "Settings",
                                     onPress: onOpenSettings,
@@ -1104,10 +1116,10 @@ function SessionList({
                                             sx={{ fontSize: "1.25em" }}
                                         />
                                     ),
-                                },
-                            ]}
-                        />
-                    )}
+                                }]
+                                : []),
+                        ]}
+                    />
                 </Box>
             )}
             <Menu
@@ -1993,6 +2005,9 @@ export function App({
             cachedWidth?: number,
         ) => void
     ) | null>(null);
+    const closeSessionsPeek = useReliableTouchTap<HTMLDivElement>((): void => {
+        if (drawerOpen) settleMobileDrawerRef.current?.(false);
+    });
     const [dialogOpen, setDialogOpen] = useState(false);
     const openNewSession = (): void => {
         // iOS only raises the software keyboard for an in-gesture focus. The
@@ -2935,9 +2950,11 @@ export function App({
                         tabIndex={drawerOpen ? 0 : -1}
                         aria-label="Close sessions"
                         aria-hidden={!drawerOpen}
-                        onClick={(): void => {
-                            if (drawerOpen) settleMobileDrawerRef.current?.(false);
-                        }}
+                        onPointerDown={closeSessionsPeek.onPointerDown}
+                        onPointerMove={closeSessionsPeek.onPointerMove}
+                        onPointerUp={closeSessionsPeek.onPointerUp}
+                        onPointerCancel={closeSessionsPeek.onPointerCancel}
+                        onClick={closeSessionsPeek.onClick}
                         onKeyDown={(event): void => {
                             if (
                                 !isImeKeyEvent(event.nativeEvent) &&
@@ -2954,7 +2971,7 @@ export function App({
                             bottom: 0,
                             left: 0,
                             zIndex: (t) => t.zIndex.modal - 1,
-                            pointerEvents: "none",
+                            pointerEvents: drawerOpen ? "auto" : "none",
                             cursor: drawerOpen ? "pointer" : "default",
                         }}
                     />
@@ -4625,47 +4642,45 @@ function MachinesContent(): React.JSX.Element {
                     </Paper>
                 );
             })}
-            <Dialog
+            <ConfirmSheet
                 open={updateConfirmation !== null}
                 onClose={() => setUpdateConfirmation(null)}
-                fullWidth
-                maxWidth="xs"
+                title="Roll out this update?"
+                actions={
+                    <>
+                        <Button color="inherit" onClick={() => setUpdateConfirmation(null)}>
+                            Cancel
+                            <Kbd keys="Esc" />
+                        </Button>
+                        <Button
+                            variant="contained"
+                            color="warning"
+                            onClick={confirmMachineUpdate}
+                        >
+                            Update and roll out
+                            <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+                        </Button>
+                    </>
+                }
             >
-                <DialogTitle>Roll out this update?</DialogTitle>
-                <DialogContent>
-                    {updateConfirmation && (
-                        <Stack spacing={2} sx={{ pt: 0.5 }}>
-                            <Typography variant="body2">
-                                {updateConfirmation.components.map(machineComponentName).join(", ")} {updateConfirmation.components.length === 1 ? "is" : "are"} used by active sessions on this Machine.
-                            </Typography>
-                            <Stack spacing={0.5}>
-                                {updateConfirmation.components.map((component) => (
-                                    <Typography key={`${component.id.kind}:${component.id.slot ?? ""}`} variant="caption" color="text.secondary">
-                                        {machineComponentName(component)} · {component.active_leases} active {component.active_leases === 1 ? "session" : "sessions"}
-                                    </Typography>
-                                ))}
-                            </Stack>
-                            <Alert severity="warning">
-                                Current turns will finish first. Cowboy will then replace affected workers gradually. Each session may be briefly unavailable while it reconnects; its transcript and agent session are preserved. Machine host or runtime updates may also reconnect the Machine service.
-                            </Alert>
-                            <Stack direction="row" spacing={1} justifyContent="flex-end">
-                                <Button color="inherit" onClick={() => setUpdateConfirmation(null)}>
-                                    Cancel
-                                    <Kbd keys="Esc" />
-                                </Button>
-                                <Button
-                                    variant="contained"
-                                    color="warning"
-                                    onClick={confirmMachineUpdate}
-                                >
-                                    Update and roll out
-                                    <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-                                </Button>
-                            </Stack>
+                {updateConfirmation && (
+                    <Stack spacing={2} sx={{ pt: 0.5 }}>
+                        <Typography variant="body2">
+                            {updateConfirmation.components.map(machineComponentName).join(", ")} {updateConfirmation.components.length === 1 ? "is" : "are"} used by active sessions on this Machine.
+                        </Typography>
+                        <Stack spacing={0.5}>
+                            {updateConfirmation.components.map((component) => (
+                                <Typography key={`${component.id.kind}:${component.id.slot ?? ""}`} variant="caption" color="text.secondary">
+                                    {machineComponentName(component)} · {component.active_leases} active {component.active_leases === 1 ? "session" : "sessions"}
+                                </Typography>
+                            ))}
                         </Stack>
-                    )}
-                </DialogContent>
-            </Dialog>
+                        <Alert severity="warning">
+                            Current turns will finish first. Cowboy will then replace affected workers gradually. Each session may be briefly unavailable while it reconnects; its transcript and agent session are preserved. Machine host or runtime updates may also reconnect the Machine service.
+                        </Alert>
+                    </Stack>
+                )}
+            </ConfirmSheet>
         </Stack>
     );
 }
@@ -4763,6 +4778,7 @@ function SettingsShell({
     // pointer/physical-keyboard surface rather than the touch sheet.
     const desktop = useMediaQuery("(pointer: fine) and (hover: hover)");
     const settingsPanelRef = useRef<HTMLDivElement>(null);
+    const codeSectionRef = useRef<HTMLDivElement>(null);
     const viewTransitionRef = useRef<ControlCenterViewTransition | null>(null);
     const changeTab = useCallback((next: ControlCenterTab): void => {
         if (next === tab) return;
@@ -4829,6 +4845,15 @@ function SettingsShell({
         setSection(initialSection);
         setTabPanelVisible(true);
     }, [open, initialTab, initialSection]);
+    useEffect(() => {
+        if (!open || desktop || initialSection !== "code" || tab !== "settings") {
+            return undefined;
+        }
+        const frame = globalThis.requestAnimationFrame(() => {
+            codeSectionRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+        });
+        return (): void => globalThis.cancelAnimationFrame(frame);
+    }, [desktop, initialSection, open, tab]);
     const vim = useVimSetting();
     const notify = useNotifySetting();
     const vibrate = useVibrateSetting();
@@ -5072,11 +5097,25 @@ function SettingsShell({
             forceSheet={useSheetSurface}
             wide
             cover
+            portal
             desktopMaxWidth={1440}
+            mobileDismiss={tab === "settings" || !useSheetSurface ? "footer" : "none"}
+            actions={tab === "settings" || !useSheetSurface ? undefined : (
+                <Box sx={{ width: "100%", display: "flex", justifyContent: "center" }}>
+                    <MobileSheetActionGroup
+                        actions={[{
+                            key: "back",
+                            label: "Back to Settings",
+                            icon: <ArrowBackIosNew sx={{ fontSize: "1.25em", ml: "-0.08em" }} />,
+                            onPress: (): void => changeTab("settings"),
+                        }]}
+                    />
+                </Box>
+            )}
         >
             <GlobalStyles styles={controlCenterViewTransitionStyles} />
-            {/* Touch keeps its compact segmented control. Desktop uses native
-                tabs so the active section is visible, focusable, and keyable. */}
+            {/* Touch is one Settings list with drill-in pages. Desktop keeps
+                native tabs so Machines / Info / Logs stay first-class. */}
             <Box
                 sx={{
                     position: "sticky",
@@ -5085,9 +5124,9 @@ function SettingsShell({
                     bgcolor: desktop ? "background.paper" : "background.default",
                     pt: desktop ? 0 : 0.25,
                     pb: desktop ? 0 : 0.75,
-                    borderRadius: desktop ? 0 : 3,
-                    borderTopLeftRadius: 0,
-                    borderTopRightRadius: 0,
+                    borderRadius: 0,
+                    borderBottom: desktop ? 0 : 1,
+                    borderColor: "divider",
                 }}
             >
             <Box
@@ -5107,20 +5146,28 @@ function SettingsShell({
                         <Typography variant="caption" color="text.secondary">Preferences, runtime information, and automation history</Typography>
                     </Box>
                 ) : null}
-                {!desktop && <SegmentedPill
-                    value={tab}
-                    onChange={changeTab}
-                    options={[{ value: "settings", label: "Settings" }, { value: "machines", label: "Machines" }, { value: "info", label: "Info" }, { value: "logs", label: "Logs" }]}
-                    sx={{
-                        width: "100%",
-                        justifySelf: "center",
-                        "& .MuiButtonBase-root": {
-                            flex: 1,
-                            minWidth: 0,
-                            px: 0.75,
-                        },
-                    }}
-                />}
+                {!desktop && (
+                    <Stack
+                        direction="row"
+                        alignItems="center"
+                        spacing={0.5}
+                        sx={{ width: "100%", minHeight: 40 }}
+                    >
+                        {tab !== "settings" && (
+                            <IconButton
+                                aria-label="Back to Settings"
+                                onClick={(): void => changeTab("settings")}
+                                onPointerDown={(event): void => event.stopPropagation()}
+                                sx={{ ml: -0.75 }}
+                            >
+                                <ArrowBackIosNew />
+                            </IconButton>
+                        )}
+                        <Typography variant="h6" fontWeight={740} sx={{ letterSpacing: -0.2 }}>
+                            {settingsDestinationLabel(tab)}
+                        </Typography>
+                    </Stack>
+                )}
                 {desktop && <Box
                     sx={{
                         flex: 1,
@@ -5246,16 +5293,6 @@ function SettingsShell({
                 </Box>
             ) : !tabPanelVisible ? null : renderedTab === "machines" ? <MachinesContent /> : renderedTab === "info" ? <InfoContent /> : renderedTab === "logs" ? <UsageLogs /> : (
             <Stack spacing={3}>
-                <SegmentedPill
-                    value={section}
-                    onChange={setSection}
-                    options={[
-                        { value: "agent", label: "Agent" },
-                        { value: "code", label: "Code" },
-                    ]}
-                />
-                {section === "code" ? <ReviewSettingsContent /> : (
-                <>
                 <ThemeModeControl value={themeMode} onChange={onSetThemeMode} />
 
                 {/* Reading comfort — scales only the transcript message content
@@ -5556,10 +5593,28 @@ function SettingsShell({
                 )}
                 <Divider />
                 <AutoResumeSettings />
-                {/* Daemon system info (Storage metrics + About) lives in the Info
-                    tab — Settings holds user preferences only. */}
-                </>
-                )}
+                <Divider />
+                <Box
+                    ref={codeSectionRef}
+                    data-settings-section="code"
+                    sx={{ scrollMarginTop: 16 }}
+                >
+                    <ReviewSettingsContent />
+                </Box>
+                <Divider />
+                <Stack spacing={0.25}>
+                    <Typography variant="overline" color="text.secondary">
+                        More
+                    </Typography>
+                    {SETTINGS_MORE_ROWS.map((row) => (
+                        <SettingsNavRow
+                            key={row.tab}
+                            icon={row.icon}
+                            label={row.label}
+                            onPress={(): void => changeTab(row.tab)}
+                        />
+                    ))}
+                </Stack>
             </Stack>
             )}
             {desktop && (

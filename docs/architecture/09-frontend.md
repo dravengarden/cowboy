@@ -41,7 +41,9 @@ This is a core visual invariant:
 - Size functional icons with `rem`/`em`, or with
   `calc(<baseline px> * var(--cowboy-font-scale, 1))` when browser minimum-font
   behavior requires explicit geometry. Do not introduce a fixed-pixel glyph
-  size for an interactive action.
+  size for an interactive action. Transcript status marks (Provider activity
+  and thought signals) are optical glyphs, not actions: keep their authored
+  pixel size so enlarging reading text does not turn a Grok mark into a heading.
 - Framework defaults are not exempt. MUI `Button` assigns fixed-pixel sizes to
   start/end icons, so the Cowboy theme overrides those descendants globally.
   Component-level `sx` may choose a different optical size, but it must retain a
@@ -145,6 +147,22 @@ belong to an ordinary Codex task, not durable coordination metadata. Verify
 independent persistence across reload, both expanded overflow modes at phone
 width, and an empty collapsed command list with the fixed action cluster still
 visible.
+
+### Confirmation surfaces
+
+Clear / Compact / Stop / Reload / discard / delete / update / Provider
+auth-or-uninstall prompts are compact decisions, not workbenches. On the
+Mobile and tablet products they always rise as the shared frosted
+DetentSheet (`ConfirmSheet` in `web/src/Sheet.tsx`), including iPhone
+landscape. Desktop keeps the centered dialog. Do not open a raw MUI
+`Dialog` for these prompts on a phone-width surface: a floating card is
+the wrong modal grammar next to Cowboy's bottom sheets. Desktop-only
+chrome such as `DesktopTopBarControls` may keep Dialog because that
+product never becomes Mobile by shrinking the window.
+
+A Settings drill-in (Machines, About, Logs) keeps the same sheet and
+turns the footer island into Back. Do not dismiss the whole sheet from
+that island while a nested page is showing.
 
 Composer controls, editor chrome, and inline image surfaces must derive colors,
 contrast, borders, and state layers from MUI theme tokens. Do not add hardcoded

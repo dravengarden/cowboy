@@ -27,6 +27,17 @@ Deno.test("mobile drawer translates an in-flow page that owns the footer", () =>
   assert(appSource.includes("mobileDrawerRailHitSx"));
   assert(reviewDrawerSource.includes('data-mobile-drawer-dim="right"'));
   assert(reviewDrawerSource.includes('data-mobile-drawer-close="right"'));
+  assert(reviewDrawerSource.includes('role="button"'));
+  assert(reviewDrawerSource.includes("useReliableTouchTap"));
+  assert(reviewDrawerSource.includes("Screen-space peek hit target"));
+  assert(reviewDrawerSource.includes("width: \"calc(100% - var(--mobile-drawer-width"));
+  assert(reviewDrawerSource.includes('pointerEvents: "none"'));
+  assert(reviewDrawerSource.includes('"& > *": { pointerEvents: "auto" }'));
+  assert(reviewDrawerSource.includes("{children}"));
+  assert(
+    reviewDrawerSource.indexOf("{children}") <
+      reviewDrawerSource.indexOf('data-mobile-drawer-close="right"'),
+  );
   assert(reviewDrawerSource.includes("mobileDrawerRailHitSx"));
   assert(appSource.includes("mobileComposerFollowRef.current"));
   assert(appSource.includes("mobileNavFollowRef.current"));
@@ -73,8 +84,9 @@ Deno.test("mobile Settings lives on the Sessions island and Code takes the old s
     ),
   );
   const newSessionAt = appSource.indexOf('key: "new"');
+  const closeAt = appSource.indexOf('key: "close"');
   const settingsAt = appSource.indexOf('key: "settings"');
-  assert(newSessionAt >= 0 && settingsAt > newSessionAt);
+  assert(newSessionAt >= 0 && closeAt > newSessionAt && settingsAt > closeAt);
   assert(appSource.includes('data-mobile-open-code="true"'));
   assert(appSource.includes('aria-label="Open code"'));
   assert(appSource.includes("openMobileProduct(\"review\")"));

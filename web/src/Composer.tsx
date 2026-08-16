@@ -21,11 +21,7 @@ import {
   CircularProgress,
   ClickAwayListener,
   Collapse,
-  Dialog,
-  DialogActions,
-  DialogContent,
   DialogContentText,
-  DialogTitle,
   Divider,
   IconButton,
   keyframes,
@@ -93,6 +89,8 @@ import {
   didMobileSoftwareKeyboardClose,
   dismissMobileSoftwareKeyboard,
   mobilePendingKeyboardCloseSettleMs,
+  beginMobileEditorFocusTransfer,
+  isMobileEditorFocusTransferPending,
   releaseMobileComposerFocus,
   shouldPresentMobileKeyboardSurface,
 } from "./composer/mobileComposerFocus";
@@ -111,9 +109,16 @@ import {
   sessionProviderFacts,
   sessionProviderManageLabel,
   sessionProviderNeedsAttention,
+  sessionProviderShowsUsage,
   sessionProviderSummary,
+  sessionProviderUsageEmptyMessage,
+  sessionProviderUsageRows,
   workspaceOptionsSummary,
 } from "./sessionSettingsPresentation";
+import {
+  providerUsage,
+  type UsageSnapshot,
+} from "./usageLimits";
 import { SessionReloadDialog } from "./SessionReloadDialog";
 import { createPortal, flushSync } from "react-dom";
 import { FullscreenComposer } from "./FullscreenComposer";
@@ -268,7 +273,7 @@ import type {
   Status,
 } from "./protocol";
 import { sessionProjectLabel } from "./sessionProject";
-import { Sheet } from "./Sheet";
+import { ConfirmSheet, Sheet } from "./Sheet";
 import { FloatingActionIsland, MobileSheetDismiss } from "./_shell";
 import {
   OPEN_SESSION_SETTINGS_EVENT,
@@ -544,67 +549,65 @@ function SessionActionConfirmDialog({
   onClose: () => void;
   onConfirm: () => Promise<void>;
 }): React.JSX.Element {
+  void disableRestoreFocus;
   return (
-    <Dialog
+    <ConfirmSheet
       open={action !== null}
       onClose={onClose}
-      disableRestoreFocus={disableRestoreFocus}
-      maxWidth="xs"
-      fullWidth
+      title={action !== null ? `${action.label}?` : undefined}
+      actions={action === null ? undefined : (
+        <>
+          <Button
+            color="inherit"
+            onClick={onClose}
+            sx={{ textTransform: "none" }}
+          >
+            Cancel
+            <Kbd keys="Esc" />
+          </Button>
+          <NetworkButton
+            variant="contained"
+            color={action.destructive ? "error" : "primary"}
+            networkAction={onConfirm}
+            sx={{ textTransform: "none" }}
+          >
+            {action.destructive ? "Clear" : "Compact"}
+            <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+          </NetworkButton>
+        </>
+      )}
     >
       {action !== null && (
         <>
-          <DialogTitle>{action.label}?</DialogTitle>
-          <DialogContent>
-            <DialogContentText>{action.detail}</DialogContentText>
-            <DialogContentText sx={{ mt: 1.5, fontSize: "0.8125rem" }}>
-              {action.kind === "slash" && action.command !== undefined
-                ? (
-                  <>
-                    Sends{" "}
-                    <Box
-                      component="code"
-                      sx={{
-                        fontFamily: "ui-monospace, monospace",
-                        px: 0.5,
-                        py: 0.125,
-                        borderRadius: 0.75,
-                        bgcolor: "action.hover",
-                      }}
-                    >
-                      {action.command}
-                    </Box>{" "}
-                    to {provider || "the agent"}
-                    {activeTurn ? " (queued — the agent is mid-turn)" : ""}.
-                  </>
-                )
-                : `Resets ${provider || "the agent"} to a fresh context now${
-                  activeTurn ? " (ends the current turn)" : ""
-                }.`}
-            </DialogContentText>
-          </DialogContent>
-          <DialogActions>
-            <Button
-              color="inherit"
-              onClick={onClose}
-              sx={{ textTransform: "none" }}
-            >
-              Cancel
-              <Kbd keys="Esc" />
-            </Button>
-            <NetworkButton
-              variant="contained"
-              color={action.destructive ? "error" : "primary"}
-              networkAction={onConfirm}
-              sx={{ textTransform: "none" }}
-            >
-              {action.destructive ? "Clear" : "Compact"}
-              <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-            </NetworkButton>
-          </DialogActions>
+          <DialogContentText>{action.detail}</DialogContentText>
+          <DialogContentText sx={{ mt: 1.5, fontSize: "0.8125rem" }}>
+            {action.kind === "slash" && action.command !== undefined
+              ? (
+                <>
+                  Sends{" "}
+                  <Box
+                    component="code"
+                    sx={{
+                      fontFamily: "ui-monospace, monospace",
+                      px: 0.5,
+                      py: 0.125,
+                      borderRadius: 0.75,
+                      bgcolor: "action.hover",
+                    }}
+                  >
+                    {action.command}
+                  </Box>{" "}
+                  to {provider || "the agent"}
+                  {activeTurn ? " (queued — the agent is mid-turn)" : ""}.
+                </>
+              )
+              : `Resets ${provider || "the agent"} to a fresh context now${
+                activeTurn ? " (ends the current turn)" : ""
+              }.`}
+          </DialogContentText>
         </>
       )}
-    </Dialog>
+    </ConfirmSheet>
   );
 }
 
@@ -1526,12 +1529,25 @@ export function ComposerWorkspace({
       const opening = !mobileComposerKeyboardWasOpenRef.current;
       mobileComposerKeyboardWasOpenRef.current = true;
       if (!opening) return undefined;
-      const frame = globalThis.requestAnimationFrame(() => {
+      const reveal = (): void => {
         if (editorRef.current?.hasFocus()) {
           editorRef.current.revealSelection();
         }
+      };
+      // Keyboard height, composer max-height, and inline-image layout all
+      // settle after the first frame. One rAF under-scrolls the caret behind
+      // the keyboard when a tall image is still measuring.
+      let laterFrame = 0;
+      const frame = globalThis.requestAnimationFrame(() => {
+        reveal();
+        laterFrame = globalThis.requestAnimationFrame(reveal);
       });
-      return (): void => globalThis.cancelAnimationFrame(frame);
+      const timer = globalThis.setTimeout(reveal, 260);
+      return (): void => {
+        globalThis.cancelAnimationFrame(frame);
+        if (laterFrame !== 0) globalThis.cancelAnimationFrame(laterFrame);
+        globalThis.clearTimeout(timer);
+      };
     }
     if (
       !didMobileSoftwareKeyboardClose(
@@ -1539,6 +1555,11 @@ export function ComposerWorkspace({
         keyboardOpen,
       )
     ) return undefined;
+
+    if (isMobileEditorFocusTransferPending()) {
+      mobileComposerKeyboardWasOpenRef.current = keyboardOpen;
+      return undefined;
+    }
 
     mobileComposerKeyboardWasOpenRef.current = false;
     // iOS and third-party keyboards can hide without blurring their surviving
@@ -2378,12 +2399,14 @@ export function ComposerWorkspace({
                     "& .MuiSvgIcon-root": { fontSize: "1.25rem" },
                   }}
                   onPointerDown={(event): void => event.preventDefault()}
+                  onMouseDown={(event): void => event.preventDefault()}
                   onClick={(): void => {
                     // Snapshot the logical selection before replacing the compact
                     // editor. Pointer-down keeps the old editor focused, then the
                     // same tap mounts and focuses fullscreen exactly once so UIKit
                     // retains both its keyboard transaction and caret/range.
                     const selection = editorRef.current?.getSelection();
+                    beginMobileEditorFocusTransfer();
                     flushSync(() => setComposeFs(true));
                     if (selection) {
                       editorRef.current?.focusSelection(selection);
@@ -3418,6 +3441,7 @@ export function ComposerWorkspace({
             // then restore its exact selection before UIKit ends the keyboard
             // transaction. A delayed effect or focusEnd() loses the user's caret.
             const selection = editorRef.current?.getSelection();
+            beginMobileEditorFocusTransfer();
             flushSync(() => setComposeFs(false));
             if (selection) editorRef.current?.focusSelection(selection);
             else editorRef.current?.focusEnd();
@@ -4631,43 +4655,41 @@ function PendingPanel({
           })}
         </Stack>
       </Collapse>
-      <Dialog
+      <ConfirmSheet
         open={confirmCollapseEdit}
         onClose={(): void => setConfirmCollapseEdit(false)}
-        fullWidth
-        maxWidth="xs"
+        title="Save edits before closing?"
+        actions={
+          <>
+            <Button
+              color="inherit"
+              onClick={(): void => setConfirmCollapseEdit(false)}
+            >
+              Keep editing
+              <Kbd keys="Esc" />
+            </Button>
+            <Button
+              color="error"
+              onClick={(): void => settleEditAndCollapse("discard")}
+            >
+              Discard
+            </Button>
+            <Button
+              variant="contained"
+              onClick={(): void => settleEditAndCollapse("save")}
+            >
+              Save &amp; collapse
+              <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+            </Button>
+          </>
+        }
       >
-        <DialogTitle>Save edits before closing?</DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            This {kind === "queued" ? "queued message" : "draft"}{" "}
-            has unsaved changes. Save or discard them before collapsing the
-            panel.
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions sx={{ flexWrap: "wrap", gap: 0.5 }}>
-          <Button
-            color="inherit"
-            onClick={(): void => setConfirmCollapseEdit(false)}
-          >
-            Keep editing
-            <Kbd keys="Esc" />
-          </Button>
-          <Button
-            color="error"
-            onClick={(): void => settleEditAndCollapse("discard")}
-          >
-            Discard
-          </Button>
-          <Button
-            variant="contained"
-            onClick={(): void => settleEditAndCollapse("save")}
-          >
-            Save &amp; collapse
-            <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-          </Button>
-        </DialogActions>
-      </Dialog>
+        <DialogContentText>
+          This {kind === "queued" ? "queued message" : "draft"}{" "}
+          has unsaved changes. Save or discard them before collapsing the
+          panel.
+        </DialogContentText>
+      </ConfirmSheet>
     </Box>
   );
 }
@@ -5260,6 +5282,7 @@ function PendingRow({
     const expandMobileEdit = (): void => {
       haptic();
       const selection = editorRef.current?.getSelection();
+      beginMobileEditorFocusTransfer();
       flushSync(() => setOverlayOpen(true));
       if (selection) overlayEditorRef.current?.focusSelection(selection);
       else overlayEditorRef.current?.focusEnd();
@@ -5515,30 +5538,28 @@ function PendingRow({
           open={mobileToolbarSettingsOpen}
           onClose={(): void => setMobileToolbarSettingsOpen(false)}
         />
-        <Dialog
+        <ConfirmSheet
           open={confirmDiscardEdit}
           onClose={(): void => setConfirmDiscardEdit(false)}
-          fullWidth
-          maxWidth="xs"
+          title="Discard message edits?"
+          actions={
+            <>
+              <Button onClick={(): void => setConfirmDiscardEdit(false)}>
+                Keep editing
+                <Kbd keys="Esc" />
+              </Button>
+              <Button color="error" onClick={discardEdit}>
+                Discard changes
+                <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+              </Button>
+            </>
+          }
         >
-          <DialogTitle>Discard message edits?</DialogTitle>
-          <DialogContent>
-            <DialogContentText>
-              Your unsaved changes to this{" "}
-              {kind === "queued" ? "queued message" : "draft"} will be lost.
-            </DialogContentText>
-          </DialogContent>
-          <DialogActions>
-            <Button onClick={(): void => setConfirmDiscardEdit(false)}>
-              Keep editing
-              <Kbd keys="Esc" />
-            </Button>
-            <Button color="error" onClick={discardEdit}>
-              Discard changes
-              <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-            </Button>
-          </DialogActions>
-        </Dialog>
+          <DialogContentText>
+            Your unsaved changes to this{" "}
+            {kind === "queued" ? "queued message" : "draft"} will be lost.
+          </DialogContentText>
+        </ConfirmSheet>
       </>
     );
   }
@@ -5873,19 +5894,36 @@ function PendingRow({
           ))}
         </Menu>
       </Stack>
-      <Dialog
+      <ConfirmSheet
         open={confirmRemove}
         onClose={(): void => setConfirmRemove(false)}
-        maxWidth="xs"
-        fullWidth
+        title={kind === "draft"
+          ? "Delete this draft?"
+          : "Delete this queued message?"}
+        actions={
+          <>
+            <Button
+              color="inherit"
+              onClick={(): void => setConfirmRemove(false)}
+              sx={{ textTransform: "none" }}
+            >
+              Cancel
+              <Kbd keys="Esc" />
+            </Button>
+            <Button
+              color="error"
+              variant="contained"
+              onClick={doRemove}
+              sx={{ textTransform: "none" }}
+            >
+              Delete
+              <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+            </Button>
+          </>
+        }
       >
-        <DialogTitle>
-          {kind === "draft"
-            ? "Delete this draft?"
-            : "Delete this queued message?"}
-        </DialogTitle>
-        {message.text && (
-          <DialogContent>
+        {message.text
+          ? (
             <DialogContentText
               sx={{
                 display: "-webkit-box",
@@ -5898,28 +5936,9 @@ function PendingRow({
             >
               {stripImageTokens(message.text)}
             </DialogContentText>
-          </DialogContent>
-        )}
-        <DialogActions>
-          <Button
-            color="inherit"
-            onClick={(): void => setConfirmRemove(false)}
-            sx={{ textTransform: "none" }}
-          >
-            Cancel
-            <Kbd keys="Esc" />
-          </Button>
-          <Button
-            color="error"
-            variant="contained"
-            onClick={doRemove}
-            sx={{ textTransform: "none" }}
-          >
-            Delete
-            <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-          </Button>
-        </DialogActions>
-      </Dialog>
+          )
+          : null}
+      </ConfirmSheet>
     </Paper>
   );
 }
@@ -5939,34 +5958,37 @@ function StopConfirmDialog({
 }): React.JSX.Element {
   useConfirmEnter(open, onConfirm);
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
-      <DialogTitle>Stop the running turn?</DialogTitle>
-      <DialogContent>
-        <DialogContentText>
-          The agent is still working. Stopping ends the current turn; whatever
-          it produced so far stays in the transcript.
-        </DialogContentText>
-      </DialogContent>
-      <DialogActions>
-        <Button
-          color="inherit"
-          onClick={onClose}
-          sx={{ textTransform: "none" }}
-        >
-          Keep running
-          <Kbd keys="Esc" />
-        </Button>
-        <Button
-          color="error"
-          variant="contained"
-          onClick={onConfirm}
-          sx={{ textTransform: "none" }}
-        >
-          Stop
-          <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-        </Button>
-      </DialogActions>
-    </Dialog>
+    <ConfirmSheet
+      open={open}
+      onClose={onClose}
+      title="Stop the running turn?"
+      actions={
+        <>
+          <Button
+            color="inherit"
+            onClick={onClose}
+            sx={{ textTransform: "none" }}
+          >
+            Keep running
+            <Kbd keys="Esc" />
+          </Button>
+          <Button
+            color="error"
+            variant="contained"
+            onClick={onConfirm}
+            sx={{ textTransform: "none" }}
+          >
+            Stop
+            <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+          </Button>
+        </>
+      }
+    >
+      <DialogContentText>
+        The agent is still working. Stopping ends the current turn; whatever
+        it produced so far stays in the transcript.
+      </DialogContentText>
+    </ConfirmSheet>
   );
 }
 
@@ -7339,6 +7361,27 @@ function SessionProviderSection({
                       mono={row.mono === true}
                     />
                   ))}
+                  {sessionProviderShowsUsage({
+                    ready,
+                    ...(entry.manifest.host.account_usage?.provider
+                      ? {
+                        accountUsageProvider:
+                          entry.manifest.host.account_usage.provider,
+                      }
+                      : {}),
+                  }) && (
+                    <SessionProviderUsage
+                      provider={session.provider}
+                      {...(session.provider_version === undefined
+                        ? {}
+                        : { providerVersion: session.provider_version })}
+                      {...(session.provider_generation_digest === undefined
+                        ? {}
+                        : {
+                          providerDigest: session.provider_generation_digest,
+                        })}
+                    />
+                  )}
                 </List>
               </>
             )}
@@ -7516,6 +7559,79 @@ function WorkspaceOptionsSection({
   );
 }
 
+function SessionProviderUsage({
+  provider,
+  providerVersion,
+  providerDigest,
+}: {
+  provider: string;
+  providerVersion?: string;
+  providerDigest?: string;
+}): React.JSX.Element {
+  const [snapshot, setSnapshot] = useState<UsageSnapshot | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    const ctrl = new AbortController();
+    void fetch("/api/usage", { signal: ctrl.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${String(response.status)}`);
+        setSnapshot(await response.json() as UsageSnapshot);
+        setError(null);
+      })
+      .catch((cause: unknown) => {
+        if (ctrl.signal.aborted) return;
+        setError(
+          cause instanceof Error ? cause.message : "Could not load usage",
+        );
+      });
+    return (): void => ctrl.abort();
+  }, [provider]);
+  const usage = providerUsage(
+    snapshot,
+    provider,
+    providerVersion,
+    providerDigest,
+  );
+  const rows = sessionProviderUsageRows(usage);
+  if (error) {
+    return <SheetDetailRow label="Usage" value={error} />;
+  }
+  if (!snapshot) {
+    return <SheetDetailRow label="Usage" value="Loading…" />;
+  }
+  if (rows.length === 0) {
+    return (
+      <SheetDetailRow
+        label="Usage"
+        value={sessionProviderUsageEmptyMessage(usage)}
+      />
+    );
+  }
+  return (
+    <>
+      {rows.map((row) => (
+        <Box key={row.id}>
+          <SheetDetailRow label={row.label} value={row.value} />
+          {row.remaining !== undefined && (
+            <LinearProgress
+              variant="determinate"
+              value={row.remaining}
+              aria-label={`${row.label} remaining`}
+              sx={{
+                height: 5,
+                mb: 0.75,
+                borderRadius: 99,
+                bgcolor: "action.selected",
+                "& .MuiLinearProgress-bar": { borderRadius: 99 },
+              }}
+            />
+          )}
+        </Box>
+      ))}
+    </>
+  );
+}
+
 function SheetDetailRow({
   label,
   value,
@@ -7548,6 +7664,7 @@ function SheetDetailRow({
           minWidth: 0,
           wordBreak: "break-word",
           fontFamily: mono ? MONO : "inherit",
+          fontVariantNumeric: "tabular-nums",
         }}
       >
         {value}

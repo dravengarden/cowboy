@@ -445,9 +445,11 @@ export function fetchCodeDiff(
 export function fetchGitRepository(
   sessionId: string,
   signal?: AbortSignal,
+  after?: string,
 ): Promise<GitRepositorySnapshot> {
+  const query = after ? `?${new URLSearchParams({ after })}` : "";
   return codeFetch(
-    `/api/code/sessions/${encodeURIComponent(sessionId)}/repository`,
+    `/api/code/sessions/${encodeURIComponent(sessionId)}/repository${query}`,
     signal,
     "no-store",
   );
