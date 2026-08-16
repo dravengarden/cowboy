@@ -124,11 +124,36 @@ const UNPUBLISHED_AUTH_EFFECTS: ReadonlySet<EffectCapability> = new Set([
 ]);
 
 type ProviderManagementProps =
-  | { scope: "service"; machine?: never }
-  | { scope: "machine"; machine: ProviderMachine };
+  | {
+    scope: "service";
+    machine?: never;
+    focusProviderId?: string;
+    embedded?: boolean;
+  }
+  | {
+    scope: "machine";
+    machine: ProviderMachine;
+    focusProviderId?: string;
+    embedded?: boolean;
+  };
 
 export function ProviderAuthenticationManagement(): React.JSX.Element {
   return <ProviderManagement scope="service" />;
+}
+
+/** Session-sheet slice of Service authentication. Settings keeps the full
+ *  catalog; this mounts only the current session's Provider and its sign-in
+ *  flow. */
+export function SessionProviderAccess(
+  { providerId }: { providerId: string },
+): React.JSX.Element {
+  return (
+    <ProviderManagement
+      scope="service"
+      focusProviderId={providerId}
+      embedded
+    />
+  );
 }
 
 export function MachineProviderManagement(
@@ -389,7 +414,7 @@ function ProviderManagementLifecycleSurface({
 }
 
 function ProviderManagement(
-  { scope, machine }: ProviderManagementProps,
+  { scope, machine, focusProviderId, embedded = false }: ProviderManagementProps,
 ): React.JSX.Element {
   const { catalog, error: catalogError, refresh: refreshCatalog } =
     useProviderCatalog();
@@ -417,7 +442,7 @@ function ProviderManagement(
     () => groupProviderAuthentications(latestEntries),
     [latestEntries],
   );
-  const providerRows = useMemo(
+  const allProviderRows = useMemo(
     () =>
       scope === "machine"
         ? joinProviderInstallations(catalog?.providers ?? [], inventory, {
@@ -442,6 +467,20 @@ function ProviderManagement(
         }),
     [catalog, inventory, machine, scope, serviceCredentialGroups],
   );
+  const providerRows = useMemo(() => {
+    if (!focusProviderId) return allProviderRows;
+    return allProviderRows.filter((row) => {
+      if (row.providerId === focusProviderId) return true;
+      if (row.latestEntry?.provider_id === focusProviderId) return true;
+      if (row.installedEntry?.provider_id === focusProviderId) return true;
+      const group = serviceCredentialGroups.find((candidate) =>
+        candidate.authenticationScope === row.latestEntry?.authentication_scope
+      );
+      return group?.entries.some((entry) =>
+        entry.provider_id === focusProviderId
+      ) === true;
+    });
+  }, [allProviderRows, focusProviderId, serviceCredentialGroups]);
   const authentications = useMemo(
     () =>
       new Map(
@@ -835,6 +874,7 @@ function ProviderManagement(
         },
       })}
     >
+      {!embedded && (
       <Stack
         direction="row"
         spacing={1}
@@ -861,11 +901,12 @@ function ProviderManagement(
           ? <Chip size="small" color="error" label="Catalog unavailable" />
           : null}
       </Stack>
+      )}
       {catalogError ? <Alert severity="error">{catalogError}</Alert> : null}
       {!catalog && !catalogError
         ? <Typography variant="caption">Loading Provider Catalog…</Typography>
         : null}
-      {catalog
+      {!embedded && catalog
         ? (
           <Stack
             direction="row"
@@ -976,13 +1017,22 @@ function ProviderManagement(
         : null}
       <Box
         id={detailsId}
-        hidden={!detailsOpen}
+        hidden={!embedded && !detailsOpen}
         sx={{
-          display: detailsOpen ? "grid" : "none",
-          gridTemplateColumns: { xs: "1fr", md: "repeat(2, minmax(0, 1fr))" },
+          display: embedded || detailsOpen ? "grid" : "none",
+          gridTemplateColumns: embedded
+            ? "1fr"
+            : { xs: "1fr", md: "repeat(2, minmax(0, 1fr))" },
           gap: 1,
         }}
       >
+        {embedded && providerRows.length === 0
+          ? (
+            <Typography variant="body2" color="text.secondary">
+              Provider details are unavailable.
+            </Typography>
+          )
+          : null}
         {providerRows.map((row) => {
           const {
             providerId,

@@ -100,8 +100,18 @@ import { useKeyboardOpen } from "./keyboardInset";
 import { attachmentTrayForSurface } from "./composer/attachmentPresentation";
 import type { ComposerWorkspaceProps } from "./composer/contracts";
 import { resolveSessionAction, type SessionAction } from "./agentCommands";
-import { currentProviderEntry } from "./providerCatalogRegistry";
+import {
+  currentProviderEntry,
+  useProviderCatalog,
+} from "./providerCatalog";
 import { providerName } from "./providerPresentation";
+import { SessionProviderAccess } from "./ProviderManagement";
+import { resolveProviderAuthenticationPresentation } from "../../packages/provider-ui-sdk/src/index.ts";
+import {
+  sessionProviderNeedsAttention,
+  sessionProviderSummary,
+  workspaceOptionsSummary,
+} from "./sessionSettingsPresentation";
 import { SessionReloadDialog } from "./SessionReloadDialog";
 import { createPortal, flushSync } from "react-dom";
 import { FullscreenComposer } from "./FullscreenComposer";
@@ -6471,6 +6481,9 @@ function ComposerSheet({
   const activePreset = pendingPreset ?? authoritativeActivePreset;
   const [customizeAgent, setCustomizeAgent] = useState(false);
   const [sessionActionsExpanded, setSessionActionsExpanded] = useState(false);
+  const [workspaceOptionsExpanded, setWorkspaceOptionsExpanded] = useState(
+    false,
+  );
   const [cmdConfirm, setCmdConfirm] = useState<SessionAction | null>(null);
   const [reloadConfirm, setReloadConfirm] = useState(false);
   useEffect(() => {
@@ -6478,6 +6491,7 @@ function ComposerSheet({
       setCustomizeAgent(false);
       setPendingPresetId(null);
       setSessionActionsExpanded(false);
+      setWorkspaceOptionsExpanded(false);
       setCmdConfirm(null);
       setReloadConfirm(false);
     }
@@ -6526,6 +6540,7 @@ function ComposerSheet({
     setTitle(displayTitle);
     setTitleFocused(false);
     setSessionActionsExpanded(false);
+    setWorkspaceOptionsExpanded(false);
     setCmdConfirm(null);
     setReloadConfirm(false);
     onClose();
@@ -6629,39 +6644,15 @@ function ComposerSheet({
           onReload={(): void => setReloadConfirm(true)}
         />
       )}
-      {session && <QueueSection session={session} />}
-      {projection && onProjectionChange && (
-        <>
-          <Divider />
-          <Box
-            sx={{
-              py: 0.75,
-              minHeight: 56,
-              display: "flex",
-              alignItems: "center",
-              gap: 1,
-            }}
-          >
-            <Box sx={{ flex: 1, minWidth: 0 }}>
-              <Typography variant="body2" sx={{ fontWeight: 650 }}>
-                Page view
-              </Typography>
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                sx={{ display: "block", lineHeight: 1.35 }}
-              >
-                One prompt and response per page
-              </Typography>
-            </Box>
-            <Switch
-              inputProps={{ "aria-label": "Page view" }}
-              checked={projection === "explore"}
-              onChange={(_event, checked): void =>
-                onProjectionChange(checked ? "explore" : "history")}
-            />
-          </Box>
-        </>
+      {session && <SessionProviderSection session={session} />}
+      {session && (
+        <WorkspaceOptionsSection
+          session={session}
+          expanded={workspaceOptionsExpanded}
+          onExpandedChange={setWorkspaceOptionsExpanded}
+          projection={projection}
+          onProjectionChange={onProjectionChange}
+        />
       )}
       {(loading || options.length > 0) && (
         <>
@@ -6963,7 +6954,6 @@ function SessionInfoSection({
     };
   }, [cacheProtectionVisible, session.id]);
   const rows: { label: string; value: string; mono?: boolean }[] = [
-    { label: "Provider", value: sessionProviderName },
     { label: "Project", value: project },
     { label: "Working dir", value: session.cwd, mono: true },
     { label: "Source", value: originLabel(session.origin) },
@@ -7221,52 +7211,223 @@ function SessionInfoSection({
   );
 }
 
-// The queue pause/resume control. Session-level and orthogonal to what's queued,
-// but infrequently used — so it lives in the session sheet (not the always-visible
-// navbar). Togglable any time (even with an empty queue): pre-arm the hold and a
-// later queued message OR a fired scheduled draft lands held for review instead
-// of auto-running. Holds only the drain — a running turn still finishes.
-function QueueSection({
+function SessionProviderSection({
   session,
 }: {
   session: SessionMeta;
 }): React.JSX.Element {
-  const paused = session.paused ?? false;
+  const { catalog } = useProviderCatalog();
+  const entry = currentProviderEntry(
+    session.provider,
+    session.provider_version,
+    session.provider_generation_digest,
+  );
+  const auth = catalog?.authentications.find((status) =>
+    status.provider_id === session.provider ||
+    status.authentication_scope === entry?.authentication_scope
+  );
+  const required = entry?.manifest.authentication.required === true;
+  const ready = !required || auth?.authentication_state === "ready";
+  const needsAttention = sessionProviderNeedsAttention({
+    catalogReady: catalog !== null,
+    required,
+    ready,
+  });
+  const [expanded, setExpanded] = useState(needsAttention);
+  useEffect(() => {
+    setExpanded(needsAttention);
+  }, [needsAttention, session.id]);
+  const presentation = entry
+    ? resolveProviderAuthenticationPresentation(entry.manifest.authentication)
+    : "none";
+  const summary = sessionProviderSummary({
+    displayName: providerName(
+      session.provider,
+      session.provider_version,
+      session.provider_generation_digest,
+    ),
+    required,
+    ready,
+    ...(auth?.account_label ? { accountLabel: auth.account_label } : {}),
+    presentation: presentation === "none" ? "none" : presentation,
+  });
+  const panelId = useId();
   return (
     <>
       <Divider />
-      <Box sx={{ py: 1.5 }}>
-        <Typography
-          variant="overline"
-          color="text.secondary"
-          sx={{ letterSpacing: 0.8, lineHeight: 1.6 }}
+      <Box sx={{ py: 0.75 }}>
+        <ButtonBase
+          aria-label={expanded
+            ? "Collapse provider"
+            : "Expand provider"}
+          aria-expanded={expanded}
+          aria-controls={panelId}
+          onClick={(): void => {
+            haptic();
+            setExpanded((current) => !current);
+          }}
+          sx={{
+            width: "100%",
+            minHeight: 44,
+            px: 0.5,
+            borderRadius: 1.5,
+            justifyContent: "space-between",
+            color: needsAttention ? "warning.main" : "text.secondary",
+            textAlign: "left",
+            "&:active": { bgcolor: "action.hover" },
+          }}
         >
-          Queue
-        </Typography>
-        <Stack
-          direction="row"
-          alignItems="center"
-          spacing={2}
-          sx={{ mt: 0.5 }}
-        >
-          <Box sx={{ flex: 1, minWidth: 0 }}>
-            <Typography variant="body2">Pause queue</Typography>
-            <Typography variant="caption" color="text.secondary">
-              Hold the queue: a running turn still finishes, but queued and
-              scheduled sends wait until you resume.
+          <Box sx={{ minWidth: 0, pr: 1 }}>
+            <Typography variant="body2" sx={{ fontWeight: 650 }}>
+              Provider
+            </Typography>
+            <Typography
+              variant="caption"
+              color={needsAttention ? "warning.main" : "text.secondary"}
+              sx={{ display: "block", lineHeight: 1.35 }}
+            >
+              {summary}
             </Typography>
           </Box>
-          <Switch
-            edge="end"
-            checked={paused}
-            color="warning"
-            inputProps={{ "aria-label": "pause queue" }}
-            onChange={(e): void => {
-              haptic();
-              setPaused(session.id, e.target.checked);
+          <ExpandMore
+            fontSize="small"
+            sx={{
+              flexShrink: 0,
+              transform: expanded ? "rotate(180deg)" : "none",
+              transition: (theme) => theme.transitions.create("transform"),
             }}
           />
-        </Stack>
+        </ButtonBase>
+        <Collapse id={panelId} in={expanded}>
+          <Box sx={{ pt: 0.75 }}>
+            <SessionProviderAccess providerId={session.provider} />
+          </Box>
+        </Collapse>
+      </Box>
+    </>
+  );
+}
+
+// Queue pause and Page view are infrequent. Keep them behind one disclosure
+// so the sheet opens on identity, Provider, and Agent. A paused queue still
+// names itself on the collapsed row.
+function WorkspaceOptionsSection({
+  session,
+  expanded,
+  onExpandedChange,
+  projection,
+  onProjectionChange,
+}: {
+  session: SessionMeta;
+  expanded: boolean;
+  onExpandedChange: (expanded: boolean) => void;
+  projection?: TranscriptProjection | undefined;
+  onProjectionChange?: ((projection: TranscriptProjection) => void) | undefined;
+}): React.JSX.Element {
+  const paused = session.paused ?? false;
+  const pageView = projection === "explore";
+  const panelId = useId();
+  return (
+    <>
+      <Divider />
+      <Box sx={{ py: 0.75 }}>
+        <ButtonBase
+          aria-label={expanded
+            ? "Collapse workspace options"
+            : "Expand workspace options"}
+          aria-expanded={expanded}
+          aria-controls={panelId}
+          onClick={(): void => {
+            haptic();
+            onExpandedChange(!expanded);
+          }}
+          sx={{
+            width: "100%",
+            minHeight: 44,
+            px: 0.5,
+            borderRadius: 1.5,
+            justifyContent: "space-between",
+            color: paused ? "warning.main" : "text.secondary",
+            textAlign: "left",
+            "&:active": { bgcolor: "action.hover" },
+          }}
+        >
+          <Box sx={{ minWidth: 0, pr: 1 }}>
+            <Typography variant="body2" sx={{ fontWeight: 650 }}>
+              Workspace
+            </Typography>
+            <Typography
+              variant="caption"
+              color={paused ? "warning.main" : "text.secondary"}
+              sx={{ display: "block", lineHeight: 1.35 }}
+            >
+              {workspaceOptionsSummary({ queuePaused: paused, pageView })}
+            </Typography>
+          </Box>
+          <ExpandMore
+            fontSize="small"
+            sx={{
+              flexShrink: 0,
+              transform: expanded ? "rotate(180deg)" : "none",
+              transition: (theme) => theme.transitions.create("transform"),
+            }}
+          />
+        </ButtonBase>
+        <Collapse id={panelId} in={expanded} unmountOnExit>
+          <Stack spacing={0.5} sx={{ pt: 0.5 }}>
+            <Stack
+              direction="row"
+              alignItems="center"
+              spacing={2}
+              sx={{ minHeight: 56 }}
+            >
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography variant="body2">Pause queue</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Hold the queue: a running turn still finishes, but queued and
+                  scheduled sends wait until you resume.
+                </Typography>
+              </Box>
+              <Switch
+                edge="end"
+                checked={paused}
+                color="warning"
+                inputProps={{ "aria-label": "pause queue" }}
+                onChange={(e): void => {
+                  haptic();
+                  setPaused(session.id, e.target.checked);
+                }}
+              />
+            </Stack>
+            {projection && onProjectionChange && (
+              <Stack
+                direction="row"
+                alignItems="center"
+                spacing={2}
+                sx={{ minHeight: 56 }}
+              >
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Typography variant="body2" sx={{ fontWeight: 650 }}>
+                    Page view
+                  </Typography>
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ display: "block", lineHeight: 1.35 }}
+                  >
+                    One prompt and response per page
+                  </Typography>
+                </Box>
+                <Switch
+                  inputProps={{ "aria-label": "Page view" }}
+                  checked={pageView}
+                  onChange={(_event, checked): void =>
+                    onProjectionChange(checked ? "explore" : "history")}
+                />
+              </Stack>
+            )}
+          </Stack>
+        </Collapse>
       </Box>
     </>
   );
