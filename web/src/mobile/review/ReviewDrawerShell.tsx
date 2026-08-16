@@ -77,10 +77,7 @@ export function ReviewDrawerShell({
         width: 1,
         height: 1,
         overflow: "hidden",
-        bgcolor: (theme) =>
-          theme.palette.mode === "dark"
-            ? theme.palette.grey[900]
-            : theme.palette.grey[200],
+        bgcolor: "background.paper",
         ...mobilePresentationMovingRootSx("data-mobile-drawer-moving"),
       }}
     >
@@ -91,11 +88,11 @@ export function ReviewDrawerShell({
           position: "absolute",
           zIndex: 0,
           inset: 0,
-          pl: "calc(100% - min(84%, 360px))",
+          pl: "calc(100% - var(--mobile-drawer-width, min(84%, 360px)))",
           bgcolor: "background.paper",
           backfaceVisibility: "hidden",
           "@media (min-width: 768px)": {
-            pl: "calc(100% - min(52%, 440px))",
+            pl: "calc(100% - var(--mobile-drawer-width, min(52%, 440px)))",
           },
         }}
       >
@@ -111,10 +108,7 @@ export function ReviewDrawerShell({
           bottom: 0,
           right: 0,
           width: 28,
-          bgcolor: (theme) =>
-            theme.palette.mode === "dark"
-              ? theme.palette.grey[900]
-              : theme.palette.grey[200],
+          bgcolor: "background.default",
           boxShadow: open ? mobileSpatialDrawerShadow("right") : "none",
           pointerEvents: "none",
           backfaceVisibility: "hidden",

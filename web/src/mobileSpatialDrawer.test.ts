@@ -21,19 +21,21 @@ Deno.test("dispose keeps seam shadow while a drawer is still translated", () => 
 
 Deno.test("mobile drawer keeps clipping and shadows off the heavy surface", () => {
   assertEquals(drawerSource.includes("surface.style.boxShadow"), false);
+  assertEquals(drawerSource.includes("surface.style.borderRadius"), false);
+  assertEquals(drawerSource.includes("applyCardChrome"), false);
   assert(drawerSource.includes("drawerMask.style.boxShadow"));
-  assert(drawerSource.includes("applyCardChrome"));
   assert(drawerSource.includes("mobileDrawerCardVisual"));
   assert(drawerSource.includes('surface.style.willChange = "transform"'));
+  assert(drawerSource.includes("--mobile-drawer-width"));
   assertEquals(drawerSource.includes("scheduleRender"), false);
   assertEquals(drawerSource.includes("drawerParallax"), false);
   assertEquals(drawerSource.includes("scale("), false);
   assert(drawerSource.includes("stepDrawerSpring"));
   assert(drawerSource.includes("MOBILE_DRAWER_PREPARE_PX"));
   assert(drawerSource.includes("gesture.prepared = true"));
-  const chromeAt = drawerSource.indexOf("applyCardChrome()");
+  const widthAt = drawerSource.indexOf("publishDrawerWidth(width)");
   const firstTranslate = drawerSource.indexOf("render(offset)");
-  assert(chromeAt >= 0 && firstTranslate > chromeAt);
+  assert(widthAt >= 0 && firstTranslate > widthAt);
 });
 
 Deno.test("drawer shadows project back toward each revealed drawer", () => {
@@ -86,4 +88,12 @@ Deno.test("settled drawers retain declarative depth and pager ownership", () => 
   assert(reviewDrawerSource.includes('data-mobile-drawer-surface="true"'));
   assert(appSource.includes("width: 28"));
   assert(reviewDrawerSource.includes("width: 28"));
+  assert(appSource.includes(
+    'width: "var(--mobile-drawer-width, min(84%, 360px))"',
+  ));
+  assert(reviewDrawerSource.includes(
+    'pl: "calc(100% - var(--mobile-drawer-width, min(84%, 360px)))"',
+  ));
+  assert(appSource.includes('bgcolor: "background.default"'));
+  assert(reviewDrawerSource.includes('bgcolor: "background.default"'));
 });
