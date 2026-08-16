@@ -166,9 +166,8 @@ export function MachineProviderManagement(
 
 type ProviderManagementStatusTone = "default" | "success" | "warning";
 
-/** One management card for every authentication surface. Extra identities
- * grow inside the leading mark and the subtitle; they must not fork a
- * second inner-card layout. */
+/** Every card is title + a wrapping row of identity items + facts.
+ * One Provider is one item; more Providers append items horizontally. */
 function ProviderManagementIdentity({
   manifest,
   version,
@@ -177,7 +176,6 @@ function ProviderManagementIdentity({
   actions,
   title = manifest.display.name,
   summary = manifest.display.summary,
-  mark,
   consumers = [],
   providerId,
 }: {
@@ -188,7 +186,6 @@ function ProviderManagementIdentity({
   actions: ReactNode;
   title?: string;
   summary?: string;
-  mark?: ReactNode;
   consumers?: readonly ProviderCatalogEntry[];
   providerId: string;
 }): React.JSX.Element {
@@ -198,145 +195,155 @@ function ProviderManagementIdentity({
     theme.palette.mode,
     version,
   ).primary;
-  const shared = consumers.length > 1;
-  const subtitle = shared
-    ? `Used by ${
-      consumers.map((entry) => entry.manifest.display.name).join(", ")
-    }`
-    : summary;
+  const items = consumers.length > 0 ? consumers : [{
+    manifest,
+    provider_id: providerId,
+  }];
+  const shared = items.length > 1;
   return (
-    <Box
+    <Stack
       data-provider-management-identity
       data-provider-shared-identity={shared ? "true" : undefined}
-      sx={{
-        display: "grid",
-        gridTemplateColumns: "auto minmax(0, 1fr)",
-        columnGap: 1.25,
-        alignItems: "start",
-        minWidth: 0,
-      }}
+      spacing={0.75}
+      sx={{ minWidth: 0 }}
     >
-      <Box
-        data-provider-management-mark
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          minWidth: 32,
-          minHeight: 32,
-          mt: 0.15,
-          color: accent,
-        }}
+      <Stack
+        direction="row"
+        alignItems="center"
+        spacing={1}
+        sx={{ minWidth: 0 }}
       >
-        {mark ?? <ProviderMarkStack manifests={[manifest]} size={28} />}
-      </Box>
-      <Stack spacing={0.3} sx={{ minWidth: 0 }}>
-        <Stack
-          direction="row"
-          alignItems="center"
-          spacing={1}
-          sx={{ minWidth: 0 }}
-        >
-          <Typography
-            variant="body2"
-            fontWeight={650}
-            sx={{
-              flex: 1,
-              minWidth: 0,
-              lineHeight: 1.3,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {title}
-          </Typography>
-          <Box
-            data-provider-management-actions
-            sx={{
-              ml: "auto",
-              flex: "0 0 auto",
-              display: "flex",
-              justifyContent: "flex-end",
-              minWidth: 0,
-              "& > .MuiStack-root": {
+        {!shared
+          ? (
+            <Box
+              data-provider-management-mark
+              sx={{
+                display: "flex",
                 alignItems: "center",
-                justifyContent: "flex-end",
-                flexDirection: "row",
-                flexWrap: "wrap",
-                gap: 0.75,
-                width: "auto",
-              },
-              "& .MuiButton-root": {
+                justifyContent: "center",
+                minWidth: 32,
                 minHeight: 32,
-                px: 1.25,
-                flex: "0 0 auto",
-                fontWeight: 650,
-                letterSpacing: 0,
-                textTransform: "none",
-                boxShadow: "none",
-              },
-              "& .MuiButton-contained": {
-                bgcolor: "transparent",
-                color: "primary.main",
-                border: "1px solid",
-                borderColor: "divider",
-                "&:hover": { bgcolor: "action.hover" },
-              },
-            }}
-          >
-            {actions}
-          </Box>
-        </Stack>
+                flexShrink: 0,
+                color: accent,
+              }}
+            >
+              <ProviderMarkStack manifests={[manifest]} size={26} />
+            </Box>
+          )
+          : null}
         <Typography
-          data-provider-credential-consumers={shared ? "true" : undefined}
-          variant="caption"
-          color="text.secondary"
+          variant="body2"
+          fontWeight={650}
           sx={{
-            lineHeight: 1.35,
+            flex: 1,
+            minWidth: 0,
+            lineHeight: 1.3,
             overflow: "hidden",
-            display: "-webkit-box",
-            WebkitBoxOrient: "vertical",
-            WebkitLineClamp: shared ? 3 : 2,
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
           }}
         >
-          {subtitle}
+          {title}
         </Typography>
-        <Stack
-          data-provider-management-footer
-          direction="row"
-          spacing={0.75}
-          alignItems="center"
-          flexWrap="wrap"
-          useFlexGap
-          sx={{ minWidth: 0 }}
+        <Box
+          data-provider-management-actions
+          sx={{
+            ml: "auto",
+            flex: "0 0 auto",
+            display: "flex",
+            justifyContent: "flex-end",
+            minWidth: 0,
+            "& > .MuiStack-root": {
+              alignItems: "center",
+              justifyContent: "flex-end",
+              flexDirection: "row",
+              flexWrap: "wrap",
+              gap: 0.75,
+              width: "auto",
+            },
+            "& .MuiButton-root": {
+              minHeight: 32,
+              px: 1.25,
+              flex: "0 0 auto",
+              fontWeight: 650,
+              letterSpacing: 0,
+              textTransform: "none",
+              boxShadow: "none",
+            },
+            "& .MuiButton-contained": {
+              bgcolor: "transparent",
+              color: "primary.main",
+              border: "1px solid",
+              borderColor: "divider",
+              "&:hover": { bgcolor: "action.hover" },
+            },
+          }}
         >
-          <Typography
-            data-provider-management-status
-            variant="caption"
-            color={statusTone === "warning"
-              ? "warning.main"
-              : statusTone === "success"
-              ? "success.main"
-              : "text.secondary"}
-            sx={{
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {statusLabel}
-          </Typography>
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            sx={{ flexShrink: 0 }}
-          >
-            v{version}
-          </Typography>
-        </Stack>
+          {actions}
+        </Box>
       </Stack>
-    </Box>
+      {shared
+        ? (
+          <Box
+            data-provider-management-mark
+            data-provider-credential-consumers
+            sx={{ color: accent, minWidth: 0 }}
+          >
+            <ProviderMarkStack
+              manifests={items.map((item) => item.manifest)}
+              labeled
+              size={20}
+            />
+          </Box>
+        )
+        : null}
+      <Typography
+        variant="caption"
+        color="text.secondary"
+        sx={{
+          lineHeight: 1.35,
+          overflow: "hidden",
+          display: "-webkit-box",
+          WebkitBoxOrient: "vertical",
+          WebkitLineClamp: 2,
+        }}
+      >
+        {shared ? "Shared Cowboy Service credential" : summary}
+      </Typography>
+      <Stack
+        data-provider-management-footer
+        direction="row"
+        spacing={0.75}
+        alignItems="center"
+        flexWrap="wrap"
+        useFlexGap
+        sx={{ minWidth: 0 }}
+      >
+        <Typography
+          data-provider-management-status
+          variant="caption"
+          color={statusTone === "warning"
+            ? "warning.main"
+            : statusTone === "success"
+            ? "success.main"
+            : "text.secondary"}
+          sx={{
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {statusLabel}
+        </Typography>
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ flexShrink: 0 }}
+        >
+          v{version}
+        </Typography>
+      </Stack>
+    </Stack>
   );
 }
 
@@ -1225,14 +1232,6 @@ function ProviderManagement(
                           ? providerCredentialTitle(credentialGroup.entries)
                           : entry.manifest.display.name}
                         summary={entry.manifest.display.summary}
-                        mark={
-                          <ProviderMarkStack
-                            manifests={credentialEntries.map((candidate) =>
-                              candidate.manifest
-                            )}
-                            size={28}
-                          />
-                        }
                         consumers={sharedCredential ? credentialEntries : []}
                       />
                       {readyCredential && credentialManagementOpen
