@@ -4924,18 +4924,24 @@ function PendingRow({
       </Popper>
     )
     : null;
-  // Mobile Queue/Draft edits own the writing surface until the user leaves
-  // them. Hiding the keyboard only persists the live buffer; it must not
-  // collapse the row into a card and hand focus to the empty new-message
-  // composer. Desktop still uses an explicit Done/discard transaction.
+  // Mobile Queue/Draft edits own the writing surface while the keyboard is
+  // up. Dismissing it must persist the live buffer, then return to the
+  // compact card — never leave the two-track dock over an empty canvas.
   const mobileEditSawKeyboardRef = useRef(false);
   const persistEditRef = useRef(persistEdit);
   persistEditRef.current = persistEdit;
-  const hideMobileEditKeyboard = (): void => {
+  const finishMobileEdit = (): void => {
     if (!touchInput || editAttachmentsPending) return;
     persistEditRef.current();
+    setOverlayOpen(false);
+    onEditDone();
     dismissMobileSoftwareKeyboard();
     releaseMobileComposerFocus();
+  };
+  const finishMobileEditRef = useRef(finishMobileEdit);
+  finishMobileEditRef.current = finishMobileEdit;
+  const hideMobileEditKeyboard = (): void => {
+    finishMobileEdit();
   };
   useEffect(() => {
     if (!touchInput || !editing) {
@@ -4958,10 +4964,10 @@ function PendingRow({
       return () => globalThis.clearTimeout(timer);
     }
     // A native long press can transiently report a closed keyboard while UIKit
-    // promotes the textarea gesture into Paste/Select. Keep the REAL textarea
-    // mounted through that settle window; only persist, never unmount.
+    // promotes the textarea gesture into Paste/Select. After that settle
+    // window, leave the two-track chrome and restore the compact card.
     const timer = globalThis.setTimeout(
-      () => persistEditRef.current(),
+      () => finishMobileEditRef.current(),
       mobilePendingKeyboardCloseSettleMs,
     );
     return () => globalThis.clearTimeout(timer);
