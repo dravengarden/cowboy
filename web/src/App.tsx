@@ -2772,6 +2772,10 @@ export function App({
                     // column here covers the Sessions rail when the page
                     // translates.
                     bgcolor: mobile ? "transparent" : "background.default",
+                    // The sliding children own hits. This wrapper stays
+                    // full-width; leaving it clickable would swallow
+                    // Sessions-row taps through the revealed rail.
+                    pointerEvents: mobile ? "none" : undefined,
                     // Lift the whole column off the on-screen keyboard + its
                     // iOS-native accessory bar: this padding (the keyboard's
                     // overlap, published by useKeyboardInset) reserves space at
@@ -2819,6 +2823,7 @@ export function App({
                         position: "relative",
                         isolation: "isolate",
                         bgcolor: "transparent",
+                        pointerEvents: "none",
                         backfaceVisibility: "hidden",
                         transformOrigin: "left center",
                     }
@@ -3010,6 +3015,7 @@ export function App({
                             ? "background.default"
                             : "transparent",
                         position: "relative",
+                        pointerEvents: mobile ? "auto" : undefined,
                         flexShrink: mobile && navbarAtBottom ? 0 : undefined,
                         zIndex: mobile ? 3 : 2,
                         // DetentSheet is intentionally inline, so this AppBar's
@@ -3373,6 +3379,7 @@ export function App({
                                     position: "relative",
                                     zIndex: 0,
                                     bgcolor: "background.default",
+                                    pointerEvents: "auto",
                                 }
                                 : {
                                     position: "absolute",
@@ -3438,6 +3445,7 @@ export function App({
                                     display: "flex",
                                     flexDirection: "column",
                                     bgcolor: "background.default",
+                                    pointerEvents: "auto",
                                     // Explore's Page Dock is an editor launcher and
                                     // navigation aid, not part of the writing
                                     // surface. Remove it from the floating stack
@@ -3547,7 +3555,11 @@ export function App({
                     <Box
                         ref={mobile ? mobilePageRef : undefined}
                         data-mobile-drawer-surface={mobile ? "true" : undefined}
-                        sx={{ flex: 1, position: "relative" }}
+                        sx={{
+                            flex: 1,
+                            position: "relative",
+                            pointerEvents: mobile ? "auto" : undefined,
+                        }}
                     >
                         <Stack
                             spacing={2}
