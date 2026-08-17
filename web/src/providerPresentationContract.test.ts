@@ -363,6 +363,18 @@ Deno.test("Provider Transcript renderer consumes only closed presentation varian
   }
   assertEquals(
     transcriptPresentationSource.includes(
+      "return { size: 15, gap: 4, paddingLeft: 0 };",
+    ),
+    true,
+  );
+  assertEquals(
+    transcriptPresentationSource.includes(
+      "presentation.variant !== \"workcell\"",
+    ),
+    true,
+  );
+  assertEquals(
+    transcriptPresentationSource.includes(
       "data-provider-thought-variant={presentation.variant}",
     ),
     true,

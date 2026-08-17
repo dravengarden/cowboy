@@ -196,7 +196,7 @@ function markerGeometry(variant: ThoughtPresentation["variant"]): {
     case "timeline":
       return { size: 5, gap: 9, paddingLeft: 2 };
     case "workcell":
-      return { size: 15, gap: 4, paddingLeft: 3 };
+      return { size: 15, gap: 4, paddingLeft: 0 };
     case "signal":
       return {
         size: SIGNAL_THOUGHT_MARK_SIZE,
@@ -330,7 +330,8 @@ export function ProviderThoughtSteps({
               display: "grid",
               gridTemplateColumns: `${geometry.size}px minmax(0, 1fr)`,
               columnGap: `${geometry.gap}px`,
-              pl: current && currentSurface
+              pl: current && currentSurface &&
+                  presentation.variant !== "workcell"
                 ? `calc(${geometry.paddingLeft}px + 6px)`
                 : `${geometry.paddingLeft}px`,
               pr: current && currentSurface ? 1.25 : 0,
