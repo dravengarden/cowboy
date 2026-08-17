@@ -368,8 +368,12 @@ Deno.test("Provider Transcript renderer consumes only closed presentation varian
     true,
   );
   assertEquals(
+    transcriptPresentationSource.includes("paddingLeft: 10,"),
+    false,
+  );
+  assertEquals(
     transcriptPresentationSource.includes(
-      "presentation.variant !== \"workcell\"",
+      "pl: current && currentSurface ? 0.5 : 0",
     ),
     true,
   );
@@ -464,7 +468,7 @@ Deno.test("Provider activity keeps motion provider-authored and geometry rendere
   );
   assertEquals(
     transcriptPresentationSource.includes(
-      "size: SIGNAL_THOUGHT_MARK_SIZE,\n        gap: 8,\n        paddingLeft: 10,",
+      "size: SIGNAL_THOUGHT_MARK_SIZE,\n        gap: 6,\n        paddingLeft: 0,",
     ),
     true,
   );
