@@ -11,6 +11,14 @@ export const mobileComposerPanelFrameSx = {
 /** Matches the compact native composer input's minimum touch height. */
 export const mobileComposerPanelHeaderMinHeight = 44;
 
+/** One line of the compact new-message field. */
+export const mobileComposerIdleEditorMinHeight = 48;
+
+/** Empty draft/queue cards match the resting composer card: message line +
+ *  the 44px action row. Contentful rows still grow. */
+export const mobilePendingRowMinHeight = mobileComposerIdleEditorMinHeight +
+  mobileComposerPanelHeaderMinHeight;
+
 /** Quiet separation between a focused Mobile composer and the native keyboard. */
 export const mobileComposerKeyboardGap = 6;
 

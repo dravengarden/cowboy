@@ -149,10 +149,12 @@ import { openLightbox } from "./ResourceLightbox";
 import { PlanDock } from "./PlanDock";
 import {
   mobileComposerFocusMotion,
+  mobileComposerIdleEditorMinHeight,
   mobileComposerKeyboardGap,
   mobileComposerPanelFrameSx,
   mobileComposerPanelHeaderMinHeight,
   mobileComposerStackGap,
+  mobilePendingRowMinHeight,
 } from "./mobileComposerPrimitives";
 import {
   mobileFocusedComposerFill,
@@ -347,7 +349,6 @@ const TOOLBAR_MIN_H = {
   minHeight: 34,
   "@media (pointer: coarse)": { minHeight: 40 },
 } as const;
-const MOBILE_COMPOSER_IDLE_EDITOR_MIN_H = 48;
 const MOBILE_COMPOSER_INPUT_EDITOR_MIN_H = 80;
 
 // MUI's Button start-icon selector assigns a fixed px size with more
@@ -1419,7 +1420,6 @@ export function ComposerWorkspace({
     if (touchInput && action.kind === "reset") {
       setMobileInputResetBlocked(true);
       setComposeFs(false);
-      setMobileToolbarSettingsOpen(false);
       setClearComposerAnchor(null);
       setImgSel(null);
       dismissMobileSoftwareKeyboard();
@@ -1566,9 +1566,10 @@ export function ComposerWorkspace({
 
     mobileComposerKeyboardWasOpenRef.current = false;
     // iOS and third-party keyboards can hide without blurring their surviving
-    // textarea/contenteditable. The Composer chrome is intentionally driven by
-    // native :focus-within, so end that stale editing session at the actual
-    // visualViewport open→closed boundary before the next paint.
+    // textarea/contenteditable. Collapse the compact card's keyboard fill and
+    // end that stale session at the visualViewport open→closed boundary.
+    noteMobileKeyboardDismissed();
+    setMobileKeyboardDismissed(true);
     releaseMobileComposerFocus();
     return undefined;
   }, [keyboardOpen, mobileKeyboardDismissed, touchInput]);
@@ -1734,11 +1735,6 @@ export function ComposerWorkspace({
         ...(!desktop && {
           minHeight: 0,
           maxHeight: "100%",
-          "&:has(> [data-mobile-primary-composer='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within)":
-            {
-              flex: "0 1 auto",
-              overflow: "hidden",
-            },
           // Every visible slot shares one horizontal contract. Explicitly zero
           // the flex minimum so a long pending row, CodeMirror canvas, or
           // container-query child cannot shrink or widen the whole bottom stack.
@@ -1748,6 +1744,11 @@ export function ComposerWorkspace({
             maxWidth: "100%",
             boxSizing: "border-box",
           },
+          "&:has(> [data-mobile-primary-composer='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within)":
+            {
+              flex: "0 1 auto",
+              overflow: "hidden",
+            },
           // Keyboard Focus Mode is a single floating writing surface. Keep the
           // auxiliary state mounted so Plan/Queue/Draft disclosure and edit
           // ownership survive, but remove it from presentation while the main
@@ -2315,7 +2316,7 @@ export function ComposerWorkspace({
                 // state above, which promotes this to the two-control height.
                 // Keeping the resting height content-tight prevents a permanent
                 // blank "padding" band regardless of Plan/Queue/Draft presence.
-                minHeight: MOBILE_COMPOSER_IDLE_EDITOR_MIN_H,
+                minHeight: mobileComposerIdleEditorMinHeight,
                 transition:
                   `min-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}`,
                 "@media (prefers-reduced-motion: reduce)": {
@@ -3806,6 +3807,7 @@ function OptimisticDraftRow({
         p: 0.75,
         display: "flex",
         alignItems: "flex-start",
+        minHeight: mobilePendingRowMinHeight,
         gap: 0.5,
         bgcolor: failed
           ? alpha(t.palette.error.main, 0.06)
@@ -5083,18 +5085,24 @@ function PendingRow({
       </Popper>
     )
     : null;
-  // Mobile Queue/Draft edits own the writing surface until the user leaves
-  // them. Hiding the keyboard only persists the live buffer; it must not
-  // collapse the row into a card and hand focus to the empty new-message
-  // composer. Desktop still uses an explicit Done/discard transaction.
+  // Mobile Queue/Draft edits own the writing surface while the keyboard is
+  // up. Dismissing it must persist the live buffer, then return to the
+  // compact card — never leave the two-track dock over an empty canvas.
   const mobileEditSawKeyboardRef = useRef(false);
   const persistEditRef = useRef(persistEdit);
   persistEditRef.current = persistEdit;
-  const hideMobileEditKeyboard = (): void => {
+  const finishMobileEdit = (): void => {
     if (!touchInput || editAttachmentsPending) return;
     persistEditRef.current();
+    setOverlayOpen(false);
+    onEditDone();
     dismissMobileSoftwareKeyboard();
     releaseMobileComposerFocus();
+  };
+  const finishMobileEditRef = useRef(finishMobileEdit);
+  finishMobileEditRef.current = finishMobileEdit;
+  const hideMobileEditKeyboard = (): void => {
+    finishMobileEdit();
   };
   useEffect(() => {
     if (!touchInput || !editing) {
@@ -5117,10 +5125,10 @@ function PendingRow({
       return () => globalThis.clearTimeout(timer);
     }
     // A native long press can transiently report a closed keyboard while UIKit
-    // promotes the textarea gesture into Paste/Select. Keep the REAL textarea
-    // mounted through that settle window; only persist, never unmount.
+    // promotes the textarea gesture into Paste/Select. After that settle
+    // window, leave the two-track chrome and restore the compact card.
     const timer = globalThis.setTimeout(
-      () => persistEditRef.current(),
+      () => finishMobileEditRef.current(),
       mobilePendingKeyboardCloseSettleMs,
     );
     return () => globalThis.clearTimeout(timer);
@@ -5767,6 +5775,7 @@ function PendingRow({
         p: 0.75,
         display: "flex",
         alignItems: "flex-start",
+        minHeight: mobilePendingRowMinHeight,
         gap: 0.5,
         userSelect: "none",
         WebkitUserSelect: "none",
@@ -5789,7 +5798,7 @@ function PendingRow({
           flex: 1,
           alignSelf: "stretch",
           minWidth: 0,
-          minHeight: 38,
+          minHeight: mobileComposerIdleEditorMinHeight,
           cursor: touchInput ? "pointer" : "text",
         }}
       >

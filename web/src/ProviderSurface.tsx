@@ -154,6 +154,85 @@ export function ProviderMark({
   );
 }
 
+/** One mark is one item. Several items stand in a wrapping horizontal row
+ *  so another Provider is another item, not a tighter collage. */
+export function ProviderMarkStack({
+  manifests,
+  size = 22,
+  labeled = false,
+  className,
+  scaleWithFont = true,
+}: {
+  manifests: readonly ProviderUiManifest[];
+  size?: number;
+  labeled?: boolean;
+  className?: string;
+  scaleWithFont?: boolean;
+}): React.JSX.Element | null {
+  if (manifests.length === 0) return null;
+  return (
+    <Box
+      className={className}
+      data-provider-mark-stack
+      sx={{
+        display: "flex",
+        flexWrap: "wrap",
+        alignItems: "center",
+        columnGap: labeled ? 0.75 : 1,
+        rowGap: 0.75,
+        minWidth: 0,
+      }}
+    >
+      {manifests.map((manifest, index) => (
+        <Box
+          key={`${manifest.display.name}:${index}`}
+          data-provider-identity-item
+          sx={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 0.75,
+            minWidth: 0,
+            maxWidth: "100%",
+            ...(labeled
+              ? {
+                minHeight: 32,
+                px: 0.9,
+                py: 0.4,
+                borderRadius: 1.25,
+                border: 1,
+                borderColor: "divider",
+              }
+              : {}),
+          }}
+        >
+          <ProviderMark
+            manifest={manifest}
+            size={size}
+            scaleWithFont={scaleWithFont}
+          />
+          {labeled
+            ? (
+              <Typography
+                variant="caption"
+                fontWeight={650}
+                sx={{
+                  minWidth: 0,
+                  lineHeight: 1.3,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {manifest.display.name}
+              </Typography>
+            )
+            : null}
+        </Box>
+      ))}
+    </Box>
+  );
+}
+
 /** Keep thin monochrome marks legible on dark surfaces without overriding a
  * Provider-authored explicit fill or gradient. */
 export function readableProviderMarkColor(

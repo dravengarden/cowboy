@@ -31,6 +31,7 @@ import { shouldApplyHydratedConfigOptions } from "./configOptionsHydration";
 import { pruneDrafts } from "./draftStore";
 import { revealPendingArrival } from "./pendingPanelState";
 import { linkTimeline } from "./derive";
+import { beginConversationClear } from "./conversationClearance";
 import { resetExploreAfterContextClear } from "./explore/exploreStore";
 import { notifyHaptic } from "./haptic";
 import { reportClientLog, reportClientMetric } from "./observability";
@@ -2228,6 +2229,7 @@ export function clearQueue(sessionId: string): Promise<void> {
 // `context_cleared` boundary after clearing memory + durable history. This is
 // the Clear composer action — NOT a slash command (no agent exposes `clear`).
 export function resetSession(sessionId: string): Promise<void> {
+  beginConversationClear(sessionId);
   const previousBoundary = [...(state.timelines.get(sessionId) ?? [])]
     .reverse()
     .find((event) =>
