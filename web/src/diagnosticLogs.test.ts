@@ -25,6 +25,14 @@ Deno.test("diagnostic logs default to serious events without narrowing kind or r
   assertEquals(DEFAULT_DIAGNOSTIC_LOG_FILTERS.agents, []);
 });
 
+Deno.test("critical and error use distinct severity accents across log dots and filters", async () => {
+  const source = await Deno.readTextFile(new URL("./UsageLogs.tsx", import.meta.url));
+  assertEquals(source.includes('critical: (theme) => theme.palette.mode === "dark" ? "#ff4d6d" : "#c9184a"'), true);
+  assertEquals(source.includes('error: (theme) => theme.palette.mode === "dark" ? "#ff8a65" : "#c2410c"'), true);
+  assertEquals(source.includes("accent: SEVERITY_OPTIONS.find((option) => option.value === value)?.accent"), true);
+  assertEquals(source.includes("bgcolor: SEVERITY_ACCENT[entry.severity]"), true);
+});
+
 Deno.test("diagnostic log kinds have concise user-facing labels", () => {
   assertEquals(diagnosticKindLabel("session_error"), "Session");
   assertEquals(diagnosticKindLabel("provider_error"), "Provider");

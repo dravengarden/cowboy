@@ -10,6 +10,7 @@ import {
   ToggleButtonGroup,
   Typography,
 } from "@mui/material";
+import type { Theme } from "@mui/material/styles";
 import { AccessTime, Check, Tune } from "@mui/icons-material";
 import { Sheet } from "./Sheet";
 import { parseDtLocal, toDtLocal } from "./scheduleTime";
@@ -25,6 +26,32 @@ export interface FilterChipOption<T extends string> {
   value: T;
   label: string;
   color?: "default" | "primary" | "secondary" | "error" | "warning" | "info" | "success";
+  accent?: (theme: Theme) => string;
+}
+
+function activeAccent(accent: FilterChipOption<string>["accent"]) {
+  if (!accent) return undefined;
+  return (theme: Theme) => {
+    const color = accent(theme);
+    return {
+      bgcolor: color,
+      color: theme.palette.getContrastText(color),
+      "& .MuiChip-icon, & .MuiChip-deleteIcon": { color: "inherit" },
+      "&:hover": { bgcolor: color },
+    };
+  };
+}
+
+function outlinedAccent(accent: FilterChipOption<string>["accent"]) {
+  if (!accent) return undefined;
+  return (theme: Theme) => {
+    const color = accent(theme);
+    return {
+      borderColor: color,
+      color,
+      "& .MuiChip-deleteIcon": { color: "inherit" },
+    };
+  };
 }
 
 export function MultiSelectChipGroup<T extends string>({
@@ -61,6 +88,7 @@ export function MultiSelectChipGroup<T extends string>({
               variant={active ? "filled" : "outlined"}
               color={active ? option.color ?? "primary" : "default"}
               icon={active ? <Check /> : undefined}
+              sx={activeAccent(active ? option.accent : undefined)}
               onClick={() => onChange(active
                 ? value.filter((item) => item !== option.value)
                 : [...value, option.value])}
@@ -90,7 +118,13 @@ export function FilterButton({ count, onClick }: { count: number; onClick: () =>
 export function ActiveFilterChips({
   items,
 }: {
-  items: Array<{ key: string; label: string; color?: FilterChipOption<string>["color"]; onDelete: () => void }>;
+  items: Array<{
+    key: string;
+    label: string;
+    color?: FilterChipOption<string>["color"];
+    accent?: FilterChipOption<string>["accent"];
+    onDelete: () => void;
+  }>;
 }): React.JSX.Element | null {
   if (items.length === 0) return null;
   return (
@@ -103,6 +137,7 @@ export function ActiveFilterChips({
           variant="outlined"
           size="small"
           onDelete={item.onDelete}
+          sx={outlinedAccent(item.accent)}
         />
       ))}
     </Stack>

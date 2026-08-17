@@ -46,11 +46,11 @@ import {
 } from "./ObservabilityFilters";
 import { Sheet } from "./Sheet";
 
-const SEVERITY_COLOR: Record<DiagnosticLogSummary["severity"], string> = {
-  info: "primary.main",
-  warning: "warning.main",
-  error: "error.main",
-  critical: "error.dark",
+const SEVERITY_ACCENT: Record<DiagnosticLogSeverity, (theme: import("@mui/material").Theme) => string> = {
+  critical: (theme) => theme.palette.mode === "dark" ? "#ff4d6d" : "#c9184a",
+  error: (theme) => theme.palette.mode === "dark" ? "#ff8a65" : "#c2410c",
+  warning: (theme) => theme.palette.warning.main,
+  info: (theme) => theme.palette.info.main,
 };
 
 const KIND_OPTIONS: readonly FilterChipOption<DiagnosticLogKind>[] = [
@@ -60,8 +60,8 @@ const KIND_OPTIONS: readonly FilterChipOption<DiagnosticLogKind>[] = [
   { value: "automation", label: "Automation", color: "info" },
 ];
 const SEVERITY_OPTIONS: readonly FilterChipOption<DiagnosticLogSeverity>[] = [
-  { value: "critical", label: "Critical", color: "error" },
-  { value: "error", label: "Error", color: "error" },
+  { value: "critical", label: "Critical", accent: SEVERITY_ACCENT.critical },
+  { value: "error", label: "Error", accent: SEVERITY_ACCENT.error },
   { value: "warning", label: "Warning", color: "warning" },
   { value: "info", label: "Info", color: "info" },
 ];
@@ -374,6 +374,7 @@ export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Ele
               key: `severity:${value}`,
               label: optionLabel(SEVERITY_OPTIONS, value),
               color: SEVERITY_OPTIONS.find((option) => option.value === value)?.color,
+              accent: SEVERITY_OPTIONS.find((option) => option.value === value)?.accent,
               onDelete: () => setFilters((current) => ({ ...current, severities: current.severities.filter((item) => item !== value) })),
             })),
             ...filters.states.map((value) => ({
@@ -447,7 +448,7 @@ export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Ele
                 bgcolor: (theme) => alpha(theme.palette.text.primary, 0.035),
               }}
             >
-              <Box sx={{ width: 8, height: 8, mt: 0.65, borderRadius: "50%", bgcolor: SEVERITY_COLOR[entry.severity] }} />
+              <Box sx={{ width: 8, height: 8, mt: 0.65, borderRadius: "50%", bgcolor: SEVERITY_ACCENT[entry.severity] }} />
               <Box sx={{ minWidth: 0 }}>
                 <Stack direction="row" spacing={0.5} alignItems="flex-start">
                   <ButtonBase
