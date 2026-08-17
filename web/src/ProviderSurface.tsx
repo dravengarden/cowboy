@@ -35,6 +35,7 @@ import {
   providerPresentationEntry,
   useProviderCatalog,
 } from "./providerCatalog";
+import { readableProviderAccent } from "./providerVisual";
 
 export function ProviderRuntimeSurface({
   provider,
@@ -233,27 +234,18 @@ export function ProviderMarkStack({
   );
 }
 
-/** Keep thin monochrome marks legible on dark surfaces without overriding a
- * Provider-authored explicit fill or gradient. */
+/** Theme wrapper around the shared accent-contrast helper. */
 export function readableProviderMarkColor(
   accent: string,
   theme: Theme,
 ): string {
-  if (theme.palette.mode !== "dark") return accent;
-  const match = /^#([0-9a-f]{6})$/i.exec(accent.trim());
-  if (!match) return accent;
-  const channels = [0, 2, 4].map((offset) =>
-    Number.parseInt(match[1]!.slice(offset, offset + 2), 16) / 255
+  return readableProviderAccent(
+    accent,
+    theme.palette.mode,
+    theme.palette.mode === "dark"
+      ? theme.palette.common.white
+      : theme.palette.text.primary,
   );
-  const luminance = channels
-    .map((channel) =>
-      channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
-    )
-    .reduce(
-      (sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index]!,
-      0,
-    );
-  return luminance < 0.25 ? theme.palette.common.white : accent;
 }
 
 /** Shared safe renderer for signed Provider artwork. */

@@ -1366,7 +1366,11 @@ Desktop Vim + IME checks:
     remove this second selection transaction. Render the touch editor directly
     as `<textarea>` and use MUI Box only for theme-aware styling. Keep it
     uncontrolled during typing, use one static `rows` value, and let the focused
-    writing canvas provide its height. External document replacement and explicit
+    writing canvas provide its height. While the field is focused, never reset
+    `style.height` to `auto` to remeasure: that collapse/grow cycle is the same
+    class of layout race as TextareaAutosize and leaves the painted caret on the
+    previous line after a few Returns. Grow height monotonically while focused;
+    fit exactly only after blur. External document replacement and explicit
     toolbar edits may still map a selection synchronously; ordinary keyboard
     input must never call `setSelectionRange`, resize the DOM from an input
     callback, insert a zero-width sentinel, blur/refocus, or draw a fake caret.

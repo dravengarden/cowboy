@@ -40,6 +40,42 @@ export const PROVIDER_SURFACE_COLORS: Record<
   },
 };
 
+/** Relative luminance of a #RRGGBB accent, or null when the token is not hex. */
+export function providerAccentLuminance(accent: string): number | null {
+  const match = /^#([0-9a-f]{6})$/i.exec(accent.trim());
+  if (!match) return null;
+  const channels = [0, 2, 4].map((offset) =>
+    Number.parseInt(match[1]!.slice(offset, offset + 2), 16) / 255
+  );
+  return channels
+    .map((channel) =>
+      channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
+    )
+    .reduce(
+      (sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index]!,
+      0,
+    );
+}
+
+/** Keep monochrome Provider marks readable on both papers. Grok cream #E8E4DC
+ *  vanishes on light Settings/transcript paper the same way #18181B vanished
+ *  on dark paper. */
+export function readableProviderAccent(
+  accent: string,
+  mode: ThemeMode,
+  fallback: string,
+): string {
+  const luminance = providerAccentLuminance(accent);
+  if (luminance === null) return accent;
+  if (mode === "dark") return luminance < 0.25 ? fallback : accent;
+  if (luminance <= 0.55) return accent;
+  const authored = accent.trim().toLowerCase();
+  for (const pair of Object.values(PROVIDER_SURFACE_COLORS)) {
+    if (pair.dark.primary.toLowerCase() === authored) return pair.light.primary;
+  }
+  return fallback;
+}
+
 export function providerVisual(
   provider: string,
   mode: ThemeMode,
