@@ -8,6 +8,7 @@ import {
   scrollbackFillRemaining,
   scrollbackReplacementFromTop,
   shouldBackfillTranscriptViewport,
+  shouldAllowTranscriptViewportBackfill,
   shouldContinueScrollbackFill,
   shouldContinueTranscriptViewportRestore,
   shouldMagnetizeTranscript,
@@ -399,6 +400,30 @@ Deno.test("detached viewport restore waits for deep paging but remains bounded",
   assertEquals(
     transcriptViewportRestoreTimedOut({ tries: 480, stableFrames: 8 }),
     false,
+  );
+});
+
+Deno.test("viewport backfill stops after a detached restore is revealed", () => {
+  assertEquals(
+    shouldAllowTranscriptViewportBackfill({
+      following: false,
+      restoring: true,
+    }),
+    true,
+  );
+  assertEquals(
+    shouldAllowTranscriptViewportBackfill({
+      following: false,
+      restoring: false,
+    }),
+    false,
+  );
+  assertEquals(
+    shouldAllowTranscriptViewportBackfill({
+      following: true,
+      restoring: false,
+    }),
+    true,
   );
 });
 

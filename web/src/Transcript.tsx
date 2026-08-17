@@ -165,6 +165,7 @@ import {
   scrollbackReplacementFromTop,
   restoredTranscriptFollowing,
   shouldBackfillTranscriptViewport,
+  shouldAllowTranscriptViewportBackfill,
   shouldContinueScrollbackFill,
   shouldContinueTranscriptViewportRestore,
   shouldMagnetizeTranscript,
@@ -3889,9 +3890,13 @@ export function Transcript({
           Number.parseFloat(globalThis.getComputedStyle(el).paddingTop) || 0,
         firstContentTop: firstContent?.getBoundingClientRect().top ?? null,
       });
+      const automaticBackfillAllowed = shouldAllowTranscriptViewportBackfill({
+        following: stick.current,
+        restoring: viewportRestoreActiveRef.current,
+      });
       const hasVisibleGap = shouldBackfillTranscriptViewport({
         managed: managesScrollHistoryRef.current,
-        allowed: true,
+        allowed: automaticBackfillAllowed,
         desktop: desktopNavigation,
         fromResize,
         reachedStart: paging.reachedStart,
@@ -3904,7 +3909,8 @@ export function Transcript({
       });
       const needsOlderPage = shouldBackfillTranscriptViewport({
         managed: managesScrollHistoryRef.current,
-        allowed: viewportBackfillAllowanceRef.current > 0 &&
+        allowed: automaticBackfillAllowed &&
+          viewportBackfillAllowanceRef.current > 0 &&
           !viewportBackfillSettlingRef.current,
         desktop: desktopNavigation,
         fromResize,

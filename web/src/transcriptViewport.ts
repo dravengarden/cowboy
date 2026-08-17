@@ -140,6 +140,13 @@ export function transcriptViewportRestoreTimedOut(input: {
     input.stableFrames < 8;
 }
 
+export function shouldAllowTranscriptViewportBackfill(input: {
+  following: boolean;
+  restoring: boolean;
+}): boolean {
+  return input.following || input.restoring;
+}
+
 export interface VisibleScrollbackBoundaryPrefetchInput {
   managed: boolean;
   restoring: boolean;
