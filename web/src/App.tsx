@@ -620,6 +620,16 @@ function SessionList({
         setTranscriptProjection(sessionId, projection, anchor);
         setMenuAnchor(null);
     };
+    const requestRenameFromMenu = (): void => {
+        const session = menuAnchor?.row;
+        if (!session) return;
+        // MUI's open Menu traps focus and restores it to the kebab button on
+        // close. Finish both behaviours before the rename opener focuses its
+        // real input; otherwise WebKit blurs the keyboard claim inside the same
+        // tap and the later Title focus can show a caret without a keyboard.
+        flushSync(() => setMenuAnchor(null));
+        onRequestRename(session);
+    };
     // Drag-to-reorder via the leading grip handle (server-authoritative, synced).
     const byId = new Map(sessions.map((s) => [s.id, s]));
     const displayedSessions = mobileDrawer ? [...sessions].reverse() : sessions;
@@ -1161,10 +1171,7 @@ function SessionList({
                     <ListItemText primary="Info" />
                 </MenuItem>
                 <MenuItem
-                    onClick={(): void => {
-                        if (menuAnchor) onRequestRename(menuAnchor.row);
-                        setMenuAnchor(null);
-                    }}
+                    onClick={requestRenameFromMenu}
                 >
                     <ListItemIcon>
                         <DriveFileRenameOutline fontSize="medium" />
@@ -1293,7 +1300,7 @@ function SessionList({
                             spacing={0.5}
                         >
                             <Typography variant="overline" color="text.secondary" sx={{ px: 1 }}>Actions</Typography>
-                            <Button data-session-shortcut="r" autoFocus fullWidth startIcon={<DriveFileRenameOutline />} onClick={(): void => { if (menuAnchor) onRequestRename(menuAnchor.row); setMenuAnchor(null); }} sx={{ justifyContent: "flex-start" }}>
+                            <Button data-session-shortcut="r" autoFocus fullWidth startIcon={<DriveFileRenameOutline />} onClick={requestRenameFromMenu} sx={{ justifyContent: "flex-start" }}>
                                 <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Rename</Box>
                                 <Kbd keys="R" />
                             </Button>
@@ -2439,8 +2446,11 @@ export function App({
             onRequestInfo={(s): void => setPendingInfo(s)}
             onRequestReload={(s): void => setPendingReload(s)}
             onRequestRename={(s): void => {
-                claimKeyboard(); // raise the keyboard in-gesture (iOS)
-                setPendingRename(s);
+                // Mount the real Title input while the rename tap still owns
+                // iOS user activation. RenameSessionShell's layout effect then
+                // focuses it before flushSync returns, so no hidden-input handoff
+                // or post-gesture focus is needed.
+                flushSync(() => setPendingRename(s));
             }}
             autoResumeDefault={autoResumeDefaultOn}
             loaded={sessionsLoaded}
@@ -3782,18 +3792,20 @@ export function App({
                     setPendingDelete(null);
                 }}
             />
-            <RenameSessionShell
-                session={pendingRename}
-                onClose={(): void => setPendingRename(null)}
-                onConfirm={(title): void => {
-                    if (pendingRename) {
-                        // Optimistic rename via the title-sync engine: the new
-                        // title shows instantly and converges on every terminal.
-                        renameSession(pendingRename.id, title);
-                    }
-                    setPendingRename(null);
-                }}
-            />
+            {pendingRename && (
+                <RenameSessionShell
+                    session={pendingRename}
+                    onClose={(): void => setPendingRename(null)}
+                    onConfirm={(title): void => {
+                        if (pendingRename) {
+                            // Optimistic rename via the title-sync engine: the new
+                            // title shows instantly and converges on every terminal.
+                            renameSession(pendingRename.id, title);
+                        }
+                        setPendingRename(null);
+                    }}
+                />
+            )}
             <SessionInfoShell session={pendingInfo} onClose={(): void => setPendingInfo(null)} />
             <SessionReloadDialog
                 session={pendingReload}
@@ -5827,8 +5839,8 @@ function DeleteSessionShell({
 }
 
 // Prefills the textfield with the current title; Save is disabled while empty
-// or unchanged (server-side also rejects empty). The rename + compose sheets both
-// raise the keyboard in-gesture via `claimKeyboard` (see ./keyboardClaim).
+// or unchanged (server-side also rejects empty). The real Title input is mounted
+// and focused synchronously inside the rename tap below.
 
 // The connecting/loading placeholder — SKELETONS that mirror the real layout
 // (a settling list of items in the sidebar, a settling transcript in the main
@@ -5912,37 +5924,28 @@ function RenameSessionShell({
     onClose,
     onConfirm,
 }: {
-    session: SessionMeta | null;
+    session: SessionMeta;
     onClose: () => void;
     onConfirm: (title: string) => void;
-}): React.JSX.Element | null {
-    const [value, setValue] = useState("");
+}): React.JSX.Element {
+    const [value, setValue] = useState(session.title);
     const inputRef = useRef<HTMLInputElement>(null);
     const navbarAtBottom = useNavbarAtBottom();
     const desktop = useSurfaceProfile().kind === "desktop";
-    useEffect(() => {
-        if (!session) return undefined;
-        setValue(session.title);
-        // The keyboard was already claimed in-gesture (claimKeyboard, on the rename
-        // tap) so it's rising regardless; here we just TRANSFER focus to the real
-        // field + select-all (you're almost always retyping). A short delay lets the
-        // field mount and its value commit before select(); the transfer keeps the
-        // keyboard up (the DetentSheet is bottom-anchored + not a Modal, so it tracks
-        // the keyboard and never steals focus). Snappy so it beats any menu
-        // focus-restore that would otherwise blur the claim before the transfer.
-        const t = globalThis.setTimeout(() => {
-            inputRef.current?.focus();
-            inputRef.current?.select();
-        }, 120);
-        return () => globalThis.clearTimeout(t);
-    }, [session?.id, session?.title]);
+    useLayoutEffect(() => {
+        // The opener mounts this component with flushSync after synchronously
+        // closing the action menu. This layout effect therefore focuses the real
+        // input inside the initiating tap, which is the only reliable way to
+        // raise iOS's software keyboard for a newly mounted field.
+        inputRef.current?.focus();
+        inputRef.current?.select();
+    }, []);
     const trimmed = value.trim();
-    const canSave = session !== null && trimmed.length > 0 && trimmed !== session.title;
+    const canSave = trimmed.length > 0 && trimmed !== session.title;
     const submit = (): void => {
         if (canSave) onConfirm(trimmed);
     };
-    useConfirmEnter(session !== null && desktop, submit, { suppressBareEnter: false });
-    if (!session) return null;
+    useConfirmEnter(desktop, submit, { suppressBareEnter: false });
     return (
         <Sheet
             forceSheet={navbarAtBottom}

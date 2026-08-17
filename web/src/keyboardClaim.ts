@@ -4,8 +4,8 @@
 // appears but no keyboard. Fix: synchronously focus a persistent off-screen input
 // in the tap to "claim" the keyboard; when the real field mounts and focuses
 // shortly after, focus just transfers between inputs and the keyboard stays up.
-// Used by the rename input + the mobile fullscreen compose sheet (both open a
-// non-Modal DetentSheet, which deliberately never steals focus back off the claim).
+// Used by New Session + the mobile fullscreen compose sheet (both open a
+// non-Modal surface that deliberately never steals focus back off the claim).
 let kbClaimEl: HTMLInputElement | null = null;
 
 export function claimKeyboard(): void {
