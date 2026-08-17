@@ -27,10 +27,25 @@ import {
   durableDeliveryAttempt,
   shouldUseTranscriptDelivery,
 } from "./durableDelivery.ts";
+import {
+  type DeliveryOrigin,
+  destinationForPrompt,
+  homeForOrigin,
+  retryDeliveryAttempt,
+  statusAfterExplicitSend,
+} from "./localFirstDelivery.ts";
+import {
+  emptyQueueValue,
+  QUEUE_TRANSITION_MUTATORS,
+  queueMutators,
+  type QueueValue,
+  settledTransitionIds,
+} from "./queueMutators.ts";
 import { shouldApplyHydratedConfigOptions } from "./configOptionsHydration";
 import { pruneDrafts } from "./draftStore";
 import { revealPendingArrival } from "./pendingPanelState";
 import { linkTimeline } from "./derive";
+import { beginConversationClear } from "./conversationClearance";
 import { resetExploreAfterContextClear } from "./explore/exploreStore";
 import { notifyHaptic } from "./haptic";
 import { reportClientLog, reportClientMetric } from "./observability";
@@ -103,6 +118,8 @@ export interface QueuedMessage {
    *  (still unconfirmed past the delay → gradient shimmer), `failed` (WS down /
    *  timed out → red + retry). A confirmed server row carries no status. */
   status?: "pending" | "sending" | "failed";
+  /** Where this local row came from, so a failed send can return there. */
+  origin?: DeliveryOrigin;
   /** Present only on a DRAFT with a future fire time — the server auto-activates
    *  it then. Drives the draft-row clock chip. Absent on plain drafts. */
   schedule?: DraftSchedule;
@@ -1744,32 +1761,70 @@ export function setSessionAutoResume(sessionId: string, value: boolean | null): 
 
 // --- Queue + drafts optimistic sync (per session) ----------------------------
 // Each session's queue+drafts is a sync state "queue:<sid>". The daemon is the
-// arbiter (its typed queue logic unchanged); the client uses the shared engine
-// for instant optimistic ADDs (addDraft / submit-when-busy) that rebase onto the
-// latest server list and reconcile by cmid (no ghost). Non-add ops (remove /
-// edit / clear / reorder / move) stay plain commands — the daemon applies them
-// and the next patch reflects them (no client mutator → no pending → no risk).
-// pending/sending/failed STATUS is local presentation, kept in `qStatus` (keyed
-// by cmid) and merged at commit — never in the synced value.
+// arbiter; the client applies ADDs and local-first moves instantly, then
+// rebases onto the latest server list and reconciles by cmid / source id.
+// pending/sending/failed STATUS is local presentation, kept in `qStatus`
+// (keyed by cmid) and merged at commit — never in the synced value.
 
-interface QValue {
-  readonly queue: readonly QueuedMessage[];
-  readonly drafts: readonly QueuedMessage[];
-}
+type QValue = QueueValue<QueuedMessage>;
 const qMut = {
-  addDraft: (v: QValue, a: { row: QueuedMessage }): QValue => ({ ...v, drafts: [...v.drafts, a.row] }),
-  addQueue: (v: QValue, a: { row: QueuedMessage }): QValue => ({ ...v, queue: [...v.queue, a.row] }),
-  // Force-push (long-press send): land the optimistic row at the FRONT of the
-  // queue, matching where the daemon puts it; its wire frame is `submit` with
-  // `force: true`, so the daemon also interrupts the running turn.
-  forceQueue: (v: QValue, a: { row: QueuedMessage }): QValue => ({ ...v, queue: [a.row, ...v.queue] }),
-  // "Jump to front" (no interrupt): same FRONT placement as forceQueue, but its
-  // wire frame is `submit` with `front: true` — the daemon puts it ahead of the
-  // queue WITHOUT cancelling the running turn (runs next after the current turn).
-  frontQueue: (v: QValue, a: { row: QueuedMessage }): QValue => ({ ...v, queue: [a.row, ...v.queue] }),
+  addDraft: (v: QValue, a: { row: QueuedMessage }): QValue => queueMutators.addDraft(v, a),
+  addQueue: (v: QValue, a: { row: QueuedMessage }): QValue => queueMutators.addQueue(v, a),
+  forceQueue: (v: QValue, a: { row: QueuedMessage }): QValue => queueMutators.forceQueue(v, a),
+  frontQueue: (v: QValue, a: { row: QueuedMessage }): QValue => queueMutators.frontQueue(v, a),
+  activateDraft: (v: QValue, a: { id: string; row?: QueuedMessage }): QValue =>
+    queueMutators.activateDraft(v, a),
+  sendQueued: (v: QValue, a: { id: string; row: QueuedMessage }): QValue =>
+    queueMutators.sendQueued(v, a),
+  forceQueued: (v: QValue, a: { id: string; row: QueuedMessage }): QValue =>
+    queueMutators.forceQueued(v, a),
+  returnQueuedToDraft: (v: QValue, a: { id: string; row: QueuedMessage }): QValue =>
+    queueMutators.returnQueuedToDraft(v, a),
 } satisfies Mutators<QValue>;
 const qClients = new Map<string, ReplicatedStore<QValue, typeof qMut>>();
 const qStatus = new Map<string, "pending" | "sending" | "failed">();
+// inFlight rows whose transcript bubble was already reconciled by a user-echo.
+// Stops commitQueue from resurrecting the same bubble before the queue patch
+// confirms the hide mutation.
+const suppressedInFlight = new Set<string>();
+
+function commandForQueueMutation(sessionId: string, m: { name: string; id: string; args: unknown }): Inbound {
+  const args = m.args as { id?: string; row?: QueuedMessage };
+  if (m.name === "addDraft" && args.row !== undefined) {
+    return {
+      type: "add_draft",
+      session_id: sessionId,
+      text: args.row.text,
+      content: contentOf(args.row.text, args.row.attachments),
+      cmid: m.id,
+    };
+  }
+  if (m.name === "activateDraft" && args.id !== undefined) {
+    return { type: "activate_draft", session_id: sessionId, id: args.id };
+  }
+  if (m.name === "sendQueued" && args.id !== undefined) {
+    return { type: "request_send_queued", session_id: sessionId, id: args.id };
+  }
+  if (m.name === "forceQueued" && args.id !== undefined) {
+    return { type: "force_push_queued", session_id: sessionId, id: args.id };
+  }
+  if (m.name === "returnQueuedToDraft" && args.id !== undefined) {
+    return { type: "queued_to_draft", session_id: sessionId, id: args.id };
+  }
+  const row = args.row;
+  if (row === undefined) {
+    return { type: "activate_draft", session_id: sessionId, id: args.id ?? m.id };
+  }
+  return {
+    type: "submit",
+    session_id: sessionId,
+    text: row.text,
+    content: contentOf(row.text, row.attachments),
+    cmid: m.id,
+    ...(m.name === "forceQueue" && { force: true }),
+    ...(m.name === "frontQueue" && { front: true }),
+  };
+}
 
 function qClient(sessionId: string): ReplicatedStore<QValue, typeof qMut> {
   let c = qClients.get(sessionId);
@@ -1777,31 +1832,23 @@ function qClient(sessionId: string): ReplicatedStore<QValue, typeof qMut> {
     c = replicatedStore<QValue, typeof qMut>({
       clientId: `${syncBase}:queue:${sessionId}`,
       mutators: qMut,
-      initial: { queue: [], drafts: [] },
-      // An optimistic add's wire frame is the daemon's own add_draft/submit
-      // command (cmid = the mutation id ⇒ the server echo confirms exactly this
-      // row, no ghost). Used both for the initial send (via mutate) and the
-      // reconnect resend (via resend).
+      initial: emptyQueueValue<QueuedMessage>(),
+      // Adds send add_draft/submit (cmid = mutation id). Local-first moves send
+      // the matching activate/request_send/force/queued_to_draft command. Used
+      // both for the initial send (via mutate) and the reconnect resend.
       send: (m): void => {
-        const row = (m.args as { row: QueuedMessage }).row;
-        const sent = send(
-          m.name === "addDraft"
-            ? { type: "add_draft", session_id: sessionId, text: row.text, content: contentOf(row.text, row.attachments), cmid: m.id }
-            : {
-              type: "submit",
-              session_id: sessionId,
-              text: row.text,
-              content: contentOf(row.text, row.attachments),
-              cmid: m.id,
-              // `forceQueue` carries the force flag so a reconnect resend still
-              // force-pushes; `frontQueue` carries `front` (jump ahead, no
-              // interrupt); `addQueue` omits both (normal queue append).
-              ...(m.name === "forceQueue" && { force: true }),
-              ...(m.name === "frontQueue" && { front: true }),
-            },
-        );
-        const attempt = durableDeliveryAttempt(sent);
+        const sent = send(commandForQueueMutation(sessionId, m));
+        const attempt = QUEUE_TRANSITION_MUTATORS.has(m.name)
+          ? {
+            status: statusAfterExplicitSend(sent),
+            armConfirmationTimeout: sent,
+          }
+          : durableDeliveryAttempt(sent);
         qStatus.set(m.id, attempt.status);
+        const echoCmid = (m.args as { row?: QueuedMessage }).row?.cmid;
+        if (echoCmid !== undefined && echoCmid !== m.id) {
+          qStatus.set(echoCmid, attempt.status);
+        }
         if (attempt.armConfirmationTimeout) armQTimers(sessionId, m.id);
       },
       onChange: (): void => {
@@ -1838,10 +1885,14 @@ async function hydrateCachedQueues(): Promise<void> {
  *  pending optimistic row. */
 function commitQueue(sessionId: string): void {
   const c = qClients.get(sessionId);
-  const view: QValue = c ? c.get() : { queue: [], drafts: [] };
+  const view: QValue = c ? c.get() : emptyQueueValue<QueuedMessage>();
   const pend = new Set((c?.pending() ?? []).map((m) => m.id));
   const withStatus = (rows: readonly QueuedMessage[]): QueuedMessage[] =>
-    rows.map((r) => (r.cmid !== undefined && pend.has(r.cmid) ? { ...r, status: qStatus.get(r.cmid) ?? "pending" } : r));
+    rows.map((r) => {
+      if (r.cmid === undefined) return r;
+      const status = qStatus.get(r.cmid) ?? (pend.has(r.cmid) ? "pending" : undefined);
+      return status !== undefined ? { ...r, status } : r;
+    });
   const queues = new Map(state.queues);
   const drafts = new Map(state.drafts);
   const q = withStatus(view.queue);
@@ -1850,7 +1901,29 @@ function commitQueue(sessionId: string): void {
   else queues.delete(sessionId);
   if (d.length > 0) drafts.set(sessionId, d);
   else drafts.delete(sessionId);
-  setState({ ...state, queues, drafts });
+  const inFlightCmids = new Set(
+    (view.inFlight ?? []).flatMap((row) => row.cmid === undefined ? [] : [row.cmid]),
+  );
+  const existing = state.optimisticMessages.get(sessionId) ?? [];
+  const kept = existing.filter((message) =>
+    message.cmid === undefined ||
+    (!suppressedInFlight.has(message.cmid) && !inFlightCmids.has(message.cmid))
+  );
+  const bubbles = [...kept];
+  for (const row of view.inFlight ?? []) {
+    if (row.cmid !== undefined && suppressedInFlight.has(row.cmid)) continue;
+    if (row.cmid !== undefined && bubbles.some((message) => message.cmid === row.cmid)) {
+      continue;
+    }
+    bubbles.push({
+      ...row,
+      status: (row.cmid !== undefined ? qStatus.get(row.cmid) : undefined) ?? row.status ?? "pending",
+    });
+  }
+  const optimisticMessages = new Map(state.optimisticMessages);
+  if (bubbles.length > 0) optimisticMessages.set(sessionId, bubbles);
+  else optimisticMessages.delete(sessionId);
+  setState({ ...state, queues, drafts, optimisticMessages });
 }
 
 /** Arm pending→sending (shimmer) and →failed timers for an optimistic queue row,
@@ -1881,12 +1954,15 @@ function qAdd(
   sessionId: string,
   text: string,
   attachments: Attachment[],
-  // queue placement: "back" (normal append), "front" (jump ahead, no interrupt),
-  // "force" (jump ahead + interrupt the running turn). Ignored for drafts.
-  mode: "back" | "front" | "force" = "back",
+  opts: {
+    mode?: "back" | "front" | "force";
+    origin?: DeliveryOrigin;
+  } = {},
 ): Promise<void> {
+  const mode = opts.mode ?? "back";
+  const origin = opts.origin ?? (target === "drafts" ? "composer" : "composer");
   const cmid = newCmid();
-  const row: QueuedMessage = { id: `opt-${cmid}`, text, attachments, cmid };
+  const row: QueuedMessage = { id: `opt-${cmid}`, text, attachments, cmid, origin };
   const store = qClient(sessionId);
   // Set status BEFORE mutating: the mutate auto-sends the add_draft/submit frame
   // (the store's `send`) AND fires `onChange` → commitQueue, which reads this
@@ -1907,7 +1983,10 @@ function qAdd(
     cmid,
   });
   return waitForState(
-    () => !store.pending().some((mutation) => mutation.id === cmid),
+    (snapshot) =>
+      (target === "drafts" ? snapshot.drafts : snapshot.queues)
+        .get(sessionId)
+        ?.some((message) => message.cmid === cmid) === true,
     target === "drafts" ? "Save draft" : "Send message",
   );
 }
@@ -1917,15 +1996,26 @@ function qAdd(
 export function retryQueued(sessionId: string, cmid: string): void {
   const c = qClients.get(sessionId);
   if (c === undefined) return;
+  const pending = c.pending().find((mutation) => mutation.id === cmid);
+  if (pending !== undefined) {
+    c.bump(cmid);
+    const attempt = retryDeliveryAttempt(send(commandForQueueMutation(sessionId, pending)));
+    qStatus.set(cmid, attempt.status);
+    const echoCmid = (pending.args as { row?: QueuedMessage }).row?.cmid;
+    if (echoCmid !== undefined && echoCmid !== cmid) qStatus.set(echoCmid, attempt.status);
+    commitQueue(sessionId);
+    if (attempt.armConfirmationTimeout) armQTimers(sessionId, cmid);
+    return;
+  }
   const view = c.get();
   const inDrafts = view.drafts.some((r) => r.cmid === cmid);
   const row = (inDrafts ? view.drafts : view.queue).find((r) => r.cmid === cmid);
   if (row === undefined) return;
-  c.bump(cmid);
-  const cmd: Inbound = inDrafts
-    ? { type: "add_draft", session_id: sessionId, text: row.text, content: contentOf(row.text, row.attachments), cmid }
-    : { type: "submit", session_id: sessionId, text: row.text, content: contentOf(row.text, row.attachments), cmid };
-  const attempt = durableDeliveryAttempt(send(cmd));
+  const attempt = retryDeliveryAttempt(send(
+    inDrafts
+      ? { type: "add_draft", session_id: sessionId, text: row.text, content: contentOf(row.text, row.attachments), cmid }
+      : { type: "submit", session_id: sessionId, text: row.text, content: contentOf(row.text, row.attachments), cmid },
+  ));
   qStatus.set(cmid, attempt.status);
   commitQueue(sessionId);
   if (attempt.armConfirmationTimeout) armQTimers(sessionId, cmid);
@@ -1940,19 +2030,91 @@ export function discardQueued(sessionId: string, cmid: string): void {
   commitQueue(sessionId);
 }
 
+function pendingNamed(
+  sessionId: string,
+  cmid: string,
+): { id: string; name: string; args: unknown } | undefined {
+  return qClients.get(sessionId)?.pending().find((mutation) => {
+    const echoCmid = (mutation.args as { row?: QueuedMessage }).row?.cmid;
+    return mutation.id === cmid || echoCmid === cmid;
+  });
+}
+
+/** Park a failed local send back in the list it left. */
+export function returnFailedQueued(sessionId: string, cmid: string): void {
+  const pending = pendingNamed(sessionId, cmid);
+  if (pending !== undefined && QUEUE_TRANSITION_MUTATORS.has(pending.name)) {
+    clearOptTimers(pending.id);
+    qStatus.delete(pending.id);
+    const echoCmid = (pending.args as { row?: QueuedMessage }).row?.cmid;
+    if (echoCmid !== undefined) {
+      qStatus.delete(echoCmid);
+      suppressedInFlight.add(echoCmid);
+      patchMessage(sessionId, echoCmid, "drop");
+    }
+    qClients.get(sessionId)?.confirm([pending.id]);
+    commitQueue(sessionId);
+    return;
+  }
+  const view = qClients.get(sessionId)?.get();
+  const inDrafts = view?.drafts.some((row) => row.cmid === cmid) === true;
+  const row = (inDrafts ? view?.drafts : view?.queue)?.find((item) => item.cmid === cmid);
+  if (row === undefined) return;
+  const home = homeForOrigin(row.origin ?? "composer");
+  discardQueued(sessionId, cmid);
+  if (home === "draft" && !inDrafts) {
+    void qAdd("drafts", sessionId, row.text, row.attachments, { origin: "composer" });
+  } else if (home === "queue" && inDrafts) {
+    void qAdd("queue", sessionId, row.text, row.attachments, { origin: "queue" });
+  }
+}
+
+export function returnFailedMessage(sessionId: string, cmid: string): void {
+  const row = state.optimisticMessages.get(sessionId)?.find((message) => message.cmid === cmid);
+  if (row === undefined) return;
+  const pending = pendingNamed(sessionId, cmid);
+  if (pending !== undefined && QUEUE_TRANSITION_MUTATORS.has(pending.name)) {
+    returnFailedQueued(sessionId, pending.id);
+    return;
+  }
+  const home = homeForOrigin(row.origin ?? "composer");
+  discardMessage(sessionId, cmid);
+  void qAdd(home === "queue" ? "queue" : "drafts", sessionId, row.text, row.attachments, {
+    origin: row.origin ?? "composer",
+  });
+}
+
 /** Fold a queue `sync_patch` for one session: apply (force on resync), clear the
  *  status/timers of any cmid the server confirmed, and cross-signal the chat
  *  overlay (a queue cmid landing also drops a wrong-guessed optimistic bubble). */
 function applyQueuePatch(sessionId: string, version: number, value: unknown, confirmed: string[], resync: boolean): void {
   const wire = value as { queue?: WireQueued[]; drafts?: WireQueued[] };
-  const next: QValue = { queue: fromWire(wire.queue ?? []), drafts: fromWire(wire.drafts ?? []) };
-  qClient(sessionId).applyPatch(snapshotPatch(version, next, confirmed), { force: resync });
+  const next: QValue = {
+    queue: fromWire(wire.queue ?? []),
+    drafts: fromWire(wire.drafts ?? []),
+    inFlight: [],
+  };
+  const store = qClient(sessionId);
+  const settled = settledTransitionIds(store.pending(), next);
+  if (settled.length > 0) {
+    for (const id of settled) {
+      const pending = store.pending().find((mutation) => mutation.id === id);
+      const echoCmid = (pending?.args as { row?: QueuedMessage } | undefined)?.row?.cmid ?? id;
+      suppressedInFlight.add(echoCmid);
+      clearOptTimers(id);
+      qStatus.delete(id);
+    }
+    store.confirm(settled);
+  }
+  store.applyPatch(snapshotPatch(version, next, confirmed), { force: resync });
   for (const cmid of confirmed) {
     if (qStatus.has(cmid)) {
       clearOptTimers(cmid);
       qStatus.delete(cmid);
     }
+    suppressedInFlight.delete(cmid);
   }
+  for (const id of settled) suppressedInFlight.delete(id);
   if (confirmed.length > 0) {
     const set = new Set<string | undefined>(confirmed);
     setState({ ...state, optimisticMessages: reconcileOptimistic(state.optimisticMessages, sessionId, set) });
@@ -2014,6 +2176,7 @@ function reconcileOptimistic(
   const kept = list.filter((m) => {
     if (m.cmid !== undefined && serverCmids.has(m.cmid)) {
       clearOptTimers(m.cmid);
+      suppressedInFlight.add(m.cmid);
       return false;
     }
     return true;
@@ -2030,15 +2193,23 @@ function reconcileOptimistic(
 export function retryMessage(sessionId: string, cmid: string): void {
   const row = state.optimisticMessages.get(sessionId)?.find((m) => m.cmid === cmid);
   if (!row) return;
-  const sent = send({
+  const pending = qClients.get(sessionId)?.pending().find((mutation) => {
+    const echoCmid = (mutation.args as { row?: QueuedMessage }).row?.cmid;
+    return mutation.id === cmid || echoCmid === cmid;
+  });
+  if (pending !== undefined) {
+    retryQueued(sessionId, pending.id);
+    return;
+  }
+  const attempt = retryDeliveryAttempt(send({
     type: "submit",
     session_id: sessionId,
     text: row.text,
     content: contentOf(row.text, row.attachments),
     cmid,
-  });
-  patchMessage(sessionId, cmid, (m) => ({ ...m, status: sent ? "pending" : "failed" }));
-  if (sent) armMsgTimers(sessionId, cmid);
+  }));
+  patchMessage(sessionId, cmid, (m) => ({ ...m, status: attempt.status }));
+  if (attempt.armConfirmationTimeout) armMsgTimers(sessionId, cmid);
 }
 
 /** Discard a (usually failed) optimistic chat bubble locally — it never reached
@@ -2054,20 +2225,24 @@ function optimisticMessage(
   sessionId: string,
   text: string,
   attachments: Attachment[],
+  origin: DeliveryOrigin = "composer",
 ): Promise<void> {
+  if (!isConnected()) {
+    return qAdd("queue", sessionId, text, attachments, { origin });
+  }
   const cmid = newCmid();
   const sent = send({ type: "submit", session_id: sessionId, text, content: contentOf(text, attachments), cmid });
+  if (!sent) {
+    return qAdd("queue", sessionId, text, attachments, { origin });
+  }
   const map = new Map(state.optimisticMessages);
-  const row: QueuedMessage = { id: `opt-${cmid}`, text, attachments, cmid, status: sent ? "pending" : "failed" };
+  const row: QueuedMessage = { id: `opt-${cmid}`, text, attachments, cmid, status: "sending", origin };
   map.set(sessionId, [...(map.get(sessionId) ?? []), row]);
   setState({ ...state, optimisticMessages: map });
-  if (sent) armMsgTimers(sessionId, cmid);
-  if (!sent) {
-    return Promise.reject(new Error("Send message is unavailable while reconnecting"));
-  }
+  armMsgTimers(sessionId, cmid);
   return waitForState(
     (snapshot) =>
-      !(snapshot.optimisticMessages.get(sessionId) ?? []).some((message) =>
+      (snapshot.optimisticMessages.get(sessionId) ?? []).some((message) =>
         message.cmid === cmid
       ),
     "Send message",
@@ -2129,10 +2304,10 @@ export function submitPrompt(
   const queueEmpty = (state.queues.get(sessionId)?.length ?? 0) === 0;
   if (shouldUseTranscriptDelivery(isConnected(), dispatchable, queueEmpty)) {
     // → dispatch: an optimistic CHAT bubble in the transcript.
-    return optimisticMessage(sessionId, trimmed, attachments);
+    return optimisticMessage(sessionId, trimmed, attachments, "composer");
   } else {
     // → queue: an optimistic row in the queue sync state.
-    return qAdd("queue", sessionId, trimmed, attachments);
+    return qAdd("queue", sessionId, trimmed, attachments, { origin: "composer" });
   }
 }
 
@@ -2149,10 +2324,10 @@ export function forcePrompt(sessionId: string, text: string, attachments: Attach
   const queueEmpty = (state.queues.get(sessionId)?.length ?? 0) === 0;
   if (shouldUseTranscriptDelivery(isConnected(), dispatchable, queueEmpty)) {
     // Idle → nothing to force ahead of; a normal optimistic chat send.
-    return optimisticMessage(sessionId, trimmed, attachments);
+    return optimisticMessage(sessionId, trimmed, attachments, "composer");
   } else {
     // Busy → optimistic FRONT row + `submit { force: true }` (interrupt + run next).
-    return qAdd("queue", sessionId, trimmed, attachments, "force");
+    return qAdd("queue", sessionId, trimmed, attachments, { mode: "force", origin: "composer" });
   }
 }
 
@@ -2170,17 +2345,54 @@ export function frontPrompt(sessionId: string, text: string, attachments: Attach
     && ["running", "exited", "crashed", "interrupted"].includes(sess.status);
   const queueEmpty = (state.queues.get(sessionId)?.length ?? 0) === 0;
   if (shouldUseTranscriptDelivery(isConnected(), dispatchable, queueEmpty)) {
-    return optimisticMessage(sessionId, trimmed, attachments);
+    return optimisticMessage(sessionId, trimmed, attachments, "composer");
   } else {
-    return qAdd("queue", sessionId, trimmed, attachments, "front");
+    return qAdd("queue", sessionId, trimmed, attachments, { mode: "front", origin: "composer" });
   }
 }
 
 // "Send now" on a queued row: the daemon sends it if it can take a turn this
 // instant, otherwise moves it to the front to drain next.
+function sessionDispatchable(sessionId: string): boolean {
+  const sess = state.sessions.find((s) => s.id === sessionId);
+  return sess !== undefined &&
+    ["running", "exited", "crashed", "interrupted"].includes(sess.status);
+}
+
+function findQueued(sessionId: string, id: string): QueuedMessage | undefined {
+  return (state.queues.get(sessionId) ?? []).find((message) => message.id === id);
+}
+
+function findDraft(sessionId: string, id: string): QueuedMessage | undefined {
+  return (state.drafts.get(sessionId) ?? []).find((message) => message.id === id);
+}
+
 export function requestSendQueued(sessionId: string, id: string): Promise<void> {
-  return sendWithAck(
-    { type: "request_send_queued", session_id: sessionId, id },
+  const row = findQueued(sessionId, id);
+  if (row === undefined) return Promise.resolve();
+  if (row.status !== undefined && row.cmid !== undefined) {
+    if (destinationForPrompt(isConnected(), sessionDispatchable(sessionId), true) === "transcript") {
+      discardQueued(sessionId, row.cmid);
+      return optimisticMessage(sessionId, row.text, row.attachments, "queue");
+    }
+    return waitForState(
+      (snapshot) => (snapshot.queues.get(sessionId) ?? []).some((message) => message.id === id),
+      "Send queued message",
+    );
+  }
+  const opId = newCmid();
+  const echoCmid = row.cmid ?? opId;
+  const presented: QueuedMessage = {
+    id: `opt-${opId}`,
+    text: row.text,
+    attachments: row.attachments,
+    cmid: echoCmid,
+    origin: "queue",
+  };
+  qStatus.set(opId, "pending");
+  qStatus.set(echoCmid, "pending");
+  qClient(sessionId).mutate("sendQueued", { id, row: presented }, opId);
+  return waitForState(
     (snapshot) => !(snapshot.queues.get(sessionId) ?? []).some((message) => message.id === id),
     "Send queued message",
   );
@@ -2190,8 +2402,25 @@ export function requestSendQueued(sessionId: string, id: string): Promise<void> 
 // next. The daemon promotes it and cancels the in-flight turn (or just sends it
 // if the session is already idle).
 export function forcePushQueued(sessionId: string, id: string): Promise<void> {
-  return sendWithAck(
-    { type: "force_push_queued", session_id: sessionId, id },
+  const row = findQueued(sessionId, id);
+  if (row === undefined) return Promise.resolve();
+  if (row.status !== undefined && row.cmid !== undefined) {
+    discardQueued(sessionId, row.cmid);
+    return qAdd("queue", sessionId, row.text, row.attachments, { mode: "force", origin: "queue" });
+  }
+  const opId = newCmid();
+  const echoCmid = row.cmid ?? opId;
+  const presented: QueuedMessage = {
+    id: `opt-${opId}`,
+    text: row.text,
+    attachments: row.attachments,
+    cmid: echoCmid,
+    origin: "queue",
+  };
+  qStatus.set(opId, "pending");
+  qStatus.set(echoCmid, "pending");
+  qClient(sessionId).mutate("forceQueued", { id, row: presented }, opId);
+  return waitForState(
     (snapshot) => !(snapshot.queues.get(sessionId) ?? []).some((message) => message.id === id),
     "Force push queued message",
   );
@@ -2228,6 +2457,7 @@ export function clearQueue(sessionId: string): Promise<void> {
 // `context_cleared` boundary after clearing memory + durable history. This is
 // the Clear composer action — NOT a slash command (no agent exposes `clear`).
 export function resetSession(sessionId: string): Promise<void> {
+  beginConversationClear(sessionId);
   const previousBoundary = [...(state.timelines.get(sessionId) ?? [])]
     .reverse()
     .find((event) =>
@@ -2343,8 +2573,56 @@ export function clearDrafts(sessionId: string): Promise<void> {
 // Activate a draft: the daemon submits it (send-or-queue) and removes it from
 // drafts.
 export function activateDraft(sessionId: string, id: string): Promise<void> {
-  return sendWithAck(
-    { type: "activate_draft", session_id: sessionId, id },
+  const row = findDraft(sessionId, id);
+  if (row === undefined) return Promise.resolve();
+  const dest = destinationForPrompt(
+    isConnected(),
+    sessionDispatchable(sessionId),
+    (state.queues.get(sessionId)?.length ?? 0) === 0,
+  );
+  if (row.status !== undefined && row.cmid !== undefined) {
+    discardQueued(sessionId, row.cmid);
+    if (dest === "transcript") {
+      return optimisticMessage(sessionId, row.text, row.attachments, "draft");
+    }
+    return qAdd("queue", sessionId, row.text, row.attachments, { origin: "draft" });
+  }
+  const opId = newCmid();
+  const presented = dest === "queue"
+    ? {
+      id: `opt-${opId}`,
+      text: row.text,
+      attachments: row.attachments,
+      cmid: opId,
+      origin: "draft" as const,
+    }
+    : undefined;
+  qStatus.set(opId, "pending");
+  if (presented !== undefined) qStatus.set(presented.cmid, "pending");
+  qClient(sessionId).mutate(
+    "activateDraft",
+    presented === undefined ? { id } : { id, row: presented },
+    opId,
+  );
+  if (dest === "transcript") {
+    const map = new Map(state.optimisticMessages);
+    map.set(sessionId, [
+      ...(map.get(sessionId) ?? []),
+      {
+        id: `opt-${opId}`,
+        text: row.text,
+        attachments: row.attachments,
+        cmid: opId,
+        status: statusAfterExplicitSend(isConnected()),
+        origin: "draft",
+      },
+    ]);
+    setState({ ...state, optimisticMessages: map });
+    if (isConnected()) armMsgTimers(sessionId, opId);
+  } else {
+    revealPendingArrival({ kind: "queued", id: `opt-${opId}`, cmid: opId });
+  }
+  return waitForState(
     (snapshot) => !(snapshot.drafts.get(sessionId) ?? []).some((message) => message.id === id),
     "Send draft",
   );
@@ -2352,10 +2630,10 @@ export function activateDraft(sessionId: string, id: string): Promise<void> {
 
 // Send all drafts (front-to-back) — bulk "send everything" on the drafts panel.
 export function activateAllDrafts(sessionId: string): Promise<void> {
-  return sendWithAck(
-    { type: "activate_all_drafts", session_id: sessionId },
-    (snapshot) => (snapshot.drafts.get(sessionId)?.length ?? 0) === 0,
-    "Send all drafts",
+  const drafts = [...(state.drafts.get(sessionId) ?? [])];
+  return drafts.reduce(
+    (previous, draft) => previous.then(() => activateDraft(sessionId, draft.id)),
+    Promise.resolve(),
   );
 }
 
@@ -2395,7 +2673,31 @@ export function unscheduleDraft(sessionId: string, id: string): void {
 
 // Move a queued prompt back to drafts.
 export function queuedToDraft(sessionId: string, id: string): void {
-  send({ type: "queued_to_draft", session_id: sessionId, id });
+  const row = findQueued(sessionId, id);
+  if (row === undefined) return;
+  if (row.status !== undefined && row.cmid !== undefined) {
+    const text = row.text;
+    const attachments = row.attachments;
+    discardQueued(sessionId, row.cmid);
+    void qAdd("drafts", sessionId, text, attachments, { origin: "queue" });
+    return;
+  }
+  const opId = newCmid();
+  const presented: QueuedMessage = {
+    id: row.id,
+    text: row.text,
+    attachments: row.attachments,
+    ...(row.cmid !== undefined ? { cmid: row.cmid } : {}),
+    origin: "queue",
+    ...(row.schedule !== undefined ? { schedule: row.schedule } : {}),
+  };
+  qStatus.set(opId, "pending");
+  qClient(sessionId).mutate("returnQueuedToDraft", { id, row: presented }, opId);
+  revealPendingArrival({
+    kind: "draft",
+    id: presented.id,
+    ...(presented.cmid !== undefined ? { cmid: presented.cmid } : {}),
+  });
 }
 
 // Move a draft to another session's drafts (the "parked it in the wrong

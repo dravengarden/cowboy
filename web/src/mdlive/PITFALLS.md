@@ -541,12 +541,14 @@ here says otherwise.
     a physical iPad with split and floating layouts.
 
 23. **Fullscreen Mobile needs an explicit way to inspect behind the keyboard.**
-    Keep one `KeyboardHide` icon in the existing right-hand dock utilities. It
-    blurs only the currently active element; it must not reconfigure CM6, mutate
-    the document, collapse the fullscreen surface, or add a detached dismissal
-    pill. Tapping the editor restores native focus normally. This fills the
-    otherwise unused balanced-dock slot while preserving the exact-centre primary
-    action and the native caret/IME ownership rules above.
+    Keep one trailing dock slot for keyboard ownership. While the software
+    keyboard is up it is `KeyboardHide`: blur the first-responder only. It must
+    not reconfigure CM6, mutate the document, collapse the fullscreen surface,
+    auto-close on a later `visualViewport` close, or add a detached dismissal
+    pill. Collapse stays on the upper-track CloseFullscreen control (and Escape).
+    After the keyboard is already down, the same slot is Edit: `focusEnd()` in
+    the same tap so iOS raises the keyboard with the caret at the document end.
+    Tapping the editor canvas still restores native focus normally.
 
 24. **Mobile session-title editing is explicitly saved from the sheet footer.**
     While the title field is focused or contains an unsaved change, replace the
@@ -858,10 +860,13 @@ here says otherwise.
     WebKit still anchors its edit menu unreliably when a long press is far from
     the nearest real text line. The compact editor did not reproduce the bug
     because UIKit owned a native textarea. Fullscreen and expanded touch editors
-    now use that same native control for token-free text, including literal
-    Markdown toolbar transformations and selection reporting. An inline-image
+    now use that same native control for plain token-free prose. Heading, list,
+    quote, and fence markup (`# hi`, `- 主题`) promotes the same document to
+    CM6 so Obsidian live preview can hide inactive-line markers. An inline-image
     token still promotes the document synchronously to CM6 so its widget remains
-    in flow. Keep the live native value separate from CM6's frozen mount seed.
+    in flow. Capture the native caret on markup promotion and inherit the
+    keyboard in the same commit, the same way image paste does. Keep the live
+    native value separate from CM6's frozen mount seed.
 
     Do not split long-press into a UIKit path near text and a Cowboy-drawn Paste
     fallback in the blank canvas. The two menus have different appearance,
@@ -1010,6 +1015,10 @@ fullscreen editor:
 - [ ] Dismiss the keyboard while editing a Queue/Draft row (inline and fullscreen):
       the latest non-empty buffer persists and the default pending card returns;
       the accessory action shows Hide keyboard rather than Save/Done (pitfall #18).
+- [ ] In fullscreen, Hide keyboard only lowers the software keyboard. The
+      surface stays open, the slot becomes Edit, and tapping it focuses the
+      caret at the end and raises the keyboard. CloseFullscreen (not Hide)
+      is what leaves fullscreen (pitfall #23).
 - [ ] Toolbar quote/list/heading: caret lands AFTER the marker (pitfall #7).
 - [ ] Attach a photo, then type — keyboard returns, input works.
 - [ ] Paste a photo in the middle of text — the image lands at the caret and the
@@ -1360,7 +1369,11 @@ Desktop Vim + IME checks:
     remove this second selection transaction. Render the touch editor directly
     as `<textarea>` and use MUI Box only for theme-aware styling. Keep it
     uncontrolled during typing, use one static `rows` value, and let the focused
-    writing canvas provide its height. External document replacement and explicit
+    writing canvas provide its height. While the field is focused, never reset
+    `style.height` to `auto` to remeasure: that collapse/grow cycle is the same
+    class of layout race as TextareaAutosize and leaves the painted caret on the
+    previous line after a few Returns. Grow height monotonically while focused;
+    fit exactly only after blur. External document replacement and explicit
     toolbar edits may still map a selection synchronously; ordinary keyboard
     input must never call `setSelectionRange`, resize the DOM from an input
     callback, insert a zero-width sentinel, blur/refocus, or draw a fake caret.

@@ -46,6 +46,7 @@ import {
   ChatBubbleOutline,
   CleaningServices,
   Close,
+  CloudUpload,
   Code,
   Construction,
   ErrorOutline,
@@ -61,6 +62,7 @@ import {
   Stop,
   Terminal,
   Tune,
+  Undo,
   UnfoldLess,
   WarningAmberRounded,
 } from "@mui/icons-material";
@@ -68,6 +70,12 @@ import { providerPresentation } from "./providerPresentation";
 import { providerVisual } from "./providerVisual";
 import { ProviderRuntimeSurface } from "./ProviderSurface";
 import { ProviderThoughtSteps } from "./ProviderTranscript";
+import {
+  conversationClearEnterMs,
+  conversationClearExitMs,
+  prefersReducedConversationMotion,
+  subscribeConversationClear,
+} from "./conversationClearance";
 import { Markdown } from "./Markdown";
 import { attachmentDisplayParts } from "./attachments";
 import { CodeView, Labeled } from "./tools/blocks";
@@ -107,9 +115,16 @@ import {
   type QueuedMessage,
   releaseFollowedHistory,
   retryMessage,
+  returnFailedMessage,
   send,
+  useConnected,
   useStoreSelector,
 } from "./store";
+import {
+  homeForOrigin,
+  pendingSyncAppearance,
+  returnLabelForHome,
+} from "./localFirstDelivery";
 import { importantHaptic, magneticHaptic } from "./haptic";
 import { useReadingSettings } from "./readingSettings";
 import { mobileTranscriptTailGap } from "./mobileComposerPrimitives";
@@ -1240,10 +1255,15 @@ function OptimisticUserBubble({
   sessionId: string;
   message: QueuedMessage;
 }): React.JSX.Element {
-  const failed = message.status === "failed";
-  const sending = message.status === "sending";
+  const connected = useConnected();
+  const appearance = pendingSyncAppearance(message.status, connected);
+  const failed = appearance === "failed";
+  const sending = appearance === "sending";
+  const syncing = appearance === "syncing";
+  const inFlight = sending || syncing;
   const cmid = message.cmid ?? "";
   const content = attachmentDisplayParts(message.text, message.attachments);
+  const returnHome = homeForOrigin(message.origin ?? "composer");
   return (
     <Stack
       alignItems="flex-end"
@@ -1259,9 +1279,7 @@ function OptimisticUserBubble({
           bgcolor: "primary.main",
           color: "primary.contrastText",
           overflow: "hidden",
-          // Dim while in flight so a sending bubble is visibly "not yet
-          // delivered"; snaps back to full on confirm.
-          opacity: sending ? 0.62 : 1,
+          opacity: inFlight ? 0.62 : 1,
           transition: "opacity 0.2s ease",
           ...(failed && { borderColor: "error.main" }),
         }}
@@ -1288,7 +1306,7 @@ function OptimisticUserBubble({
                 </Typography>
               )
           )}
-        {sending && (
+        {inFlight && (
           <Box
             aria-hidden
             sx={{
@@ -1321,10 +1339,23 @@ function OptimisticUserBubble({
           </Typography>
         </Stack>
       )}
+      {syncing && (
+        <Stack
+          direction="row"
+          spacing={0.5}
+          alignItems="center"
+          sx={{ pr: 0.25 }}
+        >
+          <CloudUpload sx={{ fontSize: 14, color: "info.main" }} />
+          <Typography variant="caption" sx={{ color: "info.main" }}>
+            Waiting to sync
+          </Typography>
+        </Stack>
+      )}
       {failed && (
         <Stack direction="row" spacing={0.25} alignItems="center">
           <Typography variant="caption" sx={{ color: "error.main" }}>
-            Failed to send
+            Couldn't reach Cowboy
           </Typography>
           <Tooltip title="Retry">
             <IconButton
@@ -1333,6 +1364,15 @@ function OptimisticUserBubble({
               onClick={(): void => retryMessage(sessionId, cmid)}
             >
               <Refresh fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title={returnLabelForHome(returnHome)}>
+            <IconButton
+              size="small"
+              aria-label={returnLabelForHome(returnHome)}
+              onClick={(): void => returnFailedMessage(sessionId, cmid)}
+            >
+              <Undo fontSize="small" />
             </IconButton>
           </Tooltip>
           <Tooltip title="Discard">
@@ -3269,13 +3309,56 @@ export function Transcript({
     presentedTimeline,
   ]);
   const crashDetail = useMemo(() => latestCrashDetail(allItems), [allItems]);
-  const items = useMemo(
+  const liveItems = useMemo(
     () =>
       visibleItemKeys
         ? allItems.filter((item) => visibleItemKeys.has(item.key))
         : allItems,
     [allItems, visibleItemKeys],
   );
+  const liveItemsRef = useRef(liveItems);
+  liveItemsRef.current = liveItems;
+  const [exitItems, setExitItems] = useState<typeof liveItems | null>(null);
+  const [clearPhase, setClearPhase] = useState<"idle" | "exit" | "enter">(
+    "idle",
+  );
+  useEffect(() => {
+    setExitItems(null);
+    setClearPhase("idle");
+    return subscribeConversationClear((clearedSessionId) => {
+      if (clearedSessionId !== sessionId) return;
+      const snapshot = liveItemsRef.current;
+      if (snapshot.length === 0) return;
+      if (
+        prefersReducedConversationMotion() ||
+        shouldShowClearedConversationEmptyState(
+          snapshot.map((item) => item.kind),
+        )
+      ) {
+        setExitItems(null);
+        setClearPhase("idle");
+        return;
+      }
+      setExitItems(snapshot);
+      setClearPhase("exit");
+    });
+  }, [sessionId]);
+  useEffect(() => {
+    if (clearPhase !== "exit") return undefined;
+    const timer = globalThis.setTimeout(() => {
+      setExitItems(null);
+      setClearPhase("enter");
+    }, conversationClearExitMs);
+    return () => globalThis.clearTimeout(timer);
+  }, [clearPhase]);
+  useEffect(() => {
+    if (clearPhase !== "enter") return undefined;
+    const timer = globalThis.setTimeout(() => {
+      setClearPhase("idle");
+    }, conversationClearEnterMs);
+    return () => globalThis.clearTimeout(timer);
+  }, [clearPhase]);
+  const items = exitItems ?? liveItems;
   const runs = useMemo(() => toolRuns(items), [items]);
   const tools = useMemo(() => runs.flatMap((run) => run.tools), [runs]);
   const [selectedToolKey, setSelectedToolKey] = useState<string | null>(null);
@@ -4865,6 +4948,9 @@ export function Transcript({
       <Box
         ref={parentRef}
         data-transcript-session={sessionId}
+        data-conversation-clear-phase={clearPhase === "idle"
+          ? undefined
+          : clearPhase}
         data-mobile-overflow-layer="true"
         data-render-paused={renderPausedForScroll ? "true" : undefined}
         data-desktop-transcript-scroller={desktopNavigation
@@ -4876,6 +4962,27 @@ export function Transcript({
           minHeight: 0,
           overflowY: "auto",
           overflowX: "hidden",
+          opacity: clearPhase === "exit" ? 0 : 1,
+          transform: clearPhase === "exit"
+            ? "translate3d(0, -10px, 0) scale(0.992)"
+            : "none",
+          transformOrigin: "center top",
+          transition: clearPhase === "idle"
+            ? "none"
+            : `opacity ${
+              clearPhase === "exit"
+                ? conversationClearExitMs
+                : conversationClearEnterMs
+            }ms cubic-bezier(0.22, 1, 0.36, 1), transform ${
+              clearPhase === "exit"
+                ? conversationClearExitMs
+                : conversationClearEnterMs
+            }ms cubic-bezier(0.22, 1, 0.36, 1)`,
+          "@media (prefers-reduced-motion: reduce)": {
+            opacity: 1,
+            transform: "none",
+            transition: "none",
+          },
           // The mobile session drawer owns a non-passive horizontal touch
           // recognizer on an ancestor. Without an explicit axis contract,
           // iOS WebKit keeps some long Page View gestures on the main thread

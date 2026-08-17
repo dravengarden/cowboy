@@ -454,6 +454,7 @@ export function reconcileDeletedInlineImages(
 /// stored message `text` field / row previews must never show a raw token).
 /// Collapses the double space a removed mid-line token leaves behind.
 export function stripImageTokens(text: string): string {
+  IMG_TOKEN_RE.lastIndex = 0;
   return text.replace(IMG_TOKEN_RE, "").replace(/ {2,}/g, " ");
 }
 

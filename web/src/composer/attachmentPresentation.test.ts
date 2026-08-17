@@ -45,6 +45,11 @@ Deno.test("fullscreen keeps only images without CM inline tokens in its tray", (
   );
 });
 
+Deno.test("pending cards preview token-backed images inline instead of a second chip", () => {
+  assertEquals(composerSource.includes("attachmentTrayForSurface(seedAttachments, seedText)"), true);
+  assertEquals(composerSource.includes("<MessagePreview text={seedText} attachments={seedAttachments} />"), true);
+});
+
 Deno.test("attachment-only pending rows retain a full content edit target", () => {
   assertEquals(
     composerSource.includes('data-pending-content-action="attachment-preview"'),

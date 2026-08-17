@@ -240,8 +240,16 @@ export const ComposerTextarea = forwardRef<
     const ta = inputRef.current;
     if (!ta) return;
     if (!expanded) {
-      ta.style.height = "auto";
-      ta.style.height = `${String(nativeTextareaFittedHeight(ta.scrollHeight))}px`;
+      const needed = nativeTextareaFittedHeight(ta.scrollHeight);
+      // Collapsing to height:auto while focused races UIKit's caret overlay
+      // after Return and leaves it painted on the previous line (pitfall #63).
+      if (ta.ownerDocument.activeElement === ta) {
+        const current = Number.parseFloat(ta.style.height) || ta.clientHeight;
+        if (needed > current + 1) ta.style.height = `${String(needed)}px`;
+      } else {
+        ta.style.height = "auto";
+        ta.style.height = `${String(needed)}px`;
+      }
     } else {
       ta.style.removeProperty("height");
     }

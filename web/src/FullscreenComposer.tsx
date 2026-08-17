@@ -19,6 +19,7 @@ import {
   Check,
   Close,
   CloseFullscreen,
+  Edit,
   EditNoteOutlined,
   KeyboardHide,
   Schedule,
@@ -39,7 +40,9 @@ import {
 import { mobileComposerKeyboardGap } from "./mobileComposerPrimitives";
 import { useKeyboardOpen } from "./keyboardInset";
 import {
-  isMobileEditorFocusTransferPending,
+  clearMobileKeyboardDismissed,
+  dismissMobileSoftwareKeyboard,
+  noteMobileKeyboardDismissed,
   releaseMobileComposerFocus,
 } from "./composer/mobileComposerFocus";
 import type { NativeClipboardImagePasteRequest } from "./composer/nativeClipboardImagePaste";
@@ -133,16 +136,18 @@ export function FullscreenComposer({
   const nativeShell = isNativeShell();
   const keyboardOpen = useKeyboardOpen();
   const theme = useTheme();
-  const sawKeyboardRef = useRef(false);
+  const [hideRequested, setHideRequested] = useState(false);
+  const sawKeyboardRef = useRef(keyboardOpen);
   useEffect(() => {
-    if (keyboardOpen) {
-      sawKeyboardRef.current = true;
-      return;
-    }
-    if (!showCollapse || !sawKeyboardRef.current) return;
-    if (isMobileEditorFocusTransferPending()) return;
-    onCollapse();
-  }, [keyboardOpen, onCollapse, showCollapse]);
+    if (!keyboardOpen) return;
+    sawKeyboardRef.current = true;
+    setHideRequested(false);
+  }, [keyboardOpen]);
+  // First paint before iOS reports the keyboard must stay Hide, not a
+  // flashing Edit glyph. After a real open→close, or an explicit Hide
+  // tap, the same slot becomes Edit and restores the caret at the end.
+  const resumeEditing = hideRequested ||
+    (sawKeyboardRef.current && !keyboardOpen);
 
   // CM6 is UNCONTROLLED, exactly like the inline composer: freeze the open-time
   // text as a one-shot seed and let `onChange` flow text OUT only. Passing the live
@@ -369,16 +374,21 @@ export function FullscreenComposer({
         }
         fixedAction={
           <MobileComposerAccessoryButton
-            title="Hide keyboard"
+            title={resumeEditing ? "Edit" : "Hide keyboard"}
             preserveEditorFocus={false}
             onClick={act(() => {
-              if (document.activeElement instanceof HTMLElement) {
-                document.activeElement.blur();
+              if (resumeEditing) {
+                clearMobileKeyboardDismissed();
+                setHideRequested(false);
+                editorRef.current?.focusEnd();
+                return;
               }
-              if (showCollapse) onCollapse();
+              noteMobileKeyboardDismissed();
+              setHideRequested(true);
+              dismissMobileSoftwareKeyboard();
             })}
           >
-            <KeyboardHide />
+            {resumeEditing ? <Edit /> : <KeyboardHide />}
           </MobileComposerAccessoryButton>
         }
         primaryLabel={showCollapse ? "Collapse editor" : submitLabel}

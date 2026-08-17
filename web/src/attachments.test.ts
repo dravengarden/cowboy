@@ -4,9 +4,11 @@ import {
   type Attachment,
   clipboardFiles,
   pendingClipboardImageAttachment,
+  IMG_TOKEN_RE,
   promoteUnplacedImageTokens,
   reconcileDeletedInlineImages,
   settlePendingAttachments,
+  stripImageTokens,
 } from "./attachments.ts";
 
 Deno.test("native clipboard placeholders reserve image ids without fake bytes", () => {
@@ -123,6 +125,16 @@ Deno.test("local message display keeps image bytes at their inline position", ()
       { type: "text", text: "\nafter" },
       { type: "attachment", attachment: file },
     ],
+  );
+});
+
+Deno.test("stripImageTokens hides cowboy-att source even after a prior global scan", () => {
+  const token =
+    "![pasted-image-1.png](cowboy-att:att-f6da137a-d97f-4f24-bcfd-36945ab21a3d)";
+  IMG_TOKEN_RE.lastIndex = token.length;
+  assertEquals(
+    stripImageTokens(`${token}\n移动端这里没有触发 Obsidian 的渲染吧？`),
+    "\n移动端这里没有触发 Obsidian 的渲染吧？",
   );
 });
 

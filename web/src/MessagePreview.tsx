@@ -6,6 +6,8 @@ import type { Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { cmTheme } from "./cmTheme";
 import { livePreviewExtensions } from "./composerExtensions";
+import { type Attachment, imageTokensInText } from "./attachments";
+import { inlineImageField, inlineImageTheme, seedInlineAttachments } from "./inlineImages";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 
 // Read-only live-preview of a queued/draft message, rendered with the EXACT same
@@ -15,9 +17,11 @@ import { useReliableTouchTap } from "./useReliableTouchTap";
 // non-interactive (`editable={false}` + `pointer-events: none`), so a tap falls
 // through to `onClick` → open the row's edit; a long note clamps to a few lines
 // with a Show more / less toggle (the "默认折叠" ask), measured like the old
-// ClampedText. Image tokens are stripped by the caller (attachments render as
-// chips below), so no inline-image registry is needed here.
+// ClampedText. cowboy-att image tokens stay in the doc and render as the same
+// inline thumbnails as the composer — never as `![…](cowboy-att:…)` source.
 const COLLAPSED_MAX = "3.1em"; // ~2 lines at the composer's 1.5 line-height
+// One composer thumbnail (80px) plus a line of following text.
+const IMAGE_COLLAPSED_MAX = "124px";
 
 // Display-only whitespace tidy for the preview — like HTML's whitespace
 // collapsing, but markdown-aware (the STORED text is untouched; this only shapes
@@ -40,9 +44,11 @@ function compactForPreview(text: string): string {
 
 function MessagePreviewImpl({
   text,
+  attachments = [],
   onClick,
 }: {
   text: string;
+  attachments?: readonly Attachment[];
   onClick?: () => void;
 }): React.JSX.Element {
   const theme = useTheme();
@@ -55,6 +61,10 @@ function MessagePreviewImpl({
   // the keyboard.  Resolve an actual tap on pointer-up (while rejecting scroll
   // gestures and nested controls), and suppress the duplicate click.
   const editTap = useReliableTouchTap<HTMLDivElement>(() => onClick?.());
+  seedInlineAttachments(attachments);
+  const attachmentKey = attachments
+    .map((attachment) => `${attachment.id}:${attachment.previewUrl ?? ""}`)
+    .join("|");
 
   // The SAME extensions the input uses (reused, not re-declared, so the preview
   // can never visually drift from the editor). Memoised per theme.
@@ -62,11 +72,16 @@ function MessagePreviewImpl({
     () => [
       cmTheme(theme),
       ...livePreviewExtensions(),
+      inlineImageField,
+      inlineImageTheme,
       EditorView.contentAttributes.of({ tabindex: "-1" }),
     ],
     [theme],
   );
   const display = useMemo(() => compactForPreview(text), [text]);
+  const collapseMax = imageTokensInText(text).length > 0
+    ? IMAGE_COLLAPSED_MAX
+    : COLLAPSED_MAX;
 
   useLayoutEffect(() => {
     const el = ref.current;
@@ -88,7 +103,7 @@ function MessagePreviewImpl({
           ...(expanded
             ? {}
             : {
-              maxHeight: COLLAPSED_MAX,
+              maxHeight: collapseMax,
               overflow: "hidden",
               // A hard crop made the last line look broken. Fade the final line
               // so the compact disclosure below reads as its continuation rather
@@ -110,6 +125,7 @@ function MessagePreviewImpl({
         }}
       >
         <CodeMirror
+          key={attachmentKey}
           value={display}
           editable={false}
           theme="none"
@@ -162,12 +178,29 @@ function MessagePreviewImpl({
 
 // Each preview mounts a FULL CodeMirror (mdlive fidelity — the same engine as the
 // composer), so a queue/drafts panel can hold a dozen+ heavy editors at once.
-// Memoize on `text` — the only visual input — so a parent re-render (a store tick
-// mid-stream, a collapse toggle, a reorder) does NOT reconcile every CM6 instance,
-// which was the source of the expand/collapse jank. `onClick` is a stable per-row
-// closure (opens that row's edit); its identity churning each render must not
-// re-render the editor, so the comparison checks only its presence, not identity.
+// Memoize on `text` and attachment preview identity so a parent re-render (a
+// store tick mid-stream, a collapse toggle, a reorder) does NOT reconcile every
+// CM6 instance, which was the source of the expand/collapse jank. `onClick` is a
+// stable per-row closure (opens that row's edit); its identity churning each
+// render must not re-render the editor, so the comparison checks only its
+// presence, not identity.
 export const MessagePreview = memo(
   MessagePreviewImpl,
-  (a, b) => a.text === b.text && !!a.onClick === !!b.onClick,
+  (a, b) =>
+    a.text === b.text &&
+    !!a.onClick === !!b.onClick &&
+    samePreviewAttachments(a.attachments, b.attachments),
 );
+
+function samePreviewAttachments(
+  left: readonly Attachment[] | undefined,
+  right: readonly Attachment[] | undefined,
+): boolean {
+  const a = left ?? [];
+  const b = right ?? [];
+  return a.length === b.length &&
+    a.every((attachment, index) =>
+      attachment.id === b[index]?.id &&
+      attachment.previewUrl === b[index]?.previewUrl
+    );
+}

@@ -82,9 +82,13 @@ Deno.test("Provider management cards keep geometry in the Cowboy component libra
   );
   assertEquals(
     managementSource.includes(
-      'gridTemplateColumns: "32px minmax(0, 1fr)"',
+      'gridTemplateColumns: "auto minmax(0, 1fr)"',
     ),
-    true,
+    false,
+  );
+  assertEquals(
+    managementSource.includes("data-provider-identity-item"),
+    false,
   );
   assertEquals(
     managementSource.includes(
@@ -228,12 +232,27 @@ Deno.test("Service credential management renders one card per typed authenticati
     true,
   );
   assertEquals(
+    managementSource.includes("data-provider-credential-consumer="),
+    false,
+  );
+  assertEquals(managementSource.includes("Used by ${"), false);
+  assertEquals(
+    managementSource.includes('labeled'),
+    true,
+  );
+  assertEquals(
+    managementSource.includes("Shared Cowboy Service credential"),
+    true,
+  );
+  assertEquals(
     managementSource.includes(
       "One Cowboy Service credential shared by ${credentialEntries.length} Providers",
     ),
-    true,
+    false,
   );
-  assertEquals(managementSource.includes("entries.slice(0, 4)"), true);
+  assertEquals(managementSource.includes("<ProviderMarkStack"), true);
+  assertEquals(managementSource.includes("ProviderCredentialMarks"), false);
+  assertEquals(managementSource.includes("entries.slice(0, 4)"), false);
 });
 
 Deno.test("Machine credential status gives a typed Service-level recovery action", () => {
@@ -252,8 +271,12 @@ Deno.test("Machine credential status gives a typed Service-level recovery action
 Deno.test("Provider marks preserve host component classes and compact chip spacing", () => {
   assertEquals(surfaceSource.includes("className?: string | undefined;"), true);
   assertEquals(surfaceSource.includes("className={className}"), true);
+  assertEquals(surfaceSource.includes("data-provider-mark-stack"), true);
+  assertEquals(surfaceSource.includes("data-provider-identity-item"), true);
+  assertEquals(surfaceSource.includes("flexWrap: \"wrap\""), true);
+  assertEquals(surfaceSource.includes("ml: index === 0 ? 0 : `-${pull}`"), false);
   assertEquals(
-    managementSource.includes('"& .MuiChip-icon": { ml: 0.6, mr: 0.1 }'),
+    managementSource.includes("data-provider-credential-consumers"),
     true,
   );
 });
@@ -338,6 +361,22 @@ Deno.test("Provider Transcript renderer consumes only closed presentation varian
   ) {
     assertEquals(transcriptPresentationSource.includes(variant), true);
   }
+  assertEquals(
+    transcriptPresentationSource.includes(
+      "return { size: 15, gap: 4, paddingLeft: 0 };",
+    ),
+    true,
+  );
+  assertEquals(
+    transcriptPresentationSource.includes("paddingLeft: 10,"),
+    false,
+  );
+  assertEquals(
+    transcriptPresentationSource.includes(
+      "pl: current && currentSurface ? 0.5 : 0",
+    ),
+    true,
+  );
   assertEquals(
     transcriptPresentationSource.includes(
       "data-provider-thought-variant={presentation.variant}",

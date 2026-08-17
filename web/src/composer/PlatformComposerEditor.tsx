@@ -49,10 +49,12 @@ export interface PlatformComposerEditorProps
 // The only editor gateway used by product shells, including fullscreen/expanded
 // pending-message editors. It deliberately does
 // not alter the CM6 extension set or controlled/uncontrolled behaviour. On
-// touch surfaces it gives token-free text to a native textarea (UIKit owns the
-// long-press menu), promoting the same document to CM6 when an inline image
-// token requires a widget. This includes fullscreen: WebKit contenteditable is
-// not a reliable edit-menu anchor far away from its nearest real text line.
+// touch surfaces it gives plain token-free prose to a native textarea (UIKit
+// owns the long-press menu), promoting the same document to CM6 when heading,
+// list, quote, or fence markup needs Obsidian live preview, or when an inline
+// image token requires a widget. This includes fullscreen: WebKit
+// contenteditable is not a reliable edit-menu anchor far away from its
+// nearest real text line.
 export const PlatformComposerEditor = forwardRef<
   ComposerEditorHandle,
   PlatformComposerEditorProps
@@ -89,9 +91,16 @@ export const PlatformComposerEditor = forwardRef<
   surfaceKindRef.current = surface.kind;
   const onChangeRef = useRef(props.onChange);
   onChangeRef.current = props.onChange;
+  // The iOS paste-permission alert temporarily owns focus. When the accepted
+  // paste event returns, `document.activeElement` can therefore be BODY even
+  // though UIKit still considers this one native paste transaction. Preserve
+  // that intent through the synchronous native-textarea -> CM6 promotion so
+  // the replacement inherits the keyboard in the same React commit.
+  const pastePromotionPendingRef = useRef(false);
   const handleChange = useCallback((next: string): void => {
-    const demoting = !committedNativeTouchRef.current &&
-      shouldUseNativeTouchEditor(surfaceKindRef.current, next);
+    const nextNative = shouldUseNativeTouchEditor(surfaceKindRef.current, next);
+    const demoting = !committedNativeTouchRef.current && nextNative;
+    const promoting = committedNativeTouchRef.current && !nextNative;
     if (demoting) {
       // Capture the post-edit selection before the parent mirrors `next` and
       // replaces CM6. The refs survive React replay until the native child's
@@ -99,14 +108,15 @@ export const PlatformComposerEditor = forwardRef<
       demotionSelectionRef.current = childEditorRef.current?.getSelection() ?? null;
       demotionFocusPendingRef.current = childEditorRef.current?.hasFocus() ?? false;
     }
+    if (promoting) {
+      const selection = childEditorRef.current?.getSelection();
+      promotionCaretRef.current = selection?.head ?? next.length;
+      if (childEditorRef.current?.hasFocus()) {
+        pastePromotionPendingRef.current = true;
+      }
+    }
     onChangeRef.current(next);
   }, []);
-  // The iOS paste-permission alert temporarily owns focus. When the accepted
-  // paste event returns, `document.activeElement` can therefore be BODY even
-  // though UIKit still considers this one native paste transaction. Preserve
-  // that intent through the synchronous native-textarea -> CM6 promotion so
-  // the replacement inherits the keyboard in the same React commit.
-  const pastePromotionPendingRef = useRef(false);
   // During an image Paste, the token is inserted synchronously and this render
   // replaces the still-focused native textarea. Autofocus the CM6 mount in the
   // same discrete UIKit gesture; a later rAF focus cannot inherit the keyboard.

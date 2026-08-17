@@ -230,6 +230,11 @@ import {
     settingsDestinationLabel,
 } from "./SettingsChrome";
 import {
+    closestScrollableSettingsSurface,
+    destinationScrollTop,
+    nextSavedSettingsScroll,
+} from "./settingsDrillInScroll";
+import {
     CONTROL_CENTER_PANEL_EXIT_MS,
     controlCenterViewTransitionStyles,
     controlCenterPanelMotionSx,
@@ -2872,10 +2877,9 @@ export function App({
                     // group (composer, or the navbar in bottom mode) rises clear
                     // of the keyboard. 0 when no keyboard.
                     pb: "var(--kb-inset, 0px)",
-                    // Keyboard Focus Mode is one coordinated transition: the
-                    // persistent composer grows its formatting track while this
-                    // session nav yields the scarce keyboard-adjacent space. CSS
-                    // :has keeps editor focus/IME state out of React render state.
+                    // Keyboard up: temporarily tuck the session nav so the
+                    // compact composer sits on the keyboard. The two-track
+                    // format dock stays edit-only; this only hides chrome.
                     "&:has([data-mobile-focus-composer='true'][data-mobile-keyboard-open='true']:focus-within) [data-mobile-session-nav='true']": {
                         minHeight: 0,
                         maxHeight: 0,
@@ -2888,11 +2892,7 @@ export function App({
                         transition:
                             `max-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, min-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, opacity 90ms ease, transform ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, padding ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}`,
                     },
-                    // When a real touch editor owns the visible keyboard, the
-                    // Composer card becomes the only floating material. Keep the
-                    // measured shell height for transcript clearance, but remove
-                    // the old full-width slab and boundary hairline behind it.
-                    "&:has([data-mobile-primary-composer='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within, [data-mobile-pending-editor='true'][data-mobile-keyboard-open='true']:focus-within) [data-mobile-composer-shell-material='true']": {
+                    "&:has([data-mobile-focus-composer='true'][data-mobile-keyboard-open='true']:focus-within) [data-mobile-composer-shell-material='true']": {
                         opacity: "0 !important",
                     },
                 }}
@@ -4715,19 +4715,6 @@ function MachinesContent(): React.JSX.Element {
     );
 }
 
-function closestScrollableSettingsSurface(panel: HTMLElement): HTMLElement {
-    let candidate: HTMLElement | null = panel;
-    while (candidate) {
-        const style = getComputedStyle(candidate);
-        if (
-            /(auto|scroll)/.test(style.overflowY) &&
-            candidate.scrollHeight > candidate.clientHeight
-        ) return candidate;
-        candidate = candidate.parentElement;
-    }
-    return panel;
-}
-
 function isSettingsEditableTarget(target: EventTarget | null): target is HTMLElement {
     return target instanceof HTMLElement && (
         target.matches("input, textarea, select, [contenteditable='true']") ||
@@ -4808,10 +4795,34 @@ function SettingsShell({
     // pointer/physical-keyboard surface rather than the touch sheet.
     const desktop = useMediaQuery("(pointer: fine) and (hover: hover)");
     const settingsPanelRef = useRef<HTMLDivElement>(null);
+    const settingsListRef = useRef<HTMLDivElement>(null);
+    const settingsListScrollRef = useRef(0);
     const codeSectionRef = useRef<HTMLDivElement>(null);
     const viewTransitionRef = useRef<ControlCenterViewTransition | null>(null);
+    const settingsScrollSurface = useCallback((): HTMLElement | null => {
+        const list = settingsPanelRef.current ?? settingsListRef.current;
+        return list === null ? null : closestScrollableSettingsSurface(list);
+    }, []);
+    const captureSettingsListScroll = useCallback((): void => {
+        const surface = settingsScrollSurface();
+        if (surface === null) return;
+        settingsListScrollRef.current = nextSavedSettingsScroll(
+            tab,
+            surface.scrollTop,
+            settingsListScrollRef.current,
+        );
+    }, [settingsScrollSurface, tab]);
+    const applyDestinationScroll = useCallback((destination: ControlCenterTab): void => {
+        const surface = settingsScrollSurface();
+        if (surface === null) return;
+        surface.scrollTop = destinationScrollTop(
+            destination,
+            settingsListScrollRef.current,
+        );
+    }, [settingsScrollSurface]);
     const changeTab = useCallback((next: ControlCenterTab): void => {
         if (next === tab) return;
+        captureSettingsListScroll();
         const reducedMotion = globalThis.matchMedia(
             "(prefers-reduced-motion: reduce)",
         ).matches;
@@ -4832,12 +4843,9 @@ function SettingsShell({
                     transitionDocument,
                     () => {
                         flushSync(() => {
-                            settingsPanelRef.current?.scrollTo({
-                                top: 0,
-                                behavior: "auto",
-                            });
                             setRenderedTab(next);
                         });
+                        applyDestinationScroll(next);
                     },
                 );
                 viewTransitionRef.current = transition;
@@ -4863,7 +4871,7 @@ function SettingsShell({
         // content exit before the selected panel mounts.
         setTabPanelVisible(false);
         setTab(next);
-    }, [desktop, tab]);
+    }, [applyDestinationScroll, captureSettingsListScroll, desktop, tab]);
     useEffect(() => {
         if (!open) {
             viewTransitionRef.current?.skipTransition();
@@ -4874,16 +4882,28 @@ function SettingsShell({
         setRenderedTab(initialTab);
         setSection(initialSection);
         setTabPanelVisible(true);
+        settingsListScrollRef.current = 0;
     }, [open, initialTab, initialSection]);
+    const didFocusCodeSectionRef = useRef(false);
     useEffect(() => {
-        if (!open || desktop || initialSection !== "code" || tab !== "settings") {
+        if (!open) {
+            didFocusCodeSectionRef.current = false;
             return undefined;
         }
+        if (desktop || initialSection !== "code" || tab !== "settings") {
+            return undefined;
+        }
+        if (didFocusCodeSectionRef.current) return undefined;
+        didFocusCodeSectionRef.current = true;
         const frame = globalThis.requestAnimationFrame(() => {
             codeSectionRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
         });
         return (): void => globalThis.cancelAnimationFrame(frame);
     }, [desktop, initialSection, open, tab]);
+    useLayoutEffect(() => {
+        if (!open || !tabPanelVisible || renderedTab !== tab) return;
+        applyDestinationScroll(renderedTab);
+    }, [applyDestinationScroll, open, renderedTab, tab, tabPanelVisible]);
     const vim = useVimSetting();
     const notify = useNotifySetting();
     const vibrate = useVibrateSetting();
@@ -4927,11 +4947,12 @@ function SettingsShell({
         let secondFrame = 0;
         let swapTimer: number | null = null;
         const mountSelectedPanel = (): void => {
-            settingsPanelRef.current?.scrollTo({ top: 0, behavior: "auto" });
             setRenderedTab(tab);
             firstFrame = globalThis.requestAnimationFrame(() => {
+                applyDestinationScroll(tab);
                 secondFrame = globalThis.requestAnimationFrame(() => {
                     setTabPanelVisible(true);
+                    applyDestinationScroll(tab);
                 });
             });
         };
@@ -4945,9 +4966,9 @@ function SettingsShell({
             // deferral, but do not wait for or render an animation.
             firstFrame = globalThis.requestAnimationFrame(() => {
                 secondFrame = globalThis.requestAnimationFrame(() => {
-                    settingsPanelRef.current?.scrollTo({ top: 0, behavior: "auto" });
                     setRenderedTab(tab);
                     setTabPanelVisible(true);
+                    applyDestinationScroll(tab);
                 });
             });
         }
@@ -4956,7 +4977,7 @@ function SettingsShell({
             if (firstFrame !== 0) globalThis.cancelAnimationFrame(firstFrame);
             if (secondFrame !== 0) globalThis.cancelAnimationFrame(secondFrame);
         };
-    }, [desktop, open, tab, tabPanelVisible]);
+    }, [applyDestinationScroll, desktop, open, tab, tabPanelVisible]);
     const [settingsGoPrefix, setSettingsGoPrefix] = useState(false);
     const [settingsEditableFocus, setSettingsEditableFocus] = useState(false);
     useEffect(() => {
@@ -5136,7 +5157,19 @@ function SettingsShell({
                         actions={[{
                             key: "back",
                             label: "Back to Settings",
-                            icon: <ArrowBackIosNew sx={{ fontSize: "1.25em", ml: "-0.08em" }} />,
+                            icon: (
+                                <ArrowBackIosNew
+                                    sx={{
+                                        // WebKit min-font-size clamps rem/em SVG
+                                        // glyphs, so em on this island never
+                                        // moved with the Settings font scale.
+                                        fontSize: "calc(20px * var(--cowboy-font-scale, 1))",
+                                        width: "calc(20px * var(--cowboy-font-scale, 1))",
+                                        height: "calc(20px * var(--cowboy-font-scale, 1))",
+                                        ml: "calc(-1.6px * var(--cowboy-font-scale, 1))",
+                                    }}
+                                />
+                            ),
                             onPress: (): void => changeTab("settings"),
                         }]}
                     />
@@ -5311,7 +5344,7 @@ function SettingsShell({
                     </Box>
                 </Box>
             ) : !tabPanelVisible ? null : renderedTab === "providers" ? <ProvidersContent /> : renderedTab === "machines" ? <MachinesContent /> : renderedTab === "info" ? <InfoContent /> : renderedTab === "logs" ? <UsageLogs /> : (
-            <Stack spacing={2}>
+            <Stack ref={settingsListRef} data-settings-list="true" spacing={2}>
                 <Stack
                     direction="row"
                     alignItems="center"

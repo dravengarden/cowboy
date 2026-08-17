@@ -52,6 +52,7 @@ import {
   ChevronRight,
   CleaningServices,
   Close,
+  CloudUpload,
   CloseFullscreen,
   Compress,
   DeleteOutline,
@@ -98,6 +99,12 @@ import {
 } from "./composer/mobileComposerFocus";
 import { useKeyboardOpen } from "./keyboardInset";
 import { attachmentTrayForSurface } from "./composer/attachmentPresentation";
+import {
+  canReturnFromPendingRow,
+  homeForOrigin,
+  pendingSyncAppearance,
+  returnLabelForHome,
+} from "./localFirstDelivery";
 import type { ComposerWorkspaceProps } from "./composer/contracts";
 import { resolveSessionAction, type SessionAction } from "./agentCommands";
 import {
@@ -149,10 +156,12 @@ import { openLightbox } from "./ResourceLightbox";
 import { PlanDock } from "./PlanDock";
 import {
   mobileComposerFocusMotion,
+  mobileComposerIdleEditorMinHeight,
   mobileComposerKeyboardGap,
   mobileComposerPanelFrameSx,
   mobileComposerPanelHeaderMinHeight,
   mobileComposerStackGap,
+  mobilePendingRowMinHeight,
 } from "./mobileComposerPrimitives";
 import {
   mobileFocusedComposerFill,
@@ -217,6 +226,7 @@ import {
   clearDrafts,
   clearQueue,
   discardQueued,
+  returnFailedQueued,
   editDraft,
   editQueued,
   forcePushQueued,
@@ -347,7 +357,6 @@ const TOOLBAR_MIN_H = {
   minHeight: 34,
   "@media (pointer: coarse)": { minHeight: 40 },
 } as const;
-const MOBILE_COMPOSER_IDLE_EDITOR_MIN_H = 48;
 const MOBILE_COMPOSER_INPUT_EDITOR_MIN_H = 80;
 
 // MUI's Button start-icon selector assigns a fixed px size with more
@@ -1419,7 +1428,6 @@ export function ComposerWorkspace({
     if (touchInput && action.kind === "reset") {
       setMobileInputResetBlocked(true);
       setComposeFs(false);
-      setMobileToolbarSettingsOpen(false);
       setClearComposerAnchor(null);
       setImgSel(null);
       dismissMobileSoftwareKeyboard();
@@ -1566,9 +1574,10 @@ export function ComposerWorkspace({
 
     mobileComposerKeyboardWasOpenRef.current = false;
     // iOS and third-party keyboards can hide without blurring their surviving
-    // textarea/contenteditable. The Composer chrome is intentionally driven by
-    // native :focus-within, so end that stale editing session at the actual
-    // visualViewport open→closed boundary before the next paint.
+    // textarea/contenteditable. Collapse the compact card's keyboard fill and
+    // end that stale session at the visualViewport open→closed boundary.
+    noteMobileKeyboardDismissed();
+    setMobileKeyboardDismissed(true);
     releaseMobileComposerFocus();
     return undefined;
   }, [keyboardOpen, mobileKeyboardDismissed, touchInput]);
@@ -1734,11 +1743,6 @@ export function ComposerWorkspace({
         ...(!desktop && {
           minHeight: 0,
           maxHeight: "100%",
-          "&:has(> [data-mobile-primary-composer='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within)":
-            {
-              flex: "0 1 auto",
-              overflow: "hidden",
-            },
           // Every visible slot shares one horizontal contract. Explicitly zero
           // the flex minimum so a long pending row, CodeMirror canvas, or
           // container-query child cannot shrink or widen the whole bottom stack.
@@ -1748,6 +1752,11 @@ export function ComposerWorkspace({
             maxWidth: "100%",
             boxSizing: "border-box",
           },
+          "&:has(> [data-mobile-primary-composer='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within)":
+            {
+              flex: "0 1 auto",
+              overflow: "hidden",
+            },
           // Keyboard Focus Mode is a single floating writing surface. Keep the
           // auxiliary state mounted so Plan/Queue/Draft disclosure and edit
           // ownership survive, but remove it from presentation while the main
@@ -2315,7 +2324,7 @@ export function ComposerWorkspace({
                 // state above, which promotes this to the two-control height.
                 // Keeping the resting height content-tight prevents a permanent
                 // blank "padding" band regardless of Plan/Queue/Draft presence.
-                minHeight: MOBILE_COMPOSER_IDLE_EDITOR_MIN_H,
+                minHeight: mobileComposerIdleEditorMinHeight,
                 transition:
                   `min-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}`,
                 "@media (prefers-reduced-motion: reduce)": {
@@ -3780,25 +3789,35 @@ const QueuedAttachmentChips = memo(function QueuedAttachmentChips({
 //   - "queued": prompts the busy agent can't take yet, auto-drained one per turn.
 //   - "draft":  parked messages the user holds; activated (sent/queued) on demand.
 
-// Gradient shimmer sweep — Claude "thinking" style — for an optimistic row
-// still unconfirmed past SHIMMER_DELAY_MS (see store's optimisticDrafts).
-const sweep = keyframes`to { background-position: -200% 0; }`;
+const uploadPulse = keyframes`
+  0%, 100% { opacity: 0.42; transform: translateY(0); }
+  50% { opacity: 1; transform: translateY(-1px); }
+`;
 
-// An OPTIMISTIC draft row: shown the instant you stage it, before the daemon
-// confirms. `pending` (<200ms) renders like a normal row so a fast LAN/tailnet
-// send never flashes a loader; `sending` shimmers in the theme colour; `failed`
-// (WS down / timed out) turns red with retry + discard. Reconciled out of the
-// store by cmid the moment its confirmed twin arrives, so it never duplicates.
+// An OPTIMISTIC draft/queue row: shown the instant you stage or move it, before
+// the service confirms. Connected `pending` stays quiet so a fast LAN confirm
+// never flashes a loader. Disconnected `pending` is an upload waiting to reach
+// the service. `sending` is in-flight. `failed` (retry still offline, or ack
+// timeout) is red with retry / return / discard.
 function OptimisticDraftRow({
   sessionId,
+  kind,
   message,
 }: {
   sessionId: string;
+  kind: "queued" | "draft";
   message: QueuedMessage;
 }): React.JSX.Element {
-  const failed = message.status === "failed";
-  const sending = message.status === "sending";
+  const connected = useConnected();
+  const appearance = pendingSyncAppearance(message.status, connected);
+  const failed = appearance === "failed";
+  const sending = appearance === "sending";
+  const syncing = appearance === "syncing";
   const cmid = message.cmid ?? "";
+  const previewText = message.text;
+  const previewTray = attachmentTrayForSurface(message.attachments, previewText);
+  const canReturn = failed && canReturnFromPendingRow(kind, message.origin);
+  const returnHome = homeForOrigin(message.origin ?? (kind === "queued" ? "draft" : "composer"));
   return (
     <Paper
       elevation={0}
@@ -3806,18 +3825,20 @@ function OptimisticDraftRow({
         p: 0.75,
         display: "flex",
         alignItems: "flex-start",
+        minHeight: mobilePendingRowMinHeight,
         gap: 0.5,
         bgcolor: failed
           ? alpha(t.palette.error.main, 0.06)
           : sending
           ? alpha(t.palette.primary.main, 0.05)
+          : syncing
+          ? alpha(t.palette.info.main, 0.06)
           : "background.paper",
-        // Coloured leading edge marks the row's state at a glance: red = failed,
-        // primary = in flight (mirrors the failed affordance so "sending" reads
-        // as clearly as "failed", not as a near-invisible text shimmer).
         ...(failed && { borderLeft: `3px solid ${t.palette.error.main}` }),
         ...(sending && !failed &&
           { borderLeft: `3px solid ${t.palette.primary.main}` }),
+        ...(syncing && !failed && !sending &&
+          { borderLeft: `3px solid ${t.palette.info.main}` }),
       })}
     >
       {sending && (
@@ -3827,39 +3848,68 @@ function OptimisticDraftRow({
           sx={{ color: "primary.main", mt: 0.25, flexShrink: 0 }}
         />
       )}
+      {syncing && (
+        <CloudUpload
+          aria-hidden
+          sx={{
+            fontSize: 16,
+            color: "info.main",
+            mt: 0.25,
+            flexShrink: 0,
+            animation: `${uploadPulse} 1.4s ease-in-out infinite`,
+            "@media (prefers-reduced-motion: reduce)": { animation: "none" },
+          }}
+        />
+      )}
       <Box sx={{ flex: 1, minWidth: 0 }}>
-        <Typography
-          variant="body2"
-          sx={(t) => ({
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-            display: "-webkit-box",
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: "vertical",
-            overflow: "hidden",
-            ...(sending && {
-              background:
-                `linear-gradient(90deg, ${t.palette.text.secondary} 0%, ${t.palette.text.secondary} 35%, ${t.palette.primary.main} 50%, ${t.palette.text.secondary} 65%, ${t.palette.text.secondary} 100%)`,
-              backgroundSize: "200% 100%",
-              WebkitBackgroundClip: "text",
-              backgroundClip: "text",
-              color: "transparent",
-              animation: `${sweep} 2s linear infinite`,
-              "@media (prefers-reduced-motion: reduce)": { animation: "none" },
-            }),
-          })}
-        >
-          {message.text || "📎 attachment"}
-        </Typography>
-        {failed && (
-          <Typography variant="caption" sx={{ color: "error.main" }}>
-            Failed to send
+        {previewText.trim() !== ""
+          ? (
+            <MessagePreview
+              text={previewText}
+              attachments={message.attachments}
+            />
+          )
+          : previewTray.length === 0
+          ? (
+            <Typography variant="body2" sx={{ color: "text.secondary" }}>
+              📎 attachment
+            </Typography>
+          )
+          : null}
+        {syncing && (
+          <Typography variant="caption" sx={{ color: "info.main" }}>
+            Waiting to sync
           </Typography>
         )}
-        {message.attachments.length > 0 && (
-          <QueuedAttachmentChips attachments={message.attachments} />
+        {sending && (
+          <Typography variant="caption" sx={{ color: "text.secondary" }}>
+            Sending…
+          </Typography>
+        )}
+        {failed && (
+          <Typography variant="caption" sx={{ color: "error.main" }}>
+            Couldn't reach Cowboy
+          </Typography>
+        )}
+        {previewTray.length > 0 && (
+          <QueuedAttachmentChips attachments={previewTray} />
         )}
       </Box>
+      {kind === "draft" && !failed && !sending && (
+        <Tooltip title="Send">
+          <IconButton
+            size="small"
+            color="primary"
+            aria-label="send draft"
+            onClick={(): void => {
+              haptic();
+              void activateDraft(sessionId, message.id);
+            }}
+          >
+            <Send fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      )}
       {failed && (
         <Stack direction="row" sx={{ flexShrink: 0 }}>
           <Tooltip title="Retry">
@@ -3867,13 +3917,27 @@ function OptimisticDraftRow({
               size="small"
               aria-label="retry send"
               onClick={(): void => {
-                haptic(); // light — recovery action
+                haptic();
                 retryQueued(sessionId, cmid);
               }}
             >
               <Refresh fontSize="small" />
             </IconButton>
           </Tooltip>
+          {canReturn && (
+            <Tooltip title={returnLabelForHome(returnHome)}>
+              <IconButton
+                size="small"
+                aria-label={returnLabelForHome(returnHome)}
+                onClick={(): void => {
+                  haptic();
+                  returnFailedQueued(sessionId, cmid);
+                }}
+              >
+                <Undo fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          )}
           <Tooltip title="Discard">
             <IconButton
               size="small"
@@ -4665,7 +4729,7 @@ function PendingPanel({
                   }}
                 >
                   {optimistic
-                    ? <OptimisticDraftRow sessionId={sessionId} message={m} />
+                    ? <OptimisticDraftRow sessionId={sessionId} kind={kind} message={m} />
                     : (
                       <PendingRow
                         desktop={desktop}
@@ -4811,6 +4875,7 @@ function PendingRow({
   >(null);
   const seedText = pendingRowVisibleText(message.text, committedText);
   const seedAttachments = committedAttachments ?? message.attachments;
+  const seedTray = attachmentTrayForSurface(seedAttachments, seedText);
   // Per-row kebab (⋮) position. Click coordinates, not the button node: the
   // peek/footer keep a translate3d layer, and hiding the kebab via container
   // query can detach the element so MUI's anchorEl lands at (0, 0).
@@ -5012,7 +5077,7 @@ function PendingRow({
     // `starting` has no interruptible turn yet, and a disconnected client would
     // drop this non-durable command. Keep the event path guarded as well as the
     // button so keyboard/confirm callbacks cannot bypass the disabled state.
-    if (!connected || status !== "busy") return;
+    if (status !== "busy") return;
     if (editing) {
       await completePendingDelivery(() =>
         forcePushQueued(sessionId, message.id)
@@ -5083,18 +5148,24 @@ function PendingRow({
       </Popper>
     )
     : null;
-  // Mobile Queue/Draft edits own the writing surface until the user leaves
-  // them. Hiding the keyboard only persists the live buffer; it must not
-  // collapse the row into a card and hand focus to the empty new-message
-  // composer. Desktop still uses an explicit Done/discard transaction.
+  // Mobile Queue/Draft edits own the writing surface while the keyboard is
+  // up. Dismissing it must persist the live buffer, then return to the
+  // compact card — never leave the two-track dock over an empty canvas.
   const mobileEditSawKeyboardRef = useRef(false);
   const persistEditRef = useRef(persistEdit);
   persistEditRef.current = persistEdit;
-  const hideMobileEditKeyboard = (): void => {
+  const finishMobileEdit = (): void => {
     if (!touchInput || editAttachmentsPending) return;
     persistEditRef.current();
+    setOverlayOpen(false);
+    onEditDone();
     dismissMobileSoftwareKeyboard();
     releaseMobileComposerFocus();
+  };
+  const finishMobileEditRef = useRef(finishMobileEdit);
+  finishMobileEditRef.current = finishMobileEdit;
+  const hideMobileEditKeyboard = (): void => {
+    finishMobileEdit();
   };
   useEffect(() => {
     if (!touchInput || !editing) {
@@ -5117,10 +5188,10 @@ function PendingRow({
       return () => globalThis.clearTimeout(timer);
     }
     // A native long press can transiently report a closed keyboard while UIKit
-    // promotes the textarea gesture into Paste/Select. Keep the REAL textarea
-    // mounted through that settle window; only persist, never unmount.
+    // promotes the textarea gesture into Paste/Select. After that settle
+    // window, leave the two-track chrome and restore the compact card.
     const timer = globalThis.setTimeout(
-      () => persistEditRef.current(),
+      () => finishMobileEditRef.current(),
       mobilePendingKeyboardCloseSettleMs,
     );
     return () => globalThis.clearTimeout(timer);
@@ -5484,8 +5555,7 @@ function PendingRow({
                       <MobileComposerAccessoryButton
                         title="Force push"
                         color="warning"
-                        disabled={!editSendable || !connected ||
-                          status !== "busy"}
+                        disabled={!editSendable || status !== "busy"}
                         onClick={(event): void => {
                           haptic();
                           setConfirmAnchor(event.currentTarget);
@@ -5685,7 +5755,7 @@ function PendingRow({
   // Built as a statement to avoid a nested ternary in the JSX.
   let primary: React.JSX.Element;
   const primaryEnabled = kind === "draft" || dispatchable ||
-    (connected && status === "busy");
+    status === "busy";
   if (kind === "draft") {
     primary = (
       <Tooltip title={dispatchable ? "Send" : "Add to queue"}>
@@ -5715,11 +5785,11 @@ function PendingRow({
       </Tooltip>
     );
   } else {
-    const canForcePush = connected && status === "busy";
-    const forcePushTitle = !connected
-      ? "Unavailable while reconnecting"
-      : status === "starting"
+    const canForcePush = status === "busy";
+    const forcePushTitle = status === "starting"
       ? "Agent is starting — available when ready"
+      : !connected
+      ? "Force push when back online"
       : "Force push (interrupt & send)";
     primary = (
       <Tooltip title={forcePushTitle}>
@@ -5767,6 +5837,7 @@ function PendingRow({
         p: 0.75,
         display: "flex",
         alignItems: "flex-start",
+        minHeight: mobilePendingRowMinHeight,
         gap: 0.5,
         userSelect: "none",
         WebkitUserSelect: "none",
@@ -5789,15 +5860,15 @@ function PendingRow({
           flex: 1,
           alignSelf: "stretch",
           minWidth: 0,
-          minHeight: 38,
+          minHeight: mobileComposerIdleEditorMinHeight,
           cursor: touchInput ? "pointer" : "text",
         }}
       >
-        {stripImageTokens(seedText).trim() !== "" && (
-          <MessagePreview text={stripImageTokens(seedText)} />
+        {seedText.trim() !== "" && (
+          <MessagePreview text={seedText} attachments={seedAttachments} />
         )}
-        {seedAttachments.length > 0 && (
-          <QueuedAttachmentChips attachments={seedAttachments} />
+        {seedTray.length > 0 && (
+          <QueuedAttachmentChips attachments={seedTray} />
         )}
         {
           /* Scheduled-draft badge: a calm info chip showing when it auto-fires;

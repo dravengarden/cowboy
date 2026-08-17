@@ -35,6 +35,7 @@ import {
   providerPresentationEntry,
   useProviderCatalog,
 } from "./providerCatalog";
+import { readableProviderAccent } from "./providerVisual";
 
 export function ProviderRuntimeSurface({
   provider,
@@ -154,27 +155,97 @@ export function ProviderMark({
   );
 }
 
-/** Keep thin monochrome marks legible on dark surfaces without overriding a
- * Provider-authored explicit fill or gradient. */
+/** One mark is one item. Several items stand in a wrapping horizontal row
+ *  so another Provider is another item, not a tighter collage. */
+export function ProviderMarkStack({
+  manifests,
+  size = 22,
+  labeled = false,
+  className,
+  scaleWithFont = true,
+}: {
+  manifests: readonly ProviderUiManifest[];
+  size?: number;
+  labeled?: boolean;
+  className?: string;
+  scaleWithFont?: boolean;
+}): React.JSX.Element | null {
+  if (manifests.length === 0) return null;
+  return (
+    <Box
+      className={className}
+      data-provider-mark-stack
+      sx={{
+        display: "flex",
+        flexWrap: "wrap",
+        alignItems: "center",
+        columnGap: labeled ? 0.75 : 1,
+        rowGap: 0.75,
+        minWidth: 0,
+      }}
+    >
+      {manifests.map((manifest, index) => (
+        <Box
+          key={`${manifest.display.name}:${index}`}
+          data-provider-identity-item
+          sx={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 0.75,
+            minWidth: 0,
+            maxWidth: "100%",
+            ...(labeled
+              ? {
+                minHeight: 32,
+                px: 0.9,
+                py: 0.4,
+                borderRadius: 1.25,
+                border: 1,
+                borderColor: "divider",
+              }
+              : {}),
+          }}
+        >
+          <ProviderMark
+            manifest={manifest}
+            size={size}
+            scaleWithFont={scaleWithFont}
+          />
+          {labeled
+            ? (
+              <Typography
+                variant="caption"
+                fontWeight={650}
+                sx={{
+                  minWidth: 0,
+                  lineHeight: 1.3,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {manifest.display.name}
+              </Typography>
+            )
+            : null}
+        </Box>
+      ))}
+    </Box>
+  );
+}
+
+/** Theme wrapper around the shared accent-contrast helper. */
 export function readableProviderMarkColor(
   accent: string,
   theme: Theme,
 ): string {
-  if (theme.palette.mode !== "dark") return accent;
-  const match = /^#([0-9a-f]{6})$/i.exec(accent.trim());
-  if (!match) return accent;
-  const channels = [0, 2, 4].map((offset) =>
-    Number.parseInt(match[1]!.slice(offset, offset + 2), 16) / 255
+  return readableProviderAccent(
+    accent,
+    theme.palette.mode,
+    theme.palette.mode === "dark"
+      ? theme.palette.common.white
+      : theme.palette.text.primary,
   );
-  const luminance = channels
-    .map((channel) =>
-      channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
-    )
-    .reduce(
-      (sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index]!,
-      0,
-    );
-  return luminance < 0.25 ? theme.palette.common.white : accent;
 }
 
 /** Shared safe renderer for signed Provider artwork. */
