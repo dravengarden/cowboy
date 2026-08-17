@@ -5,6 +5,7 @@ import {
 } from "./desktopVimMountPolicy";
 import {
   composerEditorMountSeed,
+  hasTouchLivePreviewMarkup,
   insertNativeInlineImages,
   nativeDemotionSelection,
   nativePromotionSelection,
@@ -67,6 +68,18 @@ Deno.test("only inline-image touch composers promote to CM6", () => {
   assertEquals(shouldUseNativeTouchEditor("mobile", token), false);
   assertEquals(shouldUseNativeTouchEditor("mobile", "hello"), true);
   assertEquals(shouldUseNativeTouchEditor("tablet", "hello"), true);
+});
+
+Deno.test("touch markdown headings and lists promote to Obsidian live preview", () => {
+  assertEquals(hasTouchLivePreviewMarkup("hello"), false);
+  assertEquals(hasTouchLivePreviewMarkup("#hi"), false);
+  assertEquals(hasTouchLivePreviewMarkup("# hi"), true);
+  assertEquals(hasTouchLivePreviewMarkup("- 主题"), true);
+  assertEquals(hasTouchLivePreviewMarkup("1. item"), true);
+  assertEquals(hasTouchLivePreviewMarkup("plain\n> quote"), true);
+  assertEquals(shouldUseNativeTouchEditor("mobile", "- 主题\n# hi"), false);
+  assertEquals(shouldUseNativeTouchEditor("tablet", "## Title"), false);
+  assertEquals(shouldUseNativeTouchEditor("desktop", "# hi"), false);
 });
 
 Deno.test("native to CM6 promotion freezes the token-bearing live document", () => {

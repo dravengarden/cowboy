@@ -40,16 +40,29 @@ export function shouldExpandInlineComposer(
 }
 
 /**
+ * Line-start markup that Obsidian live-preview would hide on inactive lines.
+ * `# hi` / `- 主题` must promote off the native textarea or they stay raw.
+ */
+const TOUCH_LIVE_PREVIEW_MARKUP =
+  /^(?:#{1,6} |\s*[-*+] (?:\[[ xX]\] )?|\s*\d+\. |\s*> |```)/m;
+
+export function hasTouchLivePreviewMarkup(value: string): boolean {
+  return TOUCH_LIVE_PREVIEW_MARKUP.test(value);
+}
+
+/**
  * Native iOS text controls own the reliable long-press edit menu. CM6 owns
- * inline-image widgets. Use the native control on every touch writing surface
- * while the document has no image placement token; the first token promotes
- * the same literal document to CM6 without moving or deleting the image.
+ * Obsidian live preview and inline-image widgets. Keep the native control
+ * for plain token-free prose; the first heading/list/quote/fence or image
+ * token promotes the same literal document to CM6.
  */
 export function shouldUseNativeTouchEditor(
   surfaceKind: "desktop" | "tablet" | "mobile",
   value: string,
 ): boolean {
-  return surfaceKind !== "desktop" && imageTokensInText(value).length === 0;
+  if (surfaceKind === "desktop") return false;
+  if (imageTokensInText(value).length > 0) return false;
+  return !hasTouchLivePreviewMarkup(value);
 }
 
 function hasNewImageToken(frozenSeed: string, touchValue: string): boolean {

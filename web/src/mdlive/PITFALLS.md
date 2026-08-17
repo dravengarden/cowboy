@@ -860,10 +860,13 @@ here says otherwise.
     WebKit still anchors its edit menu unreliably when a long press is far from
     the nearest real text line. The compact editor did not reproduce the bug
     because UIKit owned a native textarea. Fullscreen and expanded touch editors
-    now use that same native control for token-free text, including literal
-    Markdown toolbar transformations and selection reporting. An inline-image
+    now use that same native control for plain token-free prose. Heading, list,
+    quote, and fence markup (`# hi`, `- 主题`) promotes the same document to
+    CM6 so Obsidian live preview can hide inactive-line markers. An inline-image
     token still promotes the document synchronously to CM6 so its widget remains
-    in flow. Keep the live native value separate from CM6's frozen mount seed.
+    in flow. Capture the native caret on markup promotion and inherit the
+    keyboard in the same commit, the same way image paste does. Keep the live
+    native value separate from CM6's frozen mount seed.
 
     Do not split long-press into a UIKit path near text and a Cowboy-drawn Paste
     fallback in the blank canvas. The two menus have different appearance,
