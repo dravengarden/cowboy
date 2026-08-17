@@ -323,14 +323,14 @@ export function createImeAutoInsertVim(): {
       // The sink may replace focus only while THIS editor still owns it.
       const ownsFocus = this.view.hasFocus || this.view.dom.contains(document.activeElement);
       if (
-        ownsFocus && !this.cm?.state?.vim?.insertMode &&
+        ownsFocus && this.cm && !this.cm.state?.vim?.insertMode &&
         document.activeElement !== this.sink
       ) {
         queueMicrotask(() => {
           const stillOwnsFocus = this.view.hasFocus ||
             this.view.dom.contains(document.activeElement);
           if (
-            stillOwnsFocus && !this.cm?.state?.vim?.insertMode &&
+            stillOwnsFocus && this.cm && !this.cm.state?.vim?.insertMode &&
             !composing && !this.view.composing
           ) {
             this.sink.focus();
@@ -344,6 +344,10 @@ export function createImeAutoInsertVim(): {
       // This sink is non-editable and cannot own marked text. macOS may still
       // report isComposing/229 for physical Normal-mode keys under a CJK input
       // source, so trust the editor's real composition lifecycle instead.
+      // The first focus update can precede codemirror-vim's compatibility
+      // handle. Reconnect synchronously so the first Normal command is not
+      // dropped merely because the sink appeared one microtask early.
+      if (!this.cm) this.connect();
       if (
         !this.cm || this.cm.state?.vim?.insertMode || composing ||
         this.view.composing

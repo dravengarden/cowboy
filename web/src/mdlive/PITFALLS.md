@@ -1878,4 +1878,10 @@ Desktop Vim + IME checks:
     ownership remain unchanged. The outer Desktop command capture must also
     treat a Vim sink as an editor when its containing `prompt.draft` or
     `prompt.queued` region is focused; otherwise its list-level `i` edit command
-    prevents the already-open editor from receiving Vim's Insert command.
+    prevents the already-open editor from receiving Vim's Insert command. Do
+    not focus the command sink until its codemirror-vim compatibility handle is
+    connected, and retry that connection on the first keydown; an early focused
+    sink with a null handle silently drops the user's first Normal command. The
+    outer capture must consult the containing region's committed
+    `data-desktop-focused` marker rather than an effect closure that can lag the
+    edit-opening render and misroute that same first key to the list keymap.

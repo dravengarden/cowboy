@@ -11,57 +11,50 @@ Deno.test("a Vim sink owns keys only while its containing region is focused", ()
   assertEquals(desktopComposerOwnsWorkspace("conversation.transcript"), false);
   assertEquals(
     desktopVimSinkShouldHandleKeys({
-      focusedRegion: "conversation.transcript",
       targetIsVimSink: true,
-      targetRegion: "prompt.composer",
+      targetRegionFocused: false,
     }),
     false,
   );
   assertEquals(
     desktopVimSinkShouldHandleKeys({
-      focusedRegion: "prompt.composer",
       targetIsVimSink: true,
-      targetRegion: "prompt.composer",
+      targetRegionFocused: true,
     }),
     true,
   );
   assertEquals(
     desktopVimSinkShouldHandleKeys({
-      focusedRegion: "prompt.composer",
       targetIsVimSink: false,
-      targetRegion: "prompt.composer",
+      targetRegionFocused: true,
     }),
     false,
   );
   assertEquals(
     desktopVimSinkShouldHandleKeys({
-      focusedRegion: "prompt.draft",
       targetIsVimSink: true,
-      targetRegion: "prompt.draft",
+      targetRegionFocused: true,
     }),
     true,
   );
   assertEquals(
     desktopVimSinkShouldHandleKeys({
-      focusedRegion: "prompt.queued",
       targetIsVimSink: true,
-      targetRegion: "prompt.queued",
+      targetRegionFocused: true,
     }),
     true,
   );
   assertEquals(
     desktopShouldBlockStaleVimSink({
-      focusedRegion: "conversation.transcript",
       targetIsVimSink: true,
-      targetRegion: "prompt.composer",
+      targetRegionFocused: false,
     }),
     true,
   );
   assertEquals(
     desktopShouldBlockStaleVimSink({
-      focusedRegion: "conversation.transcript",
       targetIsVimSink: false,
-      targetRegion: "prompt.composer",
+      targetRegionFocused: false,
     }),
     false,
   );
@@ -82,6 +75,8 @@ Deno.test("workspace capture blocks a stale Prompt sink after Conversation is hi
   assertEquals(controller.includes("desktopRegionFromPointerTarget("), true);
   assertEquals(controller.includes("desktopPointerLeftComposer("), true);
   assertEquals(vim.includes('dataset.desktopFocused !== "true"'), true);
+  assertEquals(vim.includes("if (!this.cm) this.connect();"), true);
+  assertEquals(vim.includes("ownsFocus && this.cm &&"), true);
 });
 
 Deno.test("Conversation chrome without a nested region still owns the transcript", () => {

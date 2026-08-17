@@ -15,18 +15,15 @@ export function desktopDefaultRegionForPane(
 }
 
 export function desktopVimSinkShouldHandleKeys(input: {
-  focusedRegion: string | null;
   targetIsVimSink: boolean;
-  targetRegion: string | null;
+  targetRegionFocused: boolean;
 }): boolean {
-  if (!input.targetIsVimSink) return false;
-  return input.targetRegion !== null && input.targetRegion === input.focusedRegion;
+  return input.targetIsVimSink && input.targetRegionFocused;
 }
 
 export function desktopShouldBlockStaleVimSink(input: {
-  focusedRegion: string | null;
   targetIsVimSink: boolean;
-  targetRegion: string | null;
+  targetRegionFocused: boolean;
 }): boolean {
   return input.targetIsVimSink && !desktopVimSinkShouldHandleKeys(input);
 }
