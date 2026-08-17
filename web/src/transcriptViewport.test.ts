@@ -10,6 +10,7 @@ import {
   shouldBackfillTranscriptViewport,
   shouldContinueScrollbackFill,
   shouldMagnetizeTranscript,
+  shouldMaskRestoringTranscript,
   shouldPrefetchVisibleScrollbackBoundary,
   shouldRecoverUnrenderableHistory,
   shouldShowClearedConversationEmptyState,
@@ -351,6 +352,27 @@ Deno.test("viewport restoration synchronizes live windowing with follow intent",
       savedFollowing: true,
       mode: "page",
     }),
+    false,
+  );
+});
+
+Deno.test("Desktop masks intermediate pages while restoring a detached viewport", () => {
+  const restoring = {
+    desktop: true,
+    canRestore: true,
+    savedFollowing: false,
+  };
+  assertEquals(shouldMaskRestoringTranscript(restoring), true);
+  assertEquals(
+    shouldMaskRestoringTranscript({ ...restoring, desktop: false }),
+    false,
+  );
+  assertEquals(
+    shouldMaskRestoringTranscript({ ...restoring, canRestore: false }),
+    false,
+  );
+  assertEquals(
+    shouldMaskRestoringTranscript({ ...restoring, savedFollowing: true }),
     false,
   );
 });

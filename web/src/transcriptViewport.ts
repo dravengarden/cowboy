@@ -114,6 +114,14 @@ export function restoredTranscriptFollowing(input: {
   return input.canRestore ? input.savedFollowing : input.mode === "history";
 }
 
+export function shouldMaskRestoringTranscript(input: {
+  desktop: boolean;
+  canRestore: boolean;
+  savedFollowing: boolean;
+}): boolean {
+  return input.desktop && input.canRestore && !input.savedFollowing;
+}
+
 export interface VisibleScrollbackBoundaryPrefetchInput {
   managed: boolean;
   restoring: boolean;

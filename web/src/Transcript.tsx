@@ -167,6 +167,7 @@ import {
   shouldBackfillTranscriptViewport,
   shouldContinueScrollbackFill,
   shouldMagnetizeTranscript,
+  shouldMaskRestoringTranscript,
   shouldPrefetchVisibleScrollbackBoundary,
   shouldRecoverUnrenderableHistory,
   shouldShowClearedConversationEmptyState,
@@ -4058,6 +4059,7 @@ export function Transcript({
   const pageIdRef = useRef(pageId);
   pageIdRef.current = pageId;
   const viewportRestoreActiveRef = useRef(false);
+  const [maskingViewportRestore, setMaskingViewportRestore] = useState(false);
   requestVisibleScrollbackBoundaryRef.current = (): void => {
     if (visibleScrollbackBoundaryRafRef.current !== 0) return;
     const requestedKey = scrollbackBoundaryBootstrapKeyRef.current;
@@ -4278,6 +4280,8 @@ export function Transcript({
       });
     };
     const markNativeScrollActive = (): void => {
+      viewportRestoreActiveRef.current = false;
+      setMaskingViewportRestore(false);
       cancelHistoryRelease();
       markTranscriptScrollActivity();
       nativeScrollActiveRef.current = true;
@@ -4763,6 +4767,7 @@ export function Transcript({
     if (restoringProjectionMountRef.current) {
       stick.current = false;
       setFollowingLive(false);
+      setMaskingViewportRestore(false);
       setSticky(sessionId, false);
       viewportRestoreActiveRef.current = false;
       requestVisibleScrollbackBoundaryRef.current();
@@ -4778,6 +4783,11 @@ export function Transcript({
     const restoreDetached = canRestore && !saved.following &&
       saved.anchorKey !== null;
     const restoreOffset = canRestore && !saved.following;
+    setMaskingViewportRestore(shouldMaskRestoringTranscript({
+      desktop: desktopNavigation,
+      canRestore,
+      savedFollowing: saved?.following ?? false,
+    }));
     stick.current = restoredTranscriptFollowing({
       canRestore,
       savedFollowing: saved?.following ?? false,
@@ -4830,6 +4840,7 @@ export function Transcript({
         raf = requestAnimationFrame(position);
       } else {
         viewportRestoreActiveRef.current = false;
+        setMaskingViewportRestore(false);
         requestVisibleScrollbackBoundaryRef.current();
       }
     };
@@ -4837,8 +4848,9 @@ export function Transcript({
     return () => {
       cancelAnimationFrame(raf);
       viewportRestoreActiveRef.current = false;
+      setMaskingViewportRestore(false);
     };
-  }, [managesScrollHistory, pageId, sessionId]);
+  }, [desktopNavigation, managesScrollHistory, pageId, sessionId]);
 
   // A live Page is allowed to follow only for the duration of its active turn.
   // As soon as that turn settles, freeze it as an ordinary reading page at its
@@ -5327,6 +5339,31 @@ export function Transcript({
             </>
           )}
       </Box>
+      {maskingViewportRestore && (
+        <Box
+          data-transcript-viewport-restore
+          role="status"
+          aria-live="polite"
+          aria-label="Restoring conversation position"
+          sx={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 1,
+            overflow: "hidden",
+            px: `${padding}px`,
+            py: 2,
+            bgcolor: "background.default",
+            pointerEvents: "none",
+          }}
+        >
+          <TranscriptSkeleton
+            desktop
+            provider={provider}
+            providerVersion={providerVersion}
+            providerDigest={providerDigest}
+          />
+        </Box>
+      )}
       <ToolDetailsBrowser
         items={items}
         runs={runs}
