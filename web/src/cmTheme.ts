@@ -130,15 +130,15 @@ export function cmTheme(theme: Theme, mono = false): Extension {
       // Don't blink the block cursor (Zed keeps it solid). The vim cursor layer
       // blinks via a JS-set CSS animation on `.cm-vimCursorLayer`; cancel it.
       ".cm-cursorLayer.cm-vimCursorLayer": { animation: "none !important" },
-      // Insert mode owns a real native caret (required by macOS/iOS IME). The
-      // Vim package can leave its previous painted cursor layer alive for one
-      // update after focus returns to `.cm-content`, producing two adjacent
-      // carets. Once CM has editable focus, native paint is authoritative and
-      // the Vim layer must be hidden; Normal/Visual keep focus on the command
-      // sink and therefore retain the solid block / visual decorations above.
-      "&.cm-focused .cm-cursorLayer.cm-vimCursorLayer": {
-        display: "none !important",
-      },
+      // Insert mode owns a real native caret (required by macOS/iOS IME). Vim's
+      // synchronous mode callback publishes `.cm-vim-native-caret` before the
+      // WebView commits focus, so the stale Vim layer cannot share a paint with
+      // the native caret. `.cm-focused` remains a defensive focus fallback.
+      // Normal/Visual publish neither selector and retain their block cursor.
+      "&.cm-vim-native-caret .cm-cursorLayer.cm-vimCursorLayer, &.cm-focused .cm-cursorLayer.cm-vimCursorLayer":
+        {
+          display: "none !important",
+        },
       ".cm-placeholder": { color: theme.palette.text.disabled },
       "&.cm-focused": { outline: "none" },
       // Selection — use the MUI selection token in both the focused and

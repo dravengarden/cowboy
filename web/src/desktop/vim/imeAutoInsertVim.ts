@@ -17,6 +17,7 @@ import {
   setVimMacroRecording,
 } from "./macroStatusStore";
 import { vimCommandKey } from "./vimCommandKey";
+import { syncVimCursorOwnership } from "./vimCursorOwnership";
 
 const DIRECT_INSERT_KEYS = new Set(["i", "I", "a", "A", "o", "O", "s", "S", "C", "R"]);
 // These commands can replace/create an empty line whose DOM is not available
@@ -179,6 +180,7 @@ export function createImeAutoInsertVim(): {
         this.cm.openDialog = this.originalOpenDialog;
       }
       this.view.dom.classList.remove("cm-vim-command-focused");
+      syncVimCursorOwnership(this.view.dom, false);
       this.sink.remove();
     }
 
@@ -189,6 +191,7 @@ export function createImeAutoInsertVim(): {
       this.installMacroStatusBridge();
       this.modeHandler = (): void => this.syncFocusToMode();
       this.cm.on?.("vim-mode-change", this.modeHandler);
+      syncVimCursorOwnership(this.view.dom, !!this.cm.state?.vim?.insertMode);
       this.focusSinkIfNormal();
     }
 
@@ -226,7 +229,12 @@ export function createImeAutoInsertVim(): {
     }
 
     private syncFocusToMode(): void {
-      if (this.cm?.state?.vim?.insertMode) {
+      const insertMode = !!this.cm?.state?.vim?.insertMode;
+      // Vim mode is the cursor authority. Do this before focus transfer so a
+      // WebView frame with stale `.cm-focused` state cannot paint both the old
+      // Vim layer and the native Insert caret.
+      syncVimCursorOwnership(this.view.dom, insertMode);
+      if (insertMode) {
         this.focusEditorCaret();
       } else {
         this.focusSinkIfNormal();

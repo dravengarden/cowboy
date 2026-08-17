@@ -341,11 +341,17 @@ here says otherwise.
     Insert mode must likewise have exactly one cursor owner. The native caret is
     authoritative while `.cm-content` owns focus; `@replit/codemirror-vim` may
     keep its previous `.cm-vimCursorLayer` alive for one update after the mode
-    transition, which paints a second adjacent caret on an empty line. The theme
-    hides only that Vim cursor layer while `.cm-editor.cm-focused`; command-sink
-    Normal/Visual states are not `.cm-focused`, so their block cursor and custom
-    Visual decorations remain intact. Never solve this by hiding the native
-    caret or adding `drawSelection()`—both break IME ownership.
+    transition, which paints a second adjacent caret on an empty line. Browser
+    focus is not a sufficient mode signal: native WebView can paint the caret
+    before `.cm-editor.cm-focused` settles, especially on an auto-continued
+    Markdown list where the logical and decorated DOM positions differ. The
+    Desktop Vim runtime must synchronously toggle `.cm-vim-native-caret` from
+    its actual `insertMode`; the theme hides only the stale Vim cursor layer
+    under that class (with `.cm-focused` as a fallback). Command-sink
+    Normal/Visual states remove the class and retain their block cursor and
+    custom Visual decorations. Never solve this by hiding the native caret or
+    adding `drawSelection()`—both break IME ownership. Status: fixed in
+    cowboy-v1401 with a cursor-owner contract test.
 
     Focus calls are also ownership changes. A direct Insert command may focus
     CodeMirror before Vim applies its logical selection, but the following Vim
