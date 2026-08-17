@@ -76,6 +76,7 @@ export function FullscreenComposer({
   attachmentsSlot,
   editorRef,
   autoFocus = true,
+  focusEndOnMount = false,
   showCollapse = true,
   submitLabel = "Send",
   submitIcon,
@@ -115,6 +116,8 @@ export function FullscreenComposer({
   // disarm the iOS long-press menu. The row-edit overlay (opened from an effect,
   // not directly in a tap) still relies on this.
   autoFocus?: boolean;
+  /** Defer Desktop end-focus until the final Vim-enabled CM6 mount exists. */
+  focusEndOnMount?: boolean;
   /** Keep collapse separate from submit for new messages. Row edits hide it:
    *  their live-saved Done action already closes the overlay. */
   showCollapse?: boolean;
@@ -289,6 +292,7 @@ export function FullscreenComposer({
           borderless
           fill
           vim={vim}
+          focusEndOnMount={focusEndOnMount}
           {...(onVimMode ? { onVimMode } : {})}
           onEscape={(): boolean => {
             if (onDiscard) {

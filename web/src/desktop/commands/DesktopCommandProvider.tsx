@@ -20,7 +20,10 @@ import { assertMacShortcutAllowed } from "./macShortcutPolicy";
 import { desktopImeOwnsKey } from "./imeShortcut";
 import { desktopOverlayOwnsShortcuts } from "./desktopShortcutScope";
 import { desktopBrowserChromeShortcut } from "./desktopBrowserChrome";
-import { desktopShouldBlockStaleVimSink } from "../desktopComposerOwnership";
+import {
+  desktopShouldBlockStaleVimSink,
+  desktopVimSinkShouldHandleKeys,
+} from "../desktopComposerOwnership";
 import { listJumpIndex, pendingItemActionKey } from "./listNavigation";
 import {
   adjacentDesktopSplitter,
@@ -194,13 +197,21 @@ export function DesktopCommandProvider(
     const onKeyDown = (event: KeyboardEvent): void => {
       const eventElement = event.target instanceof Element ? event.target : null;
       const normalCommandSink = eventElement?.matches("[data-vim-command-sink]") ?? false;
+      const vimSinkRegion = normalCommandSink
+        ? eventElement?.closest<HTMLElement>("[data-desktop-region]")
+          ?.dataset.desktopRegion ?? null
+        : null;
       // A pane pointer/focus transition can update the workspace region one
       // frame before DOM focus leaves the Composer's hidden Normal-mode sink.
       // In that brief mismatch the newly focused non-editor region owns the
       // physical Vim key; the sink is not a text field and must not strand list
       // navigation. Real editors remain exclusive.
       const textEditorOwnsKey = isTextEditingTarget(event.target) &&
-        !(normalCommandSink && workspace.focusedRegion !== "prompt.composer");
+        !(normalCommandSink && !desktopVimSinkShouldHandleKeys({
+          focusedRegion: workspace.focusedRegion,
+          targetIsVimSink: normalCommandSink,
+          targetRegion: vimSinkRegion,
+        }));
       // Composition is an exclusive native-input transaction. `isComposing`
       // is not reliable for every macOS keydown (the first and final events can
       // straddle compositionstart/end), so consult the shared lifecycle and
@@ -216,6 +227,7 @@ export function DesktopCommandProvider(
           desktopShouldBlockStaleVimSink({
             focusedRegion: workspace.focusedRegion,
             targetIsVimSink: normalCommandSink,
+            targetRegion: vimSinkRegion,
           })
         ) {
           event.stopPropagation();
@@ -982,6 +994,7 @@ export function DesktopCommandProvider(
         desktopShouldBlockStaleVimSink({
           focusedRegion: workspace.focusedRegion,
           targetIsVimSink: normalCommandSink,
+          targetRegion: vimSinkRegion,
         })
       ) {
         event.stopPropagation();

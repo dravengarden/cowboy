@@ -5253,9 +5253,9 @@ function PendingRow({
     // navigation caused by a small Edit tap.
     // focusEnd, not focus: opening an existing draft/queued message should put
     // the caret at the end of its text so you continue typing, not at the start.
-    // Desktop's editor chunk can mount one frame after the row switches state;
-    // focus exactly once in that frame instead of racing the lazy editor now and
-    // focusing it again later (repeat focus writes can interfere with macOS IME).
+    // Desktop focus belongs to PlatformComposerEditor's final interactive mount.
+    // Its Vim runtime can resolve after this frame and replace the loading CM6
+    // instance, so focusing here would hand keyboard ownership to stale DOM.
     // Touch entry already mounted and focused the real textarea synchronously in
     // `beginEdit`. Re-focusing on the next frame falls outside the user gesture
     // and can make WebKit keep the caret while declining to show the keyboard.
@@ -5264,7 +5264,6 @@ function PendingRow({
       return undefined;
     }
     const frame = globalThis.requestAnimationFrame(() => {
-      editorRef.current?.focusEnd();
       rowRef.current?.scrollIntoView({ block: "center", behavior: "auto" });
     });
     return () => globalThis.cancelAnimationFrame(frame);
@@ -5495,6 +5494,7 @@ function PendingRow({
               borderless
               {...(touchInput ? { endInset: 36 } : {})}
               vim={touchInput ? false : vim}
+              focusEndOnMount={desktop}
               onVimMode={setVimMode}
               onChange={updateEditDraft}
               onSubmit={saveEdit}
@@ -5631,6 +5631,7 @@ function PendingRow({
             sendable={editSendable}
             // The originating accessory tap owns exactly one focus transfer.
             autoFocus={false}
+            focusEndOnMount={desktop}
             showCollapse={false}
             submitLabel={touchInput ? "Collapse editor" : "Done editing"}
             submitIcon={touchInput ? <CloseFullscreen /> : <Check />}

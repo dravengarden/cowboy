@@ -19,6 +19,7 @@ import {
   preloadDesktopVimRuntime,
 } from "../desktop/vim/runtimeLoader";
 import {
+  desktopEditorMountFocusPolicy,
   desktopVimMountPolicy,
   type DesktopVimRuntimeState,
   shouldPreloadDesktopVim,
@@ -38,6 +39,8 @@ export interface PlatformComposerEditorProps
   extends Omit<ComposerEditorProps, "vim" | "touchInput"> {
   /** Desktop preference. Touch surfaces always force this off. */
   vim?: boolean;
+  /** Focus the final interactive CM6 instance at the end of its seed document. */
+  focusEndOnMount?: boolean;
   /**
    * Live React value used only by the native touch editor, including fullscreen.
    * CM6 keeps the frozen `value` seed so React updates cannot bounce its caret
@@ -60,7 +63,7 @@ export const PlatformComposerEditor = forwardRef<
   ComposerEditorHandle,
   PlatformComposerEditorProps
 >(function PlatformComposerEditor(
-  { vim = false, nativeValue, ...props },
+  { vim = false, nativeValue, focusEndOnMount = false, ...props },
   ref,
 ): React.JSX.Element {
   const surface = useSurfaceProfile();
@@ -199,6 +202,12 @@ export const PlatformComposerEditor = forwardRef<
     runtimeState === "ready",
     runtimeState === "failed",
   );
+  const mountFocus = desktopEditorMountFocusPolicy(
+    focusEndOnMount,
+    policy.awaitingRuntime,
+    cmSeedRef.current.length,
+  );
+  const cmInitialSelection = mountFocus.initialSelection ?? initialSelection;
   if (nativeTouch) {
     return (
       <ComposerTextarea
@@ -263,9 +272,10 @@ export const PlatformComposerEditor = forwardRef<
       {...props}
       value={cmSeedRef.current}
       onChange={handleChange}
-      autoFocus={props.autoFocus || focusPromotedEditor}
-      {...(initialSelection !== undefined
-        ? { initialSelection }
+      autoFocus={props.autoFocus || focusPromotedEditor ||
+        mountFocus.focusOnMount}
+      {...(cmInitialSelection !== undefined
+        ? { initialSelection: cmInitialSelection }
         : {})}
       // The loading editor is deliberately a separate, non-interactive CM6
       // lifetime. The real editor mounts only after Vim can be included in its

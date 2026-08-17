@@ -6,13 +6,14 @@ import {
   desktopVimSinkShouldHandleKeys,
 } from "./desktopComposerOwnership.ts";
 
-Deno.test("the Vim sink owns keys only while Prompt is the focused region", () => {
+Deno.test("a Vim sink owns keys only while its containing region is focused", () => {
   assertEquals(desktopComposerOwnsWorkspace("prompt.composer"), true);
   assertEquals(desktopComposerOwnsWorkspace("conversation.transcript"), false);
   assertEquals(
     desktopVimSinkShouldHandleKeys({
       focusedRegion: "conversation.transcript",
       targetIsVimSink: true,
+      targetRegion: "prompt.composer",
     }),
     false,
   );
@@ -20,6 +21,7 @@ Deno.test("the Vim sink owns keys only while Prompt is the focused region", () =
     desktopVimSinkShouldHandleKeys({
       focusedRegion: "prompt.composer",
       targetIsVimSink: true,
+      targetRegion: "prompt.composer",
     }),
     true,
   );
@@ -27,13 +29,31 @@ Deno.test("the Vim sink owns keys only while Prompt is the focused region", () =
     desktopVimSinkShouldHandleKeys({
       focusedRegion: "prompt.composer",
       targetIsVimSink: false,
+      targetRegion: "prompt.composer",
     }),
     false,
+  );
+  assertEquals(
+    desktopVimSinkShouldHandleKeys({
+      focusedRegion: "prompt.draft",
+      targetIsVimSink: true,
+      targetRegion: "prompt.draft",
+    }),
+    true,
+  );
+  assertEquals(
+    desktopVimSinkShouldHandleKeys({
+      focusedRegion: "prompt.queued",
+      targetIsVimSink: true,
+      targetRegion: "prompt.queued",
+    }),
+    true,
   );
   assertEquals(
     desktopShouldBlockStaleVimSink({
       focusedRegion: "conversation.transcript",
       targetIsVimSink: true,
+      targetRegion: "prompt.composer",
     }),
     true,
   );
@@ -41,6 +61,7 @@ Deno.test("the Vim sink owns keys only while Prompt is the focused region", () =
     desktopShouldBlockStaleVimSink({
       focusedRegion: "conversation.transcript",
       targetIsVimSink: false,
+      targetRegion: "prompt.composer",
     }),
     false,
   );

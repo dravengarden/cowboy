@@ -17,17 +17,18 @@ export function desktopDefaultRegionForPane(
 export function desktopVimSinkShouldHandleKeys(input: {
   focusedRegion: string | null;
   targetIsVimSink: boolean;
+  targetRegion: string | null;
 }): boolean {
   if (!input.targetIsVimSink) return false;
-  return desktopComposerOwnsWorkspace(input.focusedRegion);
+  return input.targetRegion !== null && input.targetRegion === input.focusedRegion;
 }
 
 export function desktopShouldBlockStaleVimSink(input: {
   focusedRegion: string | null;
   targetIsVimSink: boolean;
+  targetRegion: string | null;
 }): boolean {
-  return input.targetIsVimSink &&
-    !desktopComposerOwnsWorkspace(input.focusedRegion);
+  return input.targetIsVimSink && !desktopVimSinkShouldHandleKeys(input);
 }
 
 export function desktopRegionFromPointerTarget(

@@ -1863,3 +1863,19 @@ Desktop Vim + IME checks:
     edit for one gesture after the kebab opens or closes, and do not
     use `cursor: text` on the unread-only card. This does not claim
     pitfall #69 fixed.
+
+73. **A transient Desktop Vim editor must focus the final interactive
+    mount, not its loading placeholder.** `PlatformComposerEditor`
+    deliberately mounts a disabled CM6 instance while the Vim chunk is
+    loading, then replaces it with a Vim-enabled instance. A one-frame
+    `focusEnd()` from Queue/Draft edit entry can land on the placeholder;
+    the replacement then loses keyboard ownership, so `i` never reaches
+    the Normal-mode command sink. Carry the end-selection intent through
+    the runtime transition and autofocus only the final interactive CM6
+    mount. Apply the same contract to inline and fullscreen pending edits;
+    Draft and Queue share `PendingRow`. Keep touch entry on its synchronous
+    native-textarea focus path so UIKit paste, selection, keyboard, and IME
+    ownership remain unchanged. The outer Desktop command capture must also
+    treat a Vim sink as an editor when its containing `prompt.draft` or
+    `prompt.queued` region is focused; otherwise its list-level `i` edit command
+    prevents the already-open editor from receiving Vim's Insert command.

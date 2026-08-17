@@ -1,5 +1,6 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
+  desktopEditorMountFocusPolicy,
   desktopVimMountPolicy,
   shouldPreloadDesktopVim,
 } from "./desktopVimMountPolicy";
@@ -47,6 +48,20 @@ Deno.test("a failed Vim chunk leaves the Desktop composer usable", () => {
   assertEquals(desktopVimMountPolicy("desktop", true, false, true), {
     awaitingRuntime: false,
     enableVim: false,
+  });
+});
+
+Deno.test("deferred Desktop edit focus lands on the final Vim mount at the document end", () => {
+  assertEquals(desktopEditorMountFocusPolicy(true, true, 17), {
+    focusOnMount: false,
+    initialSelection: 17,
+  });
+  assertEquals(desktopEditorMountFocusPolicy(true, false, 17), {
+    focusOnMount: true,
+    initialSelection: 17,
+  });
+  assertEquals(desktopEditorMountFocusPolicy(false, false, 17), {
+    focusOnMount: false,
   });
 });
 
