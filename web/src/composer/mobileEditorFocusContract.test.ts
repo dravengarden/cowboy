@@ -577,6 +577,23 @@ Deno.test("move-draft undo toast clears the iOS status safe area", () => {
   );
 });
 
+Deno.test("fullscreen hide keyboard stays expanded and resumes at the document end", () => {
+  assertEquals(fullscreenComposerSource.includes("if (showCollapse) onCollapse()"), false);
+  assertEquals(fullscreenComposerSource.includes("sawKeyboardRef.current && !keyboardOpen"), true);
+  assertEquals(fullscreenComposerSource.includes('title={resumeEditing ? "Edit" : "Hide keyboard"}'), true);
+  assertEquals(fullscreenComposerSource.includes("{resumeEditing ? <Edit /> : <KeyboardHide />}"), true);
+  assertEquals(fullscreenComposerSource.includes("editorRef.current?.focusEnd()"), true);
+  assertEquals(fullscreenComposerSource.includes("dismissMobileSoftwareKeyboard()"), true);
+  assertEquals(fullscreenComposerSource.includes("noteMobileKeyboardDismissed()"), true);
+  const hideClick = fullscreenComposerSource.slice(
+    fullscreenComposerSource.indexOf('title={resumeEditing ? "Edit" : "Hide keyboard"}'),
+    fullscreenComposerSource.indexOf(
+      "primaryLabel={showCollapse ? \"Collapse editor\" : submitLabel}",
+    ),
+  );
+  assertEquals(hideClick.includes("onCollapse()"), false);
+});
+
 Deno.test("every focused mobile editor uses two semantic bars with a fixed keyboard action", () => {
   assertEquals(
     accessoryDockSource.includes("data-mobile-composer-utility-actions"),
@@ -595,7 +612,7 @@ Deno.test("every focused mobile editor uses two semantic bars with a fixed keybo
   assertEquals(composerSource.includes("data-mobile-keyboard-hide"), false);
   assertEquals(
     fullscreenComposerSource.includes(
-      'fixedAction={\n          <MobileComposerAccessoryButton\n            title="Hide keyboard"',
+      'fixedAction={\n          <MobileComposerAccessoryButton\n            title={resumeEditing ? "Edit" : "Hide keyboard"}',
     ),
     true,
   );

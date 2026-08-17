@@ -541,12 +541,14 @@ here says otherwise.
     a physical iPad with split and floating layouts.
 
 23. **Fullscreen Mobile needs an explicit way to inspect behind the keyboard.**
-    Keep one `KeyboardHide` icon in the existing right-hand dock utilities. It
-    blurs only the currently active element; it must not reconfigure CM6, mutate
-    the document, collapse the fullscreen surface, or add a detached dismissal
-    pill. Tapping the editor restores native focus normally. This fills the
-    otherwise unused balanced-dock slot while preserving the exact-centre primary
-    action and the native caret/IME ownership rules above.
+    Keep one trailing dock slot for keyboard ownership. While the software
+    keyboard is up it is `KeyboardHide`: blur the first-responder only. It must
+    not reconfigure CM6, mutate the document, collapse the fullscreen surface,
+    auto-close on a later `visualViewport` close, or add a detached dismissal
+    pill. Collapse stays on the upper-track CloseFullscreen control (and Escape).
+    After the keyboard is already down, the same slot is Edit: `focusEnd()` in
+    the same tap so iOS raises the keyboard with the caret at the document end.
+    Tapping the editor canvas still restores native focus normally.
 
 24. **Mobile session-title editing is explicitly saved from the sheet footer.**
     While the title field is focused or contains an unsaved change, replace the
@@ -1010,6 +1012,10 @@ fullscreen editor:
 - [ ] Dismiss the keyboard while editing a Queue/Draft row (inline and fullscreen):
       the latest non-empty buffer persists and the default pending card returns;
       the accessory action shows Hide keyboard rather than Save/Done (pitfall #18).
+- [ ] In fullscreen, Hide keyboard only lowers the software keyboard. The
+      surface stays open, the slot becomes Edit, and tapping it focuses the
+      caret at the end and raises the keyboard. CloseFullscreen (not Hide)
+      is what leaves fullscreen (pitfall #23).
 - [ ] Toolbar quote/list/heading: caret lands AFTER the marker (pitfall #7).
 - [ ] Attach a photo, then type — keyboard returns, input works.
 - [ ] Paste a photo in the middle of text — the image lands at the caret and the
