@@ -106,6 +106,14 @@ export function shouldShowScrollbackLoadingSkeleton(input: {
     (input.desktop || !input.backfillingViewport);
 }
 
+export function restoredTranscriptFollowing(input: {
+  canRestore: boolean;
+  savedFollowing: boolean;
+  mode: "history" | "page";
+}): boolean {
+  return input.canRestore ? input.savedFollowing : input.mode === "history";
+}
+
 export interface VisibleScrollbackBoundaryPrefetchInput {
   managed: boolean;
   restoring: boolean;

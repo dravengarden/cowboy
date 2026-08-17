@@ -3,6 +3,7 @@ import {
   columnReverseVisualFirstRowIndex,
   historyPrefetchTransition,
   magneticHapticTransition,
+  restoredTranscriptFollowing,
   scrollbackBoundaryRequestKey,
   scrollbackFillRemaining,
   scrollbackReplacementFromTop,
@@ -315,6 +316,41 @@ Deno.test("Desktop keeps its scrollback skeleton during viewport backfill", () =
   );
   assertEquals(
     shouldShowScrollbackLoadingSkeleton({ ...backfill, reachedStart: true }),
+    false,
+  );
+});
+
+Deno.test("viewport restoration synchronizes live windowing with follow intent", () => {
+  assertEquals(
+    restoredTranscriptFollowing({
+      canRestore: true,
+      savedFollowing: false,
+      mode: "history",
+    }),
+    false,
+  );
+  assertEquals(
+    restoredTranscriptFollowing({
+      canRestore: true,
+      savedFollowing: true,
+      mode: "history",
+    }),
+    true,
+  );
+  assertEquals(
+    restoredTranscriptFollowing({
+      canRestore: false,
+      savedFollowing: false,
+      mode: "history",
+    }),
+    true,
+  );
+  assertEquals(
+    restoredTranscriptFollowing({
+      canRestore: false,
+      savedFollowing: true,
+      mode: "page",
+    }),
     false,
   );
 });

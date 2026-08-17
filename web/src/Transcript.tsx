@@ -163,6 +163,7 @@ import {
   scrollbackBoundaryRequestKey,
   scrollbackFillRemaining,
   scrollbackReplacementFromTop,
+  restoredTranscriptFollowing,
   shouldBackfillTranscriptViewport,
   shouldContinueScrollbackFill,
   shouldMagnetizeTranscript,
@@ -4761,6 +4762,7 @@ export function Transcript({
     viewportRestoreActiveRef.current = true;
     if (restoringProjectionMountRef.current) {
       stick.current = false;
+      setFollowingLive(false);
       setSticky(sessionId, false);
       viewportRestoreActiveRef.current = false;
       requestVisibleScrollbackBoundaryRef.current();
@@ -4776,7 +4778,12 @@ export function Transcript({
     const restoreDetached = canRestore && !saved.following &&
       saved.anchorKey !== null;
     const restoreOffset = canRestore && !saved.following;
-    stick.current = canRestore ? saved.following : mode === "history";
+    stick.current = restoredTranscriptFollowing({
+      canRestore,
+      savedFollowing: saved?.following ?? false,
+      mode,
+    });
+    setFollowingLive(stick.current);
     if (stick.current) resetSticky(sessionId);
     else setSticky(sessionId, false);
     let raf = 0;
