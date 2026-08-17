@@ -52,6 +52,7 @@ import {
   ChevronRight,
   CleaningServices,
   Close,
+  CloudUpload,
   CloseFullscreen,
   Compress,
   DeleteOutline,
@@ -98,6 +99,12 @@ import {
 } from "./composer/mobileComposerFocus";
 import { useKeyboardOpen } from "./keyboardInset";
 import { attachmentTrayForSurface } from "./composer/attachmentPresentation";
+import {
+  canReturnFromPendingRow,
+  homeForOrigin,
+  pendingSyncAppearance,
+  returnLabelForHome,
+} from "./localFirstDelivery";
 import type { ComposerWorkspaceProps } from "./composer/contracts";
 import { resolveSessionAction, type SessionAction } from "./agentCommands";
 import {
@@ -219,6 +226,7 @@ import {
   clearDrafts,
   clearQueue,
   discardQueued,
+  returnFailedQueued,
   editDraft,
   editQueued,
   forcePushQueued,
@@ -3785,21 +3793,34 @@ const QueuedAttachmentChips = memo(function QueuedAttachmentChips({
 // still unconfirmed past SHIMMER_DELAY_MS (see store's optimisticDrafts).
 const sweep = keyframes`to { background-position: -200% 0; }`;
 
-// An OPTIMISTIC draft row: shown the instant you stage it, before the daemon
-// confirms. `pending` (<200ms) renders like a normal row so a fast LAN/tailnet
-// send never flashes a loader; `sending` shimmers in the theme colour; `failed`
-// (WS down / timed out) turns red with retry + discard. Reconciled out of the
-// store by cmid the moment its confirmed twin arrives, so it never duplicates.
+const uploadPulse = keyframes`
+  0%, 100% { opacity: 0.42; transform: translateY(0); }
+  50% { opacity: 1; transform: translateY(-1px); }
+`;
+
+// An OPTIMISTIC draft/queue row: shown the instant you stage or move it, before
+// the service confirms. Connected `pending` stays quiet so a fast LAN confirm
+// never flashes a loader. Disconnected `pending` is an upload waiting to reach
+// the service. `sending` is in-flight. `failed` (retry still offline, or ack
+// timeout) is red with retry / return / discard.
 function OptimisticDraftRow({
   sessionId,
+  kind,
   message,
 }: {
   sessionId: string;
+  kind: "queued" | "draft";
   message: QueuedMessage;
 }): React.JSX.Element {
-  const failed = message.status === "failed";
-  const sending = message.status === "sending";
+  const connected = useConnected();
+  const appearance = pendingSyncAppearance(message.status, connected);
+  const failed = appearance === "failed";
+  const sending = appearance === "sending";
+  const syncing = appearance === "syncing";
   const cmid = message.cmid ?? "";
+  const preview = stripImageTokens(message.text);
+  const canReturn = failed && canReturnFromPendingRow(kind, message.origin);
+  const returnHome = homeForOrigin(message.origin ?? (kind === "queued" ? "draft" : "composer"));
   return (
     <Paper
       elevation={0}
@@ -3813,13 +3834,14 @@ function OptimisticDraftRow({
           ? alpha(t.palette.error.main, 0.06)
           : sending
           ? alpha(t.palette.primary.main, 0.05)
+          : syncing
+          ? alpha(t.palette.info.main, 0.06)
           : "background.paper",
-        // Coloured leading edge marks the row's state at a glance: red = failed,
-        // primary = in flight (mirrors the failed affordance so "sending" reads
-        // as clearly as "failed", not as a near-invisible text shimmer).
         ...(failed && { borderLeft: `3px solid ${t.palette.error.main}` }),
         ...(sending && !failed &&
           { borderLeft: `3px solid ${t.palette.primary.main}` }),
+        ...(syncing && !failed && !sending &&
+          { borderLeft: `3px solid ${t.palette.info.main}` }),
       })}
     >
       {sending && (
@@ -3829,39 +3851,78 @@ function OptimisticDraftRow({
           sx={{ color: "primary.main", mt: 0.25, flexShrink: 0 }}
         />
       )}
+      {syncing && (
+        <CloudUpload
+          aria-hidden
+          sx={{
+            fontSize: 16,
+            color: "info.main",
+            mt: 0.25,
+            flexShrink: 0,
+            animation: `${uploadPulse} 1.4s ease-in-out infinite`,
+            "@media (prefers-reduced-motion: reduce)": { animation: "none" },
+          }}
+        />
+      )}
       <Box sx={{ flex: 1, minWidth: 0 }}>
-        <Typography
-          variant="body2"
-          sx={(t) => ({
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-            display: "-webkit-box",
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: "vertical",
-            overflow: "hidden",
-            ...(sending && {
-              background:
-                `linear-gradient(90deg, ${t.palette.text.secondary} 0%, ${t.palette.text.secondary} 35%, ${t.palette.primary.main} 50%, ${t.palette.text.secondary} 65%, ${t.palette.text.secondary} 100%)`,
-              backgroundSize: "200% 100%",
-              WebkitBackgroundClip: "text",
-              backgroundClip: "text",
-              color: "transparent",
-              animation: `${sweep} 2s linear infinite`,
-              "@media (prefers-reduced-motion: reduce)": { animation: "none" },
-            }),
-          })}
-        >
-          {message.text || "📎 attachment"}
-        </Typography>
+        {preview.trim() !== ""
+          ? (
+            <Box
+              sx={(t) => sending
+                ? {
+                  background:
+                    `linear-gradient(90deg, ${t.palette.text.secondary} 0%, ${t.palette.text.secondary} 35%, ${t.palette.primary.main} 50%, ${t.palette.text.secondary} 65%, ${t.palette.text.secondary} 100%)`,
+                  backgroundSize: "200% 100%",
+                  WebkitBackgroundClip: "text",
+                  backgroundClip: "text",
+                  color: "transparent",
+                  animation: `${sweep} 2s linear infinite`,
+                  "@media (prefers-reduced-motion: reduce)": { animation: "none" },
+                }
+                : {}}
+            >
+              <MessagePreview text={preview} />
+            </Box>
+          )
+          : (
+            <Typography variant="body2" sx={{ color: "text.secondary" }}>
+              📎 attachment
+            </Typography>
+          )}
+        {syncing && (
+          <Typography variant="caption" sx={{ color: "info.main" }}>
+            Waiting to sync
+          </Typography>
+        )}
+        {sending && (
+          <Typography variant="caption" sx={{ color: "text.secondary" }}>
+            Sending…
+          </Typography>
+        )}
         {failed && (
           <Typography variant="caption" sx={{ color: "error.main" }}>
-            Failed to send
+            Couldn't reach Cowboy
           </Typography>
         )}
         {message.attachments.length > 0 && (
           <QueuedAttachmentChips attachments={message.attachments} />
         )}
       </Box>
+      {kind === "draft" && !failed && !sending && (
+        <Tooltip title="Send">
+          <IconButton
+            size="small"
+            color="primary"
+            aria-label="send draft"
+            onClick={(): void => {
+              haptic();
+              void activateDraft(sessionId, message.id);
+            }}
+          >
+            <Send fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      )}
       {failed && (
         <Stack direction="row" sx={{ flexShrink: 0 }}>
           <Tooltip title="Retry">
@@ -3869,13 +3930,27 @@ function OptimisticDraftRow({
               size="small"
               aria-label="retry send"
               onClick={(): void => {
-                haptic(); // light — recovery action
+                haptic();
                 retryQueued(sessionId, cmid);
               }}
             >
               <Refresh fontSize="small" />
             </IconButton>
           </Tooltip>
+          {canReturn && (
+            <Tooltip title={returnLabelForHome(returnHome)}>
+              <IconButton
+                size="small"
+                aria-label={returnLabelForHome(returnHome)}
+                onClick={(): void => {
+                  haptic();
+                  returnFailedQueued(sessionId, cmid);
+                }}
+              >
+                <Undo fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          )}
           <Tooltip title="Discard">
             <IconButton
               size="small"
@@ -4667,7 +4742,7 @@ function PendingPanel({
                   }}
                 >
                   {optimistic
-                    ? <OptimisticDraftRow sessionId={sessionId} message={m} />
+                    ? <OptimisticDraftRow sessionId={sessionId} kind={kind} message={m} />
                     : (
                       <PendingRow
                         desktop={desktop}
@@ -5014,7 +5089,7 @@ function PendingRow({
     // `starting` has no interruptible turn yet, and a disconnected client would
     // drop this non-durable command. Keep the event path guarded as well as the
     // button so keyboard/confirm callbacks cannot bypass the disabled state.
-    if (!connected || status !== "busy") return;
+    if (status !== "busy") return;
     if (editing) {
       await completePendingDelivery(() =>
         forcePushQueued(sessionId, message.id)
@@ -5492,8 +5567,7 @@ function PendingRow({
                       <MobileComposerAccessoryButton
                         title="Force push"
                         color="warning"
-                        disabled={!editSendable || !connected ||
-                          status !== "busy"}
+                        disabled={!editSendable || status !== "busy"}
                         onClick={(event): void => {
                           haptic();
                           setConfirmAnchor(event.currentTarget);
@@ -5693,7 +5767,7 @@ function PendingRow({
   // Built as a statement to avoid a nested ternary in the JSX.
   let primary: React.JSX.Element;
   const primaryEnabled = kind === "draft" || dispatchable ||
-    (connected && status === "busy");
+    status === "busy";
   if (kind === "draft") {
     primary = (
       <Tooltip title={dispatchable ? "Send" : "Add to queue"}>
@@ -5723,11 +5797,11 @@ function PendingRow({
       </Tooltip>
     );
   } else {
-    const canForcePush = connected && status === "busy";
-    const forcePushTitle = !connected
-      ? "Unavailable while reconnecting"
-      : status === "starting"
+    const canForcePush = status === "busy";
+    const forcePushTitle = status === "starting"
       ? "Agent is starting — available when ready"
+      : !connected
+      ? "Force push when back online"
       : "Force push (interrupt & send)";
     primary = (
       <Tooltip title={forcePushTitle}>

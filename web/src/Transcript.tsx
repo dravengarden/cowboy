@@ -46,6 +46,7 @@ import {
   ChatBubbleOutline,
   CleaningServices,
   Close,
+  CloudUpload,
   Code,
   Construction,
   ErrorOutline,
@@ -61,6 +62,7 @@ import {
   Stop,
   Terminal,
   Tune,
+  Undo,
   UnfoldLess,
   WarningAmberRounded,
 } from "@mui/icons-material";
@@ -113,9 +115,16 @@ import {
   type QueuedMessage,
   releaseFollowedHistory,
   retryMessage,
+  returnFailedMessage,
   send,
+  useConnected,
   useStoreSelector,
 } from "./store";
+import {
+  homeForOrigin,
+  pendingSyncAppearance,
+  returnLabelForHome,
+} from "./localFirstDelivery";
 import { importantHaptic, magneticHaptic } from "./haptic";
 import { useReadingSettings } from "./readingSettings";
 import { mobileTranscriptTailGap } from "./mobileComposerPrimitives";
@@ -1242,10 +1251,15 @@ function OptimisticUserBubble({
   sessionId: string;
   message: QueuedMessage;
 }): React.JSX.Element {
-  const failed = message.status === "failed";
-  const sending = message.status === "sending";
+  const connected = useConnected();
+  const appearance = pendingSyncAppearance(message.status, connected);
+  const failed = appearance === "failed";
+  const sending = appearance === "sending";
+  const syncing = appearance === "syncing";
+  const inFlight = sending || syncing;
   const cmid = message.cmid ?? "";
   const content = attachmentDisplayParts(message.text, message.attachments);
+  const returnHome = homeForOrigin(message.origin ?? "composer");
   return (
     <Stack
       alignItems="flex-end"
@@ -1261,9 +1275,7 @@ function OptimisticUserBubble({
           bgcolor: "primary.main",
           color: "primary.contrastText",
           overflow: "hidden",
-          // Dim while in flight so a sending bubble is visibly "not yet
-          // delivered"; snaps back to full on confirm.
-          opacity: sending ? 0.62 : 1,
+          opacity: inFlight ? 0.62 : 1,
           transition: "opacity 0.2s ease",
           ...(failed && { borderColor: "error.main" }),
         }}
@@ -1290,7 +1302,7 @@ function OptimisticUserBubble({
                 </Typography>
               )
           )}
-        {sending && (
+        {inFlight && (
           <Box
             aria-hidden
             sx={{
@@ -1323,10 +1335,23 @@ function OptimisticUserBubble({
           </Typography>
         </Stack>
       )}
+      {syncing && (
+        <Stack
+          direction="row"
+          spacing={0.5}
+          alignItems="center"
+          sx={{ pr: 0.25 }}
+        >
+          <CloudUpload sx={{ fontSize: 14, color: "info.main" }} />
+          <Typography variant="caption" sx={{ color: "info.main" }}>
+            Waiting to sync
+          </Typography>
+        </Stack>
+      )}
       {failed && (
         <Stack direction="row" spacing={0.25} alignItems="center">
           <Typography variant="caption" sx={{ color: "error.main" }}>
-            Failed to send
+            Couldn't reach Cowboy
           </Typography>
           <Tooltip title="Retry">
             <IconButton
@@ -1335,6 +1360,15 @@ function OptimisticUserBubble({
               onClick={(): void => retryMessage(sessionId, cmid)}
             >
               <Refresh fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title={returnLabelForHome(returnHome)}>
+            <IconButton
+              size="small"
+              aria-label={returnLabelForHome(returnHome)}
+              onClick={(): void => returnFailedMessage(sessionId, cmid)}
+            >
+              <Undo fontSize="small" />
             </IconButton>
           </Tooltip>
           <Tooltip title="Discard">
