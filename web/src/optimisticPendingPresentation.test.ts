@@ -11,8 +11,9 @@ Deno.test("optimistic draft cards strip image tokens instead of painting raw cow
   const end = composer.indexOf("interface PendingEditController", start);
   assert(start >= 0 && end > start);
   const body = composer.slice(start, end);
-  assert(body.includes("stripImageTokens(message.text)"));
-  assert(body.includes("<MessagePreview text={preview} />"));
+  assert(body.includes("attachmentTrayForSurface(message.attachments, previewText)"));
+  assert(body.includes("<MessagePreview"));
+  assert(body.includes("attachments={message.attachments}"));
   assertEquals(body.includes("{message.text || \"📎 attachment\"}"), false);
 });
 
@@ -26,8 +27,10 @@ Deno.test("unsynced rows show an uploading mark and failed rows offer return-to-
   assert(body.includes("returnLabelForHome"));
 });
 
-Deno.test("MessagePreview always strips cowboy-att tokens itself", () => {
-  assert(previewSource.includes("compactForPreview(stripImageTokens(text))"));
+Deno.test("MessagePreview renders cowboy-att tokens as composer inline images", () => {
+  assert(previewSource.includes("inlineImageField"));
+  assert(previewSource.includes("seedInlineAttachments(attachments)"));
+  assertEquals(previewSource.includes("compactForPreview(stripImageTokens(text))"), false);
 });
 
 Deno.test("failed transcript sends offer return to the list they left", () => {

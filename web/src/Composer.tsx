@@ -3789,10 +3789,6 @@ const QueuedAttachmentChips = memo(function QueuedAttachmentChips({
 //   - "queued": prompts the busy agent can't take yet, auto-drained one per turn.
 //   - "draft":  parked messages the user holds; activated (sent/queued) on demand.
 
-// Gradient shimmer sweep — Claude "thinking" style — for an optimistic row
-// still unconfirmed past SHIMMER_DELAY_MS (see store's optimisticDrafts).
-const sweep = keyframes`to { background-position: -200% 0; }`;
-
 const uploadPulse = keyframes`
   0%, 100% { opacity: 0.42; transform: translateY(0); }
   50% { opacity: 1; transform: translateY(-1px); }
@@ -3818,7 +3814,8 @@ function OptimisticDraftRow({
   const sending = appearance === "sending";
   const syncing = appearance === "syncing";
   const cmid = message.cmid ?? "";
-  const preview = stripImageTokens(message.text);
+  const previewText = message.text;
+  const previewTray = attachmentTrayForSurface(message.attachments, previewText);
   const canReturn = failed && canReturnFromPendingRow(kind, message.origin);
   const returnHome = homeForOrigin(message.origin ?? (kind === "queued" ? "draft" : "composer"));
   return (
@@ -3865,30 +3862,20 @@ function OptimisticDraftRow({
         />
       )}
       <Box sx={{ flex: 1, minWidth: 0 }}>
-        {preview.trim() !== ""
+        {previewText.trim() !== ""
           ? (
-            <Box
-              sx={(t) => sending
-                ? {
-                  background:
-                    `linear-gradient(90deg, ${t.palette.text.secondary} 0%, ${t.palette.text.secondary} 35%, ${t.palette.primary.main} 50%, ${t.palette.text.secondary} 65%, ${t.palette.text.secondary} 100%)`,
-                  backgroundSize: "200% 100%",
-                  WebkitBackgroundClip: "text",
-                  backgroundClip: "text",
-                  color: "transparent",
-                  animation: `${sweep} 2s linear infinite`,
-                  "@media (prefers-reduced-motion: reduce)": { animation: "none" },
-                }
-                : {}}
-            >
-              <MessagePreview text={preview} />
-            </Box>
+            <MessagePreview
+              text={previewText}
+              attachments={message.attachments}
+            />
           )
-          : (
+          : previewTray.length === 0
+          ? (
             <Typography variant="body2" sx={{ color: "text.secondary" }}>
               📎 attachment
             </Typography>
-          )}
+          )
+          : null}
         {syncing && (
           <Typography variant="caption" sx={{ color: "info.main" }}>
             Waiting to sync
@@ -3904,8 +3891,8 @@ function OptimisticDraftRow({
             Couldn't reach Cowboy
           </Typography>
         )}
-        {message.attachments.length > 0 && (
-          <QueuedAttachmentChips attachments={message.attachments} />
+        {previewTray.length > 0 && (
+          <QueuedAttachmentChips attachments={previewTray} />
         )}
       </Box>
       {kind === "draft" && !failed && !sending && (
@@ -4888,6 +4875,7 @@ function PendingRow({
   >(null);
   const seedText = pendingRowVisibleText(message.text, committedText);
   const seedAttachments = committedAttachments ?? message.attachments;
+  const seedTray = attachmentTrayForSurface(seedAttachments, seedText);
   // Per-row kebab (⋮) position. Click coordinates, not the button node: the
   // peek/footer keep a translate3d layer, and hiding the kebab via container
   // query can detach the element so MUI's anchorEl lands at (0, 0).
@@ -5876,11 +5864,11 @@ function PendingRow({
           cursor: touchInput ? "pointer" : "text",
         }}
       >
-        {stripImageTokens(seedText).trim() !== "" && (
-          <MessagePreview text={stripImageTokens(seedText)} />
+        {seedText.trim() !== "" && (
+          <MessagePreview text={seedText} attachments={seedAttachments} />
         )}
-        {seedAttachments.length > 0 && (
-          <QueuedAttachmentChips attachments={seedAttachments} />
+        {seedTray.length > 0 && (
+          <QueuedAttachmentChips attachments={seedTray} />
         )}
         {
           /* Scheduled-draft badge: a calm info chip showing when it auto-fires;
