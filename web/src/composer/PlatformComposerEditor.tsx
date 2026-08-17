@@ -50,8 +50,9 @@ export interface PlatformComposerEditorProps
 // pending-message editors. It deliberately does
 // not alter the CM6 extension set or controlled/uncontrolled behaviour. On
 // touch surfaces it gives plain token-free prose to a native textarea (UIKit
-// owns the long-press menu), promoting the same document to CM6 when heading,
-// list, quote, or fence markup needs Obsidian live preview, or when an inline
+// owns the long-press menu), promoting the same document to CM6 when any
+// complete Obsidian live-preview construct (emphasis, highlight, link, heading,
+// list, quote, fence, …) needs marker hiding, or when an inline
 // image token requires a widget. This includes fullscreen: WebKit
 // contenteditable is not a reliable edit-menu anchor far away from its
 // nearest real text line.

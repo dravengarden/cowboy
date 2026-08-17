@@ -12,7 +12,6 @@ import { Highlight } from "./composerHighlight";
 import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import { indentOnInput } from "@codemirror/language";
 import { indentWithTab } from "@codemirror/commands";
-import { search, searchKeymap } from "@codemirror/search";
 import {
   EditorView,
   highlightActiveLine,
@@ -68,8 +67,6 @@ export function livePreviewExtensions(
     closeBrackets(),
     extendEmphasisPair,
     autoCloseCodeFence,
-    // Find-in-document (Mod-f), top panel — useful in the fullscreen long-form editor.
-    search({ top: true }),
     // --- markdown language + GFM (source of the engine's syntax tree) ---
     // `extensions: [Highlight]` teaches lezer `==text==` (composerHighlight.ts) —
     // GFM has no highlight rule. mdlive renders it via the node-class entries.
@@ -85,7 +82,7 @@ export function livePreviewExtensions(
     // deletes one char, orphaning the closer), so wrap it Prec.high. (cowboy's
     // own Prec.high token-Backspace runs first but no-ops outside a token.)
     Prec.high(keymap.of(closeBracketsKeymap)),
-    keymap.of([...searchKeymap, ...markdownKeymap, indentWithTab]),
+    keymap.of([...markdownKeymap, indentWithTab]),
     inlinePreview({
       ...opts,
       onLinkClick: opts.onLinkClick ?? openExternalUrl,
@@ -99,6 +96,9 @@ export function livePreviewExtensions(
   // symptom; align with Obsidian and re-verify the WHOLE iOS matrix.
   //
   // DROPPED from atomic's composition, each with a strong reason:
+  //   • search() / searchKeymap — stock CM6 Find is browser chrome. Desktop
+  //     already refuses Mod+F as a Cowboy command; do not let a vendored keymap
+  //     reopen that panel.
   //   • history() / historyKeymap / defaultKeymap — cowboy's ComposerEditor base
   //     already provides them; a second history() splits undo.
   //   • table-widget / image-blocks / wiki-links — the only contenteditable

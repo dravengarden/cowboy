@@ -78,7 +78,7 @@ here says otherwise.
 | `drawSelection()` | ❌ removed | Native caret/selection is required for the iOS Paste/Select callout. The PWA `translateZ(0)` layer that once required a drawn caret is gone. See historical pitfalls #2–#3. |
 | `dropCursor()` | ❌ removed | It was coupled to the drawn-selection workaround and is unnecessary in the native-shell path. |
 | `highlightActiveLine()` | ✅ | active-line bg (atomic-theme styles `.cm-activeLine`). |
-| `search({top:true})` + `searchKeymap` | ✅ | find-in-doc (fullscreen long-form). Needs `@codemirror/search`. |
+| `search({top:true})` + `searchKeymap` | ❌ removed | Stock CM6 Find is Chrome-looking chrome (`Find` / `replace all`). Desktop already refuses to bind `Mod+F` as a Cowboy command; the vendored keymap was sneaking the panel back in. Search the workspace through the command palette. |
 | `EditorView.theme({".cm-widgetBuffer":{visibility:"hidden"}})` | ✅ | hide the iOS broken-image dot (pitfall #4). |
 | `indentWithTab` | ✅ | Tab indent. |
 | `rectangularSelection()` / `allowMultipleSelections` | ❌ | multi-cursor; desktop-only nicety, needs drawSelection to render. Re-add desktop-only if ever wanted. |
@@ -860,13 +860,21 @@ here says otherwise.
     WebKit still anchors its edit menu unreliably when a long press is far from
     the nearest real text line. The compact editor did not reproduce the bug
     because UIKit owned a native textarea. Fullscreen and expanded touch editors
-    now use that same native control for plain token-free prose. Heading, list,
-    quote, and fence markup (`# hi`, `- 主题`) promotes the same document to
-    CM6 so Obsidian live preview can hide inactive-line markers. An inline-image
-    token still promotes the document synchronously to CM6 so its widget remains
-    in flow. Capture the native caret on markup promotion and inherit the
-    keyboard in the same commit, the same way image paste does. Keep the live
-    native value separate from CM6's frozen mount seed.
+    now use that same native control for plain token-free prose. Any *complete*
+    construct mdlive already renders — heading, list, quote, fence, HR, setext,
+    `*italic*` / `**bold**` / `_em_`, `~~strike~~`, `==highlight==`, `` `code` ``,
+    and `[label](url)` / `![alt](url)` — promotes the same document to CM6 so
+    Obsidian live preview can hide inactive-line markers. Incomplete pairs
+    (`*hi`, `==`) stay native so IME can finish the wrap before the editor
+    swaps. An inline-image token still promotes the document synchronously to
+    CM6 so its widget remains in flow. Capture the native caret on markup
+    promotion and inherit the keyboard in the same commit, the same way image
+    paste does. Keep the live native value separate from CM6's frozen mount seed.
+
+    Still not live-previewed (same as the v1 mdlive exclusions): GFM tables,
+    `[[wiki]]`, `$math$` / `%%comment%%`, and callouts. Those either need a
+    contenteditable widget (IME landmine) or have no lezer/mdlive node yet.
+    Do not widen this list without adding a real inactive-line decoration.
 
     Do not split long-press into a UIKit path near text and a Cowboy-drawn Paste
     fallback in the blank canvas. The two menus have different appearance,

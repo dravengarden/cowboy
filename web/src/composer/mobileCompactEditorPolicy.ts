@@ -40,21 +40,43 @@ export function shouldExpandInlineComposer(
 }
 
 /**
- * Line-start markup that Obsidian live-preview would hide on inactive lines.
- * `# hi` / `- 主题` must promote off the native textarea or they stay raw.
+ * Block markup Obsidian live-preview hides on inactive lines. `# hi` / `- 主题`
+ * must leave the native textarea or they stay raw.
  */
-const TOUCH_LIVE_PREVIEW_MARKUP =
-  /^(?:#{1,6} |\s*[-*+] (?:\[[ xX]\] )?|\s*\d+\. |\s*> |```)/m;
+const TOUCH_LIVE_PREVIEW_BLOCK =
+  /^(?:#{1,6} |\s*[-*+] (?:\[[ xX]\] )?|\s*\d+\. |\s*> |```|(?:---+|\*\*\*+|___+)\s*$)/m;
+
+/** Setext headings: a title line followed by `===` or `---`. */
+const TOUCH_LIVE_PREVIEW_SETEXT = /^.+\n(?:=+|-+)\s*$/m;
+
+/**
+ * Complete inline wraps mdlive already renders. Require non-space edges so
+ * `2 * 3` and `== not ==` do not promote; incomplete `*hi` stays native so
+ * IME can finish the pair before the editor swaps.
+ */
+const TOUCH_LIVE_PREVIEW_INLINE: readonly RegExp[] = [
+  /\*\*(?:[^\s*][^*\n]*[^\s*]|[^\s*])\*\*/,
+  /\*(?:[^\s*][^*\n]*[^\s*]|[^\s*])\*(?!\*)/,
+  /(?<![_\w])__(?:[^\s_][^_\n]*[^\s_]|[^\s_])__(?![_\w])/,
+  /(?<![_\w])_(?:[^\s_][^_\n]*[^\s_]|[^\s_])_(?![_\w])/,
+  /~~(?:[^\s~][^~\n]*[^\s~]|[^\s~])~~/,
+  /==(?:[^\s=][^=\n]*[^\s=]|[^\s=])==/,
+  /`[^`\n]+`/,
+  /!\[[^\]]*\]\([^)\n]+\)/,
+  /\[[^\]]+\]\([^)\n]+\)/,
+];
 
 export function hasTouchLivePreviewMarkup(value: string): boolean {
-  return TOUCH_LIVE_PREVIEW_MARKUP.test(value);
+  if (TOUCH_LIVE_PREVIEW_BLOCK.test(value)) return true;
+  if (TOUCH_LIVE_PREVIEW_SETEXT.test(value)) return true;
+  return TOUCH_LIVE_PREVIEW_INLINE.some((pattern) => pattern.test(value));
 }
 
 /**
  * Native iOS text controls own the reliable long-press edit menu. CM6 owns
  * Obsidian live preview and inline-image widgets. Keep the native control
- * for plain token-free prose; the first heading/list/quote/fence or image
- * token promotes the same literal document to CM6.
+ * for plain token-free prose; the first complete live-preview construct or
+ * image token promotes the same literal document to CM6.
  */
 export function shouldUseNativeTouchEditor(
   surfaceKind: "desktop" | "tablet" | "mobile",

@@ -72,6 +72,9 @@ surfaces add `Ctrl-D/U` for half-page motion, `Ctrl-F/B` for full-page motion,
 and `gg/G` for the two ends. A visible shortcut bar is a live legend for these
 surface-owned motions. Text inputs, CodeMirror, native selection, and active IME
 composition always own their native keys before workspace navigation.
+Browser Find / Open / Downloads / view-source chords are swallowed so a
+Desktop PWA cannot surface Chrome chrome; OS window, edit, reload, zoom,
+and DevTools chords stay with the host.
 While an editable field owns focus, the workbench motions become inactive and
 the field/search owner may become active. `Esc` first returns focus to the
 workbench; a second `Esc` may close it.

@@ -19,6 +19,7 @@ import { workspaceCommandKey } from "./workspaceCommandKey";
 import { assertMacShortcutAllowed } from "./macShortcutPolicy";
 import { desktopImeOwnsKey } from "./imeShortcut";
 import { desktopOverlayOwnsShortcuts } from "./desktopShortcutScope";
+import { desktopBrowserChromeShortcut } from "./desktopBrowserChrome";
 import { desktopShouldBlockStaleVimSink } from "../desktopComposerOwnership";
 import { listJumpIndex, pendingItemActionKey } from "./listNavigation";
 import {
@@ -965,6 +966,13 @@ export function DesktopCommandProvider(
         if (disabled && !command.consumeWhenDisabled) continue;
         event.preventDefault();
         if (!disabled) command.run();
+        return;
+      }
+      // After Cowboy commands have had their chance, swallow leftover Chrome
+      // Find / Open / Downloads chords so a PWA never surfaces browser chrome.
+      if (desktopBrowserChromeShortcut(event, isMac)) {
+        event.preventDefault();
+        event.stopPropagation();
         return;
       }
       // Conversation/top-bar chrome can be highlighted while the hidden Prompt

@@ -82,6 +82,48 @@ Deno.test("touch markdown headings and lists promote to Obsidian live preview", 
   assertEquals(shouldUseNativeTouchEditor("desktop", "# hi"), false);
 });
 
+Deno.test("complete inline markdown promotes so Obsidian live preview can hide markers", () => {
+  const promote = [
+    "*hi*",
+    "foo*bar*baz",
+    "**hi**",
+    "_hi_",
+    "__hi__",
+    "~~bye~~",
+    "==vu==",
+    "`code`",
+    "[label](https://example.com)",
+    "![alt](https://example.com/a.png)",
+    "---",
+    "Title\n===",
+    "plain\n*hi*\n==vu==",
+  ];
+  for (const value of promote) {
+    assertEquals(hasTouchLivePreviewMarkup(value), true, value);
+    assertEquals(shouldUseNativeTouchEditor("mobile", value), false, value);
+  }
+});
+
+Deno.test("incomplete or unflanked markers stay on the native touch editor", () => {
+  const stayNative = [
+    "hello",
+    "*hi",
+    "hi*",
+    "2 * 3",
+    "a * b * c",
+    "snake_case",
+    "== not ==",
+    "==",
+    "`unterminated",
+    "[label]()",
+    "plain text with = equals",
+  ];
+  for (const value of stayNative) {
+    assertEquals(hasTouchLivePreviewMarkup(value), false, value);
+    assertEquals(shouldUseNativeTouchEditor("mobile", value), true, value);
+  }
+});
+
 Deno.test("native to CM6 promotion freezes the token-bearing live document", () => {
   const frozen = "old mount seed";
   const promoted = "live text\n![shot](cowboy-att:image-1)\n";
