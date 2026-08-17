@@ -99,7 +99,7 @@ Deno.test("restored visible scrollback resumes for each advanced cursor", () => 
   );
   assertEquals(
     transcriptSource.match(
-      /viewportRestoreActiveRef\.current = false;\s*requestVisibleScrollbackBoundaryRef\.current\(\);/g,
+      /viewportRestoreActiveRef\.current = false;\s*(?:setMaskingViewportRestore\(false\);\s*)?requestVisibleScrollbackBoundaryRef\.current\(\);/g,
     )?.length,
     2,
   );

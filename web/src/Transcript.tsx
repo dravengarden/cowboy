@@ -157,19 +157,23 @@ import {
 } from "./transcriptLiveWindow";
 import { markTranscriptScrollActivity } from "./transcriptRenderPacing";
 import {
+  columnReverseVisualFirstRowIndex,
   historyPrefetchTransition,
   magneticHapticTransition,
   scrollbackBoundaryRequestKey,
   scrollbackFillRemaining,
   scrollbackReplacementFromTop,
+  restoredTranscriptFollowing,
   shouldBackfillTranscriptViewport,
   shouldContinueScrollbackFill,
-  visibleTranscriptTopGap,
   shouldMagnetizeTranscript,
+  shouldMaskRestoringTranscript,
   shouldPrefetchVisibleScrollbackBoundary,
   shouldRecoverUnrenderableHistory,
   shouldShowClearedConversationEmptyState,
   shouldShowFreshSessionEmptyState,
+  shouldShowScrollbackLoadingSkeleton,
+  visibleTranscriptTopGap,
 } from "./transcriptViewport";
 import {
   advanceTimelinePresentation,
@@ -3870,11 +3874,17 @@ export function Transcript({
       );
       const loadingFillHeight = loadingFill?.getBoundingClientRect().height ??
         null;
-      const firstContent = el.querySelector<HTMLElement>("[data-key]");
+      const contentRows = el.querySelectorAll<HTMLElement>("[data-key]");
+      const visualFirstRowIndex = columnReverseVisualFirstRowIndex(
+        contentRows.length,
+      );
+      const firstContent = visualFirstRowIndex === null
+        ? null
+        : contentRows.item(visualFirstRowIndex);
       const visibleTopGap = visibleTranscriptTopGap({
         viewportTop: el.getBoundingClientRect().top,
-        paddingTop: Number.parseFloat(globalThis.getComputedStyle(el).paddingTop) ||
-          0,
+        paddingTop:
+          Number.parseFloat(globalThis.getComputedStyle(el).paddingTop) || 0,
         firstContentTop: firstContent?.getBoundingClientRect().top ?? null,
       });
       const hasVisibleGap = shouldBackfillTranscriptViewport({
@@ -4049,6 +4059,7 @@ export function Transcript({
   const pageIdRef = useRef(pageId);
   pageIdRef.current = pageId;
   const viewportRestoreActiveRef = useRef(false);
+  const [maskingViewportRestore, setMaskingViewportRestore] = useState(false);
   requestVisibleScrollbackBoundaryRef.current = (): void => {
     if (visibleScrollbackBoundaryRafRef.current !== 0) return;
     const requestedKey = scrollbackBoundaryBootstrapKeyRef.current;
@@ -4269,6 +4280,8 @@ export function Transcript({
       });
     };
     const markNativeScrollActive = (): void => {
+      viewportRestoreActiveRef.current = false;
+      setMaskingViewportRestore(false);
       cancelHistoryRelease();
       markTranscriptScrollActivity();
       nativeScrollActiveRef.current = true;
@@ -4753,6 +4766,8 @@ export function Transcript({
     viewportRestoreActiveRef.current = true;
     if (restoringProjectionMountRef.current) {
       stick.current = false;
+      setFollowingLive(false);
+      setMaskingViewportRestore(false);
       setSticky(sessionId, false);
       viewportRestoreActiveRef.current = false;
       requestVisibleScrollbackBoundaryRef.current();
@@ -4768,7 +4783,17 @@ export function Transcript({
     const restoreDetached = canRestore && !saved.following &&
       saved.anchorKey !== null;
     const restoreOffset = canRestore && !saved.following;
-    stick.current = canRestore ? saved.following : mode === "history";
+    setMaskingViewportRestore(shouldMaskRestoringTranscript({
+      desktop: desktopNavigation,
+      canRestore,
+      savedFollowing: saved?.following ?? false,
+    }));
+    stick.current = restoredTranscriptFollowing({
+      canRestore,
+      savedFollowing: saved?.following ?? false,
+      mode,
+    });
+    setFollowingLive(stick.current);
     if (stick.current) resetSticky(sessionId);
     else setSticky(sessionId, false);
     let raf = 0;
@@ -4815,6 +4840,7 @@ export function Transcript({
         raf = requestAnimationFrame(position);
       } else {
         viewportRestoreActiveRef.current = false;
+        setMaskingViewportRestore(false);
         requestVisibleScrollbackBoundaryRef.current();
       }
     };
@@ -4822,8 +4848,9 @@ export function Transcript({
     return () => {
       cancelAnimationFrame(raf);
       viewportRestoreActiveRef.current = false;
+      setMaskingViewportRestore(false);
     };
-  }, [managesScrollHistory, pageId, sessionId]);
+  }, [desktopNavigation, managesScrollHistory, pageId, sessionId]);
 
   // A live Page is allowed to follow only for the duration of its active turn.
   // As soon as that turn settles, freeze it as an ordinary reading page at its
@@ -5269,8 +5296,13 @@ export function Transcript({
                   }}
                 />
               )}
-              {managesScrollHistory && !backfillingViewport && paging != null &&
-                paging.beforeSeq !== null && !paging.reachedStart && (
+              {paging != null && shouldShowScrollbackLoadingSkeleton({
+                managed: managesScrollHistory,
+                desktop: desktopNavigation,
+                backfillingViewport,
+                beforeSeq: paging.beforeSeq,
+                reachedStart: paging.reachedStart,
+              }) && (
                 <ScrollbackLoadingSkeleton
                   height={scrollbackFailed
                     ? 44
@@ -5307,6 +5339,31 @@ export function Transcript({
             </>
           )}
       </Box>
+      {maskingViewportRestore && (
+        <Box
+          data-transcript-viewport-restore
+          role="status"
+          aria-live="polite"
+          aria-label="Restoring conversation position"
+          sx={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 1,
+            overflow: "hidden",
+            px: `${padding}px`,
+            py: 2,
+            bgcolor: "background.default",
+            pointerEvents: "none",
+          }}
+        >
+          <TranscriptSkeleton
+            desktop
+            provider={provider}
+            providerVersion={providerVersion}
+            providerDigest={providerDigest}
+          />
+        </Box>
+      )}
       <ToolDetailsBrowser
         items={items}
         runs={runs}

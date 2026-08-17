@@ -1,17 +1,21 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
+  columnReverseVisualFirstRowIndex,
   historyPrefetchTransition,
   magneticHapticTransition,
+  restoredTranscriptFollowing,
   scrollbackBoundaryRequestKey,
   scrollbackFillRemaining,
   scrollbackReplacementFromTop,
   shouldBackfillTranscriptViewport,
   shouldContinueScrollbackFill,
   shouldMagnetizeTranscript,
+  shouldMaskRestoringTranscript,
   shouldPrefetchVisibleScrollbackBoundary,
   shouldRecoverUnrenderableHistory,
   shouldShowClearedConversationEmptyState,
   shouldShowFreshSessionEmptyState,
+  shouldShowScrollbackLoadingSkeleton,
   visibleTranscriptTopGap,
 } from "./transcriptViewport.ts";
 
@@ -270,6 +274,106 @@ Deno.test("a hole above the first real row keeps viewport refill going", () => {
       firstContentTop: 332,
     }),
     220,
+  );
+});
+
+Deno.test("column-reverse gap measurement starts from the visual top row", () => {
+  // Rows are newest-first in DOM order. Measuring index 0 would treat the
+  // newest row near the composer as a large empty area above the transcript.
+  assertEquals(columnReverseVisualFirstRowIndex(3), 2);
+  assertEquals(columnReverseVisualFirstRowIndex(0), null);
+  const newestFirstTops = [820, 340, 92];
+  const visualFirstIndex = columnReverseVisualFirstRowIndex(
+    newestFirstTops.length,
+  );
+  assertEquals(
+    visibleTranscriptTopGap({
+      viewportTop: 80,
+      paddingTop: 12,
+      firstContentTop: visualFirstIndex === null
+        ? null
+        : newestFirstTops[visualFirstIndex] ?? null,
+    }),
+    0,
+  );
+});
+
+Deno.test("Desktop keeps its scrollback skeleton during viewport backfill", () => {
+  const backfill = {
+    managed: true,
+    desktop: true,
+    backfillingViewport: true,
+    beforeSeq: 80_000,
+    reachedStart: false,
+  };
+  assertEquals(shouldShowScrollbackLoadingSkeleton(backfill), true);
+  assertEquals(
+    shouldShowScrollbackLoadingSkeleton({ ...backfill, desktop: false }),
+    false,
+  );
+  assertEquals(
+    shouldShowScrollbackLoadingSkeleton({ ...backfill, beforeSeq: null }),
+    false,
+  );
+  assertEquals(
+    shouldShowScrollbackLoadingSkeleton({ ...backfill, reachedStart: true }),
+    false,
+  );
+});
+
+Deno.test("viewport restoration synchronizes live windowing with follow intent", () => {
+  assertEquals(
+    restoredTranscriptFollowing({
+      canRestore: true,
+      savedFollowing: false,
+      mode: "history",
+    }),
+    false,
+  );
+  assertEquals(
+    restoredTranscriptFollowing({
+      canRestore: true,
+      savedFollowing: true,
+      mode: "history",
+    }),
+    true,
+  );
+  assertEquals(
+    restoredTranscriptFollowing({
+      canRestore: false,
+      savedFollowing: false,
+      mode: "history",
+    }),
+    true,
+  );
+  assertEquals(
+    restoredTranscriptFollowing({
+      canRestore: false,
+      savedFollowing: true,
+      mode: "page",
+    }),
+    false,
+  );
+});
+
+Deno.test("Desktop masks intermediate pages while restoring a detached viewport", () => {
+  const restoring = {
+    desktop: true,
+    canRestore: true,
+    savedFollowing: false,
+  };
+  assertEquals(shouldMaskRestoringTranscript(restoring), true);
+  assertEquals(
+    shouldMaskRestoringTranscript({ ...restoring, desktop: false }),
+    false,
+  );
+  assertEquals(
+    shouldMaskRestoringTranscript({ ...restoring, canRestore: false }),
+    false,
+  );
+  assertEquals(
+    shouldMaskRestoringTranscript({ ...restoring, savedFollowing: true }),
+    false,
   );
 });
 

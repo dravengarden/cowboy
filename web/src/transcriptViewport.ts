@@ -87,6 +87,41 @@ export function visibleTranscriptTopGap(input: {
   );
 }
 
+/** Transcript rows are newest-first in the DOM and visually reversed by the
+ * scroller. The last DOM row is therefore the row nearest the visual top. */
+export function columnReverseVisualFirstRowIndex(
+  rowCount: number,
+): number | null {
+  return rowCount > 0 ? rowCount - 1 : null;
+}
+
+export function shouldShowScrollbackLoadingSkeleton(input: {
+  managed: boolean;
+  desktop: boolean;
+  backfillingViewport: boolean;
+  beforeSeq: number | null;
+  reachedStart: boolean;
+}): boolean {
+  return input.managed && input.beforeSeq !== null && !input.reachedStart &&
+    (input.desktop || !input.backfillingViewport);
+}
+
+export function restoredTranscriptFollowing(input: {
+  canRestore: boolean;
+  savedFollowing: boolean;
+  mode: "history" | "page";
+}): boolean {
+  return input.canRestore ? input.savedFollowing : input.mode === "history";
+}
+
+export function shouldMaskRestoringTranscript(input: {
+  desktop: boolean;
+  canRestore: boolean;
+  savedFollowing: boolean;
+}): boolean {
+  return input.desktop && input.canRestore && !input.savedFollowing;
+}
+
 export interface VisibleScrollbackBoundaryPrefetchInput {
   managed: boolean;
   restoring: boolean;
