@@ -30,6 +30,7 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 import { ImageLightbox } from "./_shell";
+import { MermaidDiagram } from "./MermaidDiagram";
 import { copyText } from "./clipboard";
 import { openExternalUrl, shouldRouteExternalClick } from "./openExternal";
 import { Collapsible } from "./tools/Collapsible";
@@ -663,6 +664,9 @@ const MarkdownImpl = memo(function MarkdownImpl({
         );
       }
       const lang = className?.replace("language-", "") ?? "";
+      if (lang.toLowerCase() === "mermaid") {
+        return <MermaidDiagram key={`mermaid:${text}`} source={text} />;
+      }
       return (
         <MarkdownCodeBoundary key={`${lang}:${text}`} code={text} dark={dark}>
           <CodeBlock

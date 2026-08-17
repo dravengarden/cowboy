@@ -78,6 +78,52 @@ pub struct FileDocument {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RawFileDocument {
+    pub path: String,
+    pub revision: String,
+    pub media_type: String,
+    #[serde(with = "base64_std")]
+    pub bytes: Vec<u8>,
+    pub size: u64,
+}
+
+mod base64_std {
+    use base64::Engine as _;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
+        base64::engine::general_purpose::STANDARD
+            .encode(bytes)
+            .serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
+        let encoded = String::deserialize(deserializer)?;
+        base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+pub fn preview_media_type(path: &str) -> Option<&'static str> {
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())?;
+    Some(match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "avif" => "image/avif",
+        "ico" => "image/x-icon",
+        "svg" => "image/svg+xml",
+        _ => return None,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorktreeManifest {
     pub provider: String,
     pub revision: String,
@@ -752,6 +798,30 @@ impl CodeProvider for LocalCodeProvider {
     }
 }
 
+impl LocalCodeProvider {
+    pub fn file_raw(&self, relative: &str) -> Result<RawFileDocument, String> {
+        let media_type = preview_media_type(relative)
+            .ok_or_else(|| "file is not a previewable media type".to_owned())?;
+        let relative = safe_relative(relative)?;
+        let canonical_file = self.resolved_file(&relative)?;
+        let metadata = canonical_file
+            .metadata()
+            .map_err(|error| error.to_string())?;
+        if metadata.len() > MAX_FILE_BYTES as u64 {
+            return Err("file too large".to_owned());
+        }
+        let bytes = std::fs::read(&canonical_file).map_err(|error| error.to_string())?;
+        let size = u64::try_from(bytes.len()).map_err(|error| error.to_string())?;
+        Ok(RawFileDocument {
+            path: relative.to_string_lossy().replace('\\', "/"),
+            revision: file_revision(&relative, &metadata),
+            media_type: media_type.to_owned(),
+            bytes,
+            size,
+        })
+    }
+}
+
 fn file_revision(relative: &Path, metadata: &std::fs::Metadata) -> String {
     let mut digest = sha2::Sha256::new();
     digest.update(relative.to_string_lossy().as_bytes());
@@ -1123,7 +1193,10 @@ fn count_diff_lines(diff: &str) -> (usize, usize) {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChangeStatus, CodeProvider as _, DiffScope, LocalCodeProvider};
+    use super::{
+        ChangeStatus, CodeProvider as _, DiffScope, LocalCodeProvider, RawFileDocument,
+        preview_media_type,
+    };
     use std::fs;
     use std::path::PathBuf;
     use std::process::Command;
@@ -1436,6 +1509,46 @@ mod tests {
             .status()
             .unwrap();
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn preview_media_type_covers_review_image_and_svg_paths() {
+        assert_eq!(preview_media_type("logos/heimdall.png"), Some("image/png"));
+        assert_eq!(preview_media_type("icon.SVG"), Some("image/svg+xml"));
+        assert_eq!(preview_media_type("photo.JPEG"), Some("image/jpeg"));
+        assert_eq!(preview_media_type("diagram.mmd"), None);
+        assert_eq!(preview_media_type("main.rs"), None);
+    }
+
+    #[test]
+    fn file_raw_serves_previewable_bytes_and_rejects_text() {
+        let dir = scratch("file-raw");
+        fs::write(dir.join("mark.png"), [0x89, b'P', b'N', b'G', 0, 1, 2]).unwrap();
+        fs::write(dir.join("note.md"), "# hi\n").unwrap();
+        let provider = LocalCodeProvider::new(&dir);
+        let raw = provider.file_raw("mark.png").unwrap();
+        assert_eq!(raw.media_type, "image/png");
+        assert_eq!(raw.bytes[1], b'P');
+        assert_eq!(
+            provider.file_raw("note.md").unwrap_err(),
+            "file is not a previewable media type"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn file_raw_adapter_json_encodes_bytes_as_base64() {
+        let raw = RawFileDocument {
+            path: "mark.png".to_owned(),
+            revision: "abc".to_owned(),
+            media_type: "image/png".to_owned(),
+            bytes: vec![0x89, b'P', b'N', b'G'],
+            size: 4,
+        };
+        let value = serde_json::to_value(&raw).unwrap();
+        assert_eq!(value["bytes"], "iVBORw==");
+        let decoded = serde_json::from_value::<RawFileDocument>(value).unwrap();
+        assert_eq!(decoded.bytes, raw.bytes);
     }
 
     #[test]

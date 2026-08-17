@@ -13,6 +13,9 @@ import { useDesktopCommands } from "./DesktopCommandProvider";
 import {
   DESKTOP_FOCUS_PLAN_SHORTCUT,
   DESKTOP_FOCUS_PROMPT_SHORTCUT,
+  DESKTOP_RESIZE_NARROW_SHORTCUT,
+  DESKTOP_RESIZE_SELECT_SHORTCUT,
+  DESKTOP_RESIZE_WIDEN_SHORTCUT,
 } from "./workspaceShortcuts";
 import { DesktopModal } from "../DesktopModal";
 
@@ -44,10 +47,16 @@ const NAVIGATION: ShortcutRow[] = [
   { keys: ["Ctrl", "W", "J/K"], title: "Move between regions in a pane" },
   { keys: ["Ctrl", "W", "W"], title: "Cycle focus regions" },
   {
-    keys: ["Ctrl", "W", "R"],
+    keys: [DESKTOP_RESIZE_SELECT_SHORTCUT],
     title: "Select the nearest layout resize bar",
     description:
-      "H/L resizes, Shift+H/L uses a larger step, Tab selects the next visible bar, and Esc or Enter finishes",
+      "Enter Resize mode without moving the bar. H/L then resizes, Shift+H/L uses a larger step, Tab selects the next visible bar, and Esc, Enter, or Mod+\\ finishes. Mod+[ / Mod+] still nudge immediately",
+  },
+  {
+    keys: [DESKTOP_RESIZE_NARROW_SHORTCUT, DESKTOP_RESIZE_WIDEN_SHORTCUT],
+    title: "Nudge the nearest layout bar",
+    description:
+      "Shrink or grow immediately and stay in Resize mode. Ctrl+W </> remains as the Vim window-width alias",
   },
   { keys: ["J/K"], title: "Move through items in list regions" },
   { keys: ["Mod+1…0"], title: "Switch directly to a visible session from anywhere" },
@@ -55,8 +64,13 @@ const NAVIGATION: ShortcutRow[] = [
   { keys: ["G", "G"], title: "First item" },
   { keys: ["Shift+G"], title: "Last item" },
   {
+    keys: ["1…0"],
+    title: "Jump to a Queue or Draft item while that list is focused",
+    description: "Clicking the visible number does the same jump. G then 1–0 remains available",
+  },
+  {
     keys: ["G", "1…0"],
-    title: "Jump directly to a Queue or Draft item",
+    title: "Jump to a Queue or Draft item after pressing G",
     description: "The first ten visible rows use 1–9, then 0",
   },
   { keys: ["Enter"], title: "Open or activate the focused item" },

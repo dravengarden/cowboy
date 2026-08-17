@@ -1,10 +1,13 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
+  liveTranscriptMountedRows,
   liveTranscriptWindow,
   recycledTranscriptHeight,
   shouldWindowLiveTranscript,
   TRANSCRIPT_LIVE_MOUNTED_ROWS,
+  TRANSCRIPT_LIVE_VIEWPORT_BUFFER_ROWS,
   TRANSCRIPT_RECYCLED_ROW_FALLBACK_PX,
+  typicalTranscriptRowHeight,
 } from "./transcriptLiveWindow.ts";
 
 Deno.test("live window stays off until the reader follows an overflowing tail", () => {
@@ -40,9 +43,27 @@ Deno.test("live window keeps the newest mounted rows", () => {
     mounted: TRANSCRIPT_LIVE_MOUNTED_ROWS,
     recycled: 8,
   });
+  assertEquals(liveTranscriptWindow(40, 28), {
+    mounted: 28,
+    recycled: 12,
+  });
 });
 
-Deno.test("recycled spacer uses measured heights and a stable fallback", () => {
+Deno.test("live window grows with a tall viewport of compact rows", () => {
+  assertEquals(
+    liveTranscriptMountedRows(1_080, 56),
+    Math.max(
+      TRANSCRIPT_LIVE_MOUNTED_ROWS,
+      Math.ceil(1_080 / 56) + TRANSCRIPT_LIVE_VIEWPORT_BUFFER_ROWS,
+    ),
+  );
+  assertEquals(
+    liveTranscriptMountedRows(400, 88),
+    TRANSCRIPT_LIVE_MOUNTED_ROWS,
+  );
+});
+
+Deno.test("recycled spacer uses measured heights and a typical fallback", () => {
   assertEquals(
     recycledTranscriptHeight(["a", "b"], new Map([["a", 40], ["b", 60]])),
     100,
@@ -51,4 +72,16 @@ Deno.test("recycled spacer uses measured heights and a stable fallback", () => {
     recycledTranscriptHeight(["missing"], new Map()),
     TRANSCRIPT_RECYCLED_ROW_FALLBACK_PX,
   );
+  assertEquals(
+    recycledTranscriptHeight(["missing"], new Map(), 52),
+    52,
+  );
+});
+
+Deno.test("typical recycled height is the median of measured rows", () => {
+  assertEquals(
+    typicalTranscriptRowHeight(new Map([["a", 52], ["b", 56], ["c", 400]])),
+    56,
+  );
+  assertEquals(typicalTranscriptRowHeight(new Map()), TRANSCRIPT_RECYCLED_ROW_FALLBACK_PX);
 });

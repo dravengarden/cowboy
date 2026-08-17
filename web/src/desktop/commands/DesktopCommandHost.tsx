@@ -19,7 +19,17 @@ import { DesktopShortcutsDialog } from "./DesktopShortcutsDialog";
 import {
   DESKTOP_FOCUS_PLAN_SHORTCUT,
   DESKTOP_FOCUS_PROMPT_SHORTCUT,
+  DESKTOP_RESIZE_NARROW_SHORTCUT,
+  DESKTOP_RESIZE_SELECT_SHORTCUT,
+  DESKTOP_RESIZE_WIDEN_SHORTCUT,
 } from "./workspaceShortcuts";
+import {
+  DESKTOP_SPLITTER_ADJUST_EVENT,
+  DESKTOP_SPLITTER_STEP,
+  preferredDesktopSplitter,
+  resolveDesktopResizeSplitter,
+  visibleDesktopSplitterIds,
+} from "../desktopSplitterKeyboard";
 import { DESKTOP_INSET_RADIUS } from "../DesktopEmbeddedControl";
 import { DesktopModal } from "../DesktopModal";
 import { desktopImeOwnsKey } from "./imeShortcut";
@@ -140,6 +150,74 @@ export function DesktopCommandHost({
       shortcut: "Mod+L",
       allowInEditor: true,
       run: () => workspace.focusPane("conversation"),
+    },
+    {
+      id: "workspace.enterResize",
+      title: "Select Layout Resize Bar",
+      description:
+        "Enter Resize mode on the nearest vertical split, then H/L to move it",
+      group: "Workspace",
+      shortcut: DESKTOP_RESIZE_SELECT_SHORTCUT,
+      allowInEditor: true,
+      run: () => {
+        if (workspace.selectedSplitter !== null) {
+          workspace.setSelectedSplitter(null);
+          if (workspace.focusedRegion) {
+            requestAnimationFrame(() =>
+              workspace.focusRegion(workspace.focusedRegion as string)
+            );
+          }
+          return;
+        }
+        const splitter = preferredDesktopSplitter(
+          visibleDesktopSplitterIds(),
+          workspace.focusedPane,
+          workspace.productMode,
+        );
+        if (splitter) workspace.setSelectedSplitter(splitter);
+      },
+    },
+    {
+      id: "workspace.resizeNarrow",
+      title: "Narrow Nearest Pane",
+      description: "Shrink the nearest visible vertical split and enter Resize mode",
+      group: "Workspace",
+      shortcut: DESKTOP_RESIZE_NARROW_SHORTCUT,
+      allowInEditor: true,
+      run: () => {
+        const splitter = resolveDesktopResizeSplitter(
+          visibleDesktopSplitterIds(),
+          workspace.selectedSplitter,
+          workspace.focusedPane,
+          workspace.productMode,
+        );
+        if (!splitter) return;
+        workspace.setSelectedSplitter(splitter);
+        globalThis.dispatchEvent(new CustomEvent(DESKTOP_SPLITTER_ADJUST_EVENT, {
+          detail: { splitter, delta: -DESKTOP_SPLITTER_STEP },
+        }));
+      },
+    },
+    {
+      id: "workspace.resizeWiden",
+      title: "Widen Nearest Pane",
+      description: "Grow the nearest visible vertical split and enter Resize mode",
+      group: "Workspace",
+      shortcut: DESKTOP_RESIZE_WIDEN_SHORTCUT,
+      allowInEditor: true,
+      run: () => {
+        const splitter = resolveDesktopResizeSplitter(
+          visibleDesktopSplitterIds(),
+          workspace.selectedSplitter,
+          workspace.focusedPane,
+          workspace.productMode,
+        );
+        if (!splitter) return;
+        workspace.setSelectedSplitter(splitter);
+        globalThis.dispatchEvent(new CustomEvent(DESKTOP_SPLITTER_ADJUST_EVENT, {
+          detail: { splitter, delta: DESKTOP_SPLITTER_STEP },
+        }));
+      },
     },
     {
       id: "prompt.focusPlan",

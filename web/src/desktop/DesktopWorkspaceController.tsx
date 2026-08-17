@@ -7,6 +7,10 @@ import {
   useState,
 } from "react";
 import { verticalWorkspaceRegion } from "./verticalWorkspaceRegion";
+import {
+  desktopPointerLeftComposer,
+  desktopRegionFromPointerTarget,
+} from "./desktopComposerOwnership";
 
 export type DesktopPane = "sessions" | "prompt" | "conversation";
 export type WorkspaceMode = "normal" | "search" | "command";
@@ -170,7 +174,26 @@ export function DesktopWorkspaceProvider({
           }
         }
       }
-      const region = regionFromTarget(event.target);
+      const region = desktopRegionFromPointerTarget(event.target) ??
+        regionFromTarget(event.target);
+      if (
+        event.type === "pointerdown" &&
+        desktopPointerLeftComposer(event.target, document.activeElement)
+      ) {
+        const clickedFocusable = event.target instanceof Element
+          ? event.target.closest<HTMLElement>(
+            "button, a, input, textarea, select, [href], [contenteditable='true']",
+          )
+          : null;
+        if (!clickedFocusable && region) {
+          const regionElement = document.querySelector<HTMLElement>(
+            `[data-desktop-region="${CSS.escape(region)}"]`,
+          );
+          if (regionElement) focusElement(regionElement);
+        } else if (document.activeElement instanceof HTMLElement) {
+          document.activeElement.blur();
+        }
+      }
       if (region) {
         setFocusedRegion(region);
         // The default region state can be established before its lazy Desktop

@@ -12,6 +12,7 @@ import {
   shouldRecoverUnrenderableHistory,
   shouldShowClearedConversationEmptyState,
   shouldShowFreshSessionEmptyState,
+  visibleTranscriptTopGap,
 } from "./transcriptViewport.ts";
 
 Deno.test("visible scrollback bootstrap rearms when the cursor advances", () => {
@@ -238,6 +239,37 @@ Deno.test("an unrenderable durable tail jumps to a question boundary", () => {
   assertEquals(
     shouldRecoverUnrenderableHistory({ ...tail, reachedStart: true }),
     false,
+  );
+});
+
+Deno.test("a hole above the first real row keeps viewport refill going", () => {
+  const base = {
+    managed: true,
+    allowed: true,
+    desktop: false,
+    fromResize: false,
+    reachedStart: false,
+    loadingOlder: false,
+    beforeSeq: 854_903,
+    scrollHeight: 1_400,
+    clientHeight: 1_020,
+    loadingFillHeight: 12,
+  };
+  assertEquals(
+    shouldBackfillTranscriptViewport({ ...base, visibleTopGap: 220 }),
+    true,
+  );
+  assertEquals(
+    shouldBackfillTranscriptViewport({ ...base, visibleTopGap: 8 }),
+    false,
+  );
+  assertEquals(
+    visibleTranscriptTopGap({
+      viewportTop: 100,
+      paddingTop: 12,
+      firstContentTop: 332,
+    }),
+    220,
   );
 });
 

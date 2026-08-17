@@ -11,6 +11,9 @@ const SEMANTIC_MAC_SHORTCUTS = new Map<string, ReadonlySet<string>>([
   ["mod+t", new Set(["workspace.focusTopbar"])],
   ["mod+k", new Set(["commandPalette.open"])],
   ["mod+.", new Set(["composer.more"])],
+  ["mod+[", new Set(["workspace.resizeNarrow"])],
+  ["mod+]", new Set(["workspace.resizeWiden"])],
+  ["mod+\\", new Set(["workspace.enterResize"])],
 ]);
 
 const RESERVED_MAC_SHORTCUTS = new Map<string, string>([

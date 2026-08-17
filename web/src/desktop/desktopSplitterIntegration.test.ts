@@ -23,7 +23,10 @@ Deno.test("every Desktop vertical boundary exposes the shared splitter contract"
   );
 });
 
-Deno.test("Ctrl-W angle brackets resize immediately and own an exclusive H/L mode", () => {
+Deno.test("Mod brackets resize immediately and own an exclusive H/L mode", () => {
+  assert(commandsSource.includes("desktopResizeSelectChord(event, isMac)"));
+  assert(commandsSource.includes("desktopWidthResizeDirection(event, isMac)"));
+  assert(commandsSource.includes("resolveDesktopResizeSplitter("));
   assert(commandsSource.includes('commandKey === "<" || commandKey === ">"'));
   assert(commandsSource.includes("if (isModifierKey(commandKey)) return"));
   assert(commandsSource.includes("if (isModifierKey(key)) return"));
@@ -34,7 +37,7 @@ Deno.test("Ctrl-W angle brackets resize immediately and own an exclusive H/L mod
   assert(commandsSource.includes("DESKTOP_SPLITTER_LARGE_STEP"));
   assert(commandsSource.includes("adjacentDesktopSplitter("));
   assert(commandsSource.includes("Resize mode is exclusive"));
-  assert(statusSource.includes('{ keys: "Ctrl+W+</>", label: "Resize" }'));
+  assert(statusSource.includes("DESKTOP_RESIZE_HINT"));
   assert(statusSource.includes('{ keys: "H/L", label: "Resize" }'));
 });
 

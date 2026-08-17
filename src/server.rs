@@ -1708,6 +1708,7 @@ async fn serve_axum(
         )
         .route("/api/code/sessions/{id}/diff", get(api_code_diff))
         .route("/api/code/sessions/{id}/file", get(api_code_file))
+        .route("/api/code/sessions/{id}/file-raw", get(api_code_file_raw))
         .route("/api/code/sessions/{id}/language", get(api_code_language))
         .route(
             "/api/code/sessions/{id}/intelligence/hover",
@@ -7165,10 +7166,93 @@ async fn api_code_file(
     response
 }
 
+async fn api_code_file_raw(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Query(query): Query<CodeFileQuery>,
+    headers: HeaderMap,
+) -> Response {
+    let Some(context) = resolve_code_context(&state, &session_id).await else {
+        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
+    };
+    let cwd = context.cwd;
+    let result = match remote_code_request(
+        &state,
+        &context.machine_id,
+        &cwd,
+        serde_json::json!({ "type": "file_raw", "path": query.path.clone() }),
+    )
+    .await
+    {
+        Ok(Some(crate::code_adapter::CodeAdapterResponse::FileRaw(file))) => Ok(file),
+        Ok(Some(_)) => return (StatusCode::BAD_GATEWAY, "remote file unavailable").into_response(),
+        Err(_) => return (StatusCode::BAD_GATEWAY, "remote file unavailable").into_response(),
+        Ok(None) => {
+            let cache = state.code_cache.clone();
+            let path = query.path.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                let media_type = crate::code_review::preview_media_type(&path)
+                    .ok_or_else(|| "file is not a previewable media type".to_owned())?;
+                match cache.get_or_load(FsPath::new(&cwd), &path) {
+                    Ok(Some(cached)) => Ok(crate::code_review::RawFileDocument {
+                        path: path.replace('\\', "/"),
+                        revision: cached.revision,
+                        media_type: media_type.to_owned(),
+                        bytes: cached.bytes,
+                        size: cached.size,
+                    }),
+                    Ok(None) | Err(_) => {
+                        crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd))
+                            .file_raw(&path)
+                    }
+                }
+            })
+            .await;
+            let Ok(result) = result else {
+                return (StatusCode::BAD_REQUEST, "file unavailable").into_response();
+            };
+            result
+        }
+    };
+    let result = match result {
+        Ok(result) => result,
+        Err(error) if error == "file snapshot changed" => {
+            return (StatusCode::CONFLICT, error).into_response();
+        }
+        Err(error) => return code_file_error_response(&error),
+    };
+    let etag = format!("\"{}\"", result.revision);
+    const FILE_CACHE_CONTROL: &str = "private, max-age=0, must-revalidate";
+    if headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.contains(etag.as_str()))
+    {
+        return (
+            StatusCode::NOT_MODIFIED,
+            [
+                (header::ETAG, etag.as_str()),
+                (header::CACHE_CONTROL, FILE_CACHE_CONTROL),
+            ],
+        )
+            .into_response();
+    }
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, result.media_type),
+            (header::ETAG, etag),
+            (header::CACHE_CONTROL, FILE_CACHE_CONTROL.to_owned()),
+        ],
+        result.bytes,
+    )
+        .into_response()
+}
+
 fn code_file_error_response(error: &str) -> Response {
     match error {
         "file not found" => (StatusCode::NOT_FOUND, "file not found").into_response(),
-        "binary file" | "file is not UTF-8" => (
+        "binary file" | "file is not UTF-8" | "file is not a previewable media type" => (
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
             "file is not previewable text",
         )

@@ -90,6 +90,10 @@ export function createImeAutoInsertVim(): {
       const state = cm?.state?.vim;
       setImeComposing(!!cm && !!state && !state.insertMode);
       if (!cm || !state || state.insertMode) return false;
+      const composer = view.dom.closest<HTMLElement>(
+        "[data-desktop-region='prompt.composer']",
+      );
+      if (composer && composer.dataset.desktopFocused !== "true") return false;
       // Visual/operator-pending interpret `i` as part of a command. Esc first
       // normalizes every non-insert state and clears partial commands. It is
       // harmless in plain Normal mode.
@@ -346,6 +350,10 @@ export function createImeAutoInsertVim(): {
         !this.cm || this.cm.state?.vim?.insertMode || composing ||
         this.view.composing
       ) return;
+      const composer = this.view.dom.closest<HTMLElement>(
+        "[data-desktop-region='prompt.composer']",
+      );
+      if (composer && composer.dataset.desktopFocused !== "true") return;
       const key = vimCommandKey(event);
       if (!key) return;
       event.preventDefault();

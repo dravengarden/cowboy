@@ -109,6 +109,8 @@ The v1 data plane is exposed under `/api/code/sessions/{id}`:
 - `GET /file?path=<relative>` returns the first 256 KiB UTF-8 source window.
 - `GET /file?path=<relative>&cursor=<opaque>` returns the next window only while
   the file identity revision still matches; changed snapshots return `409`.
+- `GET /file-raw?path=<relative>` returns the raw bytes of a previewable image
+  or SVG with the matching `Content-Type`. Other paths return `415`.
 
 Every response carries `apiVersion: 1`. Paths are resolved from the session and
 validated. For a Columbus aggregate worktree, the read-only tree additionally
@@ -122,8 +124,9 @@ to the isolated worktree. History is a newest-first page of 128 commits;
 tab loads that page when the list approaches the bottom, with commit-shaped
 skeletons instead of a hard cap banner. Git porcelain and Zed RPC values never cross this
 boundary. Server handlers depend on the product-level
-`CodeProvider` interface for manifests, directory pages, changes, diffs, and
-file windows. The first implementation reads the local worktree; a future
+`CodeProvider` interface for manifests, directory pages, changes, diffs, file
+windows, and previewable media bytes. The first implementation reads the local
+worktree; a future
 version-pinned Zed adapter can replace it without changing browser contracts.
 The legacy session file-tree route remains an alias temporarily, but the Code
 frontend uses only the stable namespace.

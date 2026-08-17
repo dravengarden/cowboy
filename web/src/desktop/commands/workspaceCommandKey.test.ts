@@ -56,6 +56,13 @@ Deno.test("workspace Vim motions preserve shifted G and native non-letter keys",
   );
 });
 
+Deno.test("workspace Resize-mode command uses the physical backslash key", () => {
+  assert.equal(
+    workspaceCommandKey({ code: "Backslash", key: "Process", shiftKey: false }),
+    "\\",
+  );
+});
+
 Deno.test("workspace resize commands use physical angle-bracket keys", () => {
   assert.equal(
     workspaceCommandKey({ code: "Comma", key: "Process", shiftKey: true }),

@@ -322,7 +322,7 @@ export function DesktopWorkspace({
               role="separator"
               aria-orientation="vertical"
               aria-label="Resize page index"
-              title="Resize layout · Ctrl+W </>"
+              title="Resize layout · Mod+\\"
               aria-valuemin={READING_QUESTIONS_MIN}
               aria-valuemax={READING_QUESTIONS_MAX}
               aria-valuenow={Math.round(questionsWidth)}
@@ -423,7 +423,7 @@ export function DesktopWorkspace({
         role="separator"
         aria-orientation="vertical"
         aria-label="Resize composer column"
-        title="Resize layout · Ctrl+W </>"
+        title="Resize layout · Mod+\\"
         aria-valuemin={COMPOSER_COL_MIN}
         aria-valuemax={COMPOSER_COL_MAX}
         aria-valuenow={Math.round(promptWidth)}

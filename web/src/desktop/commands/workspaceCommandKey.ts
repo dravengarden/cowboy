@@ -20,6 +20,7 @@ export function workspaceCommandKey(event: {
   const physical = ({
     BracketLeft: "[",
     BracketRight: "]",
+    Backslash: "\\",
     Enter: "Enter",
     Escape: "Escape",
     Backspace: "Backspace",

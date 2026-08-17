@@ -103,6 +103,13 @@ Deno.test("usage widget aggregates supported providers and drops unsupported pla
       resetsAt: 123,
     },
     {
+      kind: "xai",
+      label: "xAI",
+      remaining: 75,
+      periodLabel: "Monthly",
+      resetsAt: Date.parse("2026-09-01T00:00:00Z") / 1000,
+    },
+    {
       kind: "deepseek",
       label: "DeepSeek",
       balanceCny: 108.8,
@@ -111,13 +118,6 @@ Deno.test("usage widget aggregates supported providers and drops unsupported pla
       cacheHitRate: 90,
       cacheMissRate: 10,
       blockingErrors: 1,
-    },
-    {
-      kind: "xai",
-      label: "xAI",
-      remaining: 75,
-      periodLabel: "Monthly",
-      resetsAt: Date.parse("2026-09-01T00:00:00Z") / 1000,
     },
   ]);
 });

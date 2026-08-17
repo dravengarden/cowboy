@@ -9,6 +9,7 @@ export interface TranscriptViewportBackfillInput {
   scrollHeight: number;
   clientHeight: number;
   loadingFillHeight: number | null;
+  visibleTopGap?: number;
 }
 
 export function shouldShowFreshSessionEmptyState(input: {
@@ -65,10 +66,25 @@ export function shouldBackfillTranscriptViewport(
   }
   // Once mounted, the flex filler is the exact unused reading area. Ignore a
   // tiny remainder so fractional layout and safe-area rounding cannot create a
-  // load/stop oscillation. Before it mounts, a non-overflowing scroll box is
-  // enough to start the first small request and reveal the filler.
+  // load/stop oscillation. A measured hole above the first real row is the
+  // same signal after images collapse or a recycled spacer peeks into view.
+  // Before either measurement exists, a non-overflowing scroll box is enough
+  // to start the first small request and reveal the filler.
+  if (input.visibleTopGap !== undefined) return input.visibleTopGap > 16;
   if (input.loadingFillHeight !== null) return input.loadingFillHeight > 16;
   return input.scrollHeight <= input.clientHeight + 1;
+}
+
+export function visibleTranscriptTopGap(input: {
+  viewportTop: number;
+  paddingTop: number;
+  firstContentTop: number | null;
+}): number {
+  if (input.firstContentTop === null) return 0;
+  return Math.max(
+    0,
+    input.firstContentTop - input.viewportTop - Math.max(0, input.paddingTop),
+  );
 }
 
 export interface VisibleScrollbackBoundaryPrefetchInput {

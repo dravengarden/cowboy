@@ -4541,7 +4541,7 @@ function PendingPanel({
             const jumpBadgeSx = {
               position: "absolute",
               zIndex: 1,
-              pointerEvents: "none",
+              pointerEvents: desktop ? "auto" : "none",
               ...(reordering ? { top: 0, right: 0 } : {
                 top: "50%",
                 left: "50%",

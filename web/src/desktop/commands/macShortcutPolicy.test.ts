@@ -53,6 +53,9 @@ Deno.test("Cowboy workspace chords avoid Command collisions", () => {
     ["workspace.focusTopbar", "Mod+T"],
     ["commandPalette.open", "Mod+K"],
     ["shortcuts.open", "Mod+/"],
+    ["workspace.resizeNarrow", "Mod+["],
+    ["workspace.resizeWiden", "Mod+]"],
+    ["workspace.enterResize", "Mod+\\"],
   ] as const) {
     assertEquals(macShortcutConflict(commandId, shortcut), null);
   }

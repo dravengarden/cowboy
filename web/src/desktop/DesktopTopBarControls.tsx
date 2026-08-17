@@ -64,17 +64,18 @@ import { NetworkButton } from "../NetworkActionFeedback";
 import { SessionReloadDialog } from "../SessionReloadDialog";
 import {
   acceptedScheduleTime,
+  accountProviderLabel,
   fullResetTime,
   type JsonRecord,
   nearestAvailableResetCredit,
   num,
   type ProviderUsage,
-  providerUsage,
   providerUsageErrorMessage,
   record,
   relativeUpdateTime,
   scheduledResetCountdown,
   shortResetTime,
+  usageCardProviders,
   usageLimits,
   usageResetProvider,
   usageResetSchedule,
@@ -622,6 +623,61 @@ function DesktopUsageExtras(
         </DialogActions>
       </Dialog>
     </>
+  );
+}
+
+function DesktopProviderUsage({
+  usage,
+  schedule,
+  onUsageChanged,
+}: {
+  usage: ProviderUsage;
+  schedule: { fire_at_ms: number } | undefined;
+  onUsageChanged: () => Promise<void>;
+}): React.JSX.Element {
+  const limits = usageLimits(usage);
+  const hasResetCredit = nearestAvailableResetCredit(usage) !== undefined;
+  return (
+    <Stack spacing={1.25} data-usage-provider-section={usage.provider}>
+      <Typography variant="subtitle2" fontWeight={750}>
+        {accountProviderLabel(usage.provider)}
+      </Typography>
+      {limits.map((limit) => (
+        <Stack key={limit.id} spacing={0.5}>
+          <Stack direction="row" justifyContent="space-between">
+            <Typography variant="body2">{limit.label}</Typography>
+            <Typography variant="body2" fontWeight={750}>
+              {limit.remaining}% remaining
+            </Typography>
+          </Stack>
+          <LinearProgress
+            variant="determinate"
+            value={limit.remaining}
+            sx={{
+              height: 6,
+              borderRadius: 99,
+              "& .MuiLinearProgress-bar": { borderRadius: 99 },
+            }}
+          />
+          <Typography variant="caption" color="text.secondary">
+            Resets {fullResetTime(limit.resetsAt)}
+          </Typography>
+        </Stack>
+      ))}
+      {limits.length === 0 && !hasResetCredit && (
+        <Typography variant="body2" color="text.secondary">
+          {providerUsageErrorMessage(
+            usage,
+            "This provider has not exposed account limits.",
+          )}
+        </Typography>
+      )}
+      <DesktopUsageExtras
+        usage={usage}
+        schedule={schedule}
+        onUsageChanged={onUsageChanged}
+      />
+    </Stack>
   );
 }
 
@@ -1207,26 +1263,9 @@ export function DesktopTopBarControls({
   const widgetProviders = useMemo(() => usageWidgetProviders(snapshot), [
     snapshot,
   ]);
-  const sessionUsage = providerUsage(
+  const usageProviders = useMemo(() => usageCardProviders(snapshot), [
     snapshot,
-    session?.provider,
-    session?.provider_version,
-    session?.provider_generation_digest,
-  );
-  const sessionHasReset = sessionUsage !== undefined &&
-    nearestAvailableResetCredit(sessionUsage) !== undefined;
-  const usage =
-    widgetProviders.some((provider) =>
-        provider.kind === sessionUsage?.provider
-      ) ||
-      sessionHasReset
-      ? sessionUsage
-      : snapshot?.providers.find((provider) =>
-        provider.provider === widgetProviders[0]?.kind
-      );
-  const limits = useMemo(() => usageLimits(usage), [usage]);
-  const hasResetCredit = usage !== undefined &&
-    nearestAvailableResetCredit(usage) !== undefined;
+  ]);
   const updatedAgo = relativeUpdateTime(snapshot?.refreshed_at_ms ?? 0, clock);
   const availableCommands = timelineState.availableCommands;
   const compactAction = useMemo(
@@ -1668,42 +1707,25 @@ export function DesktopTopBarControls({
           <Divider />
           {usagePanel === "logs" ? <UsageLogs dense /> : (
             <>
-              {limits.map((limit) => (
-                <Stack key={limit.id} spacing={0.5}>
-                  <Stack direction="row" justifyContent="space-between">
-                    <Typography variant="body2">{limit.label}</Typography>
-                    <Typography variant="body2" fontWeight={750}>
-                      {limit.remaining}% remaining
-                    </Typography>
-                  </Stack>
-                  <LinearProgress
-                    variant="determinate"
-                    value={limit.remaining}
-                    sx={{
-                      height: 6,
-                      borderRadius: 99,
-                      "& .MuiLinearProgress-bar": { borderRadius: 99 },
-                    }}
+              {usageProviders.map((provider, index) => (
+                <Stack key={provider.provider} spacing={1.25}>
+                  {index > 0 && <Divider />}
+                  <DesktopProviderUsage
+                    usage={provider}
+                    schedule={usageResetSchedule(snapshot, provider)}
+                    onUsageChanged={() => loadUsage(false)}
                   />
-                  <Typography variant="caption" color="text.secondary">
-                    Resets {fullResetTime(limit.resetsAt)}
-                  </Typography>
                 </Stack>
               ))}
-              {limits.length === 0 && !hasResetCredit && (
+              {snapshot === null && (
                 <Typography variant="body2" color="text.secondary">
-                  {providerUsageErrorMessage(
-                    usage,
-                    "This provider has not exposed account limits.",
-                  )}
+                  Loading usage…
                 </Typography>
               )}
-              {usage && (
-                <DesktopUsageExtras
-                  usage={usage}
-                  schedule={usageResetSchedule(snapshot, usage)}
-                  onUsageChanged={() => loadUsage(false)}
-                />
+              {snapshot !== null && usageProviders.length === 0 && (
+                <Typography variant="body2" color="text.secondary">
+                  No account providers have exposed usage yet.
+                </Typography>
               )}
             </>
           )}

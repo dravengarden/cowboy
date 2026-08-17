@@ -29,6 +29,18 @@ Deno.test("pending rows expose stable item-scoped action keys", () => {
   assert.equal(pendingItemActionKey("l"), null);
 });
 
+Deno.test("a focused Queue accepts the visible number as a direct jump", async () => {
+  const provider = await Deno.readTextFile(
+    new URL("./DesktopCommandProvider.tsx", import.meta.url),
+  );
+  const keycap = await Deno.readTextFile(
+    new URL("./DesktopListJumpKeycap.tsx", import.meta.url),
+  );
+  assert.equal(provider.includes('pendingList && !reordering && /^[0-9]$/.test(key)'), true);
+  assert.equal(keycap.includes("Jump to item"), true);
+  assert.equal(keycap.includes("onClick={scopeAvailable && !prefix"), true);
+});
+
 Deno.test("numeric list jumps reject hidden and unrelated slots", () => {
   assert.equal(listJumpIndex("3", 3), 2);
   assert.equal(listJumpIndex("9", 3), null);

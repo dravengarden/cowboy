@@ -30,7 +30,6 @@ Deno.test("DeepSeek usage exposes diagnostic time and error controls", () => {
   assertEquals(infoSheetSource.includes("not included in agent spend"), true);
   assertEquals(infoSheetSource.includes("Schema v3+"), true);
   assertEquals(infoSheetSource.includes("DEEPSEEK_CACHE_MIN_HIT_LABEL"), true);
-  assertEquals(infoSheetSource.includes("animateOnOpen"), true);
 });
 
 Deno.test("nested observability sheets portal their scrims above the iOS safe area", () => {

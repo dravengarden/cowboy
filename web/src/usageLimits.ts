@@ -22,6 +22,19 @@ export interface UsageSnapshot {
   xai_reset_schedule?: { fire_at_ms: number };
 }
 
+const ACCOUNT_PROVIDER_LABELS: Record<string, string> = {
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  deepseek: "DeepSeek",
+  gemini: "Gemini",
+  xai: "xAI",
+};
+
+/** Display name for an account-usage provider id. Unknown ids pass through. */
+export function accountProviderLabel(provider: string): string {
+  return ACCOUNT_PROVIDER_LABELS[provider] ?? provider;
+}
+
 /** Keep xAI beside OpenAI without disturbing the order of other usage cards. */
 export function usageCardProviders(
   snapshot: UsageSnapshot | null,

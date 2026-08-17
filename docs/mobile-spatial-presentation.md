@@ -145,7 +145,7 @@ Two budgets, two jobs:
 | Budget | Module | Job |
 |---|---|---|
 | Event tail | `store.releaseFollowedHistory` | Drop deep ACP envelopes while following; `loadOlder` pages them back |
-| Mounted rows | `transcriptLiveWindow.ts` | Keep the newest 20 **rendered** rows; older mounted rows become one spacer |
+| Mounted rows | `transcriptLiveWindow.ts` | Keep enough newest **rendered** rows to cover the viewport, with a 20-row floor; older mounted rows become one spacer |
 
 The live window only runs when the reader follows an overflowing tail.
 Heights come from the last layout of those rows, so the spacer matches

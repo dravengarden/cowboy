@@ -133,9 +133,12 @@ import {
 } from "./transcriptFollowIntent";
 import { transcriptRowContainment } from "./transcriptMotion";
 import {
+  liveTranscriptMountedRows,
   liveTranscriptWindow,
   recycledTranscriptHeight,
   shouldWindowLiveTranscript,
+  TRANSCRIPT_LIVE_MOUNTED_ROWS,
+  typicalTranscriptRowHeight,
 } from "./transcriptLiveWindow";
 import { markTranscriptScrollActivity } from "./transcriptRenderPacing";
 import {
@@ -146,6 +149,7 @@ import {
   scrollbackReplacementFromTop,
   shouldBackfillTranscriptViewport,
   shouldContinueScrollbackFill,
+  visibleTranscriptTopGap,
   shouldMagnetizeTranscript,
   shouldPrefetchVisibleScrollbackBoundary,
   shouldRecoverUnrenderableHistory,
@@ -3783,6 +3787,13 @@ export function Transcript({
       );
       const loadingFillHeight = loadingFill?.getBoundingClientRect().height ??
         null;
+      const firstContent = el.querySelector<HTMLElement>("[data-key]");
+      const visibleTopGap = visibleTranscriptTopGap({
+        viewportTop: el.getBoundingClientRect().top,
+        paddingTop: Number.parseFloat(globalThis.getComputedStyle(el).paddingTop) ||
+          0,
+        firstContentTop: firstContent?.getBoundingClientRect().top ?? null,
+      });
       const hasVisibleGap = shouldBackfillTranscriptViewport({
         managed: managesScrollHistoryRef.current,
         allowed: true,
@@ -3794,6 +3805,7 @@ export function Transcript({
         scrollHeight: el.scrollHeight,
         clientHeight: el.clientHeight,
         loadingFillHeight,
+        visibleTopGap,
       });
       const needsOlderPage = shouldBackfillTranscriptViewport({
         managed: managesScrollHistoryRef.current,
@@ -3807,6 +3819,7 @@ export function Transcript({
         scrollHeight: el.scrollHeight,
         clientHeight: el.clientHeight,
         loadingFillHeight,
+        visibleTopGap,
       });
       const requestOwned = viewportBackfillCursorRef.current !== null ||
         paging.loadingOlder || viewportBackfillSettlingRef.current;
@@ -3909,13 +3922,18 @@ export function Transcript({
   const stick = useRef(true);
   const [followingLive, setFollowingLive] = useState(true);
   const [transcriptOverflowing, setTranscriptOverflowing] = useState(false);
+  const [liveMountedRows, setLiveMountedRows] = useState(
+    TRANSCRIPT_LIVE_MOUNTED_ROWS,
+  );
   const rowHeightsRef = useRef<Map<string, number>>(new Map());
   const windowLive = shouldWindowLiveTranscript({
     following: followingLive,
     rowCount: items.length,
     overflowing: transcriptOverflowing,
+    mountedRows: liveMountedRows,
   }) && selectedToolKey === null && locatedToolKey === null;
-  const liveWindow = liveTranscriptWindow(items.length);
+  const typicalRowHeight = typicalTranscriptRowHeight(rowHeightsRef.current);
+  const liveWindow = liveTranscriptWindow(items.length, liveMountedRows);
   const mountedItems = windowLive ? items.slice(-liveWindow.mounted) : items;
   const recycledItemKeys = windowLive
     ? items.slice(0, liveWindow.recycled).map((item) => item.key)
@@ -3923,6 +3941,7 @@ export function Transcript({
   const recycledHeight = recycledTranscriptHeight(
     recycledItemKeys,
     rowHeightsRef.current,
+    typicalRowHeight,
   );
   useLayoutEffect(() => {
     const root = parentRef.current;
@@ -3931,6 +3950,11 @@ export function Transcript({
       const key = node.dataset["key"];
       if (key) rowHeightsRef.current.set(key, node.offsetHeight);
     }
+    const nextMounted = liveTranscriptMountedRows(
+      root.clientHeight,
+      typicalTranscriptRowHeight(rowHeightsRef.current),
+    );
+    setLiveMountedRows((current) => current === nextMounted ? current : nextMounted);
   });
   const workingRef = useRef(working);
   workingRef.current = working;

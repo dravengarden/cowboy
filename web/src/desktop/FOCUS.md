@@ -112,6 +112,9 @@ turn one held prefix into a completed double-key command.
 - `Ctrl-w h/l`: adjacent pane.
 - `Ctrl-w j/k`: adjacent region in the current pane.
 - `Ctrl-w w`: cycle every visible region.
+- `Mod-\`: enter Resize mode on the nearest vertical split. `H/L` then
+  moves it. `Mod-[` / `Mod-]` still nudge immediately. `Ctrl-w </>` remains
+  as the Vim window-width alias.
 - `j/k`, `gg`, `G`: item navigation outside text-editing controls. Conversation
   is a reader rather than an item list, so the same keys scroll by line or jump
   to the oldest/latest output there.
@@ -338,26 +341,33 @@ and disabled, rather than falling through to the browser's Print action.
 
 The Composer is the exception: its caret and outlined editing canvas already
 communicate focus, so `prompt.composer` must not receive the generic region
-background, accent rail, or focus ring.
+background, accent rail, or focus ring. When Conversation, Sessions, or the
+top bar is the highlighted workspace region, the hidden Prompt Vim sink must
+not consume typed keys or IME input; those keys belong to the highlighted
+chrome and must not pop Prompt into Insert.
 
 `Ctrl-K` and `Ctrl-J` move vertically between the active pane and
 `topbar.controls`. Prompt Plan, Queue, and Draft are auxiliary panels rather
 than Vim windows; enter them through their dedicated commands, so vertical
 window movement never collapses or selects them as an intermediate stop.
 
-`Ctrl-W <` and `Ctrl-W >` shrink or grow the nearest visible vertical boundary
-by 16px and enter layout Resize mode: Sessions / Prompt from Sessions, Prompt /
-Conversation from either work pane, or Page index / Page in Reading mode. This
-matches Vim's window-width vocabulary and leaves `Ctrl-W R` available for its
-standard rotate meaning. The selected bar uses the shared accent and keycap
-language; `H/L` moves it by 16px, `Shift-H/L` moves it by 48px, `Tab` cycles
-visible bars, and `Esc` or `Enter` returns to the previously focused region.
+`Mod-\` selects the nearest visible vertical boundary and enters layout
+Resize mode without moving it: Sessions / Prompt from Sessions, Prompt /
+Conversation from either work pane, or Page index / Page in Reading mode.
+Pressing `Mod-\` again leaves the mode. `Mod-[` and `Mod-]` still shrink or
+grow immediately. `Ctrl-W <` and `Ctrl-W >` remain as the Vim window-width
+alias and leave `Ctrl-W R` available for its standard rotate meaning. The
+selected bar uses the shared accent and keycap language; `H/L` moves it by
+16px, `Shift-H/L` moves it by 48px, `Tab` cycles visible bars, and `Esc` or
+`Enter` returns to the previously focused region.
 Resize mode is exclusive, so unrelated bare keys never leak into lists,
 transcript widgets, or destructive actions. Pointer dragging keeps working and
 selecting a bar with the pointer enters the same visible state.
 
 Queue and Draft use the same list contract as Sessions: `J/K` selects, `gg` and
-`G` jump to the ends, `g1` through `g0` jump to one of the first ten visible
-slots, and `L`/`Enter` opens the selected message editor. `P` pins reorder mode
+`G` jump to the ends, and `1` through `0` jump to one of the first ten visible
+slots once that list owns focus. Clicking a visible number does the same jump.
+`G` then `1…0` remains available as the sequential form. `L`/`Enter` opens the
+selected message editor. `P` pins reorder mode
 so `J/K` moves the message and `Esc` releases it. Inside the editor, `Mod+Enter`
 saves and `Esc` cancels, with both returning focus to the originating list row.

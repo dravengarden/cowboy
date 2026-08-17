@@ -4,6 +4,7 @@ import {
   type ProviderUsage,
   record,
   topBarUsageLimits,
+  usageCardProviders,
   type UsageSnapshot,
 } from "./usageLimits";
 
@@ -132,23 +133,14 @@ export function usageWidgetForAccount(
 
 /**
  * Account-level provider summaries for the persistent Desktop widget.
- * Session-only and unavailable providers are intentionally absent: the widget
- * never reserves empty tiles for capabilities the provider does not expose.
+ * Follows the snapshot's provider list; session-only and unavailable
+ * providers stay absent because they have no account projection yet.
  */
 export function usageWidgetProviders(
   snapshot: UsageSnapshot | null,
 ): UsageWidgetProvider[] {
-  if (!snapshot) return [];
-  const byProvider = new Map(
-    snapshot.providers.map((usage) => [usage.provider, usage]),
-  );
-  return [
-    usageWidgetForAccount(byProvider.get("openai")),
-    usageWidgetForAccount(byProvider.get("deepseek")),
-    usageWidgetForAccount(byProvider.get("xai")),
-    // Anthropic is currently session-only and Gemini exposes no account quota.
-    // Add their account-level projection here when their provider contracts do.
-  ].filter((provider): provider is UsageWidgetProvider =>
-    provider !== undefined
-  );
+  return usageCardProviders(snapshot).flatMap((usage) => {
+    const widget = usageWidgetForAccount(usage);
+    return widget ? [widget] : [];
+  });
 }

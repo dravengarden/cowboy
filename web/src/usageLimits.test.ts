@@ -1,5 +1,6 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
+  accountProviderLabel,
   accountProviderUsage,
   acceptedScheduleTime,
   nearestAvailableResetCredit,
@@ -36,6 +37,12 @@ Deno.test("usage cards place xAI directly after OpenAI", () => {
     snapshot.providers.map((usage) => usage.provider),
     ["deepseek", "openai", "anthropic", "gemini", "xai", "future"],
   );
+});
+
+Deno.test("account provider labels stay catalog-backed and pass unknown ids through", () => {
+  assertEquals(accountProviderLabel("xai"), "xAI");
+  assertEquals(accountProviderLabel("openai"), "OpenAI");
+  assertEquals(accountProviderLabel("future-labs"), "future-labs");
 });
 
 Deno.test("datetime picker ignores iOS current-minute provisional values", () => {

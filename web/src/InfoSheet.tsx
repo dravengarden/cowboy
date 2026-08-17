@@ -37,6 +37,7 @@ import {
   type JsonRecord,
   nearestAvailableResetCredit,
   num,
+  accountProviderLabel,
   type ProviderUsage,
   providerUsageErrorMessage,
   record,
@@ -98,14 +99,6 @@ function InfoRow({ k, v }: { k: string; v: string }): React.JSX.Element {
     </Stack>
   );
 }
-
-const ACCOUNT_PROVIDER_NAMES: Record<string, string> = {
-  openai: "OpenAI",
-  anthropic: "Anthropic",
-  deepseek: "DeepSeek",
-  gemini: "Gemini",
-  xai: "xAI",
-};
 
 function formatTokens(value: number | undefined): string {
   return value === undefined ? "—" : value.toLocaleString();
@@ -509,7 +502,6 @@ function DeepSeekDetails(
         desktopMaxWidth={520}
         mobileDismiss="none"
         floatingActions={false}
-        animateOnOpen
       >
         <Stack spacing={2} sx={{ pt: 0.5, pb: 1 }}>
           <MultiSelectChipGroup label="Model" options={DEEPSEEK_MODEL_OPTIONS} value={draftModels} onChange={setDraftModels} />
@@ -1190,7 +1182,7 @@ function ProviderUsageCard({
     ? undefined
     : `/api/usage/${resetProvider}/reset`;
   const summary = record(usage.activity?.summary);
-  const title = ACCOUNT_PROVIDER_NAMES[usage.provider] ?? usage.provider;
+  const title = accountProviderLabel(usage.provider);
   const statusLabel = plan
     ? plan.toUpperCase()
     : usage.provider === "deepseek" && usage.status === "available"

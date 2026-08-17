@@ -50,6 +50,9 @@ pub enum CodeOperation {
         path: String,
         cursor: Option<String>,
     },
+    FileRaw {
+        path: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -64,6 +67,7 @@ pub enum CodeAdapterResponse {
     CommitDiff(crate::code_review::DiffDocument),
     Diff(crate::code_review::DiffDocument),
     File(crate::code_review::FileDocument),
+    FileRaw(crate::code_review::RawFileDocument),
 }
 
 pub async fn serve(socket: &Path, roots: Vec<PathBuf>) -> Result<()> {
@@ -172,6 +176,9 @@ fn execute(request: CodeAdapterRequest, roots: &[PathBuf]) -> Result<CodeAdapter
                 .file_page(&path, cursor.as_deref())
                 .map_err(anyhow::Error::msg)?,
         ),
+        CodeOperation::FileRaw { path } => {
+            CodeAdapterResponse::FileRaw(provider.file_raw(&path).map_err(anyhow::Error::msg)?)
+        }
     })
 }
 
@@ -202,6 +209,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("hello.rs"), "fn hello() {}\n").unwrap();
+        std::fs::write(root.join("mark.png"), [0x89, b'P', b'N', b'G', 0, 1, 2]).unwrap();
         let root = root.canonicalize().unwrap();
         let response = execute(
             CodeAdapterRequest {
@@ -218,6 +226,21 @@ mod tests {
             panic!("wrong response")
         };
         assert_eq!(file.text, "fn hello() {}\n");
+        let raw = execute(
+            CodeAdapterRequest {
+                root: root.display().to_string(),
+                operation: CodeOperation::FileRaw {
+                    path: "mark.png".to_owned(),
+                },
+            },
+            std::slice::from_ref(&root),
+        )
+        .unwrap();
+        let CodeAdapterResponse::FileRaw(file) = raw else {
+            panic!("wrong response")
+        };
+        assert_eq!(file.media_type, "image/png");
+        assert_eq!(file.bytes[1], b'P');
         let outside = execute(
             CodeAdapterRequest {
                 root: root.parent().unwrap().display().to_string(),

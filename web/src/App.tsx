@@ -2785,7 +2785,7 @@ export function App({
                         role="separator"
                         aria-orientation="vertical"
                         aria-label="Resize sidebar"
-                        title="Resize layout · Ctrl+W </>"
+                        title="Resize layout · Mod+\\"
                         aria-valuemin={SIDEBAR_MIN}
                         aria-valuemax={SIDEBAR_MAX}
                         aria-valuenow={Math.round(sidebarWidth)}

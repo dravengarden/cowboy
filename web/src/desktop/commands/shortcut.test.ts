@@ -134,6 +134,36 @@ Deno.test("Alt shortcuts use physical keys under macOS Option input", () => {
   }, true));
 });
 
+Deno.test("Mod backslash enters Resize mode under an IME", () => {
+  assert(matchesShortcut(parseShortcut("Mod+\\"), {
+    key: "Process",
+    code: "Backslash",
+    metaKey: true,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+  }, true));
+});
+
+Deno.test("Mod bracket resize shortcuts use physical keys under an IME", () => {
+  assert(matchesShortcut(parseShortcut("Mod+["), {
+    key: "Process",
+    code: "BracketLeft",
+    metaKey: true,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+  }, true));
+  assert(matchesShortcut(parseShortcut("Mod+]"), {
+    key: "Process",
+    code: "BracketRight",
+    metaKey: true,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+  }, true));
+});
+
 Deno.test("bare contextual shortcuts use physical keys only when explicitly safe", () => {
   const shortcut = parseShortcut("P");
   const imeKey = {

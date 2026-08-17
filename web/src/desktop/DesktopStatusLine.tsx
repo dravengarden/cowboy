@@ -12,6 +12,7 @@ import { useVimMacroRecording } from "./vim/macroStatusStore";
 import {
   DESKTOP_FOCUS_PLAN_SHORTCUT,
   DESKTOP_FOCUS_PROMPT_SHORTCUT,
+  DESKTOP_RESIZE_HINT,
 } from "./commands/workspaceShortcuts";
 
 function Segment({
@@ -203,7 +204,7 @@ export function DesktopStatusLine({
         document.querySelector("[data-desktop-permission-action='reject']")
       ? [{ keys: "R", label: "Reject" }]
       : []),
-    { keys: "Ctrl+W+</>", label: "Resize" },
+    { keys: DESKTOP_RESIZE_HINT, label: "Resize" },
   ];
   const hints = resizingLayout
     ? [

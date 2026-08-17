@@ -92,6 +92,9 @@ import { ReviewDrawerShell } from "./ReviewDrawerShell";
 import { ReviewFileTree } from "./ReviewFileTree";
 import { ReviewOutline } from "./ReviewOutline";
 import { isMarkdownReviewPath } from "./reviewMarkdown";
+import { ReviewMediaPreview } from "./ReviewMediaPreview";
+import { MermaidDiagram } from "./MermaidDiagram";
+import { isReviewMediaPath, reviewPreviewKind } from "./reviewPreview";
 import type { ReviewMode } from "./reviewMode";
 import {
   setReviewLanguageCapabilities,
@@ -325,6 +328,8 @@ function DocumentView({
 }): React.JSX.Element {
   const surface = useSurfaceProfile();
   const settings = useReviewSettings();
+  const previewKind = reviewPreviewKind(target.path);
+  const mediaPreview = isReviewMediaPath(target.path);
   const [text, setText] = useState("");
   const [truncated, setTruncated] = useState(false);
   const [limited, setLimited] = useState(false);
@@ -548,7 +553,14 @@ function DocumentView({
     setHoverOpen(false);
     hoverController.current?.abort();
     onRevision(undefined);
-    const request = diffTarget
+    if (mediaPreview) {
+      setLoadedPath(target.path);
+      setLoading(false);
+      return () => controller.abort();
+    }
+    // Image/SVG previews skip this fetch. Mermaid is text, but Git Changes
+    // still opens a diff target — render the current file, not the patch.
+    const request = diffTarget && previewKind !== "mermaid"
       ? loadCodeDiff(
         sessionId,
         diffTarget.path,
@@ -635,6 +647,7 @@ function DocumentView({
     target.kind,
     target.path,
     target.kind === "diff" ? target.scope : undefined,
+    mediaPreview,
     onRevision,
     reloadKey,
   ]);
@@ -763,7 +776,7 @@ function DocumentView({
             {missing
               ? "It may have been moved or deleted in the worktree."
               : unsupported
-              ? "Cowboy can preview UTF-8 text files, but not compiled programs or other binary data."
+              ? "Cowboy can preview text, images, SVG, and Mermaid files, but not compiled programs or other binary data."
               : invalid
               ? "The saved path or file snapshot is no longer valid."
               : "The connection may have been interrupted. Your tabs and reading position are preserved."}
@@ -1154,10 +1167,23 @@ function DocumentView({
         sx={{
           flex: 1,
           minHeight: 0,
-          overflow: markdownPreview ? "auto" : "hidden",
+          overflow: markdownPreview || previewKind === "mermaid" || mediaPreview
+            ? "auto"
+            : "hidden",
         }}
       >
-        {markdownPreview
+        {mediaPreview && (previewKind === "image" || previewKind === "svg")
+          ? (
+            <ReviewMediaPreview
+              key={`${sessionId}:${target.path}`}
+              sessionId={sessionId}
+              path={target.path}
+              kind={previewKind}
+            />
+          )
+          : previewKind === "mermaid"
+          ? <MermaidDiagram key={`${sessionId}:${target.path}`} source={text} />
+          : markdownPreview
           ? (
             <Box
               component="article"

@@ -19,13 +19,17 @@ import { workspaceCommandKey } from "./workspaceCommandKey";
 import { assertMacShortcutAllowed } from "./macShortcutPolicy";
 import { desktopImeOwnsKey } from "./imeShortcut";
 import { desktopOverlayOwnsShortcuts } from "./desktopShortcutScope";
+import { desktopShouldBlockStaleVimSink } from "../desktopComposerOwnership";
 import { listJumpIndex, pendingItemActionKey } from "./listNavigation";
 import {
   adjacentDesktopSplitter,
   DESKTOP_SPLITTER_ADJUST_EVENT,
   DESKTOP_SPLITTER_LARGE_STEP,
   DESKTOP_SPLITTER_STEP,
+  desktopResizeSelectChord,
+  desktopWidthResizeDirection,
   preferredDesktopSplitter,
+  resolveDesktopResizeSplitter,
   visibleDesktopSplitterIds,
 } from "../desktopSplitterKeyboard";
 import type { DesktopSplitterId } from "../DesktopWorkspaceController";
@@ -207,6 +211,14 @@ export function DesktopCommandProvider(
       if (
         desktopImeOwnsKey(event)
       ) {
+        if (
+          desktopShouldBlockStaleVimSink({
+            focusedRegion: workspace.focusedRegion,
+            targetIsVimSink: normalCommandSink,
+          })
+        ) {
+          event.stopPropagation();
+        }
         if (windowChord.current !== null) {
           globalThis.clearTimeout(windowChord.current);
           windowChord.current = null;
@@ -244,6 +256,42 @@ export function DesktopCommandProvider(
           { detail: { splitter, delta } },
         ));
       };
+      if (desktopResizeSelectChord(event, isMac)) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (workspace.selectedSplitter !== null) {
+          workspace.setSelectedSplitter(null);
+          if (workspace.focusedRegion) {
+            requestAnimationFrame(() =>
+              workspace.focusRegion(workspace.focusedRegion as string)
+            );
+          }
+          return;
+        }
+        selectSplitter(
+          preferredDesktopSplitter(
+            visibleDesktopSplitterIds(),
+            workspace.focusedPane,
+            workspace.productMode,
+          ),
+        );
+        return;
+      }
+      const widthDirection = desktopWidthResizeDirection(event, isMac);
+      if (widthDirection !== null) {
+        event.preventDefault();
+        event.stopPropagation();
+        selectAndAdjustSplitter(
+          resolveDesktopResizeSplitter(
+            visibleDesktopSplitterIds(),
+            workspace.selectedSplitter,
+            workspace.focusedPane,
+            workspace.productMode,
+          ),
+          widthDirection * DESKTOP_SPLITTER_STEP,
+        );
+        return;
+      }
       if (workspace.selectedSplitter !== null) {
         const visible = visibleDesktopSplitterIds();
         const splitter = document.querySelector<HTMLElement>(
@@ -413,7 +461,7 @@ export function DesktopCommandProvider(
           "[data-desktop-product-mode='reading'] [data-desktop-transcript-scroller]",
         );
         let readingAction: string | null = null;
-        if (!event.metaKey && !event.altKey && !isTextEditingTarget(event.target)) {
+        if (!event.metaKey && !event.altKey && !textEditorOwnsKey) {
           if (event.ctrlKey) {
             readingAction = ({
               d: "half-page-down",
@@ -599,7 +647,7 @@ export function DesktopCommandProvider(
       // the transcript scroller so its bottom-anchor engine remains authoritative.
       if (
         workspace.mode === "normal" && scrollNavigation &&
-        !isTextEditingTarget(event.target) && !event.metaKey && !event.altKey
+        !textEditorOwnsKey && !event.metaKey && !event.altKey
       ) {
         let action: string | null = null;
         const key = workspaceCommandKey(event);
@@ -720,6 +768,16 @@ export function DesktopCommandProvider(
               armPendingJumpChord(region.dataset.desktopRegion);
             }
             return;
+          }
+          if (pendingList && !reordering && /^[0-9]$/.test(key)) {
+            const jump = listJumpIndex(key, items.length);
+            if (jump !== null) {
+              event.preventDefault();
+              event.stopPropagation();
+              items[jump]?.focus({ preventScroll: true });
+              items[jump]?.scrollIntoView({ block: "nearest" });
+              return;
+            }
           }
           if (sessionsList && key.toLowerCase() === "p" && !event.repeat) {
             event.preventDefault();
@@ -886,7 +944,7 @@ export function DesktopCommandProvider(
         const allowedInEditor = typeof command.allowInEditor === "function"
           ? command.allowInEditor(event.target)
           : command.allowInEditor === true;
-        if (!allowedInEditor && isTextEditingTarget(event.target)) {
+        if (!allowedInEditor && textEditorOwnsKey) {
           continue;
         }
         // Bare contextual commands are physical Vim-style keys only outside a
@@ -908,6 +966,17 @@ export function DesktopCommandProvider(
         event.preventDefault();
         if (!disabled) command.run();
         return;
+      }
+      // Conversation/top-bar chrome can be highlighted while the hidden Prompt
+      // sink still has DOM focus. Stop the event here so `i`/`a`/IME cannot
+      // pop Prompt into Insert.
+      if (
+        desktopShouldBlockStaleVimSink({
+          focusedRegion: workspace.focusedRegion,
+          targetIsVimSink: normalCommandSink,
+        })
+      ) {
+        event.stopPropagation();
       }
     };
     globalThis.addEventListener("keydown", onKeyDown, true);

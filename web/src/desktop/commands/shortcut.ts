@@ -37,10 +37,14 @@ export function matchesShortcut(
   const physicalCode = stroke.key.length === 1
     ? /^[a-z]$/.test(stroke.key)
       ? `Key${stroke.key.toUpperCase()}`
-      : ({ "/": "Slash", ".": "Period", ",": "Comma" } as Record<
-        string,
-        string
-      >)[stroke.key]
+      : ({
+        "/": "Slash",
+        ".": "Period",
+        ",": "Comma",
+        "[": "BracketLeft",
+        "]": "BracketRight",
+        "\\": "Backslash",
+      } as Record<string, string>)[stroke.key]
     : stroke.key === "enter"
     ? "Enter"
     : undefined;
