@@ -3399,8 +3399,15 @@ async fn api_machine_provider_install(
     };
     // A replica can be stored before the Provider exists. Synchronize it first
     // so Machine activation validates and materializes the current Service
-    // generation in the same local lifecycle transaction.
-    if state.provider_auth.status(&provider_id).is_some()
+    // generation in the same local lifecycle transaction. An upgrade whose
+    // old package cannot materialize the new authentication contract may
+    // already hold that exact sealed replica; retrying the pre-sync would
+    // deadlock the upgrade before the compatible package can be activated.
+    let authentication = state.provider_auth.status(&provider_id);
+    let installed = current_machine_provider(&state, &machine_id, &provider_id)
+        .await
+        .ok();
+    if provider_auth_sync_required_before_install(authentication.as_ref(), installed.as_ref())
         && let Err(error) = sync_provider_auth_to_machine(&state, &machine_id, &provider_id).await
     {
         let mut fences = state.provider_session_fences.write();
@@ -3450,6 +3457,19 @@ async fn api_machine_provider_install(
             .into_response();
     }
     StatusCode::NO_CONTENT.into_response()
+}
+
+fn provider_auth_sync_required_before_install(
+    authentication: Option<&crate::provider_service::ProviderAuthenticationStatus>,
+    installed: Option<&crate::machine_protocol::ProviderInventory>,
+) -> bool {
+    let Some(authentication) = authentication else {
+        return false;
+    };
+    !installed.is_some_and(|provider| {
+        provider.auth_generation == Some(authentication.auth_generation)
+            && provider.replica_state == crate::machine_protocol::ProviderReplicaState::Current
+    })
 }
 
 async fn current_machine_provider(
@@ -8944,6 +8964,86 @@ mod provider_uninstall_tests {
         ] {
             assert!(!provider_session_has_active_turn(idle_or_terminal));
         }
+    }
+}
+
+#[cfg(test)]
+mod provider_install_tests {
+    use super::provider_auth_sync_required_before_install;
+    use crate::machine_protocol::{
+        ProviderInstallationState, ProviderInventory, ProviderMaterializationState,
+        ProviderReplicaState,
+    };
+    use crate::provider_service::{
+        ProviderAuthenticationStatus, ServiceAuthenticationState, ServiceDistributionState,
+    };
+
+    fn authentication(auth_generation: u64) -> ProviderAuthenticationStatus {
+        ProviderAuthenticationStatus {
+            provider_id: "codex".to_owned(),
+            auth_generation,
+            authentication_state: ServiceAuthenticationState::Ready,
+            distribution_state: ServiceDistributionState::Failed,
+            auth_contract_fingerprint: "sha256:new-auth-contract".to_owned(),
+            authentication_scope: "codex-auth-v1".to_owned(),
+            portable_schema: "codex-auth-v1".to_owned(),
+            projection_schema: "codex-home-v1".to_owned(),
+            account_label: None,
+            updated_at_ms: 1,
+        }
+    }
+
+    fn installed(
+        auth_generation: Option<u64>,
+        replica_state: ProviderReplicaState,
+    ) -> ProviderInventory {
+        ProviderInventory {
+            provider_id: "codex".to_owned(),
+            provider_version: "1.1.1".to_owned(),
+            generation_digest: "sha256:old-provider".to_owned(),
+            contract_fingerprint: "sha256:old-contract".to_owned(),
+            state: ProviderInstallationState::Active,
+            rollback_generation_digest: None,
+            active_session_leases: 0,
+            auth_generation,
+            replica_state,
+            materialization_state: ProviderMaterializationState::Failed,
+            detail: None,
+        }
+    }
+
+    #[test]
+    fn current_sealed_replica_allows_an_incompatible_provider_upgrade() {
+        let authentication = authentication(2);
+        let installed = installed(Some(2), ProviderReplicaState::Current);
+
+        assert!(!provider_auth_sync_required_before_install(
+            Some(&authentication),
+            Some(&installed),
+        ));
+    }
+
+    #[test]
+    fn missing_or_stale_replica_still_requires_pre_install_sync() {
+        let authentication = authentication(2);
+
+        assert!(provider_auth_sync_required_before_install(
+            Some(&authentication),
+            None,
+        ));
+        assert!(provider_auth_sync_required_before_install(
+            Some(&authentication),
+            Some(&installed(Some(1), ProviderReplicaState::Current)),
+        ));
+        assert!(provider_auth_sync_required_before_install(
+            Some(&authentication),
+            Some(&installed(Some(2), ProviderReplicaState::Failed)),
+        ));
+    }
+
+    #[test]
+    fn signed_out_provider_does_not_require_auth_sync() {
+        assert!(!provider_auth_sync_required_before_install(None, None));
     }
 }
 
