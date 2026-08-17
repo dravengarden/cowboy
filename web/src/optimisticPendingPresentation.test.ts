@@ -2,6 +2,9 @@ import { assert, assertEquals } from "jsr:@std/assert";
 
 const composer = await Deno.readTextFile(new URL("./Composer.tsx", import.meta.url));
 const transcript = await Deno.readTextFile(new URL("./Transcript.tsx", import.meta.url));
+const previewSource = await Deno.readTextFile(
+  new URL("./MessagePreview.tsx", import.meta.url),
+);
 
 Deno.test("optimistic draft cards strip image tokens instead of painting raw cowboy-att markdown", () => {
   const start = composer.indexOf("function OptimisticDraftRow(");
@@ -21,6 +24,10 @@ Deno.test("unsynced rows show an uploading mark and failed rows offer return-to-
   assert(body.includes("Waiting to sync"));
   assert(body.includes("returnFailedQueued"));
   assert(body.includes("returnLabelForHome"));
+});
+
+Deno.test("MessagePreview always strips cowboy-att tokens itself", () => {
+  assert(previewSource.includes("compactForPreview(stripImageTokens(text))"));
 });
 
 Deno.test("failed transcript sends offer return to the list they left", () => {

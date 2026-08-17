@@ -6,6 +6,7 @@ import type { Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { cmTheme } from "./cmTheme";
 import { livePreviewExtensions } from "./composerExtensions";
+import { stripImageTokens } from "./attachments";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 
 // Read-only live-preview of a queued/draft message, rendered with the EXACT same
@@ -15,8 +16,8 @@ import { useReliableTouchTap } from "./useReliableTouchTap";
 // non-interactive (`editable={false}` + `pointer-events: none`), so a tap falls
 // through to `onClick` → open the row's edit; a long note clamps to a few lines
 // with a Show more / less toggle (the "默认折叠" ask), measured like the old
-// ClampedText. Image tokens are stripped by the caller (attachments render as
-// chips below), so no inline-image registry is needed here.
+// ClampedText. Image tokens are stripped here (attachments render as chips
+// below), so a caller that forgets cannot paint raw cowboy-att source.
 const COLLAPSED_MAX = "3.1em"; // ~2 lines at the composer's 1.5 line-height
 
 // Display-only whitespace tidy for the preview — like HTML's whitespace
@@ -66,7 +67,7 @@ function MessagePreviewImpl({
     ],
     [theme],
   );
-  const display = useMemo(() => compactForPreview(text), [text]);
+  const display = useMemo(() => compactForPreview(stripImageTokens(text)), [text]);
 
   useLayoutEffect(() => {
     const el = ref.current;
