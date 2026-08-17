@@ -1060,6 +1060,31 @@ Deno.test("a context reset gate can only reopen from a new input interaction", (
   assertEquals(shouldPresentMobileKeyboardSurface(true, false, true), false);
 });
 
+Deno.test("successful mobile delivery latches the compact surface closed until a new editor touch", () => {
+  const dismissStart = composerSource.indexOf(
+    "const dismissAfterMobileDelivery = useCallback",
+  );
+  const dismissEnd = composerSource.indexOf(
+    "const submitWithFeedback",
+    dismissStart,
+  );
+  const dismissal = composerSource.slice(dismissStart, dismissEnd);
+  assertEquals(dismissal.includes("noteMobileKeyboardDismissed();"), true);
+  assertEquals(dismissal.includes("setMobileKeyboardDismissed(true);"), true);
+  assertEquals(
+    composerSource.includes(
+      "if (keyboardOpen) {\n      if (mobileKeyboardDismissed)",
+    ),
+    false,
+  );
+  assertEquals(
+    composerSource.includes(
+      "if (!mobileKeyboardDismissed) return;\n                setMobileKeyboardDismissed(false);\n                clearMobileKeyboardDismissed();",
+    ),
+    true,
+  );
+});
+
 Deno.test("pending kebab menus pin to the tap instead of a live button node", () => {
   assertEquals(composerSource.includes('anchorReference="anchorPosition"'), true);
   assertEquals(composerSource.includes("disableScrollLock"), true);

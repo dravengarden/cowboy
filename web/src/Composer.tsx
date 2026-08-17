@@ -209,6 +209,7 @@ import {
   filesToAttachments,
   fileToAttachment,
   pendingImageAttachment,
+  promoteUnplacedImageTokens,
   reconcileDeletedInlineImages,
   settlePendingAttachments,
   stripImageTokens,
@@ -1080,6 +1081,12 @@ export function ComposerWorkspace({
   const dismissAfterMobileDelivery = useCallback((): void => {
     if (desktop) return;
 
+    // Delivery ends this keyboard interaction even when WKWebView reports its
+    // resized viewport for a few more frames. Keep the composer collapsed until
+    // the user explicitly touches the editor again; a lagging keyboardOpen must
+    // not resurrect the large focused surface after the prompt has been sent.
+    noteMobileKeyboardDismissed();
+    setMobileKeyboardDismissed(true);
     // A touch click may have moved activeElement from the editor to its toolbar
     // button by the time the authoritative acknowledgement arrives. Clear both
     // possible owners. Modal/Popover teardown can restore the old Composer focus
@@ -1533,10 +1540,6 @@ export function ComposerWorkspace({
       return undefined;
     }
     if (keyboardOpen) {
-      if (mobileKeyboardDismissed) {
-        setMobileKeyboardDismissed(false);
-        clearMobileKeyboardDismissed();
-      }
       const opening = !mobileComposerKeyboardWasOpenRef.current;
       mobileComposerKeyboardWasOpenRef.current = true;
       if (!opening) return undefined;
@@ -1580,7 +1583,7 @@ export function ComposerWorkspace({
     setMobileKeyboardDismissed(true);
     releaseMobileComposerFocus();
     return undefined;
-  }, [keyboardOpen, mobileKeyboardDismissed, touchInput]);
+  }, [keyboardOpen, touchInput]);
   const compactTrayAttachments = attachmentTrayForSurface(
     attachments,
     text,
@@ -4867,8 +4870,11 @@ function PendingRow({
    *  its future auto-send. Absent → the row omits the schedule chip + action. */
   onSchedule?: (() => void) | undefined;
 }): React.JSX.Element {
-  const [draft, setDraft] = useState(message.text);
-  const editTextRef = useRef(message.text);
+  const initialEditText = useRef(
+    promoteUnplacedImageTokens(message.text, message.attachments),
+  ).current;
+  const [draft, setDraft] = useState(initialEditText);
+  const editTextRef = useRef(initialEditText);
   const [committedText, setCommittedText] = useState<string | null>(null);
   const [committedAttachments, setCommittedAttachments] = useState<
     Attachment[] | null
@@ -5271,6 +5277,10 @@ function PendingRow({
   if (keyboardBoundEditing) {
     const editSendable = (!!draft.trim() || editAttachments.length > 0) &&
       !editAttachmentsPending;
+    const editTrayAttachments = attachmentTrayForSurface(
+      editAttachments,
+      draft,
+    );
     const activeEditEditor = (): ComposerEditorHandle | null =>
       overlayEditorRef.current ?? editorRef.current;
     const addEditFiles = (
@@ -5484,32 +5494,43 @@ function PendingRow({
               ONE editor is mounted at a time (shared `draft`, no uncontrolled desync). */
           }
           {!overlayOpen && (
-            <PlatformComposerEditor
-              ref={editorRef}
-              // Seeds from the shared `draft` and re-mounts on overlay close, so
-              // it reflects edits made in the overlay. Desktop CM6 remains
-              // uncontrolled thereafter; touch uses the controlled native editor
-              // until an inline image token requires CM6 (vim desktop-only).
-              value={draft}
-              borderless
-              {...(touchInput ? { endInset: 36 } : {})}
-              vim={touchInput ? false : vim}
-              focusEndOnMount={desktop}
-              onVimMode={setVimMode}
-              onChange={updateEditDraft}
-              onSubmit={saveEdit}
-              sessionId={sessionId}
-              commands={commands}
-              placeholder="Edit message…"
-              onPasteFiles={(files): void =>
-                addEditFiles(files, { preserveFocus: true })}
-              onSelectionChange={setHasEditSelection}
-              onEscape={(): boolean => {
-                if (desktop) requestDiscardEdit();
-                else hideMobileEditKeyboard();
-                return true;
-              }}
-            />
+            <>
+              {touchInput && editTrayAttachments.length > 0 && (
+                <AttachmentPreviews
+                  attachments={editTrayAttachments}
+                  onRemove={(id): void =>
+                    setEditAttachments((previous) =>
+                      previous.filter((attachment) => attachment.id !== id)
+                    )}
+                />
+              )}
+              <PlatformComposerEditor
+                ref={editorRef}
+                // Seeds from the shared `draft` and re-mounts on overlay close, so
+                // it reflects edits made in the overlay. Desktop CM6 remains
+                // uncontrolled thereafter; touch uses the controlled native editor
+                // until an inline image token requires CM6 (vim desktop-only).
+                value={draft}
+                borderless
+                {...(touchInput ? { endInset: 36 } : {})}
+                vim={touchInput ? false : vim}
+                focusEndOnMount={desktop}
+                onVimMode={setVimMode}
+                onChange={updateEditDraft}
+                onSubmit={saveEdit}
+                sessionId={sessionId}
+                commands={commands}
+                placeholder="Edit message…"
+                onPasteFiles={(files): void =>
+                  addEditFiles(files, { preserveFocus: true })}
+                onSelectionChange={setHasEditSelection}
+                onEscape={(): boolean => {
+                  if (desktop) requestDiscardEdit();
+                  else hideMobileEditKeyboard();
+                  return true;
+                }}
+              />
+            </>
           )}
           {!overlayOpen &&
             (desktop ? desktopEditBar : (
@@ -5638,10 +5659,10 @@ function PendingRow({
             vim={vim}
             onVimMode={setVimMode}
             onDiscard={discardEdit}
-            attachmentsSlot={editAttachments.some((a) => !a.isImage)
+            attachmentsSlot={editTrayAttachments.length > 0
               ? (
                 <AttachmentPreviews
-                  attachments={editAttachments.filter((a) => !a.isImage)}
+                  attachments={editTrayAttachments}
                   onRemove={(id): void =>
                     setEditAttachments((prev) =>
                       prev.filter((a) => a.id !== id)

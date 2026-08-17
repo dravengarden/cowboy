@@ -50,6 +50,37 @@ Deno.test("pending cards preview token-backed images inline instead of a second 
   assertEquals(composerSource.includes("<MessagePreview text={seedText} attachments={seedAttachments} />"), true);
 });
 
+Deno.test("pending edit surfaces retain previews for attachments without inline tokens", () => {
+  assertEquals(
+    composerSource.includes(
+      "promoteUnplacedImageTokens(message.text, message.attachments)",
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "const editTrayAttachments = attachmentTrayForSurface(\n      editAttachments,\n      draft,\n    );",
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "touchInput && editTrayAttachments.length > 0",
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "attachmentsSlot={editTrayAttachments.length > 0",
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.match(/attachments={editTrayAttachments}/g)?.length,
+    2,
+  );
+});
+
 Deno.test("attachment-only pending rows retain a full content edit target", () => {
   assertEquals(
     composerSource.includes('data-pending-content-action="attachment-preview"'),

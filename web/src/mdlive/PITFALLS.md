@@ -1891,3 +1891,19 @@ Desktop Vim + IME checks:
     outer capture must consult the containing region's committed
     `data-desktop-focused` marker rather than an effect closure that can lag the
     edit-opening render and misroute that same first key to the list keymap.
+
+74. **Pending edit surfaces must preserve unplaced attachment previews, and a
+    completed mobile delivery must end its keyboard presentation immediately.**
+    Older or cross-client Draft/Queue records can contain an image attachment
+    without a matching `cowboy-att:` token. The parked card correctly shows that
+    image in its tray. Seed pending edits through `promoteUnplacedImageTokens`
+    so legacy images regain a deterministic inline position, and derive both
+    compact and fullscreen fallback trays from
+    `attachmentTrayForSurface(editAttachments, draft)`; filtering the edit tray
+    to non-images makes the attachment appear to vanish. Separately,
+    WKWebView can keep reporting its keyboard-resized viewport after delivery.
+    Latch `mobileKeyboardDismissed` before blurring on authoritative success and
+    do not clear that latch merely because the stale `keyboardOpen` signal stays
+    true. Only a fresh pointer interaction in the editor may reopen the focused
+    surface. This keeps a sent, empty composer content-tight without changing
+    UIKit focus, paste, selection, or IME ownership.
