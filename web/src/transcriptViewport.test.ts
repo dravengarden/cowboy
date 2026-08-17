@@ -9,6 +9,7 @@ import {
   scrollbackReplacementFromTop,
   shouldBackfillTranscriptViewport,
   shouldContinueScrollbackFill,
+  shouldContinueTranscriptViewportRestore,
   shouldMagnetizeTranscript,
   shouldMaskRestoringTranscript,
   shouldPrefetchVisibleScrollbackBoundary,
@@ -373,6 +374,21 @@ Deno.test("Desktop masks intermediate pages while restoring a detached viewport"
   );
   assertEquals(
     shouldMaskRestoringTranscript({ ...restoring, savedFollowing: true }),
+    false,
+  );
+});
+
+Deno.test("detached viewport restore waits for deep paging but remains bounded", () => {
+  assertEquals(
+    shouldContinueTranscriptViewportRestore({ tries: 90, stableFrames: 0 }),
+    true,
+  );
+  assertEquals(
+    shouldContinueTranscriptViewportRestore({ tries: 30, stableFrames: 8 }),
+    false,
+  );
+  assertEquals(
+    shouldContinueTranscriptViewportRestore({ tries: 480, stableFrames: 0 }),
     false,
   );
 });

@@ -122,6 +122,16 @@ export function shouldMaskRestoringTranscript(input: {
   return input.desktop && input.canRestore && !input.savedFollowing;
 }
 
+export const TRANSCRIPT_VIEWPORT_RESTORE_FRAME_LIMIT = 480;
+
+export function shouldContinueTranscriptViewportRestore(input: {
+  tries: number;
+  stableFrames: number;
+}): boolean {
+  return (input.tries < 30 || input.stableFrames < 8) &&
+    input.tries < TRANSCRIPT_VIEWPORT_RESTORE_FRAME_LIMIT;
+}
+
 export interface VisibleScrollbackBoundaryPrefetchInput {
   managed: boolean;
   restoring: boolean;

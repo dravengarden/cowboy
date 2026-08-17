@@ -166,6 +166,7 @@ import {
   restoredTranscriptFollowing,
   shouldBackfillTranscriptViewport,
   shouldContinueScrollbackFill,
+  shouldContinueTranscriptViewportRestore,
   shouldMagnetizeTranscript,
   shouldMaskRestoringTranscript,
   shouldPrefetchVisibleScrollbackBoundary,
@@ -4833,10 +4834,11 @@ export function Transcript({
         previousHeight = el.scrollHeight;
       }
       tries += 1;
-      // Lazy Markdown, fonts and images can commit after the first dozen
-      // frames. Hold the requested viewport through a real stability window,
-      // but never longer than ~1.5s; touchstart cancels immediately above.
-      if ((tries < 30 || stableFrames < 8) && tries < 90) {
+      // Lazy Markdown, fonts, images and deep history paging can commit well
+      // after the first dozen frames. Hold the Desktop restore skeleton until
+      // the requested offset is genuinely stable. An eight-second ceiling
+      // keeps a missing anchor recoverable; reader input cancels immediately.
+      if (shouldContinueTranscriptViewportRestore({ tries, stableFrames })) {
         raf = requestAnimationFrame(position);
       } else {
         viewportRestoreActiveRef.current = false;
