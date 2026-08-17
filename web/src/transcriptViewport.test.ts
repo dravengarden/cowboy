@@ -17,6 +17,7 @@ import {
   shouldShowClearedConversationEmptyState,
   shouldShowFreshSessionEmptyState,
   shouldShowScrollbackLoadingSkeleton,
+  transcriptViewportRestoreTimedOut,
   visibleTranscriptTopGap,
 } from "./transcriptViewport.ts";
 
@@ -389,6 +390,14 @@ Deno.test("detached viewport restore waits for deep paging but remains bounded",
   );
   assertEquals(
     shouldContinueTranscriptViewportRestore({ tries: 480, stableFrames: 0 }),
+    false,
+  );
+  assertEquals(
+    transcriptViewportRestoreTimedOut({ tries: 480, stableFrames: 0 }),
+    true,
+  );
+  assertEquals(
+    transcriptViewportRestoreTimedOut({ tries: 480, stableFrames: 8 }),
     false,
   );
 });

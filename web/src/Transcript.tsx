@@ -174,6 +174,7 @@ import {
   shouldShowClearedConversationEmptyState,
   shouldShowFreshSessionEmptyState,
   shouldShowScrollbackLoadingSkeleton,
+  transcriptViewportRestoreTimedOut,
   visibleTranscriptTopGap,
 } from "./transcriptViewport";
 import {
@@ -4841,6 +4842,32 @@ export function Transcript({
       if (shouldContinueTranscriptViewportRestore({ tries, stableFrames })) {
         raf = requestAnimationFrame(position);
       } else {
+        if (
+          mode === "history" &&
+          transcriptViewportRestoreTimedOut({ tries, stableFrames })
+        ) {
+          // A stale/deep anchor must not expose an endless sequence of
+          // intermediate pages after the bounded restore skeleton. Fall back
+          // atomically to the live edge and retire this invalid local anchor.
+          scrollbackFillRunRef.current += 1;
+          scrollbackFillActiveRef.current = false;
+          scrollbackBoundaryBootstrapRequestedRef.current = true;
+          setScrollbackLoading(false);
+          stick.current = true;
+          setFollowingLive(true);
+          resetSticky(sessionId);
+          freezeRef.current.key = null;
+          if (el) pinTranscriptToLatest(el);
+          saveTranscriptViewport({
+            sessionId,
+            mode: "history",
+            pageId: null,
+            anchorKey: null,
+            anchorOffset: 0,
+            scrollOffset: 0,
+            following: true,
+          });
+        }
         viewportRestoreActiveRef.current = false;
         setMaskingViewportRestore(false);
         requestVisibleScrollbackBoundaryRef.current();

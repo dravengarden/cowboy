@@ -132,6 +132,14 @@ export function shouldContinueTranscriptViewportRestore(input: {
     input.tries < TRANSCRIPT_VIEWPORT_RESTORE_FRAME_LIMIT;
 }
 
+export function transcriptViewportRestoreTimedOut(input: {
+  tries: number;
+  stableFrames: number;
+}): boolean {
+  return input.tries >= TRANSCRIPT_VIEWPORT_RESTORE_FRAME_LIMIT &&
+    input.stableFrames < 8;
+}
+
 export interface VisibleScrollbackBoundaryPrefetchInput {
   managed: boolean;
   restoring: boolean;
