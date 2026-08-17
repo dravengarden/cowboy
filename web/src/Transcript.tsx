@@ -157,6 +157,7 @@ import {
 } from "./transcriptLiveWindow";
 import { markTranscriptScrollActivity } from "./transcriptRenderPacing";
 import {
+  columnReverseVisualFirstRowIndex,
   historyPrefetchTransition,
   magneticHapticTransition,
   scrollbackBoundaryRequestKey,
@@ -164,12 +165,13 @@ import {
   scrollbackReplacementFromTop,
   shouldBackfillTranscriptViewport,
   shouldContinueScrollbackFill,
-  visibleTranscriptTopGap,
   shouldMagnetizeTranscript,
   shouldPrefetchVisibleScrollbackBoundary,
   shouldRecoverUnrenderableHistory,
   shouldShowClearedConversationEmptyState,
   shouldShowFreshSessionEmptyState,
+  shouldShowScrollbackLoadingSkeleton,
+  visibleTranscriptTopGap,
 } from "./transcriptViewport";
 import {
   advanceTimelinePresentation,
@@ -3870,11 +3872,17 @@ export function Transcript({
       );
       const loadingFillHeight = loadingFill?.getBoundingClientRect().height ??
         null;
-      const firstContent = el.querySelector<HTMLElement>("[data-key]");
+      const contentRows = el.querySelectorAll<HTMLElement>("[data-key]");
+      const visualFirstRowIndex = columnReverseVisualFirstRowIndex(
+        contentRows.length,
+      );
+      const firstContent = visualFirstRowIndex === null
+        ? null
+        : contentRows.item(visualFirstRowIndex);
       const visibleTopGap = visibleTranscriptTopGap({
         viewportTop: el.getBoundingClientRect().top,
-        paddingTop: Number.parseFloat(globalThis.getComputedStyle(el).paddingTop) ||
-          0,
+        paddingTop:
+          Number.parseFloat(globalThis.getComputedStyle(el).paddingTop) || 0,
         firstContentTop: firstContent?.getBoundingClientRect().top ?? null,
       });
       const hasVisibleGap = shouldBackfillTranscriptViewport({
@@ -5269,8 +5277,13 @@ export function Transcript({
                   }}
                 />
               )}
-              {managesScrollHistory && !backfillingViewport && paging != null &&
-                paging.beforeSeq !== null && !paging.reachedStart && (
+              {paging != null && shouldShowScrollbackLoadingSkeleton({
+                managed: managesScrollHistory,
+                desktop: desktopNavigation,
+                backfillingViewport,
+                beforeSeq: paging.beforeSeq,
+                reachedStart: paging.reachedStart,
+              }) && (
                 <ScrollbackLoadingSkeleton
                   height={scrollbackFailed
                     ? 44

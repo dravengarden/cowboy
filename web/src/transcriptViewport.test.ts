@@ -1,5 +1,6 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
+  columnReverseVisualFirstRowIndex,
   historyPrefetchTransition,
   magneticHapticTransition,
   scrollbackBoundaryRequestKey,
@@ -12,6 +13,7 @@ import {
   shouldRecoverUnrenderableHistory,
   shouldShowClearedConversationEmptyState,
   shouldShowFreshSessionEmptyState,
+  shouldShowScrollbackLoadingSkeleton,
   visibleTranscriptTopGap,
 } from "./transcriptViewport.ts";
 
@@ -270,6 +272,50 @@ Deno.test("a hole above the first real row keeps viewport refill going", () => {
       firstContentTop: 332,
     }),
     220,
+  );
+});
+
+Deno.test("column-reverse gap measurement starts from the visual top row", () => {
+  // Rows are newest-first in DOM order. Measuring index 0 would treat the
+  // newest row near the composer as a large empty area above the transcript.
+  assertEquals(columnReverseVisualFirstRowIndex(3), 2);
+  assertEquals(columnReverseVisualFirstRowIndex(0), null);
+  const newestFirstTops = [820, 340, 92];
+  const visualFirstIndex = columnReverseVisualFirstRowIndex(
+    newestFirstTops.length,
+  );
+  assertEquals(
+    visibleTranscriptTopGap({
+      viewportTop: 80,
+      paddingTop: 12,
+      firstContentTop: visualFirstIndex === null
+        ? null
+        : newestFirstTops[visualFirstIndex] ?? null,
+    }),
+    0,
+  );
+});
+
+Deno.test("Desktop keeps its scrollback skeleton during viewport backfill", () => {
+  const backfill = {
+    managed: true,
+    desktop: true,
+    backfillingViewport: true,
+    beforeSeq: 80_000,
+    reachedStart: false,
+  };
+  assertEquals(shouldShowScrollbackLoadingSkeleton(backfill), true);
+  assertEquals(
+    shouldShowScrollbackLoadingSkeleton({ ...backfill, desktop: false }),
+    false,
+  );
+  assertEquals(
+    shouldShowScrollbackLoadingSkeleton({ ...backfill, beforeSeq: null }),
+    false,
+  );
+  assertEquals(
+    shouldShowScrollbackLoadingSkeleton({ ...backfill, reachedStart: true }),
+    false,
   );
 });
 
