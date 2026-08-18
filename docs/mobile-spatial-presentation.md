@@ -1,14 +1,21 @@
 # Mobile spatial presentation
 
-Status: core product contract  
+Status: **core product requirement**  
 Scope: Cowboy Mobile PWA — Sessions/Review drawers, product pager, Transcript
-paint budget, composer chrome, and iOS hit-testing  
+paint budget, Code Review, composer chrome, and iOS hit-testing  
 Non-goal: Desktop workspace layout, CM6 IME/caret (see
 [`web/src/mdlive/PITFALLS.md`](../web/src/mdlive/PITFALLS.md)), or Provider
 package UI
 
-This document is the strategy that later Mobile motion and Transcript work
-must follow. It records what survived device review, not every attempt.
+**A horizontal swipe that tracks the finger without dropped frames is a
+core Mobile requirement, not polish.** It applies equally to Agent
+transcript, Review README, Review source/diff (CodeMirror), both
+drawers, and the Agent↔Review pager. A surface that is correct at rest
+but hitchy while sliding is unfinished.
+
+This document is the strategy that later Mobile motion, Transcript, and
+Code Review work must follow. It records what survived device review,
+not every attempt.
 
 ## 1. Product model
 
@@ -35,6 +42,11 @@ gesture root (shell)
 
 ## 2. Invariants
 
+0. **Swipe must not jank.** Finger tracking stays on the compositor. A
+   nested `-webkit-overflow-scrolling: touch` tile, sticky gutter, or
+   CodeMirror theme `overflow: auto` that survives flatten is a defect
+   even if the page looks fine after settle. README staying cheap while
+   a justfile hitchs is the Code Review signature of this bug.
 1. Drag is 1:1 `translate3d`. Do not interpolate finger tracking with CSS
    `transition` on `transform`.
 2. Release is compositor settle: `cubic-bezier(0.32, 0.72, 0, 1)`, about
@@ -161,6 +173,25 @@ WebKit can keep the intrinsic height and skip paint, leaving a hole.
 (`mobilePeekRestLayerSx`), not a prepare-time toggle. Swiping a long
 transcript must not restyle N paint boundaries on the first frame.
 
+## 4.1 Code Review
+
+README preview is a wrapped article. Source/diff is CodeMirror: default
+wrap is off (`width: max-content`), gutters are sticky, and `.cm-scroller`
+sets `-webkit-overflow-scrolling: touch`. That combination is why **both**
+Review drawer swipe and Agent↔Review pager hitch on a justfile and stay
+cheap on README.
+
+Do not treat this as a missing `will-change` or a settle-easing bug.
+
+| Layer | Job |
+|---|---|
+| CSS flatten | `mobileOverflowTileFlattenSx` uses `!important`. CM theme modules land after the MUI sheet and would otherwise keep `overflow: auto` + touch scrolling. |
+| Moving-only rail | File tree / outline overflow tiles also translate. Flatten them only while `data-mobile-*-moving` is set so a settled-open rail stays tappable. |
+| Inline freeze | `bindCodeViewerSwipeFreeze` writes the same overflow kill on `scrollDOM` and skips `onVisibleLine`. CSS can lose after a lazy grammar remount; inline cannot. |
+
+Do not snapshot the editor to a canvas. Do not change `.cm-content` width
+on claim — that remasures the document on the first tracking frame.
+
 ## 5. Hit testing and chrome freeze
 
 Flatten exists to make a swipe cheap. It must not disable the rail.
@@ -239,8 +270,8 @@ because those surfaces *contain* the blur.
 ## 8. Verification
 
 - Unit/source tests lock the contracts in `obsidianDrawerGesture`,
-  `transcriptLiveWindow`, `mobilePresentationMotion`, and
-  `mobileSpatialDrawer`.
+  `transcriptLiveWindow`, `mobilePresentationMotion`,
+  `mobileCodeSurface`, and `mobileSpatialDrawer`.
 - Chrome CDP on `https://cowboy.stormbird.xyz/` with an iPhone UA
   (`platform: iPhone`, `maxTouchPoints > 1`, `pointer: coarse`, width
   under 600 or Cowboy stays Desktop/tablet) can prove 1:1 matrices, a
@@ -258,6 +289,7 @@ because those surfaces *contain* the blur.
 | 1:1 write, followers, settle | `web/src/mobileSpatialDrawer.ts` |
 | Rail offset, dim progress, settle curve | `web/src/mobileDrawerMotion.ts` |
 | Standing peek layer, prepare flatten, rail hit, close layer | `web/src/mobilePresentationMotion.ts` |
+| CodeMirror overflow freeze during swipe | `web/src/mobileCodeSurface.ts`, `CodeViewer.tsx` |
 | Live-row recycle | `web/src/transcriptLiveWindow.ts` |
 | Column-reverse transcript; pause ref (no `setState` on finger-down) | `web/src/Transcript.tsx` |
 | Event-tail recycle | `store.releaseFollowedHistory` |

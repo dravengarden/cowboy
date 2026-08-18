@@ -91,11 +91,17 @@ row heights (dynamic measurement), stick-to-bottom during live streaming
 (releasing when the user scrolls up), and scroll anchoring on prepend so
 loading older history (via `GET /api/history/:id/:page`) never jumps the view.
 
+**Jank-free horizontal swipe is a core Mobile requirement.** Sessions and
+Review drawers, and the Agent↔Review pager, must track the finger on the
+compositor whether the peek is Transcript, README, or CodeMirror
+source/diff. A surface that hitchs only while sliding is unfinished.
 Mobile Sessions/Review drawers, swipe tracking, frost, the standing peek
-layer, and the no-React-on-finger-down rule are the contract in
+layer, CodeMirror overflow flatten, and the no-React-on-finger-down rule
+are the contract in
 [`mobile-spatial-presentation.md`](../mobile-spatial-presentation.md). Read
-that before changing drawer motion or Transcript paint budget. Do not
-`setState` on transcript `touchstart` to make a swipe cheaper.
+that before changing drawer motion, Transcript paint budget, or the
+Review editor. Do not `setState` on transcript `touchstart` to make a
+swipe cheaper.
 
 The live-turn waiting row above the composer is a compact status line, not a
 brand stamp. `ThinkingIndicator` renders the Provider `loading` activity with

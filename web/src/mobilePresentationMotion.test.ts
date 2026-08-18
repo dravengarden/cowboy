@@ -16,6 +16,12 @@ const reviewDrawerSource = await Deno.readTextFile(
 const motionSource = await Deno.readTextFile(
   new URL("./mobilePresentationMotion.ts", import.meta.url),
 );
+const spatialContract = await Deno.readTextFile(
+  new URL("../../docs/mobile-spatial-presentation.md", import.meta.url),
+);
+const webAgents = await Deno.readTextFile(
+  new URL("../AGENTS.md", import.meta.url),
+);
 
 Deno.test("drawer progress only publishes coarse ownership values", () => {
   assertEquals(drawerProgressAttribute(0), null);
@@ -53,11 +59,15 @@ Deno.test("gesture roots flatten overflow tiles without a universal selector", (
   assert(productShellSource.includes("mobileSheetPresentationSx"));
   assert(productShellSource.includes("bindMobileSheetPresentationHold"));
   assert(reviewDrawerSource.includes("mobilePresentationMovingRootSx"));
-  assert(motionSource.includes("WebkitOverflowScrolling: \"auto\""));
+  assert(motionSource.includes("WebkitOverflowScrolling: \"auto !important\""));
+  assert(motionSource.includes("overflow: \"hidden !important\""));
   assert(motionSource.includes("contain: \"paint\""));
   assert(motionSource.includes("pointerEvents: \"none\""));
   assert(motionSource.includes("& [data-mobile-drawer-surface] [data-mobile-overflow-layer]"));
+  assert(motionSource.includes("& [data-mobile-drawer-surface] .cm-gutters"));
   assert(motionSource.includes("& [data-mobile-drawer-surface] [data-key]"));
+  assert(motionSource.includes("\"& [data-mobile-overflow-layer]\": mobileOverflowTileFlattenSx"));
+  assert(motionSource.includes("\"& .cm-scroller\": mobileOverflowTileFlattenSx"));
   assert(motionSource.includes("mobilePeekRestLayerSx"));
   assert(appSource.includes("mobilePeekRestLayerSx"));
   assert(reviewDrawerSource.includes("mobilePeekRestLayerSx"));
@@ -87,6 +97,12 @@ Deno.test("gesture roots flatten overflow tiles without a universal selector", (
   assert(motionSource.includes("[data-mobile-composer-shell-material]"));
   assert(motionSource.includes("[data-mobile-focus-composer]"));
   assert(motionSource.includes("holdStorePresentation"));
+});
+
+Deno.test("jank-free swipe is a core Mobile requirement, not polish", () => {
+  assert(spatialContract.includes("core product requirement"));
+  assert(spatialContract.includes("Swipe must not jank"));
+  assert(webAgents.includes("a swipe that drops frames is a product bug"));
 });
 
 Deno.test("settled product pages do not keep a permanent will-change layer", () => {

@@ -34,6 +34,10 @@ import {
   diffSourceProjection,
 } from "./diffSourceModel";
 import { rankAndDedupeInspectCandidates } from "./symbolCandidateModel";
+import {
+  bindCodeViewerSwipeFreeze,
+  isMobileCodeSwipeFrozen,
+} from "../../mobileCodeSurface";
 import type { CodeLanguage } from "./codeApi";
 
 export interface CodeInspectCandidate {
@@ -370,8 +374,16 @@ export default function CodeViewer({
 }): React.JSX.Element {
   const theme = useTheme();
   const editorRef = useRef<EditorView | null>(null);
+  const freezeDisposeRef = useRef<(() => void) | undefined>(undefined);
   const appliedRevealRequest = useRef<number | undefined>(undefined);
   const [language, setLanguage] = useState<LanguageSupport | null>(null);
+
+  useEffect(() => {
+    return () => {
+      freezeDisposeRef.current?.();
+      freezeDisposeRef.current = undefined;
+    };
+  }, []);
 
   useEffect(() => {
     let current = true;
@@ -705,7 +717,7 @@ export default function CodeViewer({
     if (onVisibleLine) {
       values.push(
         EditorView.updateListener.of((update) => {
-          if (!update.viewportChanged) return;
+          if (!update.viewportChanged || isMobileCodeSwipeFrozen()) return;
           const top = update.view.lineBlockAtHeight(
             update.view.scrollDOM.getBoundingClientRect().top -
               update.view.documentTop,
@@ -793,6 +805,8 @@ export default function CodeViewer({
 
   return (
     <Box
+      data-mobile-overflow-layer="true"
+      data-mobile-code-layer="true"
       sx={{
         height: "100%",
         minHeight: 0,
@@ -813,6 +827,8 @@ export default function CodeViewer({
         extensions={extensions}
         onCreateEditor={(view) => {
           editorRef.current = view;
+          freezeDisposeRef.current?.();
+          freezeDisposeRef.current = bindCodeViewerSwipeFreeze(view);
         }}
         basicSetup={{
           lineNumbers: true,

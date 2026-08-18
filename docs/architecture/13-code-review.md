@@ -162,6 +162,15 @@ incremental parsing, selection, wrapping, gutters, diagnostics, and merge
 views. Load language packages on demand and do expensive decoration work only
 for visible ranges.
 
+**A Review swipe that hitchs on source/diff but not on README is a
+defect.** Default wrap-off CodeMirror (`width: max-content`, sticky
+gutters, `-webkit-overflow-scrolling: touch`) must not remain an iOS
+overflow tile while the peek or product pager translates. Flatten
+belongs to
+[`mobile-spatial-presentation.md`](../mobile-spatial-presentation.md)
+(`mobileOverflowTileFlattenSx` + `mobileCodeSurface`). Do not leave this
+to a later polish pass.
+
 Source views resolve CodeMirror's language description from the path, including
 special repository filenames such as `Cargo.lock`, then load only that grammar.
 Plain text paints immediately while the parser chunk arrives; unknown files

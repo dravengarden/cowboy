@@ -94,6 +94,12 @@ Composer (mdlive / CM6), optimistic-send, transcript (column-reverse scroll),
 confirm-detection, the Tauri native shell — see `web/AGENTS.md` and the
 `cowboy-*` memories.
 
+Mobile horizontal swipe (Sessions/Review drawers and the Agent↔Review
+pager) **must not jank**. That is a core product requirement, not
+polish: a wrap-off CodeMirror file must track the finger as cheaply as
+README. The contract is
+[`docs/mobile-spatial-presentation.md`](docs/mobile-spatial-presentation.md).
+
 **OPEN TODO:** physical iPhone caret after a pasted composer image is
 unsolved. 2026-08-15 user: same shape in Obsidian; likely WeType (first
 Return on native Pinyin, first few on WeChat IME). Ledger, failed

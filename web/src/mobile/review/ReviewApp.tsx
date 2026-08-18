@@ -1164,6 +1164,7 @@ function DocumentView({
         </Stack>
       )}
       <Box
+        data-mobile-overflow-layer="true"
         sx={{
           flex: 1,
           minHeight: 0,

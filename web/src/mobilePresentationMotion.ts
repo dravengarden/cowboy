@@ -22,6 +22,19 @@ export const mobileFrostStripSx = {
   },
 };
 
+/** Shared overflow-tile kill. `!important` is required because CodeMirror
+ *  injects `.cm-scroller { overflow:auto; -webkit-overflow-scrolling:touch }`
+ *  from a theme module that can land after this sheet. Without it, Review
+ *  source/diff swipes keep a max-content touch-scroll tile and hitch while
+ *  README (plain overflow) stays cheap. */
+export const mobileOverflowTileFlattenSx = {
+  WebkitOverflowScrolling: "auto !important",
+  overflow: "hidden !important",
+  overflowX: "hidden !important",
+  contain: "paint",
+  pointerEvents: "none",
+} as const;
+
 /** Flatten iOS overflow tiles into one cached layer.
  *  Nested `-webkit-overflow-scrolling: touch` each become their own
  *  compositor tile; translating a parent then relocates that whole tile
@@ -31,11 +44,12 @@ export const mobileCompositorFlattenSx = {
   // Only the peeking page. The Sessions/Review rail uses the same
   // overflow-layer marker so it can scroll; freezing it while the
   // drawer is open makes every session row un-tappable.
-  "& [data-mobile-drawer-surface] .cm-scroller, & [data-mobile-drawer-surface] [data-transcript-session], & [data-mobile-drawer-surface] [data-mobile-overflow-layer]": {
-    WebkitOverflowScrolling: "auto",
-    overflow: "hidden",
+  "& [data-mobile-drawer-surface] .cm-scroller, & [data-mobile-drawer-surface] [data-transcript-session], & [data-mobile-drawer-surface] [data-mobile-overflow-layer]":
+    mobileOverflowTileFlattenSx,
+  // Sticky gutters are a second tile beside the scroller. Contain them
+  // so a wrap-off justfile does not re-stick on every peek frame.
+  "& [data-mobile-drawer-surface] .cm-gutters": {
     contain: "paint",
-    pointerEvents: "none",
   },
   // Settled rows each own a paint layer. Flatten them into the peek so a
   // long transcript is one tile during the swipe, not N independent ones.
@@ -49,14 +63,19 @@ export const mobileCompositorFlattenSx = {
 
 export function mobilePresentationMovingRootSx(
   attr: "data-mobile-drawer-moving" | "data-mobile-product-moving",
-): Record<string, typeof mobileCompositorFlattenSx | (
-  & typeof mobileCompositorFlattenSx
-  & typeof mobileFrostStripSx
-)> {
+): Record<string, unknown> {
+  const flatten = attr === "data-mobile-product-moving"
+    ? { ...mobileCompositorFlattenSx, ...mobileFrostStripSx }
+    : { ...mobileCompositorFlattenSx };
   return {
-    [`&[${attr}='true']`]: attr === "data-mobile-product-moving"
-      ? { ...mobileCompositorFlattenSx, ...mobileFrostStripSx }
-      : mobileCompositorFlattenSx,
+    [`&[${attr}='true']`]: {
+      ...flatten,
+      // The rail also translates during the gesture (drawer parallax or
+      // the whole Review page). Keep it live once settled — this block
+      // is moving-only.
+      "& [data-mobile-overflow-layer]": mobileOverflowTileFlattenSx,
+      "& .cm-scroller": mobileOverflowTileFlattenSx,
+    },
   };
 }
 

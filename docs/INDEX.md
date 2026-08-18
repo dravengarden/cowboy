@@ -42,7 +42,7 @@ material, operational guidance, research evidence, and historical notes.
 - [`requirements.md`](requirements.md) — Cowboy core requirements and state-ownership contract
 - [`desktop-efficiency-redesign.md`](desktop-efficiency-redesign.md) — Desktop Efficiency Redesign, including the no page-wide target overlay contract
 - [`explore-transcript-design.md`](explore-transcript-design.md) — Explore Transcript Design
-- [`mobile-spatial-presentation.md`](mobile-spatial-presentation.md) — Mobile drawers, swipe tracking, standing peek layer, Transcript recycle, and iOS compositor contract
+- [`mobile-spatial-presentation.md`](mobile-spatial-presentation.md) — Core Mobile requirement: jank-free swipe. Drawers, product pager, standing peek layer, Transcript recycle, CodeMirror Review flatten, and iOS compositor contract
 - [`ios-simulator.md`](ios-simulator.md) — Ios Simulator
 - [`machine-operations.md`](machine-operations.md) — Machine operations, including Provider installation and Service-auth replica convergence
 - [`provider-packages.md`](provider-packages.md) — Package, typed UI, authentication/Transcript presentation, and release contract for independently released, Machine-scoped Provider packages
