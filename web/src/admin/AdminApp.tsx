@@ -50,6 +50,7 @@ import {
   type RegistrationPolicy,
   type SessionLimits,
 } from "./adminApi";
+import { AdminPasskeyLock, AdminPasskeysCard } from "./AdminPasskeys";
 
 export type AdminRoute =
   | "/admin"
@@ -93,7 +94,12 @@ export function AdminApp(): React.JSX.Element {
       />
     );
   }
-  return <AdminShell auth={auth} onLogout={() => void adminApi.logout().then(setAuth)} />;
+  return (
+    <>
+      <AdminShell auth={auth} onAuth={setAuth} onLogout={() => void adminApi.logout().then(setAuth)} />
+      <AdminPasskeyLock auth={auth} onAuth={setAuth} />
+    </>
+  );
 }
 
 function AdminLoginPage({
@@ -142,9 +148,11 @@ function AdminLoginPage({
 
 function AdminShell({
   auth,
+  onAuth,
   onLogout,
 }: {
   auth: AdminAuthStatus;
+  onAuth: (auth: AdminAuthStatus) => void;
   onLogout: () => void;
 }): React.JSX.Element {
   const [route, setRoute] = useState<AdminRoute>(currentRoute);
@@ -180,7 +188,7 @@ function AdminShell({
       </Drawer>
       <Container maxWidth="lg" sx={{ pt: 12, pb: 6, ml: "240px" }}>
         {route === "/admin" && <OverviewPage />}
-        {route === "/admin/accounts" && <AccountsPage auth={auth} />}
+        {route === "/admin/accounts" && <AccountsPage auth={auth} onAuth={onAuth} />}
         {route === "/admin/permissions" && <PermissionsPage />}
         {route === "/admin/releases" && <ReleasesPage />}
         {route === "/admin/sessions" && <SessionsPage />}
@@ -226,7 +234,13 @@ function Stat({ title, value }: { title: string; value: string }): React.JSX.Ele
   );
 }
 
-function AccountsPage({ auth }: { auth: AdminAuthStatus }): React.JSX.Element {
+function AccountsPage({
+  auth,
+  onAuth,
+}: {
+  auth: AdminAuthStatus;
+  onAuth: (auth: AdminAuthStatus) => void;
+}): React.JSX.Element {
   const [policy, setPolicy] = useState<RegistrationPolicy | null>(null);
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [productUsers, setProductUsers] = useState<ProductUser[]>([]);
@@ -278,6 +292,7 @@ function AccountsPage({ auth }: { auth: AdminAuthStatus }): React.JSX.Element {
         operators here. / is login-only until a product user exists. Public signup is a
         separate Matrix-style switch below.
       </Typography>
+      <AdminPasskeysCard auth={auth} onAuth={onAuth} />
       <Paper sx={{ p: 2 }}>
         <Typography variant="h6" gutterBottom>Admin users</Typography>
         <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ mb: 2 }}>

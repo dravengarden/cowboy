@@ -122,7 +122,10 @@ Hardening:
   `admin_login ok=false` without passwords or hashes.
 - Service worker never caches `/api/admin/*` or `/admin` as the PWA shell.
 
-Passkeys / WebAuthn and a separate admin hostname are not in this slice.
+Admin Passkeys follow the product split: password login first, then optional
+registration. With a Passkey registered, `/admin` locks the view after 15
+minutes unless the operator turns that off on Accounts. Routes live under
+`/api/admin/passkeys*`.
 
 See [Product login](16-product-auth.md) for planes, the capability matrix,
 and the Hawk enablement checklist.

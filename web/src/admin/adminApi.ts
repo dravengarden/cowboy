@@ -65,6 +65,16 @@ export interface AdminAuthStatus {
   bootstrap_required: boolean;
   account?: string;
   role?: AdminRole;
+  passkey_count?: number;
+  passkey_reauth_enabled?: boolean;
+  passkey_reauth_required?: boolean;
+}
+
+export interface AdminPasskey {
+  id: string;
+  nickname: string;
+  created_at_ms: number;
+  last_used_at_ms?: number | null;
 }
 
 export interface AdminUser {
@@ -195,4 +205,42 @@ export const adminApi = {
     readJson<{ external_releases: number }>("/api/admin/providers/refresh", {
       method: "POST",
     }),
+  listPasskeys: () =>
+    readJson<{ passkeys: AdminPasskey[]; reauth_after_ms: number }>(
+      "/api/admin/passkeys",
+    ),
+  startPasskeyRegister: (nickname: string) =>
+    readJson<{ challenge_id: string; publicKey: Record<string, unknown> }>(
+      "/api/admin/passkeys/register/options",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ nickname }),
+      },
+    ),
+  completePasskeyRegister: (challengeId: string, credential: Record<string, unknown>) =>
+    readJson<AdminPasskey>("/api/admin/passkeys/register/complete", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ challenge_id: challengeId, credential }),
+    }),
+  startPasskeyAssert: () =>
+    readJson<{ challenge_id: string; publicKey: Record<string, unknown> }>(
+      "/api/admin/passkeys/assert/options",
+      { method: "POST" },
+    ),
+  completePasskeyAssert: (challengeId: string, credential: Record<string, unknown>) =>
+    readJson<AdminAuthStatus>("/api/admin/passkeys/assert/complete", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ challenge_id: challengeId, credential }),
+    }),
+  setPasskeyReauth: (enabled: boolean) =>
+    readJson<AdminAuthStatus>("/api/admin/passkeys/reauth", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    }),
+  deletePasskey: (id: string) =>
+    readJson<{ ok: boolean }>(`/api/admin/passkeys/${id}`, { method: "DELETE" }),
 };

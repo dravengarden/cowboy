@@ -1394,6 +1394,38 @@ impl Store {
     pub async fn touch_user_last_step_up(&self, user_id: &str, now_ms: i64) -> Result<()> {
         dispatch_storage!(self, touch_user_last_step_up(user_id, now_ms))
     }
+
+    pub async fn list_admin_passkeys(
+        &self,
+        account: &str,
+    ) -> Result<Vec<crate::passkey::UserPasskey>> {
+        dispatch_storage!(self, list_admin_passkeys(account))
+    }
+
+    pub async fn insert_admin_passkey(&self, passkey: &crate::passkey::UserPasskey) -> Result<()> {
+        dispatch_storage!(self, insert_admin_passkey(passkey))
+    }
+
+    pub async fn delete_admin_passkey(&self, account: &str, passkey_id: &str) -> Result<u64> {
+        dispatch_storage!(self, delete_admin_passkey(account, passkey_id))
+    }
+
+    pub async fn update_admin_passkey(
+        &self,
+        account: &str,
+        passkey_id: &str,
+        passkey_json: &str,
+        now_ms: i64,
+    ) -> Result<()> {
+        dispatch_storage!(
+            self,
+            update_admin_passkey(account, passkey_id, passkey_json, now_ms)
+        )
+    }
+
+    pub async fn count_admin_passkeys(&self, account: &str) -> Result<u32> {
+        dispatch_storage!(self, count_admin_passkeys(account))
+    }
 }
 
 impl PostgresStorage {
@@ -2860,6 +2892,87 @@ impl PostgresStorage {
         .await
         .with_context(|| format!("TOUCH last step-up {user_id}"))?;
         Ok(())
+    }
+
+    pub async fn list_admin_passkeys(
+        &self,
+        account: &str,
+    ) -> Result<Vec<crate::passkey::UserPasskey>> {
+        let rows = sqlx::query_as::<_, ProductPasskeyRow>(
+            "SELECT id, account AS user_id, credential_id, nickname, passkey_json, created_at, \
+             last_used_at FROM admin_passkeys WHERE account = $1 ORDER BY created_at",
+        )
+        .bind(account)
+        .fetch_all(&self.pool)
+        .await
+        .with_context(|| format!("SELECT admin passkeys for {account}"))?;
+        Ok(rows
+            .into_iter()
+            .map(ProductPasskeyRow::into_passkey)
+            .collect())
+    }
+
+    pub async fn insert_admin_passkey(&self, passkey: &crate::passkey::UserPasskey) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO admin_passkeys (id, account, credential_id, nickname, passkey_json, \
+             created_at, last_used_at) VALUES ( \
+             $1, $2, $3, $4, $5, to_timestamp($6::double precision / 1000), \
+             to_timestamp($7::double precision / 1000))",
+        )
+        .bind(&passkey.id)
+        .bind(&passkey.user_id)
+        .bind(&passkey.credential_id)
+        .bind(&passkey.nickname)
+        .bind(&passkey.passkey_json)
+        .bind(passkey.created_at_ms)
+        .bind(passkey.last_used_at_ms)
+        .execute(&self.pool)
+        .await
+        .context("INSERT admin passkey")?;
+        Ok(())
+    }
+
+    pub async fn delete_admin_passkey(&self, account: &str, passkey_id: &str) -> Result<u64> {
+        let result = sqlx::query("DELETE FROM admin_passkeys WHERE id = $1 AND account = $2")
+            .bind(passkey_id)
+            .bind(account)
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("DELETE admin passkey {passkey_id}"))?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn update_admin_passkey(
+        &self,
+        account: &str,
+        passkey_id: &str,
+        passkey_json: &str,
+        now_ms: i64,
+    ) -> Result<()> {
+        let result = sqlx::query(
+            "UPDATE admin_passkeys SET passkey_json = $3, \
+             last_used_at = to_timestamp($4::double precision / 1000) \
+             WHERE id = $1 AND account = $2",
+        )
+        .bind(passkey_id)
+        .bind(account)
+        .bind(passkey_json)
+        .bind(now_ms)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPDATE admin passkey {passkey_id}"))?;
+        anyhow::ensure!(result.rows_affected() == 1, "passkey not found");
+        Ok(())
+    }
+
+    pub async fn count_admin_passkeys(&self, account: &str) -> Result<u32> {
+        let count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM admin_passkeys WHERE account = $1")
+                .bind(account)
+                .fetch_one(&self.pool)
+                .await
+                .with_context(|| format!("COUNT admin passkeys {account}"))?;
+        Ok(u32::try_from(count.0.max(0)).unwrap_or(0))
     }
 }
 

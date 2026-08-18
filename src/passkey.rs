@@ -119,7 +119,7 @@ impl PasskeyCeremonies {
             existing.len() < MAX_PASSKEYS_PER_USER,
             "at most {MAX_PASSKEYS_PER_USER} passkeys"
         );
-        let uuid = user_uuid(user_id)?;
+        let uuid = subject_uuid(user_id);
         let exclude = existing
             .iter()
             .filter_map(|row| decode_passkey(&row.passkey_json).ok())
@@ -248,13 +248,12 @@ fn decode_passkey(passkey_json: &str) -> Result<Passkey> {
     serde_json::from_str(passkey_json).context("stored passkey is invalid")
 }
 
-fn user_uuid(user_id: &str) -> Result<Uuid> {
+fn subject_uuid(subject: &str) -> Uuid {
+    use sha2::Digest as _;
+    let digest = sha2::Sha256::digest(subject.as_bytes());
     let mut bytes = [0_u8; 16];
-    anyhow::ensure!(user_id.len() == 32, "user id must be 32 hex characters");
-    for (index, chunk) in user_id.as_bytes().chunks(2).enumerate() {
-        bytes[index] = u8::from_str_radix(std::str::from_utf8(chunk)?, 16)?;
-    }
-    Ok(Uuid::from_bytes(bytes))
+    bytes.copy_from_slice(&digest[..16]);
+    Uuid::from_bytes(bytes)
 }
 
 #[derive(Debug, Deserialize)]

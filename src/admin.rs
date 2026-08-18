@@ -407,6 +407,14 @@ pub struct AdminAccount {
     pub password_salt: String,
     pub password_hash: String,
     pub created_at_ms: i64,
+    #[serde(default = "default_true")]
+    pub passkey_reauth_enabled: bool,
+    #[serde(default)]
+    pub last_step_up_at_ms: Option<i64>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -424,7 +432,7 @@ pub struct AdminIdentities {
     pub sessions: Vec<AdminSessionRecord>,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Serialize)]
 pub struct AdminAuthStatus {
     pub authenticated: bool,
@@ -433,6 +441,12 @@ pub struct AdminAuthStatus {
     pub account: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<AdminRole>,
+    #[serde(default)]
+    pub passkey_count: u32,
+    #[serde(default = "default_true")]
+    pub passkey_reauth_enabled: bool,
+    #[serde(default)]
+    pub passkey_reauth_required: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -463,17 +477,30 @@ impl AdminIdentities {
     #[must_use]
     pub fn status(&self, token: Option<&str>, now_ms: i64) -> AdminAuthStatus {
         match token.and_then(|token| self.principal(token, now_ms)) {
-            Some(principal) => AdminAuthStatus {
-                authenticated: true,
-                bootstrap_required: false,
-                account: Some(principal.account),
-                role: Some(principal.role),
-            },
+            Some(principal) => {
+                let account = self
+                    .accounts
+                    .iter()
+                    .find(|account| account.account == principal.account);
+                AdminAuthStatus {
+                    authenticated: true,
+                    bootstrap_required: false,
+                    account: Some(principal.account),
+                    role: Some(principal.role),
+                    passkey_count: 0,
+                    passkey_reauth_enabled: account
+                        .is_none_or(|account| account.passkey_reauth_enabled),
+                    passkey_reauth_required: false,
+                }
+            }
             None => AdminAuthStatus {
                 authenticated: false,
                 bootstrap_required: self.bootstrap_required(),
                 account: None,
                 role: None,
+                passkey_count: 0,
+                passkey_reauth_enabled: true,
+                passkey_reauth_required: false,
             },
         }
     }
@@ -524,6 +551,8 @@ impl AdminIdentities {
             password_salt: String::new(),
             password_hash,
             created_at_ms: now_ms,
+            passkey_reauth_enabled: true,
+            last_step_up_at_ms: Some(now_ms),
         });
         Ok(())
     }
@@ -567,7 +596,45 @@ impl AdminIdentities {
             account: account.to_owned(),
             expires_at_ms: now_ms.saturating_add(ADMIN_SESSION_TTL_MS),
         });
+        self.touch_last_step_up(account, now_ms);
         Ok(token)
+    }
+
+    pub fn touch_last_step_up(&mut self, account: &str, now_ms: i64) {
+        if let Some(stored) = self
+            .accounts
+            .iter_mut()
+            .find(|existing| existing.account == account)
+        {
+            stored.last_step_up_at_ms = Some(now_ms);
+        }
+    }
+
+    pub fn set_passkey_reauth(&mut self, account: &str, enabled: bool) -> Result<()> {
+        let stored = self
+            .accounts
+            .iter_mut()
+            .find(|existing| existing.account == account)
+            .context("admin account not found")?;
+        stored.passkey_reauth_enabled = enabled;
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn passkey_policy(
+        &self,
+        account: &str,
+        passkey_count: u32,
+    ) -> crate::passkey::PasskeyPolicy {
+        let stored = self
+            .accounts
+            .iter()
+            .find(|existing| existing.account == account);
+        crate::passkey::PasskeyPolicy {
+            enabled: stored.is_none_or(|account| account.passkey_reauth_enabled),
+            last_step_up_at_ms: stored.and_then(|account| account.last_step_up_at_ms),
+            passkey_count,
+        }
     }
 
     #[allow(dead_code)]
@@ -952,6 +1019,8 @@ mod tests {
                 password_salt: hex_bytes(&salt),
                 password_hash: hash_admin_password(&salt, "correct-horse"),
                 created_at_ms: 1,
+                passkey_reauth_enabled: true,
+                last_step_up_at_ms: None,
             }],
             sessions: vec![AdminSessionRecord {
                 token_hash: hex_sha256(b"old-session"),

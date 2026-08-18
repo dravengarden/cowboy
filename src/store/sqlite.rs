@@ -2780,6 +2780,91 @@ impl SqliteStorage {
             .with_context(|| format!("TOUCH SQLite last step-up {user_id}"))?;
         Ok(())
     }
+
+    pub(super) async fn list_admin_passkeys(
+        &self,
+        account: &str,
+    ) -> Result<Vec<crate::passkey::UserPasskey>> {
+        let rows = sqlx::query_as::<_, SqliteUserPasskeyRow>(
+            "SELECT id, account AS user_id, credential_id, nickname, passkey_json, created_at_ms, \
+             last_used_at_ms FROM admin_passkeys WHERE account = ?1 ORDER BY created_at_ms",
+        )
+        .bind(account)
+        .fetch_all(&self.pool)
+        .await
+        .with_context(|| format!("SELECT SQLite admin passkeys for {account}"))?;
+        Ok(rows
+            .into_iter()
+            .map(SqliteUserPasskeyRow::into_passkey)
+            .collect())
+    }
+
+    pub(super) async fn insert_admin_passkey(
+        &self,
+        passkey: &crate::passkey::UserPasskey,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO admin_passkeys (id, account, credential_id, nickname, passkey_json, \
+             created_at_ms, last_used_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )
+        .bind(&passkey.id)
+        .bind(&passkey.user_id)
+        .bind(&passkey.credential_id)
+        .bind(&passkey.nickname)
+        .bind(&passkey.passkey_json)
+        .bind(passkey.created_at_ms)
+        .bind(passkey.last_used_at_ms)
+        .execute(&self.pool)
+        .await
+        .context("INSERT SQLite admin passkey")?;
+        Ok(())
+    }
+
+    pub(super) async fn delete_admin_passkey(
+        &self,
+        account: &str,
+        passkey_id: &str,
+    ) -> Result<u64> {
+        let result = sqlx::query("DELETE FROM admin_passkeys WHERE id = ?1 AND account = ?2")
+            .bind(passkey_id)
+            .bind(account)
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("DELETE SQLite admin passkey {passkey_id}"))?;
+        Ok(result.rows_affected())
+    }
+
+    pub(super) async fn update_admin_passkey(
+        &self,
+        account: &str,
+        passkey_id: &str,
+        passkey_json: &str,
+        now_ms: i64,
+    ) -> Result<()> {
+        let result = sqlx::query(
+            "UPDATE admin_passkeys SET passkey_json = ?3, last_used_at_ms = ?4 \
+             WHERE id = ?1 AND account = ?2",
+        )
+        .bind(passkey_id)
+        .bind(account)
+        .bind(passkey_json)
+        .bind(now_ms)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPDATE SQLite admin passkey {passkey_id}"))?;
+        anyhow::ensure!(result.rows_affected() == 1, "passkey not found");
+        Ok(())
+    }
+
+    pub(super) async fn count_admin_passkeys(&self, account: &str) -> Result<u32> {
+        let count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM admin_passkeys WHERE account = ?1")
+                .bind(account)
+                .fetch_one(&self.pool)
+                .await
+                .with_context(|| format!("COUNT SQLite admin passkeys {account}"))?;
+        Ok(u32::try_from(count.0.max(0)).unwrap_or(0))
+    }
 }
 
 impl SqliteStorage {

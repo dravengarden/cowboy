@@ -58,6 +58,7 @@ Deno.test("adminApi lists creates disables and sets product user passwords", asy
   assertStringIncludes(source, "createProductUser");
   assertStringIncludes(source, 'role: AdminRole = "operator"');
   assertStringIncludes(source, '"/api/admin/users"');
+  assertStringIncludes(source, "/api/admin/passkeys");
   assertStringIncludes(source, "/api/admin/users/${id}/disable");
   assertStringIncludes(source, "/api/admin/users/${id}/password");
   assertEquals(source.includes("/api/admin/auth-mode"), false);
