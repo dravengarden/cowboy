@@ -1,4 +1,5 @@
 import { subscribeAnyDetentSheetOpen } from "./_shell/detent-sheet-open";
+import { mobileCodePaintCullSx } from "./mobileCodeSurface";
 import { holdStorePresentation } from "./store";
 
 /** Standing peek paint collapse. Settled rows each own `contain: layout
@@ -22,11 +23,11 @@ export const mobileFrostStripSx = {
   },
 };
 
-/** Shared overflow-tile kill. `!important` is required because CodeMirror
- *  injects `.cm-scroller { overflow:auto; -webkit-overflow-scrolling:touch }`
- *  from a theme module that can land after this sheet. Without it, Review
- *  source/diff swipes keep a max-content touch-scroll tile and hitch while
- *  README (plain overflow) stays cheap. */
+/** Shared overflow-tile kill for transcript rows and ordinary overflow
+ *  layers. Do not apply this to `.cm-scroller`: changing CodeMirror
+ *  overflow remasures the document and rebuilds its iOS scroll tile on
+ *  the first tracking frame. Review source is culled with
+ *  `mobileCodePaintCullSx` instead. */
 export const mobileOverflowTileFlattenSx = {
   WebkitOverflowScrolling: "auto !important",
   overflow: "hidden !important",
@@ -44,13 +45,8 @@ export const mobileCompositorFlattenSx = {
   // Only the peeking page. The Sessions/Review rail uses the same
   // overflow-layer marker so it can scroll; freezing it while the
   // drawer is open makes every session row un-tappable.
-  "& [data-mobile-drawer-surface] .cm-scroller, & [data-mobile-drawer-surface] [data-transcript-session], & [data-mobile-drawer-surface] [data-mobile-overflow-layer]":
+  "& [data-mobile-drawer-surface] [data-transcript-session], & [data-mobile-drawer-surface] [data-mobile-overflow-layer]":
     mobileOverflowTileFlattenSx,
-  // Sticky gutters are a second tile beside the scroller. Contain them
-  // so a wrap-off justfile does not re-stick on every peek frame.
-  "& [data-mobile-drawer-surface] .cm-gutters": {
-    contain: "paint",
-  },
   // Settled rows each own a paint layer. Flatten them into the peek so a
   // long transcript is one tile during the swipe, not N independent ones.
   "& [data-mobile-drawer-surface] [data-key]": {
@@ -74,7 +70,9 @@ export function mobilePresentationMovingRootSx(
       // the whole Review page). Keep it live once settled — this block
       // is moving-only.
       "& [data-mobile-overflow-layer]": mobileOverflowTileFlattenSx,
-      "& .cm-scroller": mobileOverflowTileFlattenSx,
+      // Pull live CodeMirror out of the transforming peek. Visibility
+      // culls paint without remasuring `.cm-scroller`.
+      "& [data-mobile-code-layer]": mobileCodePaintCullSx,
     },
   };
 }

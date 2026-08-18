@@ -43,10 +43,10 @@ gesture root (shell)
 ## 2. Invariants
 
 0. **Swipe must not jank.** Finger tracking stays on the compositor. A
-   nested `-webkit-overflow-scrolling: touch` tile, sticky gutter, or
-   CodeMirror theme `overflow: auto` that survives flatten is a defect
-   even if the page looks fine after settle. README staying cheap while
-   a justfile hitchs is the Code Review signature of this bug.
+   live CodeMirror inside a translating peek is a defect even if the
+   page looks fine after settle. README staying cheap while a justfile
+   hitchs is the Code Review signature. Do not "fix" it by changing
+   `.cm-scroller` overflow on claim.
 1. Drag is 1:1 `translate3d`. Do not interpolate finger tracking with CSS
    `transition` on `transform`.
 2. Release is compositor settle: `cubic-bezier(0.32, 0.72, 0, 1)`, about
@@ -175,22 +175,25 @@ transcript must not restyle N paint boundaries on the first frame.
 
 ## 4.1 Code Review
 
-README preview is a wrapped article. Source/diff is CodeMirror: default
-wrap is off (`width: max-content`), gutters are sticky, and `.cm-scroller`
-sets `-webkit-overflow-scrolling: touch`. That combination is why **both**
-Review drawer swipe and Agent↔Review pager hitch on a justfile and stay
-cheap on README.
+**Root cause (device-proven class):** the peek `translate3d` includes a
+live CodeMirror. Default wrap is off (`width: max-content`), gutters are
+sticky, and each visible line is a stack of token spans. iOS re-rasterizes
+that subtree on every tracking frame. README is a wrapped article, so the
+same transform is cheap.
 
-Do not treat this as a missing `will-change` or a settle-easing bug.
+Flattening `.cm-scroller` overflow does **not** fix this. It remasures the
+editor and destroys the iOS touch-scroll cache on the first tracking
+frame — the swipe then paints the token DOM live. Do not retry that.
 
 | Layer | Job |
 |---|---|
-| CSS flatten | `mobileOverflowTileFlattenSx` uses `!important`. CM theme modules land after the MUI sheet and would otherwise keep `overflow: auto` + touch scrolling. |
-| Moving-only rail | File tree / outline overflow tiles also translate. Flatten them only while `data-mobile-*-moving` is set so a settled-open rail stays tappable. |
-| Inline freeze | `bindCodeViewerSwipeFreeze` writes the same overflow kill on `scrollDOM` and skips `onVisibleLine`. CSS can lose after a lazy grammar remount; inline cannot. |
+| Paint cull | `[data-mobile-code-layer]` is `visibility: hidden` while moving. The peek keeps its box and header; CodeMirror is not in the transforming raster. |
+| Pager timing | `data-mobile-product-moving` is set **before** the first page `translate3d`. Bookkeeping (store hold) may stay on rAF. |
+| Workspace claim | Wrap-off CodeMirror is not a `hasHorizontalScroller` target. Horizontal reading uses the wrap toggle. |
+| Transcript flatten | Ordinary overflow layers still flatten. `.cm-scroller` must not. |
 
-Do not snapshot the editor to a canvas. Do not change `.cm-content` width
-on claim — that remasures the document on the first tracking frame.
+Do not snapshot the editor to a canvas. Do not change `.cm-scroller`
+overflow or `.cm-content` width on claim.
 
 ## 5. Hit testing and chrome freeze
 
@@ -289,7 +292,7 @@ because those surfaces *contain* the blur.
 | 1:1 write, followers, settle | `web/src/mobileSpatialDrawer.ts` |
 | Rail offset, dim progress, settle curve | `web/src/mobileDrawerMotion.ts` |
 | Standing peek layer, prepare flatten, rail hit, close layer | `web/src/mobilePresentationMotion.ts` |
-| CodeMirror overflow freeze during swipe | `web/src/mobileCodeSurface.ts`, `CodeViewer.tsx` |
+| CodeMirror paint cull during swipe | `web/src/mobileCodeSurface.ts`, `CodeViewer.tsx` |
 | Live-row recycle | `web/src/transcriptLiveWindow.ts` |
 | Column-reverse transcript; pause ref (no `setState` on finger-down) | `web/src/Transcript.tsx` |
 | Event-tail recycle | `store.releaseFollowedHistory` |

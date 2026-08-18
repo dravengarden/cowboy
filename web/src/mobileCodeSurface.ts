@@ -1,9 +1,15 @@
-/** Code Review's read-only CodeMirror is a nested iOS overflow tile.
- *  CSS flatten can lose to CM theme modules after a lazy grammar load;
- *  inline styles on `scrollDOM` always win. */
+/** Review CodeMirror must leave the transforming peek. Changing
+ *  `.cm-scroller` overflow remasures the document and destroys iOS's
+ *  touch-scroll cache on the first tracking frame — that was the failed
+ *  flatten. Hide paint only; keep layout and overflow alone. */
 
 export const MOBILE_CODE_SWIPE_START = "cowboy:transcript-direct-manipulation-start";
 export const MOBILE_CODE_SWIPE_END = "cowboy:transcript-direct-manipulation-end";
+
+export const mobileCodePaintCullSx = {
+  visibility: "hidden",
+  pointerEvents: "none",
+} as const;
 
 let freezeCount = 0;
 
@@ -11,20 +17,14 @@ export function isMobileCodeSwipeFrozen(): boolean {
   return freezeCount > 0;
 }
 
-export function freezeMobileOverflowTile(scroller: HTMLElement): void {
-  scroller.style.setProperty("-webkit-overflow-scrolling", "auto", "important");
-  scroller.style.setProperty("overflow", "hidden", "important");
-  scroller.style.setProperty("overflow-x", "hidden", "important");
-  scroller.style.setProperty("contain", "paint");
-  scroller.style.setProperty("pointer-events", "none");
+export function hideMobileCodePaint(layer: HTMLElement): void {
+  layer.style.visibility = "hidden";
+  layer.style.pointerEvents = "none";
 }
 
-export function thawMobileOverflowTile(scroller: HTMLElement): void {
-  scroller.style.removeProperty("-webkit-overflow-scrolling");
-  scroller.style.removeProperty("overflow");
-  scroller.style.removeProperty("overflow-x");
-  scroller.style.removeProperty("contain");
-  scroller.style.removeProperty("pointer-events");
+export function showMobileCodePaint(layer: HTMLElement): void {
+  layer.style.removeProperty("visibility");
+  layer.style.removeProperty("pointer-events");
 }
 
 export function swipeOwnsCodeSurface(
@@ -45,20 +45,24 @@ export function bindCodeViewerSwipeFreeze(
   },
   alreadyClaimed: () => boolean = swipeOwnsCodeSurface,
 ): () => void {
+  const closest = view.dom.closest("[data-mobile-code-layer]");
+  const layer = closest != null && "style" in closest
+    ? closest as HTMLElement
+    : view.dom;
   let local = false;
   const apply = (): void => {
     if (local) return;
     local = true;
     freezeCount += 1;
-    view.dom.setAttribute("data-mobile-code-frozen", "true");
-    freezeMobileOverflowTile(view.scrollDOM);
+    layer.setAttribute("data-mobile-code-frozen", "true");
+    hideMobileCodePaint(layer);
   };
   const release = (): void => {
     if (!local) return;
     local = false;
     freezeCount = Math.max(0, freezeCount - 1);
-    view.dom.removeAttribute("data-mobile-code-frozen");
-    thawMobileOverflowTile(view.scrollDOM);
+    layer.removeAttribute("data-mobile-code-frozen");
+    showMobileCodePaint(layer);
   };
   if (alreadyClaimed()) apply();
   globalThis.addEventListener(MOBILE_CODE_SWIPE_START, apply);

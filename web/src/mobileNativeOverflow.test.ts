@@ -1,4 +1,4 @@
-import { assert } from "jsr:@std/assert";
+import { assert, assertEquals } from "jsr:@std/assert";
 import { mobileNativeYScrollSx } from "./mobileNativeOverflow.ts";
 
 const reviewFileTree = await Deno.readTextFile(
@@ -22,9 +22,9 @@ Deno.test("Agent and Code scrollports keep native vertical momentum", () => {
   assert(transcript.includes('touchAction: "pan-y pinch-zoom"'));
 });
 
-Deno.test("Code Review freezes the CodeMirror overflow tile during a swipe", () => {
+Deno.test("Code Review culls CodeMirror paint during a swipe", () => {
   assert(codeViewer.includes("bindCodeViewerSwipeFreeze"));
   assert(codeViewer.includes("isMobileCodeSwipeFrozen"));
   assert(codeViewer.includes('data-mobile-code-layer="true"'));
-  assert(codeViewer.includes('data-mobile-overflow-layer="true"'));
+  assertEquals(codeViewer.includes("freezeMobileOverflowTile"), false);
 });

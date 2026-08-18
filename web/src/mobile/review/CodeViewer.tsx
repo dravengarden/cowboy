@@ -805,7 +805,6 @@ export default function CodeViewer({
 
   return (
     <Box
-      data-mobile-overflow-layer="true"
       data-mobile-code-layer="true"
       sx={{
         height: "100%",

@@ -316,6 +316,9 @@ export function MobileProductShell({
         reviewPage.style.transition = "none";
         agentPage.style.willChange = "transform";
         reviewPage.style.willChange = "transform";
+        // Publish moving before the first translate so Review CodeMirror
+        // is culled from paint in this same turn. Store hold stays on rAF.
+        shell.setAttribute("data-mobile-product-moving", "true");
       }
       event.preventDefault();
       event.stopPropagation();

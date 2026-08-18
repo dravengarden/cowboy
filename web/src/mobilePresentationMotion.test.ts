@@ -64,10 +64,13 @@ Deno.test("gesture roots flatten overflow tiles without a universal selector", (
   assert(motionSource.includes("contain: \"paint\""));
   assert(motionSource.includes("pointerEvents: \"none\""));
   assert(motionSource.includes("& [data-mobile-drawer-surface] [data-mobile-overflow-layer]"));
-  assert(motionSource.includes("& [data-mobile-drawer-surface] .cm-gutters"));
+  assertEquals(motionSource.includes("\"& .cm-scroller\""), false);
+  assertEquals(motionSource.includes("[data-mobile-drawer-surface] .cm-scroller"), false);
+  assertEquals(motionSource.includes("[data-mobile-drawer-surface] .cm-gutters"), false);
   assert(motionSource.includes("& [data-mobile-drawer-surface] [data-key]"));
   assert(motionSource.includes("\"& [data-mobile-overflow-layer]\": mobileOverflowTileFlattenSx"));
-  assert(motionSource.includes("\"& .cm-scroller\": mobileOverflowTileFlattenSx"));
+  assert(motionSource.includes("\"& [data-mobile-code-layer]\": mobileCodePaintCullSx"));
+  assert(motionSource.includes("mobileCodePaintCullSx"));
   assert(motionSource.includes("mobilePeekRestLayerSx"));
   assert(appSource.includes("mobilePeekRestLayerSx"));
   assert(reviewDrawerSource.includes("mobilePeekRestLayerSx"));
@@ -103,6 +106,17 @@ Deno.test("jank-free swipe is a core Mobile requirement, not polish", () => {
   assert(spatialContract.includes("core product requirement"));
   assert(spatialContract.includes("Swipe must not jank"));
   assert(webAgents.includes("a swipe that drops frames is a product bug"));
+});
+
+Deno.test("product pager marks moving before the first page translate", () => {
+  const lock = productShellSource.indexOf("gesture.locked = true");
+  const moving = productShellSource.indexOf(
+    'shell.setAttribute("data-mobile-product-moving", "true");',
+    lock,
+  );
+  const firstRender = productShellSource.indexOf("pagerOffset(", lock);
+  assert(lock !== -1 && moving !== -1 && firstRender !== -1);
+  assert(lock < moving && moving < firstRender);
 });
 
 Deno.test("settled product pages do not keep a permanent will-change layer", () => {

@@ -1,37 +1,40 @@
 import { assert, assertEquals } from "jsr:@std/assert";
 import {
   bindCodeViewerSwipeFreeze,
-  freezeMobileOverflowTile,
+  hideMobileCodePaint,
   isMobileCodeSwipeFrozen,
   MOBILE_CODE_SWIPE_END,
   MOBILE_CODE_SWIPE_START,
+  showMobileCodePaint,
   swipeOwnsCodeSurface,
-  thawMobileOverflowTile,
 } from "./mobileCodeSurface.ts";
 
 function fakeElement(): HTMLElement {
   const attrs = new Map<string, string>();
-  const props = new Map<string, { value: string; priority: string }>();
+  const props = new Map<string, string>();
   const style = {
-    setProperty(name: string, value: string, priority = "") {
-      props.set(name, { value, priority });
+    set visibility(value: string) {
+      props.set("visibility", value);
+    },
+    get visibility() {
+      return props.get("visibility") ?? "";
+    },
+    set pointerEvents(value: string) {
+      props.set("pointer-events", value);
+    },
+    get pointerEvents() {
+      return props.get("pointer-events") ?? "";
     },
     removeProperty(name: string) {
       props.delete(name);
       return "";
     },
-    getPropertyPriority(name: string) {
-      return props.get(name)?.priority ?? "";
-    },
-    get overflow() {
-      return props.get("overflow")?.value ?? "";
-    },
-    get pointerEvents() {
-      return props.get("pointer-events")?.value ?? "";
-    },
   };
   return {
     style,
+    closest(selector: string) {
+      return selector.includes("data-mobile-code-layer") ? this : null;
+    },
     setAttribute(name: string, value: string) {
       attrs.set(name, value);
     },
@@ -47,20 +50,17 @@ function fakeElement(): HTMLElement {
   } as unknown as HTMLElement;
 }
 
-Deno.test("inline overflow flatten wins with important flags", () => {
-  const scroller = fakeElement();
-  freezeMobileOverflowTile(scroller);
-  assertEquals(scroller.style.getPropertyPriority("overflow"), "important");
-  assertEquals(scroller.style.getPropertyPriority("overflow-x"), "important");
+Deno.test("code swipe freeze hides paint and leaves overflow alone", () => {
+  const layer = fakeElement();
+  hideMobileCodePaint(layer);
+  assertEquals(layer.style.visibility, "hidden");
+  assertEquals(layer.style.pointerEvents, "none");
   assertEquals(
-    scroller.style.getPropertyPriority("-webkit-overflow-scrolling"),
-    "important",
+    Object.getOwnPropertyDescriptor(layer.style, "overflow")?.value,
+    undefined,
   );
-  assertEquals(scroller.style.overflow, "hidden");
-  assertEquals(scroller.style.pointerEvents, "none");
-  thawMobileOverflowTile(scroller);
-  assertEquals(scroller.style.overflow, "");
-  assertEquals(scroller.style.pointerEvents, "");
+  showMobileCodePaint(layer);
+  assertEquals(layer.style.visibility, "");
 });
 
 Deno.test("code swipe freeze is reference-counted and skips after release", () => {
@@ -78,7 +78,7 @@ Deno.test("code swipe freeze is reference-counted and skips after release", () =
   globalThis.dispatchEvent(new Event(MOBILE_CODE_SWIPE_START));
   assert(isMobileCodeSwipeFrozen());
   assertEquals(first.dom.getAttribute("data-mobile-code-frozen"), "true");
-  assertEquals(second.scrollDOM.style.overflow, "hidden");
+  assertEquals(second.dom.style.visibility, "hidden");
   globalThis.dispatchEvent(new Event(MOBILE_CODE_SWIPE_END));
   assertEquals(isMobileCodeSwipeFrozen(), false);
   assertEquals(first.dom.hasAttribute("data-mobile-code-frozen"), false);
@@ -98,7 +98,7 @@ Deno.test("a late-mounted editor freezes when a swipe is already claimed", () =>
   };
   const dispose = bindCodeViewerSwipeFreeze(view, () => true);
   assert(isMobileCodeSwipeFrozen());
-  assertEquals(view.scrollDOM.style.overflow, "hidden");
+  assertEquals(view.dom.style.visibility, "hidden");
   dispose();
   assertEquals(isMobileCodeSwipeFrozen(), false);
 });

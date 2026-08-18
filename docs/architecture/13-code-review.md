@@ -163,13 +163,11 @@ views. Load language packages on demand and do expensive decoration work only
 for visible ranges.
 
 **A Review swipe that hitchs on source/diff but not on README is a
-defect.** Default wrap-off CodeMirror (`width: max-content`, sticky
-gutters, `-webkit-overflow-scrolling: touch`) must not remain an iOS
-overflow tile while the peek or product pager translates. Flatten
-belongs to
-[`mobile-spatial-presentation.md`](../mobile-spatial-presentation.md)
-(`mobileOverflowTileFlattenSx` + `mobileCodeSurface`). Do not leave this
-to a later polish pass.
+defect.** The peek must not transform a live CodeMirror. Cull
+`[data-mobile-code-layer]` paint while the drawer or pager is moving;
+do not change `.cm-scroller` overflow on claim (that remasures and
+makes the hitch worse). See
+[`mobile-spatial-presentation.md`](../mobile-spatial-presentation.md).
 
 Source views resolve CodeMirror's language description from the path, including
 special repository filenames such as `Cargo.lock`, then load only that grammar.
