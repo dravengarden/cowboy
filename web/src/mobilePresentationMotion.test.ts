@@ -111,15 +111,16 @@ Deno.test("jank-free swipe is a core Mobile requirement, not polish", () => {
   assert(spatialContract.includes("no horizontal bar"));
 });
 
-Deno.test("product pager marks moving before the first page translate", () => {
+Deno.test("product pager first tracking frames only write transform", () => {
   const lock = productShellSource.indexOf("gesture.locked = true");
-  const moving = productShellSource.indexOf(
-    'shell.setAttribute("data-mobile-product-moving", "true");',
+  const firstRender = productShellSource.indexOf("pagerOffset(", lock);
+  const movingAfterLock = productShellSource.indexOf(
+    'shell.setAttribute("data-mobile-product-moving", "true")',
     lock,
   );
-  const firstRender = productShellSource.indexOf("pagerOffset(", lock);
-  assert(lock !== -1 && moving !== -1 && firstRender !== -1);
-  assert(lock < moving && moving < firstRender);
+  assert(lock !== -1 && firstRender !== -1);
+  assert(productShellSource.includes("armPagerPresentation()"));
+  assertEquals(movingAfterLock, -1);
 });
 
 Deno.test("settled product pages do not keep a permanent will-change layer", () => {

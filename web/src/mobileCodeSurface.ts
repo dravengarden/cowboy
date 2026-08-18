@@ -50,16 +50,34 @@ export function bindCodeViewerSwipeFreeze(
     freezeCount += 1;
   };
   const release = (): void => {
+    if (local && swipeOwnsCodeSurface()) return;
     if (!local) return;
     local = false;
     freezeCount = Math.max(0, freezeCount - 1);
   };
+  const onTouchStart = (): void => {
+    apply();
+  };
+  const onTouchEnd = (): void => {
+    release();
+  };
   if (alreadyClaimed()) apply();
+  globalThis.addEventListener("touchstart", onTouchStart, {
+    capture: true,
+    passive: true,
+  });
+  globalThis.addEventListener("touchend", onTouchEnd, { passive: true });
+  globalThis.addEventListener("touchcancel", onTouchEnd, { passive: true });
   globalThis.addEventListener(MOBILE_CODE_SWIPE_START, apply);
   globalThis.addEventListener(MOBILE_CODE_SWIPE_END, release);
   return () => {
+    globalThis.removeEventListener("touchstart", onTouchStart, true);
+    globalThis.removeEventListener("touchend", onTouchEnd);
+    globalThis.removeEventListener("touchcancel", onTouchEnd);
     globalThis.removeEventListener(MOBILE_CODE_SWIPE_START, apply);
     globalThis.removeEventListener(MOBILE_CODE_SWIPE_END, release);
-    release();
+    if (!local) return;
+    local = false;
+    freezeCount = Math.max(0, freezeCount - 1);
   };
 }

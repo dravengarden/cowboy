@@ -258,9 +258,10 @@ Do not retune easing or claim thresholds to chase that. Split the work:
 | When | Do | Do not |
 |---|---|---|
 | Rest | `contain: none` on peek rows (`mobilePeekRestLayerSx`); identity translate on the page | `overflow: hidden` on the scroller; `will-change` on bottom chrome; strip a dedicated frost follower |
-| Finger-down | `holdStorePresentation`; `will-change` on peek + mask | React commit; unfollow; overflow freeze |
-| 2 px claim | `transition: none`; promote followers; freeze overflow | Restyle N rows; toggle frost |
+| Finger-down | `holdStorePresentation`; `will-change` on peek + mask / both pager pages | React commit; unfollow; overflow freeze |
+| 2 px claim | `transition: none`; first `translate3d` | `setAttribute` that restyles overflow; toggle frost |
 | Each `touchmove` | `transform` (+ `transition: none`) | `setAttribute`, `setState`, `transform-origin`, `box-shadow` |
+| Next frame | Mark moving, flatten overflow, fire the freeze event | Restyle N rows |
 
 `holdStorePresentation` plus `renderPausedRef` freeze the tree. Catch-up
 React after release. A following reader unfollows when reader-owned scroll

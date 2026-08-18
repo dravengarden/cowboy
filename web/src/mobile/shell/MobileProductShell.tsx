@@ -171,6 +171,19 @@ export function MobileProductShell({
       reviewPage.style.transform =
         `translate3d(${String(width + offset)}px, 0, 0)`;
     };
+    const armPagerPresentation = (): void => {
+      if (directManipulationActive) return;
+      releasePresentation ??= holdStorePresentation();
+      agentPage.style.willChange = "transform";
+      reviewPage.style.willChange = "transform";
+    };
+    const disarmPagerPresentation = (): void => {
+      if (directManipulationActive) return;
+      agentPage.style.removeProperty("will-change");
+      reviewPage.style.removeProperty("will-change");
+      releasePresentation?.();
+      releasePresentation = undefined;
+    };
     const beginDirectManipulation = (): void => {
       if (directManipulationActive) return;
       if (releaseFrame !== 0) globalThis.cancelAnimationFrame(releaseFrame);
@@ -182,7 +195,7 @@ export function MobileProductShell({
         }
         releaseIdle = undefined;
       }
-      releasePresentation ??= holdStorePresentation();
+      armPagerPresentation();
       directManipulationActive = true;
       shell.setAttribute("data-mobile-product-moving", "true");
       globalThis.dispatchEvent(
@@ -269,6 +282,9 @@ export function MobileProductShell({
         locked: false,
       };
       prepareNavigationHaptic();
+      // Promote both pages before the 2 px claim so the first translate
+      // only writes transform. Overflow flatten waits for rAF bookkeeping.
+      armPagerPresentation();
     };
     const onTouchMove = (event: TouchEvent): void => {
       const touch = event.touches[0];
@@ -295,6 +311,7 @@ export function MobileProductShell({
       const deltaX = touch.clientX - gesture.startX;
       const deltaY = touch.clientY - gesture.startY;
       if (!gesture.locked && obsidianDrawerAbandonsToScroll(deltaX, deltaY)) {
+        disarmPagerPresentation();
         gesture = null;
         // The spatial drawer is a descendant and has its own non-passive
         // horizontal recognizer. Keep this stream's native vertical scroll
@@ -314,11 +331,6 @@ export function MobileProductShell({
         gesture.locked = true;
         agentPage.style.transition = "none";
         reviewPage.style.transition = "none";
-        agentPage.style.willChange = "transform";
-        reviewPage.style.willChange = "transform";
-        // Publish moving before the first translate so Review CodeMirror
-        // is culled from paint in this same turn. Store hold stays on rAF.
-        shell.setAttribute("data-mobile-product-moving", "true");
       }
       event.preventDefault();
       event.stopPropagation();
@@ -343,6 +355,7 @@ export function MobileProductShell({
       if (!gesture) return;
       if (!gesture.locked) {
         gesture = null;
+        disarmPagerPresentation();
         return;
       }
       const distance = Math.abs(gesture.lastX - gesture.startX);
@@ -358,9 +371,14 @@ export function MobileProductShell({
       settle(next, velocity, width);
     };
     const onTouchCancel = (): void => {
+      const locked = gesture?.locked === true;
       const current = gesture?.product ?? productRef.current;
       const width = gesture?.width;
       gesture = null;
+      if (!locked) {
+        disarmPagerPresentation();
+        return;
+      }
       settle(current, 0, width);
     };
     const onResize = (): void => {
@@ -493,7 +511,9 @@ export function MobileProductShell({
             overflow: "hidden",
             backfaceVisibility: "hidden",
             WebkitBackfaceVisibility: "hidden",
-            contain: "layout paint style",
+            // Paint containment folds CodeMirror into this page tile and
+            // re-rasters it on every pager frame. Keep layout isolation only.
+            contain: "layout style",
             isolation: "isolate",
             transform: product === "review"
               ? "translate3d(0, 0, 0)"

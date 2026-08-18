@@ -1164,7 +1164,11 @@ function DocumentView({
         </Stack>
       )}
       <Box
-        data-mobile-overflow-layer="true"
+        data-mobile-overflow-layer={
+          markdownPreview || previewKind === "mermaid" || mediaPreview
+            ? "true"
+            : undefined
+        }
         sx={{
           flex: 1,
           minHeight: 0,
