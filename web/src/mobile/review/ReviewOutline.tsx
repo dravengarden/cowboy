@@ -1,11 +1,11 @@
 import {
   AccountTreeOutlined,
-  AdjustOutlined,
   CodeOutlined,
   Clear,
   DataArrayOutlined,
   DataObjectOutlined,
   DiamondOutlined,
+  FormatQuoteOutlined,
   Search,
 } from "@mui/icons-material";
 import {
@@ -77,7 +77,7 @@ function SymbolCategoryIcon({
   if (category === "field") return <DataArrayOutlined />;
   if (category === "constant") return <DiamondOutlined />;
   if (category === "object") return <AccountTreeOutlined />;
-  return <AdjustOutlined />;
+  return <FormatQuoteOutlined />;
 }
 
 function HighlightedSymbolName({
