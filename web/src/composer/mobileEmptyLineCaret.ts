@@ -17,6 +17,7 @@ import {
   selectionOnEmptyLineAfterImage,
   selectionOnEmptyLineInImageChain,
 } from "./inlineImageCaretPolicy";
+import { isImeInputType } from "../imeKey";
 import { reportClientLog } from "../observability";
 
 export const MOBILE_EMPTY_LINE_CARET_ANCHOR_CLASS =
@@ -256,6 +257,10 @@ export const mobileEmptyLineCaretRepair = [
       // on .cm-content beats widget ignoreEvent and the default.
       onBeforeInputCapture = (event: Event): void => {
         const input = event as InputEvent;
+        // Candidate confirmation is insertReplacementText /
+        // insertFromComposition. preventDefault here is the
+        // "tapped the suggestion, the word vanished" bug.
+        if (isImeInputType(input.inputType)) return;
         if (
           !shouldPreventNativeMobileLineBreak(input.inputType, this.view.state)
         ) {
@@ -271,15 +276,6 @@ export const mobileEmptyLineCaretRepair = [
         }
         if (this.placeFrame !== 0) cancelAnimationFrame(this.placeFrame);
         this.placeFrame = 0;
-      }
-
-      setImeHidden(hidden: boolean): void {
-        if (this.view.state.field(hideMobileEmptyLineCaretForIme) === hidden) {
-          return;
-        }
-        this.view.dispatch({
-          effects: setHideMobileEmptyLineCaretForIme.of(hidden),
-        });
       }
 
       placeLandingSelection(): void {
@@ -334,21 +330,6 @@ export const mobileEmptyLineCaretRepair = [
         );
         this.cancelPlace();
       }
-    },
-    {
-      eventHandlers: {
-        beforeinput(event: InputEvent): boolean | void {
-          if (event.inputType === "insertCompositionText") {
-            this.setImeHidden(true);
-          }
-        },
-        compositionstart(): void {
-          this.setImeHidden(true);
-        },
-        compositionend(): void {
-          this.setImeHidden(false);
-        },
-      },
     },
   ),
 ];

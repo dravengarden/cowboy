@@ -1056,6 +1056,10 @@ fullscreen editor:
       inherits the exact caret, and the keyboard stays open (pitfall #12;
       keydown-only handlers don't fire on a phone, so this is the beforeinput path).
 - [ ] Headings/bold/italic/code/list render (inactive line) + reveal (active line).
+- [ ] Native iOS Pinyin: type unmarked latin, tap a candidate in the
+      system bar — the Chinese word commits and composition continues.
+      Repeat after an inline image, and on the native textarea (no
+      image / no complete markdown). WeChat IME still works (pitfall #80).
 
 Desktop (Chrome bridge) covers render + vim + desktop IME, but **cannot** prove
 #1–#3 — those are iOS-only.
@@ -1949,3 +1953,56 @@ Desktop Vim + IME checks:
     empty/HEIC/`cowboy-att:` URLs as unloadable (tray fallback, no dead
     `<img>`), rebuild previews from `url` when `data` is gone, and strip
     placement tokens from transcript Markdown text.
+
+77. **PWA cannot strip the iOS form accessory (∧ ∨ ✓); lift content instead.**
+    The native shell removes `inputAccessoryView`. Safari / installed PWA
+    cannot. `interactive-widget=resizes-content` often shrinks the painted
+    page to the *keyboard* top, so `--kb-inset` becomes 0 (pitfall #75),
+    while the accessory still overlays the bottom ~44px. A content-height
+    New Session sheet then parks Title under that bar. **Fix:** on iOS
+    PWA, while an editable is focused, add 44px accessory overlap to
+    `--kb-inset`; make New Session a mobile `cover` like Session info so
+    Title lives at the top and the cover footer also clears the bar.
+    Native shell stays at `--kb-inset: 0`. Do not try to hide the
+    accessory from the web page.
+
+78. **Dock Paste is a clipboard port, not a native-only bridge.** The
+    native shell can probe UIPasteboard and read image bytes without a
+    browser permission prompt. Safari / PWA cannot: the dedicated Paste
+    button used to stay disabled, and keyboard-shelf photos ("拷贝的图片")
+    often arrive as an empty DataTransfer on a `<textarea>`. One
+    `ClipboardPort` picks `native` vs `web`; the dock never branches on
+    `isNativeShell()`. Web offers Paste when the Clipboard API exists
+    and reads on the tap. The textarea still owns the OS paste event
+    and falls back to the web port only when the DataTransfer has no
+    files. Do not poll the web pasteboard.
+
+79. **Expand → collapse must not forget the software keyboard is up.**
+    Fullscreen compose remounts the compact editor. In that focus gap
+    `layoutHeight === visualHeight` (PWA already shrank to the keyboard)
+    and `inferKeyboardOpen` is false. Learning that shrunken height as
+    the rest baseline then leaves `data-mobile-keyboard-open` off after
+    focus returns: session nav reappears, the format dock stays collapsed,
+    and the compact card fills the leftover canvas. Keep the tall
+    baseline unless the visible height is within 80px of it; ignore
+    visualViewport "close" during `beginMobileEditorFocusTransfer`;
+    reseed the baseline on `orientationchange`.
+
+80. **Native iOS Pinyin candidate taps must commit; do not abort composition.**
+    Symptom: tap a word in the system candidate bar (`的` / `调整` / …);
+    the word never appears and marked text dies (`tue w` leftover). WeChat
+    IME is fine; Obsidian is fine. This is **not** pitfall #69 (Return
+    after image). Native Pinyin confirms a candidate with
+    `insertReplacementText` / `insertFromComposition` while composition
+    is still open. WeChat often commits later as `insertText`.
+    Cowboy was aborting that transaction in two Obsidian-divergent
+    ways: (1) `mobileEmptyLineCaret` dispatched a CM6 effect on
+    `compositionstart` / `insertCompositionText` / `compositionend` —
+    iOS Safari first *clears* marked text then reinserts the finished
+    word, and a mid-composition `view.dispatch` makes the reinsert
+    miss; (2) a live-preview promotion could remount textarea ↔ CM6
+    during the same composition. **Fix:** never dispatch or
+    `preventDefault` IME beforeinput types; hold the committed editor
+    host until `compositionend`. Aligns with Obsidian (same CM6 stack,
+    no host swap, no composition-time transactions). Do **not** add
+    another Return/`<br>` intercept; #69 stays open.

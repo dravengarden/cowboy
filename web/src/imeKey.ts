@@ -41,3 +41,20 @@ export function isImeKeyEvent(
   return event.isComposing || event.keyCode === 229 ||
     NATIVE_TEXT_SERVICE_KEYS.has(event.key);
 }
+
+const IME_INPUT_TYPES = new Set([
+  "insertCompositionText",
+  "insertFromComposition",
+  "insertReplacementText",
+  "deleteCompositionText",
+  "deleteByComposition",
+]);
+
+/** beforeinput types that belong to a native IME transaction.
+ * preventDefault or a CM6 dispatch here aborts iOS Pinyin candidate
+ * confirmation — the candidate vanishes and composition dies. WeChat
+ * IME often commits as a later insertText, so it can look fine while
+ * the system keyboard fails. Obsidian never intercepts these. */
+export function isImeInputType(inputType: string | undefined): boolean {
+  return inputType !== undefined && IME_INPUT_TYPES.has(inputType);
+}

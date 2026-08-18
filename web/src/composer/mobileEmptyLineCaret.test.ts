@@ -195,6 +195,9 @@ Deno.test("mobile caret landing anchor is document-neutral and not late-mounted"
   assertEquals(source.includes("flushObservability"), false);
   assertEquals(source.includes("setTimeout"), true);
   assertEquals(source.includes("Never dispatch from update()"), true);
+  assertEquals(source.includes("isImeInputType"), true);
+  assertEquals(source.includes("compositionstart():"), false);
+  assertEquals(source.includes("setImeHidden"), false);
   assertEquals(source.includes("setSelectionRange"), false);
   assertEquals(source.includes("drawSelection"), false);
   assertEquals(source.includes(".focus()"), false);

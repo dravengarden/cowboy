@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert";
-import { isImeKeyEvent } from "./imeKey.ts";
+import { isImeInputType, isImeKeyEvent } from "./imeKey.ts";
 
 Deno.test("IME keyboard events include active and legacy WebKit composition", () => {
   assertEquals(
@@ -22,4 +22,16 @@ Deno.test("IME keyboard events include active and legacy WebKit composition", ()
     isImeKeyEvent({ isComposing: false, key: "Enter", keyCode: 13 }),
     false,
   );
+});
+
+Deno.test("IME beforeinput types are the candidate-confirm family", () => {
+  assertEquals(isImeInputType("insertCompositionText"), true);
+  assertEquals(isImeInputType("insertFromComposition"), true);
+  assertEquals(isImeInputType("insertReplacementText"), true);
+  assertEquals(isImeInputType("deleteCompositionText"), true);
+  assertEquals(isImeInputType("deleteByComposition"), true);
+  assertEquals(isImeInputType("insertText"), false);
+  assertEquals(isImeInputType("insertLineBreak"), false);
+  assertEquals(isImeInputType("deleteContentBackward"), false);
+  assertEquals(isImeInputType(undefined), false);
 });

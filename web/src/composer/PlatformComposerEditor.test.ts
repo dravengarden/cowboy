@@ -7,6 +7,7 @@ import {
 import {
   composerEditorMountSeed,
   hasTouchLivePreviewMarkup,
+  holdTouchEditorKind,
   insertNativeInlineImages,
   nativeDemotionSelection,
   nativePromotionSelection,
@@ -117,6 +118,13 @@ Deno.test("complete inline markdown promotes so Obsidian live preview can hide m
     assertEquals(hasTouchLivePreviewMarkup(value), true, value);
     assertEquals(shouldUseNativeTouchEditor("mobile", value), false, value);
   }
+});
+
+Deno.test("touch editor kind is held for the whole native composition", () => {
+  assertEquals(holdTouchEditorKind(true, true, false), true);
+  assertEquals(holdTouchEditorKind(false, true, true), false);
+  assertEquals(holdTouchEditorKind(true, false, false), false);
+  assertEquals(holdTouchEditorKind(false, false, true), true);
 });
 
 Deno.test("incomplete or unflanked markers stay on the native touch editor", () => {

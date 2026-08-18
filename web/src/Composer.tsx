@@ -1579,7 +1579,9 @@ export function ComposerWorkspace({
     ) return undefined;
 
     if (isMobileEditorFocusTransferPending()) {
-      mobileComposerKeyboardWasOpenRef.current = keyboardOpen;
+      // Expand → collapse remounts the editor. visualViewport can report
+      // closed while the software keyboard is still up; do not treat that
+      // flicker as a user dismiss or we latch the compact chrome over it.
       return undefined;
     }
 
@@ -6475,20 +6477,50 @@ export function SessionControls({
               options,
               optionPresentations,
             )}
-            onPointerDown={(): void => {
+            onPointerDown={(event): void => {
               // Session settings lives in the navbar, outside the Composer's
               // focus region. Release the active Mobile editor while the
               // pointer gesture still owns it; by click time WebKit may have
               // focused this button and hidden the keyboard without clearing
               // the Composer's :focus-within geometry.
+              if (event.pointerType === "touch") {
+                event.currentTarget.dataset.touchActivated = "true";
+              } else if (event.pointerType === "mouse") {
+                delete event.currentTarget.dataset.touchActivated;
+              }
               if (touchInput) releaseMobileComposerFocus();
             }}
-            onClick={(): void => {
+            onPointerEnter={(event): void => {
+              if (event.pointerType === "mouse") {
+                delete event.currentTarget.dataset.touchActivated;
+              }
+            }}
+            onKeyDown={(event): void => {
+              delete event.currentTarget.dataset.touchActivated;
+            }}
+            onClick={(event): void => {
               // Keyboard navigation does not emit pointerdown. Keep the same
               // transition boundary for accessibility and hardware keyboards.
               if (touchInput) releaseMobileComposerFocus();
               setSheetFocus("session");
               setSheetOpen(true);
+              // The sheet's footer dismiss mounts under this tap. Blur so
+              // WebKit cannot leave :hover/:focus paint on the trigger or
+              // retarget it onto the new close control at the bottom.
+              if (touchInput) event.currentTarget.blur();
+            }}
+            sx={{
+              // Same latch as the hamburger / Code buttons: iOS synthesizes
+              // :hover after a finger tap and leaves this navbar control
+              // looking selected, which then reads as a highlighted bottom
+              // chrome once the session sheet covers it.
+              "&[data-touch-activated='true']:hover, &[data-touch-activated='true'].Mui-focusVisible":
+                {
+                  bgcolor: "transparent",
+                },
+              "&[data-touch-activated='true']:active": {
+                bgcolor: "action.selected",
+              },
             }}
           >
             <Tune />

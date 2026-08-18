@@ -87,6 +87,18 @@ export function shouldUseNativeTouchEditor(
   return !hasTouchLivePreviewMarkup(value);
 }
 
+/** Native IME must never span a textarea ↔ CM6 remount. Hold the committed
+ * editor for the whole composition; apply the new kind after compositionend
+ * when the next non-composing render/onChange runs. Obsidian never swaps
+ * the editable host mid-marked-text. */
+export function holdTouchEditorKind(
+  committedNative: boolean,
+  composing: boolean,
+  nextNative: boolean,
+): boolean {
+  return composing ? committedNative : nextNative;
+}
+
 function hasNewImageToken(frozenSeed: string, touchValue: string): boolean {
   const seedIds = new Set(
     imageTokensInText(frozenSeed).map((token) => token.id),

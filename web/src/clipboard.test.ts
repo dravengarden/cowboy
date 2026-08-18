@@ -17,11 +17,12 @@ Deno.test("mobile paste stays on UIKit's native edit-menu path", () => {
   assertEquals(textareaSource.includes("onPaste={(e)"), true);
   assertEquals(textareaSource.includes('addEventListener("touchstart"'), false);
   assertEquals(textareaSource.includes("navigator.clipboard"), false);
+  assertEquals(textareaSource.includes("readWebClipboard"), true);
   assertEquals(textareaSource.includes("blankPaste"), false);
   assertEquals(clipboardSource.includes("readComposerClipboard"), false);
 });
 
-Deno.test("explicit dock paste uses only the capability-scoped native bridge", () => {
+Deno.test("explicit dock paste uses the platform clipboard port", () => {
   assertEquals(
     nativeShellSource.includes("__cowboyClipboardImageStatus"),
     true,
@@ -33,16 +34,13 @@ Deno.test("explicit dock paste uses only the capability-scoped native bridge", (
   assertEquals(nativeShellSource.includes("__cowboyReadClipboard"), true);
   assertEquals(nativeShellSource.includes("navigator.clipboard.read("), false);
   assertEquals(formatActionsSource.includes('title="Paste"'), true);
+  assertEquals(formatActionsSource.includes("createClipboardPort"), true);
+  assertEquals(formatActionsSource.includes("clipboardPort.read()"), true);
   assertEquals(
-    formatActionsSource.includes("nativeClipboardPasteAvailable"),
+    formatActionsSource.includes("insertText(contents.text, selection)"),
     true,
   );
-  assertEquals(formatActionsSource.includes("readNativeClipboardText"), true);
-  assertEquals(
-    formatActionsSource.includes("insertText(text, selection)"),
-    true,
-  );
-  assertEquals(formatActionsSource.includes("text.length > 0"), true);
+  assertEquals(formatActionsSource.includes("contents.text.length > 0"), true);
   assertEquals(
     formatActionsSource.includes("setInterval(refreshVisible, 1000)"),
     true,

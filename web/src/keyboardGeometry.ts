@@ -71,6 +71,22 @@ export function paintedLayoutHeight(
 /** Sub-pixel / chrome jitter that still means the layout already fits. */
 export const keyboardFittedEpsilonPx = 8;
 
+/** URL-bar / status-bar jitter allowed when learning a new rest height.
+ *  A larger drop is a software keyboard, not a new orientation baseline. */
+export const keyboardFreeBaselineSlackPx = 80;
+
+/** Expand → collapse remounts the editor and briefly loses focus. If we
+ *  adopt the keyboard-sized visual height as the new rest baseline in that
+ *  gap, later focused frames see no overlap and the compact card + session
+ *  nav come back over a still-visible keyboard. */
+export function shouldLearnKeyboardFreeBaseline(
+  baselineHeight: number,
+  visibleHeight: number,
+): boolean {
+  if (!(baselineHeight > 0) || !(visibleHeight > 0)) return true;
+  return visibleHeight >= baselineHeight - keyboardFreeBaselineSlackPx;
+}
+
 /** How much of the painted page still extends below the visual viewport.
  *  Do not add visualViewport.offsetTop: rubber-band pans inflate it and
  *  lift the composer too high. */
@@ -82,4 +98,39 @@ export function keyboardCoverOverlap(
   const raw = Math.round(Math.max(0, paintedHeight - visualHeight));
   if (raw <= keyboardFittedEpsilonPx) return 0;
   return clampKeyboardOverlap(raw, paintedHeight);
+}
+
+/** iOS Safari / installed PWA form accessory (∧ ∨ ✓). The native shell
+ *  strips this bar; visualViewport never includes it, so it overlays the
+ *  bottom ~44px of remaining web content (New Session Title, sheet
+ *  footers). */
+export const iosPwaKeyboardAccessoryPx = 44;
+
+export function isAppleTouchDevice(input: {
+  readonly userAgent?: string;
+  readonly platform?: string;
+  readonly maxTouchPoints?: number;
+}): boolean {
+  const userAgent = input.userAgent ?? "";
+  const platform = input.platform ?? "";
+  return /iP(hone|ad|od)/.test(userAgent) ||
+    (platform === "MacIntel" && (input.maxTouchPoints ?? 0) > 1);
+}
+
+export function pwaKeyboardAccessoryOverlap(input: {
+  readonly nativeShell: boolean;
+  readonly appleTouch: boolean;
+  readonly editableFocused: boolean;
+}): number {
+  if (input.nativeShell || !input.appleTouch || !input.editableFocused) {
+    return 0;
+  }
+  return iosPwaKeyboardAccessoryPx;
+}
+
+export function publishedKeyboardInset(
+  coverOverlap: number,
+  accessoryOverlap: number,
+): number {
+  return coverOverlap + accessoryOverlap;
 }

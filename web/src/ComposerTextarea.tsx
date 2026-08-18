@@ -12,6 +12,7 @@ import type {
   ComposerEditorSelection,
 } from "./ComposerEditor";
 import { type Attachment, clipboardFiles } from "./attachments";
+import { readWebClipboard } from "./composer/webClipboard";
 import { insertNativeInlineImages } from "./composer/mobileCompactEditorPolicy";
 import { attachComposerInputDebug } from "./composer/composerInputDebug";
 import { reportMobileNativePasteEvent } from "./composer/mobileNativePasteTelemetry";
@@ -836,7 +837,32 @@ export const ComposerTextarea = forwardRef<
           if (files.length > 0 && onPasteFiles) {
             e.preventDefault();
             onPasteFiles(files);
+            return;
           }
+          // iOS Safari / PWA often delivers keyboard-shelf photos ("拷贝的
+          // 图片") with an empty DataTransfer on a <textarea>. The same
+          // user gesture can still read the web clipboard port. Native
+          // shell never needs this: its accessory button uses the
+          // pasteboard bridge, and UIKit paste already carries files.
+          if (!onPasteFiles) return;
+          const types = e.clipboardData ? Array.from(e.clipboardData.types) : [];
+          const looksLikeImage = types.some((type) =>
+            type === "Files" || type.startsWith("image/")
+          );
+          // Empty types: let the textarea keep ordinary text paste, and
+          // speculatively read images on the same gesture.
+          if (!looksLikeImage) {
+            if (types.length === 0) {
+              void readWebClipboard().then((contents) => {
+                if (contents.files.length > 0) onPasteFiles(contents.files);
+              });
+            }
+            return;
+          }
+          e.preventDefault();
+          void readWebClipboard().then((contents) => {
+            if (contents.files.length > 0) onPasteFiles(contents.files);
+          });
         }}
         placeholder={placeholder}
         disabled={disabled}

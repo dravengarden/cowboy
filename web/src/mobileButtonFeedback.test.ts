@@ -11,6 +11,12 @@ const themeSource = await Deno.readTextFile(
 const appSource = await Deno.readTextFile(
   new URL("./App.tsx", import.meta.url),
 );
+const composerSource = await Deno.readTextFile(
+  new URL("./Composer.tsx", import.meta.url),
+);
+const indexSource = await Deno.readTextFile(
+  new URL("../index.html", import.meta.url),
+);
 
 Deno.test("touch icon buttons release synthetic hover and focus paint", () => {
   assertEquals(
@@ -45,6 +51,21 @@ Deno.test("touch icon buttons release synthetic hover and focus paint", () => {
     ),
     true,
   );
+  assertEquals(themeSource.includes("MuiButtonBase:"), true);
+  assertEquals(themeSource.includes("disableRipple: prefersCoarsePointer()"), true);
+  assertEquals(themeSource.includes("disableTouchRipple: prefersCoarsePointer()"), true);
+  assertEquals(themeSource.includes("WebkitTapHighlightColor: \"transparent\""), true);
+});
+
+Deno.test("session sheet trigger releases synthetic hover like other navbar icons", () => {
+  assertEquals(
+    composerSource.includes(
+      "&[data-touch-activated='true']:hover, &[data-touch-activated='true'].Mui-focusVisible",
+    ),
+    true,
+  );
+  assertEquals(composerSource.includes("if (touchInput) event.currentTarget.blur()"), true);
+  assertEquals(indexSource.includes("-webkit-tap-highlight-color: transparent"), true);
 });
 
 Deno.test("coarse pointer includes a finger even when iOS later reports hover", () => {

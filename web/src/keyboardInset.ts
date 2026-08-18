@@ -1,10 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import {
   inferKeyboardOpen,
+  isAppleTouchDevice,
   isUnreliableVisualViewport,
   keyboardCoverOverlap,
   paintedLayoutHeight,
+  pwaKeyboardAccessoryOverlap,
+  publishedKeyboardInset,
+  shouldLearnKeyboardFreeBaseline,
 } from "./keyboardGeometry.ts";
+import { isMobileEditorFocusTransferPending } from "./composer/mobileComposerFocus";
 import { isNativeShell } from "./nativeShell";
 
 // Publish the on-screen keyboard's overlap of the layout viewport as the
@@ -55,7 +60,19 @@ export function useKeyboardInset(): void {
         doc.getElementById("root")?.clientHeight ?? 0,
       );
       if (isUnreliableVisualViewport(layoutHeight, vv.height)) return;
-      const overlap = keyboardCoverOverlap(layoutHeight, vv.height);
+      const nav = globalThis.navigator;
+      const overlap = publishedKeyboardInset(
+        keyboardCoverOverlap(layoutHeight, vv.height),
+        pwaKeyboardAccessoryOverlap({
+          nativeShell: false,
+          appleTouch: isAppleTouchDevice({
+            userAgent: nav?.userAgent,
+            platform: nav?.platform,
+            maxTouchPoints: nav?.maxTouchPoints,
+          }),
+          editableFocused: hasEditableFocus(doc),
+        }),
+      );
       // Only write on change — the focus poll below runs apply() every 300ms, and
       // a same-value setProperty would still be a needless style touch each tick.
       if (overlap !== lastInset) {
@@ -167,16 +184,26 @@ export function useKeyboardOpen(): boolean {
         visualHeight,
         baselineHeight: baselineHeightRef.current,
         editableFocused,
-      });
+      }) || isMobileEditorFocusTransferPending();
       setOpen(next);
-      // Never learn the shrunken keyboard viewport as the baseline. Once focus
-      // is gone, accepting the settled height lets rotation and split-screen
-      // resizing establish a new keyboard-free baseline.
-      if (!editableFocused && !next) baselineHeightRef.current = visibleHeight;
-      else baselineHeightRef.current = Math.max(
-        baselineHeightRef.current,
-        visibleHeight,
-      );
+      // Never learn the shrunken keyboard viewport as the baseline. Expand →
+      // collapse remounts the editor and drops focus for a frame; treating
+      // that keyboard-sized height as the new rest height makes later
+      // focused frames look like "keyboard closed". Rotation reseeds below.
+      if (
+        !editableFocused && !next &&
+        shouldLearnKeyboardFreeBaseline(
+          baselineHeightRef.current,
+          visibleHeight,
+        )
+      ) {
+        baselineHeightRef.current = visibleHeight;
+      } else if (next || editableFocused) {
+        baselineHeightRef.current = Math.max(
+          baselineHeightRef.current,
+          visibleHeight,
+        );
+      }
     };
     const applyNow = (): void => {
       if (raf === 0) raf = globalThis.requestAnimationFrame(apply);
@@ -207,9 +234,14 @@ export function useKeyboardOpen(): boolean {
       schedule();
       stopPoll();
     };
+    const onOrientation = (): void => {
+      baselineHeightRef.current = 0;
+      schedule();
+    };
     vv.addEventListener("resize", schedule);
     vv.addEventListener("scroll", applyNow);
     globalThis.addEventListener("resize", schedule);
+    globalThis.addEventListener("orientationchange", onOrientation);
     doc.addEventListener("focusin", onFocusIn);
     doc.addEventListener("focusout", onFocusOut);
     schedule();
@@ -218,6 +250,7 @@ export function useKeyboardOpen(): boolean {
       vv.removeEventListener("resize", schedule);
       vv.removeEventListener("scroll", applyNow);
       globalThis.removeEventListener("resize", schedule);
+      globalThis.removeEventListener("orientationchange", onOrientation);
       doc.removeEventListener("focusin", onFocusIn);
       doc.removeEventListener("focusout", onFocusOut);
       clearTimers();

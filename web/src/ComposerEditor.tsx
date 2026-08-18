@@ -31,7 +31,7 @@ import {
 import { cmTheme } from "./cmTheme";
 import { livePreviewExtensions } from "./composerExtensions";
 import { hasDraftMod, hasSendMod } from "./platform";
-import { isImeKeyEvent } from "./imeKey";
+import { isImeInputType, isImeKeyEvent } from "./imeKey";
 import {
   deleteEmptyCodeFenceBackward,
   deleteTokenBackward,
@@ -893,6 +893,7 @@ export const ComposerEditor = forwardRef<
       Prec.high(
         EditorView.domEventHandlers({
           beforeinput: (e, view): boolean => {
+            if (isImeInputType(e.inputType)) return false;
             if (
               touchInput &&
               (e.inputType === "insertLineBreak" ||

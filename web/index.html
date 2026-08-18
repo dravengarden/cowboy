@@ -38,6 +38,11 @@
         width: 100%;
         height: 100%;
         overscroll-behavior: none;
+        /* iOS Safari / WKWebView default tap wash. The native loader already
+           killed this; the remote app page did not, so tapping Session
+           settings left a grey highlight on the bottom chrome and on the
+           sheet dismiss that mounts under the same finger. */
+        -webkit-tap-highlight-color: transparent;
       }
       /* Page scroll is locked (html overflow:hidden); all real scrolling lives
          inside the transcript pane. NORMAL FLOW — NOT a position:fixed body: the

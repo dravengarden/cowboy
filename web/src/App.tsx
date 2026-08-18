@@ -1632,6 +1632,7 @@ function NewSessionDialog({
     return (
         <Sheet
             forceSheet={navbarAtBottom}
+            cover={navbarAtBottom}
             open={open}
             onClose={creating ? (): void => {} : onClose}
             title="New session"

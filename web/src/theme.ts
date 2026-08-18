@@ -139,6 +139,42 @@ export function useThemeMode(): ThemeControls {
           fontSize: OS_BASE_FONT_SIZE,
         },
         components: {
+          // iOS Safari and the WKWebView shell both paint the UA tap wash on
+          // the element under the finger. Opening Session settings mounts the
+          // sheet dismiss under that same point, so the wash lands on the
+          // bottom chrome / close island and stays there. Kill it at the
+          // document root before any control can inherit the default grey.
+          MuiCssBaseline: {
+            styleOverrides: {
+              html: { WebkitTapHighlightColor: "transparent" },
+              body: { WebkitTapHighlightColor: "transparent" },
+              "#root": { WebkitTapHighlightColor: "transparent" },
+            },
+          },
+          // Session-sheet dismiss is a ButtonBase, not an IconButton. Cover the
+          // whole family so a leftover hover/focus/ripple cannot latch on the
+          // close island after the Tune button opens the sheet.
+          MuiButtonBase: {
+            defaultProps: {
+              disableRipple: prefersCoarsePointer(),
+              disableTouchRipple: prefersCoarsePointer(),
+            },
+            styleOverrides: {
+              root: {
+                WebkitTapHighlightColor: "transparent",
+                [`html.${COARSE_POINTER_ROOT_CLASS} &`]: {
+                  "&:hover, &.Mui-focusVisible": {
+                    backgroundColor: "transparent",
+                  },
+                },
+                "@media (hover: none), (pointer: coarse), (any-pointer: coarse)": {
+                  "&:hover, &.Mui-focusVisible": {
+                    backgroundColor: "transparent",
+                  },
+                },
+              },
+            },
+          },
           // Touch ergonomics (ui.md §7): on a coarse pointer no interactive
           // control drops below the ~40px tap-target floor, even when size="small"
           // is asked for desktop density — "mobile never small". Desktop keeps it.

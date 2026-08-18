@@ -426,20 +426,10 @@ Deno.test("native image and text paste action is shared by every mobile editor s
     true,
   );
   assertEquals(formatActionsSource.includes("pasteTap.onPointerUp"), true);
+  assertEquals(formatActionsSource.includes("createClipboardPort"), true);
+  assertEquals(formatActionsSource.includes("clipboardPort.read()"), true);
   assertEquals(
-    formatActionsSource.includes("readNativeClipboardImageOutcome"),
-    true,
-  );
-  assertEquals(
-    formatActionsSource.includes("return outcome.files"),
-    true,
-  );
-  assertEquals(
-    formatActionsSource.includes("readNativeClipboardText"),
-    true,
-  );
-  assertEquals(
-    formatActionsSource.includes("insertText(text, selection)"),
+    formatActionsSource.includes("insertText(contents.text, selection)"),
     true,
   );
   assertEquals(
@@ -450,7 +440,7 @@ Deno.test("native image and text paste action is shared by every mobile editor s
   );
   assertEquals(
     formatActionsSource.includes(
-      "(reading && availability.hasImages)",
+      "(reading && availability.stageImagesFirst)",
     ),
     true,
   );

@@ -12,19 +12,19 @@ import type {
 } from "./composer/PlatformComposerEditor";
 import type { NativeClipboardImagePasteRequest } from "./composer/nativeClipboardImagePaste";
 import {
+  type ClipboardAvailability,
+  createClipboardPort,
+} from "./composer/clipboardPort";
+import {
   COMPOSER_COMMANDS_BY_ID,
   type ComposerCommand,
 } from "./composerCommands";
 import { MobileComposerAccessoryButton } from "./MobileComposerAccessoryDock";
-import {
-  nativeClipboardImageStatus,
-  nativeClipboardPasteAvailable,
-  readNativeClipboardImageOutcome,
-  readNativeClipboardText,
-} from "./nativeShell";
 import { haptic } from "./haptic";
 import { flushObservability, reportClientLog } from "./observability";
 import { useReliableTouchTap } from "./useReliableTouchTap";
+
+const clipboardPort = createClipboardPort();
 
 interface MobileComposerFormatActionsProps {
   commandIds: readonly string[];
@@ -43,14 +43,11 @@ function MobileClipboardPasteButton({
   MobileComposerFormatActionsProps,
   "editorRef" | "onPasteImages"
 >): React.JSX.Element {
-  const [availability, setAvailability] = useState({
-    hasImages: false,
-    hasText: false,
-    canReadText: false,
-    textAvailabilityKnown: true,
+  const [availability, setAvailability] = useState<ClipboardAvailability>({
+    surface: clipboardPort.surface,
+    pasteAvailable: clipboardPort.surface === "web",
+    stageImagesFirst: false,
     imageCount: 0,
-    changeCount: -1,
-    supported: false,
   });
   const [reading, setReading] = useState(false);
   const refreshGeneration = useRef(0);
@@ -59,7 +56,7 @@ function MobileClipboardPasteButton({
 
   const refresh = useCallback((): void => {
     const generation = ++refreshGeneration.current;
-    void nativeClipboardImageStatus().then((status) => {
+    void clipboardPort.status().then((status) => {
       if (generation !== refreshGeneration.current) return;
       setAvailability(status);
     });
@@ -75,15 +72,15 @@ function MobileClipboardPasteButton({
     globalThis.addEventListener("cowboy:native-resume", refresh);
     globalThis.addEventListener("cowboy:clipboard-change", refresh);
     globalThis.document?.addEventListener("visibilitychange", refreshVisible);
-    // UIPasteboard change notifications are process-local on some iOS releases:
-    // copying content in another app, an IME clipboard shelf, or the screenshot
-    // UI may not emit any event when Cowboy is already foregrounded. Poll only
-    // the metadata bridge while this action is mounted and visible; text/image
-    // payloads remain user-gesture gated in their explicit read functions.
-    const poll = globalThis.setInterval(refreshVisible, 1000);
+    // Native can see pasteboard metadata without reading payloads. Web
+    // cannot; polling would only burn the user-gesture budget. Payloads
+    // stay gated behind the explicit tap on both surfaces.
+    const poll = clipboardPort.surface === "native"
+      ? globalThis.setInterval(refreshVisible, 1000)
+      : 0;
     return (): void => {
       refreshGeneration.current += 1;
-      globalThis.clearInterval(poll);
+      if (poll !== 0) globalThis.clearInterval(poll);
       globalThis.removeEventListener("focus", refresh);
       globalThis.removeEventListener("pageshow", refresh);
       globalThis.removeEventListener("cowboy:native-resume", refresh);
@@ -110,13 +107,12 @@ function MobileClipboardPasteButton({
       void flushObservability();
       return;
     }
-    const pasteImages = availability.hasImages;
-    if (!pasteImages && !nativeClipboardPasteAvailable(availability)) {
+    if (!availability.pasteAvailable) {
       reportClientLog(
         "warn",
         "mobile_paste_blocked",
         "Mobile Paste was unavailable at activation",
-        { reason: "unavailable" },
+        { reason: "unavailable", surface: availability.surface },
       );
       void flushObservability();
       return;
@@ -126,10 +122,9 @@ function MobileClipboardPasteButton({
       "mobile_paste_started",
       "Mobile Paste activation started",
       {
-        path: pasteImages ? "image" : "text",
-        status_supported: availability.supported,
+        path: availability.stageImagesFirst ? "image" : "auto",
+        surface: availability.surface,
         advertised_images: availability.imageCount,
-        has_text: availability.hasText,
         selection_span: Math.abs(selection.anchor - selection.head),
       },
     );
@@ -137,22 +132,17 @@ function MobileClipboardPasteButton({
     haptic();
     readingRef.current = true;
     try {
-      if (pasteImages) {
-        let outcomeState = "not_started";
-        let payloadCount = 0;
+      if (availability.stageImagesFirst) {
         let fileCount = 0;
-        // The callback stages inline placeholders and performs the native
-        // textarea -> CM6 focus handoff synchronously. Only then may it invoke
-        // the privacy-gated `read` thunk and await provider bytes.
+        // Native image paste must stage placeholders before the privacy-gated
+        // read so textarea -> CM6 stays inside the originating UIKit tap.
         const completion = onPasteImages({
           expectedCount: Math.max(1, availability.imageCount),
           selection,
           read: async (): Promise<File[]> => {
-            const outcome = await readNativeClipboardImageOutcome();
-            outcomeState = outcome.state;
-            payloadCount = outcome.payloadCount;
-            fileCount = outcome.files.length;
-            return outcome.files;
+            const contents = await clipboardPort.read();
+            fileCount = contents.files.length;
+            return contents.files;
           },
         });
         // Staging must happen before this state update can disable a button that
@@ -167,36 +157,53 @@ function MobileClipboardPasteButton({
             : "Mobile image Paste returned no usable image",
           {
             path: "image",
-            result: outcomeState,
+            surface: availability.surface,
             advertised_images: availability.imageCount,
-            payload_count: payloadCount,
             file_count: fileCount,
           },
         );
       } else {
-        // Unlike image insertion, text does not replace the editor. If WebKit
-        // projected accessibility focus onto the button, restore the captured
-        // editor range synchronously while pointerup still owns user activation.
+        // Web, and native text-only: read first, then insert. Images discovered
+        // on the tap still go through the shared staging host.
         const editor = editorRef.current;
         if (!editor) return;
         editor.focusSelection(selection);
         setReading(true);
-        const text = await readNativeClipboardText();
-        // A legacy shell cannot expose metadata for an empty clipboard. Never
-        // let its explicit fallback tap replace a selection with an empty read.
-        if (text.length > 0) editorRef.current?.insertText(text, selection);
-        reportClientLog(
-          text.length > 0 ? "info" : "warn",
-          "mobile_paste_finished",
-          text.length > 0
-            ? "Mobile text Paste completed"
-            : "Mobile text Paste returned no text",
-          {
-            path: "text",
-            result: text.length > 0 ? "ok" : "empty",
-            text_length: text.length,
-          },
-        );
+        const contents = await clipboardPort.read();
+        if (contents.files.length > 0) {
+          await onPasteImages({
+            expectedCount: contents.files.length,
+            selection,
+            read: (): Promise<File[]> => Promise.resolve(contents.files),
+          });
+          reportClientLog(
+            "info",
+            "mobile_paste_finished",
+            "Mobile image Paste completed",
+            {
+              path: "image",
+              surface: availability.surface,
+              file_count: contents.files.length,
+            },
+          );
+        } else {
+          if (contents.text.length > 0) {
+            editorRef.current?.insertText(contents.text, selection);
+          }
+          reportClientLog(
+            contents.text.length > 0 ? "info" : "warn",
+            "mobile_paste_finished",
+            contents.text.length > 0
+              ? "Mobile text Paste completed"
+              : "Mobile text Paste returned no text",
+            {
+              path: "text",
+              surface: availability.surface,
+              result: contents.text.length > 0 ? "ok" : "empty",
+              text_length: contents.text.length,
+            },
+          );
+        }
       }
     } finally {
       readingRef.current = false;
@@ -209,14 +216,14 @@ function MobileClipboardPasteButton({
   const pasteTap = useReliableTouchTap<HTMLButtonElement>(() => {
     void paste();
   });
-  const pasteAvailable = nativeClipboardPasteAvailable(availability);
+  const pasteAvailable = availability.pasteAvailable;
 
   return (
     <MobileComposerAccessoryButton
       title="Paste"
       disabled={
         !pasteAvailable ||
-        (reading && availability.hasImages)
+        (reading && availability.stageImagesFirst)
       }
       color={pasteAvailable ? "primary" : "default"}
       onPointerDown={(event): void => {

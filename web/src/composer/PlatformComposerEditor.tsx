@@ -26,6 +26,7 @@ import {
 } from "./desktopVimMountPolicy";
 import {
   composerEditorMountSeed,
+  holdTouchEditorKind,
   nativeDemotionSelection,
   nativePromotionSelection,
   shouldFocusDemotedEditor,
@@ -68,14 +69,12 @@ export const PlatformComposerEditor = forwardRef<
 ): React.JSX.Element {
   const surface = useSurfaceProfile();
   const touchValue = nativeValue ?? props.value;
-  const nativeTouch = shouldUseNativeTouchEditor(
-    surface.kind,
-    touchValue,
-  );
   // This ref describes the LAST COMMITTED editor, not the last render attempt.
   // React can replay a render before commit; mutating it during render consumed
   // the one-shot native -> CM6 transition and reset image-paste selection to 0.
-  const committedNativeTouchRef = useRef(nativeTouch);
+  const committedNativeTouchRef = useRef(
+    shouldUseNativeTouchEditor(surface.kind, touchValue),
+  );
   const promotionCaretRef = useRef<number | null>(null);
   const demotionSelectionRef = useRef<ComposerEditorSelection | null>(null);
   const demotionFocusPendingRef = useRef(false);
@@ -95,6 +94,30 @@ export const PlatformComposerEditor = forwardRef<
   surfaceKindRef.current = surface.kind;
   const onChangeRef = useRef(props.onChange);
   onChangeRef.current = props.onChange;
+  // Native Pinyin candidate confirmation is still one composition. Swapping
+  // the textarea for CM6 (or back) in that window wipes marked text — the
+  // candidate tap looks like it did nothing and composition dies. Hold the
+  // committed host until compositionend; Obsidian never remounts mid-IME.
+  const composingRef = useRef(false);
+  useEffect(() => {
+    const start = (): void => {
+      composingRef.current = true;
+    };
+    const end = (): void => {
+      composingRef.current = false;
+    };
+    document.addEventListener("compositionstart", start, true);
+    document.addEventListener("compositionend", end, true);
+    return (): void => {
+      document.removeEventListener("compositionstart", start, true);
+      document.removeEventListener("compositionend", end, true);
+    };
+  }, []);
+  const nativeTouch = holdTouchEditorKind(
+    committedNativeTouchRef.current,
+    composingRef.current,
+    shouldUseNativeTouchEditor(surface.kind, touchValue),
+  );
   // The iOS paste-permission alert temporarily owns focus. When the accepted
   // paste event returns, `document.activeElement` can therefore be BODY even
   // though UIKit still considers this one native paste transaction. Preserve
@@ -102,7 +125,11 @@ export const PlatformComposerEditor = forwardRef<
   // the replacement inherits the keyboard in the same React commit.
   const pastePromotionPendingRef = useRef(false);
   const handleChange = useCallback((next: string): void => {
-    const nextNative = shouldUseNativeTouchEditor(surfaceKindRef.current, next);
+    const nextNative = holdTouchEditorKind(
+      committedNativeTouchRef.current,
+      composingRef.current,
+      shouldUseNativeTouchEditor(surfaceKindRef.current, next),
+    );
     const demoting = !committedNativeTouchRef.current && nextNative;
     const promoting = committedNativeTouchRef.current && !nextNative;
     if (demoting) {
