@@ -11,6 +11,14 @@ control plane, while the web files remain an independently replaceable release.
 |---|---|
 | `GET /healthz` | readiness → `"ok"`, or 503 after persistence loss / exhausted retries |
 | `GET /version` | `{ version }` = SHA-256 of `index.html`, for build-id / stale-bundle detection |
+| `GET /api/auth/status` | public `{ registration: { enabled, mode, accepts_registration }, me? }` — no lan/exposure enum |
+| `POST /api/auth/register` | policy-gated signup; `Set-Cookie: cowboy_user`; 403 when closed |
+| `POST /api/auth/login` | product login; dummy-verifies unknown users; `cowboy_user` cookie |
+| `POST /api/auth/logout` | best-effort clear cookie + delete `user_sessions` row |
+| `GET /api/auth/me` | current product principal |
+| `GET/POST /api/admin/users` | admin operator+ list/create product users (default grant `operator`) |
+| `POST /api/admin/users/{id}/disable` | admin operator+ disable + revoke sessions/tokens |
+| `POST /api/admin/users/{id}/password` | admin owner set password |
 | `GET /api/metrics` | storage/session/RSS plus persistence pending, dropped, and failed-batch counters |
 | `GET /metrics` | Prometheus controller and runtime metrics |
 | `GET /api/usage` | Cached Codex account limits, Claude Agent SDK plan-limit events, and the latest live ACP session usage. Gemini account quota remains absent until its official ACP mode exposes it; Cowboy never reuses provider OAuth credentials against private endpoints. |

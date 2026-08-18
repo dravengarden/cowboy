@@ -1178,6 +1178,35 @@ impl Store {
         dispatch_storage!(self, user_by_username(username))
     }
 
+    /// List product users ordered by username.
+    ///
+    /// # Errors
+    /// Returns when the query fails.
+    pub async fn list_users(&self) -> Result<Vec<ProductUser>> {
+        dispatch_storage!(self, list_users())
+    }
+
+    /// Replace the stored password hash.
+    ///
+    /// # Errors
+    /// Returns when the user is missing or the update fails.
+    pub async fn update_user_password(
+        &self,
+        id: &str,
+        password_algo: &str,
+        password_hash: &str,
+    ) -> Result<()> {
+        dispatch_storage!(self, update_user_password(id, password_algo, password_hash))
+    }
+
+    /// Revoke every API token for a product user.
+    ///
+    /// # Errors
+    /// Returns when the update fails.
+    pub async fn revoke_user_api_tokens_for_user(&self, user_id: &str) -> Result<u64> {
+        dispatch_storage!(self, revoke_user_api_tokens_for_user(user_id))
+    }
+
     /// Set or clear `disabled_at` and bump `updated_at`.
     ///
     /// # Errors
@@ -2380,6 +2409,50 @@ impl PostgresStorage {
         .await
         .with_context(|| format!("SELECT user by username {username}"))?;
         Ok(row.map(ProductUser::from_pg))
+    }
+
+    pub async fn list_users(&self) -> Result<Vec<ProductUser>> {
+        let rows = sqlx::query_as::<_, ProductUserRow>(
+            "SELECT id, username, password_algo, password_hash, created_at, updated_at, \
+             disabled_at FROM users ORDER BY username",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("SELECT users")?;
+        Ok(rows.into_iter().map(ProductUser::from_pg).collect())
+    }
+
+    pub async fn update_user_password(
+        &self,
+        id: &str,
+        password_algo: &str,
+        password_hash: &str,
+    ) -> Result<()> {
+        anyhow::ensure!(!password_hash.is_empty(), "password hash cannot be empty");
+        let result = sqlx::query(
+            "UPDATE users SET password_algo = $2, password_hash = $3, updated_at = now() \
+             WHERE id = $1",
+        )
+        .bind(id)
+        .bind(password_algo)
+        .bind(password_hash)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPDATE user password {id}"))?;
+        anyhow::ensure!(result.rows_affected() == 1, "user {id} not found");
+        Ok(())
+    }
+
+    pub async fn revoke_user_api_tokens_for_user(&self, user_id: &str) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE user_api_tokens SET revoked_at = now() \
+             WHERE user_id = $1 AND revoked_at IS NULL",
+        )
+        .bind(user_id)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("REVOKE user API tokens for {user_id}"))?;
+        Ok(result.rows_affected())
     }
 
     pub async fn set_user_disabled_at(&self, id: &str, disabled_at_ms: Option<i64>) -> Result<()> {
@@ -5792,6 +5865,7 @@ mod storage_contract_tests {
             store.user_by_id(&user.id).await?.map(|row| row.username),
             Some("draven".to_owned())
         );
+        assert_eq!(store.list_users().await?.len(), 1);
         let duplicate = ProductUser {
             id: "fedcba9876543210fedcba9876543210".to_owned(),
             username: "DRAVEN".to_owned(),
@@ -5853,6 +5927,17 @@ mod storage_contract_tests {
         assert_eq!(restored_token.name, "zed");
         assert_eq!(restored_token.token_prefix, "cow_abcd");
         assert_eq!(restored_token.expires_at_ms, token.expires_at_ms);
+        assert_eq!(store.revoke_user_api_tokens_for_user(&user.id).await?, 1);
+        store
+            .update_user_password(&user.id, "argon2id", "replacement-hash")
+            .await?;
+        assert_eq!(
+            store
+                .user_by_id(&user.id)
+                .await?
+                .map(|row| row.password_hash),
+            Some("replacement-hash".to_owned())
+        );
 
         store
             .set_user_disabled_at(&user.id, Some(created_at_ms + 1))

@@ -2395,6 +2395,52 @@ impl SqliteStorage {
         Ok(row.map(ProductUser::from))
     }
 
+    pub(super) async fn list_users(&self) -> Result<Vec<ProductUser>> {
+        let rows = sqlx::query_as::<_, SqliteProductUserRow>(
+            "SELECT id, username, password_algo, password_hash, created_at_ms, updated_at_ms, \
+             disabled_at_ms FROM users ORDER BY username",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("SELECT SQLite users")?;
+        Ok(rows.into_iter().map(ProductUser::from).collect())
+    }
+
+    pub(super) async fn update_user_password(
+        &self,
+        id: &str,
+        password_algo: &str,
+        password_hash: &str,
+    ) -> Result<()> {
+        anyhow::ensure!(!password_hash.is_empty(), "password hash cannot be empty");
+        let result = sqlx::query(
+            "UPDATE users SET password_algo = ?2, password_hash = ?3, updated_at_ms = ?4 \
+             WHERE id = ?1",
+        )
+        .bind(id)
+        .bind(password_algo)
+        .bind(password_hash)
+        .bind(now_ms())
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPDATE SQLite user password {id}"))?;
+        anyhow::ensure!(result.rows_affected() == 1, "user {id} not found");
+        Ok(())
+    }
+
+    pub(super) async fn revoke_user_api_tokens_for_user(&self, user_id: &str) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE user_api_tokens SET revoked_at_ms = ?2 \
+             WHERE user_id = ?1 AND revoked_at_ms IS NULL",
+        )
+        .bind(user_id)
+        .bind(now_ms())
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("REVOKE SQLite user API tokens for {user_id}"))?;
+        Ok(result.rows_affected())
+    }
+
     pub(super) async fn set_user_disabled_at(
         &self,
         id: &str,

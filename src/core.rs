@@ -2386,6 +2386,50 @@ impl Hub {
         self.broadcast_sessions();
     }
 
+    /// Run `f` while holding the internal settings mutex. Callers must not await.
+    pub fn with_settings_mut<R>(
+        &self,
+        f: impl FnOnce(&mut HashMap<String, serde_json::Value>) -> R,
+    ) -> R {
+        let mut settings = self.inner.settings.lock();
+        f(&mut settings)
+    }
+
+    /// Insert one setting while the caller holds the settings mutex.
+    pub fn commit_setting_locked(
+        settings: &mut HashMap<String, serde_json::Value>,
+        key: String,
+        value: serde_json::Value,
+    ) -> HashMap<String, serde_json::Value> {
+        settings.insert(key, value);
+        settings.clone()
+    }
+
+    /// Persist an internal setting after the settings lock has been dropped.
+    pub fn publish_setting(
+        &self,
+        key: String,
+        value: serde_json::Value,
+        _snapshot: HashMap<String, serde_json::Value>,
+    ) {
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::PutSetting { key, value });
+        }
+        // Settings is a compatibility tombstone. Never expose internal auth or
+        // admin state to product clients.
+        let _ = self.inner.tx.send(Outbound::Settings {
+            settings: HashMap::new(),
+        });
+    }
+
+    /// Persist one internal setting and publish the empty compatibility snapshot.
+    pub fn set_setting(&self, key: String, value: serde_json::Value) {
+        let snapshot = self.with_settings_mut(|settings| {
+            Self::commit_setting_locked(settings, key.clone(), value.clone())
+        });
+        self.publish_setting(key, value, snapshot);
+    }
+
     /// Manually PAUSE / RESUME the queue drain (the user's ⏸ toggle). Pausing
     /// holds the auto-drain (`drain_head` returns early on `paused`) WITHOUT
     /// touching the running turn — it finishes normally; only the next queued

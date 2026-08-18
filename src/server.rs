@@ -12,6 +12,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Read as _;
+use std::net::SocketAddr;
 use std::path::{Component, Path as FsPath, PathBuf};
 use std::sync::Arc;
 
@@ -20,7 +21,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::extract::DefaultBodyLimit;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Json, Path, Query, State};
+use axum::extract::{ConnectInfo, Json, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post, put};
@@ -1594,12 +1595,641 @@ fn build_prompt_blocks(text: &str, content: &[serde_json::Value]) -> Option<Vec<
     }
 }
 
+#[derive(Clone)]
+struct ProductAuthState {
+    hub: Hub,
+    store: Option<Store>,
+    rate_limits: Arc<crate::product_auth::AuthRateLimiter>,
+    public_origins: Arc<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RegisterRequest {
+    account: String,
+    password: String,
+    token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LoginRequest {
+    account: String,
+    password: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminCreateUserRequest {
+    account: String,
+    password: String,
+    role: Option<crate::admin::AdminRole>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminSetPasswordRequest {
+    password: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ProductMe {
+    account: String,
+    role: crate::admin::AdminRole,
+}
+
+fn product_auth_router(state: ProductAuthState) -> Router {
+    Router::new()
+        .route("/api/auth/status", get(api_auth_status))
+        .route("/api/auth/register", post(api_auth_register))
+        .route("/api/auth/login", post(api_auth_login))
+        .route("/api/auth/logout", post(api_auth_logout))
+        .route("/api/auth/me", get(api_auth_me))
+        .route(
+            "/api/admin/users",
+            get(api_admin_users).post(api_admin_create_user),
+        )
+        .route(
+            "/api/admin/users/{id}/disable",
+            post(api_admin_disable_user),
+        )
+        .route(
+            "/api/admin/users/{id}/password",
+            post(api_admin_set_password),
+        )
+        .with_state(state)
+}
+
+fn registration_policy(hub: &Hub) -> crate::admin::RegistrationPolicy {
+    crate::admin::RegistrationPolicy::from_setting(
+        hub.settings_snapshot()
+            .get(crate::admin::REGISTRATION_SETTING),
+    )
+}
+
+fn permission_policy(hub: &Hub) -> crate::admin::PermissionPolicy {
+    crate::admin::PermissionPolicy::from_setting(
+        hub.settings_snapshot()
+            .get(crate::admin::PERMISSIONS_SETTING),
+    )
+}
+
+fn admin_identities(hub: &Hub) -> crate::admin::AdminIdentities {
+    crate::admin::AdminIdentities::from_setting(
+        hub.settings_snapshot()
+            .get(crate::admin::ADMIN_IDENTITIES_SETTING),
+    )
+}
+
+fn auth_now_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+
+fn peer_addr(ConnectInfo(peer): ConnectInfo<SocketAddr>) -> SocketAddr {
+    peer
+}
+
+fn reject_bad_origin(
+    headers: &HeaderMap,
+    peer: SocketAddr,
+    public_origins: &[String],
+) -> Option<Response> {
+    if crate::product_auth::origin_allowed(headers, peer, public_origins) {
+        None
+    } else {
+        Some(StatusCode::FORBIDDEN.into_response())
+    }
+}
+
+fn durable_store(store: &Option<Store>) -> Option<&Store> {
+    store.as_ref()
+}
+
+fn missing_store() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "product accounts require a durable store",
+    )
+        .into_response()
+}
+
+fn product_me(hub: &Hub, username: &str) -> ProductMe {
+    ProductMe {
+        account: username.to_owned(),
+        role: permission_policy(hub).role_for(username),
+    }
+}
+
+async fn apply_rate_limit(state: &ProductAuthState, username: &str, ip: &str) {
+    if let Some(delay) = state.rate_limits.delay(username, ip) {
+        tokio::time::sleep(delay).await;
+    }
+}
+
+async fn product_user_from_cookie(
+    state: &ProductAuthState,
+    headers: &HeaderMap,
+) -> Option<crate::store::ProductUser> {
+    let store = state.store.as_ref()?;
+    let token = crate::product_auth::user_cookie_token(headers)?;
+    let session = store
+        .user_session_by_token_hash(&crate::admin::hex_sha256(token.as_bytes()))
+        .await
+        .ok()
+        .flatten()?;
+    if session.expires_at_ms <= auth_now_ms() {
+        return None;
+    }
+    let user = store.user_by_id(&session.user_id).await.ok().flatten()?;
+    user.disabled_at_ms.is_none().then_some(user)
+}
+
+fn require_admin(
+    state: &ProductAuthState,
+    headers: &HeaderMap,
+    minimum: crate::admin::AdminRole,
+) -> Result<crate::admin::AdminPrincipal, StatusCode> {
+    let Some(token) = crate::admin::cookie_token(headers) else {
+        return Err(StatusCode::UNAUTHORIZED);
+    };
+    let Some(principal) = admin_identities(&state.hub).principal(&token, auth_now_ms()) else {
+        return Err(StatusCode::UNAUTHORIZED);
+    };
+    if principal.role.at_least(minimum) {
+        Ok(principal)
+    } else {
+        Err(StatusCode::FORBIDDEN)
+    }
+}
+
+async fn issue_product_session(
+    state: &ProductAuthState,
+    store: &Store,
+    user: &crate::store::ProductUser,
+    headers: &HeaderMap,
+) -> Response {
+    let token = match crate::product_auth::new_session_token() {
+        Ok(token) => token,
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+        }
+    };
+    let now = auth_now_ms();
+    if let Err(error) = store
+        .insert_user_session(&crate::store::ProductUserSession {
+            token_hash: crate::admin::hex_sha256(token.as_bytes()),
+            user_id: user.id.clone(),
+            created_at_ms: now,
+            expires_at_ms: now.saturating_add(crate::product_auth::USER_SESSION_TTL_MS),
+            last_seen_at_ms: now,
+            user_agent: headers
+                .get(header::USER_AGENT)
+                .and_then(|value| value.to_str().ok())
+                .map(ToOwned::to_owned),
+        })
+        .await
+    {
+        return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+    }
+    (
+        [(
+            header::SET_COOKIE,
+            crate::product_auth::session_cookie(
+                &token,
+                crate::product_auth::request_is_https(headers),
+            ),
+        )],
+        Json(product_me(&state.hub, &user.username)),
+    )
+        .into_response()
+}
+
+async fn hash_product_password(password: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || crate::product_auth::hash_password(&password))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
+}
+
+fn user_json(hub: &Hub, user: &crate::store::ProductUser) -> serde_json::Value {
+    serde_json::json!({
+        "id": user.id,
+        "username": user.username,
+        "created_at_ms": user.created_at_ms,
+        "updated_at_ms": user.updated_at_ms,
+        "disabled_at_ms": user.disabled_at_ms,
+        "role": permission_policy(hub).role_for(&user.username),
+    })
+}
+
+async fn api_auth_status(
+    State(state): State<ProductAuthState>,
+    headers: HeaderMap,
+) -> Json<serde_json::Value> {
+    let mut body = serde_json::json!({
+        "registration": registration_policy(&state.hub).public_status(),
+    });
+    if let Some(user) = product_user_from_cookie(&state, &headers).await {
+        body["me"] =
+            serde_json::to_value(product_me(&state.hub, &user.username)).unwrap_or_default();
+    }
+    Json(body)
+}
+
+async fn api_auth_register(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(request): Json<RegisterRequest>,
+) -> Response {
+    let peer = peer_addr(peer);
+    if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
+        return rejected;
+    }
+    let Some(store) = durable_store(&state.store).cloned() else {
+        return missing_store();
+    };
+    let username = match crate::product_auth::normalize_username(&request.account) {
+        Ok(username) => username,
+        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    };
+    if let Err(error) = crate::product_auth::ensure_password(&request.password, &username) {
+        return (StatusCode::BAD_REQUEST, error.to_string()).into_response();
+    }
+    let ip = crate::product_auth::client_ip(&headers, peer).to_string();
+    apply_rate_limit(&state, &username, &ip).await;
+    let mut preview = registration_policy(&state.hub);
+    if let Err(error) = crate::admin::consume_registration_token(
+        &mut preview,
+        request.token.as_deref(),
+        auth_now_ms(),
+    ) {
+        state.rate_limits.record_failure(&username, &ip);
+        tracing::info!(
+            username,
+            reg_mode = ?registration_policy(&state.hub).mode,
+            ok = false,
+            "product_register"
+        );
+        return (StatusCode::FORBIDDEN, error.to_string()).into_response();
+    }
+    let password_hash = match hash_product_password(request.password.clone()).await {
+        Ok(hash) => hash,
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, error).into_response();
+        }
+    };
+    let now = auth_now_ms();
+    let user = crate::store::ProductUser {
+        id: match crate::product_auth::new_user_id() {
+            Ok(id) => id,
+            Err(error) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+            }
+        },
+        username: username.clone(),
+        password_algo: crate::product_auth::PASSWORD_ALGO_ARGON2ID.to_owned(),
+        password_hash,
+        created_at_ms: now,
+        updated_at_ms: now,
+        disabled_at_ms: None,
+    };
+    if let Err(error) = store.insert_user(&user).await {
+        let message = error.to_string();
+        if message.contains("account already exists") {
+            state.rate_limits.record_failure(&username, &ip);
+            tracing::info!(username, ok = false, "product_register");
+            return (StatusCode::CONFLICT, "account already exists").into_response();
+        }
+        return (StatusCode::INTERNAL_SERVER_ERROR, message).into_response();
+    }
+    let consume = state.hub.with_settings_mut(|settings| {
+        let mut policy = crate::admin::RegistrationPolicy::from_setting(
+            settings.get(crate::admin::REGISTRATION_SETTING),
+        );
+        crate::admin::consume_registration_token(
+            &mut policy,
+            request.token.as_deref(),
+            auth_now_ms(),
+        )
+        .map(|()| {
+            if policy.mode == crate::admin::RegistrationMode::Open {
+                None
+            } else {
+                let value = serde_json::to_value(&policy).unwrap_or_else(|_| serde_json::json!({}));
+                let snapshot = Hub::commit_setting_locked(
+                    settings,
+                    crate::admin::REGISTRATION_SETTING.to_owned(),
+                    value.clone(),
+                );
+                Some((value, snapshot))
+            }
+        })
+    });
+    match consume {
+        Ok(Some((value, snapshot))) => {
+            state.hub.publish_setting(
+                crate::admin::REGISTRATION_SETTING.to_owned(),
+                value,
+                snapshot,
+            );
+        }
+        Ok(None) => {}
+        Err(error) => {
+            let _ = store.delete_user(&user.id).await;
+            state.rate_limits.record_failure(&username, &ip);
+            tracing::info!(username, ok = false, "product_register");
+            return (StatusCode::FORBIDDEN, error.to_string()).into_response();
+        }
+    }
+    state.rate_limits.reset(&username, &ip);
+    tracing::info!(
+        username,
+        reg_mode = ?registration_policy(&state.hub).mode,
+        ok = true,
+        "product_register"
+    );
+    issue_product_session(&state, &store, &user, &headers).await
+}
+
+async fn api_auth_login(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(request): Json<LoginRequest>,
+) -> Response {
+    let peer = peer_addr(peer);
+    if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
+        return rejected;
+    }
+    let Some(store) = durable_store(&state.store).cloned() else {
+        return missing_store();
+    };
+    let normalized = crate::product_auth::normalize_username(&request.account);
+    let rate_name = normalized
+        .as_ref()
+        .map_or("unknown", String::as_str)
+        .to_owned();
+    let ip = crate::product_auth::client_ip(&headers, peer).to_string();
+    apply_rate_limit(&state, &rate_name, &ip).await;
+    let user = match normalized {
+        Ok(username) => store.user_by_username(&username).await.ok().flatten(),
+        Err(_) => None,
+    };
+    let password = request.password.clone();
+    let verified = match user.as_ref() {
+        Some(user) => {
+            let hash = user.password_hash.clone();
+            tokio::task::spawn_blocking(move || {
+                crate::product_auth::verify_password(&password, &hash)
+            })
+            .await
+            .unwrap_or(false)
+        }
+        None => tokio::task::spawn_blocking(move || {
+            crate::product_auth::verify_unknown_user_password(&password)
+        })
+        .await
+        .unwrap_or(false),
+    };
+    let disabled = user
+        .as_ref()
+        .is_some_and(|user| user.disabled_at_ms.is_some());
+    if !verified || disabled || user.is_none() {
+        state.rate_limits.record_failure(&rate_name, &ip);
+        let reason = if disabled { "disabled" } else { "invalid" };
+        tracing::info!(username = rate_name, ok = false, reason, "product_login");
+        return (StatusCode::UNAUTHORIZED, "invalid credentials").into_response();
+    }
+    let user = user.expect("present after credential check");
+    state.rate_limits.reset(&rate_name, &ip);
+    tracing::info!(username = user.username, ok = true, "product_login");
+    issue_product_session(&state, &store, &user, &headers).await
+}
+
+async fn api_auth_logout(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    let peer = peer_addr(peer);
+    if crate::product_auth::user_cookie_token(&headers).is_some()
+        && let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins)
+    {
+        return rejected;
+    }
+    if let (Some(store), Some(token)) = (
+        state.store.as_ref(),
+        crate::product_auth::user_cookie_token(&headers),
+    ) && let Ok(Some(session)) = store
+        .user_session_by_token_hash(&crate::admin::hex_sha256(token.as_bytes()))
+        .await
+    {
+        let _ = store.delete_user_session(&session.token_hash).await;
+        tracing::info!(user_id = session.user_id, "product_logout");
+    }
+    (
+        [(
+            header::SET_COOKIE,
+            crate::product_auth::clear_session_cookie(crate::product_auth::request_is_https(
+                &headers,
+            )),
+        )],
+        Json(serde_json::json!({ "ok": true })),
+    )
+        .into_response()
+}
+
+async fn api_auth_me(State(state): State<ProductAuthState>, headers: HeaderMap) -> Response {
+    match product_user_from_cookie(&state, &headers).await {
+        Some(user) => Json(product_me(&state.hub, &user.username)).into_response(),
+        None => StatusCode::UNAUTHORIZED.into_response(),
+    }
+}
+
+async fn api_admin_users(State(state): State<ProductAuthState>, headers: HeaderMap) -> Response {
+    if let Err(status) = require_admin(&state, &headers, crate::admin::AdminRole::Operator) {
+        return status.into_response();
+    }
+    let Some(store) = durable_store(&state.store) else {
+        return missing_store();
+    };
+    match store.list_users().await {
+        Ok(users) => Json(serde_json::json!({
+            "users": users
+                .iter()
+                .map(|user| user_json(&state.hub, user))
+                .collect::<Vec<_>>(),
+        }))
+        .into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+async fn api_admin_create_user(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(request): Json<AdminCreateUserRequest>,
+) -> Response {
+    let peer = peer_addr(peer);
+    if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
+        return rejected;
+    }
+    let principal = match require_admin(&state, &headers, crate::admin::AdminRole::Operator) {
+        Ok(principal) => principal,
+        Err(status) => return status.into_response(),
+    };
+    let Some(store) = durable_store(&state.store).cloned() else {
+        return missing_store();
+    };
+    let username = match crate::product_auth::normalize_username(&request.account) {
+        Ok(username) => username,
+        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    };
+    if let Err(error) = crate::product_auth::ensure_password(&request.password, &username) {
+        return (StatusCode::BAD_REQUEST, error.to_string()).into_response();
+    }
+    let role = request.role.unwrap_or(crate::admin::AdminRole::Operator);
+    if role == crate::admin::AdminRole::Owner && principal.role != crate::admin::AdminRole::Owner {
+        return (StatusCode::FORBIDDEN, "only an admin owner may grant owner").into_response();
+    }
+    let password_hash = match hash_product_password(request.password).await {
+        Ok(hash) => hash,
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, error).into_response();
+        }
+    };
+    let now = auth_now_ms();
+    let user = crate::store::ProductUser {
+        id: match crate::product_auth::new_user_id() {
+            Ok(id) => id,
+            Err(error) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+            }
+        },
+        username: username.clone(),
+        password_algo: crate::product_auth::PASSWORD_ALGO_ARGON2ID.to_owned(),
+        password_hash,
+        created_at_ms: now,
+        updated_at_ms: now,
+        disabled_at_ms: None,
+    };
+    if let Err(error) = store.insert_user(&user).await {
+        let message = error.to_string();
+        if message.contains("account already exists") {
+            return (StatusCode::CONFLICT, "account already exists").into_response();
+        }
+        return (StatusCode::INTERNAL_SERVER_ERROR, message).into_response();
+    }
+    let (value, snapshot) = state.hub.with_settings_mut(|settings| {
+        let mut policy = crate::admin::PermissionPolicy::from_setting(
+            settings.get(crate::admin::PERMISSIONS_SETTING),
+        );
+        policy.upsert_grant(&username, role);
+        let value = serde_json::to_value(&policy).unwrap_or_else(|_| serde_json::json!({}));
+        let snapshot = Hub::commit_setting_locked(
+            settings,
+            crate::admin::PERMISSIONS_SETTING.to_owned(),
+            value.clone(),
+        );
+        (value, snapshot)
+    });
+    state.hub.publish_setting(
+        crate::admin::PERMISSIONS_SETTING.to_owned(),
+        value,
+        snapshot,
+    );
+    (StatusCode::CREATED, Json(user_json(&state.hub, &user))).into_response()
+}
+
+async fn api_admin_disable_user(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let peer = peer_addr(peer);
+    if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
+        return rejected;
+    }
+    if let Err(status) = require_admin(&state, &headers, crate::admin::AdminRole::Operator) {
+        return status.into_response();
+    }
+    let Some(store) = durable_store(&state.store) else {
+        return missing_store();
+    };
+    let now = auth_now_ms();
+    if let Err(error) = store.set_user_disabled_at(&id, Some(now)).await {
+        let message = error.to_string();
+        if message.contains("not found") {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+        return (StatusCode::INTERNAL_SERVER_ERROR, message).into_response();
+    }
+    let _ = store.delete_user_sessions_for_user(&id).await;
+    let _ = store.revoke_user_api_tokens_for_user(&id).await;
+    match store.user_by_id(&id).await {
+        Ok(Some(user)) => Json(user_json(&state.hub, &user)).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+async fn api_admin_set_password(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<AdminSetPasswordRequest>,
+) -> Response {
+    let peer = peer_addr(peer);
+    if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
+        return rejected;
+    }
+    if let Err(status) = require_admin(&state, &headers, crate::admin::AdminRole::Owner) {
+        return status.into_response();
+    }
+    let Some(store) = durable_store(&state.store) else {
+        return missing_store();
+    };
+    let user = match store.user_by_id(&id).await {
+        Ok(Some(user)) => user,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+        }
+    };
+    if let Err(error) = crate::product_auth::ensure_password(&request.password, &user.username) {
+        return (StatusCode::BAD_REQUEST, error.to_string()).into_response();
+    }
+    let password_hash = match hash_product_password(request.password).await {
+        Ok(hash) => hash,
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, error).into_response();
+        }
+    };
+    if let Err(error) = store
+        .update_user_password(
+            &id,
+            crate::product_auth::PASSWORD_ALGO_ARGON2ID,
+            &password_hash,
+        )
+        .await
+    {
+        return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
 async fn serve_axum(
     bind: std::net::SocketAddr,
     state: AppState,
     shutdown_tx: watch::Sender<bool>,
 ) -> anyhow::Result<()> {
     let state = Arc::new(state);
+    let auth_state = ProductAuthState {
+        hub: state.hub.clone(),
+        store: state.store.clone(),
+        rate_limits: Arc::new(crate::product_auth::AuthRateLimiter::default()),
+        public_origins: Arc::new(crate::product_auth::load_public_origins()),
+    };
 
     let app = Router::new()
         .route("/healthz", get(healthz))
@@ -1750,19 +2380,23 @@ async fn serve_axum(
         // Everything else: the separately deployed SPA, with index.html
         // fallback for client-side routes.
         .fallback(static_handler)
+        .with_state(state)
+        .merge(product_auth_router(auth_state))
         .layer(CompressionLayer::new())
-        .layer(TraceLayer::new_for_http())
-        .with_state(state);
+        .layer(TraceLayer::new_for_http());
 
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .with_context(|| format!("binding {bind}"))?;
     tracing::info!(addr = %bind, "WS/HTTP listening");
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal(shutdown_tx))
-        .await
-        .context("axum serve")?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal(shutdown_tx))
+    .await
+    .context("axum serve")?;
     Ok(())
 }
 
@@ -9318,5 +9952,359 @@ mod provider_auth_resume_tests {
         assert!(reconciliation.active.is_none());
         assert_eq!(executors.len(), 1);
         assert!(executors.contains_key("current-codex"));
+    }
+}
+
+#[cfg(test)]
+mod product_auth_api_tests {
+    use super::*;
+    use crate::admin::{
+        ADMIN_IDENTITIES_SETTING, AdminCredentials, AdminIdentities, AdminRole,
+        CreateRegistrationToken, PERMISSIONS_SETTING, PermissionPolicy, REGISTRATION_SETTING,
+        RegistrationMode, RegistrationPolicy, consume_registration_token, issue_registration_token,
+    };
+    use crate::core::{PersistenceHealth, StoreSink, StoreWrite};
+    use crate::product_auth::USER_SESSION_COOKIE;
+    use crate::store::Store;
+
+    fn auth_state(hub: Hub, store: Option<Store>) -> ProductAuthState {
+        ProductAuthState {
+            hub,
+            store,
+            rate_limits: Arc::new(crate::product_auth::AuthRateLimiter::default()),
+            public_origins: Arc::new(Vec::new()),
+        }
+    }
+
+    async fn test_store() -> (Store, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-product-auth-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let url = format!("sqlite://{}", root.join("cowboy.sqlite3").display());
+        let store = Store::connect(&url, root.join("artifacts")).await.unwrap();
+        store.migrate().await.unwrap();
+        (store, root)
+    }
+
+    fn install_rustls() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+
+    async fn spawn_auth(state: ProductAuthState) -> (String, tokio::task::JoinHandle<()>) {
+        install_rustls();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                product_auth_router(state).into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    fn origin_for(base: &str) -> String {
+        base.trim_end_matches('/').to_owned()
+    }
+
+    async fn post_json(
+        url: &str,
+        origin: &str,
+        cookie: Option<&str>,
+        body: serde_json::Value,
+    ) -> reqwest::Response {
+        let mut request = reqwest::Client::new()
+            .post(url)
+            .header(header::ORIGIN, origin)
+            .json(&body);
+        if let Some(cookie) = cookie {
+            request = request.header(header::COOKIE, cookie);
+        }
+        request.send().await.unwrap()
+    }
+
+    fn set_cookie(response: &reqwest::Response, name: &str) -> Option<String> {
+        response
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .find(|value| value.starts_with(&format!("{name}=")))
+            .map(ToOwned::to_owned)
+    }
+
+    fn cookie_header(set_cookie: &str) -> String {
+        set_cookie
+            .split(';')
+            .next()
+            .unwrap_or(set_cookie)
+            .trim()
+            .to_owned()
+    }
+
+    fn enable_open(hub: &Hub) {
+        hub.set_setting(
+            REGISTRATION_SETTING.to_owned(),
+            serde_json::to_value(RegistrationPolicy {
+                enabled: true,
+                mode: RegistrationMode::Open,
+                tokens: Vec::new(),
+            })
+            .unwrap(),
+        );
+    }
+
+    fn seed_admin(hub: &Hub) -> String {
+        let mut identities = AdminIdentities::default();
+        let token = identities
+            .bootstrap(
+                &AdminCredentials {
+                    account: "owner".to_owned(),
+                    password: "correct-horse".to_owned(),
+                },
+                1_900_000_000_000,
+            )
+            .unwrap();
+        hub.set_setting(
+            ADMIN_IDENTITIES_SETTING.to_owned(),
+            serde_json::to_value(&identities).unwrap(),
+        );
+        format!("cowboy_admin={token}")
+    }
+
+    #[tokio::test]
+    async fn default_policy_rejects_register() {
+        let (store, root) = test_store().await;
+        let (base, server) = spawn_auth(auth_state(Hub::new(), Some(store))).await;
+        let origin = origin_for(&base);
+        let response = post_json(
+            &format!("{base}/api/auth/register"),
+            &origin,
+            None,
+            serde_json::json!({
+                "account": "draven",
+                "password": "long-enough-password",
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            response.text().await.unwrap(),
+            "registration is disabled by the service"
+        );
+        server.abort();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn in_memory_store_returns_503() {
+        let (base, server) = spawn_auth(auth_state(Hub::new(), None)).await;
+        let origin = origin_for(&base);
+        let response = post_json(
+            &format!("{base}/api/auth/register"),
+            &origin,
+            None,
+            serde_json::json!({
+                "account": "draven",
+                "password": "long-enough-password",
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let login = post_json(
+            &format!("{base}/api/auth/login"),
+            &origin,
+            None,
+            serde_json::json!({
+                "account": "draven",
+                "password": "long-enough-password",
+            }),
+        )
+        .await;
+        assert_eq!(login.status(), StatusCode::SERVICE_UNAVAILABLE);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn open_mode_ignores_token_and_login_sets_cookie() {
+        let (store, root) = test_store().await;
+        let hub = Hub::new();
+        enable_open(&hub);
+        let (base, server) = spawn_auth(auth_state(hub, Some(store))).await;
+        let origin = origin_for(&base);
+        let registered = post_json(
+            &format!("{base}/api/auth/register"),
+            &origin,
+            None,
+            serde_json::json!({
+                "account": "Draven",
+                "password": "long-enough-password",
+                "token": "garbage-token",
+            }),
+        )
+        .await;
+        assert_eq!(registered.status(), StatusCode::OK);
+        let cookie = set_cookie(&registered, USER_SESSION_COOKIE).expect("register cookie");
+        assert!(cookie.contains("HttpOnly"));
+        assert!(cookie.contains("SameSite=Lax"));
+        let body: serde_json::Value = registered.json().await.unwrap();
+        assert_eq!(body["account"], "draven");
+        assert_eq!(body["role"], "viewer");
+
+        let _ = post_json(
+            &format!("{base}/api/auth/logout"),
+            &origin,
+            Some(&cookie_header(&cookie)),
+            serde_json::json!({}),
+        )
+        .await;
+
+        let logged_in = post_json(
+            &format!("{base}/api/auth/login"),
+            &origin,
+            None,
+            serde_json::json!({
+                "account": "draven",
+                "password": "long-enough-password",
+            }),
+        )
+        .await;
+        assert_eq!(logged_in.status(), StatusCode::OK);
+        let login_cookie = set_cookie(&logged_in, USER_SESSION_COOKIE).expect("login cookie");
+        assert!(login_cookie.starts_with(&format!("{USER_SESSION_COOKIE}=")));
+        assert!(login_cookie.contains("Max-Age=1209600"));
+
+        let me = reqwest::Client::new()
+            .get(format!("{base}/api/auth/me"))
+            .header(header::COOKIE, cookie_header(&login_cookie))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(me.status(), StatusCode::OK);
+        server.abort();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn admin_created_user_is_operator() {
+        let (store, root) = test_store().await;
+        let hub = Hub::new();
+        let admin = seed_admin(&hub);
+        let (base, server) = spawn_auth(auth_state(hub.clone(), Some(store))).await;
+        let origin = origin_for(&base);
+        let created = post_json(
+            &format!("{base}/api/admin/users"),
+            &origin,
+            Some(&admin),
+            serde_json::json!({
+                "account": "draven",
+                "password": "long-enough-password",
+            }),
+        )
+        .await;
+        assert_eq!(created.status(), StatusCode::CREATED);
+        let body: serde_json::Value = created.json().await.unwrap();
+        assert_eq!(body["username"], "draven");
+        assert_eq!(body["role"], "operator");
+        assert_eq!(
+            PermissionPolicy::from_setting(hub.settings_snapshot().get(PERMISSIONS_SETTING))
+                .role_for("draven"),
+            AdminRole::Operator
+        );
+        server.abort();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn concurrent_single_use_token_keeps_one_user() {
+        let (store, root) = test_store().await;
+        let writer_store = store.clone();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(32);
+        let hub = Hub::with_store(Some(StoreSink::new(
+            tx,
+            Arc::new(PersistenceHealth::default()),
+        )));
+        let writer = tokio::spawn(async move {
+            while let Some(write) = rx.recv().await {
+                if let StoreWrite::PutSetting { key, value } = write {
+                    let _ = writer_store.put_setting(&key, &value).await;
+                }
+            }
+        });
+        let mut policy = RegistrationPolicy {
+            enabled: true,
+            mode: RegistrationMode::Token,
+            tokens: Vec::new(),
+        };
+        let created = issue_registration_token(
+            &mut policy,
+            &CreateRegistrationToken {
+                name: "invite".to_owned(),
+                uses_allowed: Some(1),
+                ttl_seconds: None,
+            },
+            auth_now_ms(),
+        )
+        .unwrap();
+        hub.set_setting(
+            REGISTRATION_SETTING.to_owned(),
+            serde_json::to_value(&policy).unwrap(),
+        );
+        let (base, server) = spawn_auth(auth_state(hub.clone(), Some(store.clone()))).await;
+        let origin = origin_for(&base);
+        let token = created.token.clone();
+        let first_url = format!("{base}/api/auth/register");
+        let second_url = first_url.clone();
+        let first = post_json(
+            &first_url,
+            &origin,
+            None,
+            serde_json::json!({
+                "account": "alice",
+                "password": "long-enough-password",
+                "token": token,
+            }),
+        );
+        let second = post_json(
+            &second_url,
+            &origin,
+            None,
+            serde_json::json!({
+                "account": "bob",
+                "password": "long-enough-password",
+                "token": token,
+            }),
+        );
+        let (first, second) = tokio::join!(first, second);
+        let statuses = [first.status(), second.status()];
+        assert!(statuses.contains(&StatusCode::OK));
+        assert!(statuses.contains(&StatusCode::FORBIDDEN));
+        let users = store.list_users().await.unwrap();
+        assert_eq!(users.len(), 1);
+        let stored =
+            RegistrationPolicy::from_setting(hub.settings_snapshot().get(REGISTRATION_SETTING));
+        assert_eq!(stored.tokens[0].uses_count, 1);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let persisted = store.load_settings().await.unwrap();
+        let persisted_policy = RegistrationPolicy::from_setting(
+            persisted
+                .iter()
+                .find(|(key, _)| key == REGISTRATION_SETTING)
+                .map(|(_, value)| value),
+        );
+        assert_eq!(persisted_policy.tokens[0].uses_count, 1);
+        let mut replay = persisted_policy;
+        assert_eq!(
+            consume_registration_token(&mut replay, Some(&created.token), auth_now_ms()),
+            Err(crate::admin::ConsumeRegistrationError::InvalidToken)
+        );
+        server.abort();
+        writer.abort();
+        let _ = std::fs::remove_dir_all(root);
     }
 }
