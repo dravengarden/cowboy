@@ -51,7 +51,10 @@ Deno.test("login page is product chrome and hides register unless accepted", asy
   assert(gate.includes("/admin remains the break-glass"));
   assert(gate.includes("this is not a sign-in problem"));
   assert(gate.includes("shouldMountProductApp"));
+  assert(gate.includes("nextReadyStatusAction"));
   assert(gate.includes("deleteProductHistoryCache"));
+  assert(login.includes('component="form"'));
+  assert(login.includes("token.trim()"));
 });
 
 Deno.test("logged-out gate never mounts product children or /ws", async () => {
@@ -70,9 +73,18 @@ Deno.test("desktop can sign out through authApi without importing store", async 
   const desktop = await Deno.readTextFile(
     new URL("desktop/DesktopApp.tsx", webSrc),
   );
+  const gate = await Deno.readTextFile(new URL("ProductAuthGate.tsx", authDir));
+  const store = await Deno.readTextFile(new URL("store.ts", webSrc));
   assert(desktop.includes("useProductAuth"));
   assert(desktop.includes("account.signOut"));
   assertEquals(desktop.includes('from "../store"'), false);
+  assert(gate.includes("announceProductSessionEnd"));
+  assert(gate.includes("location.reload"));
+  assert(gate.includes("generationRef"));
+  assert(store.includes("cowboy:product-sign-out"));
+  assert(store.includes("abandonProductSocket"));
+  assert(store.includes("productSessionAbandoned"));
+  assertEquals(store.includes('from "./auth/'), false);
 });
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {

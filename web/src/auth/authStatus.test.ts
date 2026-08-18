@@ -5,6 +5,7 @@ import {
   historyCacheName,
   isLoginDecision,
   nextAuthStatusBackoffMs,
+  nextReadyStatusAction,
   shouldMountProductApp,
   shouldOpenWebSocket,
   showRegistration,
@@ -97,6 +98,48 @@ Deno.test("status retry backoff matches the connection banner", () => {
   assertEquals(nextAuthStatusBackoffMs(4), 8000);
   assertEquals(nextAuthStatusBackoffMs(5), 15000);
   assertEquals(nextAuthStatusBackoffMs(8), 15000);
+});
+
+Deno.test("a ready session ignores outages and only tears down on 200 auth change", () => {
+  const me = { account: "draven", role: "operator" as const };
+  assertEquals(
+    nextReadyStatusAction(me, classifyAuthStatus({ kind: "network" })),
+    "stay",
+  );
+  assertEquals(
+    nextReadyStatusAction(
+      me,
+      classifyAuthStatus({ kind: "unavailable", httpStatus: 502 }),
+    ),
+    "stay",
+  );
+  assertEquals(
+    nextReadyStatusAction(
+      me,
+      classifyAuthStatus({ kind: "unsupported", httpStatus: 404 }),
+    ),
+    "stay",
+  );
+  assertEquals(
+    nextReadyStatusAction(me, {
+      view: "ready",
+      me,
+      registration: closed,
+    }),
+    "update",
+  );
+  assertEquals(
+    nextReadyStatusAction(me, {
+      view: "ready",
+      me: { account: "other", role: "viewer" },
+      registration: closed,
+    }),
+    "teardown",
+  );
+  assertEquals(
+    nextReadyStatusAction(me, { view: "login", registration: closed }),
+    "teardown",
+  );
 });
 
 Deno.test("logout deletes only HISTORY_CACHE generations", async () => {

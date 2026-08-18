@@ -10,10 +10,13 @@ import {
 } from "react";
 import { authApi, type ProductMe, type RegistrationPublicStatus } from "./authApi";
 import {
+  announceProductSessionEnd,
   classifyAuthStatus,
   deleteProductHistoryCache,
   nextAuthStatusBackoffMs,
+  nextReadyStatusAction,
   shouldMountProductApp,
+  type AuthGateDecision,
   type AuthGateView,
 } from "./authStatus";
 import { ProductLoginPage } from "./ProductLoginPage";
@@ -37,9 +40,11 @@ export async function signOutProductSession(): Promise<void> {
   try {
     await authApi.logout();
   } catch {
-    // Logout is best-effort: still drop local history and remount login.
+    // Logout is best-effort: still drop the socket graph and local history.
   }
   await deleteProductHistoryCache();
+  announceProductSessionEnd();
+  globalThis.location.reload();
 }
 
 function ProductAuthSplash({ label }: { label: string }): React.JSX.Element {
@@ -141,22 +146,32 @@ export function ProductAuthGate({
   });
   const attemptsRef = useRef(0);
   const meRef = useRef<ProductMe | null>(null);
+  const generationRef = useRef(0);
 
-  const loadStatus = useCallback(async (): Promise<void> => {
-    const decision = classifyAuthStatus(await authApi.status());
+  const applyDecision = useCallback(async (decision: AuthGateDecision): Promise<void> => {
     if (decision.registration) setRegistration(decision.registration);
+    if (meRef.current) {
+      const action = nextReadyStatusAction(meRef.current, decision);
+      if (action === "stay") return;
+      if (action === "update" && decision.me) {
+        meRef.current = decision.me;
+        setMe(decision.me);
+        setView("ready");
+        return;
+      }
+      generationRef.current += 1;
+      await deleteProductHistoryCache();
+      announceProductSessionEnd();
+      globalThis.location.reload();
+      return;
+    }
     if (shouldMountProductApp(decision) && decision.me) {
       attemptsRef.current = 0;
-      if (meRef.current && meRef.current.account !== decision.me.account) {
-        await deleteProductHistoryCache();
-      }
       meRef.current = decision.me;
       setMe(decision.me);
       setView("ready");
       return;
     }
-    meRef.current = null;
-    setMe(null);
     if (decision.view === "login") {
       attemptsRef.current = 0;
       setView("login");
@@ -165,6 +180,13 @@ export function ProductAuthGate({
     attemptsRef.current += 1;
     setView(decision.view);
   }, []);
+
+  const loadStatus = useCallback(async (): Promise<void> => {
+    const generation = ++generationRef.current;
+    const decision = classifyAuthStatus(await authApi.status());
+    if (generation !== generationRef.current) return;
+    await applyDecision(decision);
+  }, [applyDecision]);
 
   useEffect(() => {
     void loadStatus();
@@ -179,6 +201,7 @@ export function ProductAuthGate({
   }, [view, loadStatus]);
 
   const handleAuthed = useCallback((next: ProductMe): void => {
+    generationRef.current += 1;
     void (async () => {
       await deleteProductHistoryCache();
       attemptsRef.current = 0;
@@ -189,12 +212,9 @@ export function ProductAuthGate({
   }, []);
 
   const signOut = useCallback(async (): Promise<void> => {
+    generationRef.current += 1;
     await signOutProductSession();
-    meRef.current = null;
-    setMe(null);
-    setView("loading");
-    await loadStatus();
-  }, [loadStatus]);
+  }, []);
 
   if (view === "ready" && me) {
     return (

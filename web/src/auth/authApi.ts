@@ -17,32 +17,34 @@ export interface AuthStatus {
   me?: ProductMe;
 }
 
-export function authStatusFromJson(value: unknown): AuthStatus {
-  const record = value != null && typeof value === "object"
-    ? value as {
-      registration?: Partial<RegistrationPublicStatus>;
-      me?: Partial<ProductMe>;
-    }
-    : {};
+export function isHtmlContentType(contentType: string | null): boolean {
+  return (contentType ?? "").toLowerCase().includes("text/html");
+}
+
+export function authStatusFromJson(value: unknown): AuthStatus | undefined {
+  if (value == null || typeof value !== "object") return undefined;
+  const record = value as {
+    registration?: Partial<RegistrationPublicStatus>;
+    me?: Partial<ProductMe>;
+  };
   const registration = record.registration;
-  const parsedRegistration: RegistrationPublicStatus =
-    registration != null &&
-      typeof registration.enabled === "boolean" &&
-      typeof registration.accepts_registration === "boolean" &&
-      (registration.mode === "disabled" ||
-        registration.mode === "token" ||
-        registration.mode === "open")
-      ? {
-        enabled: registration.enabled,
-        mode: registration.mode,
-        accepts_registration: registration.accepts_registration,
-      }
-      : {
-        enabled: false,
-        mode: "disabled",
-        accepts_registration: false,
-      };
-  const status: AuthStatus = { registration: parsedRegistration };
+  if (
+    registration == null ||
+    typeof registration.enabled !== "boolean" ||
+    typeof registration.accepts_registration !== "boolean" ||
+    (registration.mode !== "disabled" &&
+      registration.mode !== "token" &&
+      registration.mode !== "open")
+  ) {
+    return undefined;
+  }
+  const status: AuthStatus = {
+    registration: {
+      enabled: registration.enabled,
+      mode: registration.mode,
+      accepts_registration: registration.accepts_registration,
+    },
+  };
   const me = record.me;
   if (me && typeof me.account === "string" && me.account.length > 0) {
     const role = me.role;
@@ -65,10 +67,10 @@ export class AuthApiError extends Error {
 
 async function readJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
+    ...init,
     cache: "no-store",
     credentials: "same-origin",
     headers: { accept: "application/json", ...init?.headers },
-    ...init,
   });
   const text = await response.text();
   if (!response.ok) throw new AuthApiError(text || response.statusText, response.status);
@@ -77,7 +79,7 @@ async function readJson<T>(path: string, init?: RequestInit): Promise<T> {
 
 export type AuthStatusProbe =
   | { kind: "ok"; httpStatus: 200; body: AuthStatus }
-  | { kind: "unsupported"; httpStatus: 404 | 501 }
+  | { kind: "unsupported"; httpStatus: number }
   | { kind: "unavailable"; httpStatus: number }
   | { kind: "network" };
 
@@ -98,15 +100,16 @@ export async function fetchAuthStatus(): Promise<AuthStatusProbe> {
   if (!response.ok) {
     return { kind: "unavailable", httpStatus: response.status };
   }
+  if (isHtmlContentType(response.headers.get("content-type"))) {
+    return { kind: "unsupported", httpStatus: response.status };
+  }
   try {
     const text = await response.text();
-    return {
-      kind: "ok",
-      httpStatus: 200,
-      body: authStatusFromJson(text ? JSON.parse(text) : {}),
-    };
+    const body = authStatusFromJson(text ? JSON.parse(text) : {});
+    if (!body) return { kind: "unsupported", httpStatus: response.status };
+    return { kind: "ok", httpStatus: 200, body };
   } catch {
-    return { kind: "unavailable", httpStatus: response.status };
+    return { kind: "unsupported", httpStatus: response.status };
   }
 }
 

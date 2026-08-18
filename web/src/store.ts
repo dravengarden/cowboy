@@ -191,6 +191,9 @@ let state: State = {
 let presentedState = state;
 const listeners = new Set<() => void>();
 let socket: WebSocket | undefined;
+// Set by `cowboy:product-sign-out`. Prevents onclose / online / foreground
+// from opening another product socket after logout.
+let productSessionAbandoned = false;
 // The session the user currently has open. Remembered so every (re)connect can
 // re-assert it to the daemon (revive-on-open), recovering the agent after a
 // daemon restart we reconnected across. See openSession + connect's onopen.
@@ -270,6 +273,16 @@ function clearReconnectTimer(): void {
   }
 }
 
+function abandonProductSocket(): void {
+  productSessionAbandoned = true;
+  clearReconnectTimer();
+  stopLiveness();
+  const current = socket;
+  socket = undefined;
+  if (state.connected) setState({ ...state, connected: false });
+  current?.close();
+}
+
 // --- Liveness watchdog (half-open detection) --------------------------------
 // A WebSocket can go HALF-OPEN — TCP still "connected" but no data flows and
 // `onclose` NEVER fires — which is common on mobile/5G (NAT drops, radio
@@ -317,6 +330,7 @@ function startLiveness(ws: WebSocket): void {
 // then open the replacement immediately. This path is user-driven (foreground
 // or network return), so it intentionally bypasses outage backoff.
 function reconnectNow(reason: string): void {
+  if (productSessionAbandoned) return;
   const stale = socket;
   if (!shouldStartImmediateReconnect(stale?.readyState)) {
     reportClientLog("info", "websocket_reconnect_coalesced", "Cowboy WebSocket reconnect coalesced", {
@@ -381,6 +395,7 @@ if (typeof document !== "undefined") {
   document.addEventListener("visibilitychange", recoverForeground);
   globalThis.addEventListener("pageshow", recoverForeground);
   globalThis.addEventListener("online", () => reconnectNow("network_online"));
+  globalThis.addEventListener("cowboy:product-sign-out", abandonProductSocket);
 }
 
 function emit(): void {
@@ -1132,6 +1147,7 @@ export function notify(message: string, severity: "error" | "warning" = "error")
 // Schedule the next reconnect after `delay` ms (the backoff `conn.connectionLost`
 // computed off the consecutive-failure count). One pending attempt at a time.
 function scheduleReconnect(delay: number): void {
+  if (productSessionAbandoned) return;
   if (reconnectTimer !== undefined) return;
   reportClientLog("info", "websocket_reconnect_scheduled", "Cowboy WebSocket reconnect scheduled", {
     delay_ms: delay,
@@ -1150,6 +1166,7 @@ function scheduleReconnect(delay: number): void {
 // and newer than the debounce-saved cache, so re-hydrating would stomp it.
 let didHydrate = false;
 function connect(): void {
+  if (productSessionAbandoned) return;
   if (didHydrate) {
     openSocket();
     return;
@@ -1184,6 +1201,7 @@ function connect(): void {
 }
 
 function openSocket(): void {
+  if (productSessionAbandoned) return;
   // A reconnect can be triggered by several independent recovery paths
   // (backoff timer, foreground watchdog, connect guard). Never let them create
   // parallel sockets: a late close from an older socket would otherwise mark a
@@ -2584,7 +2602,7 @@ export function reorderDrafts(sessionId: string, order: string[]): void {
 }
 
 function subscribe(listener: () => void): () => void {
-  if (listeners.size === 0 && !socket) connect();
+  if (listeners.size === 0 && !socket && !productSessionAbandoned) connect();
   listeners.add(listener);
   return () => {
     listeners.delete(listener);

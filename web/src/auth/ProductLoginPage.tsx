@@ -20,8 +20,11 @@ export function ProductLoginPage({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const canSubmit = account.trim() !== "" && password !== "" &&
+    !(registering && needsToken && token.trim() === "");
+
   const submit = (): void => {
-    if (busy) return;
+    if (busy || !canSubmit) return;
     setBusy(true);
     setError(null);
     const request = registering
@@ -37,6 +40,11 @@ export function ProductLoginPage({
 
   return (
     <Box
+      component="form"
+      onSubmit={(event) => {
+        event.preventDefault();
+        submit();
+      }}
       sx={{
         minHeight: "100%",
         display: "flex",
@@ -105,15 +113,16 @@ export function ProductLoginPage({
           />
         )}
         <Button
+          type="submit"
           variant="contained"
           size="large"
-          disabled={busy || account.trim() === "" || password === ""}
-          onClick={submit}
+          disabled={busy || !canSubmit}
         >
           {registering ? "Create account" : "Sign in"}
         </Button>
         {canRegister && (
           <Button
+            type="button"
             color="inherit"
             onClick={() => {
               setMode(registering ? "login" : "register");

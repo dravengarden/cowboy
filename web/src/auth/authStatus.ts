@@ -36,6 +36,27 @@ export function isLoginDecision(decision: AuthGateDecision): boolean {
   return decision.view === "login";
 }
 
+export type ReadyStatusAction = "stay" | "update" | "teardown";
+
+/** Once the apps are mounted, only 200 + missing/changed `me` tears them down.
+ *  Network / 5xx / 404 / 501 must not unmount a ready session. */
+export function nextReadyStatusAction(
+  current: ProductMe,
+  decision: AuthGateDecision,
+): ReadyStatusAction {
+  if (decision.view === "ready" && decision.me) {
+    return decision.me.account === current.account ? "update" : "teardown";
+  }
+  if (decision.view === "login") return "teardown";
+  return "stay";
+}
+
+export const PRODUCT_SESSION_END_EVENT = "cowboy:product-sign-out";
+
+export function announceProductSessionEnd(): void {
+  globalThis.dispatchEvent(new Event(PRODUCT_SESSION_END_EVENT));
+}
+
 export function showRegistration(registration: RegistrationPublicStatus | undefined): boolean {
   return registration?.accepts_registration === true;
 }

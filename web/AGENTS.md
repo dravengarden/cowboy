@@ -120,10 +120,13 @@ never construct a WebSocket.
 `GET /api/auth/status` decides the surface: HTTP 200 + `me` mounts the apps;
 HTTP 200 + missing `me` is login (register only when
 `registration.accepts_registration`; invite field when `mode === "token"`);
-HTTP 404/501 is “controller too old / activating”, never login-forever;
+HTTP 404/501, 200 HTML, or a body without the registration shape is
+“controller too old / activating”, never login-forever;
 network / 5xx retries with banner backoff and must not clear the cookie.
-`sw.js` must not cache `/api/auth/*`. Logout and a `me` account change delete
-`HISTORY_CACHE`.
+Once the apps are mounted, a later 5xx/404/501 does not unmount them.
+Sign-out (and 200 without/`me` change) emits `cowboy:product-sign-out` so
+`store.ts` closes `/ws` without reconnecting, then reloads. `sw.js` must not
+cache `/api/auth/*`. Logout and a `me` account change delete `HISTORY_CACHE`.
 
 ## Deploy (web changes reach the installed PWA only via a SW version bump)
 
