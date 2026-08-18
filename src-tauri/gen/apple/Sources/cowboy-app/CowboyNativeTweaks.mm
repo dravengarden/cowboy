@@ -444,6 +444,32 @@ static void cowboyLoadProviderImages(
 // gone.
 static __weak WKWebView *gCowboyWebView = nil;
 
+// WKWebView wraps the document in a UIScrollView. Safari/PWA delivers touches
+// to an overflow:hidden page almost directly; the app's root scrollView still
+// delays and can cancel JS touches while it decides whether to pan. Cowboy
+// locks html/body overflow and scrolls inside Transcript/Code (those become
+// WKChildScrollView and keep native elasticity). The document scrollView must
+// not compete with the JS spatial drawers / product pager.
+// Wry 0.55.1 writes scrollView.bounces after init returns, so apply this on
+// the next main-queue turn and again on foreground in case WebKit resets it.
+static void cowboyConfigureDocumentScrollView(WKWebView *webView) {
+    if (webView == nil) return;
+    UIScrollView *scrollView = webView.scrollView;
+    scrollView.delaysContentTouches = NO;
+    scrollView.canCancelContentTouches = NO;
+    scrollView.alwaysBounceVertical = NO;
+    scrollView.alwaysBounceHorizontal = NO;
+    scrollView.bounces = NO;
+}
+
+static void cowboyScheduleDocumentScrollView(WKWebView *webView) {
+    if (webView == nil) return;
+    cowboyConfigureDocumentScrollView(webView);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        cowboyConfigureDocumentScrollView(webView);
+    });
+}
+
 // (2c) Provider authentication browser. Browser-code flows do not redirect
 // back into Cowboy, so ASWebAuthenticationSession is the wrong lifecycle: the
 // Cowboy dialog must keep polling while the user completes an arbitrary number
@@ -707,6 +733,7 @@ __attribute__((constructor)) static void cowboyInstallHapticBridge(void) {
                 // Capture the shell's web view for the keyboard avoider below. The
                 // thin shell creates one main web view; the latest assignment wins.
                 gCowboyWebView = cowboyWv;
+                cowboyScheduleDocumentScrollView(cowboyWv);
 #if DEBUG
                 // Opt into Safari inspection and install the headless simulator
                 // eval bridge. Both are DEBUG-only: release/device distribution
@@ -768,6 +795,7 @@ __attribute__((constructor)) static void cowboyInstallHapticBridge(void) {
     WKWebView *wv = gCowboyWebView;
     if (wv == nil) return;
     cowboyRepairAuthenticationBrowserBridge(wv);
+    cowboyConfigureDocumentScrollView(wv);
     [wv evaluateJavaScript:
             @"window.dispatchEvent(new Event('cowboy:native-resume'))"
          completionHandler:nil];
