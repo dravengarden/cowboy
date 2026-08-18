@@ -66,6 +66,8 @@ mod observability;
 #[cfg(feature = "full")]
 mod persistence;
 #[cfg(feature = "full")]
+mod product_auth;
+#[cfg(feature = "full")]
 mod prompt_origin;
 #[cfg(feature = "full")]
 mod provider;

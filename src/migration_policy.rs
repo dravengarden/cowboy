@@ -129,6 +129,10 @@ const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "0030_crash_incident_severity.sql",
         "914407d1be5223cbabf122ab312f16ca3179303474d36f2a798806406b5e1c01",
     ),
+    (
+        "0031_product_users.sql",
+        "f8293a2e358ef783353f09c9e5d25060f1078a3132c9bb1f7b74ad8e3d0aa3a8",
+    ),
 ];
 
 const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
@@ -147,6 +151,10 @@ const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "0004_crash_incident_severity.sql",
         "3eecb6d0a9af9fc6325924d86b9ecf57f9e6258dd72c617fb76cf5ff15467670",
+    ),
+    (
+        "0005_product_users.sql",
+        "78870bed7e48576f94709f0ad5bab7470b3a016deaa94f5580fc955d7382de05",
     ),
 ];
 

@@ -64,6 +64,89 @@ struct SqliteMachineRow {
     public_key: Option<String>,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(sqlx::FromRow)]
+struct SqliteProductUserRow {
+    id: String,
+    username: String,
+    password_algo: String,
+    password_hash: String,
+    created_at_ms: i64,
+    updated_at_ms: i64,
+    disabled_at_ms: Option<i64>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(sqlx::FromRow)]
+struct SqliteProductUserSessionRow {
+    token_hash: String,
+    user_id: String,
+    created_at_ms: i64,
+    expires_at_ms: i64,
+    last_seen_at_ms: i64,
+    user_agent: Option<String>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(sqlx::FromRow)]
+struct SqliteProductApiTokenRow {
+    id: String,
+    user_id: String,
+    name: String,
+    token_prefix: String,
+    token_hash: String,
+    created_at_ms: i64,
+    expires_at_ms: Option<i64>,
+    last_used_at_ms: Option<i64>,
+    revoked_at_ms: Option<i64>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl From<SqliteProductUserRow> for ProductUser {
+    fn from(row: SqliteProductUserRow) -> Self {
+        Self {
+            id: row.id,
+            username: row.username,
+            password_algo: row.password_algo,
+            password_hash: row.password_hash,
+            created_at_ms: row.created_at_ms,
+            updated_at_ms: row.updated_at_ms,
+            disabled_at_ms: row.disabled_at_ms,
+        }
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl From<SqliteProductUserSessionRow> for ProductUserSession {
+    fn from(row: SqliteProductUserSessionRow) -> Self {
+        Self {
+            token_hash: row.token_hash,
+            user_id: row.user_id,
+            created_at_ms: row.created_at_ms,
+            expires_at_ms: row.expires_at_ms,
+            last_seen_at_ms: row.last_seen_at_ms,
+            user_agent: row.user_agent,
+        }
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl From<SqliteProductApiTokenRow> for ProductApiToken {
+    fn from(row: SqliteProductApiTokenRow) -> Self {
+        Self {
+            id: row.id,
+            user_id: row.user_id,
+            name: row.name,
+            token_prefix: row.token_prefix,
+            token_hash: row.token_hash,
+            created_at_ms: row.created_at_ms,
+            expires_at_ms: row.expires_at_ms,
+            last_used_at_ms: row.last_used_at_ms,
+            revoked_at_ms: row.revoked_at_ms,
+        }
+    }
+}
+
 #[derive(sqlx::FromRow)]
 struct SqliteSessionRow {
     id: String,
@@ -2254,7 +2337,190 @@ impl SqliteStorage {
         .with_context(|| format!("INSERT SQLite session {}", meta.id))?;
         Ok(())
     }
+}
 
+#[cfg_attr(not(test), allow(dead_code))]
+impl SqliteStorage {
+    pub(super) async fn insert_user(&self, user: &ProductUser) -> Result<()> {
+        anyhow::ensure!(
+            valid_product_user_id(&user.id),
+            "user id must be 32 hex characters"
+        );
+        anyhow::ensure!(!user.username.is_empty(), "username cannot be empty");
+        anyhow::ensure!(
+            !user.password_hash.is_empty(),
+            "password hash cannot be empty"
+        );
+        sqlx::query(
+            "INSERT INTO users (id, username, password_algo, password_hash, created_at_ms, \
+             updated_at_ms, disabled_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )
+        .bind(&user.id)
+        .bind(&user.username)
+        .bind(&user.password_algo)
+        .bind(&user.password_hash)
+        .bind(user.created_at_ms)
+        .bind(user.updated_at_ms)
+        .bind(user.disabled_at_ms)
+        .execute(&self.pool)
+        .await
+        .map_err(|error| {
+            unique_constraint_error(error, "account already exists", "INSERT SQLite user")
+        })?;
+        Ok(())
+    }
+
+    pub(super) async fn user_by_id(&self, id: &str) -> Result<Option<ProductUser>> {
+        let row = sqlx::query_as::<_, SqliteProductUserRow>(
+            "SELECT id, username, password_algo, password_hash, created_at_ms, updated_at_ms, \
+             disabled_at_ms FROM users WHERE id = ?1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .with_context(|| format!("SELECT SQLite user {id}"))?;
+        Ok(row.map(ProductUser::from))
+    }
+
+    pub(super) async fn user_by_username(&self, username: &str) -> Result<Option<ProductUser>> {
+        let row = sqlx::query_as::<_, SqliteProductUserRow>(
+            "SELECT id, username, password_algo, password_hash, created_at_ms, updated_at_ms, \
+             disabled_at_ms FROM users WHERE username = ?1",
+        )
+        .bind(username)
+        .fetch_optional(&self.pool)
+        .await
+        .with_context(|| format!("SELECT SQLite user by username {username}"))?;
+        Ok(row.map(ProductUser::from))
+    }
+
+    pub(super) async fn set_user_disabled_at(
+        &self,
+        id: &str,
+        disabled_at_ms: Option<i64>,
+    ) -> Result<()> {
+        let result =
+            sqlx::query("UPDATE users SET disabled_at_ms = ?2, updated_at_ms = ?3 WHERE id = ?1")
+                .bind(id)
+                .bind(disabled_at_ms)
+                .bind(now_ms())
+                .execute(&self.pool)
+                .await
+                .with_context(|| format!("UPDATE SQLite user disabled_at {id}"))?;
+        anyhow::ensure!(result.rows_affected() == 1, "user {id} not found");
+        Ok(())
+    }
+
+    pub(super) async fn delete_user(&self, id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM users WHERE id = ?1")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("DELETE SQLite user {id}"))?;
+        Ok(())
+    }
+
+    pub(super) async fn insert_user_session(&self, session: &ProductUserSession) -> Result<()> {
+        anyhow::ensure!(!session.token_hash.is_empty(), "token hash cannot be empty");
+        let user_agent = truncate_user_agent(session.user_agent.as_deref());
+        sqlx::query(
+            "INSERT INTO user_sessions (token_hash, user_id, created_at_ms, expires_at_ms, \
+             last_seen_at_ms, user_agent) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        )
+        .bind(&session.token_hash)
+        .bind(&session.user_id)
+        .bind(session.created_at_ms)
+        .bind(session.expires_at_ms)
+        .bind(session.last_seen_at_ms)
+        .bind(user_agent.as_deref())
+        .execute(&self.pool)
+        .await
+        .context("INSERT SQLite user session")?;
+        Ok(())
+    }
+
+    pub(super) async fn user_session_by_token_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<ProductUserSession>> {
+        let row = sqlx::query_as::<_, SqliteProductUserSessionRow>(
+            "SELECT token_hash, user_id, created_at_ms, expires_at_ms, last_seen_at_ms, \
+             user_agent FROM user_sessions WHERE token_hash = ?1",
+        )
+        .bind(token_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .context("SELECT SQLite user session")?;
+        Ok(row.map(ProductUserSession::from))
+    }
+
+    pub(super) async fn delete_user_session(&self, token_hash: &str) -> Result<()> {
+        sqlx::query("DELETE FROM user_sessions WHERE token_hash = ?1")
+            .bind(token_hash)
+            .execute(&self.pool)
+            .await
+            .context("DELETE SQLite user session")?;
+        Ok(())
+    }
+
+    pub(super) async fn delete_user_sessions_for_user(&self, user_id: &str) -> Result<u64> {
+        let result = sqlx::query("DELETE FROM user_sessions WHERE user_id = ?1")
+            .bind(user_id)
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("DELETE SQLite user sessions for {user_id}"))?;
+        Ok(result.rows_affected())
+    }
+
+    pub(super) async fn insert_user_api_token(&self, token: &ProductApiToken) -> Result<()> {
+        anyhow::ensure!(
+            valid_product_user_id(&token.id),
+            "token id must be 32 hex characters"
+        );
+        anyhow::ensure!(!token.token_hash.is_empty(), "token hash cannot be empty");
+        sqlx::query(
+            "INSERT INTO user_api_tokens (id, user_id, name, token_prefix, token_hash, \
+             created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        )
+        .bind(&token.id)
+        .bind(&token.user_id)
+        .bind(&token.name)
+        .bind(&token.token_prefix)
+        .bind(&token.token_hash)
+        .bind(token.created_at_ms)
+        .bind(token.expires_at_ms)
+        .bind(token.last_used_at_ms)
+        .bind(token.revoked_at_ms)
+        .execute(&self.pool)
+        .await
+        .map_err(|error| {
+            unique_constraint_error(
+                error,
+                "token hash already exists",
+                "INSERT SQLite user API token",
+            )
+        })?;
+        Ok(())
+    }
+
+    pub(super) async fn user_api_token_by_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<ProductApiToken>> {
+        let row = sqlx::query_as::<_, SqliteProductApiTokenRow>(
+            "SELECT id, user_id, name, token_prefix, token_hash, created_at_ms, expires_at_ms, \
+             last_used_at_ms, revoked_at_ms FROM user_api_tokens WHERE token_hash = ?1",
+        )
+        .bind(token_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .context("SELECT SQLite user API token")?;
+        Ok(row.map(ProductApiToken::from))
+    }
+}
+
+impl SqliteStorage {
     pub(super) async fn update_status(&self, session_id: &str, status: Status) -> Result<()> {
         sqlx::query("UPDATE sessions SET status = ?1, updated_at_ms = ?2 WHERE id = ?3")
             .bind(status_to_str(status))

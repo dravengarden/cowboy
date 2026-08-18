@@ -51,6 +51,40 @@ fn valid_machine_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
+fn valid_product_user_id(value: &str) -> bool {
+    value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn unique_constraint_error(
+    error: sqlx::Error,
+    unique_message: &str,
+    context: &str,
+) -> anyhow::Error {
+    if error
+        .as_database_error()
+        .is_some_and(sqlx::error::DatabaseError::is_unique_violation)
+    {
+        anyhow::anyhow!("{unique_message}")
+    } else {
+        anyhow::Error::from(error).context(context.to_owned())
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn truncate_user_agent(user_agent: Option<&str>) -> Option<String> {
+    let value = user_agent?.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if value.chars().count() <= 512 {
+        Some(value.to_owned())
+    } else {
+        Some(value.chars().take(512).collect())
+    }
+}
+
 fn validate_encryption_public_key(value: &str) -> Result<()> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(value)
@@ -515,6 +549,126 @@ pub struct EnrolledMachine {
     pub id: String,
     pub display_name: String,
     pub fingerprint: String,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProductUser {
+    pub id: String,
+    pub username: String,
+    pub password_algo: String,
+    pub password_hash: String,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub disabled_at_ms: Option<i64>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProductUserSession {
+    pub token_hash: String,
+    pub user_id: String,
+    pub created_at_ms: i64,
+    pub expires_at_ms: i64,
+    pub last_seen_at_ms: i64,
+    pub user_agent: Option<String>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProductApiToken {
+    pub id: String,
+    pub user_id: String,
+    pub name: String,
+    pub token_prefix: String,
+    pub token_hash: String,
+    pub created_at_ms: i64,
+    pub expires_at_ms: Option<i64>,
+    pub last_used_at_ms: Option<i64>,
+    pub revoked_at_ms: Option<i64>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(sqlx::FromRow)]
+struct ProductUserRow {
+    id: String,
+    username: String,
+    password_algo: String,
+    password_hash: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    disabled_at: Option<DateTime<Utc>>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(sqlx::FromRow)]
+struct ProductUserSessionRow {
+    token_hash: String,
+    user_id: String,
+    created_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+    last_seen_at: DateTime<Utc>,
+    user_agent: Option<String>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(sqlx::FromRow)]
+struct ProductApiTokenRow {
+    id: String,
+    user_id: String,
+    name: String,
+    token_prefix: String,
+    token_hash: String,
+    created_at: DateTime<Utc>,
+    expires_at: Option<DateTime<Utc>>,
+    last_used_at: Option<DateTime<Utc>>,
+    revoked_at: Option<DateTime<Utc>>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl ProductUser {
+    fn from_pg(row: ProductUserRow) -> Self {
+        Self {
+            id: row.id,
+            username: row.username,
+            password_algo: row.password_algo,
+            password_hash: row.password_hash,
+            created_at_ms: row.created_at.timestamp_millis(),
+            updated_at_ms: row.updated_at.timestamp_millis(),
+            disabled_at_ms: row.disabled_at.map(|value| value.timestamp_millis()),
+        }
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl ProductUserSession {
+    fn from_pg(row: ProductUserSessionRow) -> Self {
+        Self {
+            token_hash: row.token_hash,
+            user_id: row.user_id,
+            created_at_ms: row.created_at.timestamp_millis(),
+            expires_at_ms: row.expires_at.timestamp_millis(),
+            last_seen_at_ms: row.last_seen_at.timestamp_millis(),
+            user_agent: row.user_agent,
+        }
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl ProductApiToken {
+    fn from_pg(row: ProductApiTokenRow) -> Self {
+        Self {
+            id: row.id,
+            user_id: row.user_id,
+            name: row.name,
+            token_prefix: row.token_prefix,
+            token_hash: row.token_hash,
+            created_at_ms: row.created_at.timestamp_millis(),
+            expires_at_ms: row.expires_at.map(|value| value.timestamp_millis()),
+            last_used_at_ms: row.last_used_at.map(|value| value.timestamp_millis()),
+            revoked_at_ms: row.revoked_at.map(|value| value.timestamp_millis()),
+        }
+    }
 }
 
 #[derive(sqlx::FromRow)]
@@ -990,6 +1144,103 @@ impl Store {
 
     pub async fn purge_provider_usage(&self, retention_days: i32) -> Result<u64> {
         dispatch_storage!(self, purge_provider_usage(retention_days))
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl Store {
+    /// Persist a product user. Username uniqueness is enforced by the store.
+    ///
+    /// # Errors
+    /// Returns when the id is not 32-hex, the username is taken, or the insert fails.
+    pub async fn insert_user(&self, user: &ProductUser) -> Result<()> {
+        dispatch_storage!(self, insert_user(user))
+    }
+
+    /// Load a product user by id.
+    ///
+    /// # Errors
+    /// Returns when the query fails.
+    pub async fn user_by_id(&self, id: &str) -> Result<Option<ProductUser>> {
+        dispatch_storage!(self, user_by_id(id))
+    }
+
+    /// Load a product user by normalized username.
+    ///
+    /// # Errors
+    /// Returns when the query fails.
+    pub async fn user_by_username(&self, username: &str) -> Result<Option<ProductUser>> {
+        dispatch_storage!(self, user_by_username(username))
+    }
+
+    /// Set or clear `disabled_at` and bump `updated_at`.
+    ///
+    /// # Errors
+    /// Returns when the user is missing or the update fails.
+    pub async fn set_user_disabled_at(&self, id: &str, disabled_at_ms: Option<i64>) -> Result<()> {
+        dispatch_storage!(self, set_user_disabled_at(id, disabled_at_ms))
+    }
+
+    /// Delete a product user. Login sessions and API tokens cascade.
+    ///
+    /// # Errors
+    /// Returns when the delete fails.
+    pub async fn delete_user(&self, id: &str) -> Result<()> {
+        dispatch_storage!(self, delete_user(id))
+    }
+
+    /// Persist a hashed login session.
+    ///
+    /// # Errors
+    /// Returns when the user is missing or the insert fails.
+    pub async fn insert_user_session(&self, session: &ProductUserSession) -> Result<()> {
+        dispatch_storage!(self, insert_user_session(session))
+    }
+
+    /// Load a login session by stored token hash.
+    ///
+    /// # Errors
+    /// Returns when the query fails.
+    pub async fn user_session_by_token_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<ProductUserSession>> {
+        dispatch_storage!(self, user_session_by_token_hash(token_hash))
+    }
+
+    /// Delete one login session.
+    ///
+    /// # Errors
+    /// Returns when the delete fails.
+    pub async fn delete_user_session(&self, token_hash: &str) -> Result<()> {
+        dispatch_storage!(self, delete_user_session(token_hash))
+    }
+
+    /// Delete every login session for a product user.
+    ///
+    /// # Errors
+    /// Returns when the delete fails.
+    pub async fn delete_user_sessions_for_user(&self, user_id: &str) -> Result<u64> {
+        dispatch_storage!(self, delete_user_sessions_for_user(user_id))
+    }
+
+    /// Persist a hashed personal access token. Unused by HTTP until a later PR.
+    ///
+    /// # Errors
+    /// Returns when the user is missing, the hash is taken, or the insert fails.
+    pub async fn insert_user_api_token(&self, token: &ProductApiToken) -> Result<()> {
+        dispatch_storage!(self, insert_user_api_token(token))
+    }
+
+    /// Load a personal access token by stored token hash.
+    ///
+    /// # Errors
+    /// Returns when the query fails.
+    pub async fn user_api_token_by_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<ProductApiToken>> {
+        dispatch_storage!(self, user_api_token_by_hash(token_hash))
     }
 }
 
@@ -2067,7 +2318,190 @@ impl PostgresStorage {
         .with_context(|| format!("INSERT session {}", m.id))?;
         Ok(())
     }
+}
 
+#[cfg_attr(not(test), allow(dead_code))]
+impl PostgresStorage {
+    pub async fn insert_user(&self, user: &ProductUser) -> Result<()> {
+        anyhow::ensure!(
+            valid_product_user_id(&user.id),
+            "user id must be 32 hex characters"
+        );
+        anyhow::ensure!(!user.username.is_empty(), "username cannot be empty");
+        anyhow::ensure!(
+            !user.password_hash.is_empty(),
+            "password hash cannot be empty"
+        );
+        sqlx::query(
+            "INSERT INTO users (id, username, password_algo, password_hash, created_at, \
+             updated_at, disabled_at) VALUES ( \
+             $1, $2, $3, $4, to_timestamp($5::double precision / 1000), \
+             to_timestamp($6::double precision / 1000), \
+             to_timestamp($7::double precision / 1000))",
+        )
+        .bind(&user.id)
+        .bind(&user.username)
+        .bind(&user.password_algo)
+        .bind(&user.password_hash)
+        .bind(user.created_at_ms)
+        .bind(user.updated_at_ms)
+        .bind(user.disabled_at_ms)
+        .execute(&self.pool)
+        .await
+        .map_err(|error| unique_constraint_error(error, "account already exists", "INSERT user"))?;
+        Ok(())
+    }
+
+    pub async fn user_by_id(&self, id: &str) -> Result<Option<ProductUser>> {
+        let row = sqlx::query_as::<_, ProductUserRow>(
+            "SELECT id, username, password_algo, password_hash, created_at, updated_at, \
+             disabled_at FROM users WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .with_context(|| format!("SELECT user {id}"))?;
+        Ok(row.map(ProductUser::from_pg))
+    }
+
+    pub async fn user_by_username(&self, username: &str) -> Result<Option<ProductUser>> {
+        let row = sqlx::query_as::<_, ProductUserRow>(
+            "SELECT id, username, password_algo, password_hash, created_at, updated_at, \
+             disabled_at FROM users WHERE username = $1",
+        )
+        .bind(username)
+        .fetch_optional(&self.pool)
+        .await
+        .with_context(|| format!("SELECT user by username {username}"))?;
+        Ok(row.map(ProductUser::from_pg))
+    }
+
+    pub async fn set_user_disabled_at(&self, id: &str, disabled_at_ms: Option<i64>) -> Result<()> {
+        let result = sqlx::query(
+            "UPDATE users SET disabled_at = to_timestamp($2::double precision / 1000), \
+             updated_at = now() WHERE id = $1",
+        )
+        .bind(id)
+        .bind(disabled_at_ms)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPDATE user disabled_at {id}"))?;
+        anyhow::ensure!(result.rows_affected() == 1, "user {id} not found");
+        Ok(())
+    }
+
+    pub async fn delete_user(&self, id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("DELETE user {id}"))?;
+        Ok(())
+    }
+
+    pub async fn insert_user_session(&self, session: &ProductUserSession) -> Result<()> {
+        anyhow::ensure!(!session.token_hash.is_empty(), "token hash cannot be empty");
+        let user_agent = truncate_user_agent(session.user_agent.as_deref());
+        sqlx::query(
+            "INSERT INTO user_sessions (token_hash, user_id, created_at, expires_at, \
+             last_seen_at, user_agent) VALUES ( \
+             $1, $2, to_timestamp($3::double precision / 1000), \
+             to_timestamp($4::double precision / 1000), \
+             to_timestamp($5::double precision / 1000), $6)",
+        )
+        .bind(&session.token_hash)
+        .bind(&session.user_id)
+        .bind(session.created_at_ms)
+        .bind(session.expires_at_ms)
+        .bind(session.last_seen_at_ms)
+        .bind(user_agent.as_deref())
+        .execute(&self.pool)
+        .await
+        .context("INSERT user session")?;
+        Ok(())
+    }
+
+    pub async fn user_session_by_token_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<ProductUserSession>> {
+        let row = sqlx::query_as::<_, ProductUserSessionRow>(
+            "SELECT token_hash, user_id, created_at, expires_at, last_seen_at, user_agent \
+             FROM user_sessions WHERE token_hash = $1",
+        )
+        .bind(token_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .context("SELECT user session")?;
+        Ok(row.map(ProductUserSession::from_pg))
+    }
+
+    pub async fn delete_user_session(&self, token_hash: &str) -> Result<()> {
+        sqlx::query("DELETE FROM user_sessions WHERE token_hash = $1")
+            .bind(token_hash)
+            .execute(&self.pool)
+            .await
+            .context("DELETE user session")?;
+        Ok(())
+    }
+
+    pub async fn delete_user_sessions_for_user(&self, user_id: &str) -> Result<u64> {
+        let result = sqlx::query("DELETE FROM user_sessions WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("DELETE user sessions for {user_id}"))?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn insert_user_api_token(&self, token: &ProductApiToken) -> Result<()> {
+        anyhow::ensure!(
+            valid_product_user_id(&token.id),
+            "token id must be 32 hex characters"
+        );
+        anyhow::ensure!(!token.token_hash.is_empty(), "token hash cannot be empty");
+        sqlx::query(
+            "INSERT INTO user_api_tokens (id, user_id, name, token_prefix, token_hash, \
+             created_at, expires_at, last_used_at, revoked_at) VALUES ( \
+             $1, $2, $3, $4, $5, to_timestamp($6::double precision / 1000), \
+             to_timestamp($7::double precision / 1000), \
+             to_timestamp($8::double precision / 1000), \
+             to_timestamp($9::double precision / 1000))",
+        )
+        .bind(&token.id)
+        .bind(&token.user_id)
+        .bind(&token.name)
+        .bind(&token.token_prefix)
+        .bind(&token.token_hash)
+        .bind(token.created_at_ms)
+        .bind(token.expires_at_ms)
+        .bind(token.last_used_at_ms)
+        .bind(token.revoked_at_ms)
+        .execute(&self.pool)
+        .await
+        .map_err(|error| {
+            unique_constraint_error(error, "token hash already exists", "INSERT user API token")
+        })?;
+        Ok(())
+    }
+
+    pub async fn user_api_token_by_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<ProductApiToken>> {
+        let row = sqlx::query_as::<_, ProductApiTokenRow>(
+            "SELECT id, user_id, name, token_prefix, token_hash, created_at, expires_at, \
+             last_used_at, revoked_at FROM user_api_tokens WHERE token_hash = $1",
+        )
+        .bind(token_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .context("SELECT user API token")?;
+        Ok(row.map(ProductApiToken::from_pg))
+    }
+}
+
+impl PostgresStorage {
     /// Update only `status` and bump `updated_at`. Used when `Hub::set_status`
     /// fires; the event itself goes through `append_event` separately.
     ///
@@ -5324,11 +5758,123 @@ mod storage_contract_tests {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
+    async fn assert_product_user_contract(store: &Store) -> Result<()> {
+        let created_at_ms = 1_900_000_000_000;
+        let user = ProductUser {
+            id: "0123456789abcdef0123456789abcdef".to_owned(),
+            username: "draven".to_owned(),
+            password_algo: crate::product_auth::PASSWORD_ALGO_ARGON2ID.to_owned(),
+            password_hash:
+                "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHRzb21lc2FsdA$dGVzdGhhc2h2YWx1ZW5vdHJlYWw"
+                    .to_owned(),
+            created_at_ms,
+            updated_at_ms: created_at_ms,
+            disabled_at_ms: None,
+        };
+        store.insert_user(&user).await?;
+        let loaded = store
+            .user_by_username("draven")
+            .await?
+            .context("product user was not restored by username")?;
+        assert_eq!(loaded.id, user.id);
+        assert_eq!(loaded.username, "draven");
+        assert_eq!(loaded.password_algo, "argon2id");
+        assert_eq!(loaded.password_hash, user.password_hash);
+        assert_eq!(loaded.disabled_at_ms, None);
+        assert_eq!(
+            store.user_by_id(&user.id).await?.map(|row| row.username),
+            Some("draven".to_owned())
+        );
+        let duplicate = ProductUser {
+            id: "fedcba9876543210fedcba9876543210".to_owned(),
+            username: "draven".to_owned(),
+            ..user.clone()
+        };
+        assert!(
+            store
+                .insert_user(&duplicate)
+                .await
+                .expect_err("duplicate username should fail")
+                .to_string()
+                .contains("account already exists")
+        );
+
+        let session = ProductUserSession {
+            token_hash: "aa".repeat(32),
+            user_id: user.id.clone(),
+            created_at_ms,
+            expires_at_ms: created_at_ms + 14 * 24 * 60 * 60 * 1_000,
+            last_seen_at_ms: created_at_ms,
+            user_agent: Some("CowboyContract/1.0".to_owned()),
+        };
+        store.insert_user_session(&session).await?;
+        let restored_session = store
+            .user_session_by_token_hash(&session.token_hash)
+            .await?
+            .context("product user session was not restored")?;
+        assert_eq!(restored_session.user_id, user.id);
+        assert_eq!(
+            restored_session.user_agent.as_deref(),
+            Some("CowboyContract/1.0")
+        );
+        store.delete_user_session(&session.token_hash).await?;
+        assert!(
+            store
+                .user_session_by_token_hash(&session.token_hash)
+                .await?
+                .is_none()
+        );
+        store.insert_user_session(&session).await?;
+        assert_eq!(store.delete_user_sessions_for_user(&user.id).await?, 1);
+
+        let token = ProductApiToken {
+            id: "abcdef0123456789abcdef0123456789".to_owned(),
+            user_id: user.id.clone(),
+            name: "zed".to_owned(),
+            token_prefix: "cow_abcd".to_owned(),
+            token_hash: "bb".repeat(32),
+            created_at_ms,
+            expires_at_ms: Some(created_at_ms + 365 * 24 * 60 * 60 * 1_000),
+            last_used_at_ms: None,
+            revoked_at_ms: None,
+        };
+        store.insert_user_api_token(&token).await?;
+        let restored_token = store
+            .user_api_token_by_hash(&token.token_hash)
+            .await?
+            .context("product API token was not restored")?;
+        assert_eq!(restored_token.name, "zed");
+        assert_eq!(restored_token.token_prefix, "cow_abcd");
+        assert_eq!(restored_token.expires_at_ms, token.expires_at_ms);
+
+        store
+            .set_user_disabled_at(&user.id, Some(created_at_ms + 1))
+            .await?;
+        assert_eq!(
+            store
+                .user_by_id(&user.id)
+                .await?
+                .and_then(|row| row.disabled_at_ms),
+            Some(created_at_ms + 1)
+        );
+        store.delete_user(&user.id).await?;
+        assert!(store.user_by_username("draven").await?.is_none());
+        assert!(
+            store
+                .user_api_token_by_hash(&token.token_hash)
+                .await?
+                .is_none()
+        );
+        Ok(())
+    }
+
     #[allow(clippy::too_many_lines)] // one shared end-to-end contract for every storage backend
     async fn run_storage_contract(store: &Store, session_id: &str) -> Result<()> {
         store.migrate().await?;
         assert_machine_contract(store).await?;
         assert_provider_action_contract(store).await?;
+        assert_product_user_contract(store).await?;
         store.insert_session(&session(session_id)).await?;
         let companion_id = format!("{session_id}-artifact");
         store.insert_session(&session(&companion_id)).await?;
