@@ -68,8 +68,21 @@ matches `draven`.
 | `POST /api/admin/auth/bootstrap` | public; first owner only | create owner + `cowboy_admin` |
 | `POST /api/admin/auth/login` | public | `cowboy_admin` cookie |
 | `POST /api/admin/auth/logout` | cookie optional | clear admin cookie |
-| `GET /api/admin/accounts` | public GET (list, no hashes) | admin operators |
-| `GET /api/admin/registration` | public GET | policy + token table (no hashes) |
+| `GET /api/admin/overview` | admin viewer+ | health, persistence, registration |
+| `GET /api/admin/sessions` | admin viewer+ | live session list |
+| `GET /api/admin/machines` | admin viewer+ | enrolled machines |
+| `GET /api/admin/accounts` | admin viewer+ | admin operators (no hashes) |
+| `POST /api/admin/accounts` | admin owner | create admin operator |
+| `GET /api/admin/registration` | admin viewer+ | policy + token table (no hashes) |
+| `PUT /api/admin/registration` | admin operator+ | enable / mode |
+| `POST /api/admin/registration/tokens` | admin operator+ | issue invite; secret shown once |
+| `DELETE /api/admin/registration/tokens/{id}` | admin operator+ | disable invite |
+| `GET /api/admin/permissions` | admin viewer+ | grants + default role |
+| `PUT /api/admin/permissions` | admin owner | replace grants |
+| `GET /api/admin/session-limits` | admin viewer+ | controller session limits |
+| `PUT /api/admin/session-limits` | admin operator+ | replace limits |
+| `GET /api/admin/providers` | admin viewer+ | catalog entries + root |
+| `POST /api/admin/providers/refresh` | admin operator+ | rescan external releases |
 | `GET /api/auth/status` | public | `{ registration: RegistrationPublicStatus, me? }` |
 | `POST /api/auth/register` | public; policy-gated | create user + `cowboy_user` cookie |
 | `POST /api/auth/login` | public | cookie + `me` |

@@ -210,6 +210,11 @@ mod service_catalog {
             Ok(count)
         }
 
+        #[must_use]
+        pub(crate) fn catalog_root(&self) -> Option<PathBuf> {
+            self.external_root.clone()
+        }
+
         pub(crate) fn entries(&self) -> Vec<CatalogEntry> {
             let external = self.external.read();
             let released_ids: std::collections::BTreeSet<_> = external

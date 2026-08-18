@@ -1605,6 +1605,10 @@ struct ProductAuthState {
     store: Option<Store>,
     rate_limits: Arc<crate::product_auth::AuthRateLimiter>,
     public_origins: Arc<Vec<String>>,
+    runtime_health: Option<Arc<RuntimeHealth>>,
+    persistence_health: Option<Arc<PersistenceHealth>>,
+    runtime_router: Option<Arc<RuntimeRouter>>,
+    provider_catalog: Option<Arc<crate::provider_catalog::ProviderCatalog>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1672,8 +1676,38 @@ fn product_auth_router(state: ProductAuthState) -> Router {
         .route("/api/admin/auth/bootstrap", post(api_admin_bootstrap))
         .route("/api/admin/auth/login", post(api_admin_login))
         .route("/api/admin/auth/logout", post(api_admin_logout))
-        .route("/api/admin/accounts", get(api_admin_accounts))
-        .route("/api/admin/registration", get(api_admin_registration))
+        .route(
+            "/api/admin/accounts",
+            get(api_admin_accounts).post(api_admin_create_account),
+        )
+        .route("/api/admin/overview", get(api_admin_overview))
+        .route("/api/admin/sessions", get(api_admin_sessions))
+        .route("/api/admin/machines", get(api_admin_machines))
+        .route(
+            "/api/admin/registration",
+            get(api_admin_registration).put(api_admin_registration_put),
+        )
+        .route(
+            "/api/admin/registration/tokens",
+            post(api_admin_registration_token),
+        )
+        .route(
+            "/api/admin/registration/tokens/{id}",
+            delete(api_admin_registration_token_delete),
+        )
+        .route(
+            "/api/admin/permissions",
+            get(api_admin_permissions).put(api_admin_permissions_put),
+        )
+        .route(
+            "/api/admin/session-limits",
+            get(api_admin_session_limits).put(api_admin_session_limits_put),
+        )
+        .route("/api/admin/providers", get(api_admin_providers))
+        .route(
+            "/api/admin/providers/refresh",
+            post(api_admin_providers_refresh),
+        )
         .with_state(state)
 }
 
@@ -1699,9 +1733,17 @@ fn admin_identities(hub: &Hub) -> crate::admin::AdminIdentities {
 }
 
 fn persist_admin_identities(hub: &Hub, identities: &crate::admin::AdminIdentities) {
+    persist_admin_setting(hub, crate::admin::ADMIN_IDENTITIES_SETTING, identities);
+}
+
+fn persist_registration_policy(hub: &Hub, policy: &crate::admin::RegistrationPolicy) {
+    persist_admin_setting(hub, crate::admin::REGISTRATION_SETTING, policy);
+}
+
+fn persist_admin_setting(hub: &Hub, key: &str, value: &impl Serialize) {
     hub.set_setting(
-        crate::admin::ADMIN_IDENTITIES_SETTING.to_owned(),
-        serde_json::to_value(identities).unwrap_or_else(|_| serde_json::json!({})),
+        key.to_owned(),
+        serde_json::to_value(value).unwrap_or_else(|_| serde_json::json!({})),
     );
 }
 
@@ -1812,6 +1854,346 @@ async fn api_admin_registration(
             .unwrap_or_else(|_| serde_json::json!({})),
     )
     .into_response()
+}
+
+async fn api_admin_create_account(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(request): Json<crate::admin::AdminCredentials>,
+) -> Response {
+    let peer = peer_addr(peer);
+    if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
+        return rejected;
+    }
+    if let Err(status) = require_admin(&state, &headers, crate::admin::AdminRole::Owner) {
+        return status.into_response();
+    }
+    let mut identities = admin_identities(&state.hub);
+    match identities.create_account(&request, crate::admin::AdminRole::Operator, auth_now_ms()) {
+        Ok(()) => {
+            persist_admin_identities(&state.hub, &identities);
+            Json(serde_json::json!({
+                "account": request.account.trim().to_ascii_lowercase(),
+                "role": "operator",
+            }))
+            .into_response()
+        }
+        Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    }
+}
+
+#[derive(Serialize)]
+struct AdminOverview {
+    healthy: bool,
+    persistence: &'static str,
+    backend: &'static str,
+    sessions_live: usize,
+    sessions_deleted: i64,
+    events_rows: i64,
+    daemon_rss_bytes: u64,
+    runtime_workers: usize,
+    runtime_busy_workers: usize,
+    registration: crate::admin::RegistrationPolicyView,
+}
+
+#[derive(Serialize)]
+struct AdminSessionRow {
+    id: String,
+    title: String,
+    provider: String,
+    machine_id: String,
+    status: Status,
+}
+
+async fn api_admin_overview(State(state): State<ProductAuthState>, headers: HeaderMap) -> Response {
+    if let Err(status) = require_admin(&state, &headers, crate::admin::AdminRole::Viewer) {
+        return status.into_response();
+    }
+    let healthy = match &state.runtime_health {
+        Some(health) => {
+            health.is_healthy(state.store.is_some())
+                && state
+                    .persistence_health
+                    .as_ref()
+                    .is_none_or(|health| health.is_healthy())
+        }
+        None => true,
+    };
+    let (events_rows, sessions_deleted) = match &state.store {
+        Some(store) => store
+            .storage_metrics()
+            .await
+            .map(|(_, events, deleted)| (events, deleted))
+            .unwrap_or((0, 0)),
+        None => (i64::try_from(state.hub.event_total()).unwrap_or(0), 0),
+    };
+    let (runtime_workers, runtime_busy_workers) = state
+        .runtime_router
+        .as_ref()
+        .map(|router| {
+            let stats = router.stats();
+            (stats.workers, stats.busy_workers)
+        })
+        .unwrap_or((0, 0));
+    Json(AdminOverview {
+        healthy,
+        persistence: if !healthy && state.store.is_some() {
+            "degraded"
+        } else if state.store.is_some() {
+            "durable"
+        } else {
+            "memory"
+        },
+        backend: if state.store.is_some() {
+            "store"
+        } else {
+            "memory"
+        },
+        sessions_live: state.hub.session_list().len(),
+        sessions_deleted,
+        events_rows,
+        daemon_rss_bytes: daemon_rss_bytes(),
+        runtime_workers,
+        runtime_busy_workers,
+        registration: registration_policy(&state.hub).public_view(),
+    })
+    .into_response()
+}
+
+async fn api_admin_sessions(State(state): State<ProductAuthState>, headers: HeaderMap) -> Response {
+    if let Err(status) = require_admin(&state, &headers, crate::admin::AdminRole::Viewer) {
+        return status.into_response();
+    }
+    let sessions = state
+        .hub
+        .session_list()
+        .into_iter()
+        .map(|session| AdminSessionRow {
+            id: session.id,
+            title: session.title,
+            provider: session.provider,
+            machine_id: session.machine_id,
+            status: session.status,
+        })
+        .collect::<Vec<_>>();
+    Json(serde_json::json!({ "sessions": sessions })).into_response()
+}
+
+async fn api_admin_machines(State(state): State<ProductAuthState>, headers: HeaderMap) -> Response {
+    if let Err(status) = require_admin(&state, &headers, crate::admin::AdminRole::Viewer) {
+        return status.into_response();
+    }
+    let machines = if let Some(store) = state.store.as_ref() {
+        match store.list_machines().await {
+            Ok(machines) => machines,
+            Err(error) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    Json(serde_json::json!({ "machines": machines })).into_response()
+}
+
+async fn api_admin_registration_put(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(patch): Json<crate::admin::RegistrationPolicyPatch>,
+) -> Response {
+    let peer = peer_addr(peer);
+    if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
+        return rejected;
+    }
+    if let Err(status) = require_admin(&state, &headers, crate::admin::AdminRole::Operator) {
+        return status.into_response();
+    }
+    let mut policy = registration_policy(&state.hub);
+    crate::admin::apply_policy_patch(&mut policy, &patch);
+    persist_registration_policy(&state.hub, &policy);
+    Json(serde_json::to_value(policy.public_view()).unwrap_or_else(|_| serde_json::json!({})))
+        .into_response()
+}
+
+async fn api_admin_registration_token(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(request): Json<crate::admin::CreateRegistrationToken>,
+) -> Response {
+    let peer = peer_addr(peer);
+    if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
+        return rejected;
+    }
+    if let Err(status) = require_admin(&state, &headers, crate::admin::AdminRole::Operator) {
+        return status.into_response();
+    }
+    let mut policy = registration_policy(&state.hub);
+    match crate::admin::issue_registration_token(&mut policy, &request, auth_now_ms()) {
+        Ok(created) => {
+            persist_registration_policy(&state.hub, &policy);
+            Json(created).into_response()
+        }
+        Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    }
+}
+
+async fn api_admin_registration_token_delete(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    Path(token_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let peer = peer_addr(peer);
+    if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
+        return rejected;
+    }
+    if let Err(status) = require_admin(&state, &headers, crate::admin::AdminRole::Operator) {
+        return status.into_response();
+    }
+    let mut policy = registration_policy(&state.hub);
+    match crate::admin::disable_registration_token(&mut policy, &token_id) {
+        Ok(()) => {
+            persist_registration_policy(&state.hub, &policy);
+            Json(policy.public_view()).into_response()
+        }
+        Err(error) => (StatusCode::NOT_FOUND, error.to_string()).into_response(),
+    }
+}
+
+async fn api_admin_permissions(
+    State(state): State<ProductAuthState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(status) = require_admin(&state, &headers, crate::admin::AdminRole::Viewer) {
+        return status.into_response();
+    }
+    let policy = permission_policy(&state.hub);
+    Json(serde_json::json!({
+        "default_role": policy.default_role,
+        "grants": policy.grants,
+        "anonymous_role": policy.role_for(""),
+    }))
+    .into_response()
+}
+
+async fn api_admin_permissions_put(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(patch): Json<crate::admin::PermissionPolicy>,
+) -> Response {
+    let peer = peer_addr(peer);
+    if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
+        return rejected;
+    }
+    if let Err(status) = require_admin(&state, &headers, crate::admin::AdminRole::Owner) {
+        return status.into_response();
+    }
+    let mut policy = permission_policy(&state.hub);
+    if let Err(error) = policy.apply_patch(patch) {
+        return (StatusCode::BAD_REQUEST, error.to_string()).into_response();
+    }
+    persist_admin_setting(&state.hub, crate::admin::PERMISSIONS_SETTING, &policy);
+    Json(policy).into_response()
+}
+
+async fn api_admin_session_limits(
+    State(state): State<ProductAuthState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(status) = require_admin(&state, &headers, crate::admin::AdminRole::Viewer) {
+        return status.into_response();
+    }
+    let limits = crate::admin::SessionLimits::from_setting(
+        state
+            .hub
+            .settings_snapshot()
+            .get(crate::admin::SESSION_LIMITS_SETTING),
+    );
+    Json(serde_json::json!({
+        "max_sessions": limits.max_sessions,
+        "max_retention_days": limits.max_retention_days,
+        "last_n": limits.last_n,
+        "last_time_hours": limits.last_time_hours,
+        "keeps_latest": limits.keeps_event(0, 0),
+        "or_rule": true,
+    }))
+    .into_response()
+}
+
+async fn api_admin_session_limits_put(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(patch): Json<crate::admin::SessionLimits>,
+) -> Response {
+    let peer = peer_addr(peer);
+    if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
+        return rejected;
+    }
+    if let Err(status) = require_admin(&state, &headers, crate::admin::AdminRole::Operator) {
+        return status.into_response();
+    }
+    let mut limits = crate::admin::SessionLimits::from_setting(
+        state
+            .hub
+            .settings_snapshot()
+            .get(crate::admin::SESSION_LIMITS_SETTING),
+    );
+    if let Err(error) = limits.apply_patch(patch) {
+        return (StatusCode::BAD_REQUEST, error.to_string()).into_response();
+    }
+    persist_admin_setting(&state.hub, crate::admin::SESSION_LIMITS_SETTING, &limits);
+    Json(limits).into_response()
+}
+
+async fn api_admin_providers(
+    State(state): State<ProductAuthState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(status) = require_admin(&state, &headers, crate::admin::AdminRole::Viewer) {
+        return status.into_response();
+    }
+    let Some(catalog) = state.provider_catalog.as_ref() else {
+        return Json(serde_json::json!({
+            "providers": [],
+            "catalog_root": serde_json::Value::Null,
+        }))
+        .into_response();
+    };
+    Json(serde_json::json!({
+        "providers": catalog.entries(),
+        "catalog_root": catalog.catalog_root(),
+    }))
+    .into_response()
+}
+
+async fn api_admin_providers_refresh(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    let peer = peer_addr(peer);
+    if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
+        return rejected;
+    }
+    if let Err(status) = require_admin(&state, &headers, crate::admin::AdminRole::Operator) {
+        return status.into_response();
+    }
+    let Some(catalog) = state.provider_catalog.as_ref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "provider catalog unavailable",
+        )
+            .into_response();
+    };
+    match catalog.refresh_external() {
+        Ok(count) => Json(serde_json::json!({ "external_releases": count })).into_response(),
+        Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    }
 }
 
 fn auth_now_ms() -> i64 {
@@ -2868,7 +3250,11 @@ async fn serve_axum(
         hub: state.hub.clone(),
         store: state.store.clone(),
         rate_limits: Arc::new(crate::product_auth::AuthRateLimiter::default()),
-        public_origins: Arc::new(crate::product_auth::load_public_origins()),
+        public_origins: state.public_origins.clone(),
+        runtime_health: Some(state.runtime_health.clone()),
+        persistence_health: state.persistence_health.clone(),
+        runtime_router: Some(state.runtime_router.clone()),
+        provider_catalog: Some(state.provider_catalog.clone()),
     };
 
     let app = Router::new()
@@ -11210,6 +11596,10 @@ mod product_auth_api_tests {
             store,
             rate_limits: Arc::new(crate::product_auth::AuthRateLimiter::default()),
             public_origins: Arc::new(Vec::new()),
+            runtime_health: None,
+            persistence_health: None,
+            runtime_router: None,
+            provider_catalog: None,
         }
     }
 
@@ -11257,6 +11647,22 @@ mod product_auth_api_tests {
     ) -> reqwest::Response {
         let mut request = reqwest::Client::new()
             .post(url)
+            .header(header::ORIGIN, origin)
+            .json(&body);
+        if let Some(cookie) = cookie {
+            request = request.header(header::COOKIE, cookie);
+        }
+        request.send().await.unwrap()
+    }
+
+    async fn put_json(
+        url: &str,
+        origin: &str,
+        cookie: Option<&str>,
+        body: serde_json::Value,
+    ) -> reqwest::Response {
+        let mut request = reqwest::Client::new()
+            .put(url)
             .header(header::ORIGIN, origin)
             .json(&body);
         if let Some(cookie) = cookie {
@@ -11415,6 +11821,18 @@ mod product_auth_api_tests {
         assert_eq!(
             classify_route(&Method::POST, "/api/admin/auth/login"),
             RouteAuth::Public
+        );
+        assert_eq!(
+            classify_route(&Method::POST, "/api/admin/accounts"),
+            RouteAuth::AdminOwner
+        );
+        assert_eq!(
+            classify_route(&Method::PUT, "/api/admin/registration"),
+            RouteAuth::AdminOperator
+        );
+        assert_eq!(
+            classify_route(&Method::PUT, "/api/admin/permissions"),
+            RouteAuth::AdminOwner
         );
         assert!(!matches!(
             classify_route(&Method::GET, "/api/unknown"),
@@ -11912,6 +12330,117 @@ mod product_auth_api_tests {
         let me_body: serde_json::Value = me.json().await.unwrap();
         assert_eq!(me_body["account"], "draven");
         assert_eq!(me_body["role"], "operator");
+
+        server.abort();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn admin_overview_requires_cookie() {
+        let (store, root) = test_store().await;
+        let hub = Hub::new();
+        let admin = seed_admin(&hub);
+        let (base, server) = spawn_auth(auth_state(hub, Some(store))).await;
+
+        let denied = reqwest::Client::new()
+            .get(format!("{base}/api/admin/overview"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+
+        let overview = reqwest::Client::new()
+            .get(format!("{base}/api/admin/overview"))
+            .header(header::COOKIE, &admin)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(overview.status(), StatusCode::OK);
+        let body: serde_json::Value = overview.json().await.unwrap();
+        assert_eq!(body["healthy"], true);
+        assert_eq!(body["backend"], "store");
+        assert_eq!(body["registration"]["accepts_registration"], false);
+
+        server.abort();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn admin_owner_can_open_registration_and_create_operator() {
+        let (store, root) = test_store().await;
+        let hub = Hub::new();
+        let admin = seed_admin(&hub);
+        let (base, server) = spawn_auth(auth_state(hub.clone(), Some(store))).await;
+        let origin = origin_for(&base);
+
+        let saved = put_json(
+            &format!("{base}/api/admin/registration"),
+            &origin,
+            Some(&admin),
+            serde_json::json!({
+                "enabled": true,
+                "mode": "token",
+            }),
+        )
+        .await;
+        assert_eq!(saved.status(), StatusCode::OK);
+        let saved_body: serde_json::Value = saved.json().await.unwrap();
+        assert_eq!(saved_body["enabled"], true);
+        assert_eq!(saved_body["mode"], "token");
+        assert_eq!(saved_body["accepts_registration"], true);
+
+        let issued = post_json(
+            &format!("{base}/api/admin/registration/tokens"),
+            &origin,
+            Some(&admin),
+            serde_json::json!({
+                "name": "invite",
+                "uses_allowed": 1,
+                "ttl_seconds": 3600,
+            }),
+        )
+        .await;
+        assert_eq!(issued.status(), StatusCode::OK);
+        let issued_body: serde_json::Value = issued.json().await.unwrap();
+        assert!(issued_body["token"].as_str().unwrap().len() > 8);
+        assert_eq!(issued_body["record"]["name"], "invite");
+
+        let created = post_json(
+            &format!("{base}/api/admin/accounts"),
+            &origin,
+            Some(&admin),
+            serde_json::json!({
+                "account": "ops",
+                "password": "correct-horse",
+            }),
+        )
+        .await;
+        assert_eq!(created.status(), StatusCode::OK);
+        let created_body: serde_json::Value = created.json().await.unwrap();
+        assert_eq!(created_body["account"], "ops");
+        assert_eq!(created_body["role"], "operator");
+
+        let accounts = reqwest::Client::new()
+            .get(format!("{base}/api/admin/accounts"))
+            .header(header::COOKIE, &admin)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(accounts.status(), StatusCode::OK);
+        let accounts_body: serde_json::Value = accounts.json().await.unwrap();
+        let names: Vec<&str> = accounts_body["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["account"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"owner"));
+        assert!(names.contains(&"ops"));
+
+        let policy =
+            RegistrationPolicy::from_setting(hub.settings_snapshot().get(REGISTRATION_SETTING));
+        assert!(policy.accepts_registration());
+        assert_eq!(policy.tokens.len(), 1);
 
         server.abort();
         let _ = std::fs::remove_dir_all(root);

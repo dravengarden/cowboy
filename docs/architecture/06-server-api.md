@@ -19,6 +19,25 @@ control plane, while the web files remain an independently replaceable release.
 | `POST /api/auth/tokens` | product operator+; create a `cow_…` token (secret shown once) |
 | `GET /api/auth/tokens` | list own token prefixes, names, timestamps |
 | `DELETE /api/auth/tokens/{id}` | revoke own token; other users' ids are 404 |
+| `GET /api/admin/auth` | public admin login status / bootstrap required |
+| `POST /api/admin/auth/bootstrap` | first owner only; `cowboy_admin` cookie |
+| `POST /api/admin/auth/login` | admin login; `cowboy_admin` cookie |
+| `POST /api/admin/auth/logout` | clear admin cookie |
+| `GET /api/admin/overview` | admin viewer+ health, persistence, registration |
+| `GET /api/admin/sessions` | admin viewer+ live sessions |
+| `GET /api/admin/machines` | admin viewer+ enrolled machines |
+| `GET /api/admin/accounts` | admin viewer+ admin operators (no hashes) |
+| `POST /api/admin/accounts` | admin owner create admin operator |
+| `GET /api/admin/registration` | admin viewer+ policy + invite table |
+| `PUT /api/admin/registration` | admin operator+ enable / mode |
+| `POST /api/admin/registration/tokens` | admin operator+ issue invite |
+| `DELETE /api/admin/registration/tokens/{id}` | admin operator+ disable invite |
+| `GET /api/admin/permissions` | admin viewer+ grants |
+| `PUT /api/admin/permissions` | admin owner replace grants |
+| `GET /api/admin/session-limits` | admin viewer+ controller limits |
+| `PUT /api/admin/session-limits` | admin operator+ replace limits |
+| `GET /api/admin/providers` | admin viewer+ catalog |
+| `POST /api/admin/providers/refresh` | admin operator+ rescan external releases |
 | `GET/POST /api/admin/users` | admin operator+ list/create product users (default grant `operator`) |
 | `POST /api/admin/users/{id}/disable` | admin operator+ disable + revoke sessions/tokens |
 | `POST /api/admin/users/{id}/password` | admin owner set password |
