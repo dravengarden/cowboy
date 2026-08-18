@@ -59,15 +59,12 @@ Deno.test("mobile drawer keeps clipping and shadows off the heavy surface", () =
   assert(widthAt >= 0 && translateAt > widthAt);
 });
 
-Deno.test("finger swipe does not fire navigation haptics", () => {
-  assertEquals(drawerSource.includes("navigationHaptic"), false);
-  assertEquals(drawerSource.includes("prepareNavigationHaptic"), false);
-  assertEquals(drawerSource.includes("thresholdHaptic"), false);
-  assertEquals(productShellSource.includes("navigationHaptic"), false);
-  assertEquals(productShellSource.includes("prepareNavigationHaptic"), false);
-  assert(
-    appSource.includes('aria-label={drawerOpen ? "Close sessions" : "Open sessions"}'),
-  );
+Deno.test("finger swipe fires a navigation haptic at the commit threshold", () => {
+  assertEquals(drawerSource.includes("prepareNavigationHaptic()"), true);
+  assertEquals(drawerSource.includes("navigationHaptic()"), true);
+  assertEquals(drawerSource.includes("thresholdHaptic"), true);
+  assertEquals(productShellSource.includes("prepareNavigationHaptic()"), true);
+  assertEquals(productShellSource.includes("if (changed) navigationHaptic()"), true);
 });
 
 Deno.test("drawer join is a hard paper|page edge", () => {

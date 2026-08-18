@@ -1,6 +1,6 @@
 import { Box } from "@mui/material";
 import { useCallback, useEffect, useRef, useState } from "react";
-
+import { navigationHaptic, prepareNavigationHaptic } from "../../haptic";
 import {
   controlPlaneConnection,
   useActiveWorkspaceBinding,
@@ -244,8 +244,10 @@ export function MobileProductShell({
       agentPage.style.transition = transition;
       reviewPage.style.transition = transition;
       render(targetOffset, width);
+      const changed = next !== productRef.current;
       productRef.current = next;
       globalThis.localStorage?.setItem(PRODUCT_STORAGE_KEY, next);
+      if (changed) navigationHaptic();
       settleTimer = globalThis.setTimeout(() => {
         agentPage.style.removeProperty("transition");
         reviewPage.style.removeProperty("transition");
@@ -279,6 +281,7 @@ export function MobileProductShell({
         velocity: 0,
         locked: false,
       };
+      prepareNavigationHaptic();
       // Promote both pages before the 2 px claim so the first translate
       // only writes transform. Overflow flatten waits for rAF bookkeeping.
       armPagerPresentation();
