@@ -11,7 +11,10 @@ package UI
 core Mobile requirement, not polish.** It applies equally to Agent
 transcript, Review README, Review source/diff (CodeMirror), both
 drawers, and the Agent↔Review pager. A surface that is correct at rest
-but hitchy while sliding is unfinished.
+but hitchy while sliding is unfinished. The iOS app is the same JS
+drawer; if it feels less 1:1 than Safari/PWA, the document
+`WKWebView.scrollView` is the first host to check (`delaysContentTouches`
+and `canCancelContentTouches`), not a missing JIT switch.
 
 This document is the strategy that later Mobile motion, Transcript, and
 Code Review work must follow. It records what survived device review,

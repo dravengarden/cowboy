@@ -224,13 +224,16 @@ and routes to native commands where the PWA can't reach (lock-screen, native fil
 picker). `AppErrorBoundary` + `ConnectionBanner` degrade gracefully when the WS
 drops.
 
-The iOS shell restores `WKWebView.scrollView.bounces` on the next main-queue
-turn after WebView construction because Wry 0.55.1 disables it after the
-initializer returns. Keep `alwaysBounceVertical` disabled: overflowing web
-scrollers should retain native edge elasticity, while a document that already
-fits the viewport must not make the whole application surface draggable. This
-is a native-shell contract and requires a SideStore release plus physical-device
-acceptance when changed.
+The iOS shell must tame the document `WKWebView.scrollView` so it does not
+compete with JS spatial drawers. Safari/PWA has no extra 150ms
+`delaysContentTouches` gate on an `overflow: hidden` page; Wry's WKWebView
+still does. After construction (and again on the next main-queue turn, because
+Wry 0.55.1 writes `bounces` after `init` returns) set
+`delaysContentTouches = NO`, `canCancelContentTouches = NO`, and disable
+document rubber-band (`bounces` / `alwaysBounceVertical` /
+`alwaysBounceHorizontal`). Inner Transcript/Code overflow stays on
+`WKChildScrollView` and keeps native edge elasticity. This is a native-shell
+contract and requires a SideStore release plus physical-device acceptance.
 
 ## A house rule worth knowing
 
