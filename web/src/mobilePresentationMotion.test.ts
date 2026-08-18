@@ -70,8 +70,8 @@ Deno.test("gesture roots flatten overflow tiles without a universal selector", (
   assert(motionSource.includes("& [data-mobile-drawer-surface] [data-key]"));
   assert(motionSource.includes("\"& [data-mobile-overflow-layer]\": mobileOverflowTileFlattenSx"));
   assert(motionSource.includes("\"& [data-mobile-code-layer]\": mobileCodeRestLayerSx"));
+  assert(motionSource.includes("mobileCodeSwipeSwapSx"));
   assertEquals(motionSource.includes("mobileCodePaintCullSx"), false);
-  assertEquals(motionSource.includes("visibility: \"hidden\""), false);
   assert(motionSource.includes("mobilePeekRestLayerSx"));
   assert(appSource.includes("mobilePeekRestLayerSx"));
   assert(reviewDrawerSource.includes("mobilePeekRestLayerSx"));
@@ -108,7 +108,7 @@ Deno.test("jank-free swipe is a core Mobile requirement, not polish", () => {
   assert(spatialContract.includes("Swipe must not jank"));
   assert(spatialContract.includes("code pane must not flash"));
   assert(webAgents.includes("a swipe that drops frames is a product bug"));
-  assert(webAgents.includes("do not hide the editor"));
+  assert(spatialContract.includes("bitmap of the current viewport"));
 });
 
 Deno.test("product pager marks moving before the first page translate", () => {

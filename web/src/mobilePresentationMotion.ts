@@ -1,5 +1,8 @@
 import { subscribeAnyDetentSheetOpen } from "./_shell/detent-sheet-open";
-import { mobileCodeRestLayerSx } from "./mobileCodeSurface";
+import {
+  mobileCodeRestLayerSx,
+  mobileCodeSwipeSwapSx,
+} from "./mobileCodeSurface";
 import { holdStorePresentation } from "./store";
 
 /** Standing peek paint collapse. Settled rows each own `contain: layout
@@ -73,6 +76,7 @@ export function mobilePresentationMovingRootSx(
       // the whole Review page). Keep it live once settled — this block
       // is moving-only.
       "& [data-mobile-overflow-layer]": mobileOverflowTileFlattenSx,
+      ...mobileCodeSwipeSwapSx,
     },
   };
 }
@@ -112,6 +116,7 @@ export const mobileSheetPresentationSx = {
   "&[data-mobile-sheet-presented='true']": {
     ...mobileCompositorFlattenSx,
     ...mobileFrostStripSx,
+    ...mobileCodeSwipeSwapSx,
   },
 };
 

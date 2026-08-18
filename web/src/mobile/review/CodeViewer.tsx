@@ -37,6 +37,7 @@ import { rankAndDedupeInspectCandidates } from "./symbolCandidateModel";
 import {
   bindCodeViewerSwipeFreeze,
   isMobileCodeSwipeFrozen,
+  mobileCodeSnapshotHostSx,
 } from "../../mobileCodeSurface";
 import type { CodeLanguage } from "./codeApi";
 
@@ -374,6 +375,8 @@ export default function CodeViewer({
 }): React.JSX.Element {
   const theme = useTheme();
   const editorRef = useRef<EditorView | null>(null);
+  const layerRef = useRef<HTMLDivElement>(null);
+  const snapshotRef = useRef<HTMLCanvasElement>(null);
   const freezeDisposeRef = useRef<(() => void) | undefined>(undefined);
   const appliedRevealRequest = useRef<number | undefined>(undefined);
   const [language, setLanguage] = useState<LanguageSupport | null>(null);
@@ -807,10 +810,12 @@ export default function CodeViewer({
 
   return (
     <Box
+      ref={layerRef}
       data-mobile-code-layer="true"
       sx={{
         height: "100%",
         minHeight: 0,
+        ...mobileCodeSnapshotHostSx,
         "& > div": { height: "100%" },
         // `cmTheme` is shared with the Agent composer and intentionally follows
         // the global reading scale. Code Review owns a separate code-only
@@ -823,13 +828,26 @@ export default function CodeViewer({
         },
       }}
     >
+      <canvas
+        ref={snapshotRef}
+        data-mobile-code-snapshot
+        aria-hidden
+      />
       <CodeMirror
         value={text}
         extensions={extensions}
         onCreateEditor={(view) => {
           editorRef.current = view;
           freezeDisposeRef.current?.();
-          freezeDisposeRef.current = bindCodeViewerSwipeFreeze(view);
+          const layer = layerRef.current;
+          const canvas = snapshotRef.current;
+          if (layer && canvas) {
+            freezeDisposeRef.current = bindCodeViewerSwipeFreeze({
+              view,
+              layer,
+              canvas,
+            });
+          }
         }}
         basicSetup={{
           lineNumbers: true,

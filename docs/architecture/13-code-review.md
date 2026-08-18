@@ -163,8 +163,8 @@ views. Load language packages on demand and do expensive decoration work only
 for visible ranges.
 
 **A Review swipe that hitchs on source/diff but not on README is a
-defect.** Keep CodeMirror on a standing viewport-sized compositor
-layer. Do not hide it during the swipe (that flashes) and do not
+defect.** Translate a viewport bitmap of the editor, not live
+CodeMirror. Do not hide the whole code pane (that flashes) and do not
 change `.cm-scroller` overflow on claim (that remasures). See
 [`mobile-spatial-presentation.md`](../mobile-spatial-presentation.md).
 

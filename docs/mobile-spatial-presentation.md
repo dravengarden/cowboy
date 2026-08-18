@@ -43,9 +43,9 @@ gesture root (shell)
 ## 2. Invariants
 
 0. **Swipe must not jank, and the code pane must not flash.** Finger
-   tracking stays on the compositor. A live CodeMirror inside a
-   translating peek is a defect. Do not hide the editor or change
-   `.cm-scroller` overflow on claim.
+   tracking stays on the compositor. Translate a viewport bitmap of
+   Review source, not live CodeMirror. Do not hide the whole code
+   layer or change `.cm-scroller` overflow on claim.
 1. Drag is 1:1 `translate3d`. Do not interpolate finger tracking with CSS
    `transition` on `transform`.
 2. Release is compositor settle: `cubic-bezier(0.32, 0.72, 0, 1)`, about
@@ -179,23 +179,23 @@ Default wrap is off (`width: max-content`), gutters are sticky, and each
 visible line is token spans. README is a wrapped article, so the same
 transform is cheap.
 
-Two retries already failed:
+Retries that failed:
 
-- Flatten `.cm-scroller` overflow on claim — remasures CM and rebuilds
-  the iOS scroll tile on the first tracking frame.
-- `visibility: hidden` on the code layer — swipe is 1:1, but the code
-  pane flashes blank. Do not retry.
+- Flatten `.cm-scroller` overflow on claim — remasures CM.
+- Hide the whole code layer — 1:1, but the pane flashes blank.
+- Standing `translateZ(0)` clip — iOS still re-rasters the token DOM
+  under the page `contain`.
+
+The swipe therefore translates a **bitmap of the current viewport**:
 
 | Layer | Job |
 |---|---|
-| Standing tile | `[data-mobile-code-layer]` is overflow-clipped and `translate3d(0,0,0)` at rest. One phone-sized texture moves with the peek. |
-| No touch-scroll tile | Review `.cm-scroller` must not set `-webkit-overflow-scrolling: touch`. |
-| Workspace claim | Wrap-off CodeMirror is not a `hasHorizontalScroller` target. Horizontal reading uses the wrap toggle. |
-| Measure freeze | Swipe JS skips `onVisibleLine` only. It must not hide the editor or change overflow. |
+| Finger-down paint | `paintCodeViewportFromDom` rasters visible gutters/lines into a canvas. Never on `touchmove`. |
+| Swap | Moving CSS shows the canvas and hides `.cm-editor`. The pane stays filled. |
+| Workspace claim | Wrap-off CodeMirror is not a `hasHorizontalScroller` target. |
 
-Do not snapshot the editor to a canvas. Do not hide the editor during
-the swipe. Do not change `.cm-scroller` overflow or `.cm-content` width
-on claim.
+Do not call html2canvas on claim. Do not change `.cm-scroller` overflow
+on claim. Do not hide the whole `[data-mobile-code-layer]`.
 
 ## 5. Hit testing and chrome freeze
 
@@ -294,7 +294,7 @@ because those surfaces *contain* the blur.
 | 1:1 write, followers, settle | `web/src/mobileSpatialDrawer.ts` |
 | Rail offset, dim progress, settle curve | `web/src/mobileDrawerMotion.ts` |
 | Standing peek layer, prepare flatten, rail hit, close layer | `web/src/mobilePresentationMotion.ts` |
-| CodeMirror standing swipe tile | `web/src/mobileCodeSurface.ts`, `CodeViewer.tsx` |
+| CodeMirror swipe snapshot | `web/src/mobileCodeSurface.ts`, `CodeViewer.tsx` |
 | Live-row recycle | `web/src/transcriptLiveWindow.ts` |
 | Column-reverse transcript; pause ref (no `setState` on finger-down) | `web/src/Transcript.tsx` |
 | Event-tail recycle | `store.releaseFollowedHistory` |

@@ -22,10 +22,9 @@ Deno.test("Agent and Code scrollports keep native vertical momentum", () => {
   assert(transcript.includes('touchAction: "pan-y pinch-zoom"'));
 });
 
-Deno.test("Code Review keeps CodeMirror visible on a standing swipe layer", () => {
+Deno.test("Code Review swipes a viewport snapshot instead of live CodeMirror", () => {
   assert(codeViewer.includes("bindCodeViewerSwipeFreeze"));
-  assert(codeViewer.includes("isMobileCodeSwipeFrozen"));
+  assert(codeViewer.includes("data-mobile-code-snapshot"));
   assert(codeViewer.includes('data-mobile-code-layer="true"'));
   assertEquals(codeViewer.includes("WebkitOverflowScrolling: \"touch\""), false);
-  assertEquals(codeViewer.includes("visibility: \"hidden\""), false);
 });
