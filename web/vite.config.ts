@@ -1,7 +1,10 @@
 import { realpathSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+
+const webRoot = dirname(fileURLToPath(import.meta.url));
 
 // In dev, proxy the WebSocket + health endpoints to a locally running daemon
 // (`cowboy serve`). Override the target with COWBOY_DEV_BACKEND.
@@ -32,6 +35,10 @@ export default defineConfig({
     // chunk fetches, and the syntax-highlighter chunk only loads once a
     // message bubble renders (Markdown is React.lazy'd).
     rollupOptions: {
+      input: {
+        main: resolve(webRoot, "index.html"),
+        admin: resolve(webRoot, "admin.html"),
+      },
       output: {
         manualChunks(id: string): string | undefined {
           // Only split out what's behind a React.lazy boundary. Splitting
@@ -112,7 +119,21 @@ export default defineConfig({
       "@emotion/styled",
     ],
   },
-  plugins: [react()],
+  plugins: [
+    react(),
+    {
+      name: "cowboy-admin-routes",
+      configureServer(server) {
+        server.middlewares.use((request, _response, next) => {
+          const url = request.url?.split("?")[0] ?? "";
+          if (url === "/admin" || url === "/admin/" || url.startsWith("/admin/")) {
+            request.url = "/admin.html";
+          }
+          next();
+        });
+      },
+    },
+  ],
   server: {
     // Allow the dev server to serve the symlinked shared-utils SDK source (it
     // lives outside this project root). Only relevant to `dev-web`.
