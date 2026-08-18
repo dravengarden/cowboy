@@ -171,6 +171,8 @@ struct SqliteSessionRow {
     config_options: Option<serde_json::Value>,
     config_preferences: serde_json::Value,
     mobile_review_state: serde_json::Value,
+    owner_user_id: Option<String>,
+    owner_username: Option<String>,
 }
 
 const PROVIDER_USAGE_COLUMNS: &str = "machine_id, producer_id, sequence, occurred_at_ms, \
@@ -1365,6 +1367,8 @@ impl SqliteSessionRow {
             context_size: 0,
             usage: None,
             next_schedule_ms: None,
+            owner_user_id: self.owner_user_id,
+            owner_username: self.owner_username,
         }
     }
 }
@@ -1982,7 +1986,9 @@ impl SqliteStorage {
              provider_auth_generation, provider_behavior, machine_id, workspace_id, workspace_name, workspace_source_path, \
              cwd, title, origin, status, agent_session_id, \
              system, next_seq, queue, drafts, \
-             config_options, config_preferences, mobile_review_state \
+             config_options, config_preferences, mobile_review_state, \
+             owner_user_id, \
+             (SELECT username FROM users WHERE users.id = sessions.owner_user_id) AS owner_username \
              FROM sessions WHERE deleted_at_ms IS NULL \
              ORDER BY position IS NULL, position ASC, created_at_ms ASC",
         )
@@ -2306,8 +2312,8 @@ impl SqliteStorage {
         sqlx::query(
             "INSERT INTO sessions(id, provider, provider_version, provider_generation_digest, \
              provider_auth_generation, provider_behavior, machine_id, workspace_id, workspace_name, \
-             workspace_source_path, cwd, title, origin, status, next_seq, system) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0, ?15)",
+             workspace_source_path, cwd, title, origin, status, next_seq, system, owner_user_id) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0, ?15, ?16)",
         )
         .bind(&meta.id)
         .bind(&meta.provider)
@@ -2332,6 +2338,7 @@ impl SqliteStorage {
         .bind(origin_to_str(meta.origin))
         .bind(status_to_str(meta.status))
         .bind(meta.system)
+        .bind(meta.owner_user_id.as_deref())
         .execute(&self.pool)
         .await
         .with_context(|| format!("INSERT SQLite session {}", meta.id))?;

@@ -105,3 +105,51 @@ fn event_field_serialization_matches_typescript_fixtures() {
     assert_eq!(values[3]["status"], "running");
     assert_eq!(values[4]["stop_reason"], "end_turn");
 }
+
+#[test]
+fn session_meta_owner_fields_are_optional_on_the_wire() {
+    use crate::core::{SessionMeta, SessionOrigin, Status};
+
+    let mut meta = SessionMeta {
+        id: "sess-1".to_owned(),
+        provider: "codex".to_owned(),
+        provider_version: String::new(),
+        provider_generation_digest: String::new(),
+        provider_auth_generation: None,
+        provider_behavior: None,
+        machine_id: "local".to_owned(),
+        workspace_id: None,
+        workspace_name: None,
+        workspace_source_path: None,
+        cwd: "/tmp".to_owned(),
+        title: "owner stamp".to_owned(),
+        status: Status::Starting,
+        origin: SessionOrigin::Web,
+        agent_session_id: None,
+        auto_resume: None,
+        awaiting_user: false,
+        done: false,
+        judging: false,
+        paused: false,
+        system: false,
+        context_used: 0,
+        context_size: 0,
+        usage: None,
+        next_schedule_ms: None,
+        owner_user_id: None,
+        owner_username: None,
+    };
+    let absent = serde_json::to_value(&meta).expect("serialize unowned session");
+    assert!(absent.get("owner_user_id").is_none());
+    assert!(absent.get("owner_username").is_none());
+
+    meta.owner_user_id = Some("0123456789abcdef0123456789abcdef".to_owned());
+    meta.owner_username = Some("draven".to_owned());
+    let present = serde_json::to_value(&meta).expect("serialize owned session");
+    assert_eq!(present["owner_user_id"], "0123456789abcdef0123456789abcdef");
+    assert_eq!(present["owner_username"], "draven");
+
+    let source = include_str!("../web/src/protocol.ts");
+    assert!(source.contains("owner_user_id?: string;"));
+    assert!(source.contains("owner_username?: string;"));
+}

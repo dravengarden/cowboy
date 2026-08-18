@@ -1903,7 +1903,9 @@ impl PostgresStorage {
              provider_auth_generation, provider_behavior, machine_id, workspace_id, workspace_name, workspace_source_path, \
              cwd, title, origin, status, agent_session_id, \
              system, next_seq, queue, drafts, \
-             config_options, config_preferences, mobile_review_state \
+             config_options, config_preferences, mobile_review_state, \
+             owner_user_id, \
+             (SELECT username FROM users WHERE users.id = sessions.owner_user_id) AS owner_username \
              FROM sessions WHERE deleted_at IS NULL ORDER BY position ASC NULLS LAST, created_at ASC",
         )
         .fetch_all(&self.pool)
@@ -2324,8 +2326,8 @@ impl PostgresStorage {
         sqlx::query(
             "INSERT INTO sessions(id, provider, provider_version, provider_generation_digest, \
              provider_auth_generation, provider_behavior, machine_id, workspace_id, workspace_name, \
-             workspace_source_path, cwd, title, origin, status, next_seq, system) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0, $15)",
+             workspace_source_path, cwd, title, origin, status, next_seq, system, owner_user_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0, $15, $16)",
         )
         .bind(&m.id)
         .bind(&m.provider)
@@ -2347,6 +2349,7 @@ impl PostgresStorage {
         .bind(origin_to_str(m.origin))
         .bind(status_to_str(m.status))
         .bind(m.system)
+        .bind(m.owner_user_id.as_deref())
         .execute(&self.pool)
         .await
         .with_context(|| format!("INSERT session {}", m.id))?;
@@ -5539,6 +5542,8 @@ struct SessionRow {
     config_options: Option<serde_json::Value>,
     config_preferences: serde_json::Value,
     mobile_review_state: serde_json::Value,
+    owner_user_id: Option<String>,
+    owner_username: Option<String>,
 }
 
 impl SessionRow {
@@ -5575,6 +5580,8 @@ impl SessionRow {
             usage: None,
             // Derived from restored drafts in `session_list`, not stored here.
             next_schedule_ms: None,
+            owner_user_id: self.owner_user_id,
+            owner_username: self.owner_username,
         }
     }
 }
@@ -5613,6 +5620,8 @@ mod storage_contract_tests {
             context_size: 0,
             usage: None,
             next_schedule_ms: None,
+            owner_user_id: None,
+            owner_username: None,
         }
     }
 
@@ -5880,6 +5889,26 @@ mod storage_contract_tests {
                 .contains("account already exists")
         );
 
+        let mut owned = session("sess-owned-contract");
+        owned.owner_user_id = Some(user.id.clone());
+        owned.owner_username = Some("ignored-client-username".to_owned());
+        store.insert_session(&owned).await?;
+        let restored_owned = store
+            .load_all()
+            .await?
+            .into_iter()
+            .find(|loaded| loaded.meta.id == owned.id)
+            .context("owned session was not restored")?;
+        assert_eq!(
+            restored_owned.meta.owner_user_id.as_deref(),
+            Some(user.id.as_str())
+        );
+        assert_eq!(
+            restored_owned.meta.owner_username.as_deref(),
+            Some("draven")
+        );
+        store.delete_session(&owned.id).await?;
+
         let session = ProductUserSession {
             token_hash: "aa".repeat(32),
             user_id: user.id.clone(),
@@ -6091,6 +6120,8 @@ mod storage_contract_tests {
         );
         assert_eq!(restored.meta.title, "Storage contract retargeted");
         assert_eq!(restored.meta.cwd, "/tmp/cowboy-retargeted");
+        assert!(restored.meta.owner_user_id.is_none());
+        assert!(restored.meta.owner_username.is_none());
         assert_eq!(restored.events.len(), 2);
         assert_eq!(restored.next_seq, 2);
         assert_eq!(restored.queue[0].id, "queue-1");

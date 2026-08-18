@@ -412,6 +412,14 @@ pub struct SessionMeta {
     /// "next fires at …" without shipping every draft to the list. Transient.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_schedule_ms: Option<i64>,
+    /// Product account that created this session. `None` is the pre-auth shared
+    /// pool (legacy rows and unauthenticated creates).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_user_id: Option<String>,
+    /// Display username for `owner_user_id`. Not a column; stamped at create and
+    /// joined from `users` on restore.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_username: Option<String>,
 }
 
 fn local_machine_id() -> String {
@@ -504,6 +512,8 @@ pub struct SessionRegistration {
     pub title: String,
     pub origin: SessionOrigin,
     pub system: bool,
+    pub owner_user_id: Option<String>,
+    pub owner_username: Option<String>,
 }
 
 /// One staged message — either a QUEUED prompt (waiting for the current turn to
@@ -2246,6 +2256,8 @@ impl Hub {
             title,
             origin,
             system,
+            owner_user_id: None,
+            owner_username: None,
         });
     }
 
@@ -2266,6 +2278,8 @@ impl Hub {
             title,
             origin,
             system,
+            owner_user_id,
+            owner_username,
         } = registration;
         let config_preferences = default_config_preferences(&provider, provider_behavior.as_ref());
         let meta = SessionMeta {
@@ -2290,6 +2304,8 @@ impl Hub {
             context_size: 0,
             usage: None,
             next_schedule_ms: None,
+            owner_user_id,
+            owner_username,
         };
         {
             let mut sessions = self.inner.sessions.lock();
@@ -4397,6 +4413,66 @@ impl Default for Hub {
 }
 
 #[cfg(test)]
+mod session_owner_tests {
+    use super::*;
+
+    fn registration(id: &str) -> SessionRegistration {
+        SessionRegistration {
+            id: id.to_owned(),
+            provider: "codex".to_owned(),
+            provider_version: String::new(),
+            provider_generation_digest: String::new(),
+            provider_auth_generation: None,
+            provider_behavior: None,
+            machine_id: "local".to_owned(),
+            workspace_id: None,
+            workspace_name: None,
+            workspace_source_path: None,
+            cwd: "/tmp".to_owned(),
+            title: "owner stamp".to_owned(),
+            origin: SessionOrigin::Web,
+            system: false,
+            owner_user_id: None,
+            owner_username: None,
+        }
+    }
+
+    #[test]
+    fn new_session_stamps_optional_owner_and_broadcasts_it() {
+        let hub = Hub::new();
+        let mut registration = registration("sess-owned");
+        registration.owner_user_id = Some("0123456789abcdef0123456789abcdef".to_owned());
+        registration.owner_username = Some("draven".to_owned());
+        hub.create_session(registration);
+
+        let meta = hub
+            .session_list()
+            .into_iter()
+            .find(|session| session.id == "sess-owned")
+            .expect("created session");
+        assert_eq!(
+            meta.owner_user_id.as_deref(),
+            Some("0123456789abcdef0123456789abcdef")
+        );
+        assert_eq!(meta.owner_username.as_deref(), Some("draven"));
+    }
+
+    #[test]
+    fn unauthenticated_create_leaves_owner_null() {
+        let hub = Hub::new();
+        hub.create_session(registration("sess-shared"));
+
+        let meta = hub
+            .session_list()
+            .into_iter()
+            .find(|session| session.id == "sess-shared")
+            .expect("created session");
+        assert!(meta.owner_user_id.is_none());
+        assert!(meta.owner_username.is_none());
+    }
+}
+
+#[cfg(test)]
 mod config_preference_tests {
     use super::*;
 
@@ -4586,6 +4662,8 @@ mod runtime_reconciliation_tests {
                 context_size: 0,
                 usage: None,
                 next_schedule_ms: None,
+                owner_user_id: None,
+                owner_username: None,
             },
             log: Vec::new(),
             event_count: 0,

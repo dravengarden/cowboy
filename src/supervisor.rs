@@ -41,6 +41,14 @@ pub struct ProviderGeneration<'a> {
     pub behavior: Option<&'a cowboy_provider_sdk::ProviderBehaviorContract>,
 }
 
+/// Product-account stamp written at session creation. Absent keeps the row in
+/// the unowned shared pool.
+#[derive(Clone, Copy)]
+pub struct SessionOwner<'a> {
+    pub user_id: &'a str,
+    pub username: Option<&'a str>,
+}
+
 /// Spawns and tracks agent sessions; routes commands to their threads.
 pub struct Supervisor {
     hub: Hub,
@@ -137,6 +145,7 @@ impl Supervisor {
         system: bool,
         placement: SessionPlacement<'_>,
         provider_generation: ProviderGeneration<'_>,
+        owner: Option<SessionOwner<'_>>,
     ) -> Result<String, String> {
         let SessionPlacement {
             machine_id,
@@ -190,6 +199,8 @@ impl Supervisor {
             title,
             origin,
             system,
+            owner_user_id: owner.map(|owner| owner.user_id.to_owned()),
+            owner_username: owner.and_then(|owner| owner.username.map(str::to_owned)),
         });
 
         Ok(id.to_owned())
@@ -234,6 +245,7 @@ impl Supervisor {
         system: bool,
         machine_id: &str,
         provider_generation: ProviderGeneration<'_>,
+        owner: Option<SessionOwner<'_>>,
     ) -> Result<String, String> {
         let id = self.register_session_on_with_id(
             id,
@@ -246,6 +258,7 @@ impl Supervisor {
                 workspace: None,
             },
             provider_generation,
+            owner,
         )?;
         self.start_registered_session(&id)?;
         Ok(id)
@@ -853,6 +866,8 @@ mod tests {
             title: "test".to_owned(),
             origin: SessionOrigin::Web,
             system: false,
+            owner_user_id: None,
+            owner_username: None,
         });
     }
 

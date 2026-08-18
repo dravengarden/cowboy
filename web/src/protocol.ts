@@ -73,6 +73,12 @@ export interface SessionMeta {
   /** Soonest fire time (epoch ms) across this session's SCHEDULED DRAFTS, or
    *  absent if none. Drives the session-row clock badge. Transient. */
   next_schedule_ms?: number;
+  /** Product account that created this session. Absent is the pre-auth shared
+   *  pool (legacy rows and unauthenticated creates). */
+  owner_user_id?: string;
+  /** Display username for `owner_user_id`. Absent when the session is unowned
+   *  or the username is not yet joined. */
+  owner_username?: string;
 }
 
 // A serialized ACP SessionUpdate. Internally tagged on `sessionUpdate`.

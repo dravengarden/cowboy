@@ -6147,6 +6147,12 @@ async fn api_reconcile_project_sessions(
     }
 }
 
+/// Product-account stamp for `POST /api/sessions`. No product principal exists
+/// on this request path yet, so creates stay in the unowned shared pool.
+fn product_session_owner() -> Option<crate::supervisor::SessionOwner<'static>> {
+    None
+}
+
 async fn api_new_session(
     State(state): State<Arc<AppState>>,
     Json(req): Json<NewSessionRequest>,
@@ -6280,6 +6286,7 @@ async fn api_new_session(
                         auth_generation: provider_generation.auth_generation,
                         behavior: Some(&provider_generation.behavior),
                     },
+                    product_session_owner(),
                 )
             },
         );
@@ -6403,6 +6410,7 @@ async fn api_new_session(
             auth_generation: None,
             behavior: None,
         },
+        product_session_owner(),
     ) {
         Ok(session_id) => {
             if let Some(prompt) = req

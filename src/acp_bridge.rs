@@ -1601,6 +1601,8 @@ mod tests {
             context_size: 0,
             usage: None,
             next_schedule_ms: None,
+            owner_user_id: None,
+            owner_username: None,
         };
         let status = Bridge::status_from_cached(&meta, None);
         assert!(status.turn_running);
