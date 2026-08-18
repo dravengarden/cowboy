@@ -616,16 +616,23 @@ pub fn cookie_token(headers: &axum::http::HeaderMap) -> Option<String> {
     crate::product_auth::cookie_value(headers, ADMIN_SESSION_COOKIE)
 }
 
-#[allow(dead_code)]
 #[must_use]
-pub fn session_cookie(token: &str) -> String {
-    format!("{ADMIN_SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800")
+pub fn session_cookie(token: &str, secure: bool) -> String {
+    let mut cookie =
+        format!("{ADMIN_SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800");
+    if secure {
+        cookie.push_str("; Secure");
+    }
+    cookie
 }
 
-#[allow(dead_code)]
 #[must_use]
-pub fn clear_session_cookie() -> String {
-    format!("{ADMIN_SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0")
+pub fn clear_session_cookie(secure: bool) -> String {
+    let mut cookie = format!("{ADMIN_SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
+    if secure {
+        cookie.push_str("; Secure");
+    }
+    cookie
 }
 
 /// Event/session retention. `last_n` and `last_time_hours` are an OR:

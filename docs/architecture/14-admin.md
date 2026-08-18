@@ -64,6 +64,12 @@ matches `draven`.
 
 | Route | Auth | Purpose |
 |---|---|---|
+| `GET /api/admin/auth` | public | `{ authenticated, bootstrap_required, account?, role? }` |
+| `POST /api/admin/auth/bootstrap` | public; first owner only | create owner + `cowboy_admin` |
+| `POST /api/admin/auth/login` | public | `cowboy_admin` cookie |
+| `POST /api/admin/auth/logout` | cookie optional | clear admin cookie |
+| `GET /api/admin/accounts` | public GET (list, no hashes) | admin operators |
+| `GET /api/admin/registration` | public GET | policy + token table (no hashes) |
 | `GET /api/auth/status` | public | `{ registration: RegistrationPublicStatus, me? }` |
 | `POST /api/auth/register` | public; policy-gated | create user + `cowboy_user` cookie |
 | `POST /api/auth/login` | public | cookie + `me` |

@@ -1668,6 +1668,12 @@ fn product_auth_router(state: ProductAuthState) -> Router {
             "/api/admin/users/{id}/password",
             post(api_admin_set_password),
         )
+        .route("/api/admin/auth", get(api_admin_auth))
+        .route("/api/admin/auth/bootstrap", post(api_admin_bootstrap))
+        .route("/api/admin/auth/login", post(api_admin_login))
+        .route("/api/admin/auth/logout", post(api_admin_logout))
+        .route("/api/admin/accounts", get(api_admin_accounts))
+        .route("/api/admin/registration", get(api_admin_registration))
         .with_state(state)
 }
 
@@ -1690,6 +1696,122 @@ fn admin_identities(hub: &Hub) -> crate::admin::AdminIdentities {
         hub.settings_snapshot()
             .get(crate::admin::ADMIN_IDENTITIES_SETTING),
     )
+}
+
+fn persist_admin_identities(hub: &Hub, identities: &crate::admin::AdminIdentities) {
+    hub.set_setting(
+        crate::admin::ADMIN_IDENTITIES_SETTING.to_owned(),
+        serde_json::to_value(identities).unwrap_or_else(|_| serde_json::json!({})),
+    );
+}
+
+fn admin_session_response(
+    hub: &Hub,
+    headers: &HeaderMap,
+    identities: crate::admin::AdminIdentities,
+    token: String,
+) -> Response {
+    persist_admin_identities(hub, &identities);
+    let secure = crate::product_auth::request_is_https(headers);
+    (
+        [(
+            header::SET_COOKIE,
+            crate::admin::session_cookie(&token, secure),
+        )],
+        Json(identities.status(Some(&token), auth_now_ms())),
+    )
+        .into_response()
+}
+
+async fn api_admin_auth(
+    State(state): State<ProductAuthState>,
+    headers: HeaderMap,
+) -> Json<crate::admin::AdminAuthStatus> {
+    Json(admin_identities(&state.hub).status(
+        crate::admin::cookie_token(&headers).as_deref(),
+        auth_now_ms(),
+    ))
+}
+
+async fn api_admin_bootstrap(
+    State(state): State<ProductAuthState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(request): Json<crate::admin::AdminCredentials>,
+) -> Response {
+    if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
+        return rejected;
+    }
+    let mut identities = admin_identities(&state.hub);
+    match identities.bootstrap(&request, auth_now_ms()) {
+        Ok(token) => admin_session_response(&state.hub, &headers, identities, token),
+        Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    }
+}
+
+async fn api_admin_login(
+    State(state): State<ProductAuthState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(request): Json<crate::admin::AdminCredentials>,
+) -> Response {
+    if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
+        return rejected;
+    }
+    let mut identities = admin_identities(&state.hub);
+    match identities.login(&request, auth_now_ms()) {
+        Ok(token) => admin_session_response(&state.hub, &headers, identities, token),
+        Err(error) => (StatusCode::UNAUTHORIZED, error.to_string()).into_response(),
+    }
+}
+
+async fn api_admin_logout(State(state): State<ProductAuthState>, headers: HeaderMap) -> Response {
+    let mut identities = admin_identities(&state.hub);
+    if let Some(token) = crate::admin::cookie_token(&headers) {
+        identities.logout(&token);
+        persist_admin_identities(&state.hub, &identities);
+    }
+    let secure = crate::product_auth::request_is_https(&headers);
+    (
+        [(
+            header::SET_COOKIE,
+            crate::admin::clear_session_cookie(secure),
+        )],
+        Json(identities.status(None, auth_now_ms())),
+    )
+        .into_response()
+}
+
+async fn api_admin_accounts(State(state): State<ProductAuthState>, headers: HeaderMap) -> Response {
+    if let Err(status) = require_admin(&state, &headers, crate::admin::AdminRole::Viewer) {
+        return status.into_response();
+    }
+    Json(serde_json::json!({
+        "accounts": admin_identities(&state.hub)
+            .accounts
+            .into_iter()
+            .map(|account| serde_json::json!({
+                "account": account.account,
+                "role": account.role,
+                "created_at_ms": account.created_at_ms,
+            }))
+            .collect::<Vec<_>>(),
+    }))
+    .into_response()
+}
+
+async fn api_admin_registration(
+    State(state): State<ProductAuthState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(status) = require_admin(&state, &headers, crate::admin::AdminRole::Viewer) {
+        return status.into_response();
+    }
+    Json(
+        serde_json::to_value(registration_policy(&state.hub).public_view())
+            .unwrap_or_else(|_| serde_json::json!({})),
+    )
+    .into_response()
 }
 
 fn auth_now_ms() -> i64 {
@@ -1876,6 +1998,13 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
     ) || path.starts_with("/api/logs/")
     {
         return RouteAuth::AdminOperator;
+    }
+    if path == "/api/admin/auth"
+        || path == "/api/admin/auth/bootstrap"
+        || path == "/api/admin/auth/login"
+        || path == "/api/admin/auth/logout"
+    {
+        return RouteAuth::Public;
     }
     if path == "/api/admin/permissions" || path.starts_with("/api/admin/accounts") {
         return if method == Method::GET {
@@ -11066,9 +11195,10 @@ mod provider_auth_resume_tests {
 mod product_auth_api_tests {
     use super::*;
     use crate::admin::{
-        ADMIN_IDENTITIES_SETTING, AdminCredentials, AdminIdentities, AdminRole,
-        CreateRegistrationToken, PERMISSIONS_SETTING, PermissionPolicy, REGISTRATION_SETTING,
-        RegistrationMode, RegistrationPolicy, consume_registration_token, issue_registration_token,
+        ADMIN_IDENTITIES_SETTING, ADMIN_SESSION_COOKIE, AdminCredentials, AdminIdentities,
+        AdminRole, CreateRegistrationToken, PERMISSIONS_SETTING, PermissionPolicy,
+        REGISTRATION_SETTING, RegistrationMode, RegistrationPolicy, consume_registration_token,
+        issue_registration_token,
     };
     use crate::core::{PersistenceHealth, StoreSink, StoreWrite};
     use crate::product_auth::USER_SESSION_COOKIE;
@@ -11273,6 +11403,18 @@ mod product_auth_api_tests {
         assert_eq!(
             classify_route(&Method::DELETE, "/api/auth/tokens/abc"),
             RouteAuth::Product
+        );
+        assert_eq!(
+            classify_route(&Method::GET, "/api/admin/auth"),
+            RouteAuth::Public
+        );
+        assert_eq!(
+            classify_route(&Method::POST, "/api/admin/auth/bootstrap"),
+            RouteAuth::Public
+        );
+        assert_eq!(
+            classify_route(&Method::POST, "/api/admin/auth/login"),
+            RouteAuth::Public
         );
         assert!(!matches!(
             classify_route(&Method::GET, "/api/unknown"),
@@ -11699,6 +11841,79 @@ mod product_auth_api_tests {
         );
         server.abort();
         writer.abort();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn admin_bootstrap_creates_owner_then_product_user_can_login() {
+        let (store, root) = test_store().await;
+        let (base, server) = spawn_auth(auth_state(Hub::new(), Some(store))).await;
+        let origin = origin_for(&base);
+
+        let status = reqwest::Client::new()
+            .get(format!("{base}/api/admin/auth"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(status.status(), StatusCode::OK);
+        let body: serde_json::Value = status.json().await.unwrap();
+        assert_eq!(body["bootstrap_required"], true);
+        assert_eq!(body["authenticated"], false);
+
+        let bootstrapped = post_json(
+            &format!("{base}/api/admin/auth/bootstrap"),
+            &origin,
+            None,
+            serde_json::json!({
+                "account": "owner",
+                "password": "correct-horse",
+            }),
+        )
+        .await;
+        assert_eq!(bootstrapped.status(), StatusCode::OK);
+        let admin_cookie =
+            cookie_header(&set_cookie(&bootstrapped, ADMIN_SESSION_COOKIE).expect("admin cookie"));
+
+        let created = post_json(
+            &format!("{base}/api/admin/users"),
+            &origin,
+            Some(&admin_cookie),
+            serde_json::json!({
+                "account": "draven",
+                "password": "long-enough-password",
+            }),
+        )
+        .await;
+        assert_eq!(created.status(), StatusCode::CREATED);
+
+        let logged_in = post_json(
+            &format!("{base}/api/auth/login"),
+            &origin,
+            None,
+            serde_json::json!({
+                "account": "draven",
+                "password": "long-enough-password",
+            }),
+        )
+        .await;
+        assert_eq!(logged_in.status(), StatusCode::OK);
+        assert!(set_cookie(&logged_in, USER_SESSION_COOKIE).is_some());
+
+        let me = reqwest::Client::new()
+            .get(format!("{base}/api/auth/me"))
+            .header(
+                header::COOKIE,
+                cookie_header(&set_cookie(&logged_in, USER_SESSION_COOKIE).unwrap()),
+            )
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(me.status(), StatusCode::OK);
+        let me_body: serde_json::Value = me.json().await.unwrap();
+        assert_eq!(me_body["account"], "draven");
+        assert_eq!(me_body["role"], "operator");
+
+        server.abort();
         let _ = std::fs::remove_dir_all(root);
     }
 }
