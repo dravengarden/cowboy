@@ -1,10 +1,12 @@
 import { Alert, Button, FormControlLabel, Paper, Stack, Switch, TextField, Typography } from "@mui/material";
 import { useCallback, useEffect, useState } from "react";
+import { ADMIN_PASSKEY_IDLE_MS } from "../auth/idleLock";
 import {
   assertPasskey,
   createPasskey,
   passkeysSupported,
 } from "../auth/passkeyBrowser";
+import { useIdlePasskeyLock } from "../auth/useIdlePasskeyLock";
 import {
   adminApi,
   type AdminAuthStatus,
@@ -38,8 +40,8 @@ export function AdminPasskeysCard({
       <Stack spacing={1.5}>
         <Typography variant="h6">Passkeys</Typography>
         <Typography color="text.secondary">
-          After password login, add a Passkey. The admin console locks after 15
-          minutes of viewing when a Passkey exists. Turn the lock off here.
+          After password login, add a Passkey. The admin console locks after 5
+          minutes idle when a Passkey exists. Turn the lock off here.
         </Typography>
         {error && <Alert severity="error">{error}</Alert>}
         <FormControlLabel
@@ -56,7 +58,7 @@ export function AdminPasskeysCard({
               }}
             />
           }
-          label="Require Passkey after 15 minutes"
+          label="Require Passkey after 5 minutes idle"
         />
         {passkeysSupported() ? (
           <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
@@ -78,6 +80,7 @@ export function AdminPasskeysCard({
                   await adminApi.completePasskeyRegister(ceremony.challenge_id, credential);
                   setNickname("This device");
                   await load();
+                  onAuth(await adminApi.auth());
                 })().catch((err: Error) => setError(err.message)).finally(() => setBusy(false));
               }}
             >
@@ -120,26 +123,12 @@ export function AdminPasskeyLock({
   auth: AdminAuthStatus;
   onAuth: (auth: AdminAuthStatus) => void;
 }): React.JSX.Element | null {
-  const [locked, setLocked] = useState(auth.passkey_reauth_required === true);
+  const eligible = auth.authenticated &&
+    auth.passkey_reauth_enabled !== false &&
+    (auth.passkey_count ?? 0) > 0;
+  const { locked, unlock } = useIdlePasskeyLock(eligible, ADMIN_PASSKEY_IDLE_MS);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-
-  const refresh = useCallback(async (): Promise<void> => {
-    const next = await adminApi.auth();
-    setLocked(next.authenticated && next.passkey_reauth_required === true);
-    onAuth(next);
-  }, [onAuth]);
-
-  useEffect(() => {
-    setLocked(auth.passkey_reauth_required === true);
-  }, [auth.passkey_reauth_required]);
-
-  useEffect(() => {
-    const timer = globalThis.setInterval(() => {
-      void refresh().catch(() => undefined);
-    }, 30_000);
-    return () => globalThis.clearInterval(timer);
-  }, [refresh]);
 
   if (!locked) return null;
 
@@ -159,7 +148,7 @@ export function AdminPasskeyLock({
       <Stack spacing={2} sx={{ maxWidth: 420 }}>
         <Typography variant="h5">Confirm it&apos;s you</Typography>
         <Typography color="text.secondary">
-          Admin has been open for 15 minutes. Use your Passkey to continue.
+          Admin has been idle for 5 minutes. Use your Passkey to continue.
         </Typography>
         {error && <Alert severity="error">{error}</Alert>}
         <Button
@@ -173,7 +162,7 @@ export function AdminPasskeyLock({
               const ceremony = await adminApi.startPasskeyAssert();
               const credential = await assertPasskey(ceremony);
               const next = await adminApi.completePasskeyAssert(ceremony.challenge_id, credential);
-              setLocked(false);
+              unlock();
               onAuth(next);
             })().catch((err: Error) => setError(err.message)).finally(() => setBusy(false));
           }}

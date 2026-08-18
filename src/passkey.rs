@@ -15,7 +15,10 @@ use webauthn_rs::prelude::{
 
 use crate::product_auth::new_user_id;
 
+/// Product PWA idle lock. Admin uses [`ADMIN_PASSKEY_REAUTH_AFTER_MS`].
 pub const PASSKEY_REAUTH_AFTER_MS: i64 = 15 * 60 * 1_000;
+/// Admin console idle lock. Shorter because the console is break-glass.
+pub const ADMIN_PASSKEY_REAUTH_AFTER_MS: i64 = 5 * 60 * 1_000;
 const CEREMONY_TTL: Duration = Duration::from_secs(300);
 const MAX_PASSKEYS_PER_USER: usize = 8;
 
@@ -46,13 +49,13 @@ pub struct PasskeyPolicy {
 }
 
 impl PasskeyPolicy {
+    /// Whether the client may engage an idle viewing lock.
+    ///
+    /// The lock itself is idle-based in the browser. The server does not
+    /// treat wall-clock time since login as a reason to lock.
     #[must_use]
-    pub fn reauth_required(&self, now_ms: i64) -> bool {
-        self.enabled
-            && self.passkey_count > 0
-            && self
-                .last_step_up_at_ms
-                .is_none_or(|stamp| now_ms.saturating_sub(stamp) >= PASSKEY_REAUTH_AFTER_MS)
+    pub fn idle_lock_eligible(&self) -> bool {
+        self.enabled && self.passkey_count > 0
     }
 }
 
@@ -283,25 +286,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn viewing_lock_requires_a_passkey_and_elapsed_window() {
-        let policy = PasskeyPolicy {
-            enabled: true,
-            last_step_up_at_ms: Some(1),
-            passkey_count: 0,
-        };
-        assert!(!policy.reauth_required(PASSKEY_REAUTH_AFTER_MS + 2));
-        let locked = PasskeyPolicy {
-            enabled: true,
-            last_step_up_at_ms: Some(1),
-            passkey_count: 1,
-        };
-        assert!(locked.reauth_required(PASSKEY_REAUTH_AFTER_MS + 2));
-        assert!(!locked.reauth_required(PASSKEY_REAUTH_AFTER_MS));
-        let disabled = PasskeyPolicy {
-            enabled: false,
-            last_step_up_at_ms: Some(1),
-            passkey_count: 1,
-        };
-        assert!(!disabled.reauth_required(PASSKEY_REAUTH_AFTER_MS + 2));
+    fn idle_lock_is_eligible_only_with_a_passkey_and_the_setting_on() {
+        assert!(
+            !PasskeyPolicy {
+                enabled: true,
+                last_step_up_at_ms: Some(1),
+                passkey_count: 0,
+            }
+            .idle_lock_eligible()
+        );
+        assert!(
+            PasskeyPolicy {
+                enabled: true,
+                last_step_up_at_ms: Some(1),
+                passkey_count: 1,
+            }
+            .idle_lock_eligible()
+        );
+        assert!(
+            !PasskeyPolicy {
+                enabled: false,
+                last_step_up_at_ms: Some(1),
+                passkey_count: 1,
+            }
+            .idle_lock_eligible()
+        );
     }
 }

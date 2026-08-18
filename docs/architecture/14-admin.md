@@ -123,9 +123,9 @@ Hardening:
 - Service worker never caches `/api/admin/*` or `/admin` as the PWA shell.
 
 Admin Passkeys follow the product split: password login first, then optional
-registration. With a Passkey registered, `/admin` locks the view after 15
-minutes unless the operator turns that off on Accounts. Routes live under
-`/api/admin/passkeys*`.
+registration. With a Passkey registered, `/admin` locks the view after
+**5 minutes idle** unless the operator turns that off on Accounts. Routes
+live under `/api/admin/passkeys*`.
 
 See [Product login](16-product-auth.md) for planes, the capability matrix,
 and the Hawk enablement checklist.

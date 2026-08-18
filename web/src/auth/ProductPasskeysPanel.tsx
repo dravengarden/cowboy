@@ -42,6 +42,7 @@ export function ProductPasskeysPanel({
       await authApi.completePasskeyRegister(ceremony.challenge_id, credential);
       setNickname("This device");
       await load();
+      updateMe(await authApi.me());
     })()
       .catch((err: unknown) => {
         setError(err instanceof AuthApiError ? err.message : "Could not add a passkey");
@@ -82,7 +83,7 @@ export function ProductPasskeysPanel({
     <Stack spacing={1.5}>
       <Typography variant="body2" color="text.secondary">
         After password login, add a Passkey. The web UI locks after 15 minutes
-        of viewing and asks for that Passkey. Turn the lock off here.
+        idle and asks for that Passkey. Turn the lock off here.
       </Typography>
       {error && <Alert severity="error">{error}</Alert>}
       <FormControlLabel
@@ -93,7 +94,7 @@ export function ProductPasskeysPanel({
             onChange={(event) => toggle(event.target.checked)}
           />
         }
-        label="Require Passkey after 15 minutes"
+        label="Require Passkey after 15 minutes idle"
       />
       {passkeysSupported() ? (
         <Stack direction="row" spacing={1} alignItems="center">

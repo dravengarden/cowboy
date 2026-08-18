@@ -1,7 +1,9 @@
 import { Alert, Box, Button, Stack, Typography } from "@mui/material";
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { AuthApiError, authApi, type ProductMe } from "./authApi";
+import { PRODUCT_PASSKEY_IDLE_MS } from "./idleLock";
 import { assertPasskey, passkeysSupported } from "./passkeyBrowser";
+import { useIdlePasskeyLock } from "./useIdlePasskeyLock";
 
 export function PasskeyReauthLock({
   me,
@@ -10,41 +12,14 @@ export function PasskeyReauthLock({
   me: ProductMe;
   onUnlocked: (me: ProductMe) => void;
 }): React.JSX.Element | null {
-  const [locked, setLocked] = useState(me.passkey_reauth_required === true);
+  const eligible = me.passkey_reauth_enabled !== false && (me.passkey_count ?? 0) > 0;
+  const { locked, unlock } = useIdlePasskeyLock(eligible, PRODUCT_PASSKEY_IDLE_MS);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const refresh = useCallback(async (): Promise<void> => {
-    const next = await authApi.me();
-    setLocked(next.passkey_reauth_required === true);
-    if (next.passkey_reauth_required !== true) onUnlocked(next);
-  }, [onUnlocked]);
-
-  useEffect(() => {
-    setLocked(me.passkey_reauth_required === true);
-  }, [me.passkey_reauth_required]);
-
-  useEffect(() => {
-    const timer = globalThis.setInterval(() => {
-      void refresh().catch(() => {
-        // Keep the current lock; the next interval retries.
-      });
-    }, 30_000);
-    const onVisible = (): void => {
-      if (document.visibilityState === "visible") {
-        void refresh().catch(() => undefined);
-      }
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      globalThis.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [refresh]);
-
   if (!locked) return null;
 
-  const unlock = (): void => {
+  const confirm = (): void => {
     if (busy || !passkeysSupported()) return;
     setBusy(true);
     setError(null);
@@ -52,7 +27,7 @@ export function PasskeyReauthLock({
       const ceremony = await authApi.startPasskeyAssert();
       const credential = await assertPasskey(ceremony);
       const next = await authApi.completePasskeyAssert(ceremony.challenge_id, credential);
-      setLocked(false);
+      unlock();
       onUnlocked(next);
     })()
       .catch((err: unknown) => {
@@ -77,11 +52,11 @@ export function PasskeyReauthLock({
           Confirm it&apos;s you
         </Typography>
         <Typography color="text.secondary">
-          This view has been open for 15 minutes. Use your Passkey to keep
+          This page has been idle for 15 minutes. Use your Passkey to keep
           reading. You can turn this off in Settings.
         </Typography>
         {error && <Alert severity="error">{error}</Alert>}
-        <Button variant="contained" disabled={busy} onClick={unlock}>
+        <Button variant="contained" disabled={busy} onClick={confirm}>
           Continue with Passkey
         </Button>
       </Stack>

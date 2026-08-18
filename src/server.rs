@@ -1807,7 +1807,7 @@ async fn enrich_admin_status(
     let policy = identities.passkey_policy(account, count);
     status.passkey_count = policy.passkey_count;
     status.passkey_reauth_enabled = policy.enabled;
-    status.passkey_reauth_required = policy.reauth_required(auth_now_ms());
+    status.passkey_reauth_required = policy.idle_lock_eligible();
     status
 }
 
@@ -2362,7 +2362,7 @@ async fn api_admin_list_passkeys(
                     last_used_at_ms: passkey.last_used_at_ms,
                 })
                 .collect::<Vec<_>>(),
-            "reauth_after_ms": crate::passkey::PASSKEY_REAUTH_AFTER_MS,
+            "reauth_after_ms": crate::passkey::ADMIN_PASSKEY_REAUTH_AFTER_MS,
         }))
         .into_response(),
         Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
@@ -2683,7 +2683,7 @@ async fn product_me_for_user(
     if let Ok(Some(policy)) = store.user_passkey_policy(&user.id).await {
         me.passkey_count = policy.passkey_count;
         me.passkey_reauth_enabled = policy.enabled;
-        me.passkey_reauth_required = policy.reauth_required(auth_now_ms());
+        me.passkey_reauth_required = policy.idle_lock_eligible();
     }
     me
 }

@@ -13,6 +13,8 @@ async function readAuthSources(): Promise<string> {
     "ProductTokensPanel.tsx",
     "ProductPasskeysPanel.tsx",
     "PasskeyReauthLock.tsx",
+    "idleLock.ts",
+    "useIdlePasskeyLock.ts",
   ];
   const chunks = await Promise.all(
     names.map((name) => Deno.readTextFile(new URL(name, authDir))),
