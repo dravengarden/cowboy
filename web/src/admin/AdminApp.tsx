@@ -180,7 +180,7 @@ function AdminShell({
       </Drawer>
       <Container maxWidth="lg" sx={{ pt: 12, pb: 6, ml: "240px" }}>
         {route === "/admin" && <OverviewPage />}
-        {route === "/admin/accounts" && <AccountsPage />}
+        {route === "/admin/accounts" && <AccountsPage auth={auth} />}
         {route === "/admin/permissions" && <PermissionsPage />}
         {route === "/admin/releases" && <ReleasesPage />}
         {route === "/admin/sessions" && <SessionsPage />}
@@ -226,11 +226,12 @@ function Stat({ title, value }: { title: string; value: string }): React.JSX.Ele
   );
 }
 
-function AccountsPage(): React.JSX.Element {
+function AccountsPage({ auth }: { auth: AdminAuthStatus }): React.JSX.Element {
   const [policy, setPolicy] = useState<RegistrationPolicy | null>(null);
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [productUsers, setProductUsers] = useState<ProductUser[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [productError, setProductError] = useState<string | null>(null);
   const [issued, setIssued] = useState<string | null>(null);
   const [enabled, setEnabled] = useState(false);
   const [mode, setMode] = useState<RegistrationMode>("disabled");
@@ -241,21 +242,32 @@ function AccountsPage(): React.JSX.Element {
   const [productPassword, setProductPassword] = useState("");
   const [productRole, setProductRole] = useState<AdminRole>("operator");
   const [passwordDrafts, setPasswordDrafts] = useState<Record<string, string>>({});
+  const canGrantOwner = auth.role === "owner";
+  const canSetPassword = auth.role === "owner";
   const reload = useCallback(async () => {
-    const [next, accountData, productData] = await Promise.all([
+    const [next, accountData] = await Promise.all([
       adminApi.registration(),
       adminApi.accounts(),
-      adminApi.productUsers(),
     ]);
     setPolicy(next);
     setEnabled(next.enabled);
     setMode(next.mode);
     setUsers(accountData.accounts);
-    setProductUsers(productData.users);
+  }, []);
+  const reloadProductUsers = useCallback(async () => {
+    try {
+      const productData = await adminApi.productUsers();
+      setProductUsers(productData.users);
+      setProductError(null);
+    } catch (err) {
+      setProductUsers([]);
+      setProductError(err instanceof Error ? err.message : String(err));
+    }
   }, []);
   useEffect(() => {
     void reload().catch((err: Error) => setError(err.message));
-  }, [reload]);
+    void reloadProductUsers();
+  }, [reload, reloadProductUsers]);
   if (error) return <Alert severity="error">{error}</Alert>;
   if (!policy) return <Typography>Loading…</Typography>;
   return (
@@ -307,6 +319,7 @@ function AccountsPage(): React.JSX.Element {
           This is not the session PWA login. Product users sign in on /. / is login-only
           until a product user exists.
         </Typography>
+        {productError && <Alert severity="error" sx={{ mb: 2 }}>{productError}</Alert>}
         <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ mb: 2 }}>
           <TextField
             label="Account"
@@ -330,7 +343,7 @@ function AccountsPage(): React.JSX.Element {
             >
               <MenuItem value="operator">Operator</MenuItem>
               <MenuItem value="viewer">Viewer</MenuItem>
-              <MenuItem value="owner">Owner</MenuItem>
+              {canGrantOwner && <MenuItem value="owner">Owner</MenuItem>}
             </Select>
           </FormControl>
           <Button
@@ -340,8 +353,8 @@ function AccountsPage(): React.JSX.Element {
                 setProductAccount("");
                 setProductPassword("");
                 setProductRole("operator");
-                return reload();
-              }).catch((err: Error) => setError(err.message));
+                return reloadProductUsers();
+              }).catch((err: Error) => setProductError(err.message));
             }}
           >
             Create user
@@ -353,7 +366,7 @@ function AccountsPage(): React.JSX.Element {
               <TableCell>Account</TableCell>
               <TableCell>Role</TableCell>
               <TableCell>Status</TableCell>
-              <TableCell>Password</TableCell>
+              {canSetPassword && <TableCell>Password</TableCell>}
               <TableCell />
             </TableRow>
           </TableHead>
@@ -363,39 +376,42 @@ function AccountsPage(): React.JSX.Element {
                 <TableCell>{user.username}</TableCell>
                 <TableCell>{user.role}</TableCell>
                 <TableCell>{user.disabled_at_ms == null ? "active" : "disabled"}</TableCell>
-                <TableCell>
-                  <Stack direction="row" spacing={1}>
-                    <TextField
-                      label="New password"
-                      type="password"
-                      size="small"
-                      value={passwordDrafts[user.id] ?? ""}
-                      onChange={(event) =>
-                        setPasswordDrafts((drafts) => ({
-                          ...drafts,
-                          [user.id]: event.target.value,
-                        }))}
-                    />
-                    <Button
-                      onClick={() => {
-                        void adminApi.setProductUserPassword(
-                          user.id,
-                          passwordDrafts[user.id] ?? "",
-                        ).then(() => {
-                          setPasswordDrafts((drafts) => ({ ...drafts, [user.id]: "" }));
-                        }).catch((err: Error) => setError(err.message));
-                      }}
-                    >
-                      Set password
-                    </Button>
-                  </Stack>
-                </TableCell>
+                {canSetPassword && (
+                  <TableCell>
+                    <Stack direction="row" spacing={1}>
+                      <TextField
+                        label="New password"
+                        type="password"
+                        size="small"
+                        value={passwordDrafts[user.id] ?? ""}
+                        onChange={(event) =>
+                          setPasswordDrafts((drafts) => ({
+                            ...drafts,
+                            [user.id]: event.target.value,
+                          }))}
+                      />
+                      <Button
+                        onClick={() => {
+                          void adminApi.setProductUserPassword(
+                            user.id,
+                            passwordDrafts[user.id] ?? "",
+                          ).then(() => {
+                            setPasswordDrafts((drafts) => ({ ...drafts, [user.id]: "" }));
+                            setProductError(null);
+                          }).catch((err: Error) => setProductError(err.message));
+                        }}
+                      >
+                        Set password
+                      </Button>
+                    </Stack>
+                  </TableCell>
+                )}
                 <TableCell>
                   <Button
                     disabled={user.disabled_at_ms != null}
                     onClick={() =>
-                      void adminApi.disableProductUser(user.id).then(reload).catch((err: Error) =>
-                        setError(err.message)
+                      void adminApi.disableProductUser(user.id).then(() => reloadProductUsers()).catch(
+                        (err: Error) => setProductError(err.message),
                       )}
                   >
                     Disable

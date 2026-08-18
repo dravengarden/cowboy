@@ -9219,17 +9219,47 @@ async fn provider_release_artifact(
         })
 }
 
+fn is_admin_console_path(requested: &str) -> bool {
+    requested == "admin" || requested.starts_with("admin/")
+}
+
+/// Resolve the on-disk document for a static request.
+///
+/// `/admin` and `/admin/*` never fall back to the session PWA `index.html`.
+/// When `admin.html` is present they return that document; otherwise 404.
+async fn resolve_static_document(
+    web_root: &FsPath,
+    requested: &str,
+) -> Result<(String, Vec<u8>), StatusCode> {
+    let requested_path = web_root.join(requested);
+    match tokio::fs::read(&requested_path).await {
+        Ok(bytes) => Ok((requested.to_owned(), bytes)),
+        Err(_) if is_admin_console_path(requested) => {
+            match tokio::fs::read(web_root.join("admin.html")).await {
+                Ok(bytes) => Ok(("admin.html".to_owned(), bytes)),
+                Err(_) => Err(StatusCode::NOT_FOUND),
+            }
+        }
+        Err(_) if requested.starts_with("assets/") => Err(StatusCode::NOT_FOUND),
+        Err(_) => match tokio::fs::read(web_root.join("index.html")).await {
+            Ok(bytes) => Ok(("index.html".to_owned(), bytes)),
+            Err(_) => Err(StatusCode::NOT_FOUND),
+        },
+    }
+}
+
 /// Serve a separately deployed asset by path, falling back to `index.html` so
 /// the SPA owns client-side routing. Missing hashed assets never fall back: a
 /// module request must receive a real 404 rather than HTML with a 200 status.
 /// Missing `index.html` (UI not built) → 404.
+/// `/admin` and `/admin/*` serve `admin.html` and never the session shell.
 ///
 /// Caching: a per-file SHA256 is used as a content `ETag` (stable across
 /// rollouts when the bytes are unchanged). The
 /// cache policy is split by whether the filename is content-addressed:
 ///   - `/assets/*` — Vite emits content-hashed names, so the bytes behind a name
 ///     never change → `immutable` with a one-year max-age, never revalidated.
-///   - everything else (index.html, sw.js, manifest, favicon, icons) —
+///   - everything else (index.html, admin.html, sw.js, manifest, favicon, icons) —
 ///     `no-cache`: the browser may store it but MUST revalidate via the `ETag` on
 ///     every use, so a redeploy is picked up immediately while unchanged files
 ///     cost only a 304. This is what stops a redeployed favicon/icon from being
@@ -9256,33 +9286,35 @@ async fn static_handler(
     }
 
     // Serve the asset if it exists; otherwise fall back to index.html so the
-    // SPA handles the route. Vite's /assets names are content-addressed files,
-    // never client-side routes. Returning index.html for a missing old chunk
-    // makes browsers report the opaque "Importing a module script failed"
-    // error because a JS import received text/html.
+    // SPA handles the route. Admin routes never take that fallback. Vite's
+    // /assets names are content-addressed files, never client-side routes.
+    // Returning index.html for a missing old chunk makes browsers report the
+    // opaque "Importing a module script failed" error because a JS import
+    // received text/html.
     let requested_path = state.web_root.join(requested);
-    let (name, content) = match tokio::fs::read(&requested_path).await {
-        Ok(bytes) => (requested, bytes),
-        Err(request_error) if requested.starts_with("assets/") => {
+    let (name, content) = match resolve_static_document(&state.web_root, requested).await {
+        Ok(document) => document,
+        Err(status) if is_admin_console_path(requested) => {
             tracing::info!(
                 requested = %requested_path.display(),
-                %request_error,
+                "admin console is not in the web root"
+            );
+            return status.into_response();
+        }
+        Err(status) if requested.starts_with("assets/") => {
+            tracing::info!(
+                requested = %requested_path.display(),
                 "requested web asset is no longer deployed"
             );
-            return StatusCode::NOT_FOUND.into_response();
+            return status.into_response();
         }
-        Err(request_error) => match tokio::fs::read(state.web_root.join("index.html")).await {
-            Ok(bytes) => ("index.html", bytes),
-            Err(index_error) => {
-                tracing::warn!(
-                    requested = %requested_path.display(),
-                    %request_error,
-                    %index_error,
-                    "reading web asset failed"
-                );
-                return (StatusCode::NOT_FOUND, "UI not built").into_response();
-            }
-        },
+        Err(status) => {
+            tracing::warn!(
+                requested = %requested_path.display(),
+                "reading web asset failed"
+            );
+            return (status, "UI not built").into_response();
+        }
     };
 
     // Content ETag uses the same hash function as `/version`.
@@ -9320,6 +9352,69 @@ async fn static_handler(
         Body::from(content),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod static_asset_tests {
+    use super::{is_admin_console_path, resolve_static_document};
+    use axum::http::StatusCode;
+
+    #[test]
+    fn admin_console_paths_are_distinct_from_the_session_spa() {
+        assert!(is_admin_console_path("admin"));
+        assert!(is_admin_console_path("admin/accounts"));
+        assert!(!is_admin_console_path("admin.html"));
+        assert!(!is_admin_console_path("index.html"));
+        assert!(!is_admin_console_path("sessions"));
+    }
+
+    #[tokio::test]
+    async fn admin_paths_serve_admin_html_not_the_session_spa() {
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-admin-static-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("index.html"), b"session-spa").unwrap();
+        std::fs::write(root.join("admin.html"), b"admin-console").unwrap();
+
+        let (name, body) = resolve_static_document(&root, "admin").await.unwrap();
+        assert_eq!(name, "admin.html");
+        assert_eq!(body, b"admin-console");
+
+        let (name, body) = resolve_static_document(&root, "admin/accounts")
+            .await
+            .unwrap();
+        assert_eq!(name, "admin.html");
+        assert_eq!(body, b"admin-console");
+
+        let (name, body) = resolve_static_document(&root, "index.html").await.unwrap();
+        assert_eq!(name, "index.html");
+        assert_eq!(body, b"session-spa");
+
+        let (name, body) = resolve_static_document(&root, "sessions").await.unwrap();
+        assert_eq!(name, "index.html");
+        assert_eq!(body, b"session-spa");
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn missing_admin_html_is_not_the_session_spa() {
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-admin-static-missing-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("index.html"), b"session-spa").unwrap();
+
+        let status = resolve_static_document(&root, "admin").await.unwrap_err();
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }
 
 /// App-level WS heartbeat interval. 25s stays under the common 60s proxy/idle

@@ -231,6 +231,17 @@ self.addEventListener("fetch", (event) => {
   // `caches.match("/")` fallback was dead code (nothing ever cached "/"), so a
   // dead daemon = blank white page instead of the cached shell + reconnect UI.
   if (request.mode === "navigate") {
+    // The admin console is a separate Vite entry. Never pin /admin, /admin/*,
+    // or /admin.html as the PWA shell and never serve the chat shell when
+    // /admin is offline. A successful admin navigation must not write SHELL_CACHE["/"].
+    if (
+      url.pathname === "/admin" ||
+      url.pathname.startsWith("/admin/") ||
+      url.pathname === "/admin.html"
+    ) {
+      event.respondWith(fetch(request));
+      return;
+    }
     event.respondWith(
       fetch(request)
         .then((resp) => {
