@@ -3,69 +3,46 @@ import {
   bindCodeViewerSwipeFreeze,
   isMobileCodeSwipeFrozen,
   mobileCodeRestLayerSx,
-  mobileCodeSwipeSwapSx,
   MOBILE_CODE_SWIPE_END,
   MOBILE_CODE_SWIPE_START,
+  swipeOwnsCodeSurface,
 } from "./mobileCodeSurface.ts";
 
-function fakeElement(): HTMLElement {
-  const attrs = new Map<string, string>();
+function fakeView() {
   return {
-    setAttribute(name: string, value: string) {
-      attrs.set(name, value);
-    },
-    removeAttribute(name: string) {
-      attrs.delete(name);
-    },
-    getAttribute(name: string) {
-      return attrs.get(name) ?? null;
-    },
-    hasAttribute(name: string) {
-      return attrs.has(name);
-    },
-    addEventListener() {},
-    removeEventListener() {},
-  } as unknown as HTMLElement;
+    scrollDOM: {} as HTMLElement,
+    dom: {} as HTMLElement,
+  };
 }
 
-Deno.test("code rest layer stays visible", () => {
+Deno.test("wrap-on rest layer stays visible and does not snapshot", () => {
+  assertEquals(mobileCodeRestLayerSx.overflow, "hidden");
   assertEquals(
     Object.prototype.hasOwnProperty.call(mobileCodeRestLayerSx, "visibility"),
     false,
   );
-  assertEquals(mobileCodeRestLayerSx.overflow, "hidden");
 });
 
-Deno.test("workspace swipe swaps to a snapshot instead of hiding the pane", () => {
-  assertEquals(
-    mobileCodeSwipeSwapSx["& [data-mobile-code-layer] [data-mobile-code-snapshot]"]
-      .visibility,
-    "visible",
-  );
-  assertEquals(
-    mobileCodeSwipeSwapSx["& [data-mobile-code-layer] .cm-editor"].visibility,
-    "hidden",
-  );
-});
-
-Deno.test("finger-down paints the snapshot before the swipe freeze", () => {
-  const paints: string[] = [];
-  const layer = fakeElement();
-  const dispose = bindCodeViewerSwipeFreeze({
-    view: { scrollDOM: fakeElement(), dom: fakeElement() },
-    layer,
-    canvas: {} as HTMLCanvasElement,
-    paint: () => {
-      paints.push("paint");
-    },
-  });
-  assertEquals(paints, ["paint"]);
-  globalThis.dispatchEvent(new Event("touchstart"));
-  assertEquals(paints, ["paint"]);
+Deno.test("code swipe freeze is reference-counted and skips after release", () => {
+  const disposeFirst = bindCodeViewerSwipeFreeze(fakeView(), () => false);
+  const disposeSecond = bindCodeViewerSwipeFreeze(fakeView(), () => false);
+  assertEquals(isMobileCodeSwipeFrozen(), false);
   globalThis.dispatchEvent(new Event(MOBILE_CODE_SWIPE_START));
-  assertEquals(layer.getAttribute("data-mobile-code-frozen"), "true");
   assert(isMobileCodeSwipeFrozen());
   globalThis.dispatchEvent(new Event(MOBILE_CODE_SWIPE_END));
-  assertEquals(layer.hasAttribute("data-mobile-code-frozen"), false);
+  assertEquals(isMobileCodeSwipeFrozen(), false);
+  disposeFirst();
+  disposeSecond();
+});
+
+Deno.test("a late-mounted editor freezes when a swipe is already claimed", () => {
+  assert(
+    swipeOwnsCodeSurface((selector) =>
+      selector.includes("data-mobile-product-moving") ? {} : null
+    ),
+  );
+  const dispose = bindCodeViewerSwipeFreeze(fakeView(), () => true);
+  assert(isMobileCodeSwipeFrozen());
   dispose();
+  assertEquals(isMobileCodeSwipeFrozen(), false);
 });

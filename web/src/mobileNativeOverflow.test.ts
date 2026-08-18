@@ -18,13 +18,15 @@ Deno.test("Agent and Code scrollports keep native vertical momentum", () => {
   assert(mobileNativeYScrollSx.touchAction === "pan-y pinch-zoom");
   assert(reviewFileTree.includes("...mobileNativeYScrollSx"));
   assert(reviewChanges.includes("...mobileNativeYScrollSx"));
-  assert(codeViewer.includes('touchAction: "pan-y pinch-zoom"'));
+  assert(codeViewer.includes("pan-y pinch-zoom"));
   assert(transcript.includes('touchAction: "pan-y pinch-zoom"'));
 });
 
-Deno.test("Code Review swipes a viewport snapshot instead of live CodeMirror", () => {
+Deno.test("wrap-on Review source keeps live CodeMirror for workspace swipe", () => {
   assert(codeViewer.includes("bindCodeViewerSwipeFreeze"));
-  assert(codeViewer.includes("data-mobile-code-snapshot"));
   assert(codeViewer.includes('data-mobile-code-layer="true"'));
-  assertEquals(codeViewer.includes("WebkitOverflowScrolling: \"touch\""), false);
+  assert(codeViewer.includes('data-mobile-code-wrap'));
+  assert(codeViewer.includes("softWrap ? { position: \"relative\" }"));
+  assert(codeViewer.includes("WebkitOverflowScrolling: \"touch\""));
+  assertEquals(codeViewer.includes("data-mobile-code-snapshot"), false);
 });

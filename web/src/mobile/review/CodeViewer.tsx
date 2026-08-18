@@ -37,7 +37,6 @@ import { rankAndDedupeInspectCandidates } from "./symbolCandidateModel";
 import {
   bindCodeViewerSwipeFreeze,
   isMobileCodeSwipeFrozen,
-  mobileCodeSnapshotHostSx,
 } from "../../mobileCodeSurface";
 import type { CodeLanguage } from "./codeApi";
 
@@ -375,8 +374,6 @@ export default function CodeViewer({
 }): React.JSX.Element {
   const theme = useTheme();
   const editorRef = useRef<EditorView | null>(null);
-  const layerRef = useRef<HTMLDivElement>(null);
-  const snapshotRef = useRef<HTMLCanvasElement>(null);
   const freezeDisposeRef = useRef<(() => void) | undefined>(undefined);
   const appliedRevealRequest = useRef<number | undefined>(undefined);
   const [language, setLanguage] = useState<LanguageSupport | null>(null);
@@ -460,10 +457,11 @@ export default function CodeViewer({
           overflow: "auto",
           overflowX: softWrap ? "hidden" : "auto",
           overscrollBehavior: "contain",
-          touchAction: "pan-y pinch-zoom",
-          // No `-webkit-overflow-scrolling: touch`. That tile is
-          // max-content wide and iOS re-rasterizes it under a parent
-          // translate. Mobile clips the wrapper instead.
+          touchAction: softWrap ? "pan-y pinch-zoom" : "pan-x pan-y pinch-zoom",
+          // Wrap-off needs the native X bar. Wrap-on has no X bar, so
+          // skip `-webkit-overflow-scrolling: touch` — that tile is
+          // what iOS re-rasters during a workspace swipe.
+          ...(softWrap ? {} : { WebkitOverflowScrolling: "touch" }),
         },
         ".cm-content": {
           fontSize: `${fontSize}px`,
@@ -475,6 +473,9 @@ export default function CodeViewer({
         ".cm-gutters": {
           backgroundColor: theme.palette.background.default,
           borderRightColor: theme.palette.divider,
+          // No horizontal pan when wrapped, so sticky gutters only
+          // re-stick under the peek transform. Keep them in flow.
+          ...(softWrap ? { position: "relative" } : {}),
         },
         ".cowboy-diff-added": {
           backgroundColor: theme.palette.mode === "dark"
@@ -810,12 +811,11 @@ export default function CodeViewer({
 
   return (
     <Box
-      ref={layerRef}
       data-mobile-code-layer="true"
+      data-mobile-code-wrap={softWrap ? "true" : undefined}
       sx={{
         height: "100%",
         minHeight: 0,
-        ...mobileCodeSnapshotHostSx,
         "& > div": { height: "100%" },
         // `cmTheme` is shared with the Agent composer and intentionally follows
         // the global reading scale. Code Review owns a separate code-only
@@ -828,26 +828,13 @@ export default function CodeViewer({
         },
       }}
     >
-      <canvas
-        ref={snapshotRef}
-        data-mobile-code-snapshot
-        aria-hidden
-      />
       <CodeMirror
         value={text}
         extensions={extensions}
         onCreateEditor={(view) => {
           editorRef.current = view;
           freezeDisposeRef.current?.();
-          const layer = layerRef.current;
-          const canvas = snapshotRef.current;
-          if (layer && canvas) {
-            freezeDisposeRef.current = bindCodeViewerSwipeFreeze({
-              view,
-              layer,
-              canvas,
-            });
-          }
+          freezeDisposeRef.current = bindCodeViewerSwipeFreeze(view);
         }}
         basicSetup={{
           lineNumbers: true,

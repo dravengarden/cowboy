@@ -59,13 +59,13 @@ Transcript paint cost, or Code Review's editor/tree on Mobile, read
 It is the core contract: jank-free swipe, 1:1 `translate3d`, complementary
 rail, follower layers for iOS pin, live-row recycle without a JS
 virtualizer, a standing peek compositor layer (arm on finger-down; first
-tracking frame only writes transform), a Review source **viewport
-bitmap** during swipe (`mobileCodeSurface` — paint on finger-down, never
-hide the whole pane, never change `.cm-scroller` overflow on claim),
-and paint/hit split for the dim. Intermittent frame drops are
-assemble-at-prepare, not tracking math — do not retune the cubic or
-`setState` on `touchstart` to chase them. Do not re-pin the rail, scale
-the peek, or freeze the session list to make a swipe cheaper.
+tracking frame only writes transform), wrap-on Review source as a
+workspace swipe (live CodeMirror, no sticky gutters, no touch-scroll
+tile; wrap-off keeps the native X bar), and paint/hit split for the dim.
+Intermittent frame drops are assemble-at-prepare, not tracking math —
+do not retune the cubic or `setState` on `touchstart` to chase them. Do
+not hide or snapshot the editor, re-pin the rail, scale the peek, or
+freeze the session list to make a swipe cheaper.
 
 ## Desktop and mobile are separate products
 

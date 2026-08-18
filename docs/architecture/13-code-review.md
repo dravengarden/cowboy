@@ -162,10 +162,10 @@ incremental parsing, selection, wrapping, gutters, diagnostics, and merge
 views. Load language packages on demand and do expensive decoration work only
 for visible ranges.
 
-**A Review swipe that hitchs on source/diff but not on README is a
-defect.** Translate a viewport bitmap of the editor, not live
-CodeMirror. Do not hide the whole code pane (that flashes) and do not
-change `.cm-scroller` overflow on claim (that remasures). See
+**Wrap-on source (no horizontal bar) is a workspace swipe and must be
+as cheap as README.** Drop sticky gutters and the touch-scroll tile in
+that mode. Wrap-off source keeps the native horizontal pan — do not
+steal it for the drawer. Do not hide or snapshot the editor. See
 [`mobile-spatial-presentation.md`](../mobile-spatial-presentation.md).
 
 Source views resolve CodeMirror's language description from the path, including

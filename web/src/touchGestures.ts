@@ -79,13 +79,12 @@ export function expandedSelection(
   return selection !== null && selection.rangeCount > 0 && !selection.isCollapsed;
 }
 
-/** Preserve native horizontal scrolling inside genuinely overflowing
- *  regions. Review CodeMirror is excluded: wrap-off source is
- *  `width: max-content`, so treating it as a scroller steals the
- *  workspace swipe. Horizontal reading uses the wrap toggle. */
+/** Preserve native horizontal scrolling when a surface actually
+ *  overflows on X. Wrap-on Review source uses `overflow-x: hidden`,
+ *  so it falls through to the workspace swipe. Wrap-off source with a
+ *  real bar keeps the pan. */
 export function hasHorizontalScroller(target: EventTarget | null, boundary: HTMLElement): boolean {
   let node = target instanceof HTMLElement ? target : null;
-  if (node?.closest("[data-mobile-code-layer]")) return false;
   while (node && node !== boundary) {
     const style = globalThis.getComputedStyle(node);
     if (
