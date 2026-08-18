@@ -1,0 +1,61 @@
+import { assert, assertEquals } from "jsr:@std/assert";
+import {
+  OBSIDIAN_SHEET_CLOSED_SCALE,
+  OBSIDIAN_SHEET_INSET_PX,
+  OBSIDIAN_SHEET_MAX_FRACTION,
+  OBSIDIAN_SHEET_RADIUS_PX,
+  OBSIDIAN_SHEET_SCRIM_MAX,
+  OBSIDIAN_SHEET_SETTLE_EASING,
+  OBSIDIAN_SHEET_SETTLE_MS,
+  obsidianSheetScale,
+  obsidianSheetScrimOpacity,
+  obsidianSheetSettleMs,
+  obsidianSheetTransform,
+} from "./obsidianSheetMotion.ts";
+
+const sheetSource = await Deno.readTextFile(
+  new URL("./Sheet.tsx", import.meta.url),
+);
+const modalSource = await Deno.readTextFile(
+  new URL("./ObsidianSheet.tsx", import.meta.url),
+);
+const drawerMotion = await Deno.readTextFile(
+  new URL("./mobileDrawerMotion.ts", import.meta.url),
+);
+
+Deno.test("compact sheet settle matches the Obsidian/iOS drawer cubic", () => {
+  assertEquals(OBSIDIAN_SHEET_SETTLE_EASING, "cubic-bezier(0.32, 0.72, 0, 1)");
+  assert(drawerMotion.includes(`"${OBSIDIAN_SHEET_SETTLE_EASING}"`));
+  assertEquals(OBSIDIAN_SHEET_SETTLE_MS, 240);
+  assertEquals(OBSIDIAN_SHEET_INSET_PX, 8);
+  assertEquals(OBSIDIAN_SHEET_RADIUS_PX, 16);
+  assertEquals(OBSIDIAN_SHEET_MAX_FRACTION, 0.88);
+  assertEquals(OBSIDIAN_SHEET_CLOSED_SCALE, 0.96);
+  assertEquals(OBSIDIAN_SHEET_SCRIM_MAX, 0.32);
+  assertEquals(obsidianSheetSettleMs(true), 1);
+  assertEquals(obsidianSheetSettleMs(false), 240);
+});
+
+Deno.test("scale and scrim interpolate from closed to open", () => {
+  assertEquals(obsidianSheetScale(200, 200), OBSIDIAN_SHEET_CLOSED_SCALE);
+  assertEquals(obsidianSheetScale(0, 200), 1);
+  assertEquals(obsidianSheetScale(100, 200), 0.98);
+  assertEquals(obsidianSheetScale(0, 0), 1);
+  assertEquals(obsidianSheetScrimOpacity(200, 200), 0);
+  assertEquals(obsidianSheetScrimOpacity(0, 200), OBSIDIAN_SHEET_SCRIM_MAX);
+  assertEquals(obsidianSheetScrimOpacity(100, 200), OBSIDIAN_SHEET_SCRIM_MAX / 2);
+  assertEquals(
+    obsidianSheetTransform(40, 0.98),
+    "translate3d(0, 40px, 0) scale(0.98)",
+  );
+});
+
+Deno.test("phone sheets use the compact Obsidian card, not a floating footer pad", () => {
+  assert(sheetSource.includes("<ObsidianSheet"));
+  assert(sheetSource.includes("!props.cover"));
+  assert(modalSource.includes("data-obsidian-sheet"));
+  assert(modalSource.includes("OBSIDIAN_SHEET_SETTLE_EASING"));
+  assertEquals(modalSource.includes("footerOverlay"), false);
+  assertEquals(modalSource.includes("calc(76px"), false);
+  assertEquals(modalSource.includes("MobileSheetDismiss"), false);
+});

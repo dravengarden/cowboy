@@ -158,13 +158,17 @@ visible.
 
 Clear / Compact / Stop / Reload / discard / delete / update / Provider
 auth-or-uninstall prompts are compact decisions, not workbenches. On the
-Mobile and tablet products they always rise as the shared frosted
-DetentSheet (`ConfirmSheet` in `web/src/Sheet.tsx`), including iPhone
-landscape. Desktop keeps the centered dialog. Do not open a raw MUI
-`Dialog` for these prompts on a phone-width surface: a floating card is
-the wrong modal grammar next to Cowboy's bottom sheets. Desktop-only
-chrome such as `DesktopTopBarControls` may keep Dialog because that
-product never becomes Mobile by shrinking the window.
+Mobile and tablet products they always rise as Cowboy's Obsidian-style
+inset card (`ObsidianSheet` via `ConfirmSheet` in `web/src/Sheet.tsx`),
+including iPhone landscape: content-hugging, 8px inset, all-around
+radius, and the same iOS cubic (`cubic-bezier(0.32, 0.72, 0, 1)` at
+240ms) the drawers already use. Do not route these prompts through
+DetentSheet's floating footer overlay — that pads ~110px of empty body
+under a short confirm. Desktop keeps the centered dialog. A centered
+MUI `Dialog` is still the wrong grammar on a phone-width surface.
+Desktop-only chrome such as `DesktopTopBarControls` may keep Dialog
+because that product never becomes Mobile by shrinking the window.
+Cover/workbench sheets (Settings, New Session) stay on DetentSheet.
 
 A Settings drill-in (Machines, About, Logs) keeps the same sheet and
 turns the footer island into Back. Do not dismiss the whole sheet from

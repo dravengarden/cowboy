@@ -96,8 +96,9 @@ freeze the session list to make a swipe cheaper.
   space and the Desktop workflow's efficiency needs.
 - Confirmation modals (Clear, Compact, Stop, Reload, discard, delete, update,
   Provider auth/uninstall) use `ConfirmSheet`. Mobile and tablet always get
-  DetentSheet; Desktop keeps a centered dialog. Do not add a raw MUI `Dialog`
-  for a phone-facing confirm.
+  the compact Obsidian-style inset card (`ObsidianSheet`); Desktop keeps a
+  centered dialog. Do not add a raw MUI `Dialog` for a phone-facing confirm.
+  Cover/workbench sheets (Settings, New Session) stay on DetentSheet.
 
 ## Deploy (web changes reach the installed PWA only via a SW version bump)
 

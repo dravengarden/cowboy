@@ -25,7 +25,7 @@ const desktopTopBarSource = await Deno.readTextFile(
   new URL("./desktop/DesktopTopBarControls.tsx", import.meta.url),
 );
 
-Deno.test("ConfirmSheet forces DetentSheet on mobile and tablet products", () => {
+Deno.test("ConfirmSheet forces the compact Obsidian card on mobile and tablet", () => {
   assert(sheetSource.includes("export function ConfirmSheet("));
   assert(sheetSource.includes("export function useConfirmSheetSurface("));
   assert(
@@ -33,6 +33,8 @@ Deno.test("ConfirmSheet forces DetentSheet on mobile and tablet products", () =>
   );
   assert(sheetSource.includes("forceSheet={forceSheet}"));
   assert(sheetSource.includes("portal"));
+  assert(sheetSource.includes("<ObsidianSheet"));
+  assert(sheetSource.includes("useCompactCard"));
   assert(
     sheetSource.includes('mobileDismiss={actions == null ? "footer" : "none"}'),
   );

@@ -2,10 +2,24 @@ import { Dialog, DialogContent, useMediaQuery, useTheme } from "@mui/material";
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { BottomSheet, type BottomSheetProps } from "./_shell";
+import { ObsidianSheet } from "./ObsidianSheet";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
+
+function maybePortal(sheet: ReactNode, portal: boolean): ReactNode {
+  // A picker nested inside a full-screen sheet otherwise inherits iOS
+  // WebKit's momentum-scroller containing block. Its fixed scrim then starts
+  // below the parent's safe-area/drag header instead of at the viewport edge.
+  // Cowboy owns the top document, so nested workbench pickers may explicitly
+  // escape that inline SDK boundary while ordinary/hosted sheets stay inline.
+  return portal && globalThis.document?.body
+    ? createPortal(sheet, globalThis.document.body)
+    : sheet;
+}
 
 // cowboy's BottomSheet: always the frosted 磨砂玻璃 material (no per-app toggle —
 // the translucent surface is the house look). Drop-in for the shared BottomSheet.
+// Compact phone/tablet sheets (no `cover`) use Obsidian's inset action-card
+// instead of the tall DetentSheet + floating footer pad.
 export function Sheet(
   props: Omit<BottomSheetProps, "frosted"> & {
     desktopMaxWidth?: number;
@@ -16,7 +30,8 @@ export function Sheet(
   const widthIsMobile = useMediaQuery(theme.breakpoints.down("sm"));
   const { desktopMaxWidth, portal = false, ...bottomSheetProps } = props;
   // Content-heavy Cowboy workbenches may claim the available Desktop canvas.
-  // Mobile and touch-forced sheets keep the shared DetentSheet unchanged.
+  // Cover sheets stay on DetentSheet; compact phone/tablet sheets use the
+  // inset Obsidian card.
   if (
     desktopMaxWidth !== undefined && !widthIsMobile && !props.forceSheet
   ) {
@@ -57,29 +72,38 @@ export function Sheet(
       </Dialog>
     );
   }
-  const sheet = (
+  const useCompactCard = (props.forceSheet || widthIsMobile) && !props.cover;
+  if (useCompactCard) {
+    return maybePortal(
+      <ObsidianSheet
+        open={props.open}
+        onClose={props.onClose}
+        title={props.title}
+        actions={props.actions}
+        ariaLabel={typeof props.title === "string" ? props.title : undefined}
+      >
+        {props.children}
+      </ObsidianSheet>,
+      portal,
+    );
+  }
+  return maybePortal(
     <BottomSheet
       mobileDismiss="footer"
       floatingActions
       {...bottomSheetProps}
       frosted
-    />
+    />,
+    portal,
   );
-  // A picker nested inside a full-screen sheet otherwise inherits iOS
-  // WebKit's momentum-scroller containing block. Its fixed scrim then starts
-  // below the parent's safe-area/drag header instead of at the viewport edge.
-  // Cowboy owns the top document, so nested workbench pickers may explicitly
-  // escape that inline SDK boundary while ordinary/hosted sheets stay inline.
-  return portal && globalThis.document?.body
-    ? createPortal(sheet, globalThis.document.body)
-    : sheet;
 }
 
 /**
  * Confirmation and other compact decision modals follow product identity.
- * Mobile and tablet always rise as DetentSheet — including iPhone landscape.
- * Desktop keeps the shared centered dialog. Do not open a raw MUI Dialog for
- * these prompts: a phone-width surface must never be a floating card.
+ * Mobile and tablet always rise as the Obsidian-style inset card — including
+ * iPhone landscape. Desktop keeps the shared centered dialog. Do not open a
+ * raw MUI Dialog for these prompts: a phone-width surface is a bottom card,
+ * not a floating centered dialog.
  */
 export function useConfirmSheetSurface(): boolean {
   return useSurfaceProfile().kind !== "desktop";

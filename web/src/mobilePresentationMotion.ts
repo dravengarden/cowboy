@@ -21,7 +21,7 @@ export const mobilePeekRestLayerSx = {
  *  has its own translate3d; toggling its filter at prepare rebuilds that
  *  layer and is the intermittent first-frame hitch. */
 export const mobileFrostStripSx = {
-  "& [data-detent-sheet-chrome], & [data-mobile-backdrop-chrome], & [data-mobile-composer-shell-material], & [data-mobile-focus-composer], & [data-mobile-primary-composer], & [data-mobile-pending-editor]": {
+  "& [data-detent-sheet-chrome], & [data-obsidian-sheet], & [data-mobile-backdrop-chrome], & [data-mobile-composer-shell-material], & [data-mobile-focus-composer], & [data-mobile-primary-composer], & [data-mobile-pending-editor]": {
     backdropFilter: "none",
     WebkitBackdropFilter: "none",
   },
