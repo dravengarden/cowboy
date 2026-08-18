@@ -767,6 +767,32 @@ Deno.test("long touch prompts scroll inside the editor without hiding chrome", (
   assertEquals(actionRowSource.includes("flexShrink: 0"), true);
 });
 
+Deno.test("cleared touch prompts fit the native textarea exactly on blur", () => {
+  const exactFitStart = textareaSource.indexOf(
+    "const fitNativeTextareaExactly",
+  );
+  const exactFitEnd = textareaSource.indexOf(
+    "const syncNativeScrollable",
+    exactFitStart,
+  );
+  const exactFitSource = textareaSource.slice(exactFitStart, exactFitEnd);
+  const blurStart = textareaSource.indexOf("onBlur={(e): void => {");
+  const blurEnd = textareaSource.indexOf("onPaste=", blurStart);
+  const blurSource = textareaSource.slice(blurStart, blurEnd);
+
+  assertEquals(exactFitStart >= 0, true);
+  assertEquals(exactFitEnd > exactFitStart, true);
+  assertEquals(
+    exactFitSource.indexOf('ta.style.height = "auto"') <
+      exactFitSource.indexOf("ta.scrollHeight"),
+    true,
+  );
+  assertEquals(blurStart >= 0, true);
+  assertEquals(blurEnd > blurStart, true);
+  assertEquals(blurSource.includes("fitNativeTextareaExactly(ta)"), true);
+  assertEquals(blurSource.includes("syncNativeScrollable(ta)"), true);
+});
+
 Deno.test("mobile keyboard focus presents one floating composer surface", () => {
   assertEquals(
     composerSource.includes("<span data-mobile-composer-clear>"),

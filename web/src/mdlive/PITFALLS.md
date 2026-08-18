@@ -1387,10 +1387,16 @@ Desktop Vim + IME checks:
     `style.height` to `auto` to remeasure: that collapse/grow cycle is the same
     class of layout race as TextareaAutosize and leaves the painted caret on the
     previous line after a few Returns. Grow height monotonically while focused;
-    fit exactly only after blur. External document replacement and explicit
-    toolbar edits may still map a selection synchronously; ordinary keyboard
-    input must never call `setSelectionRange`, resize the DOM from an input
-    callback, insert a zero-width sentinel, blur/refocus, or draw a fake caret.
+    fit exactly only after blur. That blur path must first reset the inline
+    height to `auto` and only then read `scrollHeight`: clearing a long prompt
+    while it is still focused intentionally preserves the tall box, and reading
+    `scrollHeight` before releasing that box can measure the stale height again.
+    Blur does not itself trigger a useful `ResizeObserver` update, so settle the
+    exact height synchronously in the native blur handler. External document
+    replacement and explicit toolbar edits may still map a selection
+    synchronously; ordinary keyboard input must never call `setSelectionRange`,
+    resize the DOM from an input callback, insert a zero-width sentinel,
+    blur/refocus, or draw a fake caret.
 
 64. **Do not change touch image decoration structure without physical paste
     acceptance.**

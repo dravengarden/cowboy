@@ -236,6 +236,20 @@ export const ComposerTextarea = forwardRef<
   const commandsRef = useRef(commands);
   commandsRef.current = commands;
 
+  const fitNativeTextareaExactly = (ta: HTMLTextAreaElement): void => {
+    // Read the natural content height only after releasing the previous inline
+    // height. Reading scrollHeight first can return the stale tall box after a
+    // long prompt was cleared while focused.
+    ta.style.height = "auto";
+    const needed = nativeTextareaFittedHeight(ta.scrollHeight);
+    ta.style.height = `${String(needed)}px`;
+  };
+
+  const syncNativeScrollable = (ta: HTMLTextAreaElement): void => {
+    const next = nativeTextareaNeedsScroll(ta.scrollHeight, ta.clientHeight);
+    setNativeScrollable((current) => current === next ? current : next);
+  };
+
   const measureNativeOverflow = (): void => {
     const ta = inputRef.current;
     if (!ta) return;
@@ -247,14 +261,12 @@ export const ComposerTextarea = forwardRef<
         const current = Number.parseFloat(ta.style.height) || ta.clientHeight;
         if (needed > current + 1) ta.style.height = `${String(needed)}px`;
       } else {
-        ta.style.height = "auto";
-        ta.style.height = `${String(needed)}px`;
+        fitNativeTextareaExactly(ta);
       }
     } else {
       ta.style.removeProperty("height");
     }
-    const next = nativeTextareaNeedsScroll(ta.scrollHeight, ta.clientHeight);
-    setNativeScrollable((current) => current === next ? current : next);
+    syncNativeScrollable(ta);
   };
 
   useLayoutEffect(() => {
@@ -805,8 +817,13 @@ export const ComposerTextarea = forwardRef<
           }
         }}
         onBlur={(e): void => {
-          rememberSelection(e.currentTarget as HTMLTextAreaElement);
+          const ta = e.currentTarget as HTMLTextAreaElement;
+          rememberSelection(ta);
           setTrigger(null);
+          if (!expanded) {
+            fitNativeTextareaExactly(ta);
+            syncNativeScrollable(ta);
+          }
         }}
         onPaste={(e): void => {
           const files = clipboardFiles(e.clipboardData);
