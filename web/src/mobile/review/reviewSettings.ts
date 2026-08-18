@@ -1,6 +1,8 @@
 import { persisted, useStore } from "../../_store/mod.ts";
 import {
   DEFAULT_REVIEW_SETTINGS,
+  loadReviewSettings,
+  persistReviewSettings,
   normalizeReviewSettings,
   type ReviewSettings,
 } from "./reviewSettingsModel";
@@ -9,11 +11,11 @@ const reviewSettingsStore = persisted<ReviewSettings>(
   "cowboy:review-settings",
   DEFAULT_REVIEW_SETTINGS,
   {
-    serialize: JSON.stringify,
+    serialize: persistReviewSettings,
     deserialize: (raw) => {
       if (!raw) return DEFAULT_REVIEW_SETTINGS;
       try {
-        return normalizeReviewSettings(JSON.parse(raw));
+        return loadReviewSettings(JSON.parse(raw));
       } catch {
         return DEFAULT_REVIEW_SETTINGS;
       }
