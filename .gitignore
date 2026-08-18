@@ -21,6 +21,8 @@ dist/provider-runtime-cache/
 .DS_Store
 .wrangler/
 **/.wrangler/
+.cowboy-dev.sqlite
+.cowboy-dev.sqlite-*
 
 # sccache local cache (if ever placed in-tree)
 .sccache/

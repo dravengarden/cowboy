@@ -15,6 +15,7 @@ import {
   deleteProductHistoryCache,
   nextAuthStatusBackoffMs,
   nextReadyStatusAction,
+  PRODUCT_AUTH_LOST_EVENT,
   shouldMountProductApp,
   type AuthGateDecision,
   type AuthGateView,
@@ -191,6 +192,27 @@ export function ProductAuthGate({
   useEffect(() => {
     void loadStatus();
   }, [loadStatus]);
+
+  useEffect(() => {
+    const onAuthLost = (): void => {
+      if (!meRef.current) return;
+      generationRef.current += 1;
+      void (async () => {
+        try {
+          await authApi.logout();
+        } catch {
+          // Best-effort cookie clear after 401/403/4001.
+        }
+        await deleteProductHistoryCache();
+        announceProductSessionEnd();
+        meRef.current = null;
+        setMe(null);
+        setView("login");
+      })();
+    };
+    globalThis.addEventListener(PRODUCT_AUTH_LOST_EVENT, onAuthLost);
+    return () => globalThis.removeEventListener(PRODUCT_AUTH_LOST_EVENT, onAuthLost);
+  }, []);
 
   useEffect(() => {
     if (view !== "activating" && view !== "retry") return;

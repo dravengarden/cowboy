@@ -84,7 +84,13 @@ Deno.test("desktop can sign out through authApi without importing store", async 
   assert(store.includes("cowboy:product-sign-out"));
   assert(store.includes("abandonProductSocket"));
   assert(store.includes("productSessionAbandoned"));
+  assert(store.includes("/api/auth/me"));
+  assert(store.includes("classifyMeHandshake"));
+  assert(store.includes("4001"));
+  assert(store.includes("cowboy:product-auth-lost"));
   assertEquals(store.includes('from "./auth/'), false);
+  assert(gate.includes("PRODUCT_AUTH_LOST_EVENT"));
+  assert(gate.includes("401/403/4001"));
 });
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {

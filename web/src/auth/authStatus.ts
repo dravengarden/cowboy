@@ -52,6 +52,27 @@ export function nextReadyStatusAction(
 }
 
 export const PRODUCT_SESSION_END_EVENT = "cowboy:product-sign-out";
+export const PRODUCT_AUTH_LOST_EVENT = "cowboy:product-auth-lost";
+export const WS_AUTH_REQUIRED_CLOSE_CODE = 4001;
+
+export type MeHandshake = "reconnect" | "logout" | "keep";
+
+/** Handshake /me outcomes. Never treat a generic `!ok` as logout. */
+export function classifyMeHandshake(
+  status: number | "network",
+): MeHandshake {
+  if (status === 200) return "reconnect";
+  if (status === 401 || status === 403) return "logout";
+  return "keep";
+}
+
+export function isAuthLostCloseCode(code: number): boolean {
+  return code === WS_AUTH_REQUIRED_CLOSE_CODE;
+}
+
+export function announceProductAuthLost(): void {
+  globalThis.dispatchEvent(new Event(PRODUCT_AUTH_LOST_EVENT));
+}
 
 export function announceProductSessionEnd(): void {
   globalThis.dispatchEvent(new Event(PRODUCT_SESSION_END_EVENT));

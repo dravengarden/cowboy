@@ -19,8 +19,8 @@ control plane, while the web files remain an independently replaceable release.
 | `GET/POST /api/admin/users` | admin operator+ list/create product users (default grant `operator`) |
 | `POST /api/admin/users/{id}/disable` | admin operator+ disable + revoke sessions/tokens |
 | `POST /api/admin/users/{id}/password` | admin owner set password |
-| `GET /api/metrics` | storage/session/RSS plus persistence pending, dropped, and failed-batch counters |
-| `GET /metrics` | Prometheus controller and runtime metrics |
+| `GET /api/metrics` | admin operator+ diagnostic JSON (not the scrape path) |
+| `GET /metrics` | scrape-only: loopback peer and no forwarded headers, else 404 |
 | `GET /api/usage` | Cached Codex account limits, Claude Agent SDK plan-limit events, and the latest live ACP session usage. Gemini account quota remains absent until its official ACP mode exposes it; Cowboy never reuses provider OAuth credentials against private endpoints. |
 | `POST /api/usage` | manually refresh official provider account usage, coalesced and timeout-bounded |
 | `GET /api/workspaces` | selectable session roots plus matching central Columbus work items |
@@ -33,11 +33,12 @@ control plane, while the web files remain an independently replaceable release.
 | `GET /api/sessions/{id}/files?q&limit` | the composer `@` picker (gitignore-aware fuzzy search) |
 | `GET /api/sessions/{id}/info` | metadata + event / queue / draft counts |
 | `POST /api/sessions/{id}/reload` | atomically rebuild the worker while preserving the Cowboy/native session, transcript, pending state, and saved config |
+| `POST /api/sessions` | product operator+; stamps `owner_user_id`; returns authoritative `session_id`, exact `provider_version`, `provider_generation_digest`, and optional `provider_auth_generation` selected transactionally by the Controller |
 | `POST /api/sessions/{id}/prompt` | machine-driven session wake |
 | `GET /api/history/{id}?before_seq=…` | cursor-addressed, event- and byte-bounded history page |
 | `GET /api/code/sessions/{id}/*` | worktree tree/search/manifest/diff/file/LSP data plane |
 | `GET /api/artifacts/{name}` | externalized large transcript artifacts |
-| `ANY /ws` | WebSocket upgrade |
+| `ANY /ws` | product cookie or Bearer; cookie upgrades also check Origin; 401 before upgrade |
 | `*` (fallback) | files from `--web-root`, with `index.html` fallback for client routes |
 
 Static assets are read at request time. Content-addressed Vite assets receive
@@ -114,8 +115,25 @@ and still broadcast only the product allow-list.
 
 ## Auth
 
-Product `/ws` is still unauthenticated. Settings hygiene is already in place:
-the product Settings map is the auto-resume allow-list above, and a product
-socket cannot overwrite `cowboy.admin.identities` or other admin keys via
-`SetSetting`. Admin HTTP and product login are a separate plane; see
-[Admin](14-admin.md).
+Accounts are required. There is no `cowboy.auth.mode` and no loopback
+product bypass. A product cookie (`cowboy_user`) or `Authorization: Bearer
+cow_...` is required on `/ws` and product APIs. Cookie `/ws` upgrades also
+run the CSRF Origin allow-list; missing or disallowed Origin is 403 and
+does not open a socket. Missing, expired, or disabled principals return
+**401 before `on_upgrade`**. A later revoke closes the socket with
+application code **4001**.
+
+Session REST families (`/api/sessions/{id}/*`, `/api/code/sessions/{id}/*`,
+`/api/history/{id}`) use `can_see` / `can_mutate`. Product viewers see own
+and unowned rows; operators mutate own or unowned; an owner grant sees and
+mutates every row. Global `title` / `order` SyncPatches are projected to
+visible ids. Reorder merges: submitted ids only permute names they include,
+and an omitted visible id is never dropped (`[A,B,C]` + `[C,A]` → `[C,B,A]`).
+
+`GET /api/artifacts/{name}` requires a product principal; the hash is the
+capability. `POST /api/machines/enrollment` is admin operator+. `GET
+/metrics` is scrape-only: loopback peer and no `X-Forwarded-*` /
+`X-Real-IP`, otherwise 404. `GET /api/metrics` is admin operator+. Unlisted
+`/api/*` routes fail closed as admin operator+. Admin writes use
+`require_admin_role`; viewers keep read. Admin HTTP and product login stay
+separate planes; see [Admin](14-admin.md).

@@ -1,8 +1,10 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
   classifyAuthStatus,
+  classifyMeHandshake,
   deleteProductHistoryCache,
   historyCacheName,
+  isAuthLostCloseCode,
   isLoginDecision,
   nextAuthStatusBackoffMs,
   nextReadyStatusAction,
@@ -98,6 +100,18 @@ Deno.test("status retry backoff matches the connection banner", () => {
   assertEquals(nextAuthStatusBackoffMs(4), 8000);
   assertEquals(nextAuthStatusBackoffMs(5), 15000);
   assertEquals(nextAuthStatusBackoffMs(8), 15000);
+});
+
+Deno.test("me handshake reconnects on 200, logs out on 401/403, keeps cookie otherwise", () => {
+  assertEquals(classifyMeHandshake(200), "reconnect");
+  assertEquals(classifyMeHandshake(401), "logout");
+  assertEquals(classifyMeHandshake(403), "logout");
+  assertEquals(classifyMeHandshake(404), "keep");
+  assertEquals(classifyMeHandshake(502), "keep");
+  assertEquals(classifyMeHandshake(500), "keep");
+  assertEquals(classifyMeHandshake("network"), "keep");
+  assertEquals(isAuthLostCloseCode(4001), true);
+  assertEquals(isAuthLostCloseCode(1006), false);
 });
 
 Deno.test("a ready session ignores outages and only tears down on 200 auth change", () => {

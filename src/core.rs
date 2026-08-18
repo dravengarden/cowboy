@@ -2003,24 +2003,49 @@ impl Hub {
     /// Current session list (insertion order).
     #[must_use]
     pub fn session_list(&self) -> Vec<SessionMeta> {
+        self.session_list_filtered(|_| true)
+    }
+
+    /// Session list after applying `keep` to each row's `owner_user_id`.
+    #[must_use]
+    pub fn session_list_filtered(&self, keep: impl Fn(Option<&str>) -> bool) -> Vec<SessionMeta> {
         let sessions = self.inner.sessions.lock();
         let order = self.inner.order.lock();
         order
             .iter()
             .filter_map(|id| {
-                sessions.get(id).map(|s| {
-                    let mut meta = s.meta.clone();
-                    // Surface the soonest scheduled-draft fire so the session-row
-                    // clock badge can show it, without shipping the drafts here.
-                    meta.next_schedule_ms = s
-                        .drafts
-                        .iter()
-                        .filter_map(|m| m.schedule.as_ref().map(|sc| sc.fire_at_ms))
-                        .min();
-                    meta
+                sessions.get(id).and_then(|s| {
+                    keep(s.meta.owner_user_id.as_deref()).then(|| {
+                        let mut meta = s.meta.clone();
+                        // Surface the soonest scheduled-draft fire so the session-row
+                        // clock badge can show it, without shipping the drafts here.
+                        meta.next_schedule_ms = s
+                            .drafts
+                            .iter()
+                            .filter_map(|m| m.schedule.as_ref().map(|sc| sc.fire_at_ms))
+                            .min();
+                        meta
+                    })
                 })
             })
             .collect()
+    }
+
+    /// Product user id stamped on this session. `None` if the session is
+    /// unknown or still in the unowned shared pool.
+    #[must_use]
+    pub fn session_owner_user_id(&self, session_id: &str) -> Option<String> {
+        self.inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .and_then(|session| session.meta.owner_user_id.clone())
+    }
+
+    /// Whether a live session exists and is stamped for `user_id`.
+    #[must_use]
+    pub fn owned_by_product_user(&self, session_id: &str, user_id: &str) -> bool {
+        self.session_owner_user_id(session_id).as_deref() == Some(user_id)
     }
 
     /// Per-session info (metadata + live event/queue/draft counts) for the
@@ -2521,10 +2546,11 @@ impl Hub {
 
     /// Apply a session reorder to the order list (NO broadcast — the sync channel
     /// carries it). Mirror of [`Self::reorder_sessions`] minus the broadcast.
+    /// Submitted ids only permute names they include; every existing id survives.
     fn apply_reorder(&self, order: &[String]) {
         {
             let mut list = self.inner.order.lock();
-            list.sort_by_key(|id| order.iter().position(|o| o == id).unwrap_or(usize::MAX));
+            *list = merge_session_order(&list, order);
         }
         if let Some(tx) = self.inner.store_tx.as_ref() {
             let order = self.inner.order.lock().clone();
@@ -2673,7 +2699,8 @@ impl Hub {
     /// The derived JSON value of one synced state — what a `SyncPatch` carries and
     /// the client folds. Always read live from the typed truth (so it's durable by
     /// derivation, no shadow copy to drift).
-    fn sync_value(&self, state: &str) -> serde_json::Value {
+    #[must_use]
+    pub fn sync_value(&self, state: &str) -> serde_json::Value {
         match state {
             "title" => {
                 let sessions = self.inner.sessions.lock();
@@ -4379,11 +4406,11 @@ impl Hub {
     }
 
     /// Reorder the session list to the given id order, then persist + broadcast.
-    /// Ids not in `order` keep their relative order at the end.
+    /// Submitted ids only permute names they include; existing ids are never dropped.
     pub fn reorder_sessions(&self, order: &[String]) {
         {
             let mut list = self.inner.order.lock();
-            list.sort_by_key(|id| order.iter().position(|o| o == id).unwrap_or(usize::MAX));
+            *list = merge_session_order(&list, order);
         }
         if let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::UpdateSessionOrder {
@@ -4391,6 +4418,84 @@ impl Hub {
             });
         }
         self.broadcast_sessions();
+    }
+}
+
+/// Merge a submitted session-id permutation into the global order.
+///
+/// Every id already in `existing` survives. `submitted` only permutes the
+/// names it actually includes; omitted visible ids stay in place with hidden
+/// ones. Brand-new ids (in `submitted` but not `existing`) are appended.
+#[must_use]
+pub fn merge_session_order(existing: &[String], submitted: &[String]) -> Vec<String> {
+    let mut seen_submitted = HashSet::new();
+    let submitted: Vec<String> = submitted
+        .iter()
+        .filter(|id| seen_submitted.insert((*id).as_str()))
+        .cloned()
+        .collect();
+    let existing_set: HashSet<&str> = existing.iter().map(String::as_str).collect();
+    let named: Vec<String> = submitted
+        .iter()
+        .filter(|id| existing_set.contains(id.as_str()))
+        .cloned()
+        .collect();
+    let named_set: HashSet<String> = named.iter().cloned().collect();
+    let mut named_iter = named.into_iter();
+    let mut merged: Vec<String> = existing
+        .iter()
+        .map(|id| {
+            if named_set.contains(id) {
+                named_iter
+                    .next()
+                    .expect("named ids are drawn from existing")
+            } else {
+                id.clone()
+            }
+        })
+        .collect();
+    merged.extend(
+        submitted
+            .into_iter()
+            .filter(|id| !existing_set.contains(id.as_str())),
+    );
+    merged
+}
+
+/// Project a global title map or order array down to `visible` ids only.
+#[must_use]
+pub fn project_sync_value(
+    state: &str,
+    value: serde_json::Value,
+    visible: &HashSet<String>,
+) -> serde_json::Value {
+    match state {
+        "title" => {
+            let Some(map) = value.as_object() else {
+                return value;
+            };
+            serde_json::Value::Object(
+                map.iter()
+                    .filter(|(id, _)| visible.contains(id.as_str()))
+                    .map(|(id, title)| (id.clone(), title.clone()))
+                    .collect(),
+            )
+        }
+        "order" => {
+            let Some(list) = value.as_array() else {
+                return value;
+            };
+            serde_json::Value::Array(
+                list.iter()
+                    .filter(|id| {
+                        id.as_str()
+                            .is_some_and(|session_id| visible.contains(session_id))
+                    })
+                    .cloned()
+                    .collect(),
+            )
+        }
+        _ => value,
     }
 }
 
@@ -4469,6 +4574,66 @@ mod session_owner_tests {
             .expect("created session");
         assert!(meta.owner_user_id.is_none());
         assert!(meta.owner_username.is_none());
+        assert!(!hub.owned_by_product_user("sess-shared", "anyone"));
+        assert_eq!(hub.session_owner_user_id("sess-shared"), None);
+    }
+}
+
+#[cfg(test)]
+mod session_order_merge_tests {
+    use super::{Hub, SessionOrigin, merge_session_order, project_sync_value};
+    use std::collections::HashSet;
+
+    #[test]
+    fn stale_omit_keeps_the_missing_visible_id() {
+        let merged = merge_session_order(
+            &["A".to_owned(), "B".to_owned(), "C".to_owned()],
+            &["C".to_owned(), "A".to_owned()],
+        );
+        assert_eq!(merged, vec!["C".to_owned(), "B".to_owned(), "A".to_owned()]);
+    }
+
+    #[test]
+    fn hidden_id_stays_in_its_held_slot() {
+        let merged = merge_session_order(
+            &["A".to_owned(), "hidden".to_owned(), "B".to_owned()],
+            &["B".to_owned(), "A".to_owned()],
+        );
+        assert_eq!(
+            merged,
+            vec!["B".to_owned(), "hidden".to_owned(), "A".to_owned()]
+        );
+    }
+
+    #[test]
+    fn hub_reorder_never_drops_omitted_ids() {
+        let hub = Hub::new();
+        for id in ["A", "B", "C"] {
+            hub.create_local_session(
+                id.to_owned(),
+                "codex".to_owned(),
+                "/tmp".to_owned(),
+                id.to_owned(),
+                SessionOrigin::Web,
+                false,
+            );
+        }
+        hub.reorder_sessions(&["C".to_owned(), "A".to_owned()]);
+        let order: Vec<String> = hub.session_list().into_iter().map(|meta| meta.id).collect();
+        assert_eq!(order, vec!["C".to_owned(), "B".to_owned(), "A".to_owned()]);
+    }
+
+    #[test]
+    fn project_sync_value_drops_hidden_title_and_order_ids() {
+        let visible = HashSet::from(["A".to_owned(), "C".to_owned()]);
+        let titles = project_sync_value(
+            "title",
+            serde_json::json!({ "A": "one", "B": "hidden", "C": "three" }),
+            &visible,
+        );
+        assert_eq!(titles, serde_json::json!({ "A": "one", "C": "three" }));
+        let order = project_sync_value("order", serde_json::json!(["A", "B", "C"]), &visible);
+        assert_eq!(order, serde_json::json!(["A", "C"]));
     }
 }
 

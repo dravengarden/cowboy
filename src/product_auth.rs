@@ -11,6 +11,11 @@ use argon2::Argon2;
 use axum::http::{HeaderMap, Uri, header};
 use password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 
+use crate::admin::AdminRole;
+
+/// WebSocket close code for a later-revoked or expired product principal.
+pub const WS_AUTH_REQUIRED_CLOSE_CODE: u16 = 4001;
+
 /// Product login cookie. Distinct from `cowboy_admin`.
 pub const USER_SESSION_COOKIE: &str = "cowboy_user";
 /// Absolute cookie / `user_sessions` TTL.
@@ -169,7 +174,75 @@ pub fn client_ip(headers: &HeaderMap, peer: SocketAddr) -> IpAddr {
     peer.ip()
 }
 
-/// Same-origin allow-list for cookie POST/PUT/DELETE (and later cookie `/ws`).
+/// Authenticated product user. Admin cookies never become this type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProductPrincipal {
+    pub user_id: String,
+    pub username: String,
+    pub role: AdminRole,
+}
+
+impl ProductPrincipal {
+    #[must_use]
+    pub fn sees_every_session(&self) -> bool {
+        self.role == AdminRole::Owner
+    }
+
+    #[must_use]
+    pub fn can_reorder(&self) -> bool {
+        self.role.at_least(AdminRole::Operator)
+    }
+
+    /// Viewer+ sees own rows and unowned (`owner_user_id` NULL) rows. An owner
+    /// grant sees every row.
+    #[must_use]
+    pub fn can_see(&self, owner_user_id: Option<&str>) -> bool {
+        self.sees_every_session() || owner_user_id.is_none_or(|owner| owner == self.user_id)
+    }
+
+    /// Viewer cannot mutate. Operator mutates own or unowned. Owner grant
+    /// mutates any.
+    #[must_use]
+    pub fn can_mutate(&self, owner_user_id: Option<&str>) -> bool {
+        self.role.at_least(AdminRole::Operator)
+            && (self.sees_every_session()
+                || owner_user_id.is_none_or(|owner| owner == self.user_id))
+    }
+}
+
+/// `Authorization: Bearer cow_...` secret, if the header is well-formed.
+#[must_use]
+pub fn bearer_token(headers: &HeaderMap) -> Option<String> {
+    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?.trim();
+    let token = value
+        .strip_prefix("Bearer ")
+        .or_else(|| value.strip_prefix("bearer "))?
+        .trim();
+    token.starts_with("cow_").then(|| token.to_owned())
+}
+
+const FORWARDED_CLIENT_HEADERS: [&str; 4] = [
+    "x-forwarded-for",
+    "x-forwarded-proto",
+    "x-forwarded-host",
+    "x-real-ip",
+];
+
+/// Victoria scrapes `127.0.0.1` directly. Any forwarded hop is a public
+/// reverse-proxy request and must not see `/metrics`.
+#[must_use]
+pub fn metrics_scrape_allowed(peer: SocketAddr, headers: &HeaderMap) -> bool {
+    peer.ip().is_loopback() && !has_forwarded_client_headers(headers)
+}
+
+#[must_use]
+pub fn has_forwarded_client_headers(headers: &HeaderMap) -> bool {
+    FORWARDED_CLIENT_HEADERS
+        .iter()
+        .any(|name| headers.contains_key(*name))
+}
+
+/// Same-origin allow-list for cookie POST/PUT/DELETE and cookie `/ws`.
 #[must_use]
 pub fn origin_allowed(headers: &HeaderMap, peer: SocketAddr, public_origins: &[String]) -> bool {
     let Some(candidate) = request_candidate_origin(headers) else {
@@ -437,6 +510,74 @@ mod tests {
             ("origin", "http://localhost:5173"),
         ]);
         assert!(origin_allowed(&headers, loopback(), &[]));
+    }
+
+    #[test]
+    fn product_acl_matches_capability_matrix() {
+        let viewer = ProductPrincipal {
+            user_id: "viewer".to_owned(),
+            username: "viewer".to_owned(),
+            role: crate::admin::AdminRole::Viewer,
+        };
+        let operator = ProductPrincipal {
+            user_id: "op".to_owned(),
+            username: "op".to_owned(),
+            role: crate::admin::AdminRole::Operator,
+        };
+        let owner = ProductPrincipal {
+            user_id: "own".to_owned(),
+            username: "own".to_owned(),
+            role: crate::admin::AdminRole::Owner,
+        };
+        assert!(viewer.can_see(None));
+        assert!(viewer.can_see(Some("viewer")));
+        assert!(!viewer.can_see(Some("other")));
+        assert!(!viewer.can_mutate(None));
+        assert!(!viewer.can_mutate(Some("viewer")));
+        assert!(!viewer.can_reorder());
+        assert!(operator.can_see(None));
+        assert!(operator.can_mutate(None));
+        assert!(operator.can_mutate(Some("op")));
+        assert!(!operator.can_mutate(Some("other")));
+        assert!(!operator.can_see(Some("other")));
+        assert!(operator.can_reorder());
+        assert!(owner.can_see(Some("other")));
+        assert!(owner.can_mutate(Some("other")));
+    }
+
+    #[test]
+    fn bearer_token_requires_cow_prefix() {
+        let headers = header_map(&[("authorization", "Bearer cow_abcd")]);
+        assert_eq!(bearer_token(&headers).as_deref(), Some("cow_abcd"));
+        let other = header_map(&[("authorization", "Bearer secret")]);
+        assert!(bearer_token(&other).is_none());
+        assert!(bearer_token(&header_map(&[])).is_none());
+    }
+
+    #[test]
+    fn metrics_scrape_refuses_forwarded_and_non_loopback() {
+        let empty = header_map(&[]);
+        assert!(metrics_scrape_allowed(loopback(), &empty));
+        assert!(!metrics_scrape_allowed(
+            SocketAddr::from(([10, 0, 0, 8], 3333)),
+            &empty
+        ));
+        assert!(!metrics_scrape_allowed(
+            loopback(),
+            &header_map(&[("x-forwarded-for", "1.2.3.4")])
+        ));
+        assert!(!metrics_scrape_allowed(
+            loopback(),
+            &header_map(&[("x-real-ip", "1.2.3.4")])
+        ));
+        assert!(!metrics_scrape_allowed(
+            loopback(),
+            &header_map(&[("x-forwarded-host", "cowboy.example")])
+        ));
+        assert!(!metrics_scrape_allowed(
+            loopback(),
+            &header_map(&[("x-forwarded-proto", "https")])
+        ));
     }
 
     #[test]

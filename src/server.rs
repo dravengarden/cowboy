@@ -6,9 +6,9 @@
 //! ACP bridge clients retain the complete bootstrap unless they opt into lazy
 //! mode, preserving wire compatibility.
 //!
-//! Browser clients still use the original LAN trust model. Machine connections
-//! use one-time enrollment plus an OpenSSH Ed25519 challenge before WebSocket
-//! protocol negotiation.
+//! Product `/ws` and `/api/*` require a product cookie or Bearer token.
+//! Machine connections use one-time enrollment plus an OpenSSH Ed25519
+//! challenge before WebSocket protocol negotiation.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Read as _;
@@ -20,9 +20,10 @@ use anyhow::Context as _;
 use axum::Router;
 use axum::body::Body;
 use axum::extract::DefaultBodyLimit;
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, Json, Path, Query, State};
-use axum::http::{HeaderMap, StatusCode, Uri, header};
+use axum::http::{HeaderMap, Method, StatusCode, Uri, header};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post, put};
 use base64::Engine as _;
@@ -40,12 +41,13 @@ use crate::cli::ServeArgs;
 use crate::code_review::CodeProvider as _;
 use crate::core::{
     DispatchReq, Envelope, Event, FanoutFrame, Hub, Inbound, Outbound, PersistenceHealth,
-    RestoredSession, SessionOrigin, Status, StoreSink, StoreWrite,
+    RestoredSession, SessionOrigin, Status, StoreSink, StoreWrite, project_sync_value,
 };
 use crate::diff_snapshot::{DiffSnapshotCache, DiffSnapshotKey};
 use crate::machine_control::MachineControl;
 use crate::observability::{Observability, SubmitReceipt, TelemetryBatch};
 use crate::persistence::EventReducer;
+use crate::product_auth::{ProductPrincipal, WS_AUTH_REQUIRED_CLOSE_CODE};
 use crate::remote_runtime::{RemoteBootstrap, RemoteRuntime};
 use crate::runtime::RuntimeHealth;
 use crate::runtime_router::RuntimeRouter;
@@ -187,6 +189,7 @@ struct AppState {
     zed_adapter_socket: Option<PathBuf>,
     observability: Observability,
     web_push: Arc<WebPushService>,
+    public_origins: Arc<Vec<String>>,
 }
 
 const STORE_QUEUE_CAPACITY: usize = 8_192;
@@ -713,6 +716,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             zed_adapter_socket: args.zed_adapter_socket,
             observability,
             web_push,
+            public_origins: Arc::new(crate::product_auth::load_public_origins()),
         },
         shutdown_tx,
     )
@@ -1726,7 +1730,191 @@ async fn product_user_from_cookie(
     state: &ProductAuthState,
     headers: &HeaderMap,
 ) -> Option<crate::store::ProductUser> {
-    let store = state.store.as_ref()?;
+    product_user_from_store_cookie(state.store.as_ref()?, headers).await
+}
+
+fn require_admin(
+    state: &ProductAuthState,
+    headers: &HeaderMap,
+    minimum: crate::admin::AdminRole,
+) -> Result<crate::admin::AdminPrincipal, StatusCode> {
+    require_admin_role(&state.hub, headers, minimum)
+}
+
+fn require_admin_role(
+    hub: &Hub,
+    headers: &HeaderMap,
+    minimum: crate::admin::AdminRole,
+) -> Result<crate::admin::AdminPrincipal, StatusCode> {
+    let Some(token) = crate::admin::cookie_token(headers) else {
+        return Err(StatusCode::UNAUTHORIZED);
+    };
+    let Some(principal) = admin_identities(hub).principal(&token, auth_now_ms()) else {
+        return Err(StatusCode::UNAUTHORIZED);
+    };
+    if principal.role.at_least(minimum) {
+        Ok(principal)
+    } else {
+        Err(StatusCode::FORBIDDEN)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RouteAuth {
+    Public,
+    Product,
+    ProductOperator,
+    ProductSessionSee,
+    ProductSessionMutate,
+    ProductOrAdminOperator,
+    AdminOperator,
+    AdminOwner,
+    MetricsScrape,
+}
+
+fn classify_route(method: &Method, path: &str) -> RouteAuth {
+    if matches!(path, "/healthz" | "/version")
+        || path.starts_with("/provider-artifacts/")
+        || !path.starts_with("/api/") && path != "/ws" && path != "/metrics"
+    {
+        return RouteAuth::Public;
+    }
+    if path == "/metrics" {
+        return RouteAuth::MetricsScrape;
+    }
+    if path == "/ws" {
+        return RouteAuth::Product;
+    }
+    if path.starts_with("/api/machine/") {
+        return RouteAuth::Public;
+    }
+    if path == "/api/sessions" && method == Method::POST {
+        return RouteAuth::ProductOperator;
+    }
+    if path == "/api/sessions/reconcile-project" {
+        return RouteAuth::AdminOperator;
+    }
+    if path == "/api/artifacts" || path.starts_with("/api/artifacts/") {
+        return RouteAuth::Product;
+    }
+    if session_id_from_path(path).is_some() {
+        return if matches!(*method, Method::GET | Method::HEAD) {
+            RouteAuth::ProductSessionSee
+        } else {
+            RouteAuth::ProductSessionMutate
+        };
+    }
+    if matches!(
+        path,
+        "/api/usage"
+            | "/api/usage/logs"
+            | "/api/usage/deepseek/activity"
+            | "/api/workspaces"
+            | "/api/providers"
+            | "/api/machines"
+            | "/api/observability/batches"
+    ) {
+        return RouteAuth::Product;
+    }
+    if path.starts_with("/api/usage/")
+        && (path.ends_with("/reset") || path.ends_with("/reset/schedule"))
+    {
+        return RouteAuth::AdminOperator;
+    }
+    if path.starts_with("/api/usage/") {
+        return RouteAuth::Product;
+    }
+    if path.starts_with("/api/machines/")
+        && (path.ends_with("/events") || path.ends_with("/providers"))
+        && method == Method::GET
+    {
+        return RouteAuth::Product;
+    }
+    if path == "/api/machines/enrollment"
+        || (path.starts_with("/api/machines/")
+            && (path.ends_with("/refresh")
+                || path.ends_with("/revoke")
+                || path.ends_with("/components/reconcile")
+                || path.ends_with("/components/reconcile-one")
+                || path.ends_with("/components/update-npm")))
+    {
+        return RouteAuth::AdminOperator;
+    }
+    if path.starts_with("/api/machines/") && path.contains("/providers/") {
+        return RouteAuth::ProductOrAdminOperator;
+    }
+    if path == "/api/providers/catalog/refresh" {
+        return RouteAuth::AdminOperator;
+    }
+    if path.starts_with("/api/providers/") && path.contains("/auth") {
+        return RouteAuth::ProductOperator;
+    }
+    if matches!(
+        path,
+        "/api/metrics" | "/api/logs" | "/api/observability/incidents"
+    ) || path.starts_with("/api/logs/")
+    {
+        return RouteAuth::AdminOperator;
+    }
+    if path == "/api/admin/permissions" || path.starts_with("/api/admin/accounts") {
+        return if method == Method::GET {
+            RouteAuth::Public
+        } else {
+            RouteAuth::AdminOwner
+        };
+    }
+    if path.starts_with("/api/admin/users/") && path.ends_with("/password") {
+        return RouteAuth::AdminOwner;
+    }
+    if path.starts_with("/api/admin/") {
+        return if matches!(*method, Method::GET | Method::HEAD) {
+            RouteAuth::Public
+        } else {
+            RouteAuth::AdminOperator
+        };
+    }
+    if path.starts_with("/api/") {
+        return RouteAuth::AdminOperator;
+    }
+    RouteAuth::Public
+}
+
+fn session_id_from_path(path: &str) -> Option<&str> {
+    for prefix in ["/api/sessions/", "/api/code/sessions/", "/api/history/"] {
+        if let Some(rest) = path.strip_prefix(prefix) {
+            let id = rest.split('/').next().unwrap_or_default();
+            if !id.is_empty() && id != "reconcile-project" {
+                return Some(id);
+            }
+        }
+    }
+    None
+}
+
+fn session_id_from_sync_state(state: &str) -> Option<&str> {
+    state
+        .strip_prefix("queue:")
+        .or_else(|| state.strip_prefix("mobile-review:"))
+        .filter(|id| !id.is_empty())
+}
+
+async fn resolve_product_principal(
+    store: Option<&Store>,
+    hub: &Hub,
+    headers: &HeaderMap,
+) -> Option<ProductPrincipal> {
+    let store = store?;
+    if let Some(token) = crate::product_auth::bearer_token(headers) {
+        return product_from_bearer(store, hub, &token).await;
+    }
+    let user = product_user_from_store_cookie(store, headers).await?;
+    Some(product_principal(hub, &user))
+}
+
+async fn product_user_from_store_cookie(
+    store: &Store,
+    headers: &HeaderMap,
+) -> Option<crate::store::ProductUser> {
     let token = crate::product_auth::user_cookie_token(headers)?;
     let session = store
         .user_session_by_token_hash(&crate::admin::hex_sha256(token.as_bytes()))
@@ -1740,22 +1928,176 @@ async fn product_user_from_cookie(
     user.disabled_at_ms.is_none().then_some(user)
 }
 
-fn require_admin(
-    state: &ProductAuthState,
-    headers: &HeaderMap,
-    minimum: crate::admin::AdminRole,
-) -> Result<crate::admin::AdminPrincipal, StatusCode> {
-    let Some(token) = crate::admin::cookie_token(headers) else {
-        return Err(StatusCode::UNAUTHORIZED);
-    };
-    let Some(principal) = admin_identities(&state.hub).principal(&token, auth_now_ms()) else {
-        return Err(StatusCode::UNAUTHORIZED);
-    };
-    if principal.role.at_least(minimum) {
-        Ok(principal)
-    } else {
-        Err(StatusCode::FORBIDDEN)
+async fn product_from_bearer(store: &Store, hub: &Hub, token: &str) -> Option<ProductPrincipal> {
+    let record = store
+        .user_api_token_by_hash(&crate::admin::hex_sha256(token.as_bytes()))
+        .await
+        .ok()
+        .flatten()?;
+    if record.revoked_at_ms.is_some() {
+        return None;
     }
+    if record
+        .expires_at_ms
+        .is_some_and(|expires| expires <= auth_now_ms())
+    {
+        return None;
+    }
+    let user = store.user_by_id(&record.user_id).await.ok().flatten()?;
+    if user.disabled_at_ms.is_some() {
+        return None;
+    }
+    Some(product_principal(hub, &user))
+}
+
+fn product_principal(hub: &Hub, user: &crate::store::ProductUser) -> ProductPrincipal {
+    ProductPrincipal {
+        user_id: user.id.clone(),
+        username: user.username.clone(),
+        role: permission_policy(hub).role_for(&user.username),
+    }
+}
+
+fn visible_session_ids(
+    hub: &Hub,
+    principal: &ProductPrincipal,
+) -> std::collections::HashSet<String> {
+    hub.session_list_filtered(|owner| principal.can_see(owner))
+        .into_iter()
+        .map(|meta| meta.id)
+        .collect()
+}
+
+fn session_is_visible(hub: &Hub, principal: &ProductPrincipal, session_id: &str) -> bool {
+    hub.session_info(session_id).is_some()
+        && (principal.sees_every_session()
+            || hub.session_owner_user_id(session_id).is_none()
+            || hub.owned_by_product_user(session_id, &principal.user_id))
+}
+
+fn authorize_ws_upgrade(
+    headers: &HeaderMap,
+    peer: SocketAddr,
+    public_origins: &[String],
+    principal: Option<ProductPrincipal>,
+) -> Result<ProductPrincipal, StatusCode> {
+    let via_cookie = crate::product_auth::user_cookie_token(headers).is_some()
+        && crate::product_auth::bearer_token(headers).is_none();
+    if via_cookie && !crate::product_auth::origin_allowed(headers, peer, public_origins) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    match principal {
+        Some(principal) => Ok(principal),
+        None => {
+            tracing::info!(reason = "auth_required", "ws_rejected");
+            Err(StatusCode::UNAUTHORIZED)
+        }
+    }
+}
+
+async fn enforce_product_api(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    request: axum::extract::Request,
+    next: Next,
+) -> Response {
+    let method = request.method().clone();
+    let path = request.uri().path().to_owned();
+    match classify_route(&method, &path) {
+        RouteAuth::Public | RouteAuth::MetricsScrape => return next.run(request).await,
+        RouteAuth::AdminOperator => {
+            if let Err(status) = require_admin_role(
+                &state.hub,
+                request.headers(),
+                crate::admin::AdminRole::Operator,
+            ) {
+                return status.into_response();
+            }
+            if matches!(method, Method::POST | Method::PUT | Method::DELETE)
+                && let Some(rejected) =
+                    reject_bad_origin(request.headers(), peer, &state.public_origins)
+            {
+                return rejected;
+            }
+            return next.run(request).await;
+        }
+        RouteAuth::AdminOwner => {
+            if let Err(status) = require_admin_role(
+                &state.hub,
+                request.headers(),
+                crate::admin::AdminRole::Owner,
+            ) {
+                return status.into_response();
+            }
+            if matches!(method, Method::POST | Method::PUT | Method::DELETE)
+                && let Some(rejected) =
+                    reject_bad_origin(request.headers(), peer, &state.public_origins)
+            {
+                return rejected;
+            }
+            return next.run(request).await;
+        }
+        RouteAuth::ProductOrAdminOperator
+            if require_admin_role(
+                &state.hub,
+                request.headers(),
+                crate::admin::AdminRole::Operator,
+            )
+            .is_ok() =>
+        {
+            if matches!(method, Method::POST | Method::PUT | Method::DELETE)
+                && crate::product_auth::bearer_token(request.headers()).is_none()
+                && let Some(rejected) =
+                    reject_bad_origin(request.headers(), peer, &state.public_origins)
+            {
+                return rejected;
+            }
+            return next.run(request).await;
+        }
+        _ => {}
+    }
+    let Some(principal) =
+        resolve_product_principal(state.store.as_ref(), &state.hub, request.headers()).await
+    else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let via_cookie = crate::product_auth::user_cookie_token(request.headers()).is_some()
+        && crate::product_auth::bearer_token(request.headers()).is_none();
+    if via_cookie
+        && (path == "/ws" || matches!(method, Method::POST | Method::PUT | Method::DELETE))
+        && let Some(rejected) = reject_bad_origin(request.headers(), peer, &state.public_origins)
+    {
+        return rejected;
+    }
+    match classify_route(&method, &path) {
+        RouteAuth::ProductOperator | RouteAuth::ProductOrAdminOperator
+            if !principal.role.at_least(crate::admin::AdminRole::Operator) =>
+        {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+        RouteAuth::ProductSessionSee | RouteAuth::ProductSessionMutate => {
+            if let Some(session_id) = session_id_from_path(&path) {
+                match state.hub.session_info(session_id) {
+                    None => {}
+                    Some(info) => {
+                        let owner = info.meta.owner_user_id.as_deref();
+                        if !principal.can_see(owner) {
+                            return StatusCode::NOT_FOUND.into_response();
+                        }
+                        if matches!(
+                            classify_route(&method, &path),
+                            RouteAuth::ProductSessionMutate
+                        ) && !principal.can_mutate(owner)
+                        {
+                            return StatusCode::FORBIDDEN.into_response();
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    next.run(request).await
 }
 
 async fn issue_product_session(
@@ -2037,8 +2379,8 @@ async fn api_auth_logout(
 }
 
 async fn api_auth_me(State(state): State<ProductAuthState>, headers: HeaderMap) -> Response {
-    match product_user_from_cookie(&state, &headers).await {
-        Some(user) => Json(product_me(&state.hub, &user.username)).into_response(),
+    match resolve_product_principal(state.store.as_ref(), &state.hub, &headers).await {
+        Some(principal) => Json(product_me(&state.hub, &principal.username)).into_response(),
         None => StatusCode::UNAUTHORIZED.into_response(),
     }
 }
@@ -2380,7 +2722,8 @@ async fn serve_axum(
         // Everything else: the separately deployed SPA, with index.html
         // fallback for client-side routes.
         .fallback(static_handler)
-        .with_state(state)
+        .with_state(state.clone())
+        .layer(middleware::from_fn_with_state(state, enforce_product_api))
         .merge(product_auth_router(auth_state))
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http());
@@ -3460,7 +3803,15 @@ async fn api_usage_logs(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
-async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> Response {
+async fn prometheus_metrics(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    if !crate::product_auth::metrics_scrape_allowed(peer, &headers) {
+        tracing::info!(reason = "forwarded", "metrics_rejected");
+        return StatusCode::NOT_FOUND.into_response();
+    }
     let sessions_live = state.hub.session_list().len();
     let (db_bytes, events_rows, sessions_deleted) = match &state.store {
         Some(store) => store.storage_metrics().await.unwrap_or((0, 0, 0)),
@@ -3792,8 +4143,13 @@ struct MachineEnrollmentResponse {
 
 async fn api_machine_create_enrollment(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(request): Json<MachineEnrollmentRequest>,
 ) -> Response {
+    if let Err(status) = require_admin_role(&state.hub, &headers, crate::admin::AdminRole::Operator)
+    {
+        return status.into_response();
+    }
     const TTL_SECONDS: i64 = 900;
     let Some(store) = state.store.as_ref() else {
         return (
@@ -6147,16 +6503,26 @@ async fn api_reconcile_project_sessions(
     }
 }
 
-/// Product-account stamp for `POST /api/sessions`. No product principal exists
-/// on this request path yet, so creates stay in the unowned shared pool.
-fn product_session_owner() -> Option<crate::supervisor::SessionOwner<'static>> {
-    None
+fn product_session_owner(principal: &ProductPrincipal) -> crate::supervisor::SessionOwner<'_> {
+    crate::supervisor::SessionOwner {
+        user_id: &principal.user_id,
+        username: Some(&principal.username),
+    }
 }
 
 async fn api_new_session(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(req): Json<NewSessionRequest>,
 ) -> Response {
+    let Some(principal) =
+        resolve_product_principal(state.store.as_ref(), &state.hub, &headers).await
+    else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    if !principal.role.at_least(crate::admin::AdminRole::Operator) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     let mut cwd = req.cwd;
     let session_id = state.supervisor.reserve_session_id();
     if web_session_is_missing_machine(&req.machine_id, &req.origin) {
@@ -6286,7 +6652,7 @@ async fn api_new_session(
                         auth_generation: provider_generation.auth_generation,
                         behavior: Some(&provider_generation.behavior),
                     },
-                    product_session_owner(),
+                    Some(product_session_owner(&principal)),
                 )
             },
         );
@@ -6410,7 +6776,7 @@ async fn api_new_session(
             auth_generation: None,
             behavior: None,
         },
-        product_session_owner(),
+        Some(product_session_owner(&principal)),
     ) {
         Ok(session_id) => {
             if let Some(prompt) = req
@@ -8599,7 +8965,17 @@ async fn api_question_page(
     }
 }
 
-async fn api_artifact(State(state): State<Arc<AppState>>, Path(name): Path<String>) -> Response {
+async fn api_artifact(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> Response {
+    if resolve_product_principal(state.store.as_ref(), &state.hub, &headers)
+        .await
+        .is_none()
+    {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
     let Some(path) = state
         .store
         .as_ref()
@@ -8791,30 +9167,55 @@ async fn ws_upgrade(
     ws: WebSocketUpgrade,
     State(state): State<Arc<AppState>>,
     Query(query): Query<WebSocketQuery>,
-) -> impl IntoResponse {
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    let principal = resolve_product_principal(state.store.as_ref(), &state.hub, &headers).await;
+    let principal = match authorize_ws_upgrade(&headers, peer, &state.public_origins, principal) {
+        Ok(principal) => principal,
+        Err(status) => return status.into_response(),
+    };
     let lazy_bootstrap = query.bootstrap.as_deref() == Some("lazy");
-    ws.on_upgrade(move |socket| handle_ws(socket, state, lazy_bootstrap))
+    let via_cookie = crate::product_auth::user_cookie_token(&headers).is_some()
+        && crate::product_auth::bearer_token(&headers).is_none();
+    let cookie_token = crate::product_auth::user_cookie_token(&headers);
+    let bearer = crate::product_auth::bearer_token(&headers);
+    ws.on_upgrade(move |socket| {
+        handle_ws(
+            socket,
+            state,
+            lazy_bootstrap,
+            principal,
+            via_cookie,
+            cookie_token,
+            bearer,
+        )
+    })
 }
 
-fn global_bootstrap(hub: &Hub) -> Vec<Outbound> {
+fn global_bootstrap(hub: &Hub, principal: &ProductPrincipal) -> Vec<Outbound> {
+    let sessions = hub.session_list_filtered(|owner| principal.can_see(owner));
+    let visible = sessions.iter().map(|meta| meta.id.clone()).collect();
     let mut messages = vec![
-        Outbound::Sessions {
-            sessions: hub.session_list(),
-        },
+        Outbound::Sessions { sessions },
         Outbound::Settings {
             // Compatibility tombstone: an older cached client treats an empty
             // settings snapshot as auto-resume disabled during rollout.
             settings: Default::default(),
         },
     ];
-    messages.extend(hub.sync_resync());
+    messages.extend(
+        hub.sync_resync()
+            .into_iter()
+            .filter_map(|message| project_outbound(hub, principal, &visible, message)),
+    );
     messages
 }
 
-fn connect_bootstrap(hub: &Hub, lazy: bool) -> Vec<Outbound> {
-    let mut messages = global_bootstrap(hub);
+fn connect_bootstrap(hub: &Hub, lazy: bool, principal: &ProductPrincipal) -> Vec<Outbound> {
+    let mut messages = global_bootstrap(hub, principal);
     if !lazy {
-        for session in hub.session_list() {
+        for session in hub.session_list_filtered(|owner| principal.can_see(owner)) {
             if let Some(session_messages) = focused_session_bootstrap(hub, &session.id) {
                 messages.extend(session_messages);
             }
@@ -8824,7 +9225,125 @@ fn connect_bootstrap(hub: &Hub, lazy: bool) -> Vec<Outbound> {
     messages
 }
 
-async fn handle_ws(socket: WebSocket, state: Arc<AppState>, lazy_bootstrap: bool) {
+fn project_outbound(
+    hub: &Hub,
+    principal: &ProductPrincipal,
+    visible: &std::collections::HashSet<String>,
+    message: Outbound,
+) -> Option<Outbound> {
+    match message {
+        Outbound::Sessions { sessions } => Some(Outbound::Sessions {
+            sessions: sessions
+                .into_iter()
+                .filter(|meta| principal.can_see(meta.owner_user_id.as_deref()))
+                .collect(),
+        }),
+        Outbound::Snapshot { ref session_id, .. }
+        | Outbound::ConfigOptions { ref session_id, .. }
+        | Outbound::JudgeResult { ref session_id, .. }
+        | Outbound::JudgeHistory { ref session_id, .. } => {
+            session_is_visible(hub, principal, session_id).then_some(message)
+        }
+        Outbound::Event { ref envelope } => {
+            session_is_visible(hub, principal, &envelope.session_id).then_some(message)
+        }
+        Outbound::Error {
+            session_id: Some(ref session_id),
+            ..
+        } => session_is_visible(hub, principal, session_id).then_some(message),
+        Outbound::Error {
+            session_id: None, ..
+        }
+        | Outbound::Ping
+        | Outbound::BootstrapComplete
+        | Outbound::Settings { .. }
+        | Outbound::Skills { .. } => Some(message),
+        Outbound::SyncPatch {
+            state,
+            version,
+            value,
+            confirmed,
+            resync,
+        } => {
+            if state == "title" || state == "order" {
+                Some(Outbound::SyncPatch {
+                    value: project_sync_value(&state, value, visible),
+                    state,
+                    version,
+                    confirmed,
+                    resync,
+                })
+            } else if let Some(session_id) = session_id_from_sync_state(&state) {
+                session_is_visible(hub, principal, session_id).then_some(Outbound::SyncPatch {
+                    state,
+                    version,
+                    value,
+                    confirmed,
+                    resync,
+                })
+            } else {
+                Some(Outbound::SyncPatch {
+                    state,
+                    version,
+                    value,
+                    confirmed,
+                    resync,
+                })
+            }
+        }
+    }
+}
+
+fn ws_close_auth_required() -> Message {
+    Message::Close(Some(CloseFrame {
+        code: WS_AUTH_REQUIRED_CLOSE_CODE,
+        reason: "auth_required".into(),
+    }))
+}
+
+async fn principal_still_valid(
+    state: &AppState,
+    via_cookie: bool,
+    cookie_token: Option<&str>,
+    bearer: Option<&str>,
+    expected: &ProductPrincipal,
+) -> bool {
+    let Some(store) = state.store.as_ref() else {
+        return false;
+    };
+    let current = if via_cookie {
+        let Some(token) = cookie_token else {
+            return false;
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            format!("{}={token}", crate::product_auth::USER_SESSION_COOKIE)
+                .parse()
+                .unwrap_or_else(|_| header::HeaderValue::from_static("")),
+        );
+        product_user_from_store_cookie(store, &headers)
+            .await
+            .map(|user| product_principal(&state.hub, &user))
+    } else if let Some(token) = bearer {
+        product_from_bearer(store, &state.hub, token).await
+    } else {
+        None
+    };
+    current.is_some_and(|principal| {
+        principal.user_id == expected.user_id && !principal.username.is_empty()
+    })
+}
+
+async fn handle_ws(
+    socket: WebSocket,
+    state: Arc<AppState>,
+    lazy_bootstrap: bool,
+    principal: ProductPrincipal,
+    via_cookie: bool,
+    cookie_token: Option<String>,
+    bearer: Option<String>,
+) {
     let (mut sink, mut stream) = socket.split();
 
     // Subscribe BEFORE snapshotting so no event slips through the gap; the
@@ -8832,7 +9351,7 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>, lazy_bootstrap: bool
     let mut rx = state.hub.subscribe();
     let mut shutdown = state.shutdown.clone();
 
-    for message in connect_bootstrap(&state.hub, lazy_bootstrap) {
+    for message in connect_bootstrap(&state.hub, lazy_bootstrap, &principal) {
         if send_json(&mut sink, &message).await.is_err() {
             return;
         }
@@ -8842,6 +9361,10 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>, lazy_bootstrap: bool
     // heartbeat (Outbound::Ping) so a client can detect a HALF-OPEN socket that
     // never fires `onclose` (see Outbound::Ping). Per-client interval — a failed
     // heartbeat send reaps a dead client here too.
+    let fanout_state = Arc::clone(&state);
+    let fanout_principal = principal.clone();
+    let fanout_cookie = cookie_token.clone();
+    let fanout_bearer = bearer.clone();
     let mut fanout = tokio::spawn(async move {
         let mut heartbeat = tokio::time::interval(HEARTBEAT);
         // The first tick fires immediately; consume it so the first ping waits a
@@ -8856,7 +9379,16 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>, lazy_bootstrap: bool
                 }
                 msg = rx.recv() => match msg {
                     Ok(msg) => {
-                        if send_frame(&mut sink, msg.as_ref()).await.is_err() {
+                        let visible = visible_session_ids(&fanout_state.hub, &fanout_principal);
+                        let Some(msg) = project_outbound(
+                            &fanout_state.hub,
+                            &fanout_principal,
+                            &visible,
+                            msg.outbound().clone(),
+                        ) else {
+                            continue;
+                        };
+                        if send_json(&mut sink, &msg).await.is_err() {
                             break;
                         }
                     }
@@ -8876,6 +9408,19 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>, lazy_bootstrap: bool
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 },
                 _ = heartbeat.tick() => {
+                    if !principal_still_valid(
+                        &fanout_state,
+                        via_cookie,
+                        fanout_cookie.as_deref(),
+                        fanout_bearer.as_deref(),
+                        &fanout_principal,
+                    )
+                    .await
+                    {
+                        tracing::info!(reason = "disabled", "ws_rejected");
+                        let _ = sink.send(ws_close_auth_required()).await;
+                        break;
+                    }
                     if send_json(&mut sink, &Outbound::Ping).await.is_err() {
                         break;
                     }
@@ -8896,7 +9441,9 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>, lazy_bootstrap: bool
             _ = &mut fanout => break,
             msg = stream.next() => {
                 match msg {
-                    Some(Ok(Message::Text(text))) => handle_command(&state, &text, &mut held),
+                    Some(Ok(Message::Text(text))) => {
+                        handle_command(&state, &principal, &text, &mut held);
+                    }
                     // Other frame types (ping/pong/binary) are ignored.
                     Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Binary(_))) => {}
                     // Close, transport error, or stream end: tear down.
@@ -8948,7 +9495,12 @@ fn first_prompt_title(text: &str, content: &[serde_json::Value]) -> Option<Strin
 }
 
 #[allow(clippy::too_many_lines)] // one cohesive command-dispatch match
-fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, String>) {
+fn handle_command(
+    state: &AppState,
+    principal: &ProductPrincipal,
+    text: &str,
+    held: &mut HashMap<String, String>,
+) {
     let cmd: Inbound = match serde_json::from_str(text) {
         Ok(c) => c,
         Err(e) => {
@@ -9002,6 +9554,19 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
         | Inbound::Sync { .. }
         | Inbound::SetSetting { .. } => None,
     };
+    if let Some(sid) = &session_id_for_err {
+        let owner = state
+            .hub
+            .session_info(sid)
+            .and_then(|info| info.meta.owner_user_id);
+        if !principal.can_mutate(owner.as_deref()) {
+            state.hub.broadcast_error(
+                Some(sid.clone()),
+                "not allowed to mutate this session".to_owned(),
+            );
+            return;
+        }
+    }
     // A view-only system session rejects user-driven turns; only the backend
     // wake endpoint (POST /api/sessions/{id}/prompt) drives it.
     if let Some(sid) = &session_id_for_err
@@ -9138,11 +9703,7 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
             id,
             name,
             args,
-        } => {
-            // Generic arbiter apply (title/order/…); validates, dedupes by id,
-            // applies the typed mutation, version-stamps + broadcasts the patch.
-            state.hub.sync_apply(&sync_state, id, &name, &args)
-        }
+        } => apply_inbound_sync(state, principal, &sync_state, id, &name, &args),
         Inbound::SetSessionAutoResume { .. }
         | Inbound::ResumeTurn { .. }
         | Inbound::SetSetting { .. } => Ok(()),
@@ -9428,10 +9989,7 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
             state.hub.unschedule_draft(&session_id, &id);
             Ok(())
         }
-        Inbound::ReorderSessions { order } => {
-            state.hub.reorder_sessions(&order);
-            Ok(())
-        }
+        Inbound::ReorderSessions { order } => apply_visible_reorder(state, principal, &order),
         Inbound::ReorderQueue { session_id, order } => {
             state.hub.reorder_queue(&session_id, &order);
             Ok(())
@@ -9449,6 +10007,92 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
     }
 }
 
+fn apply_inbound_sync(
+    state: &AppState,
+    principal: &ProductPrincipal,
+    sync_state: &str,
+    id: String,
+    name: &str,
+    args: &serde_json::Value,
+) -> Result<(), String> {
+    if sync_state == "order" {
+        if !principal.can_reorder() {
+            return Err("viewers cannot reorder sessions".to_owned());
+        }
+        let submitted = args
+            .get("order")
+            .and_then(serde_json::Value::as_array)
+            .ok_or("reorder: missing order")?;
+        let filtered = filter_submitted_order(state, principal, submitted);
+        return state.hub.sync_apply(
+            sync_state,
+            id,
+            name,
+            &serde_json::json!({ "order": filtered }),
+        );
+    }
+    if sync_state == "title" {
+        let session_id = args
+            .get("session_id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("rename: missing session_id")?;
+        let owner = state
+            .hub
+            .session_info(session_id)
+            .and_then(|info| info.meta.owner_user_id);
+        if !principal.can_mutate(owner.as_deref()) {
+            return Err("not allowed to rename this session".to_owned());
+        }
+        return state.hub.sync_apply(sync_state, id, name, args);
+    }
+    if let Some(session_id) = session_id_from_sync_state(sync_state) {
+        let owner = state
+            .hub
+            .session_info(session_id)
+            .and_then(|info| info.meta.owner_user_id);
+        if !principal.can_mutate(owner.as_deref()) {
+            return Err("not allowed to mutate this session".to_owned());
+        }
+        return state.hub.sync_apply(sync_state, id, name, args);
+    }
+    Err(format!("unknown sync mutation {sync_state}/{name}"))
+}
+
+fn apply_visible_reorder(
+    state: &AppState,
+    principal: &ProductPrincipal,
+    order: &[String],
+) -> Result<(), String> {
+    if !principal.can_reorder() {
+        return Err("viewers cannot reorder sessions".to_owned());
+    }
+    let submitted = order
+        .iter()
+        .map(|id| serde_json::Value::String(id.clone()))
+        .collect::<Vec<_>>();
+    let filtered = filter_submitted_order(state, principal, &submitted);
+    state.hub.reorder_sessions(&filtered);
+    Ok(())
+}
+
+fn filter_submitted_order(
+    state: &AppState,
+    principal: &ProductPrincipal,
+    submitted: &[serde_json::Value],
+) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    submitted
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .filter_map(|id| {
+            let info = state.hub.session_info(id)?;
+            principal
+                .can_see(info.meta.owner_user_id.as_deref())
+                .then(|| id.to_owned())
+        })
+        .filter(|id| seen.insert(id.clone()))
+        .collect()
+}
 async fn send_json<S, T>(sink: &mut S, msg: &T) -> Result<(), ()>
 where
     S: SinkExt<Message> + Unpin,
@@ -9708,6 +10352,15 @@ mod zed_adapter_tests {
 mod bootstrap_tests {
     use super::{connect_bootstrap, focused_session_bootstrap};
     use crate::core::{Event, Hub, Outbound, SessionOrigin};
+    use crate::product_auth::ProductPrincipal;
+
+    fn test_owner_principal() -> ProductPrincipal {
+        ProductPrincipal {
+            user_id: "owner".to_owned(),
+            username: "owner".to_owned(),
+            role: crate::admin::AdminRole::Owner,
+        }
+    }
 
     fn hub_with_sessions() -> Hub {
         let hub = Hub::new();
@@ -9732,7 +10385,7 @@ mod bootstrap_tests {
 
     #[test]
     fn websocket_bootstrap_contains_only_global_state() {
-        let messages = connect_bootstrap(&hub_with_sessions(), true);
+        let messages = connect_bootstrap(&hub_with_sessions(), true, &test_owner_principal());
         assert!(
             messages
                 .iter()
@@ -9755,7 +10408,7 @@ mod bootstrap_tests {
 
     #[test]
     fn legacy_websocket_bootstrap_remains_complete() {
-        let messages = connect_bootstrap(&hub_with_sessions(), false);
+        let messages = connect_bootstrap(&hub_with_sessions(), false, &test_owner_principal());
         let snapshots = messages
             .iter()
             .filter(|message| matches!(message, Outbound::Snapshot { .. }))
@@ -9764,6 +10417,188 @@ mod bootstrap_tests {
         assert!(matches!(messages.last(), Some(Outbound::BootstrapComplete)));
     }
 
+    #[cfg(any())]
+    mod obsolete_settings_tests_parent {
+    use super::*;
+    fn product_bootstrap_settings_omit_admin_identities_and_permissions() {
+        let hub = Hub::new();
+        hub.set_setting(
+            crate::admin::ADMIN_IDENTITIES_SETTING.to_owned(),
+            serde_json::json!({
+                "accounts": [{"account": "owner", "password_hash": "hash"}]
+            }),
+        );
+        hub.set_setting(
+            crate::admin::PERMISSIONS_SETTING.to_owned(),
+            serde_json::json!({ "default_role": "viewer", "grants": [] }),
+        );
+        hub.set_setting(
+            crate::core::AUTO_RESUME_DEFAULT_KEY.to_owned(),
+            serde_json::json!(true),
+        );
+
+        let settings = connect_bootstrap(&hub, true)
+            .into_iter()
+            .find_map(|message| match message {
+                Outbound::Settings { settings } => Some(settings),
+                _ => None,
+            })
+            .expect("bootstrap Settings");
+        assert_eq!(
+            settings.get(crate::core::AUTO_RESUME_DEFAULT_KEY),
+            Some(&serde_json::json!(true))
+        );
+        assert!(!settings.contains_key(crate::admin::ADMIN_IDENTITIES_SETTING));
+        assert!(!settings.contains_key(crate::admin::PERMISSIONS_SETTING));
+    }
+
+    #[test]
+    fn product_set_setting_rejects_admin_and_permission_keys() {
+        let hub = Hub::new();
+        for key in [
+            crate::admin::ADMIN_IDENTITIES_SETTING,
+            crate::admin::PERMISSIONS_SETTING,
+            crate::admin::REGISTRATION_SETTING,
+            crate::admin::SESSION_LIMITS_SETTING,
+            "cowboy.auth.mode",
+            "not.a.product.key",
+        ] {
+            assert!(
+                super::apply_product_set_setting(
+                    &hub,
+                    key.to_owned(),
+                    serde_json::json!({ "x": 1 })
+                )
+                .is_err(),
+                "{key} must be rejected by the product allow-list"
+            );
+            assert!(
+                !hub.settings_snapshot().contains_key(key),
+                "{key} must not land in the settings snapshot"
+            );
+        }
+        assert!(
+            super::apply_product_set_setting(
+                &hub,
+                crate::core::AUTO_RESUME_DEFAULT_KEY.to_owned(),
+                serde_json::json!(true),
+            )
+            .is_ok()
+        );
+        assert!(
+            super::apply_product_set_setting(
+                &hub,
+                crate::core::AUTO_RESUME_TEMPLATE_KEY.to_owned(),
+                serde_json::json!("continue {{partial}}"),
+            )
+            .is_ok()
+        );
+        let snapshot = hub.settings_snapshot();
+        assert_eq!(
+            snapshot.get(crate::core::AUTO_RESUME_DEFAULT_KEY),
+            Some(&serde_json::json!(true))
+        );
+        assert_eq!(
+            snapshot.get(crate::core::AUTO_RESUME_TEMPLATE_KEY),
+            Some(&serde_json::json!("continue {{partial}}"))
+        );
+        assert!(!snapshot.contains_key(crate::admin::ADMIN_IDENTITIES_SETTING));
+        assert!(!snapshot.contains_key(crate::admin::PERMISSIONS_SETTING));
+        assert!(!snapshot.contains_key("cowboy.auth.mode"));
+    }
+
+    }
+    #[cfg(any())]
+    mod obsolete_settings_tests_rebased {
+    use super::*;
+    fn product_bootstrap_settings_omit_admin_identities_and_permissions() {
+        let hub = Hub::new();
+        hub.set_setting(
+            crate::admin::ADMIN_IDENTITIES_SETTING.to_owned(),
+            serde_json::json!({
+                "accounts": [{"account": "owner", "password_hash": "hash"}]
+            }),
+        );
+        hub.set_setting(
+            crate::admin::PERMISSIONS_SETTING.to_owned(),
+            serde_json::json!({ "default_role": "viewer", "grants": [] }),
+        );
+        hub.set_setting(
+            crate::core::AUTO_RESUME_DEFAULT_KEY.to_owned(),
+            serde_json::json!(true),
+        );
+
+        let settings = connect_bootstrap(&hub, true, &test_owner_principal())
+            .into_iter()
+            .find_map(|message| match message {
+                Outbound::Settings { settings } => Some(settings),
+                _ => None,
+            })
+            .expect("bootstrap Settings");
+        assert_eq!(
+            settings.get(crate::core::AUTO_RESUME_DEFAULT_KEY),
+            Some(&serde_json::json!(true))
+        );
+        assert!(!settings.contains_key(crate::admin::ADMIN_IDENTITIES_SETTING));
+        assert!(!settings.contains_key(crate::admin::PERMISSIONS_SETTING));
+    }
+
+    #[test]
+    fn product_set_setting_rejects_admin_and_permission_keys() {
+        let hub = Hub::new();
+        for key in [
+            crate::admin::ADMIN_IDENTITIES_SETTING,
+            crate::admin::PERMISSIONS_SETTING,
+            crate::admin::REGISTRATION_SETTING,
+            crate::admin::SESSION_LIMITS_SETTING,
+            "cowboy.auth.mode",
+            "not.a.product.key",
+        ] {
+            assert!(
+                super::apply_product_set_setting(
+                    &hub,
+                    key.to_owned(),
+                    serde_json::json!({ "x": 1 })
+                )
+                .is_err(),
+                "{key} must be rejected by the product allow-list"
+            );
+            assert!(
+                !hub.settings_snapshot().contains_key(key),
+                "{key} must not land in the settings snapshot"
+            );
+        }
+        assert!(
+            super::apply_product_set_setting(
+                &hub,
+                crate::core::AUTO_RESUME_DEFAULT_KEY.to_owned(),
+                serde_json::json!(true),
+            )
+            .is_ok()
+        );
+        assert!(
+            super::apply_product_set_setting(
+                &hub,
+                crate::core::AUTO_RESUME_TEMPLATE_KEY.to_owned(),
+                serde_json::json!("continue {{partial}}"),
+            )
+            .is_ok()
+        );
+        let snapshot = hub.settings_snapshot();
+        assert_eq!(
+            snapshot.get(crate::core::AUTO_RESUME_DEFAULT_KEY),
+            Some(&serde_json::json!(true))
+        );
+        assert_eq!(
+            snapshot.get(crate::core::AUTO_RESUME_TEMPLATE_KEY),
+            Some(&serde_json::json!("continue {{partial}}"))
+        );
+        assert!(!snapshot.contains_key(crate::admin::ADMIN_IDENTITIES_SETTING));
+        assert!(!snapshot.contains_key(crate::admin::PERMISSIONS_SETTING));
+        assert!(!snapshot.contains_key("cowboy.auth.mode"));
+    }
+
+    }
     #[test]
     fn focused_bootstrap_does_not_replay_another_session() {
         let messages = focused_session_bootstrap(&hub_with_sessions(), "focused")
@@ -10083,6 +10918,142 @@ mod product_auth_api_tests {
             serde_json::to_value(&identities).unwrap(),
         );
         format!("cowboy_admin={token}")
+    }
+
+    async fn spawn_enforcement(state: ProductAuthState) -> (String, tokio::task::JoinHandle<()>) {
+        install_rustls();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            let app = Router::new()
+                .route("/ws", any(test_ws_upgrade))
+                .route("/metrics", get(test_metrics))
+                .with_state(state);
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    async fn test_ws_upgrade(
+        ws: WebSocketUpgrade,
+        State(state): State<ProductAuthState>,
+        ConnectInfo(peer): ConnectInfo<SocketAddr>,
+        headers: HeaderMap,
+    ) -> Response {
+        let principal = resolve_product_principal(state.store.as_ref(), &state.hub, &headers).await;
+        match authorize_ws_upgrade(&headers, peer, &state.public_origins, principal) {
+            Ok(_) => {
+                drop(ws);
+                StatusCode::SWITCHING_PROTOCOLS.into_response()
+            }
+            Err(status) => status.into_response(),
+        }
+    }
+
+    async fn test_metrics(
+        ConnectInfo(peer): ConnectInfo<SocketAddr>,
+        headers: HeaderMap,
+    ) -> Response {
+        if crate::product_auth::metrics_scrape_allowed(peer, &headers) {
+            StatusCode::OK.into_response()
+        } else {
+            StatusCode::NOT_FOUND.into_response()
+        }
+    }
+
+    #[test]
+    fn classify_route_table_matches_capability_matrix() {
+        assert_eq!(classify_route(&Method::GET, "/healthz"), RouteAuth::Public);
+        assert_eq!(classify_route(&Method::GET, "/ws"), RouteAuth::Product);
+        assert_eq!(
+            classify_route(&Method::GET, "/metrics"),
+            RouteAuth::MetricsScrape
+        );
+        assert_eq!(
+            classify_route(&Method::POST, "/api/sessions"),
+            RouteAuth::ProductOperator
+        );
+        assert_eq!(
+            classify_route(&Method::GET, "/api/sessions/abc/info"),
+            RouteAuth::ProductSessionSee
+        );
+        assert_eq!(
+            classify_route(&Method::POST, "/api/sessions/abc/prompt"),
+            RouteAuth::ProductSessionMutate
+        );
+        assert_eq!(
+            classify_route(&Method::GET, "/api/artifacts/hash"),
+            RouteAuth::Product
+        );
+        assert_eq!(
+            classify_route(&Method::POST, "/api/machines/enrollment"),
+            RouteAuth::AdminOperator
+        );
+        assert_eq!(
+            classify_route(&Method::GET, "/api/metrics"),
+            RouteAuth::AdminOperator
+        );
+        assert!(!matches!(
+            classify_route(&Method::GET, "/api/unknown"),
+            RouteAuth::Public | RouteAuth::Product
+        ));
+    }
+
+    #[test]
+    fn authorize_ws_upgrade_requires_a_principal() {
+        let headers = HeaderMap::new();
+        let err = authorize_ws_upgrade(
+            &headers,
+            SocketAddr::from(([127, 0, 0, 1], 3333)),
+            &[],
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(err, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn unauthenticated_ws_is_rejected_before_upgrade() {
+        let (store, root) = test_store().await;
+        let (base, server) = spawn_enforcement(auth_state(Hub::new(), Some(store))).await;
+        let response = reqwest::Client::new()
+            .get(format!("{base}/ws"))
+            .header(header::CONNECTION, "Upgrade")
+            .header(header::UPGRADE, "websocket")
+            .header("Sec-WebSocket-Version", "13")
+            .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        server.abort();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn metrics_with_forwarded_for_is_rejected() {
+        let (store, root) = test_store().await;
+        let (base, server) = spawn_enforcement(auth_state(Hub::new(), Some(store))).await;
+        let rejected = reqwest::Client::new()
+            .get(format!("{base}/metrics"))
+            .header("x-forwarded-for", "1.2.3.4")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::NOT_FOUND);
+        let allowed = reqwest::Client::new()
+            .get(format!("{base}/metrics"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(allowed.status(), StatusCode::OK);
+        server.abort();
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]

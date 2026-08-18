@@ -68,12 +68,12 @@ matches `draven`.
 | `POST /api/auth/register` | public; policy-gated | create user + `cowboy_user` cookie |
 | `POST /api/auth/login` | public | cookie + `me` |
 | `POST /api/auth/logout` | cookie optional | clear cookie |
-| `GET /api/auth/me` | product cookie | current principal |
+| `GET /api/auth/me` | product cookie or Bearer | current principal |
 | `GET /api/admin/users` | admin operator+ | list users + `role_for` |
 | `POST /api/admin/users` | admin operator+ | create user + grant |
 | `POST /api/admin/users/{id}/disable` | admin operator+ | disable + revoke sessions/tokens |
 | `POST /api/admin/users/{id}/password` | admin owner | set password |
 
 There is no `cowboy.auth.mode` and no lan/hybrid exposure switch. Product
-`/ws` enforcement lands in a later PR; this slice does not install product
-middleware on `/ws` or `/api/sessions`.
+`/ws` and product APIs require a product principal. Admin writes go through
+`require_admin_role` (operator+ or owner); viewers keep admin read.

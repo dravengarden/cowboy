@@ -1146,6 +1146,35 @@ export function notify(message: string, severity: "error" | "warning" = "error")
 
 // Schedule the next reconnect after `delay` ms (the backoff `conn.connectionLost`
 // computed off the consecutive-failure count). One pending attempt at a time.
+const PRODUCT_AUTH_LOST_EVENT = "cowboy:product-auth-lost";
+const WS_AUTH_REQUIRED_CLOSE_CODE = 4001;
+
+type MeHandshake = "reconnect" | "logout" | "keep";
+
+function classifyMeHandshake(status: number | "network"): MeHandshake {
+  if (status === 200) return "reconnect";
+  if (status === 401 || status === 403) return "logout";
+  return "keep";
+}
+
+async function probeProductAuth(): Promise<MeHandshake> {
+  try {
+    const response = await fetch("/api/auth/me", {
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: { accept: "application/json" },
+    });
+    return classifyMeHandshake(response.status);
+  } catch {
+    return classifyMeHandshake("network");
+  }
+}
+
+function logoutProductSession(): void {
+  abandonProductSocket();
+  globalThis.dispatchEvent(new Event(PRODUCT_AUTH_LOST_EVENT));
+}
+
 function scheduleReconnect(delay: number): void {
   if (productSessionAbandoned) return;
   if (reconnectTimer !== undefined) return;
@@ -1328,9 +1357,20 @@ function openSocket(): void {
       visibility: document.visibilityState,
       network_online: navigator.onLine,
     });
-    // Raises the red banner past the failure threshold and hands back the
-    // exponential-backoff delay to wait before retrying (banner lives in `conn`).
-    scheduleReconnect(conn.connectionLost());
+    if (event.code === WS_AUTH_REQUIRED_CLOSE_CODE) {
+      logoutProductSession();
+      return;
+    }
+    void (async () => {
+      const handshake = await probeProductAuth();
+      if (productSessionAbandoned || socket !== undefined) return;
+      if (handshake === "logout") {
+        logoutProductSession();
+        return;
+      }
+      // 200 reconnects; 5xx / network / 404 keep the cookie and retry.
+      scheduleReconnect(conn.connectionLost());
+    })();
   };
   ws.onerror = (): void => {
     // Closing a superseded socket can emit an error after its replacement has

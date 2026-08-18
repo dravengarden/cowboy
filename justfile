@@ -13,7 +13,12 @@ install:
     cd web && deno install
 
 # Run the daemon in the foreground (dev). Pair with `just dev-web` for HMR.
+# Default SQLite so /admin can create a product user; override with
+# COWBOY_DATABASE_URL. Login is still required (no anonymous in-memory mode).
 dev *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export COWBOY_DATABASE_URL="${COWBOY_DATABASE_URL:-sqlite:///${PWD}/.cowboy-dev.sqlite}"
     cargo run --locked -- serve {{ARGS}}
 
 # Frontend dev server (Vite), proxying /ws + /healthz to a running daemon.
