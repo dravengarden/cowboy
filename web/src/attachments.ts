@@ -336,7 +336,7 @@ function nameFromUri(uri: string): string {
 /// True when `previewUrl` can paint in an `<img>`. Empty data URLs, HEIC, and
 /// `cowboy-att:` markers all produce the blank rounded box the user sees when a
 /// draft or transcript token is still present but its bytes are gone.
-export function isLoadablePreviewUrl(url: string | undefined): boolean {
+export function isLoadablePreviewUrl(url: string | undefined): url is string {
   if (!url) return false;
   if (url.startsWith("cowboy-att:")) return false;
   if (/^data:image\/hei[cf]/i.test(url)) return false;
