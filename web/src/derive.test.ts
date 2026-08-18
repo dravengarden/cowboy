@@ -310,6 +310,42 @@ Deno.test("derive isolates user-role system-reminder echoes as agent runtime", (
   }
 });
 
+Deno.test("derive strips cowboy-att tokens from user text so Markdown cannot paint a dead image", () => {
+  const items = derive([
+    {
+      session_id: "s1",
+      seq: 1,
+      kind: "update",
+      update: {
+        sessionUpdate: "user_message_chunk",
+        promptOrigin: { actor: "human", source: "composer" },
+        content: {
+          type: "text",
+          text: "i\n![shot](cowboy-att:att-1)\n",
+        },
+      },
+    },
+    {
+      session_id: "s1",
+      seq: 2,
+      kind: "update",
+      update: {
+        sessionUpdate: "user_message_chunk",
+        promptOrigin: { actor: "human", source: "composer" },
+        content: { type: "image", data: "c2hvdA==", mimeType: "image/png" },
+      },
+    },
+  ]);
+  const user = items.find((item) => item.kind === "message" && item.role === "user");
+  if (user?.kind !== "message") throw new Error("expected a user message");
+  const text = user.chunks.find((chunk) => chunk.type === "text");
+  const image = user.chunks.find((chunk) => chunk.type === "image");
+  if (text?.type !== "text" || text.text.includes("cowboy-att:")) {
+    throw new Error(`text chunk still contains a placement token: ${JSON.stringify(text)}`);
+  }
+  if (image?.type !== "image") throw new Error("image chunk should remain");
+});
+
 Deno.test("derive hides a Grok prompt echo after an unrendered lifecycle", () => {
   const items = derive([
     {

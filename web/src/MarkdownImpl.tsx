@@ -142,7 +142,7 @@ function parseImages(md: string): { src: string; alt: string }[] {
     // `<url>` angle-bracket form strips the brackets.
     const raw = m[2] ?? "";
     const src = raw.startsWith("<") && raw.endsWith(">") ? raw.slice(1, -1) : raw;
-    if (src) out.push({ src, alt });
+    if (src && !src.startsWith("cowboy-att:")) out.push({ src, alt });
   }
   return out;
 }
@@ -612,6 +612,9 @@ const MarkdownImpl = memo(function MarkdownImpl({
   const components: Components = {
     img({ src, alt }) {
       const url = typeof src === "string" ? src : "";
+      // Composer placement tokens are not HTTP resources. Rendering them as
+      // `<img src="cowboy-att:…">` is the blank rounded box in a user bubble.
+      if (!url || url.startsWith("cowboy-att:")) return null;
       const i = galleryImages.findIndex((g) => g.src === url);
       return (
         <Box

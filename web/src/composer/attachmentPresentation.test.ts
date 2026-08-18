@@ -6,15 +6,15 @@ const composerSource = await Deno.readTextFile(
   new URL("../Composer.tsx", import.meta.url),
 );
 
-function attachment(id: string, isImage: boolean): Attachment {
+function attachment(id: string, isImage: boolean, previewUrl = "data:image/png;base64,c2hvdA=="): Attachment {
   return {
     id,
     name: `${id}.bin`,
     mimeType: isImage ? "image/png" : "application/octet-stream",
     isImage,
-    previewUrl: "",
+    previewUrl: isImage ? previewUrl : "",
     block: isImage
-      ? { type: "image", data: "", mimeType: "image/png" }
+      ? { type: "image", data: "c2hvdA==", mimeType: "image/png" }
       : { type: "resource", resource: { uri: `file:///${id}` } },
   };
 }
@@ -29,6 +29,18 @@ Deno.test("compact composer keeps token-backed images inline", () => {
       "before ![shot](cowboy-att:placed) after",
     ).map((a) => a.id),
     ["staged", "file"],
+  );
+});
+
+Deno.test("token-backed images with no loadable preview stay in the tray", () => {
+  const placed = attachment("placed", true, "");
+  const staged = attachment("staged", true);
+  assertEquals(
+    attachmentTrayForSurface(
+      [placed, staged],
+      "before ![shot](cowboy-att:placed) after",
+    ).map((a) => a.id),
+    ["placed", "staged"],
   );
 });
 

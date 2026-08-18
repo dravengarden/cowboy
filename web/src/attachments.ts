@@ -333,6 +333,27 @@ function nameFromUri(uri: string): string {
   }
 }
 
+/// True when `previewUrl` can paint in an `<img>`. Empty data URLs, HEIC, and
+/// `cowboy-att:` markers all produce the blank rounded box the user sees when a
+/// draft or transcript token is still present but its bytes are gone.
+export function isLoadablePreviewUrl(url: string | undefined): boolean {
+  if (!url) return false;
+  if (url.startsWith("cowboy-att:")) return false;
+  if (/^data:image\/hei[cf]/i.test(url)) return false;
+  if (/^data:image\/[^,;]+;base64,$/i.test(url)) return false;
+  return true;
+}
+
+/// Rebuild a display URL from an ACP image block. History may externalize the
+/// payload to `/api/artifacts/…` and drop `data`; a reconstructed attachment
+/// that still mints `data:…;base64,` from the empty field paints a blank image.
+export function imageBlockPreviewUrl(block: ContentBlock, mimeType: string): string | undefined {
+  const data = typeof block.data === "string" ? block.data : "";
+  if (data) return `data:${mimeType};base64,${data}`;
+  const url = typeof block.url === "string" ? block.url : "";
+  return isLoadablePreviewUrl(url) ? url : undefined;
+}
+
 /// Reconstruct staged `Attachment`s from a queued message's ACP content blocks —
 /// the inverse of `buildContentBlocks`, for rendering / re-editing a server-synced
 /// queue or draft on a terminal that didn't compose it. Trailing `text` blocks
@@ -356,14 +377,14 @@ export function blocksToAttachments(
   const out: Attachment[] = [];
   for (const block of blocks) {
     if (block.type === "image") {
-      const data = typeof block.data === "string" ? block.data : "";
       const mimeType = typeof block.mimeType === "string" ? block.mimeType : "image/jpeg";
+      const previewUrl = imageBlockPreviewUrl(block, mimeType);
       out.push({
         id: tokenIds[imageSeen++] ?? nextAttachmentId(),
         name: "image",
         mimeType,
         isImage: true,
-        previewUrl: `data:${mimeType};base64,${data}`,
+        ...(previewUrl !== undefined && { previewUrl }),
         block,
       });
     } else if (block.type === "resource") {

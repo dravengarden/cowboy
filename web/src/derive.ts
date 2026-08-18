@@ -3,6 +3,7 @@
 // latest plan, and unresolved permission requests. This is the multi-agent
 // transcript model — no code editor / file tree / git, just the conversation.
 
+import { stripImageTokens } from "./attachments";
 import type { AcpUpdate, Envelope, PermissionOption, PlanEntry, Status } from "./protocol";
 import {
   isHumanPrompt,
@@ -173,7 +174,11 @@ function chunkOf(update: AcpUpdate): ContentChunk | null {
       };
   if (!c) return null;
   if (c.type === "text") {
-    return { type: "text", text: c.text ?? "" };
+    // The composer stores placement as `![name](cowboy-att:<id>)`. If that
+    // marker ever reaches Markdown, react-markdown paints a dead `<img
+    // src="cowboy-att:…">` — the large empty rounded box. Image bytes belong
+    // on a sibling image chunk; the visible text must not keep the token.
+    return { type: "text", text: stripImageTokens(c.text ?? "") };
   }
   if (c.type === "resource" || c.type === "resource_link") {
     // A file the user attached (embedded resource or link). The agent reads the

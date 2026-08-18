@@ -599,7 +599,15 @@ function buildInlineDecorations(view: EditorView): DecorationSet {
       if (node.name === 'Image' && node.from < node.to) {
         const imageLine = doc.lineAt(node.from);
         const lineNum = imageLine.number;
-        if (!activeLines.has(lineNum)) {
+        const imageText = doc.sliceString(node.from, node.to);
+        // LOCAL: cowboy never vendors `image-blocks`. `cowboy-att:` tokens are
+        // painted by `inlineImages.ts`. Hiding the source on inactive lines
+        // (MessagePreview is always inactive) erased that widget and left a
+        // blank hole, because the tray also refuses token-backed images.
+        if (
+          !activeLines.has(lineNum) &&
+          !imageText.includes('cowboy-att:')
+        ) {
           // Hide the raw `![alt](url)` on inactive lines so only the
           // rendered image block (emitted by the image-blocks state
           // field below the line) shows. We deliberately keep the

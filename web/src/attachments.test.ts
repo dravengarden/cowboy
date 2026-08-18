@@ -2,9 +2,12 @@ import { assertEquals, assertStrictEquals } from "jsr:@std/assert";
 import {
   attachmentDisplayParts,
   type Attachment,
+  blocksToAttachments,
   clipboardFiles,
+  imageBlockPreviewUrl,
   pendingClipboardImageAttachment,
   IMG_TOKEN_RE,
+  isLoadablePreviewUrl,
   promoteUnplacedImageTokens,
   reconcileDeletedInlineImages,
   settlePendingAttachments,
@@ -136,6 +139,39 @@ Deno.test("stripImageTokens hides cowboy-att source even after a prior global sc
     stripImageTokens(`${token}\n移动端这里没有触发 Obsidian 的渲染吧？`),
     "\n移动端这里没有触发 Obsidian 的渲染吧？",
   );
+});
+
+Deno.test("empty and cowboy-att preview URLs are not loadable", () => {
+  assertEquals(isLoadablePreviewUrl(undefined), false);
+  assertEquals(isLoadablePreviewUrl(""), false);
+  assertEquals(isLoadablePreviewUrl("cowboy-att:att-1"), false);
+  assertEquals(isLoadablePreviewUrl("data:image/png;base64,"), false);
+  assertEquals(isLoadablePreviewUrl("data:image/heic;base64,AAAA"), false);
+  assertEquals(isLoadablePreviewUrl("data:image/png;base64,c2hvdA=="), true);
+  assertEquals(isLoadablePreviewUrl("/api/artifacts/ab.jpg"), true);
+});
+
+Deno.test("history-externalized image blocks keep the artifact URL", () => {
+  assertEquals(
+    imageBlockPreviewUrl(
+      { type: "image", url: "/api/artifacts/ab.jpg", mimeType: "image/jpeg" },
+      "image/jpeg",
+    ),
+    "/api/artifacts/ab.jpg",
+  );
+  assertEquals(
+    imageBlockPreviewUrl(
+      { type: "image", data: "", mimeType: "image/png" },
+      "image/png",
+    ),
+    undefined,
+  );
+  const restored = blocksToAttachments(
+    [{ type: "image", url: "/api/artifacts/ab.jpg", mimeType: "image/jpeg" }],
+    "![shot](cowboy-att:att-1)",
+  );
+  assertEquals(restored[0]?.id, "att-1");
+  assertEquals(restored[0]?.previewUrl, "/api/artifacts/ab.jpg");
 });
 
 Deno.test("local attachment-only messages render the attachment, not fallback text", () => {

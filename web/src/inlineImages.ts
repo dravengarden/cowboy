@@ -22,7 +22,7 @@ import {
   WidgetType,
 } from "@codemirror/view";
 import { EditorState, RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
-import type { Attachment } from "./attachments";
+import { type Attachment, isLoadablePreviewUrl } from "./attachments";
 import { openLightbox } from "./ResourceLightbox";
 import {
   imageDeletionRange,
@@ -87,7 +87,7 @@ class InlineImageWidget extends WidgetType {
   }
   override toDOM(view: EditorView): HTMLElement {
     const att = registry.get(this.id);
-    if (att?.previewUrl !== undefined && att.isImage) {
+    if (att?.isImage && isLoadablePreviewUrl(att.previewUrl)) {
       const widget = document.createElement("span");
       widget.className = "cm-inline-image-widget";
       widget.contentEditable = "false";

@@ -1936,3 +1936,16 @@ Desktop Vim + IME checks:
     still ignore `offsetTop` (rubber-band pans inflate it). Keyboard-open
     detection may keep using `innerHeight` so a stale-large window still
     counts as an open keyboard; only the padding uses the painted box.
+
+76. **A parked/sent `cowboy-att` image must not become a blank rounded box.**
+    Three things stacked into the reported "这里为什么不展示图片了呢":
+    mdlive hides inactive `![alt](url)` for upstream `image-blocks` that Cowboy
+    never vendors, so a read-only MessagePreview (every line inactive) erased
+    the inline widget; `attachmentTrayForSurface` then hid the same token id
+    from the tray, leaving only the surrounding text; and a reconstructed
+    history/draft block whose `data` was externalized to `/api/artifacts/…`
+    still minted `data:image/…;base64,` (empty), which `<img>` paints as a
+    white hole. Leave `cowboy-att:` Image nodes to `inlineImages.ts`, treat
+    empty/HEIC/`cowboy-att:` URLs as unloadable (tray fallback, no dead
+    `<img>`), rebuild previews from `url` when `data` is gone, and strip
+    placement tokens from transcript Markdown text.

@@ -5,6 +5,9 @@ const transcript = await Deno.readTextFile(new URL("./Transcript.tsx", import.me
 const previewSource = await Deno.readTextFile(
   new URL("./MessagePreview.tsx", import.meta.url),
 );
+const inlinePreviewSource = await Deno.readTextFile(
+  new URL("./mdlive/inline-preview.ts", import.meta.url),
+);
 
 Deno.test("optimistic draft cards strip image tokens instead of painting raw cowboy-att markdown", () => {
   const start = composer.indexOf("function OptimisticDraftRow(");
@@ -31,6 +34,10 @@ Deno.test("MessagePreview renders cowboy-att tokens as composer inline images", 
   assert(previewSource.includes("inlineImageField"));
   assert(previewSource.includes("seedInlineAttachments(attachments)"));
   assertEquals(previewSource.includes("compactForPreview(stripImageTokens(text))"), false);
+});
+
+Deno.test("mdlive leaves cowboy-att images for the inline widget instead of hiding them", () => {
+  assert(inlinePreviewSource.includes("!imageText.includes('cowboy-att:')"));
 });
 
 Deno.test("failed transcript sends offer return to the list they left", () => {

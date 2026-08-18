@@ -90,7 +90,16 @@ re-syncable. As of the `eba2066` vendoring, the local edits are:
      handler. Cowboy supplies it from `composerExtensions.ts`, using Tauri opener
      in the native shell and `window.open` in a browser/PWA.
 
-6. **Mouse-only preview freeze** (`inline-preview.ts`): the decoration freeze
+6. **Leave `cowboy-att:` Image nodes visible** (`inline-preview.ts`, the
+   `Image` branch). Upstream hides inactive `![alt](url)` so `image-blocks`
+   can paint the bitmap underneath. Cowboy does not vendor `image-blocks`;
+   pasted chat images are `![name](cowboy-att:<id>)` widgets from
+   `inlineImages.ts`. The hide replace and that widget share a range, and a
+   parked MessagePreview is fully inactive — the hide won, the thumbnail
+   vanished, and the tray had already filtered the same id. Skip the hide
+   when the source contains `cowboy-att:`.
+
+7. **Mouse-only preview freeze** (`inline-preview.ts`): the decoration freeze
    around pointer down/up is a desktop mouse affordance. Keep the LOCAL
    `shouldFreezePreviewPointer` gate imported from `../touchGestures`; touch and
    Pencil must remain entirely native so CM state updates cannot cancel iOS's

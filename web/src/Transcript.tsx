@@ -77,7 +77,7 @@ import {
   subscribeConversationClear,
 } from "./conversationClearance";
 import { Markdown } from "./Markdown";
-import { attachmentDisplayParts } from "./attachments";
+import { attachmentDisplayParts, isLoadablePreviewUrl } from "./attachments";
 import { CodeView, Labeled } from "./tools/blocks";
 import { ToolBody, type ToolCtx } from "./tools/registry";
 import {
@@ -1296,11 +1296,11 @@ function OptimisticUserBubble({
           : content.map((part, index) =>
             part.type === "text"
               ? <Markdown key={`text-${index}`} text={part.text} invert />
-              : part.attachment.isImage && part.attachment.previewUrl
+              : part.attachment.isImage && isLoadablePreviewUrl(part.attachment.previewUrl)
               ? (
                 <TranscriptImage
                   key={`attachment-${index}-${part.attachment.id}`}
-                  src={part.attachment.previewUrl}
+                  src={part.attachment.previewUrl as string}
                   alt={part.attachment.name}
                 />
               )
