@@ -127,6 +127,8 @@ Once the apps are mounted, a later 5xx/404/501 does not unmount them.
 Sign-out (and 200 without/`me` change) emits `cowboy:product-sign-out` so
 `store.ts` closes `/ws` without reconnecting, then reloads. `sw.js` must not
 cache `/api/auth/*`. Logout and a `me` account change delete `HISTORY_CACHE`.
+API-token management lives in Desktop/Mobile (Settings account menu) and
+uses `authApi`; `src/auth/*` still must not import `src/store.ts`.
 
 ## Deploy (web changes reach the installed PWA only via a SW version bump)
 

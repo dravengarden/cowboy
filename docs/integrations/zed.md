@@ -15,29 +15,44 @@ provider:
       "type": "custom",
       "command": "cowboy",
       "args": ["serve-acp", "--provider", "codex"],
-      "env": {}
+      "env": {
+        "COWBOY_USER_TOKEN": "cow_…"
+      }
     },
     "cowboy-claude": {
       "type": "custom",
       "command": "cowboy",
       "args": ["serve-acp", "--provider", "claude-code"],
-      "env": {}
+      "env": {
+        "COWBOY_USER_TOKEN": "cow_…"
+      }
     },
     "cowboy-gemini": {
       "type": "custom",
       "command": "cowboy",
       "args": ["serve-acp", "--provider", "gemini"],
-      "env": {}
+      "env": {
+        "COWBOY_USER_TOKEN": "cow_…"
+      }
     },
     "cowboy-grok": {
       "type": "custom",
       "command": "cowboy",
       "args": ["serve-acp", "--provider", "grok"],
-      "env": {}
+      "env": {
+        "COWBOY_USER_TOKEN": "cow_…"
+      }
     }
   }
 }
 ```
+
+`serve-acp` requires a product personal access token. Create one on `/` →
+account menu → tokens (or `POST /api/auth/tokens`), then set
+`COWBOY_USER_TOKEN` or pass `--token`. The bridge sends
+`Authorization: Bearer cow_…` on `POST /api/sessions` and `/ws`. There is
+no headerless or loopback ACP path. An unset token fails at start; a
+401/403 from the daemon exits the process instead of reconnecting.
 
 Do not override Registry agent IDs (including `codex-acp`, `claude-acp`, and
 `gemini`) unless replacing a native agent is intentional. Zed's custom-agent settings have no

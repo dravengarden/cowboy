@@ -1258,7 +1258,7 @@ impl Store {
         dispatch_storage!(self, delete_user_sessions_for_user(user_id))
     }
 
-    /// Persist a hashed personal access token. Unused by HTTP until a later PR.
+    /// Persist a hashed personal access token. The plaintext secret is never stored.
     ///
     /// # Errors
     /// Returns when the user is missing, the hash is taken, or the insert fails.
@@ -1275,6 +1275,37 @@ impl Store {
         token_hash: &str,
     ) -> Result<Option<ProductApiToken>> {
         dispatch_storage!(self, user_api_token_by_hash(token_hash))
+    }
+
+    /// List a user's own unrevoked personal access tokens.
+    ///
+    /// # Errors
+    /// Returns when the query fails.
+    pub async fn list_user_api_tokens_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<ProductApiToken>> {
+        dispatch_storage!(self, list_user_api_tokens_for_user(user_id))
+    }
+
+    /// Revoke one of a user's own tokens. Other users' ids are a no-op.
+    ///
+    /// # Errors
+    /// Returns when the update fails.
+    pub async fn revoke_user_api_token_for_user(
+        &self,
+        user_id: &str,
+        token_id: &str,
+    ) -> Result<u64> {
+        dispatch_storage!(self, revoke_user_api_token_for_user(user_id, token_id))
+    }
+
+    /// Stamp `last_used_at` at most once per ten minutes.
+    ///
+    /// # Errors
+    /// Returns when the update fails.
+    pub async fn touch_user_api_token_last_used(&self, token_id: &str, now_ms: i64) -> Result<u64> {
+        dispatch_storage!(self, touch_user_api_token_last_used(token_id, now_ms))
     }
 }
 
@@ -2580,6 +2611,55 @@ impl PostgresStorage {
         .await
         .context("SELECT user API token")?;
         Ok(row.map(ProductApiToken::from_pg))
+    }
+
+    pub async fn list_user_api_tokens_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<ProductApiToken>> {
+        let rows = sqlx::query_as::<_, ProductApiTokenRow>(
+            "SELECT id, user_id, name, token_prefix, token_hash, created_at, expires_at, \
+             last_used_at, revoked_at FROM user_api_tokens \
+             WHERE user_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .with_context(|| format!("SELECT user API tokens for {user_id}"))?;
+        Ok(rows.into_iter().map(ProductApiToken::from_pg).collect())
+    }
+
+    pub async fn revoke_user_api_token_for_user(
+        &self,
+        user_id: &str,
+        token_id: &str,
+    ) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE user_api_tokens SET revoked_at = now() \
+             WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL",
+        )
+        .bind(token_id)
+        .bind(user_id)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("REVOKE user API token {token_id}"))?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn touch_user_api_token_last_used(&self, token_id: &str, now_ms: i64) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE user_api_tokens SET last_used_at = to_timestamp($2::double precision / 1000) \
+             WHERE id = $1 AND revoked_at IS NULL \
+             AND (last_used_at IS NULL OR last_used_at <= \
+                  to_timestamp(($2::double precision - $3::double precision) / 1000))",
+        )
+        .bind(token_id)
+        .bind(now_ms)
+        .bind(crate::product_auth::API_TOKEN_LAST_USED_TOUCH_MS)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("TOUCH user API token {token_id}"))?;
+        Ok(result.rows_affected())
     }
 }
 
@@ -5956,6 +6036,53 @@ mod storage_contract_tests {
         assert_eq!(restored_token.name, "zed");
         assert_eq!(restored_token.token_prefix, "cow_abcd");
         assert_eq!(restored_token.expires_at_ms, token.expires_at_ms);
+        let listed = store.list_user_api_tokens_for_user(&user.id).await?;
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, token.id);
+        assert_eq!(
+            store
+                .touch_user_api_token_last_used(&token.id, created_at_ms)
+                .await?,
+            1
+        );
+        assert_eq!(
+            store
+                .touch_user_api_token_last_used(&token.id, created_at_ms + 1)
+                .await?,
+            0
+        );
+        let touched = store
+            .user_api_token_by_hash(&token.token_hash)
+            .await?
+            .context("touched token")?;
+        assert_eq!(touched.last_used_at_ms, Some(created_at_ms));
+        assert_eq!(
+            store
+                .revoke_user_api_token_for_user("missing-user", &token.id)
+                .await?,
+            0
+        );
+        assert_eq!(
+            store
+                .revoke_user_api_token_for_user(&user.id, &token.id)
+                .await?,
+            1
+        );
+        assert!(
+            store
+                .list_user_api_tokens_for_user(&user.id)
+                .await?
+                .is_empty()
+        );
+        store
+            .insert_user_api_token(&ProductApiToken {
+                id: "fedcba9876543210fedcba9876543210".to_owned(),
+                token_hash: "cc".repeat(32),
+                last_used_at_ms: None,
+                revoked_at_ms: None,
+                ..token.clone()
+            })
+            .await?;
         assert_eq!(store.revoke_user_api_tokens_for_user(&user.id).await?, 1);
         store
             .update_user_password(&user.id, "argon2id", "replacement-hash")

@@ -227,6 +227,8 @@ import {
     CONTROL_CENTER_TABS,
     type ControlCenterTab,
 } from "./desktop/controlCenterTabs";
+import { ProductAccountMenu } from "./auth/ProductAccountMenu";
+import { ProductTokensPanel } from "./auth/ProductTokensPanel";
 import {
     sessionNotificationsMuted,
     setSessionNotificationsMuted,
@@ -3940,7 +3942,8 @@ type MobileSettingsSection =
     | "providers"
     | "machines"
     | "info"
-    | "logs";
+    | "logs"
+    | "account";
 
 const MOBILE_SETTINGS_HEAVY_CONTENT_DELAY_MS = 180;
 
@@ -5701,6 +5704,16 @@ function SettingsShell({
                     onChange={changeMobileSettingsSection}
                 >
                     <UsageLogs dense />
+                </MobileSettingsRoute>
+                <MobileSettingsRoute
+                    id="account"
+                    title="Account"
+                    description="Product login, tokens, and sign out"
+                    activeSection={mobileSettingsSection}
+                    onChange={changeMobileSettingsSection}
+                >
+                    <ProductTokensPanel />
+                    <ProductAccountMenu />
                 </MobileSettingsRoute>
             </Stack>
             )}

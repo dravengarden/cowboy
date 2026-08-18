@@ -148,6 +148,50 @@ Deno.test("status network and 5xx stay unavailable", async () => {
   }
 });
 
+Deno.test("token CRUD is same-origin and never sends the hash", async () => {
+  const calls: FetchArgs[] = [];
+  const restore = withFetch((args) => {
+    calls.push(args);
+    if (args.init?.method === "POST") {
+      return new Response(
+        JSON.stringify({
+          id: "tok1",
+          name: "zed",
+          token: "cow_secret",
+          token_prefix: "cow_secr",
+          created_at_ms: 1,
+        }),
+        { status: 200 },
+      );
+    }
+    if (args.init?.method === "DELETE") {
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }
+    return new Response(
+      JSON.stringify({
+        tokens: [{ id: "tok1", name: "zed", token_prefix: "cow_secr", created_at_ms: 1 }],
+      }),
+      { status: 200 },
+    );
+  });
+  try {
+    assertEquals(await authApi.listTokens(), {
+      tokens: [{ id: "tok1", name: "zed", token_prefix: "cow_secr", created_at_ms: 1 }],
+    });
+    assertEquals((await authApi.createToken("zed")).token, "cow_secret");
+    assertEquals(await authApi.deleteToken("tok1"), { ok: true });
+    assertEquals(calls[0]?.input, "/api/auth/tokens");
+    assertEquals(calls[0]?.init?.credentials, "same-origin");
+    assertEquals(calls[1]?.input, "/api/auth/tokens");
+    assertEquals(calls[1]?.init?.method, "POST");
+    assertEquals(calls[1]?.init?.body, JSON.stringify({ name: "zed" }));
+    assertEquals(calls[2]?.input, "/api/auth/tokens/tok1");
+    assertEquals(calls[2]?.init?.method, "DELETE");
+  } finally {
+    restore();
+  }
+});
+
 Deno.test("logout is a same-origin POST", async () => {
   let seen: FetchArgs | undefined;
   const restore = withFetch((args) => {

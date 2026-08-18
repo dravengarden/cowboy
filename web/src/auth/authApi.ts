@@ -113,6 +113,19 @@ export async function fetchAuthStatus(): Promise<AuthStatusProbe> {
   }
 }
 
+export interface ProductApiToken {
+  id: string;
+  name: string;
+  token_prefix: string;
+  created_at_ms: number;
+  expires_at_ms?: number | null;
+  last_used_at_ms?: number | null;
+}
+
+export interface CreatedProductApiToken extends ProductApiToken {
+  token: string;
+}
+
 export const authApi = {
   status: () => fetchAuthStatus(),
   me: () => readJson<ProductMe>("/api/auth/me"),
@@ -132,4 +145,16 @@ export const authApi = {
     }),
   logout: () =>
     readJson<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
+  listTokens: () =>
+    readJson<{ tokens: ProductApiToken[] }>("/api/auth/tokens"),
+  createToken: (name: string, ttlSeconds?: number) =>
+    readJson<CreatedProductApiToken>("/api/auth/tokens", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(
+        ttlSeconds === undefined ? { name } : { name, ttl_seconds: ttlSeconds },
+      ),
+    }),
+  deleteToken: (id: string) =>
+    readJson<{ ok: boolean }>(`/api/auth/tokens/${id}`, { method: "DELETE" }),
 };

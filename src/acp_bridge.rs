@@ -33,7 +33,12 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream;
 use tokio::sync::{Notify, mpsc, oneshot};
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
+use tokio_tungstenite::{
+    MaybeTlsStream, WebSocketStream, connect_async,
+    tungstenite::{
+        Error as WsError, Message, client::IntoClientRequest as _, http::header::AUTHORIZATION,
+    },
+};
 
 use crate::acp::STARTUP_PHASE_TIMEOUT;
 use crate::cli::ServeAcpArgs;
@@ -154,6 +159,7 @@ impl BridgeState {
 struct Bridge {
     provider: Arc<str>,
     base_url: Url,
+    user_token: Arc<str>,
     http: reqwest::Client,
     state: Arc<Mutex<BridgeState>>,
     connected_notify: Arc<Notify>,
@@ -172,6 +178,7 @@ pub async fn serve(args: ServeAcpArgs) -> anyhow::Result<()> {
         bail!("invalid Provider id {:?}", args.provider);
     }
 
+    let token = require_user_token(args.token.as_deref())?;
     let base_url = normalized_base_url(&args.daemon_url)?;
     let state = Arc::new(Mutex::new(BridgeState::default()));
 
@@ -179,7 +186,8 @@ pub async fn serve(args: ServeAcpArgs) -> anyhow::Result<()> {
     let bridge = Bridge {
         provider: Arc::from(args.provider),
         base_url,
-        http: reqwest::Client::new(),
+        user_token: Arc::from(token.as_str()),
+        http: authorized_http_client(&token)?,
         state,
         connected_notify: Arc::new(Notify::new()),
         command_tx,
@@ -596,6 +604,9 @@ impl Bridge {
             .map_err(|error| error.to_string())?;
         if !response.status().is_success() {
             let status = response.status();
+            if is_fatal_auth_status(status.as_u16()) {
+                exit_on_daemon_auth_rejection("cowboy daemon rejected the user token");
+            }
             let body = response.text().await.unwrap_or_default();
             return Err(format!("cowboy session creation failed ({status}): {body}"));
         }
@@ -842,7 +853,11 @@ impl Bridge {
                 .await
                 .map_err(|error| error.to_string())?;
             if !response.status().is_success() {
-                return Err(format!("history request failed with {}", response.status()));
+                let status = response.status();
+                if is_fatal_auth_status(status.as_u16()) {
+                    exit_on_daemon_auth_rejection("cowboy daemon rejected the user token");
+                }
+                return Err(format!("history request failed with {status}"));
             }
             let page = response
                 .json::<HistoryResponse>()
@@ -890,6 +905,11 @@ impl Bridge {
         loop {
             let socket = match self.connect_daemon().await {
                 Ok(socket) => socket,
+                Err(error) if daemon_auth_rejected(&error) => {
+                    return Err(agent_client_protocol::util::internal_error(
+                        error.to_string(),
+                    ));
+                }
                 Err(error) => {
                     tracing::warn!(
                         %error,
@@ -933,9 +953,25 @@ impl Bridge {
 
     async fn connect_daemon(&self) -> anyhow::Result<Socket> {
         let ws_url = websocket_url(&self.base_url)?;
-        let (mut socket, _) = connect_async(ws_url.as_str())
-            .await
-            .with_context(|| format!("connecting to cowboy daemon at {ws_url}"))?;
+        let mut request = ws_url
+            .as_str()
+            .into_client_request()
+            .with_context(|| format!("building cowboy daemon WebSocket request for {ws_url}"))?;
+        request.headers_mut().insert(
+            AUTHORIZATION,
+            format!("Bearer {}", self.user_token)
+                .parse()
+                .context("invalid user token for Authorization header")?,
+        );
+        let (mut socket, _) = connect_async(request).await.map_err(|error| {
+            if websocket_auth_rejected(&error) {
+                anyhow!(error).context(daemon_auth_rejection_message(
+                    "cowboy daemon WebSocket rejected the user token",
+                ))
+            } else {
+                anyhow!(error).context(format!("connecting to cowboy daemon at {ws_url}"))
+            }
+        })?;
         wait_for_bootstrap(&mut socket, &self.state).await?;
         Ok(socket)
     }
@@ -1483,6 +1519,68 @@ fn apply_bootstrap_outbound(state: &Arc<Mutex<BridgeState>>, outbound: Outbound)
     }
 }
 
+const MISSING_USER_TOKEN_MESSAGE: &str = "COWBOY_USER_TOKEN / --token is required. Create a personal access token on / → account menu → tokens.";
+
+fn require_user_token(token: Option<&str>) -> anyhow::Result<String> {
+    let token = token
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!(MISSING_USER_TOKEN_MESSAGE))?;
+    anyhow::ensure!(
+        token.starts_with(crate::product_auth::API_TOKEN_SECRET_PREFIX),
+        "user token must start with {}",
+        crate::product_auth::API_TOKEN_SECRET_PREFIX
+    );
+    Ok(token.to_owned())
+}
+
+fn authorized_http_client(token: &str) -> anyhow::Result<reqwest::Client> {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::AUTHORIZATION,
+        format!("Bearer {token}")
+            .parse()
+            .context("invalid user token for Authorization header")?,
+    );
+    reqwest::Client::builder()
+        .default_headers(headers)
+        .build()
+        .context("building ACP HTTP client")
+}
+
+fn is_fatal_auth_status(status: u16) -> bool {
+    status == 401 || status == 403
+}
+
+fn websocket_handshake_status(error: &WsError) -> Option<u16> {
+    match error {
+        WsError::Http(response) => Some(response.status().as_u16()),
+        _ => None,
+    }
+}
+
+fn websocket_auth_rejected(error: &WsError) -> bool {
+    websocket_handshake_status(error).is_some_and(is_fatal_auth_status)
+}
+
+fn daemon_auth_rejection_message(context: &str) -> String {
+    format!("{context}. Create a token on / → account menu → tokens.")
+}
+
+fn daemon_auth_rejected(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<WsError>()
+            .is_some_and(websocket_auth_rejected)
+            || cause.to_string().contains("rejected the user token")
+    })
+}
+
+fn exit_on_daemon_auth_rejection(context: &str) -> ! {
+    tracing::error!("{}", daemon_auth_rejection_message(context));
+    std::process::exit(1);
+}
+
 fn normalized_base_url(input: &str) -> anyhow::Result<Url> {
     let mut url = Url::parse(input).with_context(|| format!("invalid daemon URL {input:?}"))?;
     if !matches!(url.scheme(), "http" | "https") {
@@ -1566,6 +1664,32 @@ mod tests {
         assert_eq!(parse_stop_reason("max_tokens"), Some(StopReason::MaxTokens));
         assert_eq!(parse_stop_reason("Cancelled"), Some(StopReason::Cancelled));
         assert_eq!(parse_stop_reason("error: adapter died"), None);
+    }
+
+    #[test]
+    fn missing_user_token_fails_closed() {
+        let error = require_user_token(None).unwrap_err().to_string();
+        assert!(error.contains("COWBOY_USER_TOKEN"));
+        assert!(error.contains("account menu"));
+        assert!(require_user_token(Some("   ")).is_err());
+        assert!(require_user_token(Some("not-a-cow-token")).is_err());
+        assert_eq!(
+            require_user_token(Some(" cow_secret ")).unwrap(),
+            "cow_secret"
+        );
+    }
+
+    #[test]
+    fn auth_rejection_statuses_are_fatal() {
+        assert!(is_fatal_auth_status(401));
+        assert!(is_fatal_auth_status(403));
+        assert!(!is_fatal_auth_status(502));
+        assert!(!is_fatal_auth_status(101));
+        let error = anyhow!(daemon_auth_rejection_message(
+            "cowboy daemon rejected the user token"
+        ));
+        assert!(daemon_auth_rejected(&error));
+        assert!(!daemon_auth_rejected(&anyhow!("connection refused")));
     }
 
     #[test]

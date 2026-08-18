@@ -34,5 +34,8 @@ Deno.test("mobile Settings uses an index and one lightweight detail route", () =
   assert(appSource.includes("<ProvidersContent embedded"));
   assert(appSource.includes("<MachinesContent embedded"));
   assert(appSource.includes("<UsageLogs dense"));
+  assert(appSource.includes("ProductTokensPanel"));
+  assert(appSource.includes("ProductAccountMenu"));
+  assert(appSource.includes('expanded={mobileSettingsSection === "account"}'));
   assert(appSource.includes('data-settings-section="code"'));
 });

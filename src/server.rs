@@ -25,7 +25,7 @@ use axum::extract::{ConnectInfo, Json, Path, Query, State};
 use axum::http::{HeaderMap, Method, StatusCode, Uri, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, get, post, put};
+use axum::routing::{any, delete, get, post, put};
 use base64::Engine as _;
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -1638,6 +1638,12 @@ struct ProductMe {
     role: crate::admin::AdminRole,
 }
 
+#[derive(Debug, Deserialize)]
+struct CreateApiTokenRequest {
+    name: String,
+    ttl_seconds: Option<i64>,
+}
+
 fn product_auth_router(state: ProductAuthState) -> Router {
     Router::new()
         .route("/api/auth/status", get(api_auth_status))
@@ -1645,6 +1651,11 @@ fn product_auth_router(state: ProductAuthState) -> Router {
         .route("/api/auth/login", post(api_auth_login))
         .route("/api/auth/logout", post(api_auth_logout))
         .route("/api/auth/me", get(api_auth_me))
+        .route(
+            "/api/auth/tokens",
+            get(api_auth_list_tokens).post(api_auth_create_token),
+        )
+        .route("/api/auth/tokens/{id}", delete(api_auth_delete_token))
         .route(
             "/api/admin/users",
             get(api_admin_users).post(api_admin_create_user),
@@ -1783,6 +1794,16 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
         return RouteAuth::MetricsScrape;
     }
     if path == "/ws" {
+        return RouteAuth::Product;
+    }
+    if path == "/api/auth/tokens" {
+        return if method == Method::POST {
+            RouteAuth::ProductOperator
+        } else {
+            RouteAuth::Product
+        };
+    }
+    if path.starts_with("/api/auth/tokens/") {
         return RouteAuth::Product;
     }
     if path.starts_with("/api/machine/") {
@@ -1947,6 +1968,14 @@ async fn product_from_bearer(store: &Store, hub: &Hub, token: &str) -> Option<Pr
     if user.disabled_at_ms.is_some() {
         return None;
     }
+    let store = store.clone();
+    let token_id = record.id.clone();
+    let now_ms = auth_now_ms();
+    tokio::spawn(async move {
+        let _ = store
+            .touch_user_api_token_last_used(&token_id, now_ms)
+            .await;
+    });
     Some(product_principal(hub, &user))
 }
 
@@ -2382,6 +2411,146 @@ async fn api_auth_me(State(state): State<ProductAuthState>, headers: HeaderMap) 
     match resolve_product_principal(state.store.as_ref(), &state.hub, &headers).await {
         Some(principal) => Json(product_me(&state.hub, &principal.username)).into_response(),
         None => StatusCode::UNAUTHORIZED.into_response(),
+    }
+}
+
+fn token_public_json(token: &crate::store::ProductApiToken) -> serde_json::Value {
+    serde_json::json!({
+        "id": token.id,
+        "name": token.name,
+        "token_prefix": token.token_prefix,
+        "created_at_ms": token.created_at_ms,
+        "expires_at_ms": token.expires_at_ms,
+        "last_used_at_ms": token.last_used_at_ms,
+    })
+}
+
+async fn api_auth_list_tokens(
+    State(state): State<ProductAuthState>,
+    headers: HeaderMap,
+) -> Response {
+    let Some(principal) =
+        resolve_product_principal(state.store.as_ref(), &state.hub, &headers).await
+    else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let Some(store) = durable_store(&state.store) else {
+        return missing_store();
+    };
+    match store
+        .list_user_api_tokens_for_user(&principal.user_id)
+        .await
+    {
+        Ok(tokens) => Json(serde_json::json!({
+            "tokens": tokens.iter().map(token_public_json).collect::<Vec<_>>(),
+        }))
+        .into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+async fn api_auth_create_token(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(request): Json<CreateApiTokenRequest>,
+) -> Response {
+    let peer = peer_addr(peer);
+    if crate::product_auth::bearer_token(&headers).is_none()
+        && let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins)
+    {
+        return rejected;
+    }
+    let Some(principal) =
+        resolve_product_principal(state.store.as_ref(), &state.hub, &headers).await
+    else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    if !principal.role.at_least(crate::admin::AdminRole::Operator) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Some(store) = durable_store(&state.store).cloned() else {
+        return missing_store();
+    };
+    let name = match crate::product_auth::ensure_api_token_name(&request.name) {
+        Ok(name) => name,
+        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    };
+    let ttl_secs = match crate::product_auth::api_token_ttl_secs(request.ttl_seconds) {
+        Ok(ttl) => ttl,
+        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    };
+    let secret = match crate::product_auth::new_api_token_secret() {
+        Ok(secret) => secret,
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+        }
+    };
+    let now = auth_now_ms();
+    let token = crate::store::ProductApiToken {
+        id: match crate::product_auth::new_user_id() {
+            Ok(id) => id,
+            Err(error) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+            }
+        },
+        user_id: principal.user_id.clone(),
+        name,
+        token_prefix: crate::product_auth::api_token_prefix(&secret),
+        token_hash: crate::admin::hex_sha256(secret.as_bytes()),
+        created_at_ms: now,
+        expires_at_ms: Some(now.saturating_add(ttl_secs.saturating_mul(1_000))),
+        last_used_at_ms: None,
+        revoked_at_ms: None,
+    };
+    if let Err(error) = store.insert_user_api_token(&token).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+    }
+    tracing::info!(
+        user_id = principal.user_id,
+        token_id = token.id,
+        token_prefix = %token.token_prefix,
+        "product_api_token_created"
+    );
+    let mut body = token_public_json(&token);
+    body["token"] = serde_json::Value::String(secret);
+    (StatusCode::CREATED, Json(body)).into_response()
+}
+
+async fn api_auth_delete_token(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let peer = peer_addr(peer);
+    if crate::product_auth::bearer_token(&headers).is_none()
+        && let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins)
+    {
+        return rejected;
+    }
+    let Some(principal) =
+        resolve_product_principal(state.store.as_ref(), &state.hub, &headers).await
+    else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let Some(store) = durable_store(&state.store) else {
+        return missing_store();
+    };
+    match store
+        .revoke_user_api_token_for_user(&principal.user_id, &id)
+        .await
+    {
+        Ok(0) => StatusCode::NOT_FOUND.into_response(),
+        Ok(_) => {
+            tracing::info!(
+                user_id = principal.user_id,
+                token_id = id,
+                "product_api_token_revoked"
+            );
+            Json(serde_json::json!({ "ok": true })).into_response()
+        }
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
     }
 }
 
@@ -10998,6 +11167,18 @@ mod product_auth_api_tests {
             classify_route(&Method::GET, "/api/metrics"),
             RouteAuth::AdminOperator
         );
+        assert_eq!(
+            classify_route(&Method::GET, "/api/auth/tokens"),
+            RouteAuth::Product
+        );
+        assert_eq!(
+            classify_route(&Method::POST, "/api/auth/tokens"),
+            RouteAuth::ProductOperator
+        );
+        assert_eq!(
+            classify_route(&Method::DELETE, "/api/auth/tokens/abc"),
+            RouteAuth::Product
+        );
         assert!(!matches!(
             classify_route(&Method::GET, "/api/unknown"),
             RouteAuth::Public | RouteAuth::Product
@@ -11165,6 +11346,145 @@ mod product_auth_api_tests {
             .await
             .unwrap();
         assert_eq!(me.status(), StatusCode::OK);
+        server.abort();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn operator_can_create_list_and_revoke_own_api_tokens() {
+        let (store, root) = test_store().await;
+        let hub = Hub::new();
+        let admin = seed_admin(&hub);
+        let (base, server) = spawn_auth(auth_state(hub, Some(store))).await;
+        let origin = origin_for(&base);
+        let created = post_json(
+            &format!("{base}/api/admin/users"),
+            &origin,
+            Some(&admin),
+            serde_json::json!({
+                "account": "draven",
+                "password": "long-enough-password",
+            }),
+        )
+        .await;
+        assert_eq!(created.status(), StatusCode::CREATED);
+        let viewer = post_json(
+            &format!("{base}/api/admin/users"),
+            &origin,
+            Some(&admin),
+            serde_json::json!({
+                "account": "viewer",
+                "password": "long-enough-password",
+                "role": "viewer",
+            }),
+        )
+        .await;
+        assert_eq!(viewer.status(), StatusCode::CREATED);
+
+        let logged_in = post_json(
+            &format!("{base}/api/auth/login"),
+            &origin,
+            None,
+            serde_json::json!({
+                "account": "draven",
+                "password": "long-enough-password",
+            }),
+        )
+        .await;
+        let cookie = cookie_header(&set_cookie(&logged_in, USER_SESSION_COOKIE).unwrap());
+
+        let minted = post_json(
+            &format!("{base}/api/auth/tokens"),
+            &origin,
+            Some(&cookie),
+            serde_json::json!({ "name": "zed" }),
+        )
+        .await;
+        assert_eq!(minted.status(), StatusCode::CREATED);
+        let minted_body: serde_json::Value = minted.json().await.unwrap();
+        let secret = minted_body["token"].as_str().unwrap().to_owned();
+        let token_id = minted_body["id"].as_str().unwrap().to_owned();
+        assert!(secret.starts_with("cow_"));
+        assert_eq!(minted_body["token_prefix"].as_str().unwrap(), &secret[..8]);
+        assert!(minted_body.get("token_hash").is_none());
+
+        let listed = reqwest::Client::new()
+            .get(format!("{base}/api/auth/tokens"))
+            .header(header::COOKIE, &cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(listed.status(), StatusCode::OK);
+        let listed_body: serde_json::Value = listed.json().await.unwrap();
+        assert_eq!(listed_body["tokens"][0]["id"], token_id);
+        assert!(listed_body["tokens"][0].get("token").is_none());
+        assert!(listed_body["tokens"][0].get("token_hash").is_none());
+
+        let me = reqwest::Client::new()
+            .get(format!("{base}/api/auth/me"))
+            .header(header::AUTHORIZATION, format!("Bearer {secret}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(me.status(), StatusCode::OK);
+        let me_body: serde_json::Value = me.json().await.unwrap();
+        assert_eq!(me_body["account"], "draven");
+        assert_eq!(me_body["role"], "operator");
+
+        let bearer_create = reqwest::Client::new()
+            .post(format!("{base}/api/auth/tokens"))
+            .header(header::AUTHORIZATION, format!("Bearer {secret}"))
+            .header(header::ORIGIN, "https://evil.example")
+            .json(&serde_json::json!({ "name": "curl" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(bearer_create.status(), StatusCode::CREATED);
+
+        let viewer_login = post_json(
+            &format!("{base}/api/auth/login"),
+            &origin,
+            None,
+            serde_json::json!({
+                "account": "viewer",
+                "password": "long-enough-password",
+            }),
+        )
+        .await;
+        let viewer_cookie = cookie_header(&set_cookie(&viewer_login, USER_SESSION_COOKIE).unwrap());
+        let viewer_create = post_json(
+            &format!("{base}/api/auth/tokens"),
+            &origin,
+            Some(&viewer_cookie),
+            serde_json::json!({ "name": "nope" }),
+        )
+        .await;
+        assert_eq!(viewer_create.status(), StatusCode::FORBIDDEN);
+
+        let foreign_delete = reqwest::Client::new()
+            .delete(format!("{base}/api/auth/tokens/{token_id}"))
+            .header(header::COOKIE, &viewer_cookie)
+            .header(header::ORIGIN, &origin)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(foreign_delete.status(), StatusCode::NOT_FOUND);
+
+        let revoked = reqwest::Client::new()
+            .delete(format!("{base}/api/auth/tokens/{token_id}"))
+            .header(header::COOKIE, &cookie)
+            .header(header::ORIGIN, &origin)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(revoked.status(), StatusCode::OK);
+        let rejected = reqwest::Client::new()
+            .get(format!("{base}/api/auth/me"))
+            .header(header::AUTHORIZATION, format!("Bearer {secret}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
         server.abort();
         let _ = std::fs::remove_dir_all(root);
     }

@@ -2572,6 +2572,59 @@ impl SqliteStorage {
         .context("SELECT SQLite user API token")?;
         Ok(row.map(ProductApiToken::from))
     }
+
+    pub(super) async fn list_user_api_tokens_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<ProductApiToken>> {
+        let rows = sqlx::query_as::<_, SqliteProductApiTokenRow>(
+            "SELECT id, user_id, name, token_prefix, token_hash, created_at_ms, expires_at_ms, \
+             last_used_at_ms, revoked_at_ms FROM user_api_tokens \
+             WHERE user_id = ?1 AND revoked_at_ms IS NULL ORDER BY created_at_ms DESC",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .with_context(|| format!("SELECT SQLite user API tokens for {user_id}"))?;
+        Ok(rows.into_iter().map(ProductApiToken::from).collect())
+    }
+
+    pub(super) async fn revoke_user_api_token_for_user(
+        &self,
+        user_id: &str,
+        token_id: &str,
+    ) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE user_api_tokens SET revoked_at_ms = ?3 \
+             WHERE id = ?1 AND user_id = ?2 AND revoked_at_ms IS NULL",
+        )
+        .bind(token_id)
+        .bind(user_id)
+        .bind(now_ms())
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("REVOKE SQLite user API token {token_id}"))?;
+        Ok(result.rows_affected())
+    }
+
+    pub(super) async fn touch_user_api_token_last_used(
+        &self,
+        token_id: &str,
+        now_ms: i64,
+    ) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE user_api_tokens SET last_used_at_ms = ?2 \
+             WHERE id = ?1 AND revoked_at_ms IS NULL \
+             AND (last_used_at_ms IS NULL OR last_used_at_ms <= ?2 - ?3)",
+        )
+        .bind(token_id)
+        .bind(now_ms)
+        .bind(crate::product_auth::API_TOKEN_LAST_USED_TOUCH_MS)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("TOUCH SQLite user API token {token_id}"))?;
+        Ok(result.rows_affected())
+    }
 }
 
 impl SqliteStorage {

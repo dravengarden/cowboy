@@ -69,6 +69,9 @@ matches `draven`.
 | `POST /api/auth/login` | public | cookie + `me` |
 | `POST /api/auth/logout` | cookie optional | clear cookie |
 | `GET /api/auth/me` | product cookie or Bearer | current principal |
+| `POST /api/auth/tokens` | product operator+ | create own `cow_…` token; secret shown once |
+| `GET /api/auth/tokens` | product (own rows) | list prefixes, names, timestamps |
+| `DELETE /api/auth/tokens/{id}` | product (own row; else 404) | revoke |
 | `GET /api/admin/users` | admin operator+ | list users + `role_for` |
 | `POST /api/admin/users` | admin operator+ | create user + grant |
 | `POST /api/admin/users/{id}/disable` | admin operator+ | disable + revoke sessions/tokens |

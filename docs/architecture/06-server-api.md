@@ -15,7 +15,10 @@ control plane, while the web files remain an independently replaceable release.
 | `POST /api/auth/register` | policy-gated signup; `Set-Cookie: cowboy_user`; 403 when closed |
 | `POST /api/auth/login` | product login; dummy-verifies unknown users; `cowboy_user` cookie |
 | `POST /api/auth/logout` | best-effort clear cookie + delete `user_sessions` row |
-| `GET /api/auth/me` | current product principal |
+| `GET /api/auth/me` | current product principal (cookie or Bearer) |
+| `POST /api/auth/tokens` | product operator+; create a `cow_…` token (secret shown once) |
+| `GET /api/auth/tokens` | list own token prefixes, names, timestamps |
+| `DELETE /api/auth/tokens/{id}` | revoke own token; other users' ids are 404 |
 | `GET/POST /api/admin/users` | admin operator+ list/create product users (default grant `operator`) |
 | `POST /api/admin/users/{id}/disable` | admin operator+ disable + revoke sessions/tokens |
 | `POST /api/admin/users/{id}/password` | admin owner set password |
@@ -119,9 +122,16 @@ Accounts are required. There is no `cowboy.auth.mode` and no loopback
 product bypass. A product cookie (`cowboy_user`) or `Authorization: Bearer
 cow_...` is required on `/ws` and product APIs. Cookie `/ws` upgrades also
 run the CSRF Origin allow-list; missing or disallowed Origin is 403 and
-does not open a socket. Missing, expired, or disabled principals return
-**401 before `on_upgrade`**. A later revoke closes the socket with
-application code **4001**.
+does not open a socket. Bearer requests skip Origin. Missing, expired, or
+disabled principals return **401 before `on_upgrade`**. A later revoke
+closes the socket with application code **4001**.
+
+Personal access tokens are created by the owning product operator+
+(`POST /api/auth/tokens`). The secret is `cow_` plus 32 url-safe bytes and
+is shown once. The store keeps only `token_hash` and the first 8 characters
+of the full secret as `token_prefix`. Default TTL is 365 days (minimum 1
+hour). `serve-acp` requires `--token` / `COWBOY_USER_TOKEN` and exits on
+401/403 instead of reconnecting.
 
 Session REST families (`/api/sessions/{id}/*`, `/api/code/sessions/{id}/*`,
 `/api/history/{id}`) use `can_see` / `can_mutate`. Product viewers see own

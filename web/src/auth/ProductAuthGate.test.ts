@@ -10,6 +10,7 @@ async function readAuthSources(): Promise<string> {
     "ProductAuthGate.tsx",
     "ProductLoginPage.tsx",
     "ProductAccountMenu.tsx",
+    "ProductTokensPanel.tsx",
   ];
   const chunks = await Promise.all(
     names.map((name) => Deno.readTextFile(new URL(name, authDir))),
@@ -77,6 +78,8 @@ Deno.test("desktop can sign out through authApi without importing store", async 
   const store = await Deno.readTextFile(new URL("store.ts", webSrc));
   assert(desktop.includes("useProductAuth"));
   assert(desktop.includes("account.signOut"));
+  assert(desktop.includes("account.tokens"));
+  assert(desktop.includes("ProductTokensPanel"));
   assertEquals(desktop.includes('from "../store"'), false);
   assert(gate.includes("announceProductSessionEnd"));
   assert(gate.includes("location.reload"));
@@ -95,7 +98,7 @@ Deno.test("desktop can sign out through authApi without importing store", async 
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
   const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
-  assert(sw.includes('const VERSION = "cowboy-v1405"'));
+  assert(sw.includes('const VERSION = "cowboy-v1406"'));
   const authStart = sw.indexOf('if (url.pathname.startsWith("/api/auth/"))');
   const authBranch = sw.slice(authStart, sw.indexOf("return;", authStart) + "return;".length);
   assert(authBranch.includes("event.respondWith(fetch(request))"));

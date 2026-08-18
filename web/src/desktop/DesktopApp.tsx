@@ -1,18 +1,22 @@
-import { useEffect, useMemo } from "react";
+import { Box } from "@mui/material";
+import { useEffect, useMemo, useState } from "react";
 import { App } from "../App";
 import { useProductAuth } from "../auth/ProductAuthGate";
+import { ProductTokensPanel } from "../auth/ProductTokensPanel";
 import type { Mode as ThemeMode } from "../theme";
 import {
   type DesktopCommand,
   DesktopCommandProvider,
   useDesktopCommand,
 } from "./commands/DesktopCommandProvider";
+import { DesktopModal } from "./DesktopModal";
 import { DesktopWorkspaceProvider } from "./DesktopWorkspaceController";
 import { installDesktopNativeEscapeGuard } from "./desktopNativeEscapeGuard";
 
-function DesktopProductSignOutCommand(): null {
+function DesktopAccountCommands(): React.JSX.Element {
   const { me, signOut } = useProductAuth();
-  const command = useMemo<DesktopCommand>(() => ({
+  const [tokensOpen, setTokensOpen] = useState(false);
+  const signOutCommand = useMemo<DesktopCommand>(() => ({
     id: "account.signOut",
     title: "Sign out",
     description: `Sign out ${me.account}`,
@@ -21,8 +25,28 @@ function DesktopProductSignOutCommand(): null {
       void signOut();
     },
   }), [me.account, signOut]);
-  useDesktopCommand(command);
-  return null;
+  const tokensCommand = useMemo<DesktopCommand>(() => ({
+    id: "account.tokens",
+    title: "API tokens",
+    description: "Create or revoke personal access tokens",
+    group: "Account",
+    run: () => setTokensOpen(true),
+  }), []);
+  useDesktopCommand(signOutCommand);
+  useDesktopCommand(tokensCommand);
+  return (
+    <DesktopModal
+      open={tokensOpen}
+      onClose={() => setTokensOpen(false)}
+      title="API tokens"
+      description={`Tokens for ${me.account}. Use COWBOY_USER_TOKEN with serve-acp.`}
+      width={520}
+    >
+      <Box sx={{ px: 2.25, py: 2 }}>
+        <ProductTokensPanel />
+      </Box>
+    </DesktopModal>
+  );
 }
 
 export function DesktopApp({
@@ -41,7 +65,7 @@ export function DesktopApp({
   return (
     <DesktopWorkspaceProvider>
       <DesktopCommandProvider>
-        <DesktopProductSignOutCommand />
+        <DesktopAccountCommands />
         <App
           themeMode={themeMode}
           onSetThemeMode={onSetThemeMode}

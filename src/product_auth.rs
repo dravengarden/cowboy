@@ -9,6 +9,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use argon2::Argon2;
 use axum::http::{HeaderMap, Uri, header};
+use base64::Engine as _;
 use password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 
 use crate::admin::AdminRole;
@@ -25,7 +26,19 @@ pub const USER_SESSION_TTL_MS: i64 = USER_SESSION_TTL_SECS * 1_000;
 /// Stored in `users.password_algo`. The PHC string is the only hash material.
 pub const PASSWORD_ALGO_ARGON2ID: &str = "argon2id";
 
+/// `Authorization: Bearer` personal access tokens start with this prefix.
+pub const API_TOKEN_SECRET_PREFIX: &str = "cow_";
+/// List UIs show only the first 8 characters of the full `cow_…` secret.
+pub const API_TOKEN_PREFIX_LEN: usize = 8;
+/// Default personal-access-token lifetime.
+pub const API_TOKEN_DEFAULT_TTL_SECS: i64 = 365 * 86_400;
+/// Shortest `ttl_seconds` a client may request.
+pub const API_TOKEN_MIN_TTL_SECS: i64 = 3_600;
+/// `last_used_at` is written at most this often.
+pub const API_TOKEN_LAST_USED_TOUCH_MS: i64 = 10 * 60 * 1_000;
+
 const USER_ID_HEX_LEN: usize = 32;
+const API_TOKEN_NAME_MAX_LEN: usize = 64;
 
 /// Trim, lowercase, and accept 1–64 of `[a-z0-9._-]`.
 ///
@@ -107,6 +120,51 @@ pub fn verify_unknown_user_password(password: &str) -> bool {
 /// Returns when the OS random device cannot be read.
 pub fn new_session_token() -> Result<String> {
     hex_from_urandom(32)
+}
+
+/// `cow_` plus 32 url-safe random bytes. Shown once; only the hash is stored.
+///
+/// # Errors
+/// Returns when the OS random device cannot be read.
+pub fn new_api_token_secret() -> Result<String> {
+    let bytes = random_bytes(32)?;
+    Ok(format!(
+        "{API_TOKEN_SECRET_PREFIX}{}",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+    ))
+}
+
+/// First 8 characters of the full secret, including `cow_`.
+#[must_use]
+pub fn api_token_prefix(secret: &str) -> String {
+    secret.chars().take(API_TOKEN_PREFIX_LEN).collect()
+}
+
+/// Trim and accept a 1–64 character personal-access-token name.
+///
+/// # Errors
+/// Returns when the name is empty or longer than 64 characters.
+pub fn ensure_api_token_name(name: &str) -> Result<String> {
+    let name = name.trim();
+    anyhow::ensure!(!name.is_empty(), "token name cannot be empty");
+    anyhow::ensure!(
+        name.chars().count() <= API_TOKEN_NAME_MAX_LEN,
+        "token name is too long"
+    );
+    Ok(name.to_owned())
+}
+
+/// Resolve the requested TTL, defaulting to 365 days.
+///
+/// # Errors
+/// Returns when the caller asks for less than one hour or more than 365 days.
+pub fn api_token_ttl_secs(requested: Option<i64>) -> Result<i64> {
+    let ttl = requested.unwrap_or(API_TOKEN_DEFAULT_TTL_SECS);
+    anyhow::ensure!(
+        (API_TOKEN_MIN_TTL_SECS..=API_TOKEN_DEFAULT_TTL_SECS).contains(&ttl),
+        "ttl_seconds must be between 1 hour and 365 days"
+    );
+    Ok(ttl)
 }
 
 #[must_use]
@@ -552,6 +610,26 @@ mod tests {
         let other = header_map(&[("authorization", "Bearer secret")]);
         assert!(bearer_token(&other).is_none());
         assert!(bearer_token(&header_map(&[])).is_none());
+    }
+
+    #[test]
+    fn api_token_secret_prefix_is_first_eight_of_full_cow_secret() {
+        let secret = new_api_token_secret().unwrap();
+        assert!(secret.starts_with(API_TOKEN_SECRET_PREFIX));
+        assert!(secret.len() > API_TOKEN_PREFIX_LEN);
+        let prefix = api_token_prefix(&secret);
+        assert_eq!(prefix, &secret[..API_TOKEN_PREFIX_LEN]);
+        assert_eq!(prefix.len(), API_TOKEN_PREFIX_LEN);
+        assert_eq!(api_token_prefix("cow_abcdrest"), "cow_abcd");
+        assert_eq!(ensure_api_token_name("  zed  ").unwrap(), "zed");
+        assert!(ensure_api_token_name("   ").is_err());
+        assert_eq!(
+            api_token_ttl_secs(None).unwrap(),
+            API_TOKEN_DEFAULT_TTL_SECS
+        );
+        assert_eq!(api_token_ttl_secs(Some(3_600)).unwrap(), 3_600);
+        assert!(api_token_ttl_secs(Some(3_599)).is_err());
+        assert!(api_token_ttl_secs(Some(API_TOKEN_DEFAULT_TTL_SECS + 1)).is_err());
     }
 
     #[test]

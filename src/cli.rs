@@ -81,6 +81,11 @@ pub struct ServeAcpArgs {
         default_value = "http://127.0.0.1:3333"
     )]
     pub daemon_url: String,
+
+    /// Product personal access token (`cow_…`). Required; there is no
+    /// headerless ACP path. Create one on `/` → account menu → tokens.
+    #[arg(long, env = "COWBOY_USER_TOKEN")]
+    pub token: Option<String>,
 }
 
 #[derive(Args)]
@@ -275,5 +280,22 @@ mod tests {
             panic!("expected serve command");
         };
         assert_eq!(args.database_url(), Some("postgresql:///cowboy"));
+    }
+
+    #[test]
+    fn serve_acp_accepts_token_flag() {
+        let cli = Cli::try_parse_from([
+            "cowboy",
+            "serve-acp",
+            "--provider",
+            "codex",
+            "--token",
+            "cow_testtoken",
+        ])
+        .unwrap();
+        let Command::ServeAcp(args) = cli.command else {
+            panic!("expected serve-acp command");
+        };
+        assert_eq!(args.token.as_deref(), Some("cow_testtoken"));
     }
 }
