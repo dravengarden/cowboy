@@ -438,13 +438,14 @@ export function DesktopCommandProvider(
         const readingSidebarOwnsKey = Boolean(eventElement?.closest(
           "[data-reading-question-sidebar]",
         ));
-        if (!event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+        if (!event.metaKey && !event.ctrlKey && !event.altKey) {
+          const product = key.toLowerCase();
           if (key === "Escape") {
             event.preventDefault();
             event.stopPropagation();
             workspace.setProductMode("agent");
             requestAnimationFrame(() => workspace.focusRegion("conversation.transcript"));
-          } else if (key.toLowerCase() === "p") {
+          } else if (product === "p") {
             event.preventDefault();
             event.stopPropagation();
             const closing = workspace.readingSidebarOpen;
@@ -452,11 +453,11 @@ export function DesktopCommandProvider(
             if (closing) {
               requestAnimationFrame(() => workspace.focusRegion("conversation.transcript"));
             }
-          } else if (key.toLowerCase() === "v") {
+          } else if (product === "v") {
             event.preventDefault();
             event.stopPropagation();
             commands.current.get("conversation.toggleProjection")?.run();
-          } else if (key.toLowerCase() === "f") {
+          } else if (product === "f") {
             event.preventDefault();
             event.stopPropagation();
             document.querySelector<HTMLButtonElement>(
@@ -686,6 +687,8 @@ export function DesktopCommandProvider(
             f: "page-down",
             b: "page-up",
           } as Record<string, string>)[key.toLowerCase()] ?? null;
+        } else if (key.toLowerCase() === "f") {
+          action = "toggle-following";
         } else if (!event.shiftKey || key === "G") {
           if (itemChord.current !== null) {
             globalThis.clearTimeout(itemChord.current);
@@ -702,7 +705,6 @@ export function DesktopCommandProvider(
               j: "line-down",
               k: "line-up",
               G: "latest",
-              F: "toggle-following",
             } as Record<string, string>)[key] ?? null;
           }
         }

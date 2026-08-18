@@ -164,6 +164,44 @@ Deno.test("Mod bracket resize shortcuts use physical keys under an IME", () => {
   }, true));
 });
 
+Deno.test("bare product letters ignore Shift; modified chords do not", () => {
+  const follow = parseShortcut("F");
+  const shiftedF = {
+    key: "F",
+    code: "KeyF",
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: true,
+    altKey: false,
+  };
+  assert(matchesShortcut(follow, shiftedF, true, true));
+  assert(matchesShortcut(follow, { ...shiftedF, key: "f", shiftKey: false }, true, true));
+  assert(matchesShortcut(parseShortcut("Mod+I"), {
+    key: "i",
+    code: "KeyI",
+    metaKey: true,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+  }, true));
+  assertFalse(matchesShortcut(parseShortcut("Mod+I"), {
+    key: "I",
+    code: "KeyI",
+    metaKey: true,
+    ctrlKey: false,
+    shiftKey: true,
+    altKey: false,
+  }, true));
+  assert(matchesShortcut(parseShortcut("Mod+Shift+P"), {
+    key: "P",
+    code: "KeyP",
+    metaKey: true,
+    ctrlKey: false,
+    shiftKey: true,
+    altKey: false,
+  }, true));
+});
+
 Deno.test("bare contextual shortcuts use physical keys only when explicitly safe", () => {
   const shortcut = parseShortcut("P");
   const imeKey = {

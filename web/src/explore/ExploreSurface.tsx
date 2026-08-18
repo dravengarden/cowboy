@@ -1741,9 +1741,7 @@ export function ExploreTranscript(
     if (!root) return undefined;
     const onKeyDown = (event: KeyboardEvent): void => {
       if (desktopImeOwnsKey(event)) return;
-      if (
-        event.metaKey || event.ctrlKey || event.altKey || event.shiftKey
-      ) return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target instanceof HTMLElement ? event.target : null;
       if (
         target?.matches("input, textarea, [contenteditable='true']") ||
@@ -1762,6 +1760,17 @@ export function ExploreTranscript(
         : event.code === "Slash"
         ? "/"
         : event.key;
+      if (key === "n") {
+        event.preventDefault();
+        const prompt = document.querySelector<HTMLElement>(
+          "[data-desktop-region='prompt.composer']",
+        );
+        prompt?.querySelector<HTMLElement>(
+          "[data-vim-command-sink], .cm-content[contenteditable='true']",
+        )?.focus({ preventScroll: true });
+        return;
+      }
+      if (event.shiftKey) return;
       if (key === "j" || key === "k") {
         event.preventDefault();
         event.stopPropagation();
@@ -1787,15 +1796,6 @@ export function ExploreTranscript(
         if (key === "[") goFooterPrevious();
         else goFooterNext();
         return;
-      }
-      if (key === "n") {
-        event.preventDefault();
-        const prompt = document.querySelector<HTMLElement>(
-          "[data-desktop-region='prompt.composer']",
-        );
-        prompt?.querySelector<HTMLElement>(
-          "[data-vim-command-sink], .cm-content[contenteditable='true']",
-        )?.focus({ preventScroll: true });
       }
     };
     root.addEventListener("keydown", onKeyDown);

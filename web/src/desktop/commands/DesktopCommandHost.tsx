@@ -297,6 +297,19 @@ export function DesktopCommandHost({
       },
     },
     {
+      id: "conversation.toggleFollow",
+      title: "Toggle Following",
+      description: "Jump to the latest output or pause automatic following",
+      group: "Conversation",
+      shortcut: "F",
+      contexts: ["conversation"],
+      run: () => {
+        document.querySelector<HTMLButtonElement>(
+          "[data-desktop-conversation-follow]",
+        )?.click();
+      },
+    },
+    {
       id: "conversation.permissionApprove",
       title: "Allow Pending Permission",
       description: "Choose the least persistent available allow option",

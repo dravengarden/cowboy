@@ -58,8 +58,16 @@ export function matchesShortcut(
   return keyMatches &&
     event.metaKey === expectedMeta &&
     event.ctrlKey === expectedCtrl &&
-    event.shiftKey === stroke.shift &&
+    (productLetterIgnoresShift(stroke) || event.shiftKey === stroke.shift) &&
     event.altKey === stroke.alt;
+}
+
+/// Bare product letters (`F`, `Z`, `V`) treat Shift/Caps as case, not a
+/// modifier. Vim regions keep `g`/`G` outside this matcher. Modified chords
+/// (`Mod+I`, `Mod+Shift+P`) still require an exact Shift state.
+export function productLetterIgnoresShift(stroke: ShortcutStroke): boolean {
+  return !stroke.shift && !stroke.mod && !stroke.ctrl && !stroke.alt &&
+    stroke.key.length === 1 && /[a-z]/.test(stroke.key);
 }
 
 export function isTextEditingTarget(target: EventTarget | null): boolean {

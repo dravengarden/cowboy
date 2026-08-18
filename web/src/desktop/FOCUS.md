@@ -22,6 +22,14 @@ These rules are the canonical Desktop-mode primitive contract. New controls,
 modals, product modes, and shortcut hints must reuse them rather than creating
 component-local keyboard semantics.
 
+### Product letters ignore case; Vim motions do not
+
+Bare product shortcuts (`F` Follow, `Z` Reading, `V` History/Explore, top-bar
+`R`/`U`/`L`/`C`/`X`/`S`, run-config mnemonics) match the physical letter with
+or without Shift. They are not a second Shift-modified command. Vim regions
+keep case: `g`/`gg` versus `G`, and list/transcript `j`/`k`/`h`/`l`. Modified
+chords (`Mod+I`, `Mod+Shift+P`) still require their exact Shift state.
+
 ### One truthful shortcut state machine
 
 Every live shortcut slot uses `ShortcutKeycap` and exactly one state:

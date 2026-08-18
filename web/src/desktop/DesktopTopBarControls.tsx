@@ -1080,7 +1080,7 @@ export function DesktopTopBarControls({
     });
     const onKeyDown = (event: KeyboardEvent): void => {
       if (desktopImeOwnsKey(event)) return;
-      if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) {
+      if (event.metaKey || event.ctrlKey || event.altKey) {
         return;
       }
       if (document.querySelector("[role='listbox']") !== null) return;
@@ -1207,7 +1207,7 @@ export function DesktopTopBarControls({
     if (usageAnchor === null) return undefined;
     const onKeyDown = (event: KeyboardEvent): void => {
       if (desktopImeOwnsKey(event)) return;
-      if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) {
+      if (event.metaKey || event.ctrlKey || event.altKey) {
         return;
       }
       const key = workspaceCommandKey(event).toLowerCase();
