@@ -160,6 +160,13 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
 
+  // Product identity is session-specific and must never be served from a SW
+  // cache (login/logout, activate 404/501, and HISTORY_CACHE isolation).
+  if (url.pathname.startsWith("/api/auth/")) {
+    event.respondWith(fetch(request));
+    return;
+  }
+
   // Content-hashed bundle (vite emits hashed filenames under /assets/):
   // cache-first, populating the cache on first fetch. Safe to pin forever — a
   // new build produces new filenames.

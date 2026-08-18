@@ -2,6 +2,7 @@ import { lazy, StrictMode, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import { CssBaseline, ThemeProvider } from "@mui/material";
 import { AppErrorBoundary } from "./AppErrorBoundary";
+import { ProductAuthGate } from "./auth/ProductAuthGate";
 import { SurfaceProvider, useSurfaceProfile } from "./surface/SurfaceProfile";
 import { useThemeMode } from "./theme";
 import { useGlobalFontScale, useReadingFontFaces } from "./readingSettings";
@@ -50,7 +51,9 @@ function Root(): React.JSX.Element {
       {/* Top-level boundary: a render crash anywhere in <App> degrades to a red
           error card with a reload instead of a blank white screen. */}
       <AppErrorBoundary>
-        <Suspense fallback={null}>{app}</Suspense>
+        <ProductAuthGate>
+          <Suspense fallback={null}>{app}</Suspense>
+        </ProductAuthGate>
       </AppErrorBoundary>
     </ThemeProvider>
   );

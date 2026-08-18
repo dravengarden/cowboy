@@ -110,6 +110,21 @@ the peek, or freeze the session list to make a swipe cheaper.
   centered dialog. Do not add a raw MUI `Dialog` for a phone-facing confirm.
   Cover/workbench sheets (Settings, New Session) stay on DetentSheet.
 
+## Product login gate
+
+`ProductAuthGate` wraps `DesktopApp` / `MobileApp` in `src/main.tsx`. Keep it
+out of `src/App.tsx`. `src/auth/*` must not import `src/store.ts` —
+`subscribe()` opens `/ws` on the first listener, and the logged-out branch must
+never construct a WebSocket.
+
+`GET /api/auth/status` decides the surface: HTTP 200 + `me` mounts the apps;
+HTTP 200 + missing `me` is login (register only when
+`registration.accepts_registration`; invite field when `mode === "token"`);
+HTTP 404/501 is “controller too old / activating”, never login-forever;
+network / 5xx retries with banner backoff and must not clear the cookie.
+`sw.js` must not cache `/api/auth/*`. Logout and a `me` account change delete
+`HISTORY_CACHE`.
+
 ## Deploy (web changes reach the installed PWA only via a SW version bump)
 
 1. Bump `web/public/sw.js` → `const VERSION = "cowboy-vNN"` (the foreground
