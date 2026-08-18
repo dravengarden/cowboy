@@ -1,4 +1,3 @@
-import { navigationHaptic, prepareNavigationHaptic } from "./haptic";
 import {
   mobileSpatialDrawerShadow,
   shouldKeepDrawerDepth,
@@ -12,7 +11,6 @@ import {
 } from "./mobileDrawerMotion";
 import {
   type DrawerVelocitySample,
-  OBSIDIAN_DRAWER_COMMIT_PROGRESS,
   obsidianDrawerAbandonsToScroll,
   obsidianDrawerClaimsSwipe,
   obsidianDrawerLockPx,
@@ -86,14 +84,11 @@ export function bindMobileSpatialDrawer({
     startOpen: boolean;
     width: number;
     lockPx: number;
-    thresholdHaptic: boolean;
     samples: DrawerVelocitySample[];
   } | null = null;
   let settleTimer = 0;
   let settleGen = 0;
-  let pendingThresholdHaptic = false;
   let currentOffset = 0;
-  let commit = false;
   let directManipulationActive = false;
   let presentationArmed = false;
   let releaseFrame = 0;
@@ -281,10 +276,6 @@ export function bindMobileSpatialDrawer({
     publishDrawerWidth(width);
     const targetOffset = open ? width : 0;
     publishProgress(targetOffset);
-    if (pendingThresholdHaptic) {
-      pendingThresholdHaptic = false;
-      requestAnimationFrame(() => navigationHaptic());
-    }
     if (open) setOpen(true);
     globalThis.clearTimeout(settleTimer);
     const generation = settleGen += 1;
@@ -345,7 +336,6 @@ export function bindMobileSpatialDrawer({
     const width = presentationWidth > 1 ? presentationWidth : drawerWidth();
     presentationWidth = width;
     publishDrawerWidth(width);
-    prepareNavigationHaptic();
     // Session-row taps live on the rail and keep a tap-sized slop. The
     // peeking page uses Obsidian's two-pixel |dx| > |dy| claim.
     const lockPx = obsidianDrawerLockPx(
@@ -363,10 +353,8 @@ export function bindMobileSpatialDrawer({
       startOpen,
       width,
       lockPx,
-      thresholdHaptic: false,
       samples: [{ t: now, x: touch.clientX }],
     };
-    commit = startOpen;
     // Assemble the peek layer on finger-down, before the 2 px claim writes
     // the first translate. Obsidian's workspace is already that layer.
     armPresentation();
@@ -379,7 +367,6 @@ export function bindMobileSpatialDrawer({
       expandedSelection(globalThis.getSelection?.() ?? null)
     ) {
       gesture = null;
-      commit = false;
       return;
     }
     const deltaX = touch.clientX - gesture.x;
@@ -441,18 +428,7 @@ export function bindMobileSpatialDrawer({
       gesture.startOffset + normalizedDelta,
       width,
     );
-    const progress = Math.max(0, Math.min(1, offset / width));
-    const nextCommit = progress >= OBSIDIAN_DRAWER_COMMIT_PROGRESS;
-    if (nextCommit !== commit && !gesture.thresholdHaptic) {
-      gesture.thresholdHaptic = true;
-      pendingThresholdHaptic = true;
-    }
-    commit = nextCommit;
     render(offset, true);
-    if (pendingThresholdHaptic) {
-      pendingThresholdHaptic = false;
-      navigationHaptic();
-    }
   };
   const onTouchEnd = (): void => {
     if (!gesture) return;
@@ -460,18 +436,13 @@ export function bindMobileSpatialDrawer({
       if (gesture.prepared) releaseDirectManipulation();
       else disarmPresentation();
       gesture = null;
-      commit = false;
       return;
     }
     const width = gesture.width;
     const releaseVelocity = gesture.velocity;
     const progress = Math.max(0, Math.min(1, currentOffset / width));
     const shouldOpen = obsidianDrawerShouldOpen(progress, releaseVelocity);
-    if (shouldOpen !== commit && !gesture.thresholdHaptic) {
-      navigationHaptic();
-    }
     gesture = null;
-    commit = false;
     settle(shouldOpen, releaseVelocity, releaseDirectManipulation, width);
   };
   const onTouchCancel = (): void => {
@@ -480,7 +451,6 @@ export function bindMobileSpatialDrawer({
     const startOpen = gesture?.startOpen ?? getOpen();
     const width = gesture?.width;
     gesture = null;
-    commit = false;
     if (wasLocked) settle(startOpen, 0, releaseDirectManipulation, width);
     else if (wasPrepared) releaseDirectManipulation();
     else disarmPresentation();

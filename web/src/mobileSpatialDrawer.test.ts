@@ -59,6 +59,17 @@ Deno.test("mobile drawer keeps clipping and shadows off the heavy surface", () =
   assert(widthAt >= 0 && translateAt > widthAt);
 });
 
+Deno.test("finger swipe does not fire navigation haptics", () => {
+  assertEquals(drawerSource.includes("navigationHaptic"), false);
+  assertEquals(drawerSource.includes("prepareNavigationHaptic"), false);
+  assertEquals(drawerSource.includes("thresholdHaptic"), false);
+  assertEquals(productShellSource.includes("navigationHaptic"), false);
+  assertEquals(productShellSource.includes("prepareNavigationHaptic"), false);
+  assert(
+    appSource.includes('aria-label={drawerOpen ? "Close sessions" : "Open sessions"}'),
+  );
+});
+
 Deno.test("drawer join is a hard paper|page edge", () => {
   assertEquals(mobileSpatialDrawerShadow("left"), "none");
   assertEquals(mobileSpatialDrawerShadow("right"), "none");
