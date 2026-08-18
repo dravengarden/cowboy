@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  clampKeyboardOverlap,
   inferKeyboardOpen,
   isUnreliableVisualViewport,
+  keyboardCoverOverlap,
+  paintedLayoutHeight,
 } from "./keyboardGeometry.ts";
 import { isNativeShell } from "./nativeShell";
 
@@ -13,11 +14,12 @@ import { isNativeShell } from "./nativeShell";
 //
 // Why visualViewport, not `interactive-widget=resizes-content` alone: iOS Safari
 // doesn't reliably shrink the LAYOUT viewport for the keyboard, and never for
-// that extra bar, so the fixed body keeps full height and the keyboard chrome
-// covers the bottom. visualViewport reports the actual visible region, so the
-// overlap = layout-viewport bottom − visual-viewport bottom. When the layout
-// viewport DID shrink (Android / a supporting engine), innerHeight shrinks too
-// and the overlap self-zeroes — no double lift.
+// that extra bar, so the painted page can stay full height and the keyboard
+// chrome covers the bottom. Measure the painted html/#root box against
+// visualViewport.height. window.innerHeight is not that box: it often stays on
+// the pre-keyboard layout after resizes-content or Safari's compact URL bar
+// have already shortened the page, and padding from that stale height leaves
+// a lavender band above chrome that is already outside the webview.
 //
 // Imperative (sets the CSS var, no React state) so the keyboard's open/close
 // animation doesn't re-render the tree every frame; a rAF coalesces bursts.
@@ -43,16 +45,17 @@ export function useKeyboardInset(): void {
     let lastInset = -1;
     const apply = (): void => {
       raf = 0;
-      // Keyboard overlap = layout-viewport height − visual-viewport height. We do
+      // Keyboard overlap = painted page height − visual-viewport height. We do
       // NOT add vv.offsetTop: it spikes during an overscroll/rubber-band as the
       // visual viewport pans, which inflated the inset and left the sheet too
       // high above the keyboard. vv.height stays stable under that pan.
-      const layoutHeight = globalThis.innerHeight;
-      if (isUnreliableVisualViewport(layoutHeight, vv.height)) return;
-      const overlap = clampKeyboardOverlap(
-        Math.round(Math.max(0, layoutHeight - vv.height)),
-        layoutHeight,
+      const layoutHeight = paintedLayoutHeight(
+        globalThis.innerHeight,
+        doc.documentElement.clientHeight,
+        doc.getElementById("root")?.clientHeight ?? 0,
       );
+      if (isUnreliableVisualViewport(layoutHeight, vv.height)) return;
+      const overlap = keyboardCoverOverlap(layoutHeight, vv.height);
       // Only write on change — the focus poll below runs apply() every 300ms, and
       // a same-value setProperty would still be a needless style touch each tick.
       if (overlap !== lastInset) {

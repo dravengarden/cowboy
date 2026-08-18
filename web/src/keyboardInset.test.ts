@@ -3,6 +3,8 @@ import {
   clampKeyboardOverlap,
   inferKeyboardOpen,
   isUnreliableVisualViewport,
+  keyboardCoverOverlap,
+  paintedLayoutHeight,
 } from "./keyboardGeometry.ts";
 
 Deno.test("keyboard geometry detects visual viewport overlap", () => {
@@ -49,4 +51,31 @@ Deno.test("keyboard geometry closes at the restored baseline", () => {
     baselineHeight: 844,
     editableFocused: true,
   }), false);
+});
+
+Deno.test("PWA inset follows the painted box, not a stale innerHeight", () => {
+  // Safari kept innerHeight at the pre-keyboard layout while resizes-content
+  // already shortened html/#root to the visual viewport.
+  assertEquals(paintedLayoutHeight(844, 510, 510), 510);
+  assertEquals(keyboardCoverOverlap(510, 510), 0);
+  // Layout did not shrink: the painted page still extends under the keyboard.
+  assertEquals(paintedLayoutHeight(844, 844, 844), 844);
+  assertEquals(keyboardCoverOverlap(844, 510), 334);
+  // Chrome jitter of a few pixels is not a covered keyboard.
+  assertEquals(keyboardCoverOverlap(510, 504), 0);
+});
+
+Deno.test("keyboard inset measures the painted page instead of innerHeight", async () => {
+  const source = await Deno.readTextFile(new URL("./keyboardInset.ts", import.meta.url));
+  assertEquals(source.includes("paintedLayoutHeight("), true);
+  assertEquals(
+    source.includes("keyboardCoverOverlap(layoutHeight, vv.height)"),
+    true,
+  );
+  assertEquals(
+    source.includes(
+      "const layoutHeight = paintedLayoutHeight(\n        globalThis.innerHeight,",
+    ),
+    true,
+  );
 });

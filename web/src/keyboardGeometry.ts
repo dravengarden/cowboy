@@ -49,3 +49,37 @@ export function clampKeyboardOverlap(
   const max = Math.round(layoutHeight * 0.52);
   return Math.min(overlap, max);
 }
+
+/** iOS Safari often keeps `window.innerHeight` on the pre-keyboard layout
+ *  viewport after `interactive-widget=resizes-content` (or Safari chrome)
+ *  has already shortened the painted `html` / `#root` box. Padding must
+ *  follow the painted box. Using the stale innerHeight double-lifts the
+ *  composer above chrome that is already outside the webview. */
+export function paintedLayoutHeight(
+  innerHeight: number,
+  clientHeight: number,
+  rootHeight = 0,
+): number {
+  const painted = [clientHeight, rootHeight].filter((height) => height > 0);
+  const smallestPainted = painted.length > 0 ? Math.min(...painted) : 0;
+  if (innerHeight > 0 && smallestPainted > 0) {
+    return Math.min(innerHeight, smallestPainted);
+  }
+  return innerHeight > 0 ? innerHeight : smallestPainted;
+}
+
+/** Sub-pixel / chrome jitter that still means the layout already fits. */
+export const keyboardFittedEpsilonPx = 8;
+
+/** How much of the painted page still extends below the visual viewport.
+ *  Do not add visualViewport.offsetTop: rubber-band pans inflate it and
+ *  lift the composer too high. */
+export function keyboardCoverOverlap(
+  paintedHeight: number,
+  visualHeight: number,
+): number {
+  if (isUnreliableVisualViewport(paintedHeight, visualHeight)) return 0;
+  const raw = Math.round(Math.max(0, paintedHeight - visualHeight));
+  if (raw <= keyboardFittedEpsilonPx) return 0;
+  return clampKeyboardOverlap(raw, paintedHeight);
+}

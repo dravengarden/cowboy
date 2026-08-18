@@ -1921,3 +1921,18 @@ Desktop Vim + IME checks:
     the measured keyboard is open, not only under `:focus-within`. This keeps a
     sent, empty composer content-tight without changing UIKit focus, paste,
     selection, or IME ownership.
+
+75. **PWA `--kb-inset` must follow the painted page, not `window.innerHeight`.**
+    Native shell keeps `--kb-inset` at 0 because WKWebView already resizes.
+    Browser/PWA still need a visualViewport correction when iOS refuses to
+    shrink the layout, but `innerHeight - visualViewport.height` is the wrong
+    overlap: Safari often leaves `innerHeight` on the pre-keyboard viewport
+    after `interactive-widget=resizes-content` or its compact URL bar has
+    already shortened `html`/`#root`. Padding that stale delta paints a
+    lavender band above chrome that is already outside the webview (WeType
+    and the compact `cowboy.stormbird.xyz` bar make it intermittent). Measure
+    `min(innerHeight, documentElement.clientHeight, #root.clientHeight)`
+    against `visualViewport.height`, treat a ≤8px remainder as fitted, and
+    still ignore `offsetTop` (rubber-band pans inflate it). Keyboard-open
+    detection may keep using `innerHeight` so a stale-large window still
+    counts as an open keyboard; only the padding uses the painted box.
