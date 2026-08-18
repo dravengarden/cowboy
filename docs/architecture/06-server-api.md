@@ -165,4 +165,5 @@ capability. `POST /api/machines/enrollment` is admin operator+. `GET
 `X-Real-IP`, otherwise 404. `GET /api/metrics` is admin operator+. Unlisted
 `/api/*` routes fail closed as admin operator+. Admin writes use
 `require_admin_role`; viewers keep read. Admin HTTP and product login stay
-separate planes; see [Admin](14-admin.md).
+separate planes; see [Admin](14-admin.md) and
+[Product login](16-product-auth.md).

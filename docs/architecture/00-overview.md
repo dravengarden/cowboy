@@ -54,7 +54,7 @@ reconnects and rolling updates.
 
 | Layer | Modules | Role |
 |---|---|---|
-| CLI / controller | `src/main.rs`, `src/cli.rs`, `src/server.rs` | Commands, REST, WebSocket, and runtime-served SPA |
+| CLI / controller | `src/main.rs`, `src/cli.rs`, `src/server.rs` | Commands, authenticated REST/WebSocket, and runtime-served SPA |
 | Hub | `src/core.rs`, `src/persistence.rs` | Session state, `seq`, fan-out, queueing, and write-behind intents |
 | Runtime routing | `src/supervisor.rs`, `src/remote_runtime.rs`, `src/runtime_router.rs` | Machine selection, fencing, replay, and idempotent commands |
 | Machine host | `src/machine_*.rs`, `src/bin/cowboy-machine.rs` | Enrollment, workspace preparation, component lifecycle, and detached-worker supervision |
@@ -101,6 +101,8 @@ flowchart TB
 11. [Zero-interruption rolling updates](12-rolling-updates.md)
 12. [Mobile code review](13-code-review.md)
 13. [Multi-machine runtime](15-multi-machine.md)
+14. [Admin console](14-admin.md)
+15. [Product login](16-product-auth.md)
 
 The stdio ACP bridge and isolated Zed code adapter remain optional compatibility
 integrations. They are documented separately in

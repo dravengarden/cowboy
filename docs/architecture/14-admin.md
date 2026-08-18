@@ -96,6 +96,11 @@ matches `draven`.
 | `POST /api/admin/users/{id}/disable` | admin operator+ | disable + revoke sessions/tokens |
 | `POST /api/admin/users/{id}/password` | admin owner | set password |
 
-There is no `cowboy.auth.mode` and no lan/hybrid exposure switch. Product
-`/ws` and product APIs require a product principal. Admin writes go through
-`require_admin_role` (operator+ or owner); viewers keep admin read.
+Signup is **live** and still policy-gated: default closed, invite tokens,
+open mode, and admin-created users. The first product user is created on
+this console. Product `/ws` and product APIs require a product principal.
+Admin writes go through `require_admin_role` (operator+ or owner); viewers
+keep admin read.
+
+See [Product login](16-product-auth.md) for planes, the capability matrix,
+and the Hawk enablement checklist.

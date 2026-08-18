@@ -35,7 +35,10 @@ primary phone/desktop product path.
 - [`architecture/11-operations.md`](architecture/11-operations.md) — Capacity, migrations, observability, and incident policy
 - [`architecture/12-rolling-updates.md`](architecture/12-rolling-updates.md) — Fencing, replay, draining, readiness, and rollback
 - [`architecture/13-code-review.md`](architecture/13-code-review.md) — Stable worktree, Git, file, diff, and language-intelligence API
+- [`architecture/14-admin.md`](architecture/14-admin.md) — Admin console and product registration
+- [`architecture/14-zed-code-provider.md`](architecture/14-zed-code-provider.md) — Isolated Zed code-provider integration
 - [`architecture/15-multi-machine.md`](architecture/15-multi-machine.md) — Enrollment, outbound connectivity, placement, and Machine lifecycle
+- [`architecture/16-product-auth.md`](architecture/16-product-auth.md) — Product login and self-host identity
 - [`architecture/runtime-incident-ledger.md`](architecture/runtime-incident-ledger.md) — Runtime failure evidence and resolved invariants
 
 ### Core documents
