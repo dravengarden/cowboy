@@ -2,10 +2,7 @@ import {
   AccountTreeOutlined,
   CodeOutlined,
   Clear,
-  DataArrayOutlined,
   DataObjectOutlined,
-  DiamondOutlined,
-  FormatQuoteOutlined,
   Search,
 } from "@mui/icons-material";
 import {
@@ -51,6 +48,28 @@ function categoryColor(
   return theme.palette.text.secondary;
 }
 
+function SymbolGlyph({
+  children,
+  fontSize = 13,
+}: {
+  children: string;
+  fontSize?: number;
+}): React.JSX.Element {
+  return (
+    <Box
+      component="span"
+      sx={{
+        fontFamily: "var(--cowboy-font-mono)",
+        fontSize,
+        fontWeight: 750,
+        lineHeight: 1,
+      }}
+    >
+      {children}
+    </Box>
+  );
+}
+
 function SymbolCategoryIcon({
   category,
 }: {
@@ -58,26 +77,28 @@ function SymbolCategoryIcon({
 }): React.JSX.Element {
   if (category === "module") return <AccountTreeOutlined />;
   if (category === "type") return <DataObjectOutlined />;
-  if (category === "function") {
+  if (category === "function") return <SymbolGlyph fontSize={17}>λ</SymbolGlyph>;
+  if (category === "method") return <CodeOutlined />;
+  // Field / property / key: a hollow square, not array brackets. Nix attrs
+  // like pname are named slots, not lists.
+  if (category === "field") {
     return (
       <Box
-        component="span"
+        aria-hidden
         sx={{
-          fontFamily: "var(--cowboy-font-mono)",
-          fontSize: 17,
-          fontWeight: 750,
-          lineHeight: 1,
+          width: 10,
+          height: 10,
+          borderRadius: "2px",
+          border: "1.75px solid currentColor",
         }}
-      >
-        λ
-      </Box>
+      />
     );
   }
-  if (category === "method") return <CodeOutlined />;
-  if (category === "field") return <DataArrayOutlined />;
-  if (category === "constant") return <DiamondOutlined />;
+  // Const: hash, not a gem. # reads as a binding, not a brand mark.
+  if (category === "constant") return <SymbolGlyph>#</SymbolGlyph>;
   if (category === "object") return <AccountTreeOutlined />;
-  return <FormatQuoteOutlined />;
+  // String / number / symbol / var: a type specimen, not curly quotes.
+  return <SymbolGlyph>Aa</SymbolGlyph>;
 }
 
 function HighlightedSymbolName({
