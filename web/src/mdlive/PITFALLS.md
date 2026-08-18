@@ -1957,14 +1957,14 @@ Desktop Vim + IME checks:
 77. **PWA cannot strip the iOS form accessory (∧ ∨ ✓); lift content instead.**
     The native shell removes `inputAccessoryView`. Safari / installed PWA
     cannot. `interactive-widget=resizes-content` often shrinks the painted
-    page to the *keyboard* top, so `--kb-inset` becomes 0 (pitfall #75),
-    while the accessory still overlays the bottom ~44px. A content-height
-    New Session sheet then parks Title under that bar. **Fix:** on iOS
-    PWA, while an editable is focused, add 44px accessory overlap to
-    `--kb-inset`; make New Session a mobile `cover` like Session info so
-    Title lives at the top and the cover footer also clears the bar.
-    Native shell stays at `--kb-inset: 0`. Do not try to hide the
-    accessory from the web page.
+    page to the *keyboard* top, so `--kb-inset` becomes 0 (pitfall #75).
+    A content-height New Session sheet then parked Title against that
+    bar. **Fix:** make New Session a mobile `cover` like Session info
+    so Title lives at the top. Do **not** fold 44px into `--kb-inset`:
+    after resizes-content the accessory sits *below* the visual
+    viewport, and that extra pad becomes an empty band between the
+    composer and `∧ ∨ ✓`. Native shell stays at `--kb-inset: 0`. Do
+    not try to hide the accessory from the web page.
 
 78. **Dock Paste is a clipboard port, not a native-only bridge.** The
     native shell can probe UIPasteboard and read image bytes without a

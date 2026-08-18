@@ -101,9 +101,10 @@ export function keyboardCoverOverlap(
 }
 
 /** iOS Safari / installed PWA form accessory (∧ ∨ ✓). The native shell
- *  strips this bar; visualViewport never includes it, so it overlays the
- *  bottom ~44px of remaining web content (New Session Title, sheet
- *  footers). */
+ *  strips this bar. On PWA it sits *below* the visual viewport after
+ *  resizes-content, so it must not be folded into `--kb-inset` or the
+ *  composer grows an empty band. Cover sheets (New Session) keep Title
+ *  above it without padding the whole app. */
 export const iosPwaKeyboardAccessoryPx = 44;
 
 export function isAppleTouchDevice(input: {

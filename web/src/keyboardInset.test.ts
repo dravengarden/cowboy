@@ -122,10 +122,14 @@ Deno.test("keyboard inset measures the painted page instead of innerHeight", asy
     ),
     true,
   );
-  assertEquals(source.includes("pwaKeyboardAccessoryOverlap("), true);
-  assertEquals(source.includes("publishedKeyboardInset("), true);
+  assertEquals(source.includes("pwaKeyboardAccessoryOverlap("), false);
+  assertEquals(source.includes("publishedKeyboardInset("), false);
   assertEquals(source.includes("shouldLearnKeyboardFreeBaseline("), true);
   assertEquals(source.includes("isMobileEditorFocusTransferPending()"), true);
+  assertEquals(
+    source.includes("Do not add the iOS form accessory"),
+    true,
+  );
 });
 
 Deno.test("New session is a cover sheet on the mobile navbar so Title clears the PWA accessory", async () => {

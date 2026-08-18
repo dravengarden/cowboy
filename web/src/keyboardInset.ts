@@ -1,12 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import {
   inferKeyboardOpen,
-  isAppleTouchDevice,
   isUnreliableVisualViewport,
   keyboardCoverOverlap,
   paintedLayoutHeight,
-  pwaKeyboardAccessoryOverlap,
-  publishedKeyboardInset,
   shouldLearnKeyboardFreeBaseline,
 } from "./keyboardGeometry.ts";
 import { isMobileEditorFocusTransferPending } from "./composer/mobileComposerFocus";
@@ -60,19 +57,13 @@ export function useKeyboardInset(): void {
         doc.getElementById("root")?.clientHeight ?? 0,
       );
       if (isUnreliableVisualViewport(layoutHeight, vv.height)) return;
-      const nav = globalThis.navigator;
-      const overlap = publishedKeyboardInset(
-        keyboardCoverOverlap(layoutHeight, vv.height),
-        pwaKeyboardAccessoryOverlap({
-          nativeShell: false,
-          appleTouch: isAppleTouchDevice({
-            userAgent: nav?.userAgent,
-            platform: nav?.platform,
-            maxTouchPoints: nav?.maxTouchPoints,
-          }),
-          editableFocused: hasEditableFocus(doc),
-        }),
-      );
+      // Do not add the iOS form accessory (∧ ∨ ✓) here. On PWA,
+      // resizes-content already parks the painted page at the keyboard
+      // top; the accessory sits below the visual viewport. Folding 44px
+      // into --kb-inset left an empty band between the composer and the
+      // bar. New Session clears that bar by being a cover sheet, not by
+      // padding the whole app.
+      const overlap = keyboardCoverOverlap(layoutHeight, vv.height);
       // Only write on change — the focus poll below runs apply() every 300ms, and
       // a same-value setProperty would still be a needless style touch each tick.
       if (overlap !== lastInset) {
