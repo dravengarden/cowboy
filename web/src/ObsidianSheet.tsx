@@ -376,40 +376,15 @@ export function ObsidianSheet({
             sx={{
               flexShrink: 0,
               display: "flex",
-              flexDirection: "column",
-              alignItems: "stretch",
-              px: 0,
-              pt: 0,
+              justifyContent: "flex-end",
+              alignItems: "center",
+              flexWrap: "wrap",
+              gap: 1,
+              px: 2.25,
+              pt: 1,
               pb: SAFE_INSIDE,
               borderTop: 1,
               borderColor: "divider",
-              "& > *": {
-                width: "100%",
-                minHeight: 48,
-                justifyContent: "flex-start",
-                borderRadius: 0,
-                px: 2.25,
-                py: 1.25,
-                textTransform: "none",
-                fontWeight: 500,
-                boxShadow: "none",
-              },
-              "& > .MuiButton-contained, & > .MuiButton-contained:hover": {
-                bgcolor: "transparent",
-                color: "primary.main",
-              },
-              "& > .MuiButton-containedError, & > .MuiButton-containedError:hover": {
-                bgcolor: "transparent",
-                color: "error.main",
-              },
-              "& > .MuiButton-containedWarning, & > .MuiButton-containedWarning:hover": {
-                bgcolor: "transparent",
-                color: "warning.main",
-              },
-              "& > * + *": {
-                borderTop: 1,
-                borderColor: "divider",
-              },
             }}
           >
             {actions}
