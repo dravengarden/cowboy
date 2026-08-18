@@ -1,30 +1,27 @@
-/** Review CodeMirror must leave the transforming peek. Changing
- *  `.cm-scroller` overflow remasures the document and destroys iOS's
- *  touch-scroll cache on the first tracking frame — that was the failed
- *  flatten. Hide paint only; keep layout and overflow alone. */
+/** Review CodeMirror stays visible during a workspace swipe.
+ *  Changing `.cm-scroller` overflow remasures and hitchs. Hiding the
+ *  layer flashes a blank pane. The standing contract is a viewport-sized
+ *  compositor layer at rest; swipe JS only skips measure callbacks. */
 
 export const MOBILE_CODE_SWIPE_START = "cowboy:transcript-direct-manipulation-start";
 export const MOBILE_CODE_SWIPE_END = "cowboy:transcript-direct-manipulation-end";
 
-export const mobileCodePaintCullSx = {
-  visibility: "hidden",
-  pointerEvents: "none",
+/** Clip and promote the editor to one phone-sized tile. No
+ *  `-webkit-overflow-scrolling: touch` on the inner scroller, or iOS
+ *  still owns a max-content overflow texture. */
+export const mobileCodeRestLayerSx = {
+  overflow: "hidden",
+  isolation: "isolate",
+  contain: "paint",
+  backfaceVisibility: "hidden",
+  WebkitBackfaceVisibility: "hidden",
+  transform: "translate3d(0, 0, 0)",
 } as const;
 
 let freezeCount = 0;
 
 export function isMobileCodeSwipeFrozen(): boolean {
   return freezeCount > 0;
-}
-
-export function hideMobileCodePaint(layer: HTMLElement): void {
-  layer.style.visibility = "hidden";
-  layer.style.pointerEvents = "none";
-}
-
-export function showMobileCodePaint(layer: HTMLElement): void {
-  layer.style.removeProperty("visibility");
-  layer.style.removeProperty("pointer-events");
 }
 
 export function swipeOwnsCodeSurface(
@@ -39,30 +36,22 @@ export function swipeOwnsCodeSurface(
 }
 
 export function bindCodeViewerSwipeFreeze(
-  view: {
+  _view: {
     scrollDOM: HTMLElement;
     dom: HTMLElement;
   },
   alreadyClaimed: () => boolean = swipeOwnsCodeSurface,
 ): () => void {
-  const closest = view.dom.closest("[data-mobile-code-layer]");
-  const layer = closest != null && "style" in closest
-    ? closest as HTMLElement
-    : view.dom;
   let local = false;
   const apply = (): void => {
     if (local) return;
     local = true;
     freezeCount += 1;
-    layer.setAttribute("data-mobile-code-frozen", "true");
-    hideMobileCodePaint(layer);
   };
   const release = (): void => {
     if (!local) return;
     local = false;
     freezeCount = Math.max(0, freezeCount - 1);
-    layer.removeAttribute("data-mobile-code-frozen");
-    showMobileCodePaint(layer);
   };
   if (alreadyClaimed()) apply();
   globalThis.addEventListener(MOBILE_CODE_SWIPE_START, apply);

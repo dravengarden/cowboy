@@ -458,7 +458,9 @@ export default function CodeViewer({
           overflowX: softWrap ? "hidden" : "auto",
           overscrollBehavior: "contain",
           touchAction: "pan-y pinch-zoom",
-          WebkitOverflowScrolling: "touch",
+          // No `-webkit-overflow-scrolling: touch`. That tile is
+          // max-content wide and iOS re-rasterizes it under a parent
+          // translate. Mobile clips the wrapper instead.
         },
         ".cm-content": {
           fontSize: `${fontSize}px`,

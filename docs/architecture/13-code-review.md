@@ -163,10 +163,9 @@ views. Load language packages on demand and do expensive decoration work only
 for visible ranges.
 
 **A Review swipe that hitchs on source/diff but not on README is a
-defect.** The peek must not transform a live CodeMirror. Cull
-`[data-mobile-code-layer]` paint while the drawer or pager is moving;
-do not change `.cm-scroller` overflow on claim (that remasures and
-makes the hitch worse). See
+defect.** Keep CodeMirror on a standing viewport-sized compositor
+layer. Do not hide it during the swipe (that flashes) and do not
+change `.cm-scroller` overflow on claim (that remasures). See
 [`mobile-spatial-presentation.md`](../mobile-spatial-presentation.md).
 
 Source views resolve CodeMirror's language description from the path, including

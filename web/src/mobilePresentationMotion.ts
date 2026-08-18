@@ -1,5 +1,5 @@
 import { subscribeAnyDetentSheetOpen } from "./_shell/detent-sheet-open";
-import { mobileCodePaintCullSx } from "./mobileCodeSurface";
+import { mobileCodeRestLayerSx } from "./mobileCodeSurface";
 import { holdStorePresentation } from "./store";
 
 /** Standing peek paint collapse. Settled rows each own `contain: layout
@@ -10,6 +10,10 @@ export const mobilePeekRestLayerSx = {
   "& [data-mobile-drawer-surface] [data-key]": {
     contain: "none",
   },
+  // Review CodeMirror is one viewport-sized tile at rest so a peek
+  // translate does not re-raster token spans. Do not hide this layer
+  // during the swipe — that flashes the code pane.
+  "& [data-mobile-code-layer]": mobileCodeRestLayerSx,
 };
 
 /** Strip backdrop-filter only when the moving surface *contains* the frost
@@ -26,8 +30,7 @@ export const mobileFrostStripSx = {
 /** Shared overflow-tile kill for transcript rows and ordinary overflow
  *  layers. Do not apply this to `.cm-scroller`: changing CodeMirror
  *  overflow remasures the document and rebuilds its iOS scroll tile on
- *  the first tracking frame. Review source is culled with
- *  `mobileCodePaintCullSx` instead. */
+ *  the first tracking frame. Review source uses `mobileCodeRestLayerSx`. */
 export const mobileOverflowTileFlattenSx = {
   WebkitOverflowScrolling: "auto !important",
   overflow: "hidden !important",
@@ -70,9 +73,6 @@ export function mobilePresentationMovingRootSx(
       // the whole Review page). Keep it live once settled — this block
       // is moving-only.
       "& [data-mobile-overflow-layer]": mobileOverflowTileFlattenSx,
-      // Pull live CodeMirror out of the transforming peek. Visibility
-      // culls paint without remasuring `.cm-scroller`.
-      "& [data-mobile-code-layer]": mobileCodePaintCullSx,
     },
   };
 }
