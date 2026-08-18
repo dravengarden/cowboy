@@ -3,7 +3,12 @@
 
 CREATE TABLE users (
     id TEXT PRIMARY KEY,
-    username TEXT NOT NULL UNIQUE,
+    username TEXT NOT NULL UNIQUE
+        CHECK (
+            username = lower(trim(username))
+            AND length(username) BETWEEN 1 AND 64
+            AND username NOT GLOB '*[^a-z0-9._-]*'
+        ),
     password_algo TEXT NOT NULL,
     password_hash TEXT NOT NULL,
     created_at_ms INTEGER NOT NULL DEFAULT (CAST(strftime('%s', 'now') AS INTEGER) * 1000),

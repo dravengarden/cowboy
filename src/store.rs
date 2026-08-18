@@ -57,6 +57,11 @@ fn valid_product_user_id(value: &str) -> bool {
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
+fn normalized_product_username(username: &str) -> Result<String> {
+    crate::product_auth::normalize_username(username)
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
 fn unique_constraint_error(
     error: sqlx::Error,
     unique_message: &str,
@@ -1149,7 +1154,7 @@ impl Store {
 
 #[cfg_attr(not(test), allow(dead_code))]
 impl Store {
-    /// Persist a product user. Username uniqueness is enforced by the store.
+    /// Persist a product user. The username is normalized before insert.
     ///
     /// # Errors
     /// Returns when the id is not 32-hex, the username is taken, or the insert fails.
@@ -2327,7 +2332,7 @@ impl PostgresStorage {
             valid_product_user_id(&user.id),
             "user id must be 32 hex characters"
         );
-        anyhow::ensure!(!user.username.is_empty(), "username cannot be empty");
+        let username = normalized_product_username(&user.username)?;
         anyhow::ensure!(
             !user.password_hash.is_empty(),
             "password hash cannot be empty"
@@ -2340,7 +2345,7 @@ impl PostgresStorage {
              to_timestamp($7::double precision / 1000))",
         )
         .bind(&user.id)
-        .bind(&user.username)
+        .bind(&username)
         .bind(&user.password_algo)
         .bind(&user.password_hash)
         .bind(user.created_at_ms)
@@ -2365,11 +2370,12 @@ impl PostgresStorage {
     }
 
     pub async fn user_by_username(&self, username: &str) -> Result<Option<ProductUser>> {
+        let username = normalized_product_username(username)?;
         let row = sqlx::query_as::<_, ProductUserRow>(
             "SELECT id, username, password_algo, password_hash, created_at, updated_at, \
              disabled_at FROM users WHERE username = $1",
         )
-        .bind(username)
+        .bind(&username)
         .fetch_optional(&self.pool)
         .await
         .with_context(|| format!("SELECT user by username {username}"))?;
@@ -5763,7 +5769,7 @@ mod storage_contract_tests {
         let created_at_ms = 1_900_000_000_000;
         let user = ProductUser {
             id: "0123456789abcdef0123456789abcdef".to_owned(),
-            username: "draven".to_owned(),
+            username: " Draven ".to_owned(),
             password_algo: crate::product_auth::PASSWORD_ALGO_ARGON2ID.to_owned(),
             password_hash:
                 "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHRzb21lc2FsdA$dGVzdGhhc2h2YWx1ZW5vdHJlYWw"
@@ -5774,7 +5780,7 @@ mod storage_contract_tests {
         };
         store.insert_user(&user).await?;
         let loaded = store
-            .user_by_username("draven")
+            .user_by_username("DRAVEN")
             .await?
             .context("product user was not restored by username")?;
         assert_eq!(loaded.id, user.id);
@@ -5788,7 +5794,7 @@ mod storage_contract_tests {
         );
         let duplicate = ProductUser {
             id: "fedcba9876543210fedcba9876543210".to_owned(),
-            username: "draven".to_owned(),
+            username: "DRAVEN".to_owned(),
             ..user.clone()
         };
         assert!(

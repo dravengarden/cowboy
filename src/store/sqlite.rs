@@ -2346,7 +2346,7 @@ impl SqliteStorage {
             valid_product_user_id(&user.id),
             "user id must be 32 hex characters"
         );
-        anyhow::ensure!(!user.username.is_empty(), "username cannot be empty");
+        let username = normalized_product_username(&user.username)?;
         anyhow::ensure!(
             !user.password_hash.is_empty(),
             "password hash cannot be empty"
@@ -2356,7 +2356,7 @@ impl SqliteStorage {
              updated_at_ms, disabled_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )
         .bind(&user.id)
-        .bind(&user.username)
+        .bind(&username)
         .bind(&user.password_algo)
         .bind(&user.password_hash)
         .bind(user.created_at_ms)
@@ -2383,11 +2383,12 @@ impl SqliteStorage {
     }
 
     pub(super) async fn user_by_username(&self, username: &str) -> Result<Option<ProductUser>> {
+        let username = normalized_product_username(username)?;
         let row = sqlx::query_as::<_, SqliteProductUserRow>(
             "SELECT id, username, password_algo, password_hash, created_at_ms, updated_at_ms, \
              disabled_at_ms FROM users WHERE username = ?1",
         )
-        .bind(username)
+        .bind(&username)
         .fetch_optional(&self.pool)
         .await
         .with_context(|| format!("SELECT SQLite user by username {username}"))?;

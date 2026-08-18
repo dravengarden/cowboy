@@ -131,7 +131,7 @@ const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
     ),
     (
         "0031_product_users.sql",
-        "f8293a2e358ef783353f09c9e5d25060f1078a3132c9bb1f7b74ad8e3d0aa3a8",
+        "256c9812e0c2a002d80ab1b7c109775a6335968610faf81fee27471a154e590e",
     ),
 ];
 
@@ -154,7 +154,7 @@ const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     ),
     (
         "0005_product_users.sql",
-        "78870bed7e48576f94709f0ad5bab7470b3a016deaa94f5580fc955d7382de05",
+        "5468265d5488423b27a0bad4121a38af64759580534d133e934818ddb5ffd4ce",
     ),
 ];
 

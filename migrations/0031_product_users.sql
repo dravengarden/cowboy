@@ -3,7 +3,11 @@
 
 CREATE TABLE users (
     id            text PRIMARY KEY,
-    username      text NOT NULL UNIQUE,
+    username      text NOT NULL UNIQUE
+                  CHECK (
+                      username = lower(btrim(username))
+                      AND username ~ '^[a-z0-9._-]{1,64}$'
+                  ),
     password_algo text NOT NULL,
     password_hash text NOT NULL,
     created_at    timestamptz NOT NULL DEFAULT now(),
