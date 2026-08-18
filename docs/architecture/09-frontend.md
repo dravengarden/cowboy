@@ -160,9 +160,10 @@ Clear / Compact / Stop / Reload / discard / delete / update / Provider
 auth-or-uninstall prompts are compact decisions, not workbenches. On the
 Mobile and tablet products they always rise as Cowboy's Obsidian-style
 inset card (`ObsidianSheet` via `ConfirmSheet` in `web/src/Sheet.tsx`),
-including iPhone landscape: content-hugging, 8px inset, all-around
-radius, and the same iOS cubic (`cubic-bezier(0.32, 0.72, 0, 1)` at
-240ms) the drawers already use. Do not route these prompts through
+including iPhone landscape: docked to the bottom with an 8px edge gap,
+safe-area padded inside the card so it occupies the bottom of the
+screen, content-hugging, 18px all-around radius, and the same iOS cubic
+(`cubic-bezier(0.32, 0.72, 0, 1)` at 240ms) the drawers already use. Do not route these prompts through
 DetentSheet's floating footer overlay — that pads ~110px of empty body
 under a short confirm. Desktop keeps the centered dialog. A centered
 MUI `Dialog` is still the wrong grammar on a phone-width surface.

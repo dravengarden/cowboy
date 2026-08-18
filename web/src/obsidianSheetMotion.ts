@@ -12,11 +12,12 @@ export const OBSIDIAN_SHEET_SETTLE_EASING = "cubic-bezier(0.32, 0.72, 0, 1)";
 /** Compact menus settle in ~240ms. A 320ms page-sheet tail feels sluggish. */
 export const OBSIDIAN_SHEET_SETTLE_MS = 240;
 
-/** Gap from the screen edges. Obsidian's card is inset, not full-bleed. */
+/** Tiny gap from the screen edges. The card still occupies the bottom —
+ *  safe-area lives INSIDE the sheet, never as an external lift. */
 export const OBSIDIAN_SHEET_INSET_PX = 8;
 
-/** All-around radius. Cowboy's theme radius (10) is too tight for a sheet. */
-export const OBSIDIAN_SHEET_RADIUS_PX = 16;
+/** All-around radius. Matches Obsidian's mobile action card (~18). */
+export const OBSIDIAN_SHEET_RADIUS_PX = 18;
 
 /** Keep a sliver of dimmed page above a tall inspector. */
 export const OBSIDIAN_SHEET_MAX_FRACTION = 0.88;

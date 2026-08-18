@@ -1,9 +1,10 @@
 // Cowboy compact modal — Obsidian's mobile action sheet, cowboy-tinted.
 //
 // Shared DetentSheet stays the cover/workbench surface (Settings, New Session).
-// Compact decisions and content-hugging inspectors (Confirm, Symbols, Info)
-// use this card: inset from the edges, sized to its rows, spring settle on
-// the Obsidian/iOS cubic. Drag stays 1:1 on the compositor; release is CSS.
+// Compact decisions and inspectors (Confirm, Symbols, Info) use this card:
+// docked to the bottom of the screen, 8px edge gap, safe-area padded INSIDE
+// so the card occupies the bottom instead of floating above the home
+// indicator. Content-hugging. Drag is 1:1; release is the Obsidian/iOS cubic.
 
 import {
   type PointerEvent as ReactPointerEvent,
@@ -31,7 +32,9 @@ import {
 const Z = 1250;
 const PROJECTION_MS = 110;
 const FLICK_DISMISS = 0.55;
-const HANDLE_HEIGHT = 22;
+const HANDLE_HEIGHT = 18;
+const SAFE_INSIDE =
+  "max(8px, calc(env(safe-area-inset-bottom, 0px) - var(--kb-inset, 0px)))";
 
 function prefersReducedMotion(): boolean {
   return globalThis.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ===
@@ -236,7 +239,9 @@ export function ObsidianSheet({
 
   const z = Z + Math.min(level, 24) * 2;
   const inset = `${String(OBSIDIAN_SHEET_INSET_PX)}px`;
-  const bottom = `calc(${inset} + env(safe-area-inset-bottom, 0px) + var(--kb-inset, 0px))`;
+  // Dock to the bottom. Only the 8px optical gap + keyboard lift sit
+  // outside the card; the home indicator is padded inside, like Obsidian.
+  const bottom = `calc(${inset} + var(--kb-inset, 0px))`;
 
   return (
     <>
@@ -284,7 +289,7 @@ export function ObsidianSheet({
           left: inset,
           right: inset,
           bottom,
-          maxHeight: `calc(${String(OBSIDIAN_SHEET_MAX_FRACTION * 100)}dvh - ${inset} - env(safe-area-inset-bottom, 0px) - var(--kb-inset, 0px))`,
+          maxHeight: `calc(${String(OBSIDIAN_SHEET_MAX_FRACTION * 100)}dvh - ${inset} - var(--kb-inset, 0px))`,
           zIndex: z + 1,
           willChange: "transform",
           contain: "layout paint",
@@ -292,22 +297,18 @@ export function ObsidianSheet({
           flexDirection: "column",
           overflow: "hidden",
           borderRadius: `${String(OBSIDIAN_SHEET_RADIUS_PX)}px`,
-          border: 1,
-          borderColor: "divider",
+          border: 0,
           bgcolor: (t) =>
             alpha(
               t.palette.background.paper,
-              t.palette.mode === "dark" ? 0.88 : 0.92,
+              t.palette.mode === "dark" ? 0.82 : 0.9,
             ),
-          backgroundImage: (t) =>
-            `linear-gradient(180deg, ${
-              alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.07 : 0.38)
-            } 0%, transparent 72px)`,
-          backdropFilter: "blur(40px) saturate(180%)",
-          WebkitBackdropFilter: "blur(40px) saturate(180%)",
+          backgroundImage: "none",
+          backdropFilter: "blur(36px) saturate(160%)",
+          WebkitBackdropFilter: "blur(36px) saturate(160%)",
           boxShadow: (t) =>
-            `0 18px 48px ${
-              alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.48 : 0.18)
+            `0 12px 40px ${
+              alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.42 : 0.16)
             }`,
           outline: "none",
           transformOrigin: "center bottom",
@@ -325,8 +326,8 @@ export function ObsidianSheet({
             touchAction: "none",
             cursor: "grab",
             userSelect: "none",
-            pt: 0.75,
-            pb: title == null ? 0.25 : 0,
+            pt: 0.5,
+            pb: title == null ? 0 : 0,
           }}
         >
           <Box
@@ -340,17 +341,17 @@ export function ObsidianSheet({
             <Box
               sx={{
                 width: 36,
-                height: 5,
-                borderRadius: 3,
+                height: 4,
+                borderRadius: 2,
                 bgcolor: "text.disabled",
-                opacity: 0.72,
+                opacity: 0.55,
               }}
             />
           </Box>
           {title == null ? null : (
             <Typography
               variant="subtitle1"
-              sx={{ fontWeight: 700, px: 2, pb: 0.75, pt: 0.25 }}
+              sx={{ fontWeight: 700, px: 2.25, pb: 0.5, pt: 0.125 }}
             >
               {title}
             </Typography>
@@ -363,8 +364,8 @@ export function ObsidianSheet({
             overflowY: "auto",
             WebkitOverflowScrolling: "touch",
             overscrollBehavior: "contain",
-            px: 2,
-            pb: actions == null ? 1.25 : 0.5,
+            px: 2.25,
+            pb: actions == null ? SAFE_INSIDE : 0.75,
             "[data-detent-moving] &": { transform: "none" },
           }}
         >
@@ -375,14 +376,40 @@ export function ObsidianSheet({
             sx={{
               flexShrink: 0,
               display: "flex",
-              justifyContent: "flex-end",
-              flexWrap: "wrap",
-              gap: 1,
-              px: 2,
-              pt: 1,
-              pb: 1.25,
+              flexDirection: "column",
+              alignItems: "stretch",
+              px: 0,
+              pt: 0,
+              pb: SAFE_INSIDE,
               borderTop: 1,
               borderColor: "divider",
+              "& > *": {
+                width: "100%",
+                minHeight: 48,
+                justifyContent: "flex-start",
+                borderRadius: 0,
+                px: 2.25,
+                py: 1.25,
+                textTransform: "none",
+                fontWeight: 500,
+                boxShadow: "none",
+              },
+              "& > .MuiButton-contained, & > .MuiButton-contained:hover": {
+                bgcolor: "transparent",
+                color: "primary.main",
+              },
+              "& > .MuiButton-containedError, & > .MuiButton-containedError:hover": {
+                bgcolor: "transparent",
+                color: "error.main",
+              },
+              "& > .MuiButton-containedWarning, & > .MuiButton-containedWarning:hover": {
+                bgcolor: "transparent",
+                color: "warning.main",
+              },
+              "& > * + *": {
+                borderTop: 1,
+                borderColor: "divider",
+              },
             }}
           >
             {actions}

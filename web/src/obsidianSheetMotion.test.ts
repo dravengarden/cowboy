@@ -28,7 +28,7 @@ Deno.test("compact sheet settle matches the Obsidian/iOS drawer cubic", () => {
   assert(drawerMotion.includes(`"${OBSIDIAN_SHEET_SETTLE_EASING}"`));
   assertEquals(OBSIDIAN_SHEET_SETTLE_MS, 240);
   assertEquals(OBSIDIAN_SHEET_INSET_PX, 8);
-  assertEquals(OBSIDIAN_SHEET_RADIUS_PX, 16);
+  assertEquals(OBSIDIAN_SHEET_RADIUS_PX, 18);
   assertEquals(OBSIDIAN_SHEET_MAX_FRACTION, 0.88);
   assertEquals(OBSIDIAN_SHEET_CLOSED_SCALE, 0.96);
   assertEquals(OBSIDIAN_SHEET_SCRIM_MAX, 0.32);
@@ -58,4 +58,12 @@ Deno.test("phone sheets use the compact Obsidian card, not a floating footer pad
   assertEquals(modalSource.includes("footerOverlay"), false);
   assertEquals(modalSource.includes("calc(76px"), false);
   assertEquals(modalSource.includes("MobileSheetDismiss"), false);
+  // Home indicator is inside the card. Lifting the whole sheet by
+  // safe-area would float it off the bottom, unlike Obsidian.
+  assertEquals(
+    modalSource.includes("calc(${inset} + env(safe-area-inset-bottom"),
+    false,
+  );
+  assert(modalSource.includes("SAFE_INSIDE"));
+  assert(modalSource.includes("calc(${inset} + var(--kb-inset, 0px))"));
 });
