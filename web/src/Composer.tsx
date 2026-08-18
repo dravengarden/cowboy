@@ -1098,6 +1098,14 @@ export function ComposerWorkspace({
       releaseMobileComposerFocus();
     });
   }, [desktop]);
+  // Queue/Draft row taps are a fresh writing gesture. Delivery and hide-keyboard
+  // latch the compact surface so a lagging visualViewport cannot resurrect the
+  // empty primary card; that latch must not also freeze the pending editor in
+  // its compact "N Drafts Editing" card after iOS has already raised the keyboard.
+  const resumeMobileKeyboardSurface = useCallback((): void => {
+    clearMobileKeyboardDismissed();
+    setMobileKeyboardDismissed(false);
+  }, []);
   const submitWithFeedback = useCallback((onSucceeded?: () => void): void => {
     if (preparing) return;
     void (async () => {
@@ -1981,6 +1989,7 @@ export function ComposerWorkspace({
               commands={(): AvailableCommand[] => availableCommands}
               unbounded
               onEditingChange={onMobileQueuedEditingChange}
+              onResumeKeyboardSurface={resumeMobileKeyboardSurface}
             />
           )}
           {/* Drafts: parked messages the user holds + activates on demand. */}
@@ -1995,6 +2004,7 @@ export function ComposerWorkspace({
               commands={(): AvailableCommand[] => availableCommands}
               unbounded
               onEditingChange={onMobileDraftEditingChange}
+              onResumeKeyboardSurface={resumeMobileKeyboardSurface}
               // Only offer "move" when there's somewhere to move to.
               onMoveDraft={otherSessions.length > 0
                 ? (id: string): void => setMoveSrcId(id)
@@ -3979,6 +3989,7 @@ function PendingPanel({
   onMoveDraft,
   onScheduleDraft,
   onEditingChange,
+  onResumeKeyboardSurface,
   unbounded,
 }: {
   desktop: boolean;
@@ -4000,6 +4011,9 @@ function PendingPanel({
   /** Mobile parent projection used to yield the ordinary composer while this
    *  panel owns the only active writing surface. */
   onEditingChange?: ((editing: boolean) => void) | undefined;
+  /** Clear the compact-surface latch so a Queue/Draft tap can own the
+   *  keyboard-up two-track chrome after delivery or hide-keyboard. */
+  onResumeKeyboardSurface?: (() => void) | undefined;
   /** Rendered inside the composer's SHARED queue+drafts scroll region, so this
    *  panel must NOT apply its own maxHeight/overflow — nesting scrollers would
    *  trap the gesture. The outer region owns the cap + scroll. */
@@ -4743,6 +4757,7 @@ function PendingPanel({
                         commands={commands}
                         editing={editingId === m.id}
                         keyboardOpen={keyboardOpen}
+                        onResumeKeyboardSurface={onResumeKeyboardSurface}
                         onEdit={(): void => {
                           setReordering(false);
                           setEditingId(m.id);
@@ -4846,6 +4861,7 @@ function PendingRow({
   commands,
   editing,
   keyboardOpen,
+  onResumeKeyboardSurface,
   onEdit,
   onEditDone,
   onEditController,
@@ -4861,6 +4877,7 @@ function PendingRow({
   editing: boolean;
   /** Panel-owned software-keyboard state, shared by every row. */
   keyboardOpen: boolean;
+  onResumeKeyboardSurface?: (() => void) | undefined;
   onEdit: () => void;
   onEditDone: () => void;
   onEditController: (controller: PendingEditController | null) => void;
@@ -4974,6 +4991,12 @@ function PendingRow({
     // same gesture directly to it. This also arms UIKit's native paste/select
     // recognizer; a hidden keyboard claim or rAF focus cannot do that.
     if (touchInput) {
+      // The originating tap is the same "fresh editor interaction" the primary
+      // card uses to clear the compact latch. A transient visualViewport close
+      // during the focus handoff must not re-latch Hide/delivery and leave this
+      // row stuck as "N Drafts Editing" after the keyboard is already up.
+      beginMobileEditorFocusTransfer();
+      onResumeKeyboardSurface?.();
       flushSync(() => {
         setDraft(seedText);
         editTextRef.current = seedText;
@@ -5448,6 +5471,8 @@ function PendingRow({
             : undefined}
           sx={{
             position: "relative",
+            display: "flex",
+            flexDirection: "column",
             overflow: "hidden",
             ...(desktop ? { p: 0.75 } : {
               borderRadius: mobileComposerPanelFrameSx.borderRadius,
@@ -5455,8 +5480,30 @@ function PendingRow({
               borderColor: (theme) => alpha(theme.palette.primary.main, 0.42),
               transition:
                 `border-color ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, background-color ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, box-shadow ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}`,
-              "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within)":
-                mobileFocusedComposerSurfaceSx,
+              // Match the primary card: visualViewport is the keyboard authority.
+              // Do not wait for :focus-within — iOS can move DOM focus to body
+              // while the keyboard and caret stay up.
+              "&[data-mobile-keyboard-open='true']": {
+                ...mobileFocusedComposerSurfaceSx,
+                backgroundImage: "none",
+              },
+              "&[data-mobile-keyboard-open='true'] [data-mobile-editor-area]": {
+                bgcolor: mobileFocusedComposerFill,
+                backgroundImage: "none",
+                flex: "0 1 auto",
+                minHeight: MOBILE_COMPOSER_INPUT_EDITOR_MIN_H,
+                maxHeight: "min(42dvh, 22rem)",
+                overflow: "hidden",
+              },
+              "&[data-mobile-keyboard-open='true'] [data-mobile-editor-area] .cm-theme-none, &[data-mobile-keyboard-open='true'] [data-mobile-editor-area] .cm-editor, &[data-mobile-keyboard-open='true'] [data-mobile-editor-area] .cm-scroller, &[data-mobile-keyboard-open='true'] [data-mobile-editor-area] .cm-content":
+                {
+                  bgcolor: mobileFocusedComposerFill,
+                  backgroundImage: "none",
+                  WebkitOverflowScrolling: "auto",
+                },
+              "& [data-mobile-composer-accessory]": {
+                flexShrink: 0,
+              },
             }),
           }}
           onKeyDownCapture={desktop
@@ -5494,7 +5541,19 @@ function PendingRow({
               ONE editor is mounted at a time (shared `draft`, no uncontrolled desync). */
           }
           {!overlayOpen && (
-            <>
+            <Box
+              data-mobile-editor-area={touchInput ? "true" : undefined}
+              onPointerDown={touchInput
+                ? (): void => {
+                  onResumeKeyboardSurface?.();
+                }
+                : undefined}
+              sx={{
+                display: "flex",
+                flexDirection: "column",
+                minHeight: 0,
+              }}
+            >
               {touchInput && editTrayAttachments.length > 0 && (
                 <AttachmentPreviews
                   attachments={editTrayAttachments}
@@ -5530,7 +5589,7 @@ function PendingRow({
                   return true;
                 }}
               />
-            </>
+            </Box>
           )}
           {!overlayOpen &&
             (desktop ? desktopEditBar : (

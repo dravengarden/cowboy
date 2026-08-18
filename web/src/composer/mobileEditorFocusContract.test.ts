@@ -1111,6 +1111,65 @@ Deno.test("successful mobile delivery latches the compact surface closed until a
   );
 });
 
+Deno.test("queue and draft edit taps reopen the keyboard-up two-track chrome", () => {
+  const pendingStart = composerSource.indexOf("if (keyboardBoundEditing) {");
+  const pendingEnd = composerSource.indexOf(
+    "// Secondary actions",
+    pendingStart,
+  );
+  const pending = composerSource.slice(pendingStart, pendingEnd);
+  const beginEditStart = composerSource.indexOf("const beginEdit = (): void => {");
+  const beginEdit = composerSource.slice(
+    beginEditStart,
+    composerSource.indexOf("const pendingEditTap", beginEditStart),
+  );
+
+  assertEquals(pendingStart >= 0 && pendingEnd > pendingStart, true);
+  assertEquals(beginEditStart >= 0, true);
+  assertEquals(
+    composerSource.includes(
+      "const resumeMobileKeyboardSurface = useCallback((): void => {\n    clearMobileKeyboardDismissed();\n    setMobileKeyboardDismissed(false);",
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "onResumeKeyboardSurface={resumeMobileKeyboardSurface}",
+    ),
+    true,
+  );
+  assertEquals(beginEdit.includes("beginMobileEditorFocusTransfer();"), true);
+  assertEquals(beginEdit.includes("onResumeKeyboardSurface?.();"), true);
+  assertEquals(
+    pending.includes(
+      'data-mobile-editor-area={touchInput ? "true" : undefined}',
+    ),
+    true,
+  );
+  assertEquals(
+    pending.includes("onResumeKeyboardSurface?.();"),
+    true,
+  );
+  assertEquals(
+    pending.includes(
+      '"& [data-mobile-composer-accessory]": {\n                flexShrink: 0,',
+    ),
+    true,
+  );
+  assertEquals(
+    pending.includes(
+      "\"&[data-mobile-keyboard-open='true']\": {\n                ...mobileFocusedComposerSurfaceSx",
+    ),
+    true,
+  );
+  assertEquals(
+    pending.includes(
+      "\"&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within)\":\n                mobileFocusedComposerSurfaceSx",
+    ),
+    false,
+  );
+});
+
 Deno.test("pending kebab menus pin to the tap instead of a live button node", () => {
   assertEquals(composerSource.includes('anchorReference="anchorPosition"'), true);
   assertEquals(composerSource.includes("disableScrollLock"), true);

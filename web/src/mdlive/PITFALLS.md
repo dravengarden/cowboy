@@ -1911,5 +1911,13 @@ Desktop Vim + IME checks:
     Latch `mobileKeyboardDismissed` before blurring on authoritative success and
     do not clear that latch merely because the stale `keyboardOpen` signal stays
     true. Only a fresh pointer interaction in the editor may reopen the focused
-    surface. This keeps a sent, empty composer content-tight without changing
-    UIKit focus, paste, selection, or IME ownership.
+    surface. Queue and Draft row taps are that same fresh interaction: clear the
+    latch in `beginEdit` and on the pending editor-area pointer, and arm the
+    focus-transfer window so a transient visualViewport close during the handoff
+    cannot freeze the row as "N Drafts Editing" after the keyboard is already
+    up. The pending card is a flex column that pins
+    `MobileComposerAccessoryDock` and caps the editor/preview area so a tall
+    image cannot clip the two-track chrome. Apply the focused surface whenever
+    the measured keyboard is open, not only under `:focus-within`. This keeps a
+    sent, empty composer content-tight without changing UIKit focus, paste,
+    selection, or IME ownership.
