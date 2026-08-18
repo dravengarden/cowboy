@@ -11,6 +11,8 @@ async function readAuthSources(): Promise<string> {
     "ProductLoginPage.tsx",
     "ProductAccountMenu.tsx",
     "ProductTokensPanel.tsx",
+    "ProductPasskeysPanel.tsx",
+    "PasskeyReauthLock.tsx",
   ];
   const chunks = await Promise.all(
     names.map((name) => Deno.readTextFile(new URL(name, authDir))),
@@ -98,8 +100,8 @@ Deno.test("desktop can sign out through authApi without importing store", async 
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
   const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
-  assert(sw.includes('const VERSION = "cowboy-v1406"'));
-  const authStart = sw.indexOf('if (url.pathname.startsWith("/api/auth/"))');
+  assert(sw.includes('const VERSION = "cowboy-v1416"'));
+  const authStart = sw.indexOf('url.pathname.startsWith("/api/auth/")');
   const authBranch = sw.slice(authStart, sw.indexOf("return;", authStart) + "return;".length);
   assert(authBranch.includes("event.respondWith(fetch(request))"));
   assertEquals(authBranch.includes("caches."), false);

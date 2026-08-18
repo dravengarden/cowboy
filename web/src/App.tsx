@@ -228,6 +228,7 @@ import {
     type ControlCenterTab,
 } from "./desktop/controlCenterTabs";
 import { ProductAccountMenu } from "./auth/ProductAccountMenu";
+import { ProductPasskeysPanel } from "./auth/ProductPasskeysPanel";
 import { ProductTokensPanel } from "./auth/ProductTokensPanel";
 import {
     sessionNotificationsMuted,
@@ -5713,6 +5714,7 @@ function SettingsShell({
                     onChange={changeMobileSettingsSection}
                 >
                     <ProductTokensPanel />
+                    <ProductPasskeysPanel />
                     <ProductAccountMenu />
                 </MobileSettingsRoute>
             </Stack>

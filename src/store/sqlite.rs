@@ -102,6 +102,50 @@ struct SqliteProductApiTokenRow {
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
+#[derive(sqlx::FromRow)]
+struct SqliteUserPasskeyRow {
+    id: String,
+    user_id: String,
+    credential_id: String,
+    nickname: String,
+    passkey_json: String,
+    created_at_ms: i64,
+    last_used_at_ms: Option<i64>,
+}
+
+impl SqliteUserPasskeyRow {
+    fn into_passkey(self) -> crate::passkey::UserPasskey {
+        crate::passkey::UserPasskey {
+            id: self.id,
+            user_id: self.user_id,
+            credential_id: self.credential_id,
+            nickname: self.nickname,
+            passkey_json: self.passkey_json,
+            created_at_ms: self.created_at_ms,
+            last_used_at_ms: self.last_used_at_ms,
+        }
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(sqlx::FromRow)]
+struct SqlitePasskeyPolicyRow {
+    passkey_reauth_enabled: i64,
+    last_step_up_at_ms: Option<i64>,
+    passkey_count: i64,
+}
+
+impl SqlitePasskeyPolicyRow {
+    fn into_policy(self) -> crate::passkey::PasskeyPolicy {
+        crate::passkey::PasskeyPolicy {
+            enabled: self.passkey_reauth_enabled != 0,
+            last_step_up_at_ms: self.last_step_up_at_ms,
+            passkey_count: u32::try_from(self.passkey_count.max(0)).unwrap_or(0),
+        }
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
 impl From<SqliteProductUserRow> for ProductUser {
     fn from(row: SqliteProductUserRow) -> Self {
         Self {
@@ -2624,6 +2668,117 @@ impl SqliteStorage {
         .await
         .with_context(|| format!("TOUCH SQLite user API token {token_id}"))?;
         Ok(result.rows_affected())
+    }
+
+    pub(super) async fn list_user_passkeys(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<crate::passkey::UserPasskey>> {
+        let rows = sqlx::query_as::<_, SqliteUserPasskeyRow>(
+            "SELECT id, user_id, credential_id, nickname, passkey_json, created_at_ms, \
+             last_used_at_ms FROM user_passkeys WHERE user_id = ?1 ORDER BY created_at_ms",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .with_context(|| format!("SELECT SQLite user passkeys for {user_id}"))?;
+        Ok(rows
+            .into_iter()
+            .map(SqliteUserPasskeyRow::into_passkey)
+            .collect())
+    }
+
+    pub(super) async fn insert_user_passkey(
+        &self,
+        passkey: &crate::passkey::UserPasskey,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO user_passkeys (id, user_id, credential_id, nickname, passkey_json, \
+             created_at_ms, last_used_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )
+        .bind(&passkey.id)
+        .bind(&passkey.user_id)
+        .bind(&passkey.credential_id)
+        .bind(&passkey.nickname)
+        .bind(&passkey.passkey_json)
+        .bind(passkey.created_at_ms)
+        .bind(passkey.last_used_at_ms)
+        .execute(&self.pool)
+        .await
+        .context("INSERT SQLite user passkey")?;
+        Ok(())
+    }
+
+    pub(super) async fn delete_user_passkey(&self, user_id: &str, passkey_id: &str) -> Result<u64> {
+        let result = sqlx::query("DELETE FROM user_passkeys WHERE id = ?1 AND user_id = ?2")
+            .bind(passkey_id)
+            .bind(user_id)
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("DELETE SQLite user passkey {passkey_id}"))?;
+        Ok(result.rows_affected())
+    }
+
+    pub(super) async fn update_user_passkey(
+        &self,
+        user_id: &str,
+        passkey_id: &str,
+        passkey_json: &str,
+        now_ms: i64,
+    ) -> Result<()> {
+        let result = sqlx::query(
+            "UPDATE user_passkeys SET passkey_json = ?3, last_used_at_ms = ?4 \
+             WHERE id = ?1 AND user_id = ?2",
+        )
+        .bind(passkey_id)
+        .bind(user_id)
+        .bind(passkey_json)
+        .bind(now_ms)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPDATE SQLite user passkey {passkey_id}"))?;
+        anyhow::ensure!(result.rows_affected() == 1, "passkey not found");
+        Ok(())
+    }
+
+    pub(super) async fn user_passkey_policy(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<crate::passkey::PasskeyPolicy>> {
+        let row = sqlx::query_as::<_, SqlitePasskeyPolicyRow>(
+            "SELECT passkey_reauth_enabled, last_step_up_at_ms, \
+             (SELECT COUNT(*) FROM user_passkeys WHERE user_id = ?1) AS passkey_count \
+             FROM users WHERE id = ?1",
+        )
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .with_context(|| format!("SELECT SQLite passkey policy {user_id}"))?;
+        Ok(row.map(SqlitePasskeyPolicyRow::into_policy))
+    }
+
+    pub(super) async fn set_user_passkey_reauth(&self, user_id: &str, enabled: bool) -> Result<()> {
+        let result = sqlx::query(
+            "UPDATE users SET passkey_reauth_enabled = ?2, updated_at_ms = ?3 WHERE id = ?1",
+        )
+        .bind(user_id)
+        .bind(i64::from(enabled))
+        .bind(now_ms())
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPDATE SQLite passkey reauth {user_id}"))?;
+        anyhow::ensure!(result.rows_affected() == 1, "user {user_id} not found");
+        Ok(())
+    }
+
+    pub(super) async fn touch_user_last_step_up(&self, user_id: &str, now_ms: i64) -> Result<()> {
+        sqlx::query("UPDATE users SET last_step_up_at_ms = ?2 WHERE id = ?1")
+            .bind(user_id)
+            .bind(now_ms)
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("TOUCH SQLite last step-up {user_id}"))?;
+        Ok(())
     }
 }
 

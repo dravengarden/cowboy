@@ -1609,6 +1609,7 @@ struct ProductAuthState {
     persistence_health: Option<Arc<PersistenceHealth>>,
     runtime_router: Option<Arc<RuntimeRouter>>,
     provider_catalog: Option<Arc<crate::provider_catalog::ProviderCatalog>>,
+    passkeys: Arc<crate::passkey::PasskeyCeremonies>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1640,6 +1641,12 @@ struct AdminSetPasswordRequest {
 struct ProductMe {
     account: String,
     role: crate::admin::AdminRole,
+    #[serde(default)]
+    passkey_count: u32,
+    #[serde(default)]
+    passkey_reauth_enabled: bool,
+    #[serde(default)]
+    passkey_reauth_required: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1660,6 +1667,25 @@ fn product_auth_router(state: ProductAuthState) -> Router {
             get(api_auth_list_tokens).post(api_auth_create_token),
         )
         .route("/api/auth/tokens/{id}", delete(api_auth_delete_token))
+        .route("/api/auth/passkeys", get(api_auth_list_passkeys))
+        .route(
+            "/api/auth/passkeys/register/options",
+            post(api_auth_passkey_register_options),
+        )
+        .route(
+            "/api/auth/passkeys/register/complete",
+            post(api_auth_passkey_register_complete),
+        )
+        .route(
+            "/api/auth/passkeys/assert/options",
+            post(api_auth_passkey_assert_options),
+        )
+        .route(
+            "/api/auth/passkeys/assert/complete",
+            post(api_auth_passkey_assert_complete),
+        )
+        .route("/api/auth/passkeys/reauth", put(api_auth_passkey_reauth))
+        .route("/api/auth/passkeys/{id}", delete(api_auth_delete_passkey))
         .route(
             "/api/admin/users",
             get(api_admin_users).post(api_admin_create_user),
@@ -2291,7 +2317,27 @@ fn product_me(hub: &Hub, username: &str) -> ProductMe {
     ProductMe {
         account: username.to_owned(),
         role: permission_policy(hub).role_for(username),
+        passkey_count: 0,
+        passkey_reauth_enabled: true,
+        passkey_reauth_required: false,
     }
+}
+
+async fn product_me_for_user(
+    store: Option<&Store>,
+    hub: &Hub,
+    user: &crate::store::ProductUser,
+) -> ProductMe {
+    let mut me = product_me(hub, &user.username);
+    let Some(store) = store else {
+        return me;
+    };
+    if let Ok(Some(policy)) = store.user_passkey_policy(&user.id).await {
+        me.passkey_count = policy.passkey_count;
+        me.passkey_reauth_enabled = policy.enabled;
+        me.passkey_reauth_required = policy.reauth_required(auth_now_ms());
+    }
+    me
 }
 
 async fn apply_rate_limit(state: &ProductAuthState, username: &str, ip: &str) {
@@ -2368,6 +2414,9 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
         };
     }
     if path.starts_with("/api/auth/tokens/") {
+        return RouteAuth::Product;
+    }
+    if path.starts_with("/api/auth/passkeys") {
         return RouteAuth::Product;
     }
     if path.starts_with("/api/machine/") {
@@ -2739,6 +2788,7 @@ async fn issue_product_session(
     {
         return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
     }
+    let _ = store.touch_user_last_step_up(&user.id, now).await;
     (
         [(
             header::SET_COOKIE,
@@ -2747,7 +2797,7 @@ async fn issue_product_session(
                 crate::product_auth::request_is_https(headers),
             ),
         )],
-        Json(product_me(&state.hub, &user.username)),
+        Json(product_me_for_user(Some(store), &state.hub, user).await),
     )
         .into_response()
 }
@@ -2778,8 +2828,10 @@ async fn api_auth_status(
         "registration": registration_policy(&state.hub).public_status(),
     });
     if let Some(user) = product_user_from_cookie(&state, &headers).await {
-        body["me"] =
-            serde_json::to_value(product_me(&state.hub, &user.username)).unwrap_or_default();
+        body["me"] = serde_json::to_value(
+            product_me_for_user(state.store.as_ref(), &state.hub, &user).await,
+        )
+        .unwrap_or_default();
     }
     Json(body)
 }
@@ -2989,9 +3041,300 @@ async fn api_auth_logout(
 }
 
 async fn api_auth_me(State(state): State<ProductAuthState>, headers: HeaderMap) -> Response {
-    match resolve_product_principal(state.store.as_ref(), &state.hub, &headers).await {
-        Some(principal) => Json(product_me(&state.hub, &principal.username)).into_response(),
-        None => StatusCode::UNAUTHORIZED.into_response(),
+    let Some(principal) =
+        resolve_product_principal(state.store.as_ref(), &state.hub, &headers).await
+    else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let user = match state.store.as_ref() {
+        Some(store) => store.user_by_id(&principal.user_id).await.ok().flatten(),
+        None => None,
+    };
+    match user {
+        Some(user) => {
+            Json(product_me_for_user(state.store.as_ref(), &state.hub, &user).await).into_response()
+        }
+        None => Json(product_me(&state.hub, &principal.username)).into_response(),
+    }
+}
+
+async fn require_product_user(
+    state: &ProductAuthState,
+    headers: &HeaderMap,
+) -> Result<crate::store::ProductUser, Response> {
+    product_user_from_cookie(state, headers)
+        .await
+        .ok_or_else(|| StatusCode::UNAUTHORIZED.into_response())
+}
+
+async fn api_auth_list_passkeys(
+    State(state): State<ProductAuthState>,
+    headers: HeaderMap,
+) -> Response {
+    let user = match require_product_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(store) = durable_store(&state.store) else {
+        return missing_store();
+    };
+    match store.list_user_passkeys(&user.id).await {
+        Ok(passkeys) => Json(serde_json::json!({
+            "passkeys": passkeys
+                .into_iter()
+                .map(|passkey| crate::passkey::PasskeyView {
+                    id: passkey.id,
+                    nickname: passkey.nickname,
+                    created_at_ms: passkey.created_at_ms,
+                    last_used_at_ms: passkey.last_used_at_ms,
+                })
+                .collect::<Vec<_>>(),
+            "reauth_after_ms": crate::passkey::PASSKEY_REAUTH_AFTER_MS,
+        }))
+        .into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+async fn api_auth_passkey_register_options(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(request): Json<crate::passkey::RegisterStartRequest>,
+) -> Response {
+    let peer = peer_addr(peer);
+    if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
+        return rejected;
+    }
+    let user = match require_product_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let nickname = match crate::passkey::normalize_nickname(&request.nickname) {
+        Ok(nickname) => nickname,
+        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    };
+    let Some(store) = durable_store(&state.store) else {
+        return missing_store();
+    };
+    let existing = match store.list_user_passkeys(&user.id).await {
+        Ok(existing) => existing,
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+        }
+    };
+    let webauthn = match crate::passkey::webauthn_for_request(&headers) {
+        Ok(webauthn) => webauthn,
+        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    };
+    match state.passkeys.start_registration(
+        &user.id,
+        &user.username,
+        nickname,
+        &existing,
+        &webauthn,
+    ) {
+        Ok((challenge_id, public_key)) => Json(serde_json::json!({
+            "challenge_id": challenge_id,
+            "publicKey": public_key,
+        }))
+        .into_response(),
+        Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    }
+}
+
+async fn api_auth_passkey_register_complete(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(request): Json<crate::passkey::RegisterCompleteRequest>,
+) -> Response {
+    let peer = peer_addr(peer);
+    if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
+        return rejected;
+    }
+    let user = match require_product_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(store) = durable_store(&state.store) else {
+        return missing_store();
+    };
+    let webauthn = match crate::passkey::webauthn_for_request(&headers) {
+        Ok(webauthn) => webauthn,
+        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    };
+    let (nickname, credential_id, passkey_json) = match state.passkeys.finish_registration(
+        &user.id,
+        &request.challenge_id,
+        request.credential,
+        &webauthn,
+    ) {
+        Ok(created) => created,
+        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    };
+    let now = auth_now_ms();
+    let passkey = crate::passkey::UserPasskey {
+        id: match crate::product_auth::new_user_id() {
+            Ok(id) => id,
+            Err(error) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+            }
+        },
+        user_id: user.id.clone(),
+        credential_id,
+        nickname,
+        passkey_json,
+        created_at_ms: now,
+        last_used_at_ms: Some(now),
+    };
+    if let Err(error) = store.insert_user_passkey(&passkey).await {
+        return (StatusCode::CONFLICT, error.to_string()).into_response();
+    }
+    let _ = store.touch_user_last_step_up(&user.id, now).await;
+    Json(crate::passkey::PasskeyView {
+        id: passkey.id,
+        nickname: passkey.nickname,
+        created_at_ms: passkey.created_at_ms,
+        last_used_at_ms: passkey.last_used_at_ms,
+    })
+    .into_response()
+}
+
+async fn api_auth_passkey_assert_options(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    let peer = peer_addr(peer);
+    if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
+        return rejected;
+    }
+    let user = match require_product_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(store) = durable_store(&state.store) else {
+        return missing_store();
+    };
+    let existing = match store.list_user_passkeys(&user.id).await {
+        Ok(existing) => existing,
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+        }
+    };
+    let webauthn = match crate::passkey::webauthn_for_request(&headers) {
+        Ok(webauthn) => webauthn,
+        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    };
+    match state
+        .passkeys
+        .start_assertion(&user.id, &existing, &webauthn)
+    {
+        Ok((challenge_id, public_key)) => Json(serde_json::json!({
+            "challenge_id": challenge_id,
+            "publicKey": public_key,
+        }))
+        .into_response(),
+        Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    }
+}
+
+async fn api_auth_passkey_assert_complete(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(request): Json<crate::passkey::AssertCompleteRequest>,
+) -> Response {
+    let peer = peer_addr(peer);
+    if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
+        return rejected;
+    }
+    let user = match require_product_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(store) = durable_store(&state.store) else {
+        return missing_store();
+    };
+    let existing = match store.list_user_passkeys(&user.id).await {
+        Ok(existing) => existing,
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+        }
+    };
+    let webauthn = match crate::passkey::webauthn_for_request(&headers) {
+        Ok(webauthn) => webauthn,
+        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    };
+    let (passkey_id, passkey_json) = match state.passkeys.finish_assertion(
+        &user.id,
+        &request.challenge_id,
+        request.credential,
+        &existing,
+        &webauthn,
+    ) {
+        Ok(done) => done,
+        Err(error) => return (StatusCode::UNAUTHORIZED, error.to_string()).into_response(),
+    };
+    let now = auth_now_ms();
+    if let Err(error) = store
+        .update_user_passkey(&user.id, &passkey_id, &passkey_json, now)
+        .await
+    {
+        return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+    }
+    let _ = store.touch_user_last_step_up(&user.id, now).await;
+    Json(product_me_for_user(Some(store), &state.hub, &user).await).into_response()
+}
+
+async fn api_auth_passkey_reauth(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(request): Json<crate::passkey::ReauthSettingRequest>,
+) -> Response {
+    let peer = peer_addr(peer);
+    if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
+        return rejected;
+    }
+    let user = match require_product_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(store) = durable_store(&state.store) else {
+        return missing_store();
+    };
+    if let Err(error) = store
+        .set_user_passkey_reauth(&user.id, request.enabled)
+        .await
+    {
+        return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+    }
+    Json(product_me_for_user(Some(store), &state.hub, &user).await).into_response()
+}
+
+async fn api_auth_delete_passkey(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let peer = peer_addr(peer);
+    if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
+        return rejected;
+    }
+    let user = match require_product_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(store) = durable_store(&state.store) else {
+        return missing_store();
+    };
+    match store.delete_user_passkey(&user.id, &id).await {
+        Ok(0) => StatusCode::NOT_FOUND.into_response(),
+        Ok(_) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
     }
 }
 
@@ -3325,6 +3668,7 @@ async fn serve_axum(
         persistence_health: state.persistence_health.clone(),
         runtime_router: Some(state.runtime_router.clone()),
         provider_catalog: Some(state.provider_catalog.clone()),
+        passkeys: Arc::new(crate::passkey::PasskeyCeremonies::default()),
     };
 
     let app = Router::new()
@@ -11670,6 +12014,7 @@ mod product_auth_api_tests {
             persistence_health: None,
             runtime_router: None,
             provider_catalog: None,
+            passkeys: Arc::new(crate::passkey::PasskeyCeremonies::default()),
         }
     }
 
@@ -12548,6 +12893,63 @@ mod product_auth_api_tests {
             RegistrationPolicy::from_setting(hub.settings_snapshot().get(REGISTRATION_SETTING));
         assert!(policy.accepts_registration());
         assert_eq!(policy.tokens.len(), 1);
+
+        server.abort();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn passkey_viewing_lock_is_off_until_a_credential_exists() {
+        let (store, root) = test_store().await;
+        let hub = Hub::new();
+        enable_open(&hub);
+        let (base, server) = spawn_auth(auth_state(hub, Some(store))).await;
+        let origin = origin_for(&base);
+        let registered = post_json(
+            &format!("{base}/api/auth/register"),
+            &origin,
+            None,
+            serde_json::json!({
+                "account": "draven",
+                "password": "long-enough-password",
+            }),
+        )
+        .await;
+        assert_eq!(registered.status(), StatusCode::OK);
+        let cookie = cookie_header(&set_cookie(&registered, USER_SESSION_COOKIE).unwrap());
+        let me: serde_json::Value = reqwest::Client::new()
+            .get(format!("{base}/api/auth/me"))
+            .header(header::COOKIE, &cookie)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(me["passkey_count"], 0);
+        assert_eq!(me["passkey_reauth_required"], false);
+        assert_eq!(me["passkey_reauth_enabled"], true);
+
+        let listed = reqwest::Client::new()
+            .get(format!("{base}/api/auth/passkeys"))
+            .header(header::COOKIE, &cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(listed.status(), StatusCode::OK);
+        let listed_body: serde_json::Value = listed.json().await.unwrap();
+        assert_eq!(listed_body["passkeys"].as_array().unwrap().len(), 0);
+
+        let disabled = put_json(
+            &format!("{base}/api/auth/passkeys/reauth"),
+            &origin,
+            Some(&cookie),
+            serde_json::json!({ "enabled": false }),
+        )
+        .await;
+        assert_eq!(disabled.status(), StatusCode::OK);
+        let disabled_body: serde_json::Value = disabled.json().await.unwrap();
+        assert_eq!(disabled_body["passkey_reauth_enabled"], false);
 
         server.abort();
         let _ = std::fs::remove_dir_all(root);

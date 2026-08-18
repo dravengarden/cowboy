@@ -20,10 +20,12 @@ import {
   type AuthGateDecision,
   type AuthGateView,
 } from "./authStatus";
+import { PasskeyReauthLock } from "./PasskeyReauthLock";
 import { ProductLoginPage } from "./ProductLoginPage";
 
 export interface ProductAuthValue {
   me: ProductMe;
+  updateMe: (me: ProductMe) => void;
   signOut: () => Promise<void>;
 }
 
@@ -238,10 +240,16 @@ export function ProductAuthGate({
     await signOutProductSession();
   }, []);
 
+  const updateMe = useCallback((next: ProductMe): void => {
+    meRef.current = next;
+    setMe(next);
+  }, []);
+
   if (view === "ready" && me) {
     return (
-      <ProductAuthContext.Provider value={{ me, signOut }}>
+      <ProductAuthContext.Provider value={{ me, updateMe, signOut }}>
         {children}
+        <PasskeyReauthLock me={me} onUnlocked={updateMe} />
       </ProductAuthContext.Provider>
     );
   }

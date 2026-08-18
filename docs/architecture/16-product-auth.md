@@ -45,6 +45,17 @@ login), dummy verify, 12-hour `SameSite=Strict` cookie, HTTPS via the
 loopback proxy only, and rate-limited bootstrap/login. See
 [Admin](14-admin.md).
 
+## Passkeys (optional step-up)
+
+Password login stays first. After sign-in a product user may register a
+discoverable WebAuthn Passkey (`POST /api/auth/passkeys/register/*`). The
+PWA default is to lock the **view** after 15 minutes if at least one
+Passkey exists (`passkey_reauth_required` on `/api/auth/me`). Settings can
+turn that lock off (`PUT /api/auth/passkeys/reauth`). No Passkey means the
+lock never engages. The cookie remains valid; this is a viewing lock, not
+a second product login. Modeled on Cardea's password-then-Passkey /
+step-up split, implemented in-process with `webauthn-rs`.
+
 Roles reuse the serde names `owner` / `operator` / `viewer`. Product roles
 live only in `cowboy.permissions` (`role_for`); there is no `users.role`
 column. Admin roles live on `cowboy.admin.identities`.

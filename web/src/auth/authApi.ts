@@ -10,6 +10,9 @@ export interface RegistrationPublicStatus {
 export interface ProductMe {
   account: string;
   role: ProductRole;
+  passkey_count?: number;
+  passkey_reauth_enabled?: boolean;
+  passkey_reauth_required?: boolean;
 }
 
 export interface AuthStatus {
@@ -49,7 +52,15 @@ export function authStatusFromJson(value: unknown): AuthStatus | undefined {
   if (me && typeof me.account === "string" && me.account.length > 0) {
     const role = me.role;
     if (role === "owner" || role === "operator" || role === "viewer") {
-      status.me = { account: me.account, role };
+      const next: ProductMe = { account: me.account, role };
+      if (typeof me.passkey_count === "number") next.passkey_count = me.passkey_count;
+      if (typeof me.passkey_reauth_enabled === "boolean") {
+        next.passkey_reauth_enabled = me.passkey_reauth_enabled;
+      }
+      if (typeof me.passkey_reauth_required === "boolean") {
+        next.passkey_reauth_required = me.passkey_reauth_required;
+      }
+      status.me = next;
     }
   }
   return status;
@@ -157,4 +168,57 @@ export const authApi = {
     }),
   deleteToken: (id: string) =>
     readJson<{ ok: boolean }>(`/api/auth/tokens/${id}`, { method: "DELETE" }),
+  listPasskeys: () =>
+    readJson<{ passkeys: ProductPasskey[]; reauth_after_ms: number }>(
+      "/api/auth/passkeys",
+    ),
+  startPasskeyRegister: (nickname: string) =>
+    readJson<PasskeyCeremony>(
+      "/api/auth/passkeys/register/options",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ nickname }),
+      },
+    ),
+  completePasskeyRegister: (challengeId: string, credential: PublicKeyCredentialJSON) =>
+    readJson<ProductPasskey>("/api/auth/passkeys/register/complete", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ challenge_id: challengeId, credential }),
+    }),
+  startPasskeyAssert: () =>
+    readJson<PasskeyCeremony>("/api/auth/passkeys/assert/options", {
+      method: "POST",
+    }),
+  completePasskeyAssert: (challengeId: string, credential: PublicKeyCredentialJSON) =>
+    readJson<ProductMe>("/api/auth/passkeys/assert/complete", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ challenge_id: challengeId, credential }),
+    }),
+  setPasskeyReauth: (enabled: boolean) =>
+    readJson<ProductMe>("/api/auth/passkeys/reauth", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    }),
+  deletePasskey: (id: string) =>
+    readJson<{ ok: boolean }>(`/api/auth/passkeys/${id}`, { method: "DELETE" }),
 };
+
+export interface ProductPasskey {
+  id: string;
+  nickname: string;
+  created_at_ms: number;
+  last_used_at_ms?: number | null;
+}
+
+export interface PasskeyCeremony {
+  challenge_id: string;
+  publicKey: PublicKeyCredentialCreationOptionsJSON | PublicKeyCredentialRequestOptionsJSON;
+}
+
+type PublicKeyCredentialJSON = Record<string, unknown>;
+type PublicKeyCredentialCreationOptionsJSON = Record<string, unknown>;
+type PublicKeyCredentialRequestOptionsJSON = Record<string, unknown>;

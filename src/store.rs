@@ -631,6 +631,50 @@ struct ProductApiTokenRow {
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
+#[derive(sqlx::FromRow)]
+struct ProductPasskeyRow {
+    id: String,
+    user_id: String,
+    credential_id: String,
+    nickname: String,
+    passkey_json: String,
+    created_at: DateTime<Utc>,
+    last_used_at: Option<DateTime<Utc>>,
+}
+
+impl ProductPasskeyRow {
+    fn into_passkey(self) -> crate::passkey::UserPasskey {
+        crate::passkey::UserPasskey {
+            id: self.id,
+            user_id: self.user_id,
+            credential_id: self.credential_id,
+            nickname: self.nickname,
+            passkey_json: self.passkey_json,
+            created_at_ms: self.created_at.timestamp_millis(),
+            last_used_at_ms: self.last_used_at.map(|value| value.timestamp_millis()),
+        }
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(sqlx::FromRow)]
+struct ProductPasskeyPolicyRow {
+    passkey_reauth_enabled: bool,
+    last_step_up_at: Option<DateTime<Utc>>,
+    passkey_count: i64,
+}
+
+impl ProductPasskeyPolicyRow {
+    fn into_policy(self) -> crate::passkey::PasskeyPolicy {
+        crate::passkey::PasskeyPolicy {
+            enabled: self.passkey_reauth_enabled,
+            last_step_up_at_ms: self.last_step_up_at.map(|value| value.timestamp_millis()),
+            passkey_count: u32::try_from(self.passkey_count.max(0)).unwrap_or(0),
+        }
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
 impl ProductUser {
     fn from_pg(row: ProductUserRow) -> Self {
         Self {
@@ -1306,6 +1350,49 @@ impl Store {
     /// Returns when the update fails.
     pub async fn touch_user_api_token_last_used(&self, token_id: &str, now_ms: i64) -> Result<u64> {
         dispatch_storage!(self, touch_user_api_token_last_used(token_id, now_ms))
+    }
+
+    pub async fn list_user_passkeys(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<crate::passkey::UserPasskey>> {
+        dispatch_storage!(self, list_user_passkeys(user_id))
+    }
+
+    pub async fn insert_user_passkey(&self, passkey: &crate::passkey::UserPasskey) -> Result<()> {
+        dispatch_storage!(self, insert_user_passkey(passkey))
+    }
+
+    pub async fn delete_user_passkey(&self, user_id: &str, passkey_id: &str) -> Result<u64> {
+        dispatch_storage!(self, delete_user_passkey(user_id, passkey_id))
+    }
+
+    pub async fn update_user_passkey(
+        &self,
+        user_id: &str,
+        passkey_id: &str,
+        passkey_json: &str,
+        now_ms: i64,
+    ) -> Result<()> {
+        dispatch_storage!(
+            self,
+            update_user_passkey(user_id, passkey_id, passkey_json, now_ms)
+        )
+    }
+
+    pub async fn user_passkey_policy(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<crate::passkey::PasskeyPolicy>> {
+        dispatch_storage!(self, user_passkey_policy(user_id))
+    }
+
+    pub async fn set_user_passkey_reauth(&self, user_id: &str, enabled: bool) -> Result<()> {
+        dispatch_storage!(self, set_user_passkey_reauth(user_id, enabled))
+    }
+
+    pub async fn touch_user_last_step_up(&self, user_id: &str, now_ms: i64) -> Result<()> {
+        dispatch_storage!(self, touch_user_last_step_up(user_id, now_ms))
     }
 }
 
@@ -2660,6 +2747,119 @@ impl PostgresStorage {
         .await
         .with_context(|| format!("TOUCH user API token {token_id}"))?;
         Ok(result.rows_affected())
+    }
+
+    pub async fn list_user_passkeys(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<crate::passkey::UserPasskey>> {
+        let rows = sqlx::query_as::<_, ProductPasskeyRow>(
+            "SELECT id, user_id, credential_id, nickname, passkey_json, created_at, last_used_at \
+             FROM user_passkeys WHERE user_id = $1 ORDER BY created_at",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .with_context(|| format!("SELECT user passkeys for {user_id}"))?;
+        Ok(rows
+            .into_iter()
+            .map(ProductPasskeyRow::into_passkey)
+            .collect())
+    }
+
+    pub async fn insert_user_passkey(&self, passkey: &crate::passkey::UserPasskey) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO user_passkeys (id, user_id, credential_id, nickname, passkey_json, \
+             created_at, last_used_at) VALUES ( \
+             $1, $2, $3, $4, $5, to_timestamp($6::double precision / 1000), \
+             to_timestamp($7::double precision / 1000))",
+        )
+        .bind(&passkey.id)
+        .bind(&passkey.user_id)
+        .bind(&passkey.credential_id)
+        .bind(&passkey.nickname)
+        .bind(&passkey.passkey_json)
+        .bind(passkey.created_at_ms)
+        .bind(passkey.last_used_at_ms)
+        .execute(&self.pool)
+        .await
+        .context("INSERT user passkey")?;
+        Ok(())
+    }
+
+    pub async fn delete_user_passkey(&self, user_id: &str, passkey_id: &str) -> Result<u64> {
+        let result = sqlx::query("DELETE FROM user_passkeys WHERE id = $1 AND user_id = $2")
+            .bind(passkey_id)
+            .bind(user_id)
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("DELETE user passkey {passkey_id}"))?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn update_user_passkey(
+        &self,
+        user_id: &str,
+        passkey_id: &str,
+        passkey_json: &str,
+        now_ms: i64,
+    ) -> Result<()> {
+        let result = sqlx::query(
+            "UPDATE user_passkeys SET passkey_json = $3, \
+             last_used_at = to_timestamp($4::double precision / 1000) \
+             WHERE id = $1 AND user_id = $2",
+        )
+        .bind(passkey_id)
+        .bind(user_id)
+        .bind(passkey_json)
+        .bind(now_ms)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPDATE user passkey {passkey_id}"))?;
+        anyhow::ensure!(result.rows_affected() == 1, "passkey not found");
+        Ok(())
+    }
+
+    pub async fn user_passkey_policy(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<crate::passkey::PasskeyPolicy>> {
+        let row = sqlx::query_as::<_, ProductPasskeyPolicyRow>(
+            "SELECT passkey_reauth_enabled, last_step_up_at, \
+             (SELECT COUNT(*) FROM user_passkeys WHERE user_id = $1)::bigint AS passkey_count \
+             FROM users WHERE id = $1",
+        )
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .with_context(|| format!("SELECT passkey policy {user_id}"))?;
+        Ok(row.map(ProductPasskeyPolicyRow::into_policy))
+    }
+
+    pub async fn set_user_passkey_reauth(&self, user_id: &str, enabled: bool) -> Result<()> {
+        let result = sqlx::query(
+            "UPDATE users SET passkey_reauth_enabled = $2, updated_at = now() WHERE id = $1",
+        )
+        .bind(user_id)
+        .bind(enabled)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPDATE passkey reauth {user_id}"))?;
+        anyhow::ensure!(result.rows_affected() == 1, "user {user_id} not found");
+        Ok(())
+    }
+
+    pub async fn touch_user_last_step_up(&self, user_id: &str, now_ms: i64) -> Result<()> {
+        sqlx::query(
+            "UPDATE users SET last_step_up_at = to_timestamp($2::double precision / 1000) \
+             WHERE id = $1",
+        )
+        .bind(user_id)
+        .bind(now_ms)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("TOUCH last step-up {user_id}"))?;
+        Ok(())
     }
 }
 
