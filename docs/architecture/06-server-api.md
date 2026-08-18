@@ -82,6 +82,14 @@ Rust enums and fails tests when their serialized discriminants differ from the
 TypeScript unions; representative field shapes remain covered by Rust serde and
 TypeScript checks. See [Core — the Hub](02-core-hub.md) for the full catalogs.
 
+Product `Outbound::Settings` is built only by `Hub::settings_for_product_clients`
+(connect bootstrap **and** the live `set_setting` broadcast). The map is an
+allow-list of `session.autoResume.default` and `session.autoResume.template`.
+Admin identities, permissions, session limits, and the registration invite
+table never ride `/ws`. `Inbound::SetSetting` is rejected unless the key is
+one of those two auto-resume keys. Admin writes persist through `Hub::set_setting`
+and still broadcast only the product allow-list.
+
 ## Background tasks
 
 `serve` spins up, alongside the HTTP server:
@@ -98,9 +106,8 @@ TypeScript checks. See [Core — the Hub](02-core-hub.md) for the full catalogs.
 
 ## Auth
 
-Browser/API access has no Cowboy login boundary; the deployed service therefore
-binds localhost and is reached through a trusted Tailscale or reverse-proxy
-boundary. Machine access is different: enrollment uses a short-lived,
-single-use token, then public-key identity authenticates outbound WSS
-connections and supports explicit revocation. Do not expose the controller's
-browser/API surface directly to the public Internet.
+Product `/ws` is still unauthenticated. Settings hygiene is already in place:
+the product Settings map is the auto-resume allow-list above, and a product
+socket cannot overwrite `cowboy.admin.identities` or other admin keys via
+`SetSetting`. Admin HTTP and product login are a separate plane; see
+[Admin](14-admin.md).

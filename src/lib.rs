@@ -10,6 +10,8 @@ mod acp;
 #[cfg(feature = "full")]
 mod acp_bridge;
 #[cfg(feature = "full")]
+mod admin;
+#[cfg(feature = "full")]
 mod agent_model;
 #[cfg(feature = "full")]
 mod agent_sink;
