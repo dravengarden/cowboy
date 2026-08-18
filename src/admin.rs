@@ -30,7 +30,9 @@ pub fn is_admin_setting_key(key: &str) -> bool {
 }
 
 pub const ADMIN_SESSION_COOKIE: &str = "cowboy_admin";
-const ADMIN_SESSION_TTL_MS: i64 = 7 * 86_400_000;
+/// Absolute admin session lifetime. Shorter than the product cookie.
+pub const ADMIN_SESSION_TTL_SECS: i64 = 12 * 3_600;
+const ADMIN_SESSION_TTL_MS: i64 = ADMIN_SESSION_TTL_SECS * 1_000;
 
 /// Synapse-shaped registration switch. The service, not the client, decides.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -400,6 +402,8 @@ impl PermissionPolicy {
 pub struct AdminAccount {
     pub account: String,
     pub role: AdminRole,
+    /// Empty when `password_hash` is an argon2id PHC string.
+    #[serde(default)]
     pub password_salt: String,
     pub password_hash: String,
     pub created_at_ms: i64,
@@ -504,7 +508,7 @@ impl AdminIdentities {
         now_ms: i64,
     ) -> Result<()> {
         let account = normalize_admin_account(&request.account)?;
-        ensure_admin_password(&request.password)?;
+        ensure_admin_password(&request.password, &account)?;
         anyhow::ensure!(
             !self
                 .accounts
@@ -512,33 +516,44 @@ impl AdminIdentities {
                 .any(|existing| existing.account == account),
             "admin account already exists"
         );
-        let mut salt = [0_u8; 16];
-        std::fs::File::open("/dev/urandom")
-            .context("opening OS randomness")?
-            .read_exact(&mut salt)
-            .context("reading OS randomness")?;
+        let password_hash = crate::product_auth::hash_password(&request.password)
+            .context("hashing admin password")?;
         self.accounts.push(AdminAccount {
             account,
             role,
-            password_salt: hex_bytes(&salt),
-            password_hash: hash_admin_password(&salt, &request.password),
+            password_salt: String::new(),
+            password_hash,
             created_at_ms: now_ms,
         });
         Ok(())
     }
 
     pub fn login(&mut self, request: &AdminCredentials, now_ms: i64) -> Result<String> {
-        let account = normalize_admin_account(&request.account)?;
-        let stored = self
+        let Ok(account) = normalize_admin_account(&request.account) else {
+            let _ = crate::product_auth::verify_unknown_user_password(&request.password);
+            anyhow::bail!("invalid admin credentials");
+        };
+        let Some(index) = self
             .accounts
             .iter()
-            .find(|existing| existing.account == account)
-            .context("invalid admin credentials")?;
-        let salt = decode_hex(&stored.password_salt).context("invalid stored password salt")?;
-        anyhow::ensure!(
-            hash_admin_password(&salt, &request.password) == stored.password_hash,
-            "invalid admin credentials"
-        );
+            .position(|existing| existing.account == account)
+        else {
+            let _ = crate::product_auth::verify_unknown_user_password(&request.password);
+            anyhow::bail!("invalid admin credentials");
+        };
+        if !verify_stored_admin_password(&self.accounts[index], &request.password) {
+            anyhow::bail!("invalid admin credentials");
+        }
+        if !is_argon2id_phc(&self.accounts[index].password_hash)
+            && let Ok(hash) = crate::product_auth::hash_password(&request.password)
+        {
+            self.accounts[index].password_salt.clear();
+            self.accounts[index].password_hash = hash;
+        }
+        self.issue_session(&account, now_ms)
+    }
+
+    fn issue_session(&mut self, account: &str, now_ms: i64) -> Result<String> {
         let mut token_bytes = [0_u8; 32];
         std::fs::File::open("/dev/urandom")
             .context("opening OS randomness")?
@@ -546,10 +561,10 @@ impl AdminIdentities {
             .context("reading OS randomness")?;
         let token = hex_bytes(&token_bytes);
         self.sessions
-            .retain(|session| session.expires_at_ms > now_ms);
+            .retain(|session| session.expires_at_ms > now_ms && session.account != account);
         self.sessions.push(AdminSessionRecord {
             token_hash: hex_sha256(token.as_bytes()),
-            account,
+            account: account.to_owned(),
             expires_at_ms: now_ms.saturating_add(ADMIN_SESSION_TTL_MS),
         });
         Ok(token)
@@ -577,12 +592,42 @@ fn normalize_admin_account(account: &str) -> Result<String> {
     Ok(account)
 }
 
-fn ensure_admin_password(password: &str) -> Result<()> {
+fn ensure_admin_password(password: &str, account: &str) -> Result<()> {
     anyhow::ensure!(
-        (8..=128).contains(&password.len()),
-        "admin password must be 8-128 characters"
+        (12..=128).contains(&password.len()),
+        "admin password must be 12-128 characters"
     );
+    anyhow::ensure!(password != account, "admin password cannot be the account");
     Ok(())
+}
+
+fn is_argon2id_phc(password_hash: &str) -> bool {
+    password_hash.starts_with("$argon2id$")
+}
+
+fn verify_stored_admin_password(account: &AdminAccount, password: &str) -> bool {
+    if is_argon2id_phc(&account.password_hash) {
+        return crate::product_auth::verify_password(password, &account.password_hash);
+    }
+    let Ok(salt) = decode_hex(&account.password_salt) else {
+        let _ = crate::product_auth::verify_unknown_user_password(password);
+        return false;
+    };
+    hashes_equal(
+        &hash_admin_password(&salt, password),
+        &account.password_hash,
+    )
+}
+
+fn hashes_equal(left: &str, right: &str) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.as_bytes()
+        .iter()
+        .zip(right.as_bytes())
+        .fold(0_u8, |acc, (a, b)| acc | (a ^ b))
+        == 0
 }
 
 fn hash_admin_password(salt: &[u8], password: &str) -> String {
@@ -618,8 +663,9 @@ pub fn cookie_token(headers: &axum::http::HeaderMap) -> Option<String> {
 
 #[must_use]
 pub fn session_cookie(token: &str, secure: bool) -> String {
-    let mut cookie =
-        format!("{ADMIN_SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800");
+    let mut cookie = format!(
+        "{ADMIN_SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={ADMIN_SESSION_TTL_SECS}"
+    );
     if secure {
         cookie.push_str("; Secure");
     }
@@ -628,7 +674,8 @@ pub fn session_cookie(token: &str, secure: bool) -> String {
 
 #[must_use]
 pub fn clear_session_cookie(secure: bool) -> String {
-    let mut cookie = format!("{ADMIN_SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
+    let mut cookie =
+        format!("{ADMIN_SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0");
     if secure {
         cookie.push_str("; Secure");
     }
@@ -879,5 +926,76 @@ mod tests {
                 )
                 .is_err()
         );
+        assert!(
+            identities.accounts[0]
+                .password_hash
+                .starts_with("$argon2id$")
+        );
+        assert!(identities.accounts[0].password_salt.is_empty());
+    }
+
+    #[test]
+    fn admin_password_rejects_short_and_account_name() {
+        assert!(ensure_admin_password("short-pass", "owner").is_err());
+        assert!(ensure_admin_password("ownerrrrrrrr", "ownerrrrrrrr").is_err());
+        assert!(ensure_admin_password("correct-horse", "owner").is_ok());
+    }
+
+    #[test]
+    fn legacy_sha256_admin_login_upgrades_to_argon2id_and_replaces_sessions() {
+        let mut salt = [0_u8; 16];
+        salt[0] = 7;
+        let mut identities = AdminIdentities {
+            accounts: vec![AdminAccount {
+                account: "owner".to_owned(),
+                role: AdminRole::Owner,
+                password_salt: hex_bytes(&salt),
+                password_hash: hash_admin_password(&salt, "correct-horse"),
+                created_at_ms: 1,
+            }],
+            sessions: vec![AdminSessionRecord {
+                token_hash: hex_sha256(b"old-session"),
+                account: "owner".to_owned(),
+                expires_at_ms: 1_900_000_100_000,
+            }],
+        };
+        assert!(!is_argon2id_phc(&identities.accounts[0].password_hash));
+        let token = identities
+            .login(
+                &AdminCredentials {
+                    account: "owner".to_owned(),
+                    password: "correct-horse".to_owned(),
+                },
+                1_900_000_000_000,
+            )
+            .unwrap();
+        assert!(
+            identities.accounts[0]
+                .password_hash
+                .starts_with("$argon2id$")
+        );
+        assert!(identities.accounts[0].password_salt.is_empty());
+        assert_eq!(identities.sessions.len(), 1);
+        assert!(identities.principal(&token, 1_900_000_000_001).is_some());
+        assert!(
+            identities
+                .principal("old-session", 1_900_000_000_001)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn unknown_admin_login_is_generic() {
+        let mut identities = AdminIdentities::default();
+        let error = identities
+            .login(
+                &AdminCredentials {
+                    account: "nobody".to_owned(),
+                    password: "correct-horse".to_owned(),
+                },
+                1,
+            )
+            .unwrap_err();
+        assert_eq!(error.to_string(), "invalid admin credentials");
     }
 }

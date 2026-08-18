@@ -162,7 +162,7 @@ self.addEventListener("fetch", (event) => {
 
   // Product identity is session-specific and must never be served from a SW
   // cache (login/logout, activate 404/501, and HISTORY_CACHE isolation).
-  if (url.pathname.startsWith("/api/auth/")) {
+  if (url.pathname.startsWith("/api/auth/") || url.pathname.startsWith("/api/admin/")) {
     event.respondWith(fetch(request));
     return;
   }

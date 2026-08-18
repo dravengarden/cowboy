@@ -102,5 +102,27 @@ this console. Product `/ws` and product APIs require a product principal.
 Admin writes go through `require_admin_role` (operator+ or owner); viewers
 keep admin read.
 
+## Admin login
+
+`/admin` is a separate site. The document is public HTML; every
+`/api/admin/*` route except `GET/POST /api/admin/auth*` requires a
+`cowboy_admin` cookie. Product cookies never become an admin principal.
+
+Hardening:
+
+- New admin passwords are argon2id PHC (12–128 characters, not the account).
+  Existing iterated SHA-256 hashes verify once and upgrade on login.
+- Unknown-account login dummy-verifies so timing does not enumerate owners.
+- Cookie: `HttpOnly`, `SameSite=Strict`, 12-hour absolute TTL, `Secure` on HTTPS.
+  A new login replaces every other session for that account.
+- Login and bootstrap require HTTPS as advertised by a **loopback** reverse
+  proxy (`X-Forwarded-Proto: https`). Direct non-loopback HTTP is refused.
+  Loopback without forwarded headers stays allowed for `just dev`.
+- Login/bootstrap share the in-process failure limiter. Failures log
+  `admin_login ok=false` without passwords or hashes.
+- Service worker never caches `/api/admin/*` or `/admin` as the PWA shell.
+
+Passkeys / WebAuthn and a separate admin hostname are not in this slice.
+
 See [Product login](16-product-auth.md) for planes, the capability matrix,
 and the Hawk enablement checklist.

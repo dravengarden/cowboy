@@ -113,8 +113,8 @@ function AdminLoginPage({
           <Typography variant="h5">Cowboy Admin</Typography>
           <Typography color="text.secondary">
             {bootstrap
-              ? "Create the first owner account. This page is a separate admin site and is not the session UI."
-              : "Sign in to the admin console."}
+              ? "Create the first owner account (12+ character password). This page is a separate admin site and is not the session UI."
+              : "Sign in to the admin console. Admin sessions last 12 hours."}
           </Typography>
           {error && <Alert severity="error">{error}</Alert>}
           <TextField label="Account" value={account} onChange={(event) => setAccount(event.target.value)} autoComplete="username" />

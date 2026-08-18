@@ -34,11 +34,16 @@ Never mix these in one cookie.
 
 | Principal | Proof | Scope |
 |---|---|---|
-| `AdminPrincipal` | `cowboy_admin` cookie | `/api/admin/*` only |
+| `AdminPrincipal` | `cowboy_admin` cookie (12h, `SameSite=Strict`) | `/api/admin/*` only |
 | `ProductPrincipal` | `cowboy_user` cookie or `Authorization: Bearer cow_…` | PWA REST, `/ws`, product APIs |
 | `MachinePrincipal` | enrollment token, then signed challenge | machine enroll / connect |
 
 A same handle on admin and product is coincidence, not a link.
+
+Admin login is the break-glass plane: argon2id (legacy SHA-256 upgraded on
+login), dummy verify, 12-hour `SameSite=Strict` cookie, HTTPS via the
+loopback proxy only, and rate-limited bootstrap/login. See
+[Admin](14-admin.md).
 
 Roles reuse the serde names `owner` / `operator` / `viewer`. Product roles
 live only in `cowboy.permissions` (`role_for`); there is no `users.role`

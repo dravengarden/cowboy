@@ -1784,10 +1784,29 @@ async fn api_admin_bootstrap(
     if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
         return rejected;
     }
+    if let Some(rejected) = reject_insecure_admin(&headers, peer) {
+        return rejected;
+    }
+    let ip = crate::product_auth::client_ip(&headers, peer).to_string();
+    apply_rate_limit(&state, "admin:bootstrap", &ip).await;
     let mut identities = admin_identities(&state.hub);
-    match identities.bootstrap(&request, auth_now_ms()) {
-        Ok(token) => admin_session_response(&state.hub, &headers, identities, token),
-        Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    let now = auth_now_ms();
+    match tokio::task::spawn_blocking(move || {
+        let token = identities.bootstrap(&request, now)?;
+        Ok::<_, anyhow::Error>((identities, token))
+    })
+    .await
+    {
+        Ok(Ok((identities, token))) => {
+            state.rate_limits.reset("admin:bootstrap", &ip);
+            tracing::info!(account = "owner", "admin_bootstrap");
+            admin_session_response(&state.hub, &headers, identities, token)
+        }
+        Ok(Err(error)) => {
+            state.rate_limits.record_failure("admin:bootstrap", &ip);
+            (StatusCode::BAD_REQUEST, error.to_string()).into_response()
+        }
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
     }
 }
 
@@ -1800,10 +1819,31 @@ async fn api_admin_login(
     if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
         return rejected;
     }
+    if let Some(rejected) = reject_insecure_admin(&headers, peer) {
+        return rejected;
+    }
+    let ip = crate::product_auth::client_ip(&headers, peer).to_string();
+    let rate_name = format!("admin:{}", request.account.trim().to_ascii_lowercase());
+    apply_rate_limit(&state, &rate_name, &ip).await;
     let mut identities = admin_identities(&state.hub);
-    match identities.login(&request, auth_now_ms()) {
-        Ok(token) => admin_session_response(&state.hub, &headers, identities, token),
-        Err(error) => (StatusCode::UNAUTHORIZED, error.to_string()).into_response(),
+    let now = auth_now_ms();
+    match tokio::task::spawn_blocking(move || {
+        let token = identities.login(&request, now)?;
+        Ok::<_, anyhow::Error>((identities, token))
+    })
+    .await
+    {
+        Ok(Ok((identities, token))) => {
+            state.rate_limits.reset(&rate_name, &ip);
+            tracing::info!("admin_login ok=true");
+            admin_session_response(&state.hub, &headers, identities, token)
+        }
+        Ok(Err(_)) => {
+            state.rate_limits.record_failure(&rate_name, &ip);
+            tracing::info!("admin_login ok=false");
+            (StatusCode::UNAUTHORIZED, "invalid admin credentials").into_response()
+        }
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
     }
 }
 
@@ -1870,16 +1910,23 @@ async fn api_admin_create_account(
         return status.into_response();
     }
     let mut identities = admin_identities(&state.hub);
-    match identities.create_account(&request, crate::admin::AdminRole::Operator, auth_now_ms()) {
-        Ok(()) => {
+    let now = auth_now_ms();
+    match tokio::task::spawn_blocking(move || {
+        identities.create_account(&request, crate::admin::AdminRole::Operator, now)?;
+        Ok::<_, anyhow::Error>((identities, request.account.trim().to_ascii_lowercase()))
+    })
+    .await
+    {
+        Ok(Ok((identities, account))) => {
             persist_admin_identities(&state.hub, &identities);
             Json(serde_json::json!({
-                "account": request.account.trim().to_ascii_lowercase(),
+                "account": account,
                 "role": "operator",
             }))
             .into_response()
         }
-        Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+        Ok(Err(error)) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
     }
 }
 
@@ -2216,6 +2263,18 @@ fn reject_bad_origin(
     }
 }
 
+fn reject_insecure_admin(headers: &HeaderMap, peer: SocketAddr) -> Option<Response> {
+    if !peer.ip().is_loopback() {
+        return Some((StatusCode::FORBIDDEN, "admin login requires HTTPS").into_response());
+    }
+    if crate::product_auth::request_is_https(headers)
+        || !crate::product_auth::has_forwarded_client_headers(headers)
+    {
+        return None;
+    }
+    Some((StatusCode::FORBIDDEN, "admin login requires HTTPS").into_response())
+}
+
 fn durable_store(store: &Option<Store>) -> Option<&Store> {
     store.as_ref()
 }
@@ -2282,6 +2341,7 @@ enum RouteAuth {
     ProductSessionSee,
     ProductSessionMutate,
     ProductOrAdminOperator,
+    AdminViewer,
     AdminOperator,
     AdminOwner,
     MetricsScrape,
@@ -2389,8 +2449,8 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
         return RouteAuth::Public;
     }
     if path == "/api/admin/permissions" || path.starts_with("/api/admin/accounts") {
-        return if method == Method::GET {
-            RouteAuth::Public
+        return if matches!(*method, Method::GET | Method::HEAD) {
+            RouteAuth::AdminViewer
         } else {
             RouteAuth::AdminOwner
         };
@@ -2400,7 +2460,7 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
     }
     if path.starts_with("/api/admin/") {
         return if matches!(*method, Method::GET | Method::HEAD) {
-            RouteAuth::Public
+            RouteAuth::AdminViewer
         } else {
             RouteAuth::AdminOperator
         };
@@ -2545,6 +2605,16 @@ async fn enforce_product_api(
     let path = request.uri().path().to_owned();
     match classify_route(&method, &path) {
         RouteAuth::Public | RouteAuth::MetricsScrape => return next.run(request).await,
+        RouteAuth::AdminViewer => {
+            if let Err(status) = require_admin_role(
+                &state.hub,
+                request.headers(),
+                crate::admin::AdminRole::Viewer,
+            ) {
+                return status.into_response();
+            }
+            return next.run(request).await;
+        }
         RouteAuth::AdminOperator => {
             if let Err(status) = require_admin_role(
                 &state.hub,
@@ -11823,6 +11893,14 @@ mod product_auth_api_tests {
             RouteAuth::Public
         );
         assert_eq!(
+            classify_route(&Method::GET, "/api/admin/overview"),
+            RouteAuth::AdminViewer
+        );
+        assert_eq!(
+            classify_route(&Method::GET, "/api/admin/accounts"),
+            RouteAuth::AdminViewer
+        );
+        assert_eq!(
             classify_route(&Method::POST, "/api/admin/accounts"),
             RouteAuth::AdminOwner
         );
@@ -12289,8 +12367,12 @@ mod product_auth_api_tests {
         )
         .await;
         assert_eq!(bootstrapped.status(), StatusCode::OK);
-        let admin_cookie =
-            cookie_header(&set_cookie(&bootstrapped, ADMIN_SESSION_COOKIE).expect("admin cookie"));
+        let admin_set_cookie =
+            set_cookie(&bootstrapped, ADMIN_SESSION_COOKIE).expect("admin cookie");
+        assert!(admin_set_cookie.contains("SameSite=Strict"));
+        assert!(admin_set_cookie.contains("HttpOnly"));
+        assert!(!admin_set_cookie.contains("SameSite=Lax"));
+        let admin_cookie = cookie_header(&admin_set_cookie);
 
         let created = post_json(
             &format!("{base}/api/admin/users"),
@@ -12331,6 +12413,31 @@ mod product_auth_api_tests {
         assert_eq!(me_body["account"], "draven");
         assert_eq!(me_body["role"], "operator");
 
+        server.abort();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn admin_login_rejects_forwarded_cleartext() {
+        let (store, root) = test_store().await;
+        let hub = Hub::new();
+        let _admin = seed_admin(&hub);
+        let (base, server) = spawn_auth(auth_state(hub, Some(store))).await;
+        let origin = origin_for(&base);
+        let rejected = reqwest::Client::new()
+            .post(format!("{base}/api/admin/auth/login"))
+            .header(header::ORIGIN, &origin)
+            .header("x-forwarded-for", "203.0.113.9")
+            .header("x-forwarded-proto", "http")
+            .json(&serde_json::json!({
+                "account": "owner",
+                "password": "correct-horse",
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
+        assert_eq!(rejected.text().await.unwrap(), "admin login requires HTTPS");
         server.abort();
         let _ = std::fs::remove_dir_all(root);
     }
