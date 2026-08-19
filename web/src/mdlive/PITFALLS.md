@@ -1936,10 +1936,18 @@ Desktop Vim + IME checks:
     lavender band above chrome that is already outside the webview (WeType
     and the compact `cowboy.stormbird.xyz` bar make it intermittent). Measure
     `min(innerHeight, documentElement.clientHeight, #root.clientHeight)`
-    against `visualViewport.height`, treat a ≤8px remainder as fitted, and
-    still ignore `offsetTop` (rubber-band pans inflate it). Keyboard-open
-    detection may keep using `innerHeight` so a stale-large window still
-    counts as an open keyboard; only the padding uses the painted box.
+    against `visualViewport.height`. Subtract *clamped* `offsetTop` so a
+    pan that keeps the focused field on screen is not counted as cover
+    (a rubber-band spike is clamped and cannot inflate the inset).
+    **Safari tabs after v1435 still showed the band:** resizes-content
+    already parked the painted box above the keyboard; the remaining
+    50–110px is iOS 26's compact URL pill sitting *outside* that box,
+    usually with `offsetTop = 0`. Treat remainders at or below
+    `keyboardOpenMinOverlapPx` (120, the same floor as "is the keyboard
+    open") as chrome, not cover. Real keyboards are ~260–340px and still
+    pad. PWA has no pill (remainder ≈ 0). Keyboard-open detection may
+    keep using `innerHeight` so a stale-large window still counts as an
+    open keyboard; only the padding uses the painted box.
 
 76. **A parked/sent `cowboy-att` image must not become a blank rounded box.**
     Three things stacked into the reported "这里为什么不展示图片了呢":

@@ -47,10 +47,10 @@ export function useKeyboardInset(): void {
     let lastInset = -1;
     const apply = (): void => {
       raf = 0;
-      // Keyboard overlap = painted page height − visual-viewport height. We do
-      // NOT add vv.offsetTop: it spikes during an overscroll/rubber-band as the
-      // visual viewport pans, which inflated the inset and left the sheet too
-      // high above the keyboard. vv.height stays stable under that pan.
+      // Keyboard overlap = how much of the painted page still sits *below*
+      // the visual viewport. Subtract clamped offsetTop so a Safari pan to
+      // keep the field on screen is not counted as cover; rubber-band
+      // spikes are clamped and cannot inflate the inset.
       const layoutHeight = paintedLayoutHeight(
         globalThis.innerHeight,
         doc.documentElement.clientHeight,
@@ -63,10 +63,11 @@ export function useKeyboardInset(): void {
       // into --kb-inset left an empty band between the composer and the
       // bar. New Session clears that bar by being a cover sheet, not by
       // padding the whole app.
-      // Subtract vv.offsetTop (clamped): Safari pans the visual viewport
-      // to keep the focused composer on screen. Counting that pan as
-      // keyboard cover pads a lavender gap above the compact URL bar.
-      // PWA already shrank the painted box; native skips this hook.
+      // Safari tabs (not PWA/app): after resizes-content the painted box
+      // already excludes the keyboard. visualViewport is then shorter by
+      // the compact URL pill, often with offsetTop = 0. keyboardCoverOverlap
+      // drops that chrome-sized remainder so we do not pad a lavender band
+      // above cowboy.stormbird.xyz. PWA remainder is ~0; native skips this.
       const overlap = keyboardCoverOverlap(
         layoutHeight,
         vv.height,

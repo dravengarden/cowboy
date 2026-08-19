@@ -75,6 +75,13 @@ Deno.test("PWA inset follows the painted box, not a stale innerHeight", () => {
   assertEquals(keyboardCoverOverlap(844, 510), 334);
   // Chrome jitter of a few pixels is not a covered keyboard.
   assertEquals(keyboardCoverOverlap(510, 504), 0);
+  // Safari tabs: layout already shrank for the keyboard; visualViewport
+  // is then shorter by the compact URL pill (offsetTop often 0). That
+  // remainder is browser chrome, not cover — padding it is the lavender
+  // band above cowboy.stormbird.xyz.
+  assertEquals(keyboardCoverOverlap(510, 430), 0);
+  assertEquals(keyboardCoverOverlap(510, 400), 0);
+  assertEquals(keyboardCoverOverlap(510, 400, 10), 0);
   // Safari pans the visual viewport (offsetTop) to keep the field on
   // screen. That top offset is not keyboard cover and must not pad.
   assertEquals(keyboardCoverOverlap(844, 510, 80), 254);

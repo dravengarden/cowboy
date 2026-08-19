@@ -10,6 +10,11 @@ export interface KeyboardGeometry {
 // though several hundred pixels are occupied by the keyboard. Keep the last
 // keyboard-free height as a second signal, but only trust it while an editor is
 // focused so rotation/browser chrome changes cannot masquerade as a keyboard.
+/** Overlaps below this are browser chrome, not a software keyboard.
+ *  iOS keyboards are ~260–340px; Safari's compact URL pill + form
+ *  accessory land in the 44–110px range. */
+export const keyboardOpenMinOverlapPx = 120;
+
 export function inferKeyboardOpen(geometry: KeyboardGeometry): boolean {
   const visibleHeight = Math.min(
     geometry.layoutHeight,
@@ -23,8 +28,8 @@ export function inferKeyboardOpen(geometry: KeyboardGeometry): boolean {
     0,
     geometry.baselineHeight - visibleHeight,
   );
-  return visualOverlap > 120 ||
-    (geometry.editableFocused && resizedOverlap > 120);
+  return visualOverlap > keyboardOpenMinOverlapPx ||
+    (geometry.editableFocused && resizedOverlap > keyboardOpenMinOverlapPx);
 }
 
 /** iOS can report visualViewport.height ≈ 0 for one keyboard frame.
@@ -68,9 +73,6 @@ export function paintedLayoutHeight(
   return innerHeight > 0 ? innerHeight : smallestPainted;
 }
 
-/** Sub-pixel / chrome jitter that still means the layout already fits. */
-export const keyboardFittedEpsilonPx = 8;
-
 /** URL-bar / status-bar jitter allowed when learning a new rest height.
  *  A larger drop is a software keyboard, not a new orientation baseline. */
 export const keyboardFreeBaselineSlackPx = 80;
@@ -90,12 +92,17 @@ export function shouldLearnKeyboardFreeBaseline(
 /** How much of the painted page still extends *below* the visual viewport.
  *
  *  `paintedHeight - visualHeight` over-counts when offsetTop > 0: Safari
- *  (not PWA/app) pans the visual viewport to keep the focused field on
- *  screen, so part of that difference is already above the window. Padding
- *  by the full difference leaves a lavender band above Safari's compact
- *  URL bar. Clamp offsetTop so a rubber-band spike cannot go negative or
- *  past the covered range (that was the old "offsetTop inflates inset"
- *  bug). */
+ *  pans the visual viewport to keep the focused field on screen, so part
+ *  of that difference is already above the window.
+ *
+ *  After `interactive-widget=resizes-content` the painted box has already
+ *  excluded the keyboard. Safari tabs then report a *further* shortfall
+ *  equal to the compact URL pill (iOS 26) sitting *outside* that box —
+ *  `offsetTop` is often 0, so subtracting it does nothing. Padding that
+ *  chrome remainder (typically 50–110px) is the lavender band between the
+ *  composer and `cowboy.stormbird.xyz`. PWA has no pill (remainder ≈ 0);
+ *  the native shell never publishes `--kb-inset`. Remainders at or below
+ *  `keyboardOpenMinOverlapPx` are chrome, not cover. */
 export function keyboardCoverOverlap(
   paintedHeight: number,
   visualHeight: number,
@@ -105,7 +112,7 @@ export function keyboardCoverOverlap(
   const covered = Math.max(0, paintedHeight - visualHeight);
   const offset = Math.max(0, Math.min(visualOffsetTop, covered));
   const below = Math.round(covered - offset);
-  if (below <= keyboardFittedEpsilonPx) return 0;
+  if (below <= keyboardOpenMinOverlapPx) return 0;
   return clampKeyboardOverlap(below, paintedHeight);
 }
 
