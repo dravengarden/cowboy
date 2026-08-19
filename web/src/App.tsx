@@ -3996,11 +3996,13 @@ type MobileSettingsSection =
     | "info"
     | "logs";
 
-const MOBILE_SETTINGS_ENTER_MS = 280;
-const MOBILE_SETTINGS_EXIT_MS = 220;
+const MOBILE_SETTINGS_ENTER_MS = 320;
+const MOBILE_SETTINGS_EXIT_MS = 180;
 const MOBILE_SETTINGS_ANCHOR_MAX_MS = 1600;
-const MOBILE_SETTINGS_ANCHOR_RESPONSE_MS = 90;
+const MOBILE_SETTINGS_ANCHOR_RESPONSE_MS = 48;
 const MOBILE_SETTINGS_ANCHOR_STABLE_FRAMES = 3;
+const MOBILE_SETTINGS_ENTER_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
+const MOBILE_SETTINGS_EXIT_EASING = "cubic-bezier(0.4, 0, 1, 1)";
 
 function initialMobileSettingsSection(
     tab: ControlCenterTab,
@@ -4035,6 +4037,10 @@ function MobileSettingsAccordion({
             slotProps={{
                 transition: {
                     timeout: { enter: MOBILE_SETTINGS_ENTER_MS, exit: MOBILE_SETTINGS_EXIT_MS },
+                    easing: {
+                        enter: MOBILE_SETTINGS_ENTER_EASING,
+                        exit: MOBILE_SETTINGS_EXIT_EASING,
+                    },
                     unmountOnExit: true,
                 },
             }}
@@ -4075,7 +4081,20 @@ function MobileSettingsAccordion({
             </AccordionSummary>
             <AccordionDetails
                 id={`mobile-settings-${id}-content`}
-                sx={{ px: 0.75, pt: 1.5, pb: 2.5, borderTop: 1, borderColor: "divider" }}
+                sx={{
+                    px: 0.75,
+                    pt: 1.5,
+                    pb: 2.5,
+                    borderTop: 1,
+                    borderColor: "divider",
+                    // Reserve one useful screen before async sections resolve. This gives the
+                    // scroll anchor room to move from the first animation frame and prevents a
+                    // late Machines/Logs response from turning into a large height transition.
+                    minHeight: "calc(100vh - 152px)",
+                    "@supports (height: 100dvh)": {
+                        minHeight: "calc(100dvh - 152px)",
+                    },
+                }}
             >
                 {children}
             </AccordionDetails>
