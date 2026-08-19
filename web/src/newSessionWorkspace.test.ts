@@ -13,14 +13,17 @@ const composerSource = await Deno.readTextFile(
   new URL("./Composer.tsx", import.meta.url),
 );
 
-Deno.test("mobile new session keeps Cancel/Create in a reserved footer", () => {
-  const titleAt = appSource.indexOf('title="New session"');
-  const sheet = appSource.slice(titleAt, appSource.indexOf("<Stack spacing={2}", titleAt));
-  assertEquals(titleAt >= 0, true);
-  assertEquals(sheet.includes("floatingActions={false}"), true);
-  assertEquals(sheet.includes("Cancel"), true);
-  assertEquals(sheet.includes("Create"), true);
-  assertEquals(sheet.includes("FloatingActionIsland"), false);
+Deno.test("mobile new session puts Cancel and Create in the cover header", () => {
+  const dialog = appSource.slice(
+    appSource.indexOf("function NewSessionDialog("),
+    appSource.indexOf("const EMPTY_TRANSCRIPT_TIMELINE"),
+  );
+  assertEquals(dialog.includes('ariaLabel="New session"'), true);
+  assertEquals(dialog.includes("cover"), true);
+  assertEquals(dialog.includes("Cancel"), true);
+  assertEquals(dialog.includes("Create"), true);
+  assertEquals(dialog.includes("floatingActions"), false);
+  assertEquals(dialog.includes('title="New session"'), true);
 });
 
 Deno.test("new session navigation precedes Machine preparation completion", () => {

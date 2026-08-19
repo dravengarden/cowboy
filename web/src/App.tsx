@@ -1562,6 +1562,7 @@ function NewSessionDialog({
         };
     }, [open, machineId]);
     const navbarAtBottom = useNavbarAtBottom();
+    const theme = useTheme();
     const create = (): void => {
         if (creating) return;
         // POST (not the fire-and-forget WS `new_session`) so we get the assigned
@@ -1650,41 +1651,7 @@ function NewSessionDialog({
     // focused Create button suppress their own native bare-Enter activation.
     // Mobile retains its established single-Enter form behaviour.
     useConfirmEnter(open && desktop, create, { suppressBareEnter: false });
-    // BottomSheet (not a centered Dialog) to match the rest of the modals — they
-    // all rise from the bottom on the mobile tier.
-    return (
-        <Sheet
-            forceSheet={navbarAtBottom}
-            cover={navbarAtBottom}
-            open={open}
-            onClose={creating ? (): void => {} : onClose}
-            title="New session"
-            mobileDismiss="none"
-            floatingActions={false}
-            actions={
-                <>
-                    <Button onClick={onClose} color="inherit" disabled={creating}>
-                        Cancel
-                        <Kbd keys="Esc" />
-                    </Button>
-                    <Button
-                        onClick={create}
-                        onKeyDown={(e): void => {
-                            if (
-                                desktop && e.key === "Enter" &&
-                                !e.metaKey && !e.ctrlKey &&
-                                !isImeKeyEvent(e.nativeEvent)
-                            ) e.preventDefault();
-                        }}
-                        variant="contained"
-                    disabled={creating || !provider || !machineId || !cwd}
-                    >
-                        {creating ? "Preparing…" : "Create"}
-                        <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-                    </Button>
-                </>
-            }
-        >
+    const form = (
             <Stack spacing={2} sx={{ mt: 1 }}>
                 {createError ? <Alert severity="error">{createError}</Alert> : null}
                 <TextField
@@ -1825,6 +1792,98 @@ function NewSessionDialog({
                     </TextField>
                 ) : null}
             </Stack>
+    );
+    const canCreate = !creating && Boolean(provider && machineId && cwd);
+    const stopSheetDrag = (event: { stopPropagation: () => void }): void => {
+        event.stopPropagation();
+    };
+    // Mobile: Cancel/Create live in the cover header, like an iOS form
+    // sheet. A footer above the PWA accessory truncates Working directory
+    // and leaves a dead band. Desktop keeps the dialog action row.
+    if (navbarAtBottom) {
+        return (
+            <DetentSheet
+                open={open}
+                onClose={creating ? (): void => {} : onClose}
+                cover
+                frosted
+                ariaLabel="New session"
+                surfaceColor={theme.palette.background.default}
+                header={
+                    <Box
+                        sx={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 0.5,
+                            pl: 0.5,
+                            pr: "max(env(safe-area-inset-right), 8px)",
+                            pb: 1,
+                            minHeight: 44,
+                        }}
+                    >
+                        <Button
+                            onClick={onClose}
+                            onPointerDown={stopSheetDrag}
+                            color="inherit"
+                            disabled={creating}
+                            sx={{ textTransform: "none", minWidth: 72, flex: "0 0 auto" }}
+                        >
+                            Cancel
+                        </Button>
+                        <Typography
+                            variant="subtitle1"
+                            sx={{ flex: 1, fontWeight: 700, textAlign: "center" }}
+                            noWrap
+                        >
+                            New session
+                        </Typography>
+                        <Button
+                            onClick={create}
+                            onPointerDown={stopSheetDrag}
+                            variant="contained"
+                            size="small"
+                            disabled={!canCreate}
+                            sx={{ textTransform: "none", minWidth: 72, flex: "0 0 auto" }}
+                        >
+                            {creating ? "Preparing…" : "Create"}
+                        </Button>
+                    </Box>
+                }
+            >
+                <Box sx={{ px: 2 }}>{form}</Box>
+            </DetentSheet>
+        );
+    }
+    return (
+        <Sheet
+            open={open}
+            onClose={creating ? (): void => {} : onClose}
+            title="New session"
+            actions={
+                <>
+                    <Button onClick={onClose} color="inherit" disabled={creating}>
+                        Cancel
+                        <Kbd keys="Esc" />
+                    </Button>
+                    <Button
+                        onClick={create}
+                        onKeyDown={(e): void => {
+                            if (
+                                desktop && e.key === "Enter" &&
+                                !e.metaKey && !e.ctrlKey &&
+                                !isImeKeyEvent(e.nativeEvent)
+                            ) e.preventDefault();
+                        }}
+                        variant="contained"
+                        disabled={!canCreate}
+                    >
+                        {creating ? "Preparing…" : "Create"}
+                        <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+                    </Button>
+                </>
+            }
+        >
+            {form}
         </Sheet>
     );
 }
