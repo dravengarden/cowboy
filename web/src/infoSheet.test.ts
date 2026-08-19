@@ -61,12 +61,17 @@ Deno.test("DeepSeek usage controls stay readable on tablet and desktop widths", 
   );
 });
 
-Deno.test("diagnostic detail keeps labels and values in a bounded grid", () => {
+Deno.test("diagnostic detail uses compact scan lines instead of nested field cards", () => {
   assertEquals(
-    usageLogsSource.includes('gridTemplateColumns: "repeat(2, minmax(0, 1fr))"'),
+    usageLogsSource.includes(
+      'gridTemplateColumns: "minmax(96px, 0.36fr) minmax(0, 1fr) 24px"',
+    ),
     true,
   );
+  assertEquals(usageLogsSource.includes("data-diagnostic-detail-section"), true);
+  assertEquals(usageLogsSource.includes("data-diagnostic-detail-field"), true);
   assertEquals(usageLogsSource.includes('"@media (max-width: 720px)"'), true);
+  assertEquals(usageLogsSource.includes('gridTemplateColumns: "84px minmax(0, 1fr) 24px"'), true);
   assertEquals(usageLogsSource.includes('textAlign: "right"'), false);
   assertEquals(usageLogsSource.includes('borderColor: "divider"'), true);
 });

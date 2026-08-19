@@ -129,87 +129,90 @@ function LogDetail({
     return <Typography variant="caption" color="error.main">{state.error ?? "Detail unavailable"}</Typography>;
   }
   return (
-    <Stack spacing={1.25} sx={{ pt: 1.15 }}>
+    <Stack spacing={1.5} sx={{ pt: 1.25 }}>
       {state.value.sections.map((section) => (
-        <Box
+        <Stack
           key={section.title}
-          sx={{
-            border: 1,
-            borderColor: "divider",
-            borderRadius: 1.5,
-            overflow: "hidden",
-            bgcolor: (theme) => alpha(theme.palette.background.paper, 0.42),
-          }}
+          data-diagnostic-detail-section={section.title}
+          spacing={0.25}
         >
           <Typography
             variant="overline"
             color="text.secondary"
-            sx={{ display: "block", px: 1.25, py: 0.55, borderBottom: 1, borderColor: "divider" }}
+            sx={{
+              display: "block",
+              px: 0.25,
+              fontWeight: 700,
+              letterSpacing: "0.08em",
+            }}
           >
             {section.title}
           </Typography>
           <Box
             sx={{
-              display: "grid",
-              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-              gap: 0.75,
-              px: 1.25,
-              py: 0.85,
-              "@media (max-width: 720px)": { gridTemplateColumns: "minmax(0, 1fr)" },
+              borderTop: 1,
+              borderBottom: 1,
+              borderColor: "divider",
             }}
           >
-            {section.fields.map((field) => {
+            {section.fields.map((field, index) => {
               const copyKey = `${state.value?.id ?? "detail"}:${section.title}:${field.label}`;
               return (
                 <Box
                   key={`${section.title}:${field.label}`}
+                  data-diagnostic-detail-field={field.label}
                   sx={{
                     minWidth: 0,
-                    px: 0.9,
-                    py: 0.7,
-                    borderRadius: 1,
-                    bgcolor: "action.hover",
+                    display: "grid",
+                    gridTemplateColumns: "minmax(96px, 0.36fr) minmax(0, 1fr) 24px",
+                    columnGap: 1,
+                    alignItems: "start",
+                    px: 0.25,
+                    py: 0.75,
+                    borderBottom: index < section.fields.length - 1 ? 1 : 0,
+                    borderColor: "divider",
+                    "@media (max-width: 720px)": {
+                      gridTemplateColumns: "84px minmax(0, 1fr) 24px",
+                    },
                   }}
                 >
-                  <Typography variant="caption" color="text.secondary" display="block">
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ lineHeight: 1.55 }}
+                  >
                     {field.label}
                   </Typography>
-                  <Stack
-                    direction="row"
-                    spacing={0.5}
-                    alignItems="flex-start"
-                    sx={{ minWidth: 0, mt: 0.2 }}
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      minWidth: 0,
+                      overflowWrap: "anywhere",
+                      fontFamily: field.copyable ? "monospace" : undefined,
+                      lineHeight: 1.55,
+                    }}
                   >
-                    <Typography
-                      variant="caption"
-                      sx={{
-                        minWidth: 0,
-                        flex: 1,
-                        overflowWrap: "anywhere",
-                        fontFamily: field.copyable ? "monospace" : undefined,
-                        lineHeight: 1.55,
-                      }}
-                    >
-                      {field.value}
-                    </Typography>
-                    {field.copyable && (
+                    {field.value}
+                  </Typography>
+                  {field.copyable
+                    ? (
                       <Tooltip title="Copy value">
                         <IconButton
                           size="small"
                           aria-label={`Copy ${field.label}`}
                           onClick={() => onCopy(copyKey, field.value)}
-                          sx={{ width: 24, height: 24, p: 0, mt: -0.35, flexShrink: 0 }}
+                          sx={{ width: 24, height: 24, p: 0, mt: -0.35 }}
                         >
                           {copiedKey === copyKey ? <Check sx={{ fontSize: 14 }} /> : <ContentCopy sx={{ fontSize: 13 }} />}
                         </IconButton>
                       </Tooltip>
-                    )}
-                  </Stack>
+                    )
+                    : <Box aria-hidden sx={{ width: 24, height: 1 }} />}
                 </Box>
               );
             })}
           </Box>
-        </Box>
+        </Stack>
       ))}
       {state.value.evidence !== undefined && (
         <Box component="details">
