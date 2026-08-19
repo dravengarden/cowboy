@@ -60,6 +60,37 @@ export function clampKeyboardOverlap(
  *  has already shortened the painted `html` / `#root` box. Padding must
  *  follow the painted box. Using the stale innerHeight double-lifts the
  *  composer above chrome that is already outside the webview. */
+/** Layout box that `position:fixed` actually uses. iOS Safari tabs keep
+ *  `html.clientHeight` on the pre-keyboard page while `innerHeight` tracks
+ *  the visual viewport — min() with innerHeight (paintedLayoutHeight) would
+ *  clamp offsetTop to 0 and leave a cover sheet in the wrong slice. */
+export function fixedLayoutHeight(
+  clientHeight: number,
+  rootHeight = 0,
+  innerHeight = 0,
+): number {
+  const layout = [clientHeight, rootHeight].filter((height) => height > 0);
+  const tallest = layout.length > 0 ? Math.max(...layout) : 0;
+  return tallest > 0 ? tallest : innerHeight;
+}
+
+/** Pin a full-bleed cover to the visual viewport. Safari pans offsetTop
+ *  over a taller layout while the keyboard is up; a 100dvh New Session
+ *  cover then shows its empty body + footer and hides Title. */
+export function visualViewportBox(
+  layoutHeight: number,
+  visualHeight: number,
+  visualOffsetTop = 0,
+): { offset: number; height: number } {
+  const height = Math.round(Math.max(0, visualHeight));
+  const layout = Math.round(Math.max(0, layoutHeight));
+  const maxOffset = Math.max(0, layout - height);
+  const offset = Math.round(
+    Math.max(0, Math.min(visualOffsetTop, maxOffset)),
+  );
+  return { offset, height };
+}
+
 export function paintedLayoutHeight(
   innerHeight: number,
   clientHeight: number,

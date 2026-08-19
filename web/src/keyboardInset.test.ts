@@ -6,10 +6,12 @@ import {
   isAppleTouchDevice,
   isUnreliableVisualViewport,
   keyboardCoverOverlap,
+  fixedLayoutHeight,
   paintedLayoutHeight,
   pwaKeyboardAccessoryOverlap,
   publishedKeyboardInset,
   shouldLearnKeyboardFreeBaseline,
+  visualViewportBox,
 } from "./keyboardGeometry.ts";
 
 Deno.test("keyboard geometry detects visual viewport overlap", () => {
@@ -89,6 +91,17 @@ Deno.test("PWA inset follows the painted box, not a stale innerHeight", () => {
   assertEquals(keyboardCoverOverlap(844, 510, -40), 334);
 });
 
+Deno.test("Safari cover sheets pin to the visual viewport, not 100dvh of html", () => {
+  // html stays 714 while innerHeight tracks the 376px visual viewport and
+  // offsetTop pans to keep Title on screen. The cover must use html's box
+  // so offsetTop is not clamped to 0.
+  assertEquals(fixedLayoutHeight(714, 714, 376), 714);
+  assertEquals(visualViewportBox(714, 376, 338), { offset: 338, height: 376 });
+  assertEquals(visualViewportBox(714, 376, 0), { offset: 0, height: 376 });
+  assertEquals(visualViewportBox(714, 376, 900), { offset: 338, height: 376 });
+  assertEquals(visualViewportBox(510, 510, 0), { offset: 0, height: 510 });
+});
+
 Deno.test("PWA iOS accessory bar is added only while an editable is focused", () => {
   assertEquals(isAppleTouchDevice({ userAgent: "iPhone" }), true);
   assertEquals(isAppleTouchDevice({ platform: "MacIntel", maxTouchPoints: 5 }), true);
@@ -142,6 +155,9 @@ Deno.test("keyboard inset measures the painted page instead of innerHeight", asy
     source.includes("Do not add the iOS form accessory"),
     true,
   );
+  assertEquals(source.includes("visualViewportBox("), true);
+  assertEquals(source.includes('"--vv-height"'), true);
+  assertEquals(source.includes('"--vv-offset"'), true);
 });
 
 Deno.test("New session is a cover sheet on the mobile navbar so Title clears the PWA accessory", async () => {
@@ -150,4 +166,7 @@ Deno.test("New session is a cover sheet on the mobile navbar so Title clears the
   const coverAt = appSource.lastIndexOf("cover={navbarAtBottom}", titleAt);
   assertEquals(titleAt > 0, true);
   assertEquals(coverAt > 0 && coverAt < titleAt, true);
+  const html = await Deno.readTextFile(new URL("../index.html", import.meta.url));
+  assertEquals(html.includes("--vv-height"), true);
+  assertEquals(html.includes("[data-obsidian-sheet]"), true);
 });

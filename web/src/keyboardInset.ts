@@ -3,8 +3,10 @@ import {
   inferKeyboardOpen,
   isUnreliableVisualViewport,
   keyboardCoverOverlap,
+  fixedLayoutHeight,
   paintedLayoutHeight,
   shouldLearnKeyboardFreeBaseline,
+  visualViewportBox,
 } from "./keyboardGeometry.ts";
 import { isMobileEditorFocusTransferPending } from "./composer/mobileComposerFocus";
 import { isNativeShell } from "./nativeShell";
@@ -45,18 +47,41 @@ export function useKeyboardInset(): void {
     let timers: number[] = [];
     let poll = 0;
     let lastInset = -1;
+    let lastVvHeight = -1;
+    let lastVvOffset = -1;
     const apply = (): void => {
       raf = 0;
       // Keyboard overlap = how much of the painted page still sits *below*
       // the visual viewport. Subtract clamped offsetTop so a Safari pan to
       // keep the field on screen is not counted as cover; rubber-band
       // spikes are clamped and cannot inflate the inset.
+      const rootHeight = doc.getElementById("root")?.clientHeight ?? 0;
       const layoutHeight = paintedLayoutHeight(
         globalThis.innerHeight,
         doc.documentElement.clientHeight,
-        doc.getElementById("root")?.clientHeight ?? 0,
+        rootHeight,
       );
       if (isUnreliableVisualViewport(layoutHeight, vv.height)) return;
+      // Cover sheets (New Session) are position:fixed against html's box,
+      // which stays tall on Safari tabs. Pin them with --vv-* so Title
+      // cannot pan off the top of a 100dvh cover.
+      const coverBox = visualViewportBox(
+        fixedLayoutHeight(
+          doc.documentElement.clientHeight,
+          rootHeight,
+          globalThis.innerHeight,
+        ),
+        vv.height,
+        vv.offsetTop,
+      );
+      if (coverBox.height !== lastVvHeight) {
+        lastVvHeight = coverBox.height;
+        root.style.setProperty("--vv-height", `${String(coverBox.height)}px`);
+      }
+      if (coverBox.offset !== lastVvOffset) {
+        lastVvOffset = coverBox.offset;
+        root.style.setProperty("--vv-offset", `${String(coverBox.offset)}px`);
+      }
       // Do not add the iOS form accessory (∧ ∨ ✓) here. On PWA,
       // resizes-content already parks the painted page at the keyboard
       // top; the accessory sits below the visual viewport. Folding 44px
@@ -142,6 +167,8 @@ export function useKeyboardInset(): void {
       stopPoll();
       if (raf !== 0) globalThis.cancelAnimationFrame(raf);
       root.style.removeProperty("--kb-inset");
+      root.style.removeProperty("--vv-height");
+      root.style.removeProperty("--vv-offset");
     };
   }, []);
 }

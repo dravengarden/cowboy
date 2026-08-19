@@ -1973,6 +1973,11 @@ Desktop Vim + IME checks:
     viewport, and that extra pad becomes an empty band between the
     composer and `∧ ∨ ✓`. Native shell stays at `--kb-inset: 0`. Do
     not try to hide the accessory from the web page.
+    **Safari tabs:** html stays tall, `100dvh` cover is taller than the
+    visual viewport, and `offsetTop` pans the window onto the cover's
+    empty body + Cancel/Create (Title gone). Pin covers to
+    `--vv-offset` / `--vv-height`. Leave compact Obsidian cards on
+    their own bottom docking.
 
 78. **Dock Paste is a clipboard port, not a native-only bridge.** The
     native shell can probe UIPasteboard and read image bytes without a

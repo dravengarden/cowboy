@@ -68,6 +68,18 @@
       #root {
         height: 100%;
       }
+      /* Cover DetentSheets are 100dvh of the LAYOUT viewport. iOS Safari
+         pans visualViewport.offsetTop over that taller box while the
+         keyboard is up, so New Session's Title scrolls off the top and
+         only Cancel/Create remain. Pin covers to --vv-offset/--vv-height
+         (published from visualViewport). Obsidian compact cards are
+         content-height and keep their own bottom docking. */
+      [data-detent-sheet="true"]:not([data-obsidian-sheet]) {
+        top: var(--vv-offset, 0px) !important;
+        bottom: auto !important;
+        height: var(--vv-height, 100dvh) !important;
+        max-height: var(--vv-height, 100dvh) !important;
+      }
       /* Pre-mount app-shell splash. Painted with the document — before the SPA
          bundle parses and the /ws socket connects — so the first frame is a
          themed spinner, not a blank canvas (cowboy used to flash white for the
