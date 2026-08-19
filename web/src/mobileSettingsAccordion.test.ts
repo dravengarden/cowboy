@@ -15,6 +15,13 @@ Deno.test("mobile Settings is one mutually exclusive accordion surface", () => {
   assert(appSource.includes('expanded={mobileSettingsSection === "logs"}'));
   assert(appSource.includes("onChange={setMobileSettingsSection}"));
   assert(appSource.includes('position: expanded ? "sticky" : "relative"'));
+  assert(appSource.includes("MOBILE_SETTINGS_ANCHOR_MS"));
+  assert(appSource.includes("surface.scrollTop += correction"));
+  assert(appSource.includes('surface.addEventListener("pointerdown", cancelForUser'));
+  assert(appSource.includes('surface.addEventListener("touchstart", cancelForUser'));
+  assert(appSource.includes('surface.addEventListener("wheel", cancelForUser'));
+  assert(appSource.includes("unmountOnExit: true"));
+  assert(appSource.includes("prefers-reduced-motion: reduce"));
   assert(appSource.includes('borderRadius: "0 !important"'));
   assert(appSource.includes('data-settings-list="true" spacing={0}'));
   assert(appSource.includes('const openingTab = desktop ? initialTab : "settings"'));

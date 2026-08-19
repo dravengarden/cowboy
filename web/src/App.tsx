@@ -3996,6 +3996,10 @@ type MobileSettingsSection =
     | "info"
     | "logs";
 
+const MOBILE_SETTINGS_ENTER_MS = 280;
+const MOBILE_SETTINGS_EXIT_MS = 220;
+const MOBILE_SETTINGS_ANCHOR_MS = 360;
+
 function initialMobileSettingsSection(
     tab: ControlCenterTab,
     focus: SettingsProductFocus,
@@ -4023,16 +4027,15 @@ function MobileSettingsAccordion({
         <Accordion
             data-mobile-settings-group={id}
             expanded={expanded}
-            onChange={(_event, next): void => {
-                onChange(next ? id : null);
-                if (!next) return;
-                globalThis.requestAnimationFrame(() => {
-                    globalThis.document.getElementById(`mobile-settings-${id}-header`)
-                        ?.scrollIntoView({ block: "start", behavior: "smooth" });
-                });
-            }}
+            onChange={(_event, next): void => onChange(next ? id : null)}
             disableGutters
             elevation={0}
+            slotProps={{
+                transition: {
+                    timeout: { enter: MOBILE_SETTINGS_ENTER_MS, exit: MOBILE_SETTINGS_EXIT_MS },
+                    unmountOnExit: true,
+                },
+            }}
             sx={{
                 bgcolor: "transparent",
                 m: "0 !important",
@@ -4072,7 +4075,7 @@ function MobileSettingsAccordion({
                 id={`mobile-settings-${id}-content`}
                 sx={{ px: 0.75, pt: 1.5, pb: 2.5, borderTop: 1, borderColor: "divider" }}
             >
-                {expanded ? children : null}
+                {children}
             </AccordionDetails>
         </Accordion>
     );
@@ -4923,7 +4926,6 @@ function SettingsShell({
     const settingsPanelRef = useRef<HTMLDivElement>(null);
     const settingsListRef = useRef<HTMLDivElement>(null);
     const settingsListScrollRef = useRef(0);
-    const codeSectionRef = useRef<HTMLDivElement>(null);
     const viewTransitionRef = useRef<ControlCenterViewTransition | null>(null);
     const settingsScrollSurface = useCallback((): HTMLElement | null => {
         const list = settingsPanelRef.current ?? settingsListRef.current;
@@ -5013,29 +5015,62 @@ function SettingsShell({
         setFontOpen(false);
         settingsListScrollRef.current = 0;
     }, [desktop, open, initialTab, initialSection]);
-    const didFocusCodeSectionRef = useRef(false);
     useEffect(() => {
-        if (!open) {
-            didFocusCodeSectionRef.current = false;
+        if (!open || desktop || tab !== "settings" || mobileSettingsSection === null) {
             return undefined;
         }
-        if (
-            desktop ||
-            initialSection !== "code" ||
-            tab !== "settings" ||
-            mobileSettingsSection !== "code"
-        ) {
-            return undefined;
-        }
-        if (didFocusCodeSectionRef.current) return undefined;
-        const codeSection = codeSectionRef.current;
-        if (codeSection === null) return undefined;
-        didFocusCodeSectionRef.current = true;
-        const frame = globalThis.requestAnimationFrame(() => {
-            codeSection.scrollIntoView({ block: "start", behavior: "smooth" });
-        });
-        return (): void => globalThis.cancelAnimationFrame(frame);
-    }, [desktop, initialSection, mobileSettingsSection, open, tab]);
+        const reducedMotion = globalThis.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        let frame = 0;
+        let cancelled = false;
+        let surface: HTMLElement | null = null;
+        let startedAt: number | null = null;
+        let startingHeaderTop: number | null = null;
+        const cancelForUser = (): void => {
+            cancelled = true;
+            if (frame !== 0) globalThis.cancelAnimationFrame(frame);
+        };
+        const detachSurfaceListeners = (): void => {
+            surface?.removeEventListener("pointerdown", cancelForUser);
+            surface?.removeEventListener("touchstart", cancelForUser);
+            surface?.removeEventListener("wheel", cancelForUser);
+        };
+        const alignExpandedHeader = (now: number): void => {
+            if (cancelled) return;
+            const header = globalThis.document.getElementById(
+                `mobile-settings-${mobileSettingsSection}-header`,
+            );
+            const nextSurface = settingsScrollSurface();
+            if (header === null || nextSurface === null) return;
+            if (surface !== nextSurface) {
+                detachSurfaceListeners();
+                surface = nextSurface;
+                surface.addEventListener("pointerdown", cancelForUser, { passive: true });
+                surface.addEventListener("touchstart", cancelForUser, { passive: true });
+                surface.addEventListener("wheel", cancelForUser, { passive: true });
+            }
+            const headerTop = header.getBoundingClientRect().top;
+            const surfaceTop = surface.getBoundingClientRect().top - 1;
+            startedAt ??= now;
+            startingHeaderTop ??= headerTop;
+            const elapsed = now - startedAt;
+            const progress = reducedMotion
+                ? 1
+                : Math.min(1, elapsed / MOBILE_SETTINGS_ENTER_MS);
+            const eased = 1 - Math.pow(1 - progress, 3);
+            const desiredTop = startingHeaderTop + (surfaceTop - startingHeaderTop) * eased;
+            const correction = headerTop - desiredTop;
+            if (Math.abs(correction) >= 0.25) surface.scrollTop += correction;
+            if (!reducedMotion && elapsed < MOBILE_SETTINGS_ANCHOR_MS) {
+                frame = globalThis.requestAnimationFrame(alignExpandedHeader);
+            }
+        };
+        frame = globalThis.requestAnimationFrame(alignExpandedHeader);
+        return () => {
+            cancelled = true;
+            if (frame !== 0) globalThis.cancelAnimationFrame(frame);
+            detachSurfaceListeners();
+        };
+    }, [desktop, mobileSettingsSection, open, settingsScrollSurface, tab]);
     useLayoutEffect(() => {
         if (!open || !tabPanelVisible || renderedTab !== tab) return;
         applyDestinationScroll(renderedTab);
@@ -5728,7 +5763,6 @@ function SettingsShell({
                     onChange={setMobileSettingsSection}
                 >
                 <Box
-                    ref={codeSectionRef}
                     data-settings-section="code"
                     sx={{ scrollMarginTop: 16 }}
                 >
