@@ -1165,14 +1165,16 @@ function DocumentView({
       )}
       <Box
         data-mobile-overflow-layer={
-          markdownPreview || previewKind === "mermaid" || mediaPreview
+          markdownPreview || previewKind === "mermaid" || mediaPreview ||
+              settings.softWrap
             ? "true"
             : undefined
         }
         sx={{
           flex: 1,
           minHeight: 0,
-          overflow: markdownPreview || previewKind === "mermaid" || mediaPreview
+          overflow: markdownPreview || previewKind === "mermaid" ||
+              mediaPreview || settings.softWrap
             ? "auto"
             : "hidden",
         }}

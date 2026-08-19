@@ -4,10 +4,10 @@
  *  - Wrap off, horizontal bar: left/right pans the file. `hasHorizontalScroller`
  *    owns that gesture. Do not steal it for the drawer/pager.
  *
- *  iOS re-rasters CM token spans under an ancestor translate3d. Overflow
- *  flatten remasures the scroller. Hiding flashes. A canvas snapshot was
- *  rejected. During a claimed swipe, `filter: opacity(0.999)` forces one
- *  compositor texture of the live editor without changing overflow. */
+ *  The swipe hitch is a nested ScrollView. README scrolls
+ *  `[data-mobile-overflow-layer]`; wrap-on code must do the same and keep
+ *  `.cm-scroller` at `overflow: visible`. Flattening `.cm-scroller`
+ *  remasures. Hiding flashes. A canvas snapshot was rejected. */
 
 export const MOBILE_CODE_SWIPE_START = "cowboy:transcript-direct-manipulation-start";
 export const MOBILE_CODE_SWIPE_END = "cowboy:transcript-direct-manipulation-end";

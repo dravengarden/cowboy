@@ -189,10 +189,14 @@ Sticky gutters are unused in that mode and are what iOS re-sticks under
 the peek transform — keep them `position: relative`. Do not set
 `-webkit-overflow-scrolling: touch` when wrap is on.
 
-A standing `contain: paint` tile is not enough: iOS still re-rasters
-CM token spans for the whole gesture. On a claimed swipe, flatten the
-live editor with `filter: opacity(0.999)` so the compositor holds one
-texture. Do not change `.cm-scroller` overflow and do not hide paint.
+The hitch is the nested ScrollView. README scrolls
+`[data-mobile-overflow-layer]`; swipe flatten can kill that tile.
+Wrap-on code used `.cm-scroller { overflow: auto }` inside the
+translated page — iOS promotes that descendant and relocates it every
+frame. Wrap-on therefore grows with the document and lets the same
+page layer scroll, like README. Wrap-off keeps the inner XY scroller
+and the native bar. Do not flatten `.cm-scroller` overflow on claim
+(remasure) and do not hide paint.
 
 Retries that failed and must not return:
 

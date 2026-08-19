@@ -10,6 +10,9 @@ const reviewChanges = await Deno.readTextFile(
 const codeViewer = await Deno.readTextFile(
   new URL("./mobile/review/CodeViewer.tsx", import.meta.url),
 );
+const reviewApp = await Deno.readTextFile(
+  new URL("./mobile/review/ReviewApp.tsx", import.meta.url),
+);
 const transcript = await Deno.readTextFile(
   new URL("./Transcript.tsx", import.meta.url),
 );
@@ -29,5 +32,8 @@ Deno.test("wrap-on Review source keeps live CodeMirror for workspace swipe", () 
   assert(codeViewer.includes("softWrap"));
   assert(codeViewer.includes('position: "relative"'));
   assert(codeViewer.includes("WebkitOverflowScrolling: \"touch\""));
+  assert(codeViewer.includes('overflow: softWrap ? "visible" : "auto"'));
   assertEquals(codeViewer.includes("data-mobile-code-snapshot"), false);
+  assert(reviewApp.includes("settings.softWrap"));
+  assert(reviewApp.includes('data-mobile-overflow-layer'));
 });

@@ -451,16 +451,21 @@ export default function CodeViewer({
       cmTheme(theme, true),
       syntaxHighlighting(highlightStyle),
       EditorView.theme({
-        "&": { height: "100%", fontSize: `${fontSize}px` },
+        "&": {
+          height: softWrap ? "auto" : "100%",
+          ...(softWrap ? { minHeight: "100%" } : {}),
+          fontSize: `${fontSize}px`,
+        },
         ".cm-scroller": {
           fontSize: `${fontSize}px`,
-          overflow: "auto",
-          overflowX: softWrap ? "hidden" : "auto",
+          // Wrap-on must not be a nested ScrollView. README scrolls the
+          // page layer (`data-mobile-overflow-layer`); that tile is what
+          // swipe flatten can kill. A `.cm-scroller { overflow: auto }`
+          // inside a translated page is the remaining compositor hitch.
+          overflow: softWrap ? "visible" : "auto",
+          overflowX: softWrap ? "visible" : "auto",
           overscrollBehavior: "contain",
           touchAction: softWrap ? "pan-y pinch-zoom" : "pan-x pan-y pinch-zoom",
-          // Wrap-off needs the native X bar. Wrap-on has no X bar, so
-          // skip `-webkit-overflow-scrolling: touch` — that tile is
-          // what iOS re-rasters during a workspace swipe.
           ...(softWrap ? {} : { WebkitOverflowScrolling: "touch" }),
         },
         ".cm-content": {
@@ -816,9 +821,12 @@ export default function CodeViewer({
       data-mobile-code-layer="true"
       data-mobile-code-wrap={softWrap ? "true" : undefined}
       sx={{
-        height: "100%",
-        minHeight: 0,
-        "& > div": { height: "100%" },
+        height: softWrap ? "auto" : "100%",
+        minHeight: softWrap ? "100%" : 0,
+        "& > div": {
+          height: softWrap ? "auto" : "100%",
+          minHeight: softWrap ? "100%" : undefined,
+        },
         // `cmTheme` is shared with the Agent composer and intentionally follows
         // the global reading scale. Code Review owns a separate code-only
         // setting, so enforce it at this product boundary instead of changing
@@ -850,7 +858,7 @@ export default function CodeViewer({
         }}
         editable={false}
         theme="none"
-        height="100%"
+        height={softWrap ? "auto" : "100%"}
       />
     </Box>
   );
