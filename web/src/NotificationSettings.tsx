@@ -203,6 +203,9 @@ export function NotificationSettingsContent(): React.JSX.Element {
             })}
           />
         ))}
+        <Typography variant="caption" color="text.secondary">
+          Mute or unmute an individual session from its ••• menu. System permission always takes priority.
+        </Typography>
       </Stack>
 
       <Divider />
@@ -233,9 +236,6 @@ export function NotificationSettingsContent(): React.JSX.Element {
         disabled={!enabled}
         onChange={(checked): void => updateSystemNotificationPreferences({ showSessionNames: checked })}
       />
-      <Typography variant="caption" color="text.secondary">
-        Mute or unmute an individual session from its ••• menu. System permission always takes priority.
-      </Typography>
     </Stack>
   );
 }
