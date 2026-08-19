@@ -7426,13 +7426,17 @@ async fn api_code_language(
     if query.path.is_empty() {
         return (StatusCode::BAD_REQUEST, "invalid buffer path").into_response();
     }
+    let Some((worktree, path)) = zed_language_target(&cwd, &query.path) else {
+        return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable")
+            .into_response();
+    };
     match zed_adapter_request_for_session(
         &state,
         &session_id,
         serde_json::json!({
             "type": "bufferLanguage",
-            "worktree": cwd,
-            "path": query.path,
+            "worktree": worktree,
+            "path": path,
         }),
     )
     .await
@@ -7480,13 +7484,17 @@ async fn api_code_hover(
     if query.path.is_empty() {
         return (StatusCode::BAD_REQUEST, "invalid buffer path").into_response();
     }
+    let Some((worktree, path)) = zed_language_target(&cwd, &query.path) else {
+        return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable")
+            .into_response();
+    };
     match zed_adapter_request_for_session(
         &state,
         &session_id,
         serde_json::json!({
             "type": "bufferHover",
-            "worktree": cwd,
-            "path": query.path,
+            "worktree": worktree,
+            "path": path,
             "row": query.row,
             "column": query.column,
         }),
@@ -7526,13 +7534,17 @@ async fn api_code_navigation(
     if query.path.is_empty() {
         return (StatusCode::BAD_REQUEST, "invalid buffer path").into_response();
     }
+    let Some((worktree, path)) = zed_language_target(&cwd, &query.path) else {
+        return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable")
+            .into_response();
+    };
     match zed_adapter_request_for_session(
         &state,
         &session_id,
         serde_json::json!({
             "type": "bufferNavigate",
-            "worktree": cwd,
-            "path": query.path,
+            "worktree": worktree,
+            "path": path,
             "row": query.row,
             "column": query.column,
             "kind": query.kind,
@@ -7575,13 +7587,17 @@ async fn api_code_outline(
     if query.path.is_empty() {
         return (StatusCode::BAD_REQUEST, "invalid buffer path").into_response();
     }
+    let Some((worktree, path)) = zed_language_target(&cwd, &query.path) else {
+        return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable")
+            .into_response();
+    };
     match zed_adapter_request_for_session(
         &state,
         &session_id,
         serde_json::json!({
             "type": "bufferSymbols",
-            "worktree": cwd,
-            "path": query.path,
+            "worktree": worktree,
+            "path": path,
         }),
     )
     .await
@@ -7632,14 +7648,16 @@ async fn api_code_buffer_lease(
     {
         return (StatusCode::BAD_REQUEST, "invalid buffer lease").into_response();
     }
-    if open && !local_buffer_file_exists(&cwd, &request.path) {
-        // Aggregate-project files are a read-only Code projection and cannot be
-        // registered with a Zed worktree rooted at this session. Missing and
-        // projected paths are deterministic lease misses, not adapter outages.
-        return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable").into_response();
-    }
+    let Some((worktree, path)) = zed_language_target(&cwd, &request.path) else {
+        // Missing files, path escapes, and unregistered aggregate projections
+        // are deterministic lease misses, not adapter outages. Registered
+        // `projects/<name>/...` files lease against that checkout so hover can
+        // run rust-analyzer there.
+        return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable")
+            .into_response();
+    };
     if open
-        && ensure_zed_worktree_for_session(&state, &session_id, &cwd)
+        && ensure_zed_worktree_for_session(&state, &session_id, &worktree)
             .await
             .is_err()
     {
@@ -7654,8 +7672,8 @@ async fn api_code_buffer_lease(
         &session_id,
         serde_json::json!({
             "type": if open { "openBuffer" } else { "closeBuffer" },
-            "worktree": cwd,
-            "path": request.path,
+            "worktree": worktree,
+            "path": path,
             "leaseId": request.lease_id,
         }),
     )
@@ -7690,6 +7708,17 @@ async fn api_code_buffer_lease(
                 .into_response()
         }
     }
+}
+
+fn zed_language_target(cwd: &str, relative: &str) -> Option<(String, String)> {
+    crate::code_review::LocalCodeProvider::new(std::path::Path::new(cwd))
+        .language_buffer_key(relative)
+        .map(|(worktree, path)| {
+            (
+                worktree.to_string_lossy().into_owned(),
+                path.to_string_lossy().replace('\\', "/"),
+            )
+        })
 }
 
 fn local_buffer_file_exists(cwd: &str, relative: &str) -> bool {

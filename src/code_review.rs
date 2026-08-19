@@ -260,6 +260,39 @@ impl LocalCodeProvider {
         projected
     }
 
+    /// Map a Code-tree path onto the Zed worktree that can actually open it.
+    /// Session-local files stay on this checkout. Aggregate
+    /// `projects/<name>/...` files are registered checkouts outside the
+    /// session worktree and must be leased there, or hover/outline always
+    /// fail with "buffer is not open".
+    #[must_use]
+    pub fn language_buffer_key(&self, relative: &str) -> Option<(PathBuf, PathBuf)> {
+        let relative = Path::new(relative);
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|component| !matches!(component, Component::Normal(_)))
+        {
+            return None;
+        }
+        let local = self.root.join(relative);
+        if let Ok(canonical) = local.canonicalize() {
+            let Ok(canonical_root) = self.root.canonicalize() else {
+                return None;
+            };
+            if canonical.starts_with(&canonical_root) && canonical.is_file() {
+                return Some((canonical_root, relative.to_path_buf()));
+            }
+        }
+        let (project_root, inner) = self.projected_path(relative)?;
+        let canonical_root = project_root.canonicalize().ok()?;
+        let canonical = project_root.join(&inner).canonicalize().ok()?;
+        if !canonical.starts_with(&canonical_root) || !canonical.is_file() {
+            return None;
+        }
+        Some((canonical_root, inner))
+    }
+
     fn projected_path(&self, relative: &Path) -> Option<(PathBuf, PathBuf)> {
         let mut components = relative.components();
         if !matches!(
@@ -1502,6 +1535,16 @@ mod tests {
             "pub fn projected() {}\n"
         );
         assert!(provider.file("projects/unregistered/secret").is_err());
+        let (worktree, inner) = provider
+            .language_buffer_key("projects/external/src/lib.rs")
+            .expect("projected files should lease against the registered checkout");
+        assert_eq!(worktree, dir.join("projects/external").canonicalize().unwrap());
+        assert_eq!(inner, PathBuf::from("src/lib.rs"));
+        assert!(
+            provider
+                .language_buffer_key("projects/unregistered/secret")
+                .is_none()
+        );
 
         Command::new("git")
             .args(["worktree", "remove", "--force", linked.to_str().unwrap()])
