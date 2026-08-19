@@ -3998,7 +3998,9 @@ type MobileSettingsSection =
 
 const MOBILE_SETTINGS_ENTER_MS = 280;
 const MOBILE_SETTINGS_EXIT_MS = 220;
-const MOBILE_SETTINGS_ANCHOR_MS = 360;
+const MOBILE_SETTINGS_ANCHOR_MAX_MS = 1600;
+const MOBILE_SETTINGS_ANCHOR_RESPONSE_MS = 90;
+const MOBILE_SETTINGS_ANCHOR_STABLE_FRAMES = 3;
 
 function initialMobileSettingsSection(
     tab: ControlCenterTab,
@@ -5024,7 +5026,8 @@ function SettingsShell({
         let cancelled = false;
         let surface: HTMLElement | null = null;
         let startedAt: number | null = null;
-        let startingHeaderTop: number | null = null;
+        let lastFrameAt: number | null = null;
+        let stableFrames = 0;
         const cancelForUser = (): void => {
             cancelled = true;
             if (frame !== 0) globalThis.cancelAnimationFrame(frame);
@@ -5035,6 +5038,7 @@ function SettingsShell({
             surface?.removeEventListener("wheel", cancelForUser);
         };
         const alignExpandedHeader = (now: number): void => {
+            frame = 0;
             if (cancelled) return;
             const header = globalThis.document.getElementById(
                 `mobile-settings-${mobileSettingsSection}-header`,
@@ -5051,23 +5055,45 @@ function SettingsShell({
             const headerTop = header.getBoundingClientRect().top;
             const surfaceTop = surface.getBoundingClientRect().top - 1;
             startedAt ??= now;
-            startingHeaderTop ??= headerTop;
+            lastFrameAt ??= now - 16;
             const elapsed = now - startedAt;
-            const progress = reducedMotion
+            const frameDuration = Math.min(50, now - lastFrameAt);
+            lastFrameAt = now;
+            const correction = headerTop - surfaceTop;
+            const response = reducedMotion
                 ? 1
-                : Math.min(1, elapsed / MOBILE_SETTINGS_ENTER_MS);
-            const eased = 1 - Math.pow(1 - progress, 3);
-            const desiredTop = startingHeaderTop + (surfaceTop - startingHeaderTop) * eased;
-            const correction = headerTop - desiredTop;
-            if (Math.abs(correction) >= 0.25) surface.scrollTop += correction;
-            if (!reducedMotion && elapsed < MOBILE_SETTINGS_ANCHOR_MS) {
+                : 1 - Math.exp(-frameDuration / MOBILE_SETTINGS_ANCHOR_RESPONSE_MS);
+            if (Math.abs(correction) >= 0.25) {
+                surface.scrollTop += correction * response;
+            }
+            stableFrames = Math.abs(correction) < 0.75 ? stableFrames + 1 : 0;
+            if (
+                !reducedMotion &&
+                elapsed < MOBILE_SETTINGS_ANCHOR_MAX_MS &&
+                stableFrames < MOBILE_SETTINGS_ANCHOR_STABLE_FRAMES
+            ) {
                 frame = globalThis.requestAnimationFrame(alignExpandedHeader);
             }
         };
-        frame = globalThis.requestAnimationFrame(alignExpandedHeader);
+        const scheduleAlignment = (): void => {
+            if (cancelled || frame !== 0) return;
+            startedAt = null;
+            lastFrameAt = null;
+            stableFrames = 0;
+            frame = globalThis.requestAnimationFrame(alignExpandedHeader);
+        };
+        const expandedGroup = globalThis.document.querySelector<HTMLElement>(
+            `[data-mobile-settings-group="${mobileSettingsSection}"]`,
+        );
+        const resizeObserver = typeof ResizeObserver === "undefined"
+            ? null
+            : new ResizeObserver(scheduleAlignment);
+        if (expandedGroup !== null) resizeObserver?.observe(expandedGroup);
+        scheduleAlignment();
         return () => {
             cancelled = true;
             if (frame !== 0) globalThis.cancelAnimationFrame(frame);
+            resizeObserver?.disconnect();
             detachSurfaceListeners();
         };
     }, [desktop, mobileSettingsSection, open, settingsScrollSurface, tab]);
