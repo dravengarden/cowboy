@@ -244,7 +244,7 @@ Deno.test("mobile column and pending ownership cannot fill the viewport without 
   );
   assertEquals(
     composerSource.includes(
-      "...(!desktop && !mobileFloatingEdit && {\n              maxHeight: \"30vh\",\n              overflowY: \"auto\",",
+      "...(!desktop && !mobileFloatingEdit && {\n              maxHeight: \"30vh\",\n              overflowY: visuallyCollapsed ? \"hidden\" : \"auto\",",
     ),
     true,
   );

@@ -28,7 +28,9 @@ Deno.test("plan queue and draft share the exclusive stack accordion", () => {
   );
   assertEquals(composerSource.includes("unbounded"), false);
   assertEquals(
-    composerSource.includes('data-mobile-pending-scrollport={!desktop ? "true" : undefined}'),
+    composerSource.includes(
+      "data-mobile-pending-scrollport={!desktop && !visuallyCollapsed",
+    ),
     true,
   );
   assertEquals(
@@ -36,7 +38,23 @@ Deno.test("plan queue and draft share the exclusive stack accordion", () => {
     true,
   );
   assertEquals(
+    composerSource.includes(
+      'overflowY: visuallyCollapsed ? "hidden" : "auto"',
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      'WebkitOverflowScrolling: visuallyCollapsed ? "auto" : "touch"',
+    ),
+    true,
+  );
+  assertEquals(
     planSource.includes('maxHeight: desktop ? 176 : "30vh"'),
+    true,
+  );
+  assertEquals(
+    planSource.includes('overflowY: expanded ? "auto" : "hidden"'),
     true,
   );
   assertEquals(composerSource.includes("data-mobile-pending-scrollport"), true);

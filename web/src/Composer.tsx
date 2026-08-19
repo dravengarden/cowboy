@@ -4570,7 +4570,9 @@ function PendingPanel({
         <Stack
           spacing={0.5}
           ref={scrollRef}
-          data-mobile-pending-scrollport={!desktop ? "true" : undefined}
+          data-mobile-pending-scrollport={!desktop && !visuallyCollapsed
+            ? "true"
+            : undefined}
           data-desktop-pending-list={desktop ? "true" : undefined}
           data-desktop-aux-list={desktop ? "true" : undefined}
           sx={{
@@ -4582,11 +4584,14 @@ function PendingPanel({
             // Exclusive accordion means only one body is open, so each panel
             // owns its own cap + scrollbar. Keyboard-up floating edit is the
             // writing surface and must not clip the editor at 30vh.
+            // Collapse keeps children mounted. A hidden
+            // `-webkit-overflow-scrolling: touch` tile still becomes its own
+            // iOS compositor scroller and freezes the transcript until reload.
             ...(!desktop && !mobileFloatingEdit && {
               maxHeight: "30vh",
-              overflowY: "auto",
-              overscrollBehavior: "contain",
-              WebkitOverflowScrolling: "touch",
+              overflowY: visuallyCollapsed ? "hidden" : "auto",
+              overscrollBehavior: visuallyCollapsed ? "auto" : "contain",
+              WebkitOverflowScrolling: visuallyCollapsed ? "auto" : "touch",
             }),
             ...(desktop && {
               maxHeight: 176,

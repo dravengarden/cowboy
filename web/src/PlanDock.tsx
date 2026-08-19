@@ -171,9 +171,12 @@ export const PlanDock = memo(function PlanDock({
           sx={{
             p: 1.25,
             maxHeight: desktop ? 176 : "30vh",
-            overflowY: "auto",
-            overscrollBehavior: "contain",
-            WebkitOverflowScrolling: "touch",
+            // Collapse keeps the checklist mounted. A collapsed
+            // `-webkit-overflow-scrolling: touch` tile freezes transcript
+            // scroll on iOS, so only the open body is a native scroller.
+            overflowY: expanded ? "auto" : "hidden",
+            overscrollBehavior: expanded ? "contain" : "auto",
+            WebkitOverflowScrolling: expanded ? "touch" : "auto",
             ...(desktop && {
               transition: "max-height 150ms ease, padding 150ms ease",
               "[data-desktop-focused='true'] &": {
