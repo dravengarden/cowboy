@@ -202,6 +202,7 @@ export function ReviewOutline({
       title={`Outline · ${fileName}`}
       forceSheet
       cover
+      portal
     >
       <Stack spacing={1.25} sx={{ minHeight: "55vh", pb: 2 }}>
         <TextField

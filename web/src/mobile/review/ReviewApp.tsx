@@ -1234,6 +1234,7 @@ function DocumentView({
                 ? `Symbols · ${inspectCandidates.length}`
                 : "Symbol"}
               forceSheet
+              portal
             >
               {mobileCandidateSelector}
               {symbolContent}
@@ -2814,6 +2815,7 @@ export function ReviewApp({
           title={selectedContextProject?.label ?? "Context"}
           forceSheet
           cover
+          portal
         >
           <Stack
             ref={sessionListRef}

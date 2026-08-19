@@ -4,6 +4,11 @@ const outlineSource = await Deno.readTextFile(
   new URL("./ReviewOutline.tsx", import.meta.url),
 );
 
+Deno.test("outline sheet portals off the Review pager containing block", () => {
+  assertEquals(outlineSource.includes("portal"), true);
+  assertEquals(outlineSource.includes("forceSheet"), true);
+});
+
 Deno.test("outline kind marks are code glyphs, not decorative logos", () => {
   assertEquals(outlineSource.includes("DataArrayOutlined"), false);
   assertEquals(outlineSource.includes("DiamondOutlined"), false);

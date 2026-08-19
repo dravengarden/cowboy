@@ -10,6 +10,17 @@ const storeSource = await Deno.readTextFile(
   new URL("../../store.ts", import.meta.url),
 );
 
+Deno.test("review sheets portal off the product-pager containing block", () => {
+  const symbolsAt = source.indexOf('? `Symbols · ${inspectCandidates.length}`');
+  assertEquals(symbolsAt >= 0, true);
+  assertStringIncludes(source.slice(symbolsAt, symbolsAt + 180), "portal");
+  const contextAt = source.indexOf(
+    'title={selectedContextProject?.label ?? "Context"}',
+  );
+  assertEquals(contextAt >= 0, true);
+  assertStringIncludes(source.slice(contextAt, contextAt + 180), "portal");
+});
+
 Deno.test("session context leads with the active session without a history row", () => {
   assertEquals(source.includes("function ContextPreviousSessionRow"), false);
   assertEquals(source.includes('label = "Previous session"'), false);
