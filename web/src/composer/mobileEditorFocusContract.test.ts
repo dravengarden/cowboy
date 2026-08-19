@@ -73,6 +73,21 @@ Deno.test("mobile keyboard keeps the writing material opaque across transient We
   );
 });
 
+Deno.test("IME focus loss must not collapse the keyboard-up formatting row", () => {
+  assertEquals(
+    composerSource.includes(
+      "\"&[data-mobile-keyboard-open='true'] [data-mobile-focus-format-row]\"",
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "\"&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-focus-format-row]\"",
+    ),
+    false,
+  );
+});
+
 Deno.test("multi-image mobile composers scroll the focused caret above the keyboard", () => {
   assertEquals(
     composerSource.includes('maxHeight: "min(42dvh, 22rem)"'),

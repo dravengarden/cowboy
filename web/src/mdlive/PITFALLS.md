@@ -1096,8 +1096,15 @@ Desktop Vim + IME checks:
     card.** The compact card contains utility buttons, so card-wide
     `:focus-within` can remain true after the textarea/contenteditable has
     blurred and leave a tall canvas that looks editable but cannot summon the
-    iOS keyboard. Promote the card, formatting row, and keyboard action only
-    from `[data-mobile-editor-area]:focus-within`. The token-free native
+    iOS keyboard. Promote the card canvas only from
+    `[data-mobile-editor-area]:focus-within` together with a visible keyboard.
+    The two-track formatting row is keyboard *presentation*: WKWebView can
+    move `activeElement` to `body` during IME or the 123-pad while the caret
+    and software keyboard stay, and requiring `:focus-within` then collapses
+    that row so the action rail paints under the iOS `∧ ∨ ✓` accessory.
+    Show the formatting row from `data-mobile-keyboard-open` alone. Hide
+    keyboard / Settings still dismiss that surface by clearing the keyboard
+    signal. The token-free native
     textarea must remain content-sized and grow through MUI's native autosizer
     up to its row limit. Do not give its parent an independent focused minimum
     height or force the MUI/textarea chain to `height: 100%`: that manufactures

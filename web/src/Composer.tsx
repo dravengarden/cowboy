@@ -2209,7 +2209,11 @@ export function ComposerWorkspace({
               {
                 minHeight: 0,
               },
-            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-focus-format-row]":
+            // Two-track chrome is keyboard presentation, not DOM focus.
+            // WKWebView can move activeElement to body during IME / 123-pad
+            // while the caret stays; requiring :focus-within collapses this
+            // row and parks the action rail under the iOS ∧∨✓ accessory.
+            "&[data-mobile-keyboard-open='true'] [data-mobile-focus-format-row]":
               {
                 maxHeight: 48,
                 opacity: 1,
