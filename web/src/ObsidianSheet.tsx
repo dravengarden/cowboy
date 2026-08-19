@@ -297,18 +297,20 @@ export function ObsidianSheet({
           flexDirection: "column",
           overflow: "hidden",
           borderRadius: `${String(OBSIDIAN_SHEET_RADIUS_PX)}px`,
-          border: 0,
-          bgcolor: (t) =>
+          // Obsidian's mobile action card is an opaque slab with a hairline,
+          // not frosted glass. Frost + no border left a hollow frame of
+          // dimmed page around Clear/Symbols.
+          border: "1px solid",
+          borderColor: (t) =>
             alpha(
-              t.palette.background.paper,
-              t.palette.mode === "dark" ? 0.82 : 0.9,
+              t.palette.common.black,
+              t.palette.mode === "dark" ? 0.55 : 0.14,
             ),
+          bgcolor: "background.paper",
           backgroundImage: "none",
-          backdropFilter: "blur(36px) saturate(160%)",
-          WebkitBackdropFilter: "blur(36px) saturate(160%)",
           boxShadow: (t) =>
-            `0 12px 40px ${
-              alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.42 : 0.16)
+            `0 8px 28px ${
+              alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.38 : 0.12)
             }`,
           outline: "none",
           transformOrigin: "center bottom",
@@ -376,9 +378,9 @@ export function ObsidianSheet({
             sx={{
               flexShrink: 0,
               display: "flex",
-              justifyContent: "flex-end",
+              justifyContent: "space-between",
               alignItems: "center",
-              flexWrap: "wrap",
+              flexWrap: "nowrap",
               gap: 1,
               px: 2.25,
               pt: 1,

@@ -13,7 +13,9 @@ export const OBSIDIAN_SHEET_SETTLE_EASING = "cubic-bezier(0.32, 0.72, 0, 1)";
 export const OBSIDIAN_SHEET_SETTLE_MS = 240;
 
 /** Tiny gap from the screen edges. The card still occupies the bottom —
- *  safe-area lives INSIDE the sheet, never as an external lift. */
+ *  safe-area lives INSIDE the sheet, never as an external lift. Obsidian
+ *  keeps this optical gap; the card itself is opaque with a hairline, so
+ *  the gap does not read as a hollow frame. */
 export const OBSIDIAN_SHEET_INSET_PX = 8;
 
 /** All-around radius. Matches Obsidian's mobile action card (~18). */
@@ -25,8 +27,9 @@ export const OBSIDIAN_SHEET_MAX_FRACTION = 0.88;
 /** Closed scale. A tiny shrink-from-below is what makes Obsidian pop. */
 export const OBSIDIAN_SHEET_CLOSED_SCALE = 0.96;
 
-/** Scrim at rest. Heavier than a thin frosted DetentSheet so the inset card lifts. */
-export const OBSIDIAN_SHEET_SCRIM_MAX = 0.32;
+/** Scrim at rest. Opaque enough that the 8px edge gap does not show
+ *  page chrome as a hollow frame around the card. */
+export const OBSIDIAN_SHEET_SCRIM_MAX = 0.48;
 
 export function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));

@@ -607,7 +607,9 @@ Deno.test("every focused mobile editor uses two semantic bars with a fixed keybo
     true,
   );
   assertEquals(
-    composerSource.includes('primaryLabel="Expand editor"'),
+    composerSource.includes(
+      'primaryLabel={kind === "draft" ? "Send draft" : "Expand editor"}',
+    ),
     true,
   );
   assertEquals(
@@ -874,19 +876,28 @@ Deno.test("mobile pending editing keeps expansion and context delivery actions i
   assertEquals(pendingStart >= 0 && pendingEnd > pendingStart, true);
   assertEquals(
     pending.indexOf('title="Attach file"') <
-      pending.indexOf('primaryLabel="Expand editor"'),
+      pending.indexOf('primaryLabel={kind === "draft" ? "Send draft"'),
     true,
   );
-  assertEquals(pending.includes('primaryLabel="Expand editor"'), true);
-  assertEquals(pending.includes("onPrimary={expandMobileEdit}"), true);
-  assertEquals(pending.includes('title="Send draft"'), true);
+  assertEquals(
+    pending.includes('primaryLabel={kind === "draft" ? "Send draft" : "Expand editor"}'),
+    true,
+  );
+  assertEquals(
+    pending.includes(
+      "onPrimary={kind === \"draft\" ? sendDraftFromEdit : expandMobileEdit}",
+    ),
+    true,
+  );
+  assertEquals(pending.includes('primaryIcon={kind === "draft" ? <Send />'), true);
   assertEquals(
     /title=\{message\.schedule\s*\?\s*"Reschedule send"\s*:\s*"Schedule send"\}/
       .test(pending),
     true,
   );
   assertEquals(pending.includes('title="Force push"'), true);
-  assertEquals(pending.includes("networkAction={sendDraftFromEdit}"), true);
+  assertEquals(pending.includes('title="Expand editor"'), true);
+  assertEquals(accessoryDockSource.includes('flex: "0 0 auto"'), true);
   assertEquals(
     composerSource.includes("const completePendingDelivery = async"),
     true,

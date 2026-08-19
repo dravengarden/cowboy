@@ -31,7 +31,7 @@ Deno.test("compact sheet settle matches the Obsidian/iOS drawer cubic", () => {
   assertEquals(OBSIDIAN_SHEET_RADIUS_PX, 18);
   assertEquals(OBSIDIAN_SHEET_MAX_FRACTION, 0.88);
   assertEquals(OBSIDIAN_SHEET_CLOSED_SCALE, 0.96);
-  assertEquals(OBSIDIAN_SHEET_SCRIM_MAX, 0.32);
+  assertEquals(OBSIDIAN_SHEET_SCRIM_MAX, 0.48);
   assertEquals(obsidianSheetSettleMs(true), 1);
   assertEquals(obsidianSheetSettleMs(false), 240);
 });
@@ -66,4 +66,8 @@ Deno.test("phone sheets use the compact Obsidian card, not a floating footer pad
   );
   assert(modalSource.includes("SAFE_INSIDE"));
   assert(modalSource.includes("calc(${inset} + var(--kb-inset, 0px))"));
+  assert(modalSource.includes('bgcolor: "background.paper"'));
+  assert(modalSource.includes('border: "1px solid"'));
+  assertEquals(modalSource.includes("backdropFilter"), false);
+  assert(modalSource.includes('justifyContent: "space-between"'));
 });

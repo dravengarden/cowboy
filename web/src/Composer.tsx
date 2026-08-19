@@ -5607,31 +5607,19 @@ function PendingRow({
                     >
                       <AttachFile />
                     </MobileComposerAccessoryButton>
-                    {kind === "draft" && (
-                      <>
-                        <MobileComposerAccessoryButton
-                          title="Send draft"
-                          color="primary"
-                          disabled={!editSendable}
-                          networkAction={sendDraftFromEdit}
-                        >
-                          <Send />
-                        </MobileComposerAccessoryButton>
-                        {onSchedule && (
-                          <MobileComposerAccessoryButton
-                            title={message.schedule
-                              ? "Reschedule send"
-                              : "Schedule send"}
-                            disabled={!editSendable}
-                            onClick={(): void => {
-                              haptic();
-                              scheduleDraftFromEdit();
-                            }}
-                          >
-                            <Schedule />
-                          </MobileComposerAccessoryButton>
-                        )}
-                      </>
+                    {kind === "draft" && onSchedule && (
+                      <MobileComposerAccessoryButton
+                        title={message.schedule
+                          ? "Reschedule send"
+                          : "Schedule send"}
+                        disabled={!editSendable}
+                        onClick={(): void => {
+                          haptic();
+                          scheduleDraftFromEdit();
+                        }}
+                      >
+                        <Schedule />
+                      </MobileComposerAccessoryButton>
                     )}
                     {kind === "queued" && (
                       <MobileComposerAccessoryButton
@@ -5646,6 +5634,14 @@ function PendingRow({
                         <Bolt />
                       </MobileComposerAccessoryButton>
                     )}
+                    {kind === "draft" && (
+                      <MobileComposerAccessoryButton
+                        title="Expand editor"
+                        onClick={expandMobileEdit}
+                      >
+                        <OpenInFull />
+                      </MobileComposerAccessoryButton>
+                    )}
                   </>
                 }
                 fixedAction={
@@ -5658,10 +5654,10 @@ function PendingRow({
                     <KeyboardHide />
                   </MobileComposerAccessoryButton>
                 }
-                primaryLabel="Expand editor"
-                primaryDisabled={false}
-                onPrimary={expandMobileEdit}
-                primaryIcon={<OpenInFull />}
+                primaryLabel={kind === "draft" ? "Send draft" : "Expand editor"}
+                primaryDisabled={kind === "draft" ? !editSendable : false}
+                onPrimary={kind === "draft" ? sendDraftFromEdit : expandMobileEdit}
+                primaryIcon={kind === "draft" ? <Send /> : <OpenInFull />}
               />
             ))}
         </Paper>

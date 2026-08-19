@@ -82,6 +82,7 @@ export function MobileComposerAccessoryDock({
           alignItems="center"
           spacing={0.125}
           sx={{
+            flex: "0 0 auto",
             minWidth: 0,
             overflowX: "auto",
             overflowY: "hidden",

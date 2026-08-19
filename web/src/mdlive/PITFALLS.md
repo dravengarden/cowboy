@@ -2014,3 +2014,14 @@ Desktop Vim + IME checks:
     host until `compositionend`. Aligns with Obsidian (same CM6 stack,
     no host swap, no composition-time transactions). Do **not** add
     another Return/`<br>` intercept; #69 stays open.
+
+81. **Obsidian compact sheets are opaque cards with a hairline, not frost.**
+    Clear/Symbols used a translucent `backdrop-filter` slab with no
+    border. That read as a hollow frame of dimmed page around the card
+    (Obsidian has a 1px stroke and solid fill; the 8px edge gap is only
+    an optical inset). Keep `background.paper`, a 1px hairline, and
+    left/right Cancel/Confirm. Do not restore frost on `ObsidianSheet`.
+    Separately, a focused Mobile **draft** dock must keep Send on the
+    primary right slot (same place as the main composer Send). Expand
+    stays in the left cluster so the empty middle of the top track is
+    not a missing action.
