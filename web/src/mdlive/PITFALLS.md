@@ -2030,3 +2030,14 @@ Desktop Vim + IME checks:
     primary right slot (same place as the main composer Send). Expand
     stays in the left cluster so the empty middle of the top track is
     not a missing action.
+
+82. **Chromium clipboard files need representation-level deduplication.** A
+    desktop image paste can expose the same underlying image in both
+    `DataTransfer.files` and the file entries of `DataTransfer.items`.
+    Chromium may return a different `File` wrapper from `item.getAsFile()`, so
+    object-identity deduplication inserts two attachment tokens and thumbnails.
+    Pair item entries one-to-one with direct files by stable file metadata
+    (name, MIME type, size, and modification time), while retaining item-only
+    files for iOS and retaining genuinely repeated equal-metadata files. Keep
+    this normalization in `clipboardFiles`; do not add browser checks or a
+    second paste-event guard to the editors.

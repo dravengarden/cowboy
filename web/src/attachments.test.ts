@@ -40,6 +40,41 @@ Deno.test("clipboard files include iOS item-only images without duplicates", () 
   assertEquals(clipboardFiles(clipboard), [direct, itemOnly]);
 });
 
+Deno.test("clipboard files dedupe Chromium's distinct wrappers", () => {
+  const direct = new File(["same bytes"], "image.png", {
+    type: "image/png",
+    lastModified: 123,
+  });
+  const itemWrapper = new File(["same bytes"], "image.png", {
+    type: "image/png",
+    lastModified: 123,
+  });
+  const clipboard = {
+    files: [direct],
+    items: [{ kind: "file", getAsFile: () => itemWrapper }],
+  } as unknown as Pick<DataTransfer, "files" | "items">;
+
+  assertEquals(clipboardFiles(clipboard), [direct]);
+});
+
+Deno.test("clipboard files preserve multiple equal-metadata files", () => {
+  const file = (): File =>
+    new File(["same bytes"], "image.png", {
+      type: "image/png",
+      lastModified: 123,
+    });
+  const direct = [file(), file()];
+  const clipboard = {
+    files: direct,
+    items: [
+      { kind: "file", getAsFile: file },
+      { kind: "file", getAsFile: file },
+    ],
+  } as unknown as Pick<DataTransfer, "files" | "items">;
+
+  assertEquals(clipboardFiles(clipboard), direct);
+});
+
 function attachment(id: string, isImage: boolean): Attachment {
   return {
     id,
