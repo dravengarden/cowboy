@@ -3535,7 +3535,13 @@ export function ComposerWorkspace({
         onClose={(): void => setMoveSrcId(null)}
         title="Move draft to…"
       >
-        <List sx={{ pb: 1 }}>
+        {
+          /* ObsidianSheet already pads the body 18px. Default ListItemButton
+            gutters add another 16px, so the title sits left of the rows and a
+            long cwd paints through the right pad into the card edge. Bleed the
+            list to the card and reuse the title inset on both sides. */
+        }
+        <List disablePadding sx={{ mx: -2.25, pb: 1 }}>
           {otherSessions.map((s) => (
             <ListItemButton
               key={s.id}
@@ -3546,11 +3552,16 @@ export function ComposerWorkspace({
                 }
                 setMoveSrcId(null);
               }}
+              sx={{ px: 2.25, py: 1.25, overflow: "hidden" }}
             >
               <ListItemText
                 primary={s.title}
                 secondary={s.cwd}
-                secondaryTypographyProps={{ noWrap: true }}
+                sx={{ my: 0, minWidth: 0, overflow: "hidden" }}
+                slotProps={{
+                  primary: { noWrap: true },
+                  secondary: { noWrap: true },
+                }}
               />
             </ListItemButton>
           ))}

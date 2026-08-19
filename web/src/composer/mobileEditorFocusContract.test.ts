@@ -567,6 +567,24 @@ Deno.test("move-draft undo toast clears the iOS status safe area", () => {
   );
 });
 
+Deno.test("move-draft destination list matches the Obsidian sheet title inset", () => {
+  const sheetStart = composerSource.indexOf('title="Move draft to…"');
+  const sheet = composerSource.slice(
+    sheetStart,
+    composerSource.indexOf("</Sheet>", sheetStart),
+  );
+  assertEquals(sheet.includes("<List disablePadding sx={{ mx: -2.25, pb: 1 }}>"), true);
+  assertEquals(
+    sheet.includes('sx={{ px: 2.25, py: 1.25, overflow: "hidden" }}'),
+    true,
+  );
+  assertEquals(
+    sheet.includes('sx={{ my: 0, minWidth: 0, overflow: "hidden" }}'),
+    true,
+  );
+  assertEquals(sheet.includes("secondaryTypographyProps"), false);
+});
+
 Deno.test("fullscreen hide keyboard stays expanded and resumes at the document end", () => {
   assertEquals(fullscreenComposerSource.includes("if (showCollapse) onCollapse()"), false);
   assertEquals(fullscreenComposerSource.includes("sawKeyboardRef.current && !keyboardOpen"), true);
