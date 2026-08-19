@@ -32,6 +32,8 @@ import {
   Popover,
   Stack,
   Toolbar,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
@@ -2173,27 +2175,12 @@ export function ReviewApp({
           alignItems="center"
           sx={{
             minHeight: 52,
-            pl: 0.5,
+            pl: 1.5,
             pr: 1.5,
             borderBottom: 1,
             borderColor: "divider",
           }}
         >
-          <IconButton
-            data-mobile-open-agent="true"
-            aria-label="Back to Agent"
-            title="Agent"
-            onClick={(): void => {
-              navigationHaptic();
-              openMobileProduct("agent");
-            }}
-            sx={{
-              mr: 0.25,
-              color: "text.primary",
-            }}
-          >
-            <ArrowBackIosNew sx={{ fontSize: 18 }} />
-          </IconButton>
           <Box sx={{ flex: 1, minWidth: 0 }}>
             <Typography
               variant="body2"
@@ -2533,22 +2520,45 @@ export function ReviewApp({
               variant="dense"
               sx={{
                 minHeight: 44,
+                px: 1,
+                gap: 0.5,
                 "@media (min-width: 600px)": { minHeight: 44 },
               }}
             >
               <Button
+                data-mobile-open-agent="true"
                 variant="text"
                 color="inherit"
                 size="small"
-                aria-label={`Switch to ${
-                  mode === "git" ? "Files" : "Git review"
-                }`}
-                startIcon={mode === "git"
-                  ? <DifferenceOutlined fontSize="small" />
-                  : <FolderOutlined fontSize="small" />}
-                onClick={() => {
+                aria-label="Back to Agent"
+                startIcon={<ArrowBackIosNew sx={{ fontSize: 15 }} />}
+                onClick={(): void => {
                   navigationHaptic();
-                  const nextMode = mode === "git" ? "files" : "git";
+                  openMobileProduct("agent");
+                }}
+                sx={{
+                  minWidth: 0,
+                  height: 36,
+                  px: 0.75,
+                  borderRadius: 2,
+                  color: "text.secondary",
+                  textTransform: "none",
+                  fontSize: "0.72rem",
+                  fontWeight: 650,
+                  "& .MuiButton-startIcon": { mr: 0.375 },
+                }}
+              >
+                Agent
+              </Button>
+              <ToggleButtonGroup
+                data-mobile-review-mode-switcher
+                exclusive
+                size="small"
+                value={mode}
+                aria-label="Review mode"
+                onChange={(_, nextMode: ReviewMode | null) => {
+                  if (!nextMode || nextMode === mode) return;
+                  navigationHaptic();
                   setMode(nextMode);
                   if (nextMode === "files") setCommitTarget(undefined);
                   if (workspace?.sessionId) {
@@ -2558,21 +2568,29 @@ export function ReviewApp({
                   }
                 }}
                 sx={{
-                  minWidth: 0,
-                  height: 40,
-                  px: 1,
+                  height: 32,
                   borderRadius: 2,
-                  color: "text.secondary",
-                  textTransform: "none",
-                  fontSize: "0.75rem",
-                  fontWeight: 600,
-                  "& .MuiButton-startIcon": {
-                    mr: 0.625,
+                  bgcolor: "action.hover",
+                  "& .MuiToggleButton-root": {
+                    minWidth: 0,
+                    height: 32,
+                    px: 0.875,
+                    borderColor: "divider",
+                    color: "text.secondary",
+                    textTransform: "none",
+                    fontSize: "0.7rem",
+                    fontWeight: 650,
+                    lineHeight: 1,
+                  },
+                  "& .MuiToggleButton-root.Mui-selected": {
+                    bgcolor: "action.selected",
+                    color: "text.primary",
                   },
                 }}
               >
-                {mode === "git" ? "Changes" : "Files"}
-              </Button>
+                <ToggleButton value="git">Changes</ToggleButton>
+                <ToggleButton value="files">Files</ToggleButton>
+              </ToggleButtonGroup>
               {target.kind !== "changes" && !(
                 target.kind === "source" &&
                 isMarkdownReviewPath(target.path) &&
