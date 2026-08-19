@@ -11,6 +11,10 @@ Deno.test("mobile Settings uses an index and one lightweight detail route", () =
   assert(appSource.includes('data-mobile-settings-route={id}'));
   assert(appSource.includes('data-mobile-settings-level={mobileSettingsSection === null ? "index" : "detail"}'));
   assert(appSource.includes("changeMobileSettingsSection"));
+  assert(appSource.includes("MOBILE_SETTINGS_HEAVY_CONTENT_DELAY_MS = 180"));
+  assert(appSource.includes('id === "machines" || id === "providers"'));
+  assert(appSource.includes("contentReady"));
+  assert(appSource.includes("mobile-settings-content-enter 100ms"));
   assert(appSource.includes("settingsListScrollRef.current = surface.scrollTop"));
   assert(appSource.includes("mobile-settings-route-enter 140ms"));
   assert(appSource.includes('willChange: "transform, opacity"'));

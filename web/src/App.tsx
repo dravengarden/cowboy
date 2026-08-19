@@ -3995,6 +3995,8 @@ type MobileSettingsSection =
     | "info"
     | "logs";
 
+const MOBILE_SETTINGS_HEAVY_CONTENT_DELAY_MS = 180;
+
 function initialMobileSettingsSection(
     tab: ControlCenterTab,
     focus: SettingsProductFocus,
@@ -4018,6 +4020,20 @@ function MobileSettingsRoute({
     onChange: (section: MobileSettingsSection | null) => void;
     children: React.ReactNode;
 }): React.JSX.Element {
+    const heavyContent = id === "machines" || id === "providers";
+    const [contentReady, setContentReady] = useState(!heavyContent);
+    useEffect(() => {
+        if (!heavyContent) return undefined;
+        if (activeSection !== id) {
+            setContentReady(false);
+            return undefined;
+        }
+        const timer = globalThis.setTimeout(
+            () => setContentReady(true),
+            MOBILE_SETTINGS_HEAVY_CONTENT_DELAY_MS,
+        );
+        return () => globalThis.clearTimeout(timer);
+    }, [activeSection, heavyContent, id]);
     if (activeSection !== null && activeSection !== id) return <></>;
     if (activeSection === null) {
         return (
@@ -4087,7 +4103,35 @@ function MobileSettingsRoute({
                     pb: 12,
                 }}
             >
-                {children}
+                {contentReady
+                    ? (
+                        <Box
+                            sx={{
+                                animation: "mobile-settings-content-enter 100ms ease-out both",
+                                "@keyframes mobile-settings-content-enter": {
+                                    from: { opacity: 0 },
+                                    to: { opacity: 1 },
+                                },
+                                "@media (prefers-reduced-motion: reduce)": {
+                                    animation: "none",
+                                },
+                            }}
+                        >
+                            {children}
+                        </Box>
+                    )
+                    : (
+                        <Stack
+                            direction="row"
+                            spacing={1}
+                            alignItems="center"
+                            justifyContent="center"
+                            sx={{ minHeight: 160, color: "text.secondary" }}
+                        >
+                            <CircularProgress size={18} color="inherit" />
+                            <Typography variant="caption">Loading…</Typography>
+                        </Stack>
+                    )}
             </Box>
         </Box>
     );
