@@ -49,8 +49,8 @@ export function useKeyboardInset(): void {
     let lastInset = -1;
     let lastVvHeight = -1;
     let lastVvOffset = -1;
-    const apply = (): void => {
-      raf = 0;
+    let pendingCoverBox = false;
+    const apply = (updateCoverBox: boolean): void => {
       // Keyboard overlap = how much of the painted page still sits *below*
       // the visual viewport. Subtract clamped offsetTop so a Safari pan to
       // keep the field on screen is not counted as cover; rubber-band
@@ -64,23 +64,27 @@ export function useKeyboardInset(): void {
       if (isUnreliableVisualViewport(layoutHeight, vv.height)) return;
       // Cover sheets (New Session) are position:fixed against html's box,
       // which stays tall on Safari tabs. Pin them with --vv-* so Title
-      // cannot pan off the top of a 100dvh cover.
-      const coverBox = visualViewportBox(
-        fixedLayoutHeight(
-          doc.documentElement.clientHeight,
-          rootHeight,
-          globalThis.innerHeight,
-        ),
-        vv.height,
-        vv.offsetTop,
-      );
-      if (coverBox.height !== lastVvHeight) {
-        lastVvHeight = coverBox.height;
-        root.style.setProperty("--vv-height", `${String(coverBox.height)}px`);
-      }
-      if (coverBox.offset !== lastVvOffset) {
-        lastVvOffset = coverBox.offset;
-        root.style.setProperty("--vv-offset", `${String(coverBox.offset)}px`);
+      // cannot pan off the top of a 100dvh cover. Do not follow
+      // visualViewport.scroll: that fires while the form itself scrolls
+      // and jumps the whole sheet (the New Session twitch).
+      if (updateCoverBox) {
+        const coverBox = visualViewportBox(
+          fixedLayoutHeight(
+            doc.documentElement.clientHeight,
+            rootHeight,
+            globalThis.innerHeight,
+          ),
+          vv.height,
+          vv.offsetTop,
+        );
+        if (coverBox.height !== lastVvHeight) {
+          lastVvHeight = coverBox.height;
+          root.style.setProperty("--vv-height", `${String(coverBox.height)}px`);
+        }
+        if (coverBox.offset !== lastVvOffset) {
+          lastVvOffset = coverBox.offset;
+          root.style.setProperty("--vv-offset", `${String(coverBox.offset)}px`);
+        }
       }
       // Do not add the iOS form accessory (∧ ∨ ✓) here. On PWA,
       // resizes-content already parks the painted page at the keyboard
@@ -105,8 +109,21 @@ export function useKeyboardInset(): void {
         root.style.setProperty("--kb-inset", `${String(overlap)}px`);
       }
     };
+    const flush = (): void => {
+      const updateCoverBox = pendingCoverBox;
+      pendingCoverBox = false;
+      raf = 0;
+      apply(updateCoverBox);
+    };
     const applyNow = (): void => {
-      if (raf === 0) raf = globalThis.requestAnimationFrame(apply);
+      pendingCoverBox = true;
+      if (raf === 0) raf = globalThis.requestAnimationFrame(flush);
+    };
+    const applyScroll = (): void => {
+      // Inner sheet scrolling pans visualViewport on iOS. Re-measure the
+      // keyboard inset, but keep the cover pinned so Title/actions do not
+      // fight the form scroller every frame.
+      if (raf === 0) raf = globalThis.requestAnimationFrame(flush);
     };
     const clearTimers = (): void => {
       for (const t of timers) globalThis.clearTimeout(t);
@@ -123,7 +140,9 @@ export function useKeyboardInset(): void {
     const schedule = (): void => {
       applyNow();
       clearTimers();
-      timers = [120, 300, 550].map((d) => globalThis.setTimeout(apply, d));
+      timers = [120, 300, 550].map((d) =>
+        globalThis.setTimeout(() => apply(true), d)
+      );
     };
     // Poll WHILE a field is focused. iOS changes the keyboard's height — the
     // IME candidate / predictive bar appearing or disappearing as you type, a
@@ -132,7 +151,7 @@ export function useKeyboardInset(): void {
     // keyboard ("还是有一定概率出现"). A 300ms re-measure while focused self-corrects
     // any untracked change; the change-guard above keeps idle ticks free.
     const startPoll = (): void => {
-      if (poll === 0) poll = globalThis.setInterval(apply, 300);
+      if (poll === 0) poll = globalThis.setInterval(() => apply(true), 300);
     };
     const stopPoll = (): void => {
       if (poll !== 0) {
@@ -149,9 +168,8 @@ export function useKeyboardInset(): void {
       stopPoll();
     };
     vv.addEventListener("resize", schedule);
-    // `scroll` fires every scroll frame and never changes the keyboard height, so
-    // it only needs the cheap immediate re-measure — not the settle timers.
-    vv.addEventListener("scroll", applyNow);
+    // `scroll` fires every scroll frame and never changes the keyboard height.
+    vv.addEventListener("scroll", applyScroll);
     doc.addEventListener("focusin", onFocusIn);
     doc.addEventListener("focusout", onFocusOut);
     schedule();
@@ -160,7 +178,7 @@ export function useKeyboardInset(): void {
     if (doc.activeElement !== null && doc.activeElement !== doc.body) startPoll();
     return () => {
       vv.removeEventListener("resize", schedule);
-      vv.removeEventListener("scroll", applyNow);
+      vv.removeEventListener("scroll", applyScroll);
       doc.removeEventListener("focusin", onFocusIn);
       doc.removeEventListener("focusout", onFocusOut);
       clearTimers();

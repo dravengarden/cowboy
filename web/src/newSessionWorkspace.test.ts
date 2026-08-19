@@ -13,14 +13,14 @@ const composerSource = await Deno.readTextFile(
   new URL("./Composer.tsx", import.meta.url),
 );
 
-Deno.test("mobile new session confirms with the check island, not overlay Cancel/Create", () => {
+Deno.test("mobile new session keeps Cancel/Create in a reserved footer", () => {
   const titleAt = appSource.indexOf('title="New session"');
-  const actionsAt = appSource.indexOf("actions={navbarAtBottom", titleAt);
-  const desktopCancelAt = appSource.indexOf("Cancel", actionsAt);
-  assertEquals(titleAt >= 0 && actionsAt > titleAt, true);
-  assertEquals(appSource.includes("aria-label={creating ? \"preparing session\" : \"create session\"}"), true);
-  assertEquals(appSource.includes("<FloatingActionIsland maxWidth={54}>"), true);
-  assertEquals(desktopCancelAt > actionsAt, true);
+  const sheet = appSource.slice(titleAt, appSource.indexOf("<Stack spacing={2}", titleAt));
+  assertEquals(titleAt >= 0, true);
+  assertEquals(sheet.includes("floatingActions={false}"), true);
+  assertEquals(sheet.includes("Cancel"), true);
+  assertEquals(sheet.includes("Create"), true);
+  assertEquals(sheet.includes("FloatingActionIsland"), false);
 });
 
 Deno.test("new session navigation precedes Machine preparation completion", () => {
@@ -50,7 +50,9 @@ Deno.test("new session navigation precedes Machine preparation completion", () =
   assertEquals(appSource.includes("if (mobile) claimKeyboard();"), true);
   assertEquals(appSource.includes("const openNewSession = (): void => {"), true);
   assertEquals(
-    appSource.includes("titleRef.current?.focus();\n            titleRef.current?.select();\n        }, 120);"),
+    appSource.includes(
+      "titleRef.current?.focus({ preventScroll: true });\n            titleRef.current?.select();\n        }, 120);",
+    ),
     true,
   );
   assertEquals(appSource.includes("initial_prompt: selectedWorkItem"), true);

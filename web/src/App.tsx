@@ -186,7 +186,6 @@ import { retainTranscriptViewportSessions } from "./transcriptViewportStore";
 import {
     ConnectionBanner,
     DetentSheet,
-    FloatingActionIsland,
     MobileSheetActionGroup,
     MobileSheetDismiss,
     NativeReleaseUpdatePrompt,
@@ -1504,7 +1503,7 @@ function NewSessionDialog({
         setCreating(false);
         setCreateError("");
         const t = globalThis.setTimeout(() => {
-            titleRef.current?.focus();
+            titleRef.current?.focus({ preventScroll: true });
             titleRef.current?.select();
         }, 120);
         return () => globalThis.clearTimeout(t);
@@ -1661,67 +1660,30 @@ function NewSessionDialog({
             onClose={creating ? (): void => {} : onClose}
             title="New session"
             mobileDismiss="none"
-            actions={navbarAtBottom
-                ? (
-                    // Cover sheets overlay the footer on the form. Desktop
-                    // Cancel/Create labels then float over Working directory
-                    // once the keyboard lifts. Mobile confirmations use the
-                    // same check island as session rename; swipe dismisses.
-                    <Box
-                        sx={{
-                            width: "100%",
-                            display: "flex",
-                            justifyContent: "center",
+            floatingActions={false}
+            actions={
+                <>
+                    <Button onClick={onClose} color="inherit" disabled={creating}>
+                        Cancel
+                        <Kbd keys="Esc" />
+                    </Button>
+                    <Button
+                        onClick={create}
+                        onKeyDown={(e): void => {
+                            if (
+                                desktop && e.key === "Enter" &&
+                                !e.metaKey && !e.ctrlKey &&
+                                !isImeKeyEvent(e.nativeEvent)
+                            ) e.preventDefault();
                         }}
+                        variant="contained"
+                    disabled={creating || !provider || !machineId || !cwd}
                     >
-                        <FloatingActionIsland maxWidth={54}>
-                            <ButtonBase
-                                aria-label={creating ? "preparing session" : "create session"}
-                                disabled={creating || !provider || !machineId || !cwd}
-                                onPointerDown={(event): void => {
-                                    event.preventDefault();
-                                    event.stopPropagation();
-                                }}
-                                onClick={create}
-                                sx={{
-                                    width: 46,
-                                    height: 46,
-                                    borderRadius: 999,
-                                    color: "primary.main",
-                                    "&:active": { transform: "scale(0.97)" },
-                                    "&.Mui-disabled": { color: "text.disabled" },
-                                }}
-                            >
-                                {creating
-                                    ? <CircularProgress size={18} color="inherit" />
-                                    : <CheckIcon fontSize="small" />}
-                            </ButtonBase>
-                        </FloatingActionIsland>
-                    </Box>
-                )
-                : (
-                    <>
-                        <Button onClick={onClose} color="inherit" disabled={creating}>
-                            Cancel
-                            <Kbd keys="Esc" />
-                        </Button>
-                        <Button
-                            onClick={create}
-                            onKeyDown={(e): void => {
-                                if (
-                                    desktop && e.key === "Enter" &&
-                                    !e.metaKey && !e.ctrlKey &&
-                                    !isImeKeyEvent(e.nativeEvent)
-                                ) e.preventDefault();
-                            }}
-                            variant="contained"
-                            disabled={creating || !provider || !machineId || !cwd}
-                        >
-                            {creating ? "Preparing…" : "Create"}
-                            <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-                        </Button>
-                    </>
-                )}
+                        {creating ? "Preparing…" : "Create"}
+                        <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+                    </Button>
+                </>
+            }
         >
             <Stack spacing={2} sx={{ mt: 1 }}>
                 {createError ? <Alert severity="error">{createError}</Alert> : null}

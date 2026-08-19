@@ -158,6 +158,8 @@ Deno.test("keyboard inset measures the painted page instead of innerHeight", asy
   assertEquals(source.includes("visualViewportBox("), true);
   assertEquals(source.includes('"--vv-height"'), true);
   assertEquals(source.includes('"--vv-offset"'), true);
+  assertEquals(source.includes('vv.addEventListener("scroll", applyScroll)'), true);
+  assertEquals(source.includes("fight the form scroller every frame"), true);
 });
 
 Deno.test("New session is a cover sheet on the mobile navbar so Title clears the PWA accessory", async () => {
