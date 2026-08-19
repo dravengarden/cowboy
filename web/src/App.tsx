@@ -4035,11 +4035,13 @@ function MobileSettingsAccordion({
             elevation={0}
             sx={{
                 bgcolor: "transparent",
-                border: 1,
-                borderColor: expanded ? "primary.main" : "divider",
-                borderRadius: "12px !important",
-                overflow: "hidden",
-                transition: "border-color 150ms ease",
+                m: "0 !important",
+                border: 0,
+                borderBottom: 1,
+                borderColor: "divider",
+                borderRadius: "0 !important",
+                overflow: "visible",
+                "&:first-of-type": { borderTop: 1, borderColor: "divider" },
                 "&::before": { display: "none" },
             }}
         >
@@ -4048,11 +4050,15 @@ function MobileSettingsAccordion({
                 aria-controls={`mobile-settings-${id}-content`}
                 id={`mobile-settings-${id}-header`}
                 sx={{
-                    minHeight: 64,
-                    px: 1.5,
-                    "&.Mui-expanded": { minHeight: 64 },
-                    "& .MuiAccordionSummary-content": { my: 1.25, minWidth: 0 },
-                    "& .MuiAccordionSummary-content.Mui-expanded": { my: 1.25 },
+                    position: expanded ? "sticky" : "relative",
+                    top: expanded ? -1 : "auto",
+                    zIndex: expanded ? 3 : 1,
+                    bgcolor: "background.default",
+                    minHeight: 52,
+                    px: 0.75,
+                    "&.Mui-expanded": { minHeight: 52 },
+                    "& .MuiAccordionSummary-content": { my: 1, minWidth: 0 },
+                    "& .MuiAccordionSummary-content.Mui-expanded": { my: 1 },
                 }}
             >
                 <Stack spacing={0.125} sx={{ minWidth: 0 }}>
@@ -4064,7 +4070,7 @@ function MobileSettingsAccordion({
             </AccordionSummary>
             <AccordionDetails
                 id={`mobile-settings-${id}-content`}
-                sx={{ px: 1.5, pt: 1, pb: 2, borderTop: 1, borderColor: "divider" }}
+                sx={{ px: 0.75, pt: 1.5, pb: 2.5, borderTop: 1, borderColor: "divider" }}
             >
                 {expanded ? children : null}
             </AccordionDetails>
@@ -5434,7 +5440,7 @@ function SettingsShell({
                     </Box>
                 </Box>
             ) : !tabPanelVisible ? null : renderedTab === "notifications" ? <NotificationSettingsContent /> : renderedTab === "providers" ? <ProvidersContent /> : renderedTab === "machines" ? <MachinesContent /> : renderedTab === "info" ? <InfoContent /> : renderedTab === "logs" ? <UsageLogs /> : (
-            <Stack ref={settingsListRef} data-settings-list="true" spacing={1}>
+            <Stack ref={settingsListRef} data-settings-list="true" spacing={0}>
                 <MobileSettingsAccordion
                     id="appearance"
                     title="Appearance"
