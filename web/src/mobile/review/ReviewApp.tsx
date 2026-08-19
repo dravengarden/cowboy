@@ -227,48 +227,6 @@ function ContextSessionRow({
   );
 }
 
-function ContextPreviousSessionRow({
-  session,
-  label = "Previous session",
-  onPick,
-}: {
-  session: SessionMeta;
-  label?: string;
-  onPick: () => void;
-}): React.JSX.Element {
-  return (
-    <ListItemButton
-      onClick={onPick}
-      sx={{
-        mx: 0.75,
-        height: 52,
-        minHeight: 52,
-        flex: "0 0 52px",
-        px: 1.5,
-        borderRadius: 1.5,
-        border: 1,
-        borderColor: "divider",
-        bgcolor: "transparent",
-      }}
-    >
-      <Undo color="primary" fontSize="small" sx={{ mr: 1.25 }} />
-      <Box sx={{ minWidth: 0, flex: 1 }}>
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          sx={{ display: "block", lineHeight: 1.2 }}
-        >
-          {label}
-        </Typography>
-        <Typography variant="body2" fontWeight={600} noWrap>
-          {session.title}
-        </Typography>
-      </Box>
-      <ChevronRight color="disabled" fontSize="small" />
-    </ListItemButton>
-  );
-}
-
 type ReviewTarget =
   | { kind: "changes" }
   | {
@@ -1402,7 +1360,9 @@ export function ReviewApp({
   const [toggleDrawerRequest, setToggleDrawerRequest] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [sessionSwitcherOpen, setSessionSwitcherOpen] = useState(false);
-  const [contextTab, setContextTab] = useState<"recent" | "projects">("recent");
+  const [contextTab, setContextTab] = useState<"sessions" | "projects">(
+    "sessions",
+  );
   const [contextProjectKey, setContextProjectKey] = useState<string>();
   const [machineInventories, setMachineInventories] = useState<
     readonly ReviewMachineInventory[]
@@ -2803,13 +2763,6 @@ export function ReviewApp({
                 {contextError}
               </Alert>
             )}
-            {contextReturnSession && (
-              <ContextPreviousSessionRow
-                session={contextReturnSession}
-                label={projectCodeContext ? "Current session" : "Previous session"}
-                onPick={returnToSessionContext}
-              />
-            )}
             {!selectedContextProject && (
               <Stack
                 direction="row"
@@ -2818,7 +2771,7 @@ export function ReviewApp({
                 spacing={0.5}
                 sx={{ px: 0.75 }}
               >
-                {(["recent", "projects"] as const).map((value) => (
+                {(["sessions", "projects"] as const).map((value) => (
                   <Button
                     key={value}
                     role="tab"
@@ -2837,30 +2790,52 @@ export function ReviewApp({
                       textTransform: "none",
                     }}
                   >
-                    {value === "recent" ? "Recent" : "Projects"}
+                    {value === "sessions" ? "Sessions" : "Projects"}
                   </Button>
                 ))}
               </Stack>
             )}
-            {!selectedContextProject && contextTab === "recent" && (
-              <Stack spacing={0.5}>
-                <Typography
-                  variant="overline"
-                  color="text.secondary"
-                  sx={{ px: 1.25, fontWeight: 700, letterSpacing: "0.09em" }}
-                >
-                  Recent sessions
-                </Typography>
-                <Stack divider={<Divider flexItem />}>
-                  {sessions.map((session) => (
+            {!selectedContextProject && contextTab === "sessions" && (
+              <Stack spacing={1.5}>
+                {currentSession && (
+                  <Stack spacing={0.5}>
+                    <Typography
+                      variant="overline"
+                      color="text.secondary"
+                      sx={{ px: 1.25, fontWeight: 700, letterSpacing: "0.09em" }}
+                    >
+                      Current session
+                    </Typography>
                     <ContextSessionRow
-                      key={session.id}
-                      session={session}
-                      selected={session.id === workspace?.sessionId}
-                      onPick={() => switchSession(session)}
+                      session={currentSession}
+                      selected
+                      onPick={() => switchSession(currentSession)}
                     />
-                  ))}
-                </Stack>
+                  </Stack>
+                )}
+                {sessions.some((session) => session.id !== activeSessionId) && (
+                  <Stack spacing={0.5}>
+                    <Typography
+                      variant="overline"
+                      color="text.secondary"
+                      sx={{ px: 1.25, fontWeight: 700, letterSpacing: "0.09em" }}
+                    >
+                      {currentSession ? "Other sessions" : "Sessions"}
+                    </Typography>
+                    <Stack divider={<Divider flexItem />}>
+                      {sessions.filter((session) => session.id !== activeSessionId).map(
+                        (session) => (
+                          <ContextSessionRow
+                            key={session.id}
+                            session={session}
+                            selected={false}
+                            onPick={() => switchSession(session)}
+                          />
+                        ),
+                      )}
+                    </Stack>
+                  </Stack>
+                )}
               </Stack>
             )}
             {!selectedContextProject && contextTab === "projects" && (
@@ -3002,7 +2977,7 @@ export function ReviewApp({
                             <ContextSessionRow
                               key={session.id}
                               session={session}
-                              selected={session.id === workspace?.sessionId}
+                              selected={session.id === activeSessionId}
                               showWorktree={false}
                               onPick={() => switchSession(session)}
                             />
@@ -3014,7 +2989,7 @@ export function ReviewApp({
                 })}
               </Stack>
             )}
-            {contextTab === "recent" && sessions.length === 0 && (
+            {contextTab === "sessions" && sessions.length === 0 && (
               <Typography
                 color="text.secondary"
                 variant="body2"
