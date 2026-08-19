@@ -3996,12 +3996,12 @@ type MobileSettingsSection =
     | "info"
     | "logs";
 
-const MOBILE_SETTINGS_ENTER_MS = 320;
+const MOBILE_SETTINGS_ENTER_MS = 360;
 const MOBILE_SETTINGS_EXIT_MS = 180;
 const MOBILE_SETTINGS_ANCHOR_MAX_MS = 1600;
-const MOBILE_SETTINGS_ANCHOR_RESPONSE_MS = 48;
+const MOBILE_SETTINGS_ANCHOR_DURATION_MS = 360;
 const MOBILE_SETTINGS_ANCHOR_STABLE_FRAMES = 3;
-const MOBILE_SETTINGS_ENTER_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
+const MOBILE_SETTINGS_ENTER_EASING = "linear";
 const MOBILE_SETTINGS_EXIT_EASING = "cubic-bezier(0.4, 0, 1, 1)";
 
 function initialMobileSettingsSection(
@@ -4620,6 +4620,10 @@ function MachinesContent({ embedded = false }: { embedded?: boolean } = {}): Rea
                             overflow: "hidden",
                             borderColor: open ? "primary.main" : "divider",
                             transition: "border-color .2s",
+                            "& [data-provider-management-card]": {
+                                contentVisibility: "auto",
+                                containIntrinsicSize: "auto 220px",
+                            },
                         }}
                     >
                         <Stack spacing={1.25} sx={{ p: 1.5 }}>
@@ -5045,7 +5049,7 @@ function SettingsShell({
         let cancelled = false;
         let surface: HTMLElement | null = null;
         let startedAt: number | null = null;
-        let lastFrameAt: number | null = null;
+        let startingHeaderTop: number | null = null;
         let stableFrames = 0;
         const cancelForUser = (): void => {
             cancelled = true;
@@ -5074,18 +5078,24 @@ function SettingsShell({
             const headerTop = header.getBoundingClientRect().top;
             const surfaceTop = surface.getBoundingClientRect().top - 1;
             startedAt ??= now;
-            lastFrameAt ??= now - 16;
+            startingHeaderTop ??= headerTop;
             const elapsed = now - startedAt;
-            const frameDuration = Math.min(50, now - lastFrameAt);
-            lastFrameAt = now;
-            const correction = headerTop - surfaceTop;
-            const response = reducedMotion
+            const progress = reducedMotion
                 ? 1
-                : 1 - Math.exp(-frameDuration / MOBILE_SETTINGS_ANCHOR_RESPONSE_MS);
+                : Math.min(1, elapsed / MOBILE_SETTINGS_ANCHOR_DURATION_MS);
+            // Quintic smootherstep has zero velocity and acceleration at both
+            // ends, avoiding the initial lurch and slow exponential tail.
+            const eased = progress * progress * progress *
+                (progress * (progress * 6 - 15) + 10);
+            const desiredTop = startingHeaderTop +
+                (surfaceTop - startingHeaderTop) * eased;
+            const correction = headerTop - desiredTop;
             if (Math.abs(correction) >= 0.25) {
-                surface.scrollTop += correction * response;
+                surface.scrollTop += correction;
             }
-            stableFrames = Math.abs(correction) < 0.75 ? stableFrames + 1 : 0;
+            stableFrames = progress === 1 && Math.abs(headerTop - surfaceTop) < 0.75
+                ? stableFrames + 1
+                : 0;
             if (
                 !reducedMotion &&
                 elapsed < MOBILE_SETTINGS_ANCHOR_MAX_MS &&
@@ -5097,7 +5107,7 @@ function SettingsShell({
         const scheduleAlignment = (): void => {
             if (cancelled || frame !== 0) return;
             startedAt = null;
-            lastFrameAt = null;
+            startingHeaderTop = null;
             stableFrames = 0;
             frame = globalThis.requestAnimationFrame(alignExpandedHeader);
         };
