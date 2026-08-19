@@ -4087,13 +4087,17 @@ function MobileSettingsAccordion({
                     pb: 2.5,
                     borderTop: 1,
                     borderColor: "divider",
-                    // Reserve one useful screen before async sections resolve. This gives the
-                    // scroll anchor room to move from the first animation frame and prevents a
-                    // late Machines/Logs response from turning into a large height transition.
-                    minHeight: "calc(100vh - 152px)",
-                    "@supports (height: 100dvh)": {
-                        minHeight: "calc(100dvh - 152px)",
-                    },
+                    // Machines resolves a tall remote inventory after opening, so it alone
+                    // reserves one screen for the anchor animation. Short synchronous sections
+                    // must remain intrinsic or they leave a large empty gap before the next row.
+                    ...(id === "machines"
+                        ? {
+                            minHeight: "calc(100vh - 152px)",
+                            "@supports (height: 100dvh)": {
+                                minHeight: "calc(100dvh - 152px)",
+                            },
+                        }
+                        : {}),
                 }}
             >
                 {children}
