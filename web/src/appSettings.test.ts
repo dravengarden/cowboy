@@ -39,8 +39,9 @@ Deno.test("Code chrome uses Agent instead of a local settings sheet", () => {
   assert(reviewAppSource.includes("ArrowBackIosNew"));
   assert(reviewAppSource.includes("openMobileProduct(\"agent\")"));
   assert(reviewAppSource.includes("data-mobile-review-mode-switcher"));
-  assert(reviewAppSource.includes('<ToggleButton value="git">Changes</ToggleButton>'));
-  assert(reviewAppSource.includes('<ToggleButton value="files">Files</ToggleButton>'));
+  assert(reviewAppSource.includes('<Tab value="git" label="Changes" />'));
+  assert(reviewAppSource.includes('<Tab value="files" label="Files" />'));
+  assert(reviewAppSource.includes('aria-label="Review navigation"'));
   assert(
     reviewAppSource.indexOf('data-mobile-open-agent="true"') >
       reviewAppSource.indexOf('aria-label="Code Review controls"'),

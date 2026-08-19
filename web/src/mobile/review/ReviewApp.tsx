@@ -31,9 +31,9 @@ import {
   ListItemButton,
   Popover,
   Stack,
+  Tab,
+  Tabs,
   Toolbar,
-  ToggleButton,
-  ToggleButtonGroup,
   Typography,
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
@@ -2525,40 +2525,17 @@ export function ReviewApp({
                 "@media (min-width: 600px)": { minHeight: 44 },
               }}
             >
-              <Button
-                data-mobile-open-agent="true"
-                variant="text"
-                color="inherit"
-                size="small"
-                aria-label="Back to Agent"
-                startIcon={<ArrowBackIosNew sx={{ fontSize: 15 }} />}
-                onClick={(): void => {
-                  navigationHaptic();
-                  openMobileProduct("agent");
-                }}
-                sx={{
-                  minWidth: 0,
-                  height: 36,
-                  px: 0.75,
-                  borderRadius: 2,
-                  color: "text.secondary",
-                  textTransform: "none",
-                  fontSize: "0.72rem",
-                  fontWeight: 650,
-                  "& .MuiButton-startIcon": { mr: 0.375 },
-                }}
-              >
-                Agent
-              </Button>
-              <ToggleButtonGroup
+              <Tabs
                 data-mobile-review-mode-switcher
-                exclusive
-                size="small"
                 value={mode}
-                aria-label="Review mode"
-                onChange={(_, nextMode: ReviewMode | null) => {
-                  if (!nextMode || nextMode === mode) return;
+                aria-label="Review navigation"
+                onChange={(_, nextMode: ReviewMode | "agent") => {
                   navigationHaptic();
+                  if (nextMode === "agent") {
+                    openMobileProduct("agent");
+                    return;
+                  }
+                  if (nextMode === mode) return;
                   setMode(nextMode);
                   if (nextMode === "files") setCommitTarget(undefined);
                   if (workspace?.sessionId) {
@@ -2568,29 +2545,41 @@ export function ReviewApp({
                   }
                 }}
                 sx={{
-                  height: 32,
-                  borderRadius: 2,
-                  bgcolor: "action.hover",
-                  "& .MuiToggleButton-root": {
+                  minHeight: 44,
+                  flexShrink: 0,
+                  "& .MuiTabs-flexContainer": { height: 44 },
+                  "& .MuiTabs-indicator": {
+                    height: 2,
+                    borderRadius: "2px 2px 0 0",
+                  },
+                  "& .MuiTab-root": {
                     minWidth: 0,
-                    height: 32,
-                    px: 0.875,
-                    borderColor: "divider",
+                    minHeight: 44,
+                    px: 1.125,
                     color: "text.secondary",
                     textTransform: "none",
-                    fontSize: "0.7rem",
+                    fontSize: "0.75rem",
                     fontWeight: 650,
                     lineHeight: 1,
+                    opacity: 1,
                   },
-                  "& .MuiToggleButton-root.Mui-selected": {
-                    bgcolor: "action.selected",
+                  "& .MuiTab-root.Mui-selected": {
                     color: "text.primary",
                   },
+                  "& .MuiTab-iconWrapper": { mr: 0.375 },
                 }}
               >
-                <ToggleButton value="git">Changes</ToggleButton>
-                <ToggleButton value="files">Files</ToggleButton>
-              </ToggleButtonGroup>
+                <Tab
+                  data-mobile-open-agent="true"
+                  value="agent"
+                  aria-label="Back to Agent"
+                  icon={<ArrowBackIosNew sx={{ fontSize: 14 }} />}
+                  iconPosition="start"
+                  label="Agent"
+                />
+                <Tab value="git" label="Changes" />
+                <Tab value="files" label="Files" />
+              </Tabs>
               {target.kind !== "changes" && !(
                 target.kind === "source" &&
                 isMarkdownReviewPath(target.path) &&
