@@ -7721,6 +7721,7 @@ fn zed_language_target(cwd: &str, relative: &str) -> Option<(String, String)> {
         })
 }
 
+#[cfg(test)]
 fn local_buffer_file_exists(cwd: &str, relative: &str) -> bool {
     let relative = FsPath::new(relative);
     if relative.is_absolute()
