@@ -1,5 +1,8 @@
 import { subscribeAnyDetentSheetOpen } from "./_shell/detent-sheet-open";
-import { mobileCodeRestLayerSx } from "./mobileCodeSurface";
+import {
+  mobileCodeRestLayerSx,
+  mobileCodeSwipeFlattenSx,
+} from "./mobileCodeSurface";
 import { holdStorePresentation } from "./store";
 
 /** Standing peek paint collapse. Settled rows each own `contain: layout
@@ -45,6 +48,7 @@ export const mobileOverflowTileFlattenSx = {
  *  tree every frame even when JS is idle. Apply this only after the
  *  swipe is claimed — overflow:hidden would break vertical scroll. */
 export const mobileCompositorFlattenSx = {
+  ...mobileCodeSwipeFlattenSx,
   // Only the peeking page. The Sessions/Review rail uses the same
   // overflow-layer marker so it can scroll; freezing it while the
   // drawer is open makes every session row un-tappable.

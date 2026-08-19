@@ -99,6 +99,7 @@ Deno.test("gesture roots flatten overflow tiles without a universal selector", (
   );
   assert(motionSource.includes("& [data-detent-sheet][data-detent-moving]"));
   assert(motionSource.includes("[data-obsidian-sheet]"));
+  assert(motionSource.includes("mobileCodeSwipeFlattenSx"));
   assert(motionSource.includes("[data-mobile-composer-shell-material]"));
   assert(motionSource.includes("[data-mobile-focus-composer]"));
   assert(motionSource.includes("holdStorePresentation"));

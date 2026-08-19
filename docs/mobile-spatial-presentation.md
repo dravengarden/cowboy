@@ -189,6 +189,11 @@ Sticky gutters are unused in that mode and are what iOS re-sticks under
 the peek transform — keep them `position: relative`. Do not set
 `-webkit-overflow-scrolling: touch` when wrap is on.
 
+A standing `contain: paint` tile is not enough: iOS still re-rasters
+CM token spans for the whole gesture. On a claimed swipe, flatten the
+live editor with `filter: opacity(0.999)` so the compositor holds one
+texture. Do not change `.cm-scroller` overflow and do not hide paint.
+
 Retries that failed and must not return:
 
 - Flatten `.cm-scroller` overflow on claim — remasures CM.

@@ -473,9 +473,11 @@ export default function CodeViewer({
         ".cm-gutters": {
           backgroundColor: theme.palette.background.default,
           borderRightColor: theme.palette.divider,
-          // No horizontal pan when wrapped, so sticky gutters only
-          // re-stick under the peek transform. Keep them in flow.
-          ...(softWrap ? { position: "relative" } : {}),
+          // Sticky gutters re-stick under a parent translate. Wrap-on
+          // has no X pan, so keep them in flow and unpromoted.
+          ...(softWrap
+            ? { position: "relative", left: "auto", zIndex: 0 }
+            : {}),
         },
         ".cowboy-diff-added": {
           backgroundColor: theme.palette.mode === "dark"

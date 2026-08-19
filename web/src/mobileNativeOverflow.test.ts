@@ -26,7 +26,8 @@ Deno.test("wrap-on Review source keeps live CodeMirror for workspace swipe", () 
   assert(codeViewer.includes("bindCodeViewerSwipeFreeze"));
   assert(codeViewer.includes('data-mobile-code-layer="true"'));
   assert(codeViewer.includes('data-mobile-code-wrap'));
-  assert(codeViewer.includes("softWrap ? { position: \"relative\" }"));
+  assert(codeViewer.includes("softWrap"));
+  assert(codeViewer.includes('position: "relative"'));
   assert(codeViewer.includes("WebkitOverflowScrolling: \"touch\""));
   assertEquals(codeViewer.includes("data-mobile-code-snapshot"), false);
 });

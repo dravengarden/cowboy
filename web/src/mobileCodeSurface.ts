@@ -4,9 +4,10 @@
  *  - Wrap off, horizontal bar: left/right pans the file. `hasHorizontalScroller`
  *    owns that gesture. Do not steal it for the drawer/pager.
  *
- *  Workspace swipe therefore only translates wrap-on source. Sticky
- *  gutters are unnecessary in that mode and are the remaining iOS
- *  re-raster. Do not hide the editor or snapshot it. */
+ *  iOS re-rasters CM token spans under an ancestor translate3d. Overflow
+ *  flatten remasures the scroller. Hiding flashes. A canvas snapshot was
+ *  rejected. During a claimed swipe, `filter: opacity(0.999)` forces one
+ *  compositor texture of the live editor without changing overflow. */
 
 export const MOBILE_CODE_SWIPE_START = "cowboy:transcript-direct-manipulation-start";
 export const MOBILE_CODE_SWIPE_END = "cowboy:transcript-direct-manipulation-end";
@@ -17,6 +18,24 @@ export const mobileCodeRestLayerSx = {
   contain: "paint",
   backfaceVisibility: "hidden",
   WebkitBackfaceVisibility: "hidden",
+  // Inner CM pieces must not self-promote. A nested overflow tile plus
+  // sticky gutters is what iOS relocates every swipe frame.
+  "& .cm-scroller, & .cm-content, & .cm-gutters, & .cm-layer": {
+    backfaceVisibility: "visible",
+    isolation: "auto",
+    transform: "none",
+    willChange: "auto",
+    WebkitOverflowScrolling: "auto",
+  },
+} as const;
+
+/** Claimed-swipe flatten. Opacity 0.999 so WebKit cannot skip the filter. */
+export const mobileCodeSwipeFlattenSx = {
+  "& [data-mobile-code-layer]": {
+    filter: "opacity(0.999)",
+    WebkitFilter: "opacity(0.999)",
+    willChange: "transform",
+  },
 } as const;
 
 let freezeCount = 0;
