@@ -129,8 +129,11 @@ turn one held prefix into a completed double-key command.
 - `j/k`, `gg`, `G`: item navigation outside text-editing controls. Conversation
   is a reader rather than an item list, so the same keys scroll by line or jump
   to the oldest/latest output there.
-- In Sessions, the filled row remains the currently open session; a distinct
-  accent cursor shows the row selected by `j/k` for the next `l`/Enter action.
+- In Sessions, the filled row is the currently open session only while
+  Sessions owns focus; a distinct accent cursor shows the row selected by
+  `j/k` for the next `l`/Enter action. Switching to a Conversation tab
+  (History/Explore/Reading) must un-highlight the session row so the tab is
+  the only selected chrome.
 - `Enter`: default item action. In Sessions, `l` and `Enter` open the selected
   session and move focus to its Prompt editor; entering the Sessions region
   always starts on the currently open session.
@@ -321,11 +324,13 @@ nested inside those surfaces use `DESKTOP_INSET_RADIUS`. Never apply the inset
 radius to a whole selectable row; changing geometry must happen in the shared
 Desktop primitive rather than in a component-local override.
 
-Session rows deliberately separate two states: the currently open session uses
-a persistent tinted fill, while the transient keyboard cursor uses a crisp
-outline. When both states coincide, both signals remain visible. Do not add a
-heavy leading rail or reuse the same fill treatment for current state and J/K
-focus.
+Session rows deliberately separate two states while Sessions owns focus: the
+currently open session uses a tinted fill, while the transient keyboard cursor
+uses a crisp outline. When both states coincide, both signals remain visible.
+Do not add a heavy leading rail or reuse the same fill treatment for current
+state and J/K focus. When Conversation or Prompt owns focus, session rows stay
+unmarked so the tab or editor is the only highlighted selection; the live
+session remains identifiable from its status mark and the open transcript.
 
 Desktop product modes are separate command domains. Agent is the default mode;
 `Z` enters Reading only while Conversation owns focus. Reading covers the Agent

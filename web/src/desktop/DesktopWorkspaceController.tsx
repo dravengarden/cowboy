@@ -9,6 +9,7 @@ import {
 import { verticalWorkspaceRegion } from "./verticalWorkspaceRegion";
 import {
   desktopPointerLeftComposer,
+  desktopPointerLeftRegion,
   desktopRegionFromPointerTarget,
 } from "./desktopComposerOwnership";
 
@@ -178,7 +179,8 @@ export function DesktopWorkspaceProvider({
         regionFromTarget(event.target);
       if (
         event.type === "pointerdown" &&
-        desktopPointerLeftComposer(event.target, document.activeElement)
+        (desktopPointerLeftComposer(event.target, document.activeElement) ||
+          desktopPointerLeftRegion(event.target, document.activeElement))
       ) {
         const clickedFocusable = event.target instanceof Element
           ? event.target.closest<HTMLElement>(

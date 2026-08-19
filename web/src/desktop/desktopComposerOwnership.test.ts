@@ -74,9 +74,19 @@ Deno.test("workspace capture blocks a stale Prompt sink after Conversation is hi
   assertEquals(provider.includes("!textEditorOwnsKey && !event.metaKey && !event.altKey"), true);
   assertEquals(controller.includes("desktopRegionFromPointerTarget("), true);
   assertEquals(controller.includes("desktopPointerLeftComposer("), true);
+  assertEquals(controller.includes("desktopPointerLeftRegion("), true);
   assertEquals(vim.includes('dataset.desktopFocused !== "true"'), true);
   assertEquals(vim.includes("if (!this.cm) this.connect();"), true);
   assertEquals(vim.includes("ownsFocus && this.cm &&"), true);
+});
+
+Deno.test("pointerdown on a Conversation tab leaves the Sessions region", async () => {
+  const ownership = await Deno.readTextFile(
+    new URL("./desktopComposerOwnership.ts", import.meta.url),
+  );
+  assertEquals(ownership.includes("export function desktopPointerLeftRegion("), true);
+  assertEquals(ownership.includes('active.closest("[data-desktop-region]")'), true);
+  assertEquals(ownership.includes("return !owned.contains(target);"), true);
 });
 
 Deno.test("Conversation chrome without a nested region still owns the transcript", () => {

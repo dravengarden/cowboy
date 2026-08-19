@@ -49,3 +49,16 @@ export function desktopPointerLeftComposer(
   if (!composer) return false;
   return !composer.contains(target);
 }
+
+/** True when pointerdown left the region that currently owns DOM focus.
+ *  Session rows keep MUI selected/:focus-visible fill after a Conversation
+ *  tab click unless that leftover item focus is dropped. */
+export function desktopPointerLeftRegion(
+  target: EventTarget | null,
+  active: Element | null,
+): boolean {
+  if (!(target instanceof Element) || !(active instanceof Element)) return false;
+  const owned = active.closest("[data-desktop-region]");
+  if (!owned) return false;
+  return !owned.contains(target);
+}

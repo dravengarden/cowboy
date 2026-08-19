@@ -2692,11 +2692,17 @@ export function App({
                             opacity: "1 !important",
                         },
                     },
-                    // The open session is persistent state; the crisp outline is
-                    // only the keyboard cursor. A quiet persistent tint keeps the
-                    // current session identifiable without the heavy selection
-                    // rail that competed with the row border and status icon.
-                    "& [data-desktop-region='sessions.list'] [data-desktop-item][data-desktop-current='true']": {
+                    // Current-session fill is Sessions-region selection, not a
+                    // global badge. After focus moves to Conversation tabs
+                    // (History/Explore/Reading) the row must un-highlight so the
+                    // tab is the only selected chrome. The status mark still
+                    // identifies the live session.
+                    "& [data-desktop-region='sessions.list']:not([data-desktop-focused='true']) [data-desktop-item].Mui-selected, & [data-desktop-region='sessions.list']:not([data-desktop-focused='true']) [data-desktop-item][data-desktop-current='true'], & [data-desktop-region='sessions.list']:not([data-desktop-focused='true']) [data-desktop-item]:focus, & [data-desktop-region='sessions.list']:not([data-desktop-focused='true']) [data-desktop-item]:focus-visible, & [data-desktop-region='sessions.list']:not([data-desktop-focused='true']) [data-desktop-item]:focus-within": {
+                        borderColor: "transparent",
+                        bgcolor: "transparent",
+                        boxShadow: "none",
+                    },
+                    "& [data-desktop-region='sessions.list'][data-desktop-focused='true'] [data-desktop-item][data-desktop-current='true']": {
                         borderColor: (t) => alpha(t.palette.primary.main, 0.28),
                         bgcolor: (t) => alpha(t.palette.primary.main, 0.09),
                         boxShadow: "none",
