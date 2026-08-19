@@ -64,6 +64,8 @@ import {
     InfoOutlined,
     Menu as MenuIcon,
     MoreVert,
+    NotificationsOffOutlined,
+    NotificationsOutlined,
     Refresh as RefreshIcon,
     Schedule,
     Settings as SettingsIcon,
@@ -80,6 +82,7 @@ import {
     type SettingsProductFocus,
 } from "./appSettings";
 import { ReviewSettingsContent } from "./mobile/review/ReviewSettings";
+import { NotificationSettingsContent } from "./NotificationSettings";
 import { claimKeyboard } from "./keyboardClaim";
 import { machineVersionPresentation, type MachineComponentUpdate } from "./machineVersions";
 import { DelayedNetworkProgress, NetworkIconButton } from "./NetworkActionFeedback";
@@ -126,7 +129,6 @@ import {
     mobilePresentationMovingRootSx,
 } from "./mobilePresentationMotion";
 import { frostedChrome } from "./frostedGlass";
-import { setNotifySetting, setVibrateSetting, useNotifySetting, useVibrateSetting } from "./turnNotify";
 import {
     clampComposerColWidth,
     composerColWidthStore,
@@ -225,10 +227,16 @@ import {
 } from "./desktop/controlCenterTabs";
 import {
     SETTINGS_MORE_ROWS,
+    SETTINGS_NOTIFICATIONS_ROW,
     SETTINGS_PROVIDER_ROW,
     SettingsNavRow,
     settingsDestinationLabel,
 } from "./SettingsChrome";
+import {
+    sessionNotificationsMuted,
+    setSessionNotificationsMuted,
+    useSystemNotificationPreferences,
+} from "./systemNotifications";
 import {
     closestScrollableSettingsSurface,
     destinationScrollTop,
@@ -610,6 +618,15 @@ function SessionList({
         row: SessionMeta;
         el: HTMLElement;
     } | null>(null);
+    useSystemNotificationPreferences();
+    const menuSessionMuted = menuAnchor
+        ? sessionNotificationsMuted(menuAnchor.row.id)
+        : false;
+    const toggleMenuSessionNotifications = (): void => {
+        if (!menuAnchor) return;
+        setSessionNotificationsMuted(menuAnchor.row.id, !menuSessionMuted);
+        setMenuAnchor(null);
+    };
     const menuProjection = useExploreSessionState(
         menuAnchor?.row.id ?? "__session-menu-none__",
     ).projection;
@@ -1178,6 +1195,14 @@ function SessionList({
                     </ListItemIcon>
                     <ListItemText primary="Rename" />
                 </MenuItem>
+                <MenuItem onClick={toggleMenuSessionNotifications}>
+                    <ListItemIcon>
+                        {menuSessionMuted
+                            ? <NotificationsOutlined fontSize="medium" />
+                            : <NotificationsOffOutlined fontSize="medium" />}
+                    </ListItemIcon>
+                    <ListItemText primary={menuSessionMuted ? "Unmute notifications" : "Mute notifications"} />
+                </MenuItem>
                 <Divider />
                 <ListSubheader sx={{ lineHeight: "32px", bgcolor: "transparent" }}>
                     View mode
@@ -1307,6 +1332,10 @@ function SessionList({
                             <Button data-session-shortcut="l" fullWidth startIcon={<RefreshIcon />} onClick={(): void => { if (menuAnchor) onRequestReload(menuAnchor.row); setMenuAnchor(null); }} sx={{ justifyContent: "flex-start" }}>
                                 <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Reload</Box>
                                 <Kbd keys="L" />
+                            </Button>
+                            <Button data-session-shortcut="n" fullWidth startIcon={menuSessionMuted ? <NotificationsOutlined /> : <NotificationsOffOutlined />} onClick={toggleMenuSessionNotifications} sx={{ justifyContent: "flex-start" }}>
+                                <Box component="span" sx={{ flex: 1, textAlign: "left" }}>{menuSessionMuted ? "Unmute notifications" : "Mute notifications"}</Box>
+                                <Kbd keys="N" />
                             </Button>
                             <Divider sx={{ my: 0.5 }} />
                             <Typography variant="overline" color="text.secondary" sx={{ px: 1 }}>View mode</Typography>
@@ -4002,8 +4031,6 @@ function DesktopSettingsContent({
     shortcutsAvailable: boolean;
 }): React.JSX.Element {
     const vim = useVimSetting();
-    const notify = useNotifySetting();
-    const vibrate = useVibrateSetting();
     const composerDebug = useComposerDebugSetting();
     const reading = useReadingSettings();
     const selectedFont = getFontPreset(reading.fontVariant);
@@ -4089,12 +4116,6 @@ function DesktopSettingsContent({
                         },
                     }}
                 >
-                    <DesktopSettingsRow shortcut="S" shortcutAvailable={shortcutsAvailable} label="Sound alert" description="Chime when an agent needs you">
-                        <DesktopSettingsChoice active={notify} onClick={() => setNotifySetting(!notify)} ariaLabel="Toggle sound alerts">{notify ? "On" : "Off"}</DesktopSettingsChoice>
-                    </DesktopSettingsRow>
-                    <DesktopSettingsRow shortcut="V" shortcutAvailable={shortcutsAvailable} label="Vibration alert" description="Native haptic notification">
-                        <DesktopSettingsChoice active={vibrate} onClick={() => setVibrateSetting(!vibrate)} ariaLabel="Toggle vibration alerts">{vibrate ? "On" : "Off"}</DesktopSettingsChoice>
-                    </DesktopSettingsRow>
                     <DesktopSettingsRow shortcut="M" shortcutAvailable={shortcutsAvailable} label="Vim keybindings" description="Modal editing in the composer">
                         <DesktopSettingsChoice active={vim} onClick={() => setVimSetting(!vim)} ariaLabel="Toggle Vim keybindings">{vim ? "On" : "Off"}</DesktopSettingsChoice>
                     </DesktopSettingsRow>
@@ -4918,8 +4939,6 @@ function SettingsShell({
         applyDestinationScroll(renderedTab);
     }, [applyDestinationScroll, open, renderedTab, tab, tabPanelVisible]);
     const vim = useVimSetting();
-    const notify = useNotifySetting();
-    const vibrate = useVibrateSetting();
     const composerDebug = useComposerDebugSetting();
     const reading = useReadingSettings();
     // Font picker is collapsed by default (the 7 preview cards otherwise fill the
@@ -5351,12 +5370,12 @@ function SettingsShell({
                                         />
                                     )}
                             </Stack>
-                        ) : renderedTab === "providers" ? <ProvidersContent /> : renderedTab === "machines" ? <MachinesContent /> : renderedTab === "info" ? (
+                        ) : renderedTab === "notifications" ? <NotificationSettingsContent /> : renderedTab === "providers" ? <ProvidersContent /> : renderedTab === "machines" ? <MachinesContent /> : renderedTab === "info" ? (
                             <InfoContent desktop />
                         ) : <UsageLogs />}
                     </Box>
                 </Box>
-            ) : !tabPanelVisible ? null : renderedTab === "providers" ? <ProvidersContent /> : renderedTab === "machines" ? <MachinesContent /> : renderedTab === "info" ? <InfoContent /> : renderedTab === "logs" ? <UsageLogs /> : (
+            ) : !tabPanelVisible ? null : renderedTab === "notifications" ? <NotificationSettingsContent /> : renderedTab === "providers" ? <ProvidersContent /> : renderedTab === "machines" ? <MachinesContent /> : renderedTab === "info" ? <InfoContent /> : renderedTab === "logs" ? <UsageLogs /> : (
             <Stack ref={settingsListRef} data-settings-list="true" spacing={2}>
                 <Stack
                     direction="row"
@@ -5586,44 +5605,6 @@ function SettingsShell({
                     spacing={2}
                 >
                     <Stack>
-                        <Typography variant="body2">Sound alert</Typography>
-                        <Typography variant="caption" color="text.secondary">
-                            Chime when an agent finishes or needs you
-                        </Typography>
-                    </Stack>
-                    <Switch
-                        checked={notify}
-                        onChange={(e): void => setNotifySetting(e.target.checked)}
-                        inputProps={{ "aria-label": "Sound alert" }}
-                    />
-                </Stack>
-                <Stack
-                    direction="row"
-                    alignItems="center"
-                    justifyContent="space-between"
-                    spacing={2}
-                >
-                    <Stack>
-                        <Typography variant="body2">Vibration alert</Typography>
-                        <Typography variant="caption" color="text.secondary">
-                            Vibrate when an agent finishes or needs you (native on
-                            iPhone, no-op on devices without a vibration motor)
-                        </Typography>
-                    </Stack>
-                    <Switch
-                        checked={vibrate}
-                        onChange={(e): void => setVibrateSetting(e.target.checked)}
-                        inputProps={{ "aria-label": "Vibration alert" }}
-                    />
-                </Stack>
-                <Divider />
-                <Stack
-                    direction="row"
-                    alignItems="center"
-                    justifyContent="space-between"
-                    spacing={2}
-                >
-                    <Stack>
                         <Typography variant="body2">
                             Debug mode
                         </Typography>
@@ -5684,6 +5665,17 @@ function SettingsShell({
                 >
                     <ReviewSettingsContent />
                 </Box>
+                <Divider />
+                <Stack spacing={0.25}>
+                    <Typography variant="overline" color="text.secondary">
+                        Attention
+                    </Typography>
+                    <SettingsNavRow
+                        icon={SETTINGS_NOTIFICATIONS_ROW.icon}
+                        label={SETTINGS_NOTIFICATIONS_ROW.label}
+                        onPress={(): void => changeTab(SETTINGS_NOTIFICATIONS_ROW.tab)}
+                    />
+                </Stack>
                 <Divider />
                 <Stack spacing={0.25}>
                     <Typography variant="overline" color="text.secondary">
@@ -5758,8 +5750,7 @@ function SettingsShell({
                                     slots: ([
                                             ["T", "Theme"], ["F", "Reading font"],
                                             ["Z", "Font size"], ["P", "Padding"],
-                                            ["R", "Line height"], ["S", "Sound"],
-                                            ["V", "Vibration"], ["M", "Vim"],
+                                            ["R", "Line height"], ["M", "Vim"],
                                             ["A", "Auto-resume"],
                                         ] as const).map(([shortcut, title]) => ({
                                             shortcut,

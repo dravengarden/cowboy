@@ -51,6 +51,7 @@ use crate::runtime_router::RuntimeRouter;
 use crate::store::Store;
 use crate::supervisor::Supervisor;
 use crate::usage::UsageService;
+use crate::web_push::{NotificationCategory, WebPushService, WebPushSubscription};
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::{mpsc, watch};
@@ -184,6 +185,7 @@ struct AppState {
     code_cache: crate::code_cache::CodeCache,
     zed_adapter_socket: Option<PathBuf>,
     observability: Observability,
+    web_push: Arc<WebPushService>,
 }
 
 const STORE_QUEUE_CAPACITY: usize = 8_192;
@@ -231,6 +233,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         crate::code_cache::CodeCache::open(args.data_dir.join("code-cache"), args.code_cache_bytes)
             .map_err(anyhow::Error::msg)
             .context("opening code content cache")?;
+    let web_push = WebPushService::open(&args.data_dir).context("opening Web Push service")?;
     let provider_catalog = Arc::new(crate::provider_catalog::ProviderCatalog::open(
         &args.data_dir,
         args.provider_catalog_dir.clone(),
@@ -352,6 +355,11 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         let shutdown = shutdown_rx.clone();
         tokio::spawn(run_machine_presence_sweeper(store, shutdown))
     });
+    let web_push_task = tokio::spawn(run_web_push_notifications(
+        hub.clone(),
+        Arc::clone(&web_push),
+        shutdown_rx.clone(),
+    ));
     let runtime_router = RuntimeRouter::new();
     // Reset credits belong to provider accounts, not sessions. Restore one
     // shared timer per provider and keep them independent from session queues.
@@ -725,6 +733,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             code_cache,
             zed_adapter_socket: args.zed_adapter_socket,
             observability,
+            web_push,
         },
         shutdown_tx,
     )
@@ -733,6 +742,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     scheduler_task.abort();
     reset_task.abort();
     runtime_reconciliation_task.abort();
+    web_push_task.abort();
     match tokio::time::timeout(std::time::Duration::from_secs(5), &mut dispatcher_task).await {
         Ok(Ok(())) => {}
         Ok(Err(error)) => tracing::error!(%error, "dispatcher task failed during shutdown"),
@@ -775,6 +785,62 @@ async fn run_machine_presence_sweeper(store: Store, mut shutdown: watch::Receive
                 }
             }
         }
+    }
+}
+
+async fn run_web_push_notifications(
+    hub: Hub,
+    service: Arc<WebPushService>,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    let mut events = hub.subscribe();
+    loop {
+        let outbound = tokio::select! {
+            result = events.recv() => match result {
+                Ok(outbound) => outbound,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    tracing::warn!(skipped, "Web Push observer lagged");
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            },
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() { break; }
+                continue;
+            }
+        };
+        let notification = match outbound {
+            Outbound::Event { envelope }
+                if matches!(envelope.event, Event::PermissionRequest { .. }) =>
+            {
+                Some((NotificationCategory::Permission, envelope.session_id))
+            }
+            Outbound::JudgeResult {
+                session_id,
+                done: true,
+                ..
+            } => Some((NotificationCategory::Completed, session_id)),
+            Outbound::JudgeResult {
+                session_id,
+                awaiting_user: true,
+                ..
+            } => Some((NotificationCategory::Input, session_id)),
+            Outbound::Error {
+                session_id: Some(session_id),
+                ..
+            } => Some((NotificationCategory::Error, session_id)),
+            _ => None,
+        };
+        let Some((category, session_id)) = notification else {
+            continue;
+        };
+        let title = hub
+            .session_info(&session_id)
+            .map_or_else(|| "Session".to_owned(), |info| info.meta.title);
+        let service = Arc::clone(&service);
+        tokio::spawn(async move {
+            service.notify(category, &session_id, &title).await;
+        });
     }
 }
 
@@ -1632,6 +1698,11 @@ async fn serve_axum(
         )
         .route("/metrics", get(prometheus_metrics))
         .route("/api/workspaces", get(api_workspaces))
+        .route("/api/web-push/config", get(api_web_push_config))
+        .route(
+            "/api/web-push/subscription",
+            put(api_web_push_subscribe).delete(api_web_push_unsubscribe),
+        )
         .route("/api/providers", get(api_providers))
         .route(
             "/api/providers/catalog/refresh",
@@ -1813,6 +1884,51 @@ async fn healthz(State(state): State<Arc<AppState>>) -> Response {
         (StatusCode::SERVICE_UNAVAILABLE, "persistence degraded").into_response()
     } else {
         "ok".into_response()
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebPushConfigResponse<'a> {
+    application_server_key: &'a str,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WebPushUnsubscribeRequest {
+    endpoint: String,
+}
+
+async fn api_web_push_config(State(state): State<Arc<AppState>>) -> Response {
+    Json(WebPushConfigResponse {
+        application_server_key: state.web_push.public_key(),
+    })
+    .into_response()
+}
+
+async fn api_web_push_subscribe(
+    State(state): State<Arc<AppState>>,
+    Json(subscription): Json<WebPushSubscription>,
+) -> Response {
+    match state.web_push.upsert(subscription) {
+        Ok(()) => Json(serde_json::json!({ "subscribed": true })).into_response(),
+        Err(error) => {
+            tracing::warn!(%error, "rejecting Web Push subscription");
+            (StatusCode::BAD_REQUEST, "invalid Web Push subscription").into_response()
+        }
+    }
+}
+
+async fn api_web_push_unsubscribe(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<WebPushUnsubscribeRequest>,
+) -> Response {
+    match state.web_push.remove(&request.endpoint) {
+        Ok(()) => Json(serde_json::json!({ "subscribed": false })).into_response(),
+        Err(error) => {
+            tracing::warn!(%error, "removing Web Push subscription");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
     }
 }
 

@@ -4,6 +4,7 @@ import {
   ChevronRight,
   DnsOutlined,
   InfoOutlined,
+  NotificationsOutlined,
 } from "@mui/icons-material";
 import { Box, ButtonBase, Stack, Typography } from "@mui/material";
 import type { ReactNode } from "react";
@@ -11,6 +12,7 @@ import type { ControlCenterTab } from "./desktop/controlCenterTabs";
 
 const DESTINATION_LABELS: Record<ControlCenterTab, string> = {
   settings: "Settings",
+  notifications: "Notifications",
   providers: "Providers",
   machines: "Machines",
   info: "About",
@@ -72,6 +74,12 @@ export const SETTINGS_PROVIDER_ROW = {
   tab: "providers" as const,
   label: "Accounts & sign-in",
   icon: <AccountCircleOutlined fontSize="small" />,
+};
+
+export const SETTINGS_NOTIFICATIONS_ROW = {
+  tab: "notifications" as const,
+  label: "Notifications",
+  icon: <NotificationsOutlined fontSize="small" />,
 };
 
 export const SETTINGS_MORE_ROWS = [

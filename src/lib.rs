@@ -110,3 +110,5 @@ mod workspace_roots;
 mod migration_policy;
 #[cfg(all(test, feature = "full"))]
 mod protocol_contract;
+#[cfg(feature = "full")]
+mod web_push;

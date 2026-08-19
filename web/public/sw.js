@@ -9,7 +9,7 @@
 // Bump on EVERY web deploy — the app's foreground update-check (main.tsx) only
 // detects a new worker when this string changes. Desktop auto-reloads after its
 // visible countdown; Mobile waits for an explicit Update tap.
-const VERSION = "cowboy-v1438";
+const VERSION = "cowboy-v1439";
 const ASSET_CACHE = `${VERSION}-assets`;
 // The app shell ("/" — index.html). Cowboy serves the independently switched
 // frontend on the same origin as the API/WS, so when the daemon is down (e.g. a
@@ -61,6 +61,97 @@ self.addEventListener("activate", (event) => {
       // re-check sw.js on launch/foreground and surface an update once.
     })(),
   );
+});
+
+const NOTIFICATION_CATEGORIES = new Set(["completed", "input", "permission", "error"]);
+const SAFE_SESSION_ID = /^[A-Za-z0-9_-]{1,160}$/;
+const ACTIVE_SESSIONS = new Map();
+
+function validNotificationMessage(message) {
+  return Boolean(
+    message && typeof message === "object" &&
+    message.version === 1 &&
+    NOTIFICATION_CATEGORIES.has(message.category) &&
+    SAFE_SESSION_ID.test(message.sessionId ?? "") &&
+    typeof message.title === "string" && message.title.length <= 120 &&
+    typeof message.body === "string" && message.body.length <= 240
+  );
+}
+
+function showSessionNotification(message) {
+  const url = message.test === true ? "/" : `/?session=${encodeURIComponent(message.sessionId)}`;
+  return self.registration.showNotification(message.title, {
+    body: message.body,
+    icon: "/cowboy-app-icon-192.png",
+    badge: "/cowboy-app-icon-192.png",
+    tag: `cowboy-session-${message.sessionId}`,
+    data: { url, sessionId: message.test === true ? null : message.sessionId },
+  });
+}
+
+self.addEventListener("message", (event) => {
+  const message = event.data;
+  if (message?.type === "cowboy.active-session" && event.source?.id) {
+    if (SAFE_SESSION_ID.test(message.sessionId ?? "")) ACTIVE_SESSIONS.set(event.source.id, message.sessionId);
+    else ACTIVE_SESSIONS.delete(event.source.id);
+    return;
+  }
+  if (
+    !message ||
+    message.type !== "cowboy.session-notification" ||
+    !validNotificationMessage(message)
+  ) return;
+  event.waitUntil(showSessionNotification(message));
+});
+
+self.addEventListener("push", (event) => {
+  let message;
+  try {
+    message = event.data?.json();
+  } catch {
+    return;
+  }
+  if (!validNotificationMessage(message)) return;
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    const alreadyVisible = windows.some((client) =>
+      client.visibilityState === "visible" && ACTIVE_SESSIONS.get(client.id) === message.sessionId
+    );
+    if (!alreadyVisible) await showSessionNotification(message);
+  })());
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const data = event.notification.data;
+  if (data?.url === "/") {
+    const target = new URL("/", self.location.origin).href;
+    event.waitUntil((async () => {
+      const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      const client = windows.find((candidate) => new URL(candidate.url).origin === self.location.origin);
+      if (client) {
+        await client.focus();
+        return;
+      }
+      await self.clients.openWindow(target);
+    })());
+    return;
+  }
+  const sessionId = data && SAFE_SESSION_ID.test(data.sessionId ?? "")
+    ? data.sessionId
+    : null;
+  if (!sessionId) return;
+  const target = new URL(`/?session=${encodeURIComponent(sessionId)}`, self.location.origin).href;
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    const client = windows.find((candidate) => new URL(candidate.url).origin === self.location.origin);
+    if (client) {
+      await client.navigate(target);
+      await client.focus();
+      return;
+    }
+    await self.clients.openWindow(target);
+  })());
 });
 
 self.addEventListener("fetch", (event) => {

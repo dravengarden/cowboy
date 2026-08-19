@@ -14,20 +14,21 @@ Deno.test("control center numeric shortcuts select one stable tab", () => {
     CONTROL_CENTER_TABS.map(({ value, shortcut }) => [shortcut, value]),
     [
       ["1", "settings"],
-      ["2", "providers"],
-      ["3", "machines"],
-      ["4", "info"],
-      ["5", "logs"],
+      ["2", "notifications"],
+      ["3", "providers"],
+      ["4", "machines"],
+      ["5", "info"],
+      ["6", "logs"],
     ],
   );
   assertEquals(controlCenterTabForShortcut("1"), "settings");
-  assertEquals(controlCenterTabForShortcut("5"), "logs");
+  assertEquals(controlCenterTabForShortcut("6"), "logs");
   assertEquals(controlCenterTabForShortcut("x"), null);
 });
 
 Deno.test("control center bracket navigation wraps across tabs", () => {
   assertEquals(adjacentControlCenterTab("settings", -1), "logs");
-  assertEquals(adjacentControlCenterTab("settings", 1), "providers");
+  assertEquals(adjacentControlCenterTab("settings", 1), "notifications");
   assertEquals(adjacentControlCenterTab("logs", 1), "settings");
 });
 

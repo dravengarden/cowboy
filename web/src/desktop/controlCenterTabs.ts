@@ -1,9 +1,10 @@
 export const CONTROL_CENTER_TABS = [
   { value: "settings", label: "Settings", shortcut: "1" },
-  { value: "providers", label: "Providers", shortcut: "2" },
-  { value: "machines", label: "Machines", shortcut: "3" },
-  { value: "info", label: "Info", shortcut: "4" },
-  { value: "logs", label: "Logs", shortcut: "5" },
+  { value: "notifications", label: "Notifications", shortcut: "2" },
+  { value: "providers", label: "Providers", shortcut: "3" },
+  { value: "machines", label: "Machines", shortcut: "4" },
+  { value: "info", label: "Info", shortcut: "5" },
+  { value: "logs", label: "Logs", shortcut: "6" },
 ] as const;
 
 export type ControlCenterTab = typeof CONTROL_CENTER_TABS[number]["value"];

@@ -18,7 +18,37 @@ const activeSessionStore = persisted<string | null>("cowboy:active-session", nul
   deserialize: (raw) => (raw === "" ? null : raw),
 });
 const activeSessionListeners = new Set<() => void>();
-let activeSessionId = activeSessionStore.get();
+
+function notificationSessionDeepLink(): string | null {
+  try {
+    const url = new URL(globalThis.location.href);
+    const sessionId = url.searchParams.get("session");
+    if (!sessionId || !/^[A-Za-z0-9_-]{1,160}$/.test(sessionId)) return null;
+    url.searchParams.delete("session");
+    globalThis.history.replaceState(globalThis.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+    return sessionId;
+  } catch {
+    return null;
+  }
+}
+
+let activeSessionId = notificationSessionDeepLink() ?? activeSessionStore.get();
+if (activeSessionId !== activeSessionStore.get()) activeSessionStore.set(activeSessionId);
+
+function publishActiveSessionToWorker(): void {
+  void globalThis.navigator?.serviceWorker?.ready.then((registration) => {
+    (registration.active ?? registration.waiting)?.postMessage({
+      type: "cowboy.active-session",
+      sessionId: activeSessionId,
+    });
+  });
+}
+
+if (typeof globalThis.addEventListener === "function") {
+  globalThis.addEventListener("focus", publishActiveSessionToWorker);
+  globalThis.document?.addEventListener("visibilitychange", publishActiveSessionToWorker);
+  publishActiveSessionToWorker();
+}
 
 export function getActiveSessionId(): string | null {
   return activeSessionId;
@@ -28,6 +58,7 @@ export function setActiveSessionId(id: string | null): void {
   if (id === activeSessionId) return;
   activeSessionId = id;
   activeSessionStore.set(id);
+  publishActiveSessionToWorker();
   for (const listener of activeSessionListeners) listener();
 }
 
