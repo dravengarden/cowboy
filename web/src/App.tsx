@@ -4087,14 +4087,25 @@ function MobileSettingsAccordion({
                     pb: 2.5,
                     borderTop: 1,
                     borderColor: "divider",
-                    // Machines resolves a tall remote inventory after opening, so it alone
-                    // reserves one screen for the anchor animation. Short synchronous sections
-                    // must remain intrinsic or they leave a large empty gap before the next row.
+                    // Cap disclosure geometry at one viewport. A long card inventory then
+                    // scrolls natively inside the expanded section instead of asking Collapse
+                    // to interpolate thousands of pixels. Short sections stay intrinsic.
+                    boxSizing: "border-box",
+                    maxHeight: "calc(100vh - 152px)",
+                    overflowY: "auto",
+                    overscrollBehaviorY: "contain",
+                    WebkitOverflowScrolling: "touch",
+                    "@supports (height: 100dvh)": {
+                        maxHeight: "calc(100dvh - 152px)",
+                    },
+                    // Machines resolves its remote inventory after opening, so reserve the same
+                    // bounded viewport before data arrives and keep the anchor motion stable.
                     ...(id === "machines"
                         ? {
                             minHeight: "calc(100vh - 152px)",
                             "@supports (height: 100dvh)": {
                                 minHeight: "calc(100dvh - 152px)",
+                                maxHeight: "calc(100dvh - 152px)",
                             },
                         }
                         : {}),
