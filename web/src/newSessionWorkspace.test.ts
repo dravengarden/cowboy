@@ -13,16 +13,16 @@ const composerSource = await Deno.readTextFile(
   new URL("./Composer.tsx", import.meta.url),
 );
 
-Deno.test("mobile new session puts Cancel and Create in the cover header", () => {
+Deno.test("mobile new session uses left Cancel and right Create glass islands", () => {
   const dialog = appSource.slice(
     appSource.indexOf("function NewSessionDialog("),
     appSource.indexOf("const EMPTY_TRANSCRIPT_TIMELINE"),
   );
   assertEquals(dialog.includes('ariaLabel="New session"'), true);
-  assertEquals(dialog.includes("cover"), true);
-  assertEquals(dialog.includes("Cancel"), true);
-  assertEquals(dialog.includes("Create"), true);
-  assertEquals(dialog.includes("floatingActions"), false);
+  assertEquals(dialog.includes("footerOverlay"), true);
+  assertEquals(dialog.includes('key: "cancel"'), true);
+  assertEquals(dialog.includes('key: "create"'), true);
+  assertEquals(dialog.includes("justifyContent: \"space-between\""), true);
   assertEquals(dialog.includes('title="New session"'), true);
 });
 

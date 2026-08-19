@@ -1794,12 +1794,10 @@ function NewSessionDialog({
             </Stack>
     );
     const canCreate = !creating && Boolean(provider && machineId && cwd);
-    const stopSheetDrag = (event: { stopPropagation: () => void }): void => {
-        event.stopPropagation();
-    };
-    // Mobile: Cancel/Create live in the cover header, like an iOS form
-    // sheet. A footer above the PWA accessory truncates Working directory
-    // and leaves a dead band. Desktop keeps the dialog action row.
+    // Mobile: the same liquid-glass islands as Sessions close/new. Footer
+    // text buttons and a header row both failed: one truncated the form,
+    // the other was too far to tap. Overlay X left / check right, fields
+    // scroll behind them. Desktop keeps the dialog action row.
     if (navbarAtBottom) {
         return (
             <DetentSheet
@@ -1807,46 +1805,57 @@ function NewSessionDialog({
                 onClose={creating ? (): void => {} : onClose}
                 cover
                 frosted
+                footerOverlay
                 ariaLabel="New session"
                 surfaceColor={theme.palette.background.default}
                 header={
-                    <Box
-                        sx={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 0.5,
-                            pl: 0.5,
-                            pr: "max(env(safe-area-inset-right), 8px)",
-                            pb: 1,
-                            minHeight: 44,
-                        }}
-                    >
-                        <Button
-                            onClick={onClose}
-                            onPointerDown={stopSheetDrag}
-                            color="inherit"
-                            disabled={creating}
-                            sx={{ textTransform: "none", minWidth: 72, flex: "0 0 auto" }}
-                        >
-                            Cancel
-                        </Button>
-                        <Typography
-                            variant="subtitle1"
-                            sx={{ flex: 1, fontWeight: 700, textAlign: "center" }}
-                            noWrap
-                        >
+                    <Box sx={{ pl: 2, pr: 2, pb: 1 }}>
+                        <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
                             New session
                         </Typography>
-                        <Button
-                            onClick={create}
-                            onPointerDown={stopSheetDrag}
-                            variant="contained"
-                            size="small"
-                            disabled={!canCreate}
-                            sx={{ textTransform: "none", minWidth: 72, flex: "0 0 auto" }}
-                        >
-                            {creating ? "Preparing…" : "Create"}
-                        </Button>
+                    </Box>
+                }
+                footer={
+                    <Box
+                        sx={{
+                            width: "100%",
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            pointerEvents: "none",
+                            "& > *": {
+                                width: "auto",
+                                flex: "0 0 auto",
+                                pointerEvents: "auto",
+                            },
+                        }}
+                    >
+                        <MobileSheetActionGroup
+                            actions={[{
+                                key: "cancel",
+                                label: "Cancel",
+                                disabled: creating,
+                                onPress: creating ? (): void => {} : onClose,
+                                icon: (
+                                    <CloseIcon
+                                        aria-hidden
+                                        fontSize="small"
+                                        sx={{ transform: "translate(-0.75px, -0.5px)" }}
+                                    />
+                                ),
+                            }]}
+                        />
+                        <MobileSheetActionGroup
+                            actions={[{
+                                key: "create",
+                                label: creating ? "Preparing session" : "Create session",
+                                disabled: !canCreate,
+                                onPress: create,
+                                icon: creating
+                                    ? <CircularProgress size={18} color="inherit" />
+                                    : <CheckIcon fontSize="small" />,
+                            }]}
+                        />
                     </Box>
                 }
             >
