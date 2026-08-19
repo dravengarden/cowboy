@@ -1,8 +1,5 @@
 import { assertEquals } from "jsr:@std/assert";
-import {
-  pendingPanelCollapseKey,
-  pendingRowMatchesArrival,
-} from "./pendingPanelState.ts";
+import { pendingRowMatchesArrival } from "./pendingPanelState.ts";
 
 const composerSource = await Deno.readTextFile(
   new URL("./Composer.tsx", import.meta.url),
@@ -10,11 +7,6 @@ const composerSource = await Deno.readTextFile(
 const storeSource = await Deno.readTextFile(
   new URL("./store.ts", import.meta.url),
 );
-
-Deno.test("pending panel collapse keys stay per kind", () => {
-  assertEquals(pendingPanelCollapseKey("draft"), "cowboy:draft-collapsed");
-  assertEquals(pendingPanelCollapseKey("queued"), "cowboy:queued-collapsed");
-});
 
 Deno.test("a just-staged optimistic row still matches after the server id arrives", () => {
   assertEquals(

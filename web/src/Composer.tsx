@@ -299,14 +299,17 @@ import {
 } from "./sessionSettingsOpen";
 import { useStore as usePrefStore } from "./_store/mod.ts";
 import {
-  collapseStore,
   PENDING_ARRIVAL_FLASH_MS,
   type PendingArrival,
-  pendingPanelCollapseKey,
   pendingRowMatchesArrival,
   scrollPendingRowIntoView,
   subscribePendingArrival,
 } from "./pendingPanelState";
+import {
+  collapseComposerStackPanel,
+  composerStackExpandedStore,
+  toggleComposerStackPanel,
+} from "./composerStackAccordion";
 
 const DesktopContextShortcut = lazy(async () => {
   const module = await import("./desktop/commands/DesktopContextShortcut");
@@ -1539,8 +1542,6 @@ export function ComposerWorkspace({
   // Editing ownership and visual expansion are deliberately separate. Queue or
   // Draft may still own the buffer while WebKit is dismissing (or declined to
   // open) the keyboard; that must not grant a mobile surface fill-height.
-  const mobilePendingKeyboardEditing = mobilePendingEditing &&
-    mobileKeyboardPresentationOpen;
   const mobileComposerKeyboardWasOpenRef = useRef(false);
   useLayoutEffect(() => {
     if (!touchInput) {
@@ -1923,55 +1924,21 @@ export function ComposerWorkspace({
         }}
       />
       {
-        /* Pending stack (queue + drafts) in ONE bounded scroll region so they
-          scroll TOGETHER and never strand the editor. Before, each panel had its
-          own 30vh internal scroll; stacked (queue + drafts + plan) they overflowed
-          the phone with no unified scroll and the input got pushed off-screen
-          ("都展开页面无法滚动"). Now they share a single capped scroller (editor +
-          navbar below stay visible); `unbounded` drops each panel's own cap so the
-          scroll isn't nested. minHeight:0 lets it shrink + scroll in the flex column. */
+        /* Queue and drafts stay a stacked pair of headers. Exclusive
+          disclosure means only one body is open, so each panel can own its
+          own inner scroller instead of a shared outer scrollbar. */
       }
       {(queue.length > 0 || draftList.length > 0) && !desktop && (
         <Box
           data-composer-stack-slot="pending"
-          data-mobile-pending-scrollport
           data-mobile-input-context="pending"
-          // This is a native vertical scrollport, but it still participates in
-          // the shell-wide direction-locked Sessions gesture. `pan-y` below
-          // keeps vertical movement native; only a deliberate horizontal move
-          // is prevented by the ancestor after it locks. Excluding this whole
-          // subtree made both expanded cards and collapsed headers dead zones
-          // for opening the drawer.
           sx={{
-            // Plain BLOCK scroll container — NOT flex-column: with flex, the panels
-            // (flex-shrink:1 children) get squished to fit instead of overflowing +
-            // scrolling, which crushed the last panel's (drafts) header. Block stacks
-            // them at natural height and `overflowY: auto` scrolls the overflow.
-            overflowY: mobilePendingKeyboardEditing ? "hidden" : "auto",
-            // Do not trap a vertical gesture when the bounded stack currently
-            // fits or reaches an edge. WebKit can then finish normal scroll
-            // chaining instead of leaving the touched cards feeling frozen.
-            overscrollBehaviorY: "auto",
-            // This Box is a flex child of the mobile composer stack. Without an
-            // explicit zero minimum, WebKit applies min-height:auto and keeps the
-            // grid at its content height instead of establishing this bounded
-            // inner scrollport — the rows remain visible but vertical swipes do
-            // nothing. Preserve native vertical ownership while the app shell's
-            // direction lock continues to recognise deliberate horizontal drawer
-            // gestures.
             minHeight: 0,
-            maxHeight: mobilePendingKeyboardEditing ? "none" : "40vh",
-            transition: "max-height 180ms cubic-bezier(.2,.8,.2,1)",
-            flexShrink: 1,
-            touchAction: "pan-y",
-            WebkitOverflowScrolling: "touch",
+            flexShrink: 0,
             display: "block",
             "& > * + *": {
               mt: "var(--mobile-composer-stack-gap)",
             },
-            // The outer Composer owns the space before and after this group.
-            // Keep this nested scroller flush so one optional Queue/Draft panel
-            // cannot introduce a different-looking gap above the editor.
             m: 0,
             p: 0,
           }}
@@ -1989,7 +1956,6 @@ export function ComposerWorkspace({
               items={queue}
               status={status}
               commands={(): AvailableCommand[] => availableCommands}
-              unbounded
               onEditingChange={onMobileQueuedEditingChange}
               onResumeKeyboardSurface={resumeMobileKeyboardSurface}
             />
@@ -2004,7 +1970,6 @@ export function ComposerWorkspace({
               items={draftList}
               status={status}
               commands={(): AvailableCommand[] => availableCommands}
-              unbounded
               onEditingChange={onMobileDraftEditingChange}
               onResumeKeyboardSurface={resumeMobileKeyboardSurface}
               // Only offer "move" when there's somewhere to move to.
@@ -4017,7 +3982,6 @@ function PendingPanel({
   onScheduleDraft,
   onEditingChange,
   onResumeKeyboardSurface,
-  unbounded,
 }: {
   desktop: boolean;
   keyboardOpen: boolean;
@@ -4041,18 +4005,11 @@ function PendingPanel({
   /** Clear the compact-surface latch so a Queue/Draft tap can own the
    *  keyboard-up two-track chrome after delivery or hide-keyboard. */
   onResumeKeyboardSurface?: (() => void) | undefined;
-  /** Rendered inside the composer's SHARED queue+drafts scroll region, so this
-   *  panel must NOT apply its own maxHeight/overflow — nesting scrollers would
-   *  trap the gesture. The outer region owns the cap + scroll. */
-  unbounded?: boolean;
 }): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null);
-  // Collapsed state is an APP-LEVEL (per-device) UI pref, NOT service state: it
-  // persists in localStorage per panel kind so it survives reloads + session
-  // switches, but is never synced across terminals (mirrors PlanDock's
-  // `cowboy:plan-expanded`). Default expanded; the count stays visible either way.
-  const collapse = collapseStore(pendingPanelCollapseKey(kind));
-  const collapsed = usePrefStore(collapse);
+  // Plan / Queue / Draft share one exclusive accordion: opening this panel
+  // folds the other two; tapping the already-open panel folds all three.
+  const collapsed = usePrefStore(composerStackExpandedStore()) !== kind;
   const [arrivalFlash, setArrivalFlash] = useState<PendingArrival | null>(null);
   // One viewport/focus observer per panel, not per message row. A long queue can
   // contain dozens of rows; registering the iOS keyboard listeners in every row
@@ -4082,7 +4039,7 @@ function PendingPanel({
     if (resolution === "save") controller.save();
     else controller.discard();
     setConfirmCollapseEdit(false);
-    collapse.set(true);
+    collapseComposerStackPanel(kind);
   };
   useConfirmEnter(confirmCollapseEdit, () => settleEditAndCollapse("save"));
   const runBulkConfirm = async (): Promise<void> => {
@@ -4148,9 +4105,8 @@ function PendingPanel({
       settleEditAndCollapse("discard");
       return;
     }
-    const nextCollapsed = decision === "collapse";
-    collapse.set(nextCollapsed);
-    if (desktop && !nextCollapsed) {
+    toggleComposerStackPanel(kind);
+    if (desktop && decision === "expand") {
       requestAnimationFrame(() =>
         scrollRef.current?.querySelector<HTMLElement>("[data-desktop-item]")
           ?.focus({ preventScroll: true })
@@ -4614,6 +4570,7 @@ function PendingPanel({
         <Stack
           spacing={0.5}
           ref={scrollRef}
+          data-mobile-pending-scrollport={!desktop ? "true" : undefined}
           data-desktop-pending-list={desktop ? "true" : undefined}
           data-desktop-aux-list={desktop ? "true" : undefined}
           sx={{
@@ -4622,10 +4579,15 @@ function PendingPanel({
             // with the input box, not the rows.
             px: mobileFloatingEdit ? 0 : 0.5,
             pb: mobileFloatingEdit ? 0 : 0.5,
-            // Standalone: cap so a long backlog scrolls instead of pushing the
-            // editor off a phone viewport. `unbounded`: the composer's shared
-            // queue+drafts scroller owns the cap, so don't nest a second scroller.
-            ...(unbounded ? {} : { maxHeight: "30vh", overflowY: "auto" }),
+            // Exclusive accordion means only one body is open, so each panel
+            // owns its own cap + scrollbar. Keyboard-up floating edit is the
+            // writing surface and must not clip the editor at 30vh.
+            ...(!desktop && !mobileFloatingEdit && {
+              maxHeight: "30vh",
+              overflowY: "auto",
+              overscrollBehavior: "contain",
+              WebkitOverflowScrolling: "touch",
+            }),
             ...(desktop && {
               maxHeight: 176,
               overflowY: "auto",

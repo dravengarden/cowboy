@@ -12,13 +12,17 @@ import {
 import { CheckCircle, Close, ExpandLess, ExpandMore, RadioButtonUnchecked } from "@mui/icons-material";
 import type { PlanEntry } from "./protocol";
 import { memo, type ReactNode } from "react";
-import { persisted, useStore } from "./_store/mod.ts";
+import { useStore } from "./_store/mod.ts";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 import { desktopSurfaceSx } from "./desktop/DesktopEmbeddedControl";
 import {
   mobileComposerPanelFrameSx,
   mobileComposerPanelHeaderMinHeight,
 } from "./mobileComposerPrimitives";
+import {
+  composerStackExpandedStore,
+  toggleComposerStackPanel,
+} from "./composerStackAccordion";
 
 // A collapsible, always-visible summary of the agent's current plan (ACP `plan`
 // update), docked above the message queue so the task's progress stays in view
@@ -26,14 +30,6 @@ import {
 // in-progress step + an N/M counter + a determinate bar. Expanded: the full
 // checklist. The plan no longer renders inline in the transcript (it updates in
 // place / latest-wins anyway), so this is the single place it lives.
-
-// Persist the collapse choice globally — the dock remounts per session (with the
-// composer), so a local-only state would forget the user's preference on switch.
-// "1"/"0" legacy format preserved.
-const planExpanded = persisted("cowboy:plan-expanded", false, {
-  serialize: (v) => (v ? "1" : "0"),
-  deserialize: (s) => s === "1",
-});
 
 export const PlanDock = memo(function PlanDock({
   entries,
@@ -51,7 +47,7 @@ export const PlanDock = memo(function PlanDock({
   /** Desktop-only persistent global navigation hint. */
   shortcut?: ReactNode;
 }): React.JSX.Element {
-  const expanded = useStore(planExpanded);
+  const expanded = useStore(composerStackExpandedStore()) === "plan";
   const total = entries.length;
   const done = entries.filter((e) => e.status === "completed").length;
   const allDone = total > 0 && done === total;
@@ -62,7 +58,7 @@ export const PlanDock = memo(function PlanDock({
   const current = active ?? entries.find((e) => e.status !== "completed");
 
   const toggle = (): void => {
-    planExpanded.set(!expanded);
+    toggleComposerStackPanel("plan");
   };
   const toggleTap = useReliableTouchTap<HTMLButtonElement>(toggle);
 

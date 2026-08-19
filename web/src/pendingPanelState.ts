@@ -1,4 +1,4 @@
-import { persisted, type Store } from "./_store/store.ts";
+import { expandComposerStackPanel } from "./composerStackAccordion.ts";
 
 export type PendingPanelKind = "queued" | "draft";
 
@@ -6,24 +6,6 @@ export interface PendingArrival {
   kind: PendingPanelKind;
   id: string;
   cmid?: string;
-}
-
-const collapseStores = new Map<string, Store<boolean>>();
-
-export function collapseStore(key: string): Store<boolean> {
-  let store = collapseStores.get(key);
-  if (store === undefined) {
-    store = persisted(key, false, {
-      serialize: (value) => (value ? "1" : "0"),
-      deserialize: (raw) => raw === "1",
-    });
-    collapseStores.set(key, store);
-  }
-  return store;
-}
-
-export function pendingPanelCollapseKey(kind: PendingPanelKind): string {
-  return `cowboy:${kind}-collapsed`;
 }
 
 const listeners = new Set<(arrival: PendingArrival) => void>();
@@ -38,7 +20,7 @@ export function subscribePendingArrival(
 }
 
 export function revealPendingArrival(arrival: PendingArrival): void {
-  collapseStore(pendingPanelCollapseKey(arrival.kind)).set(false);
+  expandComposerStackPanel(arrival.kind);
   for (const listener of listeners) listener(arrival);
 }
 

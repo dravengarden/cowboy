@@ -231,12 +231,6 @@ Deno.test("mobile recommended presets survive a swallowed Safari click", () => {
 
 Deno.test("mobile column and pending ownership cannot fill the viewport without a keyboard", () => {
   assertEquals(
-    composerSource.includes(
-      "const mobilePendingKeyboardEditing = mobilePendingEditing &&\n    mobileKeyboardPresentationOpen;",
-    ),
-    true,
-  );
-  assertEquals(
     composerSource.includes("...(desktop && column && {"),
     true,
   );
@@ -246,11 +240,11 @@ Deno.test("mobile column and pending ownership cannot fill the viewport without 
     composerSource.includes(
       'maxHeight: mobilePendingKeyboardEditing ? "none" : "40vh"',
     ),
-    true,
+    false,
   );
   assertEquals(
     composerSource.includes(
-      'overflowY: mobilePendingKeyboardEditing ? "hidden" : "auto"',
+      "...(!desktop && !mobileFloatingEdit && {\n              maxHeight: \"30vh\",\n              overflowY: \"auto\",",
     ),
     true,
   );
@@ -269,7 +263,7 @@ Deno.test("Plan plus Queue or Draft editing cannot promote mobile geometry after
     composerSource.includes(
       'mobilePendingKeyboardEditing ? "none" : "40vh"',
     ),
-    true,
+    false,
   );
 });
 
