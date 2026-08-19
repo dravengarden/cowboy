@@ -191,6 +191,7 @@ import {
     NativeReleaseUpdatePrompt,
 } from "./_shell";
 import { ConfirmSheet, Sheet } from "./Sheet";
+import { MobileThumbDock } from "./MobileThumbDock";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { isImeKeyEvent } from "./imeKey";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
@@ -1794,18 +1795,14 @@ function NewSessionDialog({
             </Stack>
     );
     const canCreate = !creating && Boolean(provider && machineId && cwd);
-    // Mobile: the same liquid-glass islands as Sessions close/new. Footer
-    // text buttons and a header row both failed: one truncated the form,
-    // the other was too far to tap. Overlay X left / check right, fields
-    // scroll behind them. Desktop keeps the dialog action row.
     if (navbarAtBottom) {
         return (
+            <>
             <DetentSheet
                 open={open}
                 onClose={creating ? (): void => {} : onClose}
                 cover
                 frosted
-                footerOverlay
                 ariaLabel="New session"
                 surfaceColor={theme.palette.background.default}
                 header={
@@ -1815,52 +1812,43 @@ function NewSessionDialog({
                         </Typography>
                     </Box>
                 }
-                footer={
-                    <Box
-                        sx={{
-                            width: "100%",
-                            display: "flex",
-                            justifyContent: "space-between",
-                            alignItems: "center",
-                            pointerEvents: "none",
-                            "& > *": {
-                                width: "auto",
-                                flex: "0 0 auto",
-                                pointerEvents: "auto",
-                            },
-                        }}
-                    >
-                        <MobileSheetActionGroup
-                            actions={[{
-                                key: "cancel",
-                                label: "Cancel",
-                                disabled: creating,
-                                onPress: creating ? (): void => {} : onClose,
-                                icon: (
-                                    <CloseIcon
-                                        aria-hidden
-                                        fontSize="small"
-                                        sx={{ transform: "translate(-0.75px, -0.5px)" }}
-                                    />
-                                ),
-                            }]}
-                        />
-                        <MobileSheetActionGroup
-                            actions={[{
-                                key: "create",
-                                label: creating ? "Preparing session" : "Create session",
-                                disabled: !canCreate,
-                                onPress: create,
-                                icon: creating
-                                    ? <CircularProgress size={18} color="inherit" />
-                                    : <CheckIcon fontSize="small" />,
-                            }]}
-                        />
-                    </Box>
-                }
             >
-                <Box sx={{ px: 2 }}>{form}</Box>
+                <Box sx={{ px: 2, pb: "88px" }}>{form}</Box>
             </DetentSheet>
+            <MobileThumbDock
+                open={open}
+                left={
+                    <MobileSheetActionGroup
+                        actions={[{
+                            key: "cancel",
+                            label: "Cancel",
+                            disabled: creating,
+                            onPress: creating ? (): void => {} : onClose,
+                            icon: (
+                                <CloseIcon
+                                    aria-hidden
+                                    fontSize="small"
+                                    sx={{ transform: "translate(-0.75px, -0.5px)" }}
+                                />
+                            ),
+                        }]}
+                    />
+                }
+                right={
+                    <MobileSheetActionGroup
+                        actions={[{
+                            key: "create",
+                            label: creating ? "Preparing session" : "Create session",
+                            disabled: !canCreate,
+                            onPress: create,
+                            icon: creating
+                                ? <CircularProgress size={18} color="inherit" />
+                                : <CheckIcon fontSize="small" />,
+                        }]}
+                    />
+                }
+            />
+            </>
         );
     }
     return (
