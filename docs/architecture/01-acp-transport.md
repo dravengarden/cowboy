@@ -121,7 +121,7 @@ sent it.
 |---|---|---|
 | `human` | `composer` | The person typed or attached it |
 | `cowboy` | `auto-resume`, `schedule` | Cowboy issued the prompt (`__cont__`, `__wake__`, `__sched__`) |
-| `agent` | `runtime` | The agent runtime injected it (for example a Grok `<system-reminder>`) |
+| `agent` | `runtime`, `review` | The agent runtime injected it (a Grok `<system-reminder>`, or Grok Build's design-review writer follow-up) |
 
 New senders add a `source` string under one of those three actors. They do not
 invent a fourth actor. Cowboy still writes `autoResumed: true` on non-human
@@ -129,7 +129,9 @@ echoes so older clients keep the muted-note path.
 
 Inbound ACP `user_message_chunk` events from the agent are classified the same
 way. A Grok background-task reminder is stamped `actor: agent`,
-`source: runtime`, `provider: grok` and never counts as a human question.
+`source: runtime`, `provider: grok`. Grok Build design-review writer
+follow-ups (no reminder tags) are stamped `source: review` and never count
+as a human question.
 Grok also re-emits the accepted prompt as `user_message_chunk`. Cowboy already
 echoed that prompt (with `promptOrigin`), so the inbound copy is dropped.
 `derive` hides the same replay in already-persisted logs: a `lifecycle: busy`

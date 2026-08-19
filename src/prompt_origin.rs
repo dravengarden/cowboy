@@ -67,10 +67,47 @@ pub fn origin_from_cmid(cmid: Option<&str>) -> PromptOrigin {
     }
 }
 
+/// Grok Build's design-review / writer loop injects a user-role prompt
+/// without `<system-reminder>` wrappers. Several fingerprints are required
+/// so a human mentioning "review_file" stays a human bubble.
+pub fn is_grok_runtime_task_prompt(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lowered = trimmed.to_ascii_lowercase();
+    let mut hits = 0u8;
+    if lowered.contains("/tmp/grok-") {
+        hits += 2;
+    }
+    if lowered.contains("grok-design-review-") || lowered.contains("grok-design-doc-") {
+        hits += 2;
+    }
+    if lowered.contains("the reviewer found issues") {
+        hits += 2;
+    }
+    if lowered.contains("review_file") {
+        hits += 1;
+    }
+    if lowered.contains("status: open") && lowered.contains("addressed") {
+        hits += 1;
+    }
+    if lowered.contains("add a response field") {
+        hits += 1;
+    }
+    if lowered.contains("wontfix") && lowered.contains("needs-user-input") {
+        hits += 1;
+    }
+    hits >= 3
+}
+
 pub fn is_internal_runtime_prompt(text: &str) -> bool {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return false;
+    }
+    if is_grok_runtime_task_prompt(trimmed) {
+        return true;
     }
     let lowered = trimmed.to_ascii_lowercase();
     if lowered.starts_with("<system-reminder") {
@@ -123,6 +160,10 @@ pub fn annotate_inbound_user_prompt(update: &mut Value, provider_id: &str) {
         .pointer("/content/text")
         .and_then(Value::as_str)
         .unwrap_or("");
+    if is_grok_runtime_task_prompt(text) {
+        apply_prompt_origin(update, &PromptOrigin::agent("review", "grok"));
+        return;
+    }
     if is_internal_runtime_prompt(text) {
         apply_prompt_origin(update, &PromptOrigin::agent("runtime", provider_id));
     }
@@ -220,6 +261,26 @@ mod tests {
         assert!(!is_internal_runtime_prompt(
             "Please do not leak <system-reminder> tags"
         ));
+    }
+
+    #[test]
+    fn grok_review_follow_up_is_agent_owned() {
+        let prompt = "The reviewer found issues. The review_file is at: /tmp/grok-1000/grok-design-review-d58766af.md\n\nRead the review_file. Address ALL issues with Status: open -- including nits.\nThen update the review_file:\n- Status: open -> addressed\n- Add a Response field\nYou may set wontfix or needs-user-input.";
+        assert!(is_grok_runtime_task_prompt(prompt));
+        assert!(is_internal_runtime_prompt(prompt));
+        assert!(!is_grok_runtime_task_prompt("Read the review_file please"));
+        assert!(!is_grok_runtime_task_prompt(
+            "The reviewer found issues in my PR"
+        ));
+        let mut update = serde_json::json!({
+            "sessionUpdate": "user_message_chunk",
+            "content": { "type": "text", "text": prompt }
+        });
+        annotate_inbound_user_prompt(&mut update, "grok");
+        assert_eq!(update["promptOrigin"]["actor"], "agent");
+        assert_eq!(update["promptOrigin"]["source"], "review");
+        assert_eq!(update["promptOrigin"]["provider"], "grok");
+        assert!(!is_human_prompt_update(&update));
     }
 
     #[test]
