@@ -14,6 +14,9 @@ import {
 import type { ComponentPropsWithoutRef } from "react";
 import { flushSync } from "react-dom";
 import {
+    Accordion,
+    AccordionDetails,
+    AccordionSummary,
     Alert,
     alpha,
     AppBar,
@@ -50,7 +53,6 @@ import {
 import type { SxProps, Theme } from "@mui/material";
 import {
     Add,
-    ArrowBackIosNew,
     Bolt,
     Check as CheckIcon,
     Circle,
@@ -225,13 +227,6 @@ import {
     CONTROL_CENTER_TABS,
     type ControlCenterTab,
 } from "./desktop/controlCenterTabs";
-import {
-    SETTINGS_MORE_ROWS,
-    SETTINGS_NOTIFICATIONS_ROW,
-    SETTINGS_PROVIDER_ROW,
-    SettingsNavRow,
-    settingsDestinationLabel,
-} from "./SettingsChrome";
 import {
     sessionNotificationsMuted,
     setSessionNotificationsMuted,
@@ -3990,6 +3985,93 @@ function DesktopSettingsRow({
     );
 }
 
+type MobileSettingsSection =
+    | "appearance"
+    | "reading"
+    | "agent"
+    | "code"
+    | "notifications"
+    | "providers"
+    | "machines"
+    | "info"
+    | "logs";
+
+function initialMobileSettingsSection(
+    tab: ControlCenterTab,
+    focus: SettingsProductFocus,
+): MobileSettingsSection {
+    if (tab !== "settings") return tab;
+    return focus === "code" ? "code" : "appearance";
+}
+
+function MobileSettingsAccordion({
+    id,
+    title,
+    description,
+    expanded,
+    onChange,
+    children,
+}: {
+    id: MobileSettingsSection;
+    title: string;
+    description: string;
+    expanded: boolean;
+    onChange: (section: MobileSettingsSection | null) => void;
+    children: React.ReactNode;
+}): React.JSX.Element {
+    return (
+        <Accordion
+            data-mobile-settings-group={id}
+            expanded={expanded}
+            onChange={(_event, next): void => {
+                onChange(next ? id : null);
+                if (!next) return;
+                globalThis.requestAnimationFrame(() => {
+                    globalThis.document.getElementById(`mobile-settings-${id}-header`)
+                        ?.scrollIntoView({ block: "start", behavior: "smooth" });
+                });
+            }}
+            disableGutters
+            elevation={0}
+            sx={{
+                bgcolor: "transparent",
+                border: 1,
+                borderColor: expanded ? "primary.main" : "divider",
+                borderRadius: "12px !important",
+                overflow: "hidden",
+                transition: "border-color 150ms ease",
+                "&::before": { display: "none" },
+            }}
+        >
+            <AccordionSummary
+                expandIcon={<ExpandMore />}
+                aria-controls={`mobile-settings-${id}-content`}
+                id={`mobile-settings-${id}-header`}
+                sx={{
+                    minHeight: 64,
+                    px: 1.5,
+                    "&.Mui-expanded": { minHeight: 64 },
+                    "& .MuiAccordionSummary-content": { my: 1.25, minWidth: 0 },
+                    "& .MuiAccordionSummary-content.Mui-expanded": { my: 1.25 },
+                }}
+            >
+                <Stack spacing={0.125} sx={{ minWidth: 0 }}>
+                    <Typography variant="body2" fontWeight={700}>{title}</Typography>
+                    <Typography variant="caption" color="text.secondary" noWrap>
+                        {description}
+                    </Typography>
+                </Stack>
+            </AccordionSummary>
+            <AccordionDetails
+                id={`mobile-settings-${id}-content`}
+                sx={{ px: 1.5, pt: 1, pb: 2, borderTop: 1, borderColor: "divider" }}
+            >
+                {expanded ? children : null}
+            </AccordionDetails>
+        </Accordion>
+    );
+}
+
 // Dense visual grouping used inside the Settings tab. Runtime information,
 // Machines, and Logs own separate top-level tabs rather than nesting here.
 function DesktopModalBlock({
@@ -4301,21 +4383,21 @@ function MachineNpmUpdateButton({
     );
 }
 
-function ProvidersContent(): React.JSX.Element {
+function ProvidersContent({ embedded = false }: { embedded?: boolean } = {}): React.JSX.Element {
     return (
         <Stack spacing={2}>
-            <Box>
+            {!embedded && <Box>
                 <Typography fontWeight={760}>Providers</Typography>
                 <Typography variant="caption" color="text.secondary">
                     Sign in and manage provider accounts
                 </Typography>
-            </Box>
+            </Box>}
             <ProviderAuthenticationManagement />
         </Stack>
     );
 }
 
-function MachinesContent(): React.JSX.Element {
+function MachinesContent({ embedded = false }: { embedded?: boolean } = {}): React.JSX.Element {
     const [machines, setMachines] = useState<readonly MachineChoice[]>([]);
     const [commandFeedback, setCommandFeedback] = useState<Record<string, ReturnType<typeof machineCommandResultPresentation>>>({});
     const commandFeedbackTimers = useRef<Record<string, number>>({});
@@ -4454,10 +4536,10 @@ function MachinesContent(): React.JSX.Element {
     useConfirmEnter(updateConfirmation !== null, confirmMachineUpdate);
     return (
         <Stack spacing={2}>
-            <Box>
+            {!embedded && <Box>
                 <Typography fontWeight={760}>Machines</Typography>
                 <Typography variant="caption" color="text.secondary">Where Cowboy sessions run</Typography>
-            </Box>
+            </Box>}
             {machines.map((machine) => {
                 const open = Boolean(expanded[machine.id]);
                 const pending = machine.pending_updates ?? [];
@@ -4825,6 +4907,10 @@ function SettingsShell({
     const [renderedTab, setRenderedTab] = useState<ControlCenterTab>(initialTab);
     const [section, setSection] = useState<SettingsProductFocus>(initialSection);
     const [tabPanelVisible, setTabPanelVisible] = useState(true);
+    const [mobileSettingsSection, setMobileSettingsSection] = useState<MobileSettingsSection | null>(
+        initialMobileSettingsSection(initialTab, initialSection),
+    );
+    const [fontOpen, setFontOpen] = useState(false);
     // Vim and animated workbench tabs are desktop-only: both require a fine
     // pointer/physical-keyboard surface rather than the touch sheet.
     const desktop = useMediaQuery("(pointer: fine) and (hover: hover)");
@@ -4912,39 +4998,47 @@ function SettingsShell({
             viewTransitionRef.current = null;
             return;
         }
-        setTab(initialTab);
-        setRenderedTab(initialTab);
+        const openingTab = desktop ? initialTab : "settings";
+        setTab(openingTab);
+        setRenderedTab(openingTab);
         setSection(initialSection);
         setTabPanelVisible(true);
+        setMobileSettingsSection(initialMobileSettingsSection(initialTab, initialSection));
+        setFontOpen(false);
         settingsListScrollRef.current = 0;
-    }, [open, initialTab, initialSection]);
+    }, [desktop, open, initialTab, initialSection]);
     const didFocusCodeSectionRef = useRef(false);
     useEffect(() => {
         if (!open) {
             didFocusCodeSectionRef.current = false;
             return undefined;
         }
-        if (desktop || initialSection !== "code" || tab !== "settings") {
+        if (
+            desktop ||
+            initialSection !== "code" ||
+            tab !== "settings" ||
+            mobileSettingsSection !== "code"
+        ) {
             return undefined;
         }
         if (didFocusCodeSectionRef.current) return undefined;
+        const codeSection = codeSectionRef.current;
+        if (codeSection === null) return undefined;
         didFocusCodeSectionRef.current = true;
         const frame = globalThis.requestAnimationFrame(() => {
-            codeSectionRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+            codeSection.scrollIntoView({ block: "start", behavior: "smooth" });
         });
         return (): void => globalThis.cancelAnimationFrame(frame);
-    }, [desktop, initialSection, open, tab]);
+    }, [desktop, initialSection, mobileSettingsSection, open, tab]);
     useLayoutEffect(() => {
         if (!open || !tabPanelVisible || renderedTab !== tab) return;
         applyDestinationScroll(renderedTab);
     }, [applyDestinationScroll, open, renderedTab, tab, tabPanelVisible]);
-    const vim = useVimSetting();
     const composerDebug = useComposerDebugSetting();
     const reading = useReadingSettings();
     // Font picker is collapsed by default (the 7 preview cards otherwise fill the
     // screen); the collapsed summary still shows the current face. Resets to
     // collapsed each time Settings opens — the desired compact default.
-    const [fontOpen, setFontOpen] = useState(false);
     const selectedFont = getFontPreset(reading.fontVariant);
     // Shared card style for both the collapsed summary and the expanded list.
     const fontCardSx = (active: boolean): SxProps<Theme> => ({
@@ -5182,76 +5276,40 @@ function SettingsShell({
             cover
             portal
             desktopMaxWidth={1440}
-            mobileDismiss={tab === "settings" || !useSheetSurface ? "footer" : "none"}
-            actions={tab === "settings" || !useSheetSurface ? undefined : (
-                <Box sx={{ width: "100%", display: "flex", justifyContent: "center" }}>
-                    <MobileSheetActionGroup
-                        actions={[{
-                            key: "back",
-                            label: "Back to Settings",
-                            icon: (
-                                <ArrowBackIosNew
-                                    sx={{
-                                        // WebKit min-font-size clamps rem/em SVG
-                                        // glyphs, so em on this island never
-                                        // moved with the Settings font scale.
-                                        fontSize: "calc(20px * var(--cowboy-font-scale, 1))",
-                                        width: "calc(20px * var(--cowboy-font-scale, 1))",
-                                        height: "calc(20px * var(--cowboy-font-scale, 1))",
-                                        ml: "calc(-1.6px * var(--cowboy-font-scale, 1))",
-                                    }}
-                                />
-                            ),
-                            onPress: (): void => changeTab("settings"),
-                        }]}
-                    />
-                </Box>
-            )}
+            mobileDismiss="footer"
         >
             <GlobalStyles styles={controlCenterViewTransitionStyles} />
-            {/* Touch is one Settings list with drill-in pages. Desktop keeps
-                native tabs so Machines / Info / Logs stay first-class. The
-                root mobile list starts at the first preference: a fat
-                "Settings" title only repeats the sheet and leaves a dead
-                band under the handle, especially at a reduced font scale.
-                Drill-in pages keep a one-line sticky label; Back lives in
-                the floating footer so the header is not a second chrome. */}
-            {(desktop || tab !== "settings") && (
+            {/* Touch is one mutually exclusive accordion list. Desktop keeps
+                native tabs so Machines / Info / Logs remain first-class. */}
+            {desktop && (
             <Box
                 sx={{
                     position: "sticky",
-                    top: desktop ? -1 : 0,
+                    top: -1,
                     zIndex: 4,
-                    bgcolor: desktop ? "background.paper" : "background.default",
-                    pt: desktop ? 0 : 0.25,
-                    pb: desktop ? 0 : 0.5,
+                    bgcolor: "background.paper",
+                    pt: 0,
+                    pb: 0,
                     borderRadius: 0,
-                    borderBottom: desktop ? 0 : 1,
+                    borderBottom: 0,
                     borderColor: "divider",
                 }}
             >
             <Box
                 sx={{
-                    display: desktop ? "flex" : "grid",
-                    gridTemplateColumns: desktop ? "none" : "1fr",
+                    display: "flex",
                     alignItems: "center",
-                    mt: desktop ? 0.25 : 0,
-                    mb: desktop ? 1 : 0,
-                    py: desktop ? 0.5 : 0,
+                    mt: 0.25,
+                    mb: 1,
+                    py: 0.5,
                     width: "100%",
                 }}
             >
-                {desktop ? (
-                    <Box sx={{ flex: 1 }}>
-                        <Typography variant="h6" fontWeight={780}>Cowboy control center</Typography>
-                        <Typography variant="caption" color="text.secondary">Preferences, runtime information, and automation history</Typography>
-                    </Box>
-                ) : (
-                    <Typography variant="subtitle1" fontWeight={740} sx={{ letterSpacing: -0.2 }}>
-                        {settingsDestinationLabel(tab)}
-                    </Typography>
-                )}
-                {desktop && <Box
+                <Box sx={{ flex: 1 }}>
+                    <Typography variant="h6" fontWeight={780}>Cowboy control center</Typography>
+                    <Typography variant="caption" color="text.secondary">Preferences, runtime information, and automation history</Typography>
+                </Box>
+                <Box
                     sx={{
                         flex: 1,
                         display: "flex",
@@ -5270,7 +5328,7 @@ function SettingsShell({
                             availability={settingsShortcutsAvailable ? "available" : "inactive"}
                         />
                     </Box>
-                </Box>}
+                </Box>
             </Box>
             {desktop && (
                 <Tabs
@@ -5376,7 +5434,15 @@ function SettingsShell({
                     </Box>
                 </Box>
             ) : !tabPanelVisible ? null : renderedTab === "notifications" ? <NotificationSettingsContent /> : renderedTab === "providers" ? <ProvidersContent /> : renderedTab === "machines" ? <MachinesContent /> : renderedTab === "info" ? <InfoContent /> : renderedTab === "logs" ? <UsageLogs /> : (
-            <Stack ref={settingsListRef} data-settings-list="true" spacing={2}>
+            <Stack ref={settingsListRef} data-settings-list="true" spacing={1}>
+                <MobileSettingsAccordion
+                    id="appearance"
+                    title="Appearance"
+                    description="Theme and reading font"
+                    expanded={mobileSettingsSection === "appearance"}
+                    onChange={setMobileSettingsSection}
+                >
+                <Stack spacing={2}>
                 <Stack
                     direction="row"
                     alignItems="center"
@@ -5500,7 +5566,17 @@ function SettingsShell({
                             <ExpandMore sx={{ color: "text.secondary" }} />
                         </Box>
                     )}
+                </Stack>
+                </MobileSettingsAccordion>
 
+                <MobileSettingsAccordion
+                    id="reading"
+                    title="Reading layout"
+                    description="Text size, padding, and line spacing"
+                    expanded={mobileSettingsSection === "reading"}
+                    onChange={setMobileSettingsSection}
+                >
+                    <Stack spacing={2}>
                     <Stack
                         direction="row"
                         alignItems="center"
@@ -5597,7 +5673,16 @@ function SettingsShell({
                             ))}
                         </Select>
                     </Stack>
-                <Divider />
+                    </Stack>
+                </MobileSettingsAccordion>
+                <MobileSettingsAccordion
+                    id="agent"
+                    title="Agent behavior"
+                    description="Diagnostics and interrupted turns"
+                    expanded={mobileSettingsSection === "agent"}
+                    onChange={setMobileSettingsSection}
+                >
+                    <Stack spacing={2}>
                 <Stack
                     direction="row"
                     alignItems="center"
@@ -5625,39 +5710,17 @@ function SettingsShell({
                         inputProps={{ "aria-label": "Composer debug mode" }}
                     />
                 </Stack>
-                {desktop && (
-                    <>
-                        <Divider />
-                        <Stack
-                            direction="row"
-                            alignItems="center"
-                            justifyContent="space-between"
-                            spacing={2}
-                        >
-                            <Stack>
-                                <Typography variant="body2">
-                                    Vim keybindings
-                                </Typography>
-                                <Typography
-                                    variant="caption"
-                                    color="text.secondary"
-                                >
-                                    Modal editing in the composer
-                                </Typography>
-                            </Stack>
-                            <Switch
-                                checked={vim}
-                                onChange={(e): void =>
-                                    setVimSetting(e.target.checked)
-                                }
-                                inputProps={{ "aria-label": "Vim keybindings" }}
-                            />
-                        </Stack>
-                    </>
-                )}
                 <Divider />
                 <AutoResumeSettings />
-                <Divider />
+                    </Stack>
+                </MobileSettingsAccordion>
+                <MobileSettingsAccordion
+                    id="code"
+                    title="Code & diff"
+                    description="Code display and review preferences"
+                    expanded={mobileSettingsSection === "code"}
+                    onChange={setMobileSettingsSection}
+                >
                 <Box
                     ref={codeSectionRef}
                     data-settings-section="code"
@@ -5665,42 +5728,52 @@ function SettingsShell({
                 >
                     <ReviewSettingsContent />
                 </Box>
-                <Divider />
-                <Stack spacing={0.25}>
-                    <Typography variant="overline" color="text.secondary">
-                        Attention
-                    </Typography>
-                    <SettingsNavRow
-                        icon={SETTINGS_NOTIFICATIONS_ROW.icon}
-                        label={SETTINGS_NOTIFICATIONS_ROW.label}
-                        onPress={(): void => changeTab(SETTINGS_NOTIFICATIONS_ROW.tab)}
-                    />
-                </Stack>
-                <Divider />
-                <Stack spacing={0.25}>
-                    <Typography variant="overline" color="text.secondary">
-                        Providers
-                    </Typography>
-                    <SettingsNavRow
-                        icon={SETTINGS_PROVIDER_ROW.icon}
-                        label={SETTINGS_PROVIDER_ROW.label}
-                        onPress={(): void => changeTab(SETTINGS_PROVIDER_ROW.tab)}
-                    />
-                </Stack>
-                <Divider />
-                <Stack spacing={0.25}>
-                    <Typography variant="overline" color="text.secondary">
-                        More
-                    </Typography>
-                    {SETTINGS_MORE_ROWS.map((row) => (
-                        <SettingsNavRow
-                            key={row.tab}
-                            icon={row.icon}
-                            label={row.label}
-                            onPress={(): void => changeTab(row.tab)}
-                        />
-                    ))}
-                </Stack>
+                </MobileSettingsAccordion>
+                <MobileSettingsAccordion
+                    id="notifications"
+                    title="Notifications"
+                    description="Apple alerts, privacy, sound, and vibration"
+                    expanded={mobileSettingsSection === "notifications"}
+                    onChange={setMobileSettingsSection}
+                >
+                    <NotificationSettingsContent embedded />
+                </MobileSettingsAccordion>
+                <MobileSettingsAccordion
+                    id="providers"
+                    title="Accounts & sign-in"
+                    description="Provider authentication and accounts"
+                    expanded={mobileSettingsSection === "providers"}
+                    onChange={setMobileSettingsSection}
+                >
+                    <ProvidersContent embedded />
+                </MobileSettingsAccordion>
+                <MobileSettingsAccordion
+                    id="machines"
+                    title="Machines"
+                    description="Connected runtimes and component updates"
+                    expanded={mobileSettingsSection === "machines"}
+                    onChange={setMobileSettingsSection}
+                >
+                    <MachinesContent embedded />
+                </MobileSettingsAccordion>
+                <MobileSettingsAccordion
+                    id="info"
+                    title="About"
+                    description="Cowboy information and diagnostics"
+                    expanded={mobileSettingsSection === "info"}
+                    onChange={setMobileSettingsSection}
+                >
+                    <InfoContent />
+                </MobileSettingsAccordion>
+                <MobileSettingsAccordion
+                    id="logs"
+                    title="Logs"
+                    description="Usage and diagnostic history"
+                    expanded={mobileSettingsSection === "logs"}
+                    onChange={setMobileSettingsSection}
+                >
+                    <UsageLogs dense />
+                </MobileSettingsAccordion>
             </Stack>
             )}
             {desktop && (

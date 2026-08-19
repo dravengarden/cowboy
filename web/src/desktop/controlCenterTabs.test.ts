@@ -67,20 +67,15 @@ Deno.test("desktop control center keeps one stable semantic tab panel", () => {
   assertEquals(appSource.includes("{tabContentReady && ("), false);
 });
 
-Deno.test("control center tab bar stays sticky on desktop and mobile scroll", () => {
+Deno.test("control center tab bar stays sticky on desktop", () => {
   assertEquals(
     appSource.includes('position: desktop ? "sticky" : "static"'),
     false,
   );
   assertEquals(appSource.includes('position: "sticky"'), true);
-  assertEquals(appSource.includes("top: desktop ? -1 : 0"), true);
-  assertEquals(
-    appSource.includes(
-      'bgcolor: desktop ? "background.paper" : "background.default"',
-    ),
-    true,
-  );
+  assertEquals(appSource.includes("top: -1"), true);
+  assertEquals(appSource.includes('bgcolor: "background.paper"'), true);
   assertEquals(appSource.includes("borderRadius: 0"), true);
-  assertEquals(appSource.includes("borderBottom: desktop ? 0 : 1"), true);
+  assertEquals(appSource.includes("borderBottom: 0"), true);
   assertEquals(appSource.includes('borderColor: "divider"'), true);
 });

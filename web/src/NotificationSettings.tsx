@@ -71,7 +71,7 @@ function PreferenceRow({
   );
 }
 
-export function NotificationSettingsContent(): React.JSX.Element {
+export function NotificationSettingsContent({ embedded = false }: { embedded?: boolean } = {}): React.JSX.Element {
   const preferences = useSystemNotificationPreferences();
   const sound = useNotifySetting();
   const vibration = useVibrateSetting();
@@ -117,7 +117,9 @@ export function NotificationSettingsContent(): React.JSX.Element {
     <Stack
       spacing={2}
       data-notification-settings="true"
-      sx={{ pt: { xs: 1.5, md: 0 }, pb: { xs: 12, md: 0 } }}
+      sx={embedded
+        ? { pt: 0, pb: 0 }
+        : { pt: { xs: 1.5, md: 0 }, pb: { xs: 12, md: 0 } }}
     >
       <Stack direction="row" alignItems="flex-start" spacing={1.25}>
         <Box sx={{ mt: 0.25, color: enabled ? "success.main" : "text.secondary", display: "grid" }}>
