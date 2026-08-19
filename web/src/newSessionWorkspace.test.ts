@@ -13,6 +13,16 @@ const composerSource = await Deno.readTextFile(
   new URL("./Composer.tsx", import.meta.url),
 );
 
+Deno.test("mobile new session confirms with the check island, not overlay Cancel/Create", () => {
+  const titleAt = appSource.indexOf('title="New session"');
+  const actionsAt = appSource.indexOf("actions={navbarAtBottom", titleAt);
+  const desktopCancelAt = appSource.indexOf("Cancel", actionsAt);
+  assertEquals(titleAt >= 0 && actionsAt > titleAt, true);
+  assertEquals(appSource.includes("aria-label={creating ? \"preparing session\" : \"create session\"}"), true);
+  assertEquals(appSource.includes("<FloatingActionIsland maxWidth={54}>"), true);
+  assertEquals(desktopCancelAt > actionsAt, true);
+});
+
 Deno.test("new session navigation precedes Machine preparation completion", () => {
   const created = appSource.indexOf("onCreated={(session): void => {");
   const active = appSource.indexOf("setActiveId(session.id);", created);
