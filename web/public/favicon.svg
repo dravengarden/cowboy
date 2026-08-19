@@ -35,7 +35,7 @@
   <rect width="512" height="512" fill="url(#bg)"/>
   <ellipse cx="150" cy="150" rx="215" ry="215" fill="#ffffff" opacity="0.10" filter="url(#soft)"/>
 
-  <g id="hat" transform="translate(256 286) scale(1.34) translate(-256 -286)">
+  <g id="hat">
     <!-- cast shadow, bottom-right -->
     <ellipse cx="276" cy="372" rx="202" ry="26" fill="#280c50" opacity="0.5" filter="url(#soft)"/>
 
