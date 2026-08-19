@@ -117,19 +117,25 @@ export function NotificationSettingsContent(): React.JSX.Element {
     <Stack
       spacing={2}
       data-notification-settings="true"
-      sx={{ pb: { xs: 12, md: 0 } }}
+      sx={{ pt: { xs: 1.5, md: 0 }, pb: { xs: 12, md: 0 } }}
     >
-      <Stack direction="row" alignItems="center" spacing={1.25}>
-        <Box sx={{ color: enabled ? "success.main" : "text.secondary", display: "grid" }}>
+      <Stack direction="row" alignItems="flex-start" spacing={1.25}>
+        <Box sx={{ mt: 0.25, color: enabled ? "success.main" : "text.secondary", display: "grid" }}>
           {enabled ? <NotificationsActiveOutlined /> : <NotificationsOffOutlined />}
         </Box>
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography variant="subtitle2">System notifications</Typography>
-          <Typography variant="caption" color="text.secondary">
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", lineHeight: 1.4, pr: 0.5 }}>
             Alerts from the installed Cowboy app when a session needs attention
           </Typography>
         </Box>
-        <Chip size="small" label={status} color={enabled ? "success" : "default"} variant="outlined" />
+        <Chip
+          size="small"
+          label={status}
+          color={enabled ? "success" : "default"}
+          variant="outlined"
+          sx={{ mt: 0.125, flexShrink: 0 }}
+        />
       </Stack>
 
       {permission === "denied" && (
