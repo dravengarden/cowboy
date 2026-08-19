@@ -101,10 +101,14 @@ export function ObsidianSheet({
       }
     }
     if (scrim) {
+      const opacity = obsidianSheetScrimOpacity(y, closedPx);
       scrim.style.transition = animate
         ? `opacity ${String(settle)}ms ${OBSIDIAN_SHEET_SETTLE_EASING}`
         : "none";
-      scrim.style.opacity = String(obsidianSheetScrimOpacity(y, closedPx));
+      scrim.style.opacity = String(opacity);
+      // A dismissed-but-mounted scrim at opacity 0 would still eat every
+      // scroll if onClose is delayed. Keep it out of the hit tree.
+      scrim.style.pointerEvents = opacity > 0.02 ? "auto" : "none";
     }
   }, []);
 

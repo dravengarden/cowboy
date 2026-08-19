@@ -7,12 +7,13 @@ const appSource = await Deno.readTextFile(
   new URL("./App.tsx", import.meta.url),
 );
 
-Deno.test("thumb dock pins to the visual viewport box, not the sheet footer", () => {
-  assertEquals(source.includes('top: "var(--vv-offset, 0px)"'), true);
-  assertEquals(source.includes('height: "var(--vv-height, 100dvh)"'), true);
-  assertEquals(source.includes('data-mobile-thumb-dock="true"'), true);
-  assertEquals(source.includes('pb: keyboardOpen'), true);
+Deno.test("thumb dock pins islands to the visual viewport corners", () => {
+  assertEquals(source.includes('data-mobile-thumb-dock="left"'), true);
+  assertEquals(source.includes('data-mobile-thumb-dock="right"'), true);
+  assertEquals(source.includes("translateY(-100%)"), true);
+  assertEquals(source.includes("var(--vv-height, 100dvh)"), true);
   assertEquals(source.includes('createPortal(dock, globalThis.document.body)'), true);
+  assertEquals(source.includes('height: "var(--vv-height, 100dvh)"'), false);
 });
 
 Deno.test("mobile new session uses the thumb dock instead of a sheet footer", () => {

@@ -103,6 +103,16 @@ Deno.test("gesture roots flatten overflow tiles without a universal selector", (
   assert(motionSource.includes("[data-mobile-composer-shell-material]"));
   assert(motionSource.includes("[data-mobile-focus-composer]"));
   assert(motionSource.includes("holdStorePresentation"));
+  assert(
+    motionSource.includes(
+      '"&:has([data-detent-sheet][data-detent-moving])"',
+    ),
+  );
+  const presented = motionSource.slice(
+    motionSource.indexOf('"&[data-mobile-sheet-presented=\'true\']"'),
+    motionSource.indexOf('"&:has([data-detent-sheet][data-detent-moving])"'),
+  );
+  assertEquals(presented.includes("mobileCompositorFlattenSx"), false);
 });
 
 Deno.test("jank-free swipe is a core Mobile requirement, not polish", () => {

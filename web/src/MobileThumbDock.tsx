@@ -5,15 +5,28 @@ import { useKeyboardOpen } from "./keyboardInset";
 
 const Z = 1260;
 
+function islandPin(side: "left" | "right", keyboardOpen: boolean): object {
+  const inset = keyboardOpen
+    ? "10px"
+    : "max(12px, env(safe-area-inset-bottom, 0px))";
+  return {
+    position: "fixed",
+    top:
+      `calc(var(--vv-offset, 0px) + var(--vv-height, 100dvh) - ${inset})`,
+    transform: "translateY(-100%)",
+    [side]: 16,
+    zIndex: Z,
+    pointerEvents: "auto",
+    "& > *": { width: "auto" },
+  };
+}
+
 /**
- * Thumb-reachable action dock for cover sheets.
+ * Thumb-reachable action islands for cover sheets.
  *
- * DetentSheet footers live inside the sheet's transformed box and still
- * pad for the home indicator after PWA resizes-content zeroes --kb-inset.
- * That lifts Cancel/Create into the form and leaves a dead band above the
- * iOS accessory. This dock is a separate layer, pinned to the same
- * --vv-offset/--vv-height box the cover uses, so the islands sit on the
- * visual viewport's bottom edge.
+ * Do not wrap these in a full-viewport overlay. iOS WebKit still hits
+ * `pointer-events: none` flex layers and freezes the page underneath.
+ * Pin each island to the visual-viewport bottom corners instead.
  */
 export function MobileThumbDock({
   open,
@@ -27,45 +40,24 @@ export function MobileThumbDock({
   const keyboardOpen = useKeyboardOpen();
   if (!open || (left == null && right == null)) return null;
   const dock = (
-    <Box
-      data-mobile-thumb-dock="true"
-      sx={{
-        position: "fixed",
-        top: "var(--vv-offset, 0px)",
-        left: 0,
-        right: 0,
-        height: "var(--vv-height, 100dvh)",
-        zIndex: Z,
-        pointerEvents: "none",
-        display: "flex",
-        alignItems: "flex-end",
-        justifyContent: "space-between",
-        px: 2,
-        pb: keyboardOpen
-          ? "10px"
-          : "max(12px, env(safe-area-inset-bottom, 0px))",
-      }}
-    >
-      <Box
-        sx={{
-          pointerEvents: "auto",
-          flex: "0 0 auto",
-          "& > *": { width: "auto" },
-        }}
-      >
-        {left}
-      </Box>
-      <Box
-        sx={{
-          pointerEvents: "auto",
-          flex: "0 0 auto",
-          ml: "auto",
-          "& > *": { width: "auto" },
-        }}
-      >
-        {right}
-      </Box>
-    </Box>
+    <>
+      {left == null ? null : (
+        <Box
+          data-mobile-thumb-dock="left"
+          sx={islandPin("left", keyboardOpen)}
+        >
+          {left}
+        </Box>
+      )}
+      {right == null ? null : (
+        <Box
+          data-mobile-thumb-dock="right"
+          sx={islandPin("right", keyboardOpen)}
+        >
+          {right}
+        </Box>
+      )}
+    </>
   );
   return globalThis.document?.body
     ? createPortal(dock, globalThis.document.body)

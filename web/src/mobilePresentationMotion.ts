@@ -106,7 +106,11 @@ export const mobileDrawerRailHitSx = {
 
 /** DetentSheet already disables its own blur while `data-detent-moving` is
  *  set. The remaining hitch is the Paper elevation shadow plus the page
- *  behind the sheet (CM6 + frosted chrome) still being independent tiles. */
+ *  behind the sheet (CM6 + frosted chrome) still being independent tiles.
+ *  Flatten the page only while a sheet is moving. Doing it for the whole
+ *  open lifetime (`overflow: hidden` + `pointer-events: none` on the
+ *  transcript) freezes scrolling until restart if the open registry
+ *  leaks after a portaled dismiss. */
 export const mobileSheetPresentationSx = {
   "& [data-detent-sheet][data-detent-moving]": {
     boxShadow: "none !important",
@@ -114,6 +118,9 @@ export const mobileSheetPresentationSx = {
     WebkitBackdropFilter: "none !important",
   },
   "&[data-mobile-sheet-presented='true']": {
+    ...mobileFrostStripSx,
+  },
+  "&:has([data-detent-sheet][data-detent-moving])": {
     ...mobileCompositorFlattenSx,
     ...mobileFrostStripSx,
   },
