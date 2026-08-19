@@ -2199,6 +2199,11 @@ export function ComposerWorkspace({
                 overflowY: "auto",
                 scrollPaddingBlock: "12px",
                 overscrollBehavior: "contain",
+                // Ancestor drawer/pager listeners are non-passive. Without
+                // pan-y, iOS waits on them and the overflow-y:auto scroller
+                // never starts. Do not use -webkit-overflow-scrolling:touch
+                // here: that compositor tile hides the native caret (#2).
+                touchAction: "pan-y pinch-zoom",
               },
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-content":
               {
@@ -5494,6 +5499,18 @@ function PendingRow({
                   bgcolor: mobileFocusedComposerFill,
                   backgroundImage: "none",
                   WebkitOverflowScrolling: "auto",
+                },
+              "&[data-mobile-keyboard-open='true'] [data-mobile-editor-area] .cm-scroller":
+                {
+                  flex: "0 1 auto",
+                  minHeight: 0,
+                  height: "auto",
+                  maxHeight: "min(42dvh, 22rem)",
+                  overflowX: "hidden",
+                  overflowY: "auto",
+                  scrollPaddingBlock: "12px",
+                  overscrollBehavior: "contain",
+                  touchAction: "pan-y pinch-zoom",
                 },
               "& [data-mobile-composer-accessory]": {
                 flexShrink: 0,

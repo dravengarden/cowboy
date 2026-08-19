@@ -1862,12 +1862,18 @@ Desktop Vim + IME checks:
     composer actions once several thumbnails make the document taller
     than the keyboard-open canvas. Keep the outer composer shell and
     editor wrapper clipped, but allow only the focused CM6 scroller to
-    scroll within a viewport-height bound. On the closed-to-open
-    keyboard transition, reveal the current CM6 selection without
-    changing focus or selection; the native textarea implementation is
-    intentionally a no-op so UIKit continues to own its selection and
-    IME. This is a viewport-reveal fix only and does not claim the
-    physical painted-caret behavior in pitfall #69 is fixed.
+    scroll within a viewport-height bound. Finger scrolling also needs
+    `touch-action: pan-y pinch-zoom` on that scroller: Sessions drawer
+    and product pager keep a non-passive ancestor listener, so iOS will
+    not start `overflow-y: auto` without an explicit vertical contract.
+    Do not restore `-webkit-overflow-scrolling: touch` here — that
+    compositor tile hides the native caret (pitfall #2). On the
+    closed-to-open keyboard transition, reveal the current CM6 selection
+    without changing focus or selection; the native textarea
+    implementation is intentionally a no-op so UIKit continues to own
+    its selection and IME. This is a viewport-reveal fix only and does
+    not claim the physical painted-caret behavior in pitfall #69 is
+    fixed.
 
 72. **A Queue/Draft kebab or Force tap must not start an edit.** The
     pending card's empty fill is an edit hit target (`pendingEditTap` on

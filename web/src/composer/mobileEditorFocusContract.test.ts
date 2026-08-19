@@ -79,6 +79,16 @@ Deno.test("multi-image mobile composers scroll the focused caret above the keybo
     true,
   );
   assertEquals(
+    composerSource.includes(
+      'touchAction: "pan-y pinch-zoom"',
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes("never starts. Do not use -webkit-overflow-scrolling:touch"),
+    true,
+  );
+  assertEquals(
     composerSource.includes("editorRef.current.revealSelection();"),
     true,
   );
