@@ -14,9 +14,6 @@ import {
 import type { ComponentPropsWithoutRef } from "react";
 import { flushSync } from "react-dom";
 import {
-    Accordion,
-    AccordionDetails,
-    AccordionSummary,
     Alert,
     alpha,
     AppBar,
@@ -53,8 +50,10 @@ import {
 import type { SxProps, Theme } from "@mui/material";
 import {
     Add,
+    ArrowBackIosNew,
     Bolt,
     Check as CheckIcon,
+    ChevronRight,
     Circle,
     Close as CloseIcon,
     Code as CodeIcon,
@@ -3996,84 +3995,81 @@ type MobileSettingsSection =
     | "info"
     | "logs";
 
-const MOBILE_SETTINGS_ENTER_MS = 200;
-const MOBILE_SETTINGS_EXIT_MS = 100;
-const MOBILE_SETTINGS_ANCHOR_MAX_MS = 1600;
-const MOBILE_SETTINGS_ANCHOR_DURATION_MS = 200;
-const MOBILE_SETTINGS_ANCHOR_STABLE_FRAMES = 3;
-const MOBILE_SETTINGS_ENTER_EASING = "linear";
-const MOBILE_SETTINGS_EXIT_EASING = "cubic-bezier(0.4, 0, 1, 1)";
-
 function initialMobileSettingsSection(
     tab: ControlCenterTab,
     focus: SettingsProductFocus,
-): MobileSettingsSection {
+): MobileSettingsSection | null {
     if (tab !== "settings") return tab;
-    return focus === "code" ? "code" : "appearance";
+    return focus === "code" ? "code" : null;
 }
 
-function MobileSettingsAccordion({
+function MobileSettingsRoute({
     id,
     title,
     description,
-    expanded,
+    activeSection,
     onChange,
     children,
 }: {
     id: MobileSettingsSection;
     title: string;
     description: string;
-    expanded: boolean;
+    activeSection: MobileSettingsSection | null;
     onChange: (section: MobileSettingsSection | null) => void;
     children: React.ReactNode;
 }): React.JSX.Element {
-    const compositorDisclosure = id === "machines" || id === "providers";
+    if (activeSection !== null && activeSection !== id) return <></>;
+    if (activeSection === null) {
+        return (
+            <ButtonBase
+                data-mobile-settings-route={id}
+                onClick={(): void => onChange(id)}
+                sx={{
+                    width: "100%",
+                    minHeight: 64,
+                    px: 0.75,
+                    py: 1,
+                    gap: 1,
+                    justifyContent: "flex-start",
+                    textAlign: "left",
+                    borderBottom: 1,
+                    borderColor: "divider",
+                    touchAction: "manipulation",
+                    "&:first-of-type": { borderTop: 1, borderColor: "divider" },
+                }}
+            >
+                <Stack spacing={0.125} sx={{ minWidth: 0, flex: 1 }}>
+                    <Typography variant="body2" fontWeight={700}>{title}</Typography>
+                    <Typography variant="caption" color="text.secondary" noWrap>
+                        {description}
+                    </Typography>
+                </Stack>
+                <ChevronRight fontSize="small" sx={{ color: "text.secondary", flexShrink: 0 }} />
+            </ButtonBase>
+        );
+    }
     return (
-        <Accordion
+        <Box
             data-mobile-settings-group={id}
-            expanded={expanded}
-            onChange={(_event, next): void => onChange(next ? id : null)}
-            disableGutters
-            elevation={0}
-            slotProps={{
-                transition: {
-                    timeout: {
-                        enter: compositorDisclosure ? 0 : MOBILE_SETTINGS_ENTER_MS,
-                        exit: MOBILE_SETTINGS_EXIT_MS,
-                    },
-                    easing: {
-                        enter: MOBILE_SETTINGS_ENTER_EASING,
-                        exit: MOBILE_SETTINGS_EXIT_EASING,
-                    },
-                    unmountOnExit: true,
-                },
-            }}
             sx={{
-                bgcolor: "transparent",
-                m: "0 !important",
-                border: 0,
-                borderBottom: 1,
-                borderColor: "divider",
-                borderRadius: "0 !important",
-                overflow: "visible",
-                "&:first-of-type": { borderTop: 1, borderColor: "divider" },
-                "&::before": { display: "none" },
+                minHeight: "100%",
             }}
         >
-            <AccordionSummary
-                expandIcon={<ExpandMore />}
-                aria-controls={`mobile-settings-${id}-content`}
+            <Box
                 id={`mobile-settings-${id}-header`}
                 sx={{
-                    position: expanded ? "sticky" : "relative",
-                    top: expanded ? -1 : "auto",
-                    zIndex: expanded ? 3 : 1,
+                    position: "sticky",
+                    top: -1,
+                    zIndex: 3,
                     bgcolor: "background.default",
-                    minHeight: 52,
+                    minHeight: 64,
                     px: 0.75,
-                    "&.Mui-expanded": { minHeight: 52 },
-                    "& .MuiAccordionSummary-content": { my: 1, minWidth: 0 },
-                    "& .MuiAccordionSummary-content.Mui-expanded": { my: 1 },
+                    py: 1,
+                    display: "flex",
+                    alignItems: "center",
+                    borderTop: 1,
+                    borderBottom: 1,
+                    borderColor: "divider",
                 }}
             >
                 <Stack spacing={0.125} sx={{ minWidth: 0 }}>
@@ -4082,61 +4078,18 @@ function MobileSettingsAccordion({
                         {description}
                     </Typography>
                 </Stack>
-            </AccordionSummary>
-            <AccordionDetails
+            </Box>
+            <Box
                 id={`mobile-settings-${id}-content`}
                 sx={{
                     px: 0.75,
                     pt: 1.5,
-                    pb: 2.5,
-                    borderTop: 1,
-                    borderColor: "divider",
-                    // Cap disclosure geometry at one viewport. A long card inventory then
-                    // scrolls natively inside the expanded section instead of asking Collapse
-                    // to interpolate thousands of pixels. Short sections stay intrinsic.
-                    boxSizing: "border-box",
-                    maxHeight: "calc(100vh - 152px)",
-                    overflowY: "auto",
-                    overscrollBehaviorY: "contain",
-                    WebkitOverflowScrolling: "touch",
-                    ...(compositorDisclosure
-                        ? {
-                            animation: expanded
-                                ? "mobile-settings-card-reveal 160ms cubic-bezier(0.2, 0.8, 0.2, 1) both"
-                                : "mobile-settings-card-hide 80ms ease-in both",
-                            willChange: "transform, opacity",
-                            "@keyframes mobile-settings-card-reveal": {
-                                from: { opacity: 0, transform: "translate3d(0, 6px, 0)" },
-                                to: { opacity: 1, transform: "translate3d(0, 0, 0)" },
-                            },
-                            "@keyframes mobile-settings-card-hide": {
-                                from: { opacity: 1, transform: "translate3d(0, 0, 0)" },
-                                to: { opacity: 0, transform: "translate3d(0, -3px, 0)" },
-                            },
-                            "@media (prefers-reduced-motion: reduce)": {
-                                animation: "none",
-                            },
-                        }
-                        : {}),
-                    "@supports (height: 100dvh)": {
-                        maxHeight: "calc(100dvh - 152px)",
-                    },
-                    // Machines resolves its remote inventory after opening, so reserve the same
-                    // bounded viewport before data arrives and keep the anchor motion stable.
-                    ...(id === "machines"
-                        ? {
-                            minHeight: "calc(100vh - 152px)",
-                            "@supports (height: 100dvh)": {
-                                minHeight: "calc(100dvh - 152px)",
-                                maxHeight: "calc(100dvh - 152px)",
-                            },
-                        }
-                        : {}),
+                    pb: 12,
                 }}
             >
                 {children}
-            </AccordionDetails>
-        </Accordion>
+            </Box>
+        </Box>
     );
 }
 
@@ -5078,90 +5031,20 @@ function SettingsShell({
         setFontOpen(false);
         settingsListScrollRef.current = 0;
     }, [desktop, open, initialTab, initialSection]);
-    useEffect(() => {
-        if (!open || desktop || tab !== "settings" || mobileSettingsSection === null) {
-            return undefined;
+    const changeMobileSettingsSection = useCallback((next: MobileSettingsSection | null): void => {
+        const surface = settingsScrollSurface();
+        if (mobileSettingsSection === null && next !== null && surface !== null) {
+            settingsListScrollRef.current = surface.scrollTop;
         }
-        const reducedMotion = globalThis.matchMedia("(prefers-reduced-motion: reduce)").matches;
-        let frame = 0;
-        let cancelled = false;
-        let surface: HTMLElement | null = null;
-        let startedAt: number | null = null;
-        let startingHeaderTop: number | null = null;
-        let stableFrames = 0;
-        const cancelForUser = (): void => {
-            cancelled = true;
-            if (frame !== 0) globalThis.cancelAnimationFrame(frame);
-        };
-        const detachSurfaceListeners = (): void => {
-            surface?.removeEventListener("pointerdown", cancelForUser);
-            surface?.removeEventListener("touchstart", cancelForUser);
-            surface?.removeEventListener("wheel", cancelForUser);
-        };
-        const alignExpandedHeader = (now: number): void => {
-            frame = 0;
-            if (cancelled) return;
-            const header = globalThis.document.getElementById(
-                `mobile-settings-${mobileSettingsSection}-header`,
-            );
-            const nextSurface = settingsScrollSurface();
-            if (header === null || nextSurface === null) return;
-            if (surface !== nextSurface) {
-                detachSurfaceListeners();
-                surface = nextSurface;
-                surface.addEventListener("pointerdown", cancelForUser, { passive: true });
-                surface.addEventListener("touchstart", cancelForUser, { passive: true });
-                surface.addEventListener("wheel", cancelForUser, { passive: true });
-            }
-            const headerTop = header.getBoundingClientRect().top;
-            const surfaceTop = surface.getBoundingClientRect().top - 1;
-            startedAt ??= now;
-            startingHeaderTop ??= headerTop;
-            const elapsed = now - startedAt;
-            const progress = reducedMotion
-                ? 1
-                : Math.min(1, elapsed / MOBILE_SETTINGS_ANCHOR_DURATION_MS);
-            // A half-cosine starts responding sooner than smootherstep while
-            // retaining zero velocity at both ends and a restrained midpoint.
-            const eased = (1 - Math.cos(Math.PI * progress)) / 2;
-            const desiredTop = startingHeaderTop +
-                (surfaceTop - startingHeaderTop) * eased;
-            const correction = headerTop - desiredTop;
-            if (Math.abs(correction) >= 0.25) {
-                surface.scrollTop += correction;
-            }
-            stableFrames = progress === 1 && Math.abs(headerTop - surfaceTop) < 0.75
-                ? stableFrames + 1
-                : 0;
-            if (
-                !reducedMotion &&
-                elapsed < MOBILE_SETTINGS_ANCHOR_MAX_MS &&
-                stableFrames < MOBILE_SETTINGS_ANCHOR_STABLE_FRAMES
-            ) {
-                frame = globalThis.requestAnimationFrame(alignExpandedHeader);
-            }
-        };
-        const scheduleAlignment = (): void => {
-            if (cancelled || frame !== 0) return;
-            startedAt = null;
-            startingHeaderTop = null;
-            stableFrames = 0;
-            frame = globalThis.requestAnimationFrame(alignExpandedHeader);
-        };
-        const expandedGroup = globalThis.document.querySelector<HTMLElement>(
-            `[data-mobile-settings-group="${mobileSettingsSection}"]`,
-        );
-        const resizeObserver = typeof ResizeObserver === "undefined"
-            ? null
-            : new ResizeObserver(scheduleAlignment);
-        if (expandedGroup !== null) resizeObserver?.observe(expandedGroup);
-        scheduleAlignment();
-        return () => {
-            cancelled = true;
-            if (frame !== 0) globalThis.cancelAnimationFrame(frame);
-            resizeObserver?.disconnect();
-            detachSurfaceListeners();
-        };
+        setMobileSettingsSection(next);
+    }, [mobileSettingsSection, settingsScrollSurface]);
+    useLayoutEffect(() => {
+        if (!open || desktop || tab !== "settings") return;
+        const surface = settingsScrollSurface();
+        if (surface === null) return;
+        surface.scrollTop = mobileSettingsSection === null
+            ? settingsListScrollRef.current
+            : 0;
     }, [desktop, mobileSettingsSection, open, settingsScrollSurface, tab]);
     useLayoutEffect(() => {
         if (!open || !tabPanelVisible || renderedTab !== tab) return;
@@ -5409,7 +5292,23 @@ function SettingsShell({
             cover
             portal
             desktopMaxWidth={1440}
-            mobileDismiss="footer"
+            mobileDismiss={desktop ? "footer" : "none"}
+            actions={!desktop
+                ? (
+                    <MobileSheetActionGroup
+                        actions={[{
+                            key: mobileSettingsSection === null ? "close" : "back",
+                            label: mobileSettingsSection === null ? "Close" : "Back",
+                            onPress: mobileSettingsSection === null
+                                ? onClose
+                                : (): void => changeMobileSettingsSection(null),
+                            icon: mobileSettingsSection === null
+                                ? <CloseIcon aria-hidden fontSize="small" />
+                                : <ArrowBackIosNew aria-hidden fontSize="small" />,
+                        }]}
+                    />
+                )
+                : undefined}
         >
             <GlobalStyles styles={controlCenterViewTransitionStyles} />
             {/* Touch is one mutually exclusive accordion list. Desktop keeps
@@ -5567,13 +5466,35 @@ function SettingsShell({
                     </Box>
                 </Box>
             ) : !tabPanelVisible ? null : renderedTab === "notifications" ? <NotificationSettingsContent /> : renderedTab === "providers" ? <ProvidersContent /> : renderedTab === "machines" ? <MachinesContent /> : renderedTab === "info" ? <InfoContent /> : renderedTab === "logs" ? <UsageLogs /> : (
-            <Stack ref={settingsListRef} data-settings-list="true" spacing={0}>
-                <MobileSettingsAccordion
+            <Stack
+                key={mobileSettingsSection ?? "index"}
+                ref={settingsListRef}
+                data-settings-list="true"
+                data-mobile-settings-level={mobileSettingsSection === null ? "index" : "detail"}
+                spacing={0}
+                sx={{
+                    animation: "mobile-settings-route-enter 140ms cubic-bezier(0.2, 0.8, 0.2, 1) both",
+                    willChange: "transform, opacity",
+                    "@keyframes mobile-settings-route-enter": {
+                        from: {
+                            opacity: 0,
+                            transform: mobileSettingsSection === null
+                                ? "translate3d(-8px, 0, 0)"
+                                : "translate3d(8px, 0, 0)",
+                        },
+                        to: { opacity: 1, transform: "translate3d(0, 0, 0)" },
+                    },
+                    "@media (prefers-reduced-motion: reduce)": {
+                        animation: "none",
+                    },
+                }}
+            >
+                <MobileSettingsRoute
                     id="appearance"
                     title="Appearance"
                     description="Theme and reading font"
-                    expanded={mobileSettingsSection === "appearance"}
-                    onChange={setMobileSettingsSection}
+                    activeSection={mobileSettingsSection}
+                    onChange={changeMobileSettingsSection}
                 >
                 <Stack spacing={2}>
                 <Stack
@@ -5700,14 +5621,14 @@ function SettingsShell({
                         </Box>
                     )}
                 </Stack>
-                </MobileSettingsAccordion>
+                </MobileSettingsRoute>
 
-                <MobileSettingsAccordion
+                <MobileSettingsRoute
                     id="reading"
                     title="Reading layout"
                     description="Text size, padding, and line spacing"
-                    expanded={mobileSettingsSection === "reading"}
-                    onChange={setMobileSettingsSection}
+                    activeSection={mobileSettingsSection}
+                    onChange={changeMobileSettingsSection}
                 >
                     <Stack spacing={2}>
                     <Stack
@@ -5807,13 +5728,13 @@ function SettingsShell({
                         </Select>
                     </Stack>
                     </Stack>
-                </MobileSettingsAccordion>
-                <MobileSettingsAccordion
+                </MobileSettingsRoute>
+                <MobileSettingsRoute
                     id="agent"
                     title="Agent behavior"
                     description="Diagnostics and interrupted turns"
-                    expanded={mobileSettingsSection === "agent"}
-                    onChange={setMobileSettingsSection}
+                    activeSection={mobileSettingsSection}
+                    onChange={changeMobileSettingsSection}
                 >
                     <Stack spacing={2}>
                 <Stack
@@ -5846,13 +5767,13 @@ function SettingsShell({
                 <Divider />
                 <AutoResumeSettings />
                     </Stack>
-                </MobileSettingsAccordion>
-                <MobileSettingsAccordion
+                </MobileSettingsRoute>
+                <MobileSettingsRoute
                     id="code"
                     title="Code & diff"
                     description="Code display and review preferences"
-                    expanded={mobileSettingsSection === "code"}
-                    onChange={setMobileSettingsSection}
+                    activeSection={mobileSettingsSection}
+                    onChange={changeMobileSettingsSection}
                 >
                 <Box
                     data-settings-section="code"
@@ -5860,52 +5781,52 @@ function SettingsShell({
                 >
                     <ReviewSettingsContent />
                 </Box>
-                </MobileSettingsAccordion>
-                <MobileSettingsAccordion
+                </MobileSettingsRoute>
+                <MobileSettingsRoute
                     id="notifications"
                     title="Notifications"
                     description="Apple alerts, privacy, sound, and vibration"
-                    expanded={mobileSettingsSection === "notifications"}
-                    onChange={setMobileSettingsSection}
+                    activeSection={mobileSettingsSection}
+                    onChange={changeMobileSettingsSection}
                 >
                     <NotificationSettingsContent embedded />
-                </MobileSettingsAccordion>
-                <MobileSettingsAccordion
+                </MobileSettingsRoute>
+                <MobileSettingsRoute
                     id="providers"
                     title="Accounts & sign-in"
                     description="Provider authentication and accounts"
-                    expanded={mobileSettingsSection === "providers"}
-                    onChange={setMobileSettingsSection}
+                    activeSection={mobileSettingsSection}
+                    onChange={changeMobileSettingsSection}
                 >
                     <ProvidersContent embedded />
-                </MobileSettingsAccordion>
-                <MobileSettingsAccordion
+                </MobileSettingsRoute>
+                <MobileSettingsRoute
                     id="machines"
                     title="Machines"
                     description="Connected runtimes and component updates"
-                    expanded={mobileSettingsSection === "machines"}
-                    onChange={setMobileSettingsSection}
+                    activeSection={mobileSettingsSection}
+                    onChange={changeMobileSettingsSection}
                 >
                     <MachinesContent embedded />
-                </MobileSettingsAccordion>
-                <MobileSettingsAccordion
+                </MobileSettingsRoute>
+                <MobileSettingsRoute
                     id="info"
                     title="About"
                     description="Cowboy information and diagnostics"
-                    expanded={mobileSettingsSection === "info"}
-                    onChange={setMobileSettingsSection}
+                    activeSection={mobileSettingsSection}
+                    onChange={changeMobileSettingsSection}
                 >
                     <InfoContent />
-                </MobileSettingsAccordion>
-                <MobileSettingsAccordion
+                </MobileSettingsRoute>
+                <MobileSettingsRoute
                     id="logs"
                     title="Logs"
                     description="Usage and diagnostic history"
-                    expanded={mobileSettingsSection === "logs"}
-                    onChange={setMobileSettingsSection}
+                    activeSection={mobileSettingsSection}
+                    onChange={changeMobileSettingsSection}
                 >
                     <UsageLogs dense />
-                </MobileSettingsAccordion>
+                </MobileSettingsRoute>
             </Stack>
             )}
             {desktop && (
