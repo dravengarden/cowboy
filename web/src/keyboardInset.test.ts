@@ -75,6 +75,11 @@ Deno.test("PWA inset follows the painted box, not a stale innerHeight", () => {
   assertEquals(keyboardCoverOverlap(844, 510), 334);
   // Chrome jitter of a few pixels is not a covered keyboard.
   assertEquals(keyboardCoverOverlap(510, 504), 0);
+  // Safari pans the visual viewport (offsetTop) to keep the field on
+  // screen. That top offset is not keyboard cover and must not pad.
+  assertEquals(keyboardCoverOverlap(844, 510, 80), 254);
+  assertEquals(keyboardCoverOverlap(844, 510, 334), 0);
+  assertEquals(keyboardCoverOverlap(844, 510, -40), 334);
 });
 
 Deno.test("PWA iOS accessory bar is added only while an editable is focused", () => {
@@ -113,7 +118,7 @@ Deno.test("keyboard inset measures the painted page instead of innerHeight", asy
   const source = await Deno.readTextFile(new URL("./keyboardInset.ts", import.meta.url));
   assertEquals(source.includes("paintedLayoutHeight("), true);
   assertEquals(
-    source.includes("keyboardCoverOverlap(layoutHeight, vv.height)"),
+    source.includes("keyboardCoverOverlap(\n        layoutHeight,\n        vv.height,\n        vv.offsetTop,"),
     true,
   );
   assertEquals(

@@ -63,7 +63,15 @@ export function useKeyboardInset(): void {
       // into --kb-inset left an empty band between the composer and the
       // bar. New Session clears that bar by being a cover sheet, not by
       // padding the whole app.
-      const overlap = keyboardCoverOverlap(layoutHeight, vv.height);
+      // Subtract vv.offsetTop (clamped): Safari pans the visual viewport
+      // to keep the focused composer on screen. Counting that pan as
+      // keyboard cover pads a lavender gap above the compact URL bar.
+      // PWA already shrank the painted box; native skips this hook.
+      const overlap = keyboardCoverOverlap(
+        layoutHeight,
+        vv.height,
+        vv.offsetTop,
+      );
       // Only write on change — the focus poll below runs apply() every 300ms, and
       // a same-value setProperty would still be a needless style touch each tick.
       if (overlap !== lastInset) {

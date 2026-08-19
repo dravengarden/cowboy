@@ -87,17 +87,26 @@ export function shouldLearnKeyboardFreeBaseline(
   return visibleHeight >= baselineHeight - keyboardFreeBaselineSlackPx;
 }
 
-/** How much of the painted page still extends below the visual viewport.
- *  Do not add visualViewport.offsetTop: rubber-band pans inflate it and
- *  lift the composer too high. */
+/** How much of the painted page still extends *below* the visual viewport.
+ *
+ *  `paintedHeight - visualHeight` over-counts when offsetTop > 0: Safari
+ *  (not PWA/app) pans the visual viewport to keep the focused field on
+ *  screen, so part of that difference is already above the window. Padding
+ *  by the full difference leaves a lavender band above Safari's compact
+ *  URL bar. Clamp offsetTop so a rubber-band spike cannot go negative or
+ *  past the covered range (that was the old "offsetTop inflates inset"
+ *  bug). */
 export function keyboardCoverOverlap(
   paintedHeight: number,
   visualHeight: number,
+  visualOffsetTop = 0,
 ): number {
   if (isUnreliableVisualViewport(paintedHeight, visualHeight)) return 0;
-  const raw = Math.round(Math.max(0, paintedHeight - visualHeight));
-  if (raw <= keyboardFittedEpsilonPx) return 0;
-  return clampKeyboardOverlap(raw, paintedHeight);
+  const covered = Math.max(0, paintedHeight - visualHeight);
+  const offset = Math.max(0, Math.min(visualOffsetTop, covered));
+  const below = Math.round(covered - offset);
+  if (below <= keyboardFittedEpsilonPx) return 0;
+  return clampKeyboardOverlap(below, paintedHeight);
 }
 
 /** iOS Safari / installed PWA form accessory (∧ ∨ ✓). The native shell
