@@ -218,7 +218,12 @@ export function NotificationSettingsContent(): React.JSX.Element {
 
       <Divider />
       <Stack spacing={1.75}>
-        <Typography variant="overline" color="text.secondary">Delivery</Typography>
+        <Box>
+          <Typography variant="overline" color="text.secondary">Delivery</Typography>
+          <Typography variant="caption" color="text.secondary" display="block">
+            Lock Screen notification sound and vibration follow your device settings.
+          </Typography>
+        </Box>
         <PreferenceRow
           label="In-app sound"
           description="Play Cowboy's chime when the open app is in the background"
@@ -231,9 +236,6 @@ export function NotificationSettingsContent(): React.JSX.Element {
           checked={vibration}
           onChange={setVibrateSetting}
         />
-        <Typography variant="caption" color="text.secondary">
-          Lock Screen notification sound and vibration follow your device settings.
-        </Typography>
       </Stack>
 
     </Stack>
