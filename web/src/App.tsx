@@ -4073,24 +4073,36 @@ function MobileSettingsRoute({
         >
             <Box
                 id={`mobile-settings-${id}-header`}
+                data-mobile-settings-detail-header
                 sx={{
                     position: "sticky",
                     top: -1,
                     zIndex: 3,
                     bgcolor: "background.default",
-                    minHeight: 64,
                     px: 0.75,
-                    py: 1,
-                    display: "flex",
-                    alignItems: "center",
-                    borderTop: 1,
+                    pt: 1.75,
+                    pb: 1.5,
                     borderBottom: 1,
                     borderColor: "divider",
                 }}
             >
-                <Stack spacing={0.125} sx={{ minWidth: 0 }}>
-                    <Typography variant="body2" fontWeight={700}>{title}</Typography>
-                    <Typography variant="caption" color="text.secondary" noWrap>
+                <Stack spacing={0.5} sx={{ minWidth: 0 }}>
+                    <Typography
+                        variant="overline"
+                        color="primary.main"
+                        sx={{
+                            fontSize: "0.68rem",
+                            fontWeight: 760,
+                            letterSpacing: "0.12em",
+                            lineHeight: 1.2,
+                        }}
+                    >
+                        Settings
+                    </Typography>
+                    <Typography variant="h6" fontWeight={780} sx={{ lineHeight: 1.2 }}>
+                        {title}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.45 }}>
                         {description}
                     </Typography>
                 </Stack>

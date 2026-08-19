@@ -9,6 +9,10 @@ Deno.test("mobile Settings uses an index and one lightweight detail route", () =
   assert(appSource.includes('return focus === "code" ? "code" : null'));
   assert(appSource.includes("activeSection: MobileSettingsSection | null"));
   assert(appSource.includes('data-mobile-settings-route={id}'));
+  assert(appSource.includes("data-mobile-settings-detail-header"));
+  assert(appSource.includes('variant="overline"'));
+  assert(appSource.includes('letterSpacing: "0.12em"'));
+  assert(appSource.includes('<Typography variant="h6" fontWeight={780}'));
   assert(appSource.includes('data-mobile-settings-level={mobileSettingsSection === null ? "index" : "detail"}'));
   assert(appSource.includes("changeMobileSettingsSection"));
   assert(appSource.includes("MOBILE_SETTINGS_HEAVY_CONTENT_DELAY_MS = 180"));
