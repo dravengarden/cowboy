@@ -183,6 +183,14 @@ export function NotificationSettingsContent(): React.JSX.Element {
         )}
       </Stack>
 
+      <PreferenceRow
+        label="Show session names"
+        description="Include task names on the Lock Screen; off by default for privacy"
+        checked={preferences.showSessionNames}
+        disabled={!enabled}
+        onChange={(checked): void => updateSystemNotificationPreferences({ showSessionNames: checked })}
+      />
+
       <Divider />
       <Stack spacing={1.75}>
         <Box>
@@ -228,14 +236,6 @@ export function NotificationSettingsContent(): React.JSX.Element {
         </Typography>
       </Stack>
 
-      <Divider />
-      <PreferenceRow
-        label="Show session names"
-        description="Include task names on the Lock Screen; off by default for privacy"
-        checked={preferences.showSessionNames}
-        disabled={!enabled}
-        onChange={(checked): void => updateSystemNotificationPreferences({ showSessionNames: checked })}
-      />
     </Stack>
   );
 }
