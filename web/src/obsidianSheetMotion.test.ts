@@ -27,7 +27,7 @@ Deno.test("compact sheet settle matches the Obsidian/iOS drawer cubic", () => {
   assertEquals(OBSIDIAN_SHEET_SETTLE_EASING, "cubic-bezier(0.32, 0.72, 0, 1)");
   assert(drawerMotion.includes(`"${OBSIDIAN_SHEET_SETTLE_EASING}"`));
   assertEquals(OBSIDIAN_SHEET_SETTLE_MS, 240);
-  assertEquals(OBSIDIAN_SHEET_INSET_PX, 8);
+  assertEquals(OBSIDIAN_SHEET_INSET_PX, 0);
   assertEquals(OBSIDIAN_SHEET_RADIUS_PX, 18);
   assertEquals(OBSIDIAN_SHEET_MAX_FRACTION, 0.88);
   assertEquals(OBSIDIAN_SHEET_CLOSED_SCALE, 0.96);
@@ -67,7 +67,13 @@ Deno.test("phone sheets use the compact Obsidian card, not a floating footer pad
   assert(modalSource.includes("SAFE_INSIDE"));
   assert(modalSource.includes("calc(${inset} + var(--kb-inset, 0px))"));
   assert(modalSource.includes('bgcolor: "background.paper"'));
-  assert(modalSource.includes('border: "1px solid"'));
+  assert(modalSource.includes('border: "none"'));
+  assertEquals(modalSource.includes('border: "1px solid"'), false);
+  assert(
+    modalSource.includes(
+      'borderRadius: `${String(OBSIDIAN_SHEET_RADIUS_PX)}px ${String(OBSIDIAN_SHEET_RADIUS_PX)}px 0 0`',
+    ),
+  );
   assertEquals(modalSource.includes("backdropFilter"), false);
   assert(modalSource.includes('justifyContent: "space-between"'));
 });

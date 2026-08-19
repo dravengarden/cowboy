@@ -18,7 +18,7 @@ function maybePortal(sheet: ReactNode, portal: boolean): ReactNode {
 
 // cowboy's BottomSheet: always the frosted 磨砂玻璃 material (no per-app toggle —
 // the translucent surface is the house look). Drop-in for the shared BottomSheet.
-// Compact phone/tablet sheets (no `cover`) use Obsidian's bottom-docked
+// Compact phone/tablet sheets (no `cover`) use a flush bottom-docked
 // action card instead of the tall DetentSheet + floating footer pad.
 export function Sheet(
   props: Omit<BottomSheetProps, "frosted"> & {
@@ -31,7 +31,7 @@ export function Sheet(
   const { desktopMaxWidth, portal = false, ...bottomSheetProps } = props;
   // Content-heavy Cowboy workbenches may claim the available Desktop canvas.
   // Cover sheets stay on DetentSheet; compact phone/tablet sheets use the
-  // inset Obsidian card.
+  // flush bottom card.
   if (
     desktopMaxWidth !== undefined && !widthIsMobile && !props.forceSheet
   ) {

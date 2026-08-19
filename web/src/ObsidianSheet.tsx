@@ -1,10 +1,10 @@
-// Cowboy compact modal — Obsidian's mobile action sheet, cowboy-tinted.
+// Cowboy compact modal — a flush bottom sheet, cowboy-tinted.
 //
 // Shared DetentSheet stays the cover/workbench surface (Settings, New Session).
-// Compact decisions and inspectors (Confirm, Symbols, Info) use this card:
-// docked to the bottom of the screen, 8px edge gap, safe-area padded INSIDE
-// so the card occupies the bottom instead of floating above the home
-// indicator. Content-hugging. Drag is 1:1; release is the Obsidian/iOS cubic.
+// Compact decisions and inspectors (Confirm, Symbols, Info, Move draft) use
+// this card: full-bleed left/right, docked to the bottom, safe-area padded
+// INSIDE so the home indicator sits in the card instead of floating it.
+// Content-hugging. Drag is 1:1; release is the iOS cubic.
 
 import {
   type PointerEvent as ReactPointerEvent,
@@ -239,8 +239,9 @@ export function ObsidianSheet({
 
   const z = Z + Math.min(level, 24) * 2;
   const inset = `${String(OBSIDIAN_SHEET_INSET_PX)}px`;
-  // Dock to the bottom. Only the 8px optical gap + keyboard lift sit
-  // outside the card; the home indicator is padded inside, like Obsidian.
+  // Dock to the bottom. Keyboard lift sits outside the card; the home
+  // indicator is padded inside. No side gap: a hairline inset around a
+  // tall picker reads as an uneven frame.
   const bottom = `calc(${inset} + var(--kb-inset, 0px))`;
 
   return (
@@ -296,16 +297,8 @@ export function ObsidianSheet({
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
-          borderRadius: `${String(OBSIDIAN_SHEET_RADIUS_PX)}px`,
-          // Obsidian's mobile action card is an opaque slab with a hairline,
-          // not frosted glass. Frost + no border left a hollow frame of
-          // dimmed page around Clear/Symbols.
-          border: "1px solid",
-          borderColor: (t) =>
-            alpha(
-              t.palette.common.black,
-              t.palette.mode === "dark" ? 0.55 : 0.14,
-            ),
+          borderRadius: `${String(OBSIDIAN_SHEET_RADIUS_PX)}px ${String(OBSIDIAN_SHEET_RADIUS_PX)}px 0 0`,
+          border: "none",
           bgcolor: "background.paper",
           backgroundImage: "none",
           boxShadow: (t) =>

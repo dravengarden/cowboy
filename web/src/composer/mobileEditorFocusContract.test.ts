@@ -574,14 +574,9 @@ Deno.test("move-draft destination list matches the Obsidian sheet title inset", 
     composerSource.indexOf("</Sheet>", sheetStart),
   );
   assertEquals(sheet.includes("<List disablePadding sx={{ mx: -2.25, pb: 1 }}>"), true);
-  assertEquals(
-    sheet.includes('sx={{ px: 2.25, py: 1.25, overflow: "hidden" }}'),
-    true,
-  );
-  assertEquals(
-    sheet.includes('sx={{ my: 0, minWidth: 0, overflow: "hidden" }}'),
-    true,
-  );
+  assertEquals(sheet.includes('width: "100%"'), true);
+  assertEquals(sheet.includes('flex: "1 1 0px"'), true);
+  assertEquals(sheet.includes('textOverflow: "ellipsis"'), true);
   assertEquals(sheet.includes("secondaryTypographyProps"), false);
 });
 

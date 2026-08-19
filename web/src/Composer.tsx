@@ -3536,10 +3536,10 @@ export function ComposerWorkspace({
         title="Move draft to…"
       >
         {
-          /* ObsidianSheet already pads the body 18px. Default ListItemButton
-            gutters add another 16px, so the title sits left of the rows and a
-            long cwd paints through the right pad into the card edge. Bleed the
-            list to the card and reuse the title inset on both sides. */
+          /* Bleed the list to the card so rows share the title inset. A
+            <button> with nowrap cwd otherwise grows to min-content and
+            paints through the right pad; width 100% + flex 0 basis keeps
+            both sides on the same 18px gutter. */
         }
         <List disablePadding sx={{ mx: -2.25, pb: 1 }}>
           {otherSessions.map((s) => (
@@ -3552,15 +3552,29 @@ export function ComposerWorkspace({
                 }
                 setMoveSrcId(null);
               }}
-              sx={{ px: 2.25, py: 1.25, overflow: "hidden" }}
+              sx={{
+                px: 2.25,
+                py: 1.25,
+                width: "100%",
+                maxWidth: "100%",
+                minWidth: 0,
+                overflow: "hidden",
+                boxSizing: "border-box",
+              }}
             >
               <ListItemText
                 primary={s.title}
                 secondary={s.cwd}
-                sx={{ my: 0, minWidth: 0, overflow: "hidden" }}
-                slotProps={{
-                  primary: { noWrap: true },
-                  secondary: { noWrap: true },
+                sx={{
+                  my: 0,
+                  minWidth: 0,
+                  flex: "1 1 0px",
+                  overflow: "hidden",
+                  "& .MuiListItemText-primary, & .MuiListItemText-secondary": {
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  },
                 }}
               />
             </ListItemButton>
