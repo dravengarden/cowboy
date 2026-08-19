@@ -31,6 +31,7 @@ import {
   ListItemButton,
   Popover,
   Stack,
+  Switch,
   Toolbar,
   Typography,
 } from "@mui/material";
@@ -2128,17 +2129,13 @@ export function ReviewApp({
     setSessionSwitcherOpen(true);
   };
   const activateReviewMode = (nextMode: ReviewMode): void => {
+    if (nextMode === mode) return;
     navigationHaptic();
-    if (nextMode === mode) {
-      setToggleDrawerRequest((value) => value + 1);
-      return;
-    }
     setMode(nextMode);
     if (nextMode === "files") setCommitTarget(undefined);
     if (workspace?.sessionId) {
       mutateMobileReview(workspace.sessionId, "setMode", { mode: nextMode });
     }
-    if (!drawerOpen) setToggleDrawerRequest((value) => value + 1);
   };
 
   return (
@@ -2536,76 +2533,52 @@ export function ReviewApp({
                 "@media (min-width: 600px)": { minHeight: 44 },
               }}
             >
+              <IconButton
+                data-mobile-open-agent="true"
+                aria-label="Open Agent"
+                title="Agent"
+                onClick={() => {
+                  navigationHaptic();
+                  openMobileProduct("agent");
+                }}
+                sx={{ width: 44, height: 44, color: "text.secondary" }}
+              >
+                <ChatBubbleOutline />
+              </IconButton>
               <Stack
                 data-mobile-review-mode-switcher
                 direction="row"
+                alignItems="center"
                 role="group"
-                aria-label="Review navigation"
+                aria-label="Review mode"
+                sx={{ height: 44, px: 0.25 }}
               >
-                <IconButton
-                  data-mobile-open-agent="true"
-                  aria-label="Open Agent"
-                  title="Agent"
-                  onClick={() => {
-                    navigationHaptic();
-                    openMobileProduct("agent");
-                  }}
-                  sx={{ width: 44, height: 44, color: "text.secondary" }}
-                >
-                  <ChatBubbleOutline />
-                </IconButton>
-                <IconButton
-                  aria-label={mode === "git"
-                    ? drawerOpen ? "Close Git changes" : "Open Git changes"
-                    : "Switch to Git changes"}
-                  aria-pressed={mode === "git"}
-                  title="Changes"
-                  onClick={() => activateReviewMode("git")}
+                <DifferenceOutlined
+                  aria-hidden
                   sx={{
-                    width: 44,
-                    height: 44,
-                    borderRadius: 2,
-                    color: mode === "git" ? "primary.main" : "text.secondary",
-                    bgcolor: mode === "git" ? "action.selected" : "transparent",
+                    fontSize: 18,
+                    color: mode === "git" ? "primary.main" : "text.disabled",
                   }}
-                >
-                  <Badge
-                    variant="dot"
-                    color="primary"
-                    invisible={changeCount === 0}
-                    slotProps={{
-                      badge: { "aria-label": `${changeCount} changed files` },
-                    }}
-                    sx={{
-                      "& .MuiBadge-badge": {
-                        top: 3,
-                        right: 2,
-                        minWidth: 7,
-                        width: 7,
-                        height: 7,
-                      },
-                    }}
-                  >
-                    <DifferenceOutlined />
-                  </Badge>
-                </IconButton>
-                <IconButton
-                  aria-label={mode === "files"
-                    ? drawerOpen ? "Close file tree" : "Open file tree"
-                    : "Switch to Worktree files"}
-                  aria-pressed={mode === "files"}
-                  title="Files"
-                  onClick={() => activateReviewMode("files")}
+                />
+                <Switch
+                  size="small"
+                  checked={mode === "files"}
+                  onChange={(_, checked) =>
+                    activateReviewMode(checked ? "files" : "git")}
+                  slotProps={{
+                    input: {
+                      "aria-label": "Switch between Git changes and Worktree files",
+                    },
+                  }}
+                  sx={{ mx: 0.125 }}
+                />
+                <AccountTreeOutlined
+                  aria-hidden
                   sx={{
-                    width: 44,
-                    height: 44,
-                    borderRadius: 2,
-                    color: mode === "files" ? "primary.main" : "text.secondary",
-                    bgcolor: mode === "files" ? "action.selected" : "transparent",
+                    fontSize: 18,
+                    color: mode === "files" ? "primary.main" : "text.disabled",
                   }}
-                >
-                  <AccountTreeOutlined />
-                </IconButton>
+                />
               </Stack>
               {target.kind !== "changes" && !(
                 target.kind === "source" &&
@@ -2676,6 +2649,42 @@ export function ReviewApp({
                   <FormatListBulleted />
                 </IconButton>
               )}
+              <IconButton
+                data-mobile-review-sidebar="true"
+                aria-label={drawerOpen
+                  ? `Close ${mode === "git" ? "Git changes" : "file tree"} sidebar`
+                  : `Open ${mode === "git" ? "Git changes" : "file tree"} sidebar`}
+                aria-pressed={drawerOpen}
+                sx={{
+                  color: "text.primary",
+                  bgcolor: drawerOpen ? "action.selected" : "transparent",
+                }}
+                onClick={() => setToggleDrawerRequest((value) => value + 1)}
+              >
+                {mode === "git"
+                  ? (
+                    <Badge
+                      variant="dot"
+                      color="primary"
+                      invisible={changeCount === 0}
+                      slotProps={{
+                        badge: { "aria-label": `${changeCount} changed files` },
+                      }}
+                      sx={{
+                        "& .MuiBadge-badge": {
+                          top: 3,
+                          right: 2,
+                          minWidth: 7,
+                          width: 7,
+                          height: 7,
+                        },
+                      }}
+                    >
+                      <DifferenceOutlined />
+                    </Badge>
+                  )
+                  : <AccountTreeOutlined />}
+              </IconButton>
             </Toolbar>
           </Box>
         </Box>
