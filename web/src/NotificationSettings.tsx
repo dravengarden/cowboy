@@ -114,7 +114,11 @@ export function NotificationSettingsContent(): React.JSX.Element {
     : "Off";
 
   return (
-    <Stack spacing={2} data-notification-settings="true">
+    <Stack
+      spacing={2}
+      data-notification-settings="true"
+      sx={{ pb: { xs: 12, md: 0 } }}
+    >
       <Stack direction="row" alignItems="center" spacing={1.25}>
         <Box sx={{ color: enabled ? "success.main" : "text.secondary", display: "grid" }}>
           {enabled ? <NotificationsActiveOutlined /> : <NotificationsOffOutlined />}
