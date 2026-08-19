@@ -40,21 +40,35 @@ export interface Attachment {
   pending?: boolean;
 }
 
+function sameClipboardFile(left: File, right: File): boolean {
+  return left === right ||
+    (left.name === right.name &&
+      left.type === right.type &&
+      left.size === right.size &&
+      left.lastModified === right.lastModified);
+}
+
 /** Read every file representation exposed by a clipboard paste. iOS WebKit can
  * expose a pasted photo through `items` while leaving `files` empty; desktop
- * browsers commonly populate both, so dedupe by File identity. */
+ * browsers commonly populate both. Chromium may return a fresh `File` wrapper
+ * from `item.getAsFile()`, so pair item entries with their matching direct-file
+ * metadata instead of relying on object identity alone. One-to-one matching
+ * preserves two genuinely separate files even when their metadata is equal. */
 export function clipboardFiles(
   clipboard: Pick<DataTransfer, "files" | "items">,
 ): File[] {
   const files = Array.from(clipboard.files);
-  const seen = new Set(files);
+  const directFiles = [...files];
+  const matchedDirect = new Set<number>();
   for (const item of Array.from(clipboard.items)) {
     if (item.kind !== "file") continue;
     const file = item.getAsFile();
-    if (file && !seen.has(file)) {
-      seen.add(file);
-      files.push(file);
-    }
+    if (!file) continue;
+    const directIndex = directFiles.findIndex((direct, index) =>
+      !matchedDirect.has(index) && sameClipboardFile(direct, file)
+    );
+    if (directIndex >= 0) matchedDirect.add(directIndex);
+    else files.push(file);
   }
   return files;
 }
