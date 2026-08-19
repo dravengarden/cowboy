@@ -26,6 +26,7 @@ import {
   Typography,
 } from "@mui/material";
 import {
+  type ReactNode,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -33,6 +34,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   DetentSheet,
   MobileSheetActionGroup,
@@ -2064,6 +2066,19 @@ export function ExploreTranscript(
   );
 }
 
+function maybePortalToBody(node: ReactNode): ReactNode {
+  // MobilePageDock lives in the drawer-follow composer footer. That
+  // ancestor keeps a compositor transform, so an inline DetentSheet's
+  // position:fixed is trapped in the footer box on iOS PWA: the cover
+  // sheet clips to a grab-handle strip over Pages instead of filling
+  // the viewport. Cowboy owns the top document, so this picker can
+  // escape that containing block the same way nested workbench sheets
+  // already do.
+  return globalThis.document?.body
+    ? createPortal(node, globalThis.document.body)
+    : node;
+}
+
 export function MobilePageDock({
   sessionId,
   composeOpen,
@@ -2484,6 +2499,7 @@ export function MobilePageDock({
           </Tooltip>
         </Stack>
       </Paper>
+      {maybePortalToBody(
       <DetentSheet
         open={open}
         onClose={closePageDirectory}
@@ -2587,7 +2603,8 @@ export function MobilePageDock({
             />
           </Box>
         </Box>
-      </DetentSheet>
+      </DetentSheet>,
+      )}
     </Box>
   );
 }

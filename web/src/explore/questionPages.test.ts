@@ -25,6 +25,20 @@ const desktopWorkspaceSource = await Deno.readTextFile(
   new URL("../desktop/DesktopWorkspace.tsx", import.meta.url),
 );
 
+Deno.test("mobile page index cover escapes the drawer-follow footer containing block", () => {
+  assertEquals(exploreSurfaceSource.includes("function maybePortalToBody("), true);
+  assertEquals(
+    exploreSurfaceSource.includes("createPortal(node, globalThis.document.body)"),
+    true,
+  );
+  const sheetStart = exploreSurfaceSource.indexOf('ariaLabel="Page index"');
+  assertEquals(sheetStart > 0, true);
+  assertEquals(
+    exploreSurfaceSource.lastIndexOf("maybePortalToBody(", sheetStart) > 0,
+    true,
+  );
+});
+
 Deno.test("mobile Page Dock retains disabled previous and next slots", () => {
   assertEquals(exploreSurfaceSource.includes("onlyCompletePage"), false);
   assertEquals(exploreSurfaceSource.includes('aria-label="Next page"'), true);
