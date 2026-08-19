@@ -35,18 +35,18 @@ Deno.test("Code settings open on the Code section and Agent settings stay on Age
 
 Deno.test("Code chrome uses Agent instead of a local settings sheet", () => {
   assert(reviewAppSource.includes('data-mobile-open-agent="true"'));
-  assert(reviewAppSource.includes('aria-label="Back to Agent"'));
-  assert(reviewAppSource.includes("ArrowBackIosNew"));
+  assert(reviewAppSource.includes('aria-label="Open Agent"'));
   assert(reviewAppSource.includes("openMobileProduct(\"agent\")"));
   assert(reviewAppSource.includes("data-mobile-review-mode-switcher"));
-  assert(reviewAppSource.includes('<Tab value="git" label="Changes" />'));
-  assert(reviewAppSource.includes('<Tab value="files" label="Files" />'));
+  assert(reviewAppSource.includes('onClick={() => activateReviewMode("git")}'));
+  assert(reviewAppSource.includes('onClick={() => activateReviewMode("files")}'));
   assert(reviewAppSource.includes('aria-label="Review navigation"'));
   assert(
     reviewAppSource.indexOf('data-mobile-open-agent="true"') >
       reviewAppSource.indexOf('aria-label="Code Review controls"'),
   );
-  assertEquals(reviewAppSource.includes("ChatBubbleOutline"), false);
+  assert(reviewAppSource.includes("ChatBubbleOutline"));
+  assertEquals(reviewAppSource.includes("ArrowBackIosNew"), false);
   assertEquals(reviewSettingsSource.includes("SettingsSheet"), false);
   assert(reviewSettingsSource.includes("export function ReviewSettingsContent"));
   assert(fileTreeSource.includes('openAppSettings({ section: "code" })'));

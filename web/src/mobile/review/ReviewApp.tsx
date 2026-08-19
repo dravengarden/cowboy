@@ -1,8 +1,8 @@
 import {
   AccountTreeOutlined,
   ArrowBack,
-  ArrowBackIosNew,
   ArrowForward,
+  ChatBubbleOutline,
   CheckCircle,
   CheckCircleOutline,
   ChevronLeft,
@@ -31,8 +31,6 @@ import {
   ListItemButton,
   Popover,
   Stack,
-  Tab,
-  Tabs,
   Toolbar,
   Typography,
 } from "@mui/material";
@@ -2129,6 +2127,19 @@ export function ReviewApp({
     setContextProjectKey(undefined);
     setSessionSwitcherOpen(true);
   };
+  const activateReviewMode = (nextMode: ReviewMode): void => {
+    navigationHaptic();
+    if (nextMode === mode) {
+      setToggleDrawerRequest((value) => value + 1);
+      return;
+    }
+    setMode(nextMode);
+    if (nextMode === "files") setCommitTarget(undefined);
+    if (workspace?.sessionId) {
+      mutateMobileReview(workspace.sessionId, "setMode", { mode: nextMode });
+    }
+    if (!drawerOpen) setToggleDrawerRequest((value) => value + 1);
+  };
 
   return (
     <ReviewDrawerShell
@@ -2525,61 +2536,77 @@ export function ReviewApp({
                 "@media (min-width: 600px)": { minHeight: 44 },
               }}
             >
-              <Tabs
+              <Stack
                 data-mobile-review-mode-switcher
-                value={mode}
+                direction="row"
+                role="group"
                 aria-label="Review navigation"
-                onChange={(_, nextMode: ReviewMode | "agent") => {
-                  navigationHaptic();
-                  if (nextMode === "agent") {
-                    openMobileProduct("agent");
-                    return;
-                  }
-                  if (nextMode === mode) return;
-                  setMode(nextMode);
-                  if (nextMode === "files") setCommitTarget(undefined);
-                  if (workspace?.sessionId) {
-                    mutateMobileReview(workspace.sessionId, "setMode", {
-                      mode: nextMode,
-                    });
-                  }
-                }}
-                sx={{
-                  minHeight: 44,
-                  flexShrink: 0,
-                  "& .MuiTabs-flexContainer": { height: 44 },
-                  "& .MuiTabs-indicator": {
-                    height: 2,
-                    borderRadius: "2px 2px 0 0",
-                  },
-                  "& .MuiTab-root": {
-                    minWidth: 0,
-                    minHeight: 44,
-                    px: 1.125,
-                    color: "text.secondary",
-                    textTransform: "none",
-                    fontSize: "0.75rem",
-                    fontWeight: 650,
-                    lineHeight: 1,
-                    opacity: 1,
-                  },
-                  "& .MuiTab-root.Mui-selected": {
-                    color: "text.primary",
-                  },
-                  "& .MuiTab-iconWrapper": { mr: 0.375 },
-                }}
               >
-                <Tab
+                <IconButton
                   data-mobile-open-agent="true"
-                  value="agent"
-                  aria-label="Back to Agent"
-                  icon={<ArrowBackIosNew sx={{ fontSize: 14 }} />}
-                  iconPosition="start"
-                  label="Agent"
-                />
-                <Tab value="git" label="Changes" />
-                <Tab value="files" label="Files" />
-              </Tabs>
+                  aria-label="Open Agent"
+                  title="Agent"
+                  onClick={() => {
+                    navigationHaptic();
+                    openMobileProduct("agent");
+                  }}
+                  sx={{ width: 44, height: 44, color: "text.secondary" }}
+                >
+                  <ChatBubbleOutline />
+                </IconButton>
+                <IconButton
+                  aria-label={mode === "git"
+                    ? drawerOpen ? "Close Git changes" : "Open Git changes"
+                    : "Switch to Git changes"}
+                  aria-pressed={mode === "git"}
+                  title="Changes"
+                  onClick={() => activateReviewMode("git")}
+                  sx={{
+                    width: 44,
+                    height: 44,
+                    borderRadius: 2,
+                    color: mode === "git" ? "primary.main" : "text.secondary",
+                    bgcolor: mode === "git" ? "action.selected" : "transparent",
+                  }}
+                >
+                  <Badge
+                    variant="dot"
+                    color="primary"
+                    invisible={changeCount === 0}
+                    slotProps={{
+                      badge: { "aria-label": `${changeCount} changed files` },
+                    }}
+                    sx={{
+                      "& .MuiBadge-badge": {
+                        top: 3,
+                        right: 2,
+                        minWidth: 7,
+                        width: 7,
+                        height: 7,
+                      },
+                    }}
+                  >
+                    <DifferenceOutlined />
+                  </Badge>
+                </IconButton>
+                <IconButton
+                  aria-label={mode === "files"
+                    ? drawerOpen ? "Close file tree" : "Open file tree"
+                    : "Switch to Worktree files"}
+                  aria-pressed={mode === "files"}
+                  title="Files"
+                  onClick={() => activateReviewMode("files")}
+                  sx={{
+                    width: 44,
+                    height: 44,
+                    borderRadius: 2,
+                    color: mode === "files" ? "primary.main" : "text.secondary",
+                    bgcolor: mode === "files" ? "action.selected" : "transparent",
+                  }}
+                >
+                  <AccountTreeOutlined />
+                </IconButton>
+              </Stack>
               {target.kind !== "changes" && !(
                 target.kind === "source" &&
                 isMarkdownReviewPath(target.path) &&
@@ -2649,47 +2676,6 @@ export function ReviewApp({
                   <FormatListBulleted />
                 </IconButton>
               )}
-              <IconButton
-                aria-label={drawerOpen
-                  ? `Close ${
-                    mode === "git" ? "Git changes" : "file tree"
-                  } sidebar`
-                  : `Open ${
-                    mode === "git" ? "Git changes" : "file tree"
-                  } sidebar`}
-                aria-pressed={drawerOpen}
-                sx={{
-                  color: "text.primary",
-                  bgcolor: drawerOpen ? "action.selected" : "transparent",
-                }}
-                onClick={() => setToggleDrawerRequest((value) => value + 1)}
-              >
-                {mode === "git"
-                  ? (
-                    <Badge
-                      variant="dot"
-                      color="primary"
-                      invisible={changeCount === 0}
-                      slotProps={{
-                        badge: {
-                          "aria-label": `${changeCount} changed files`,
-                        },
-                      }}
-                      sx={{
-                        "& .MuiBadge-badge": {
-                          top: 3,
-                          right: 2,
-                          minWidth: 7,
-                          width: 7,
-                          height: 7,
-                        },
-                      }}
-                    >
-                      <DifferenceOutlined />
-                    </Badge>
-                  )
-                  : <AccountTreeOutlined />}
-              </IconButton>
             </Toolbar>
           </Box>
         </Box>
