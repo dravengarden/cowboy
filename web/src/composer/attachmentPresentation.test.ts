@@ -57,6 +57,19 @@ Deno.test("fullscreen keeps only images without CM inline tokens in its tray", (
   );
 });
 
+Deno.test("inline-image Preview dismisses the software keyboard before the lightbox", () => {
+  const previewStart = composerSource.indexOf("Preview\n              </Button>");
+  const preview = composerSource.slice(
+    composerSource.lastIndexOf("<Button", previewStart),
+    previewStart,
+  );
+  assertEquals(previewStart >= 0, true);
+  assertEquals(preview.includes("noteMobileKeyboardDismissed();"), true);
+  assertEquals(preview.includes("dismissMobileSoftwareKeyboard();"), true);
+  assertEquals(preview.includes("releaseMobileComposerFocus();"), true);
+  assertEquals(preview.includes("openLightbox([att], 0)"), true);
+});
+
 Deno.test("pending cards preview token-backed images inline instead of a second chip", () => {
   assertEquals(composerSource.includes("attachmentTrayForSurface(seedAttachments, seedText)"), true);
   assertEquals(composerSource.includes("<MessagePreview text={seedText} attachments={seedAttachments} />"), true);

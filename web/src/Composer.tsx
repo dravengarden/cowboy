@@ -3370,6 +3370,13 @@ export function ComposerWorkspace({
                   const id = imgSel?.id;
                   const att = (id ? getInlineAttachment(id) : undefined) ??
                     attachments.find((a) => a.id === id);
+                  // Delete keeps the editor session. Preview leaves writing for
+                  // the lightbox, so collapse two-track chrome and drop the
+                  // software keyboard instead of leaving ∧∨✓ over the image.
+                  noteMobileKeyboardDismissed();
+                  setMobileKeyboardDismissed(true);
+                  dismissMobileSoftwareKeyboard();
+                  releaseMobileComposerFocus();
                   if (att) openLightbox([att], 0);
                   closeImgSel();
                 }}

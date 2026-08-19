@@ -664,8 +664,10 @@ here says otherwise.
     CM6, which immediately ended iOS's software-keyboard session. Render this
     contextual toolbar with non-modal `Popper`, keep the editor's native
     selection active, and prevent its buttons' pointer-down default so Delete
-    does not focus chrome before it edits the document. Preview may intentionally
-    enter the lightbox afterward. Keep action glyph sizes rem-based so the global
+    does not focus chrome before it edits the document. Preview still prevents
+    pointer-down default so the tap is not eaten, then explicitly dismisses the
+    software keyboard and two-track chrome before opening the lightbox — leaving
+    the keyboard up parks `∧ ∨ ✓` over the image. Keep action glyph sizes rem-based so the global
     font-size setting scales them with their labels. Never repair this with a
     delayed editor `focus()`: once the original UIKit gesture has ended, that is
     too late to preserve the keyboard session and can regress long-press menus.
