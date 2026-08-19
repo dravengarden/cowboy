@@ -3996,10 +3996,10 @@ type MobileSettingsSection =
     | "info"
     | "logs";
 
-const MOBILE_SETTINGS_ENTER_MS = 360;
+const MOBILE_SETTINGS_ENTER_MS = 400;
 const MOBILE_SETTINGS_EXIT_MS = 180;
 const MOBILE_SETTINGS_ANCHOR_MAX_MS = 1600;
-const MOBILE_SETTINGS_ANCHOR_DURATION_MS = 360;
+const MOBILE_SETTINGS_ANCHOR_DURATION_MS = 400;
 const MOBILE_SETTINGS_ANCHOR_STABLE_FRAMES = 3;
 const MOBILE_SETTINGS_ENTER_EASING = "linear";
 const MOBILE_SETTINGS_EXIT_EASING = "cubic-bezier(0.4, 0, 1, 1)";
@@ -5083,10 +5083,9 @@ function SettingsShell({
             const progress = reducedMotion
                 ? 1
                 : Math.min(1, elapsed / MOBILE_SETTINGS_ANCHOR_DURATION_MS);
-            // Quintic smootherstep has zero velocity and acceleration at both
-            // ends, avoiding the initial lurch and slow exponential tail.
-            const eased = progress * progress * progress *
-                (progress * (progress * 6 - 15) + 10);
+            // A half-cosine starts responding sooner than smootherstep while
+            // retaining zero velocity at both ends and a restrained midpoint.
+            const eased = (1 - Math.cos(Math.PI * progress)) / 2;
             const desiredTop = startingHeaderTop +
                 (surfaceTop - startingHeaderTop) * eased;
             const correction = headerTop - desiredTop;

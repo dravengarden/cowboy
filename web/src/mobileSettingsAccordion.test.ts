@@ -19,7 +19,7 @@ Deno.test("mobile Settings is one mutually exclusive accordion surface", () => {
   assert(appSource.includes("MOBILE_SETTINGS_ANCHOR_DURATION_MS"));
   assert(appSource.includes("MOBILE_SETTINGS_ENTER_EASING"));
   assert(appSource.includes('minHeight: "calc(100dvh - 152px)"'));
-  assert(appSource.includes("progress * progress * progress"));
+  assert(appSource.includes("Math.cos(Math.PI * progress)"));
   assert(appSource.includes("surface.scrollTop += correction"));
   assert(appSource.includes('contentVisibility: "auto"'));
   assert(appSource.includes("new ResizeObserver(scheduleAlignment)"));
