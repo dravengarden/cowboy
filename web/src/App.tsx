@@ -4027,6 +4027,7 @@ function MobileSettingsAccordion({
     onChange: (section: MobileSettingsSection | null) => void;
     children: React.ReactNode;
 }): React.JSX.Element {
+    const compositorDisclosure = id === "machines" || id === "providers";
     return (
         <Accordion
             data-mobile-settings-group={id}
@@ -4036,7 +4037,10 @@ function MobileSettingsAccordion({
             elevation={0}
             slotProps={{
                 transition: {
-                    timeout: { enter: MOBILE_SETTINGS_ENTER_MS, exit: MOBILE_SETTINGS_EXIT_MS },
+                    timeout: {
+                        enter: compositorDisclosure ? 0 : MOBILE_SETTINGS_ENTER_MS,
+                        exit: MOBILE_SETTINGS_EXIT_MS,
+                    },
                     easing: {
                         enter: MOBILE_SETTINGS_ENTER_EASING,
                         exit: MOBILE_SETTINGS_EXIT_EASING,
@@ -4095,6 +4099,25 @@ function MobileSettingsAccordion({
                     overflowY: "auto",
                     overscrollBehaviorY: "contain",
                     WebkitOverflowScrolling: "touch",
+                    ...(compositorDisclosure
+                        ? {
+                            animation: expanded
+                                ? "mobile-settings-card-reveal 160ms cubic-bezier(0.2, 0.8, 0.2, 1) both"
+                                : "mobile-settings-card-hide 80ms ease-in both",
+                            willChange: "transform, opacity",
+                            "@keyframes mobile-settings-card-reveal": {
+                                from: { opacity: 0, transform: "translate3d(0, 6px, 0)" },
+                                to: { opacity: 1, transform: "translate3d(0, 0, 0)" },
+                            },
+                            "@keyframes mobile-settings-card-hide": {
+                                from: { opacity: 1, transform: "translate3d(0, 0, 0)" },
+                                to: { opacity: 0, transform: "translate3d(0, -3px, 0)" },
+                            },
+                            "@media (prefers-reduced-motion: reduce)": {
+                                animation: "none",
+                            },
+                        }
+                        : {}),
                     "@supports (height: 100dvh)": {
                         maxHeight: "calc(100dvh - 152px)",
                     },

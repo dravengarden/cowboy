@@ -21,6 +21,10 @@ Deno.test("mobile Settings is one mutually exclusive accordion surface", () => {
   assert(appSource.includes("const MOBILE_SETTINGS_EXIT_MS = 100"));
   assert(appSource.includes("const MOBILE_SETTINGS_ANCHOR_DURATION_MS = 200"));
   assert(appSource.includes("MOBILE_SETTINGS_ENTER_EASING"));
+  assert(appSource.includes('id === "machines" || id === "providers"'));
+  assert(appSource.includes("enter: compositorDisclosure ? 0"));
+  assert(appSource.includes("mobile-settings-card-reveal 160ms"));
+  assert(appSource.includes('willChange: "transform, opacity"'));
   assert(appSource.includes('id === "machines"'));
   assert(appSource.includes('minHeight: "calc(100dvh - 152px)"'));
   assert(appSource.includes('maxHeight: "calc(100dvh - 152px)"'));
