@@ -1,6 +1,6 @@
 import { assertEquals } from "jsr:@std/assert";
 import type { SessionMeta } from "./protocol";
-import { sessionProjectLabel } from "./sessionProject";
+import { sessionDisplayDirectory, sessionProjectLabel } from "./sessionProject";
 
 function session(overrides: Partial<SessionMeta> = {}): SessionMeta {
   return {
@@ -42,4 +42,15 @@ Deno.test("session project preserves legacy stable-checkout fallback", () => {
     "carrack",
   );
   assertEquals(sessionProjectLabel(session()), null);
+});
+
+Deno.test("session list shows the selected source directory instead of its worktree", () => {
+  assertEquals(
+    sessionDisplayDirectory(session({
+      workspace_source_path: "/home/draven/columbus/projects/cowboy",
+      cwd: "/home/draven/.local/state/cowboy-machine/worktrees/sess-1",
+    })),
+    "/home/draven/columbus/projects/cowboy",
+  );
+  assertEquals(sessionDisplayDirectory(session()), "/tmp/worktree/sess-1");
 });

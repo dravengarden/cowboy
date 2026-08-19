@@ -1,5 +1,10 @@
 import type { SessionMeta } from "./protocol";
 
+/** Directory the user selected when creating the session; legacy sessions fall back to cwd. */
+export function sessionDisplayDirectory(session: SessionMeta): string {
+  return session.workspace_source_path?.trim() || session.cwd;
+}
+
 /** Human-readable stable project/workspace identity for session surfaces. */
 export function sessionProjectLabel(session: SessionMeta): string | null {
   const workspaceName = session.workspace_name?.trim();

@@ -89,7 +89,7 @@ import { machineVersionPresentation, type MachineComponentUpdate } from "./machi
 import { DelayedNetworkProgress, NetworkIconButton } from "./NetworkActionFeedback";
 import { setObservabilityContext } from "./observability";
 import { Transcript } from "./Transcript";
-import { sessionProjectLabel } from "./sessionProject";
+import { sessionDisplayDirectory, sessionProjectLabel } from "./sessionProject";
 import {
     joinProviderInstallations,
     useProviderCatalog,
@@ -1034,7 +1034,7 @@ function SessionList({
                                     <ScheduleBadge meta={s} />
                                 </Stack>
                             }
-                            secondary={s.cwd}
+                            secondary={sessionDisplayDirectory(s)}
                             slotProps={{
                                 primary: { component: "div" },
                                 secondary: {

@@ -7,6 +7,13 @@ const rowStart = appSource.indexOf("const ReliableListItemButton");
 const rowEnd = appSource.indexOf("function SessionList", rowStart);
 const rowSource = appSource.slice(rowStart, rowEnd);
 
+Deno.test("session rows show the user-selected directory", () => {
+  assertEquals(
+    appSource.includes("secondary={sessionDisplayDirectory(s)}"),
+    true,
+  );
+});
+
 Deno.test("touch session rows do not retain synthetic hover or focus paint", () => {
   assertEquals(
     rowSource.includes('event.currentTarget.dataset.touchActivated = "true"'),
