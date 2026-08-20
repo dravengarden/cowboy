@@ -1601,7 +1601,6 @@ mod tests {
             status: Status::Busy,
             origin: crate::core::SessionOrigin::Api,
             agent_session_id: None,
-            auto_resume: None,
             awaiting_user: false,
             done: false,
             judging: false,

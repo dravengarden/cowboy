@@ -287,14 +287,6 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 })
                 .collect();
             let restored_count = restored.len();
-            // Seed the global settings (auto-resume default + continuation template)
-            // BEFORE restore, so restore can compute each session's effective
-            // auto-resume (override ?? default) and enqueue a continuation for the
-            // opted-in interrupted ones.
-            match store.load_settings().await {
-                Ok(entries) => hub.load_settings(entries),
-                Err(e) => tracing::warn!(error = %e, "loading settings (degrading to defaults)"),
-            }
             // Detached workers outlive this control-plane process. Keep
             // persisted Busy turns guarded until their Machine runtime has had
             // one bounded reconnect window to prove ownership; only then may a
@@ -666,20 +658,13 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // now-restored in-memory sessions. An overdue one fires immediately (catch-up).
     hub.rearm_scheduled_drafts();
 
-    // Resume interruptions already finalized before this process. Newly restored
-    // Busy turns are deliberately absent here until runtime reconciliation ends.
-    for meta in hub.session_list() {
-        revive_auto_resume_session(&hub, &supervisor, &meta.id);
-    }
-
     // Machine WebSockets can only reconnect after Axum starts listening. Keep
     // this timer independent of the request task: real worker snapshots remove
     // their sessions from the reconciliation set, while the remainder become
     // genuine interruptions after the same bounded grace used for Machine
-    // presence. Auto-resume starts only after that decision, never before it.
+    // presence. Interrupted turns stay stopped until the user submits work.
     let runtime_reconciliation_task = {
         let hub = hub.clone();
-        let supervisor = Arc::clone(&supervisor);
         let mut shutdown = shutdown_rx.clone();
         tokio::spawn(async move {
             tokio::select! {
@@ -690,9 +675,6 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                             count = interrupted.len(),
                             "runtime reconciliation grace expired without detached owners"
                         );
-                    }
-                    for session_id in interrupted {
-                        revive_auto_resume_session(&hub, &supervisor, &session_id);
                     }
                 }
                 changed = shutdown.changed() => {
@@ -1367,10 +1349,6 @@ async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyhow::Result<
         StoreWrite::UpdateJudgeRuns { session_id, runs } => {
             store.update_judge_runs(session_id, runs).await
         }
-        StoreWrite::UpdateAutoResume { session_id, value } => {
-            store.update_auto_resume(session_id, *value).await
-        }
-        StoreWrite::PutSetting { key, value } => store.put_setting(key, value).await,
         StoreWrite::UpdateMobileReviewState { session_id, value } => {
             store.update_mobile_review_state(session_id, value).await
         }
@@ -1610,28 +1588,6 @@ fn provider_fence_key_for_session(hub: &Hub, session_id: &str) -> Option<(String
         .into_iter()
         .find(|session| session.id == session_id)
         .map(|session| (session.machine_id, session.provider))
-}
-
-/// Revive one opted-in interrupted session only when it has durable work ready
-/// to drain. This is shared by startup recovery and the delayed detached-worker
-/// reconciliation path so neither requires a browser to open the session.
-fn revive_auto_resume_session(hub: &Hub, supervisor: &Supervisor, session_id: &str) {
-    if hub.status(session_id) != Some(Status::Interrupted)
-        || !hub.effective_auto_resume(session_id)
-        || hub
-            .session_info(session_id)
-            .is_none_or(|info| info.queue_count == 0)
-    {
-        return;
-    }
-    match supervisor.ensure_alive(session_id) {
-        Ok(revived) => {
-            tracing::info!(session = %session_id, revived, "auto-resume: reviving interrupted turn");
-        }
-        Err(error) => {
-            tracing::warn!(session = %session_id, %error, "auto-resume revive failed");
-        }
-    }
 }
 
 /// Build the ACP prompt blocks for a queued message: parse the stored content
@@ -7427,8 +7383,7 @@ async fn api_code_language(
         return (StatusCode::BAD_REQUEST, "invalid buffer path").into_response();
     }
     let Some((worktree, path)) = zed_language_target(&cwd, &query.path) else {
-        return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable")
-            .into_response();
+        return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable").into_response();
     };
     match zed_adapter_request_for_session(
         &state,
@@ -7485,8 +7440,7 @@ async fn api_code_hover(
         return (StatusCode::BAD_REQUEST, "invalid buffer path").into_response();
     }
     let Some((worktree, path)) = zed_language_target(&cwd, &query.path) else {
-        return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable")
-            .into_response();
+        return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable").into_response();
     };
     match zed_adapter_request_for_session(
         &state,
@@ -7535,8 +7489,7 @@ async fn api_code_navigation(
         return (StatusCode::BAD_REQUEST, "invalid buffer path").into_response();
     }
     let Some((worktree, path)) = zed_language_target(&cwd, &query.path) else {
-        return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable")
-            .into_response();
+        return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable").into_response();
     };
     match zed_adapter_request_for_session(
         &state,
@@ -7588,8 +7541,7 @@ async fn api_code_outline(
         return (StatusCode::BAD_REQUEST, "invalid buffer path").into_response();
     }
     let Some((worktree, path)) = zed_language_target(&cwd, &query.path) else {
-        return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable")
-            .into_response();
+        return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable").into_response();
     };
     match zed_adapter_request_for_session(
         &state,
@@ -7653,8 +7605,7 @@ async fn api_code_buffer_lease(
         // are deterministic lease misses, not adapter outages. Registered
         // `projects/<name>/...` files lease against that checkout so hover can
         // run rust-analyzer there.
-        return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable")
-            .into_response();
+        return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable").into_response();
     };
     if open
         && ensure_zed_worktree_for_session(&state, &session_id, &worktree)
@@ -8168,7 +8119,9 @@ fn global_bootstrap(hub: &Hub) -> Vec<Outbound> {
             sessions: hub.session_list(),
         },
         Outbound::Settings {
-            settings: hub.settings_snapshot(),
+            // Compatibility tombstone: an older cached client treats an empty
+            // settings snapshot as auto-resume disabled during rollout.
+            settings: Default::default(),
         },
         Outbound::Skills {
             skills: hub.skills_snapshot(),
@@ -8513,10 +8466,9 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
             // applies the typed mutation, version-stamps + broadcasts the patch.
             state.hub.sync_apply(&sync_state, id, &name, &args)
         }
-        Inbound::SetSessionAutoResume { session_id, value } => {
-            state.hub.set_auto_resume(&session_id, value);
-            Ok(())
-        }
+        Inbound::SetSessionAutoResume { .. }
+        | Inbound::ResumeTurn { .. }
+        | Inbound::SetSetting { .. } => Ok(()),
         Inbound::SetAwaiting {
             session_id,
             awaiting,
@@ -8528,19 +8480,10 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
             state.hub.set_paused(&session_id, paused);
             Ok(())
         }
-        Inbound::ResumeTurn { session_id } => {
-            state.supervisor.prepare_session(&session_id).map(|_| {
-                state.hub.resume_turn(&session_id);
-            })
-        }
         Inbound::RetryTurn { session_id } => {
             state.supervisor.prepare_session(&session_id).map(|_| {
                 state.hub.retry_turn(&session_id);
             })
-        }
-        Inbound::SetSetting { key, value } => {
-            state.hub.set_setting(key, value);
-            Ok(())
         }
         Inbound::SetConfigOption {
             session_id,
@@ -8601,14 +8544,10 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
                         })
             });
             if terminal_provider_error
-                || (state.hub.status(&session_id) == Some(Status::Interrupted)
-                    && !state.hub.effective_auto_resume(&session_id))
+                || state.hub.status(&session_id) == Some(Status::Interrupted)
             {
-                // Interrupted + NOT opted into auto-resume → leave it for manual
-                // recovery (the "last turn was interrupted" bar; submitting
-                // revives it). An auto-resume session falls through to
-                // ensure_alive: restore already enqueued the continuation, so
-                // reviving here drains it the moment the session is opened.
+                // Interrupted sessions remain stopped until the user submits a
+                // message or explicitly sends queued work.
                 if terminal_provider_error {
                     tracing::info!(
                         session_id = %session_id,

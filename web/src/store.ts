@@ -165,10 +165,6 @@ export interface State {
   // converges on the arbiter's `sync_patch`. Ids absent here fall back to the
   // broadcast SessionMeta.title.
   titleOverrides: Record<string, string>;
-  // Global key-value settings (auto-resume default flag + continuation template),
-  // from the `settings` broadcast. Drives the Settings UI + the per-session badge
-  // (effective auto-resume = session override ?? this default).
-  settings: Record<string, unknown>;
   // The static skill registry (prompt + extract) from the `skills` broadcast.
   skills: SkillView[];
   // Latest confirm-detect judge result per session (drives the overlay's raw-data
@@ -199,7 +195,6 @@ let state: State = {
   drafts: new Map(),
   optimisticMessages: new Map(),
   titleOverrides: {},
-  settings: {},
   skills: [],
   judgeResults: {},
   judgeRuns: {},
@@ -1088,7 +1083,7 @@ function handle(msg: Outbound): void {
       break;
     }
     case "settings": {
-      setState({ ...state, settings: msg.settings });
+      // Compatibility tombstone from controllers spanning the rollout.
       break;
     }
     case "skills": {
@@ -1715,32 +1710,6 @@ export function renameSession(sessionId: string, title: string): void {
   titleSync.mutate("rename", { session_id: sessionId, title: trimmed });
 }
 
-// --- Auto-resume interrupted turns (tasks/archive/2026/07/session-auto-resume) ---
-
-export const AUTO_RESUME_DEFAULT_KEY = "session.autoResume.default";
-export const AUTO_RESUME_TEMPLATE_KEY = "session.autoResume.template";
-/** The built-in continuation template (mirrors DEFAULT_CONTINUATION_TEMPLATE in
- *  src/core.rs) — shown in the editor when the operator hasn't customized one. */
-export const DEFAULT_CONTINUATION_TEMPLATE =
-  "[系统自动续接,非用户重新提问] 你上一轮回复在完成前被 cowboy 重启打断,系统现自动恢复该轮。请**从中断处接着完成**,不要从头重做整个任务;尤其在重新执行任何有副作用的操作(写/改文件、部署、git 提交、发网络请求等)之前,先确认它是否已经做过,避免重复执行导致循环或副作用叠加。以下是你被打断前已产出的内容:\n\n{{partial}}";
-
-/** The global auto-resume default (off unless explicitly enabled). */
-export function autoResumeDefault(s: State): boolean {
-  return s.settings[AUTO_RESUME_DEFAULT_KEY] === true;
-}
-
-/** Effective auto-resume for a session: its override, else the global default. */
-export function effectiveAutoResume(meta: SessionMeta, s: State): boolean {
-  return meta.auto_resume ?? autoResumeDefault(s);
-}
-
-/** Set one global setting. Optimistic (plain field) + send; the daemon persists
- *  + re-broadcasts, which reconciles. */
-export function setSetting(key: string, value: unknown): void {
-  setState({ ...state, settings: { ...state.settings, [key]: value } });
-  send({ type: "set_setting", key, value });
-}
-
 /** The registered skills (prompt + extract), for the Info sheet viewer. */
 export function useSkills(): SkillView[] {
   return useStoreSelector((snapshot) => snapshot.skills);
@@ -1750,13 +1719,6 @@ export function useSkills(): SkillView[] {
  *  true on (re)open — drives the turn-status pill's "Reconnecting…" state. */
 export function useConnected(): boolean {
   return useStoreSelector((snapshot) => snapshot.connected);
-}
-
-/** Set a session's auto-resume override (`null` = inherit the global default).
- *  Non-optimistic: the daemon re-broadcasts the SessionMeta within a round-trip
- *  (the override rides the raw session list, which `deriveSessions` rebuilds). */
-export function setSessionAutoResume(sessionId: string, value: boolean | null): void {
-  send({ type: "set_session_auto_resume", session_id: sessionId, value });
 }
 
 // --- Queue + drafts optimistic sync (per session) ----------------------------
@@ -2478,7 +2440,7 @@ export function resetSession(sessionId: string): Promise<void> {
 // Lift the confirm-detect "awaiting user" hold (the awaiting widget's dismiss /
 // Send). `false` = "the agent wasn't really asking" → the queue drains. Non-
 // optimistic: the daemon `broadcast_sessions()` reflects the cleared flag within
-// a round-trip (mirrors `setSessionAutoResume`).
+// a round-trip.
 export function dismissAwaiting(sessionId: string): void {
   send({ type: "set_awaiting", session_id: sessionId, awaiting: false });
 }
@@ -2514,11 +2476,6 @@ export function removeJudgeRun(sessionId: string, id: string): void {
 /** Clear a session's entire judge history. */
 export function clearJudgeRuns(sessionId: string): void {
   send({ type: "clear_judge_runs", session_id: sessionId });
-}
-
-/** Overlay "Resume": continue an interrupted turn. */
-export function resumeTurn(sessionId: string): void {
-  send({ type: "resume_turn", session_id: sessionId });
 }
 
 /** Overlay "Retry": re-run the last prompt of an errored/crashed turn. */

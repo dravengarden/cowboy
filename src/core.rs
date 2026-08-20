@@ -240,8 +240,8 @@ pub enum SessionOrigin {
     Web,
 }
 
-use crate::agent_model::{AUTO_CONTINUE_PREFIX, SCHED_PREFIX};
 pub use crate::agent_model::{Event, Status};
+use crate::agent_model::{LEGACY_AUTO_CONTINUE_PREFIX, SCHED_PREFIX};
 
 /// One event stamped with its session + monotonic `seq`. This is the unit
 /// stored in the log and streamed to clients.
@@ -256,40 +256,6 @@ pub struct Envelope {
     /// Not persisted (transient reconcile tag) and None for everything else.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cmid: Option<String>,
-}
-
-// --- Auto-resume interrupted turns (tasks/archive/2026/07/session-auto-resume) ---
-
-/// Settings key: the global default for auto-resuming interrupted turns (bool).
-const AUTO_RESUME_DEFAULT_KEY: &str = "session.autoResume.default";
-/// Settings key: the continuation-message template (string with `{{var}}` holes).
-const AUTO_RESUME_TEMPLATE_KEY: &str = "session.autoResume.template";
-/// Built-in continuation template used when the operator hasn't customized one.
-/// `{{partial}}` is the assistant output cowboy captured before the cut-off — the
-/// one source of truth the revived agent's own store lacks. It MUST self-identify
-/// as a SYSTEM auto-resume (not a fresh user request) and guard against re-running
-/// side-effectful work: a revived agent that re-does already-done steps can loop
-/// (re-deploy → another restart → resume → …) or double its side effects. The
-/// "verify before re-running" line is the best-effort idempotency guard.
-const DEFAULT_CONTINUATION_TEMPLATE: &str = "[系统自动续接,非用户重新提问] 你上一轮回复在完成前被 cowboy 重启打断,系统现自动恢复该轮。请**从中断处接着完成**,不要从头重做整个任务;尤其在重新执行任何有副作用的操作(写/改文件、部署、git 提交、发网络请求等)之前,先确认它是否已经做过,避免重复执行导致循环或副作用叠加。以下是你被打断前已产出的内容:\n\n{{partial}}";
-
-/// Empty-partial framing: the turn was cut off BEFORE producing anything, so
-/// there's nothing to "continue from" and we re-issue the original prompt. But it
-/// must STILL be framed as a system auto-retry — a bare verbatim re-send (the old
-/// behaviour) reads to the agent as a brand-new user request, so it re-runs
-/// side-effectful work (re-deploy → another restart → resume → …): the exact loop
-/// the user hit. `{{prompt}}` is the original request.
-const DEFAULT_RETRY_TEMPLATE: &str = "[系统自动续接,非用户重新提问] 你上一轮还没产出任何内容就被 cowboy 重启打断,系统现自动重试该轮。请重新处理下面这条原始请求;但在执行其中任何有副作用的操作(写/改文件、部署、git 提交、发网络请求等)之前,先确认它是否已经做过,避免重复执行导致循环或副作用叠加:\n\n{{prompt}}";
-
-/// Render a `{{var}}` template by literal substitution. Unknown vars are left
-/// verbatim (the UI flags them); a var absent from the map is simply not
-/// replaced.
-fn render_template(template: &str, vars: &[(&str, &str)]) -> String {
-    let mut out = template.to_owned();
-    for (k, v) in vars {
-        out = out.replace(&format!("{{{{{k}}}}}"), v);
-    }
-    out
 }
 
 /// Extract `(user_prompt, assistant_partial)` for the LAST turn in a session's
@@ -478,12 +444,6 @@ pub struct SessionMeta {
     /// agent assigns one, and for providers that don't support resume.
     #[serde(default)]
     pub agent_session_id: Option<String>,
-    /// Per-session OVERRIDE of the global auto-resume-interrupted-turns default.
-    /// `None` = inherit `settings['session.autoResume.default']`; `Some(true)` =
-    /// always auto-continue an interrupted turn for this session; `Some(false)` =
-    /// never (explicit opt-out). See tasks/archive/2026/07/session-auto-resume.
-    #[serde(default)]
-    pub auto_resume: Option<bool>,
     /// True when the confirm-detect skill judged the agent's last turn as
     /// "awaiting the user" (a question/confirmation). Like `editing`, it PAUSES
     /// the whole drain so the next queued message isn't auto-sent as a wrong
@@ -1014,9 +974,9 @@ pub enum Inbound {
     /// and (post-rename) in the sidebar list. Empty title is rejected at
     /// the server before this point.
     RenameSession { session_id: String, title: String },
-    /// Set a session's auto-resume OVERRIDE (`value: null` = inherit the global
-    /// default, `true`/`false` = force on/off). Persisted + re-broadcast on
-    /// `SessionMeta`. See tasks/archive/2026/07/session-auto-resume.
+    /// Compatibility tombstone for pre-removal Web clients. The command is
+    /// accepted and ignored so a stale installed PWA cannot re-enable the retired
+    /// behavior or surface a protocol error before it updates.
     SetSessionAutoResume {
         session_id: String,
         #[serde(default)]
@@ -1029,13 +989,11 @@ pub enum Inbound {
     /// User toggle: manually pause/resume the queue drain. Holds the auto-drain
     /// without interrupting the running turn (see [`Hub::set_paused`]).
     SetPaused { session_id: String, paused: bool },
-    /// Overlay action: resume an interrupted turn (inject the continuation + run).
+    /// Compatibility tombstone for the retired synthetic continuation action.
     ResumeTurn { session_id: String },
     /// Overlay action: retry an errored/crashed turn (re-run the last prompt).
     RetryTurn { session_id: String },
-    /// Set one global setting (`session.autoResume.default` flag /
-    /// `session.autoResume.template` string). Persisted + broadcast to every
-    /// surface as [`Outbound::Settings`].
+    /// Compatibility tombstone for retired auto-resume settings.
     SetSetting {
         key: String,
         value: serde_json::Value,
@@ -1282,10 +1240,8 @@ pub enum Outbound {
         #[serde(default)]
         resync: bool,
     },
-    /// The global key-value settings (auto-resume default flag + continuation
-    /// template). Sent on connect and re-broadcast whenever an edit lands, so
-    /// every surface renders the same Settings UI + computes the same effective
-    /// auto-resume.
+    /// Compatibility tombstone for cached clients from before automatic resume
+    /// was retired. New clients ignore this empty snapshot.
     Settings {
         settings: std::collections::HashMap<String, serde_json::Value>,
     },
@@ -1403,22 +1359,12 @@ pub enum StoreWrite {
     UpdateSessionOrder {
         order: Vec<String>,
     },
-    /// Persist a session's auto-resume OVERRIDE (`None` = inherit global default).
-    UpdateAutoResume {
-        session_id: String,
-        value: Option<bool>,
-    },
     /// Persist a session's confirm-detect judge-run history (whole list, as JSONB
     /// — migration 0009). Written on every add / delete / clear, like
     /// [`StoreWrite::UpdatePending`].
     UpdateJudgeRuns {
         session_id: String,
         runs: Vec<JudgeRun>,
-    },
-    /// Upsert one global setting (auto-resume default flag / continuation template).
-    PutSetting {
-        key: String,
-        value: serde_json::Value,
     },
     /// Persist one session's Mobile-only code-review workspace state.
     UpdateMobileReviewState {
@@ -1634,10 +1580,6 @@ struct HubInner {
     /// transcript sequence. Wall-clock milliseconds make ids restart-safe;
     /// this counter disambiguates multiple errors in the same millisecond.
     next_error_id: AtomicU64,
-    /// Global key-value settings (auto-resume default flag + continuation
-    /// template), mirrored from the `settings` table on restore. Authoritative
-    /// in-memory; every edit also write-behinds via `StoreWrite::PutSetting`.
-    settings: Mutex<HashMap<String, serde_json::Value>>,
 }
 
 fn set_config_option_current_value(
@@ -1700,7 +1642,6 @@ impl Hub {
                 sync: Mutex::new(HashMap::new()),
                 next_qid: AtomicU64::new(1),
                 next_error_id: AtomicU64::new(1),
-                settings: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -1861,8 +1802,8 @@ impl Hub {
     /// Restore persisted sessions while reconciling detached runtime workers.
     /// A persisted `Busy` row is interrupted only when no matching live worker
     /// exists. This prevents a control-plane deploy from generating a false
-    /// interruption marker and duplicate auto-resume while the original ACP
-    /// prompt is still running in its detached worker.
+    /// interruption marker while the original ACP prompt is still running in
+    /// its detached worker.
     #[cfg(test)]
     fn restore_with_workers(&self, sessions: Vec<RestoredSession>, workers: &[WorkerSnapshot]) {
         self.restore_impl(sessions, workers, false);
@@ -1899,8 +1840,10 @@ impl Hub {
         // Collected under the lock, marked after it's released — `push` below
         // re-locks `sessions`, so holding the lock here would deadlock.
         let mut interrupted: Vec<String> = Vec::new();
-        // Sessions whose ids we HEALED (re-id'd a duplicate) → persist after.
-        let mut reid_dirty: Vec<String> = Vec::new();
+        // Sessions whose pending lists changed during compatibility repair →
+        // persist after restore. This includes duplicate-id healing and removal
+        // of retired synthetic continuations left by an older controller.
+        let mut pending_dirty: Vec<String> = Vec::new();
         // Ids already seen across ALL sessions — ids must be globally unique so a
         // later cross-session move can't collide. The first occurrence keeps its
         // id; a duplicate (corruption from the old counter-reset bug) gets a fresh
@@ -1925,6 +1868,22 @@ impl Hub {
                     mobile_review_state,
                 } = r;
                 let mut healed = false;
+                let queue_len = queue.len();
+                let drafts_len = drafts.len();
+                queue.retain(|message| {
+                    !message
+                        .cmid
+                        .as_deref()
+                        .is_some_and(|cmid| cmid.starts_with(LEGACY_AUTO_CONTINUE_PREFIX))
+                });
+                drafts.retain(|message| {
+                    !message
+                        .cmid
+                        .as_deref()
+                        .is_some_and(|cmid| cmid.starts_with(LEGACY_AUTO_CONTINUE_PREFIX))
+                });
+                let removed_legacy_continuation =
+                    queue.len() != queue_len || drafts.len() != drafts_len;
                 for m in queue.iter_mut().chain(drafts.iter_mut()) {
                     if !seen.insert(m.id.clone()) {
                         m.id = self.next_qid();
@@ -1970,8 +1929,8 @@ impl Hub {
                         interrupted.push(id.clone());
                     }
                 }
-                if healed {
-                    reid_dirty.push(id.clone());
+                if healed || removed_legacy_continuation {
+                    pending_dirty.push(id.clone());
                 }
                 let mut log_bytes = log.iter().fold(0usize, |size, envelope| {
                     size.saturating_add(estimated_envelope_bytes(envelope))
@@ -2019,9 +1978,9 @@ impl Hub {
         for id in interrupted {
             self.record_restart_interruption(&id);
         }
-        // Persist any session whose duplicate ids we healed, so the corrected
-        // (unique-id) lists reach the DB + every client.
-        for id in reid_dirty {
+        // Persist repaired pending lists so a retired continuation cannot return
+        // after another restart and healed ids remain globally unique.
+        for id in pending_dirty {
             self.emit_pending(&id);
         }
     }
@@ -2057,7 +2016,7 @@ impl Hub {
 
     /// Finalize persisted Busy sessions whose detached owner did not reconnect
     /// within the server's bounded grace period. Returns exactly the sessions
-    /// newly marked Interrupted so the server can revive opted-in continuations.
+    /// newly marked Interrupted for observability.
     pub fn finalize_runtime_reconciliation(&self) -> Vec<String> {
         let pending = std::mem::take(&mut *self.inner.runtime_reconciliation.lock());
         let interrupted: Vec<String> = pending
@@ -2076,12 +2035,6 @@ impl Hub {
             Status::Interrupted,
             Some("turn cut off by a cowboy restart — it never finished".to_owned()),
         );
-        // Auto-resume (opted in, globally or per-session): enqueue a
-        // continuation built from the cut-off turn's partial output. It stays
-        // queued behind the Interrupted marker until the server revives it.
-        if self.effective_auto_resume(session_id) {
-            self.enqueue_continuation(session_id);
-        }
     }
 
     /// Subscribe to the live event stream.
@@ -2384,7 +2337,6 @@ impl Hub {
             status: Status::Starting,
             origin,
             agent_session_id: None,
-            auto_resume: None, // inherit the global default until overridden
             awaiting_user: false,
             done: false,
             judging: false,
@@ -2490,59 +2442,6 @@ impl Hub {
             });
         }
         self.broadcast_sessions();
-    }
-
-    /// Set a session's auto-resume OVERRIDE (`None` = inherit the global
-    /// default). Updates the typed truth (`SessionMeta.auto_resume`), persists,
-    /// and re-broadcasts the session list — the override rides on `SessionMeta`,
-    /// so the client recomputes its badge from `override ?? global default`.
-    /// Mirror of [`Self::rename_session`].
-    pub fn set_auto_resume(&self, session_id: &str, value: Option<bool>) {
-        {
-            let mut sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get_mut(session_id) else {
-                return;
-            };
-            s.meta.auto_resume = value;
-        }
-        if let Some(tx) = self.inner.store_tx.as_ref() {
-            let _ = tx.send(StoreWrite::UpdateAutoResume {
-                session_id: session_id.to_owned(),
-                value,
-            });
-        }
-        self.broadcast_sessions();
-    }
-
-    /// Snapshot of all global settings — for the connect-time push.
-    #[must_use]
-    pub fn settings_snapshot(&self) -> HashMap<String, serde_json::Value> {
-        self.inner.settings.lock().clone()
-    }
-
-    /// Set one global setting (auto-resume default / continuation template),
-    /// persist it, and broadcast the new full map to every connected surface.
-    pub fn set_setting(&self, key: String, value: serde_json::Value) {
-        let snapshot = {
-            let mut s = self.inner.settings.lock();
-            s.insert(key.clone(), value.clone());
-            s.clone()
-        };
-        if let Some(tx) = self.inner.store_tx.as_ref() {
-            let _ = tx.send(StoreWrite::PutSetting { key, value });
-        }
-        let _ = self
-            .inner
-            .tx
-            .send(Outbound::Settings { settings: snapshot });
-    }
-
-    /// Seed the in-memory settings map from the persisted table (restore only).
-    pub fn load_settings(&self, entries: Vec<(String, serde_json::Value)>) {
-        let mut s = self.inner.settings.lock();
-        for (k, v) in entries {
-            s.insert(k, v);
-        }
     }
 
     /// Snapshot the static skill registry into owned wire views (Info sheet).
@@ -2921,121 +2820,6 @@ impl Hub {
             .lock()
             .get(session_id)
             .map_or_else(Vec::new, |s| s.judge_runs.clone())
-    }
-
-    /// The global default for auto-resuming interrupted turns (off when unset).
-    #[must_use]
-    pub fn auto_resume_default(&self) -> bool {
-        self.inner
-            .settings
-            .lock()
-            .get(AUTO_RESUME_DEFAULT_KEY)
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false)
-    }
-
-    /// Effective auto-resume for a session: its override, else the global
-    /// default. `false` for an unknown session.
-    #[must_use]
-    pub fn effective_auto_resume(&self, session_id: &str) -> bool {
-        let over = self
-            .inner
-            .sessions
-            .lock()
-            .get(session_id)
-            .map(|s| s.meta.auto_resume);
-        match over {
-            Some(Some(v)) => v,                       // explicit per-session override
-            Some(None) => self.auto_resume_default(), // inherit
-            None => false,                            // unknown session
-        }
-    }
-
-    /// The continuation-message template (the customizable string with `{{var}}`
-    /// holes), falling back to the built-in default.
-    fn continuation_template(&self) -> String {
-        self.inner
-            .settings
-            .lock()
-            .get(AUTO_RESUME_TEMPLATE_KEY)
-            .and_then(|v| v.as_str())
-            .map_or_else(|| DEFAULT_CONTINUATION_TEMPLATE.to_owned(), str::to_owned)
-    }
-
-    /// Build the continuation prompt for an interrupted turn (template rendered
-    /// with the turn's partial output / original prompt / cwd) and ENQUEUE it, so
-    /// it auto-drains the moment the agent revives (via `session/load`). No-op if
-    /// the last turn left nothing to continue. The continuation is a fresh turn
-    /// carrying cowboy's partial output (the agent's own store is unreliable after
-    /// a mid-turn crash); the template tells it to continue, not redo.
-    fn enqueue_continuation(&self, session_id: &str) {
-        // Read the template before taking the sessions lock (avoid nesting the
-        // settings lock under it).
-        let template = self.continuation_template();
-        {
-            let mut sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get_mut(session_id) else {
-                return;
-            };
-            // RUNAWAY GUARD: never stack a second auto-continuation. A session
-            // interrupted across several restarts while never opened (so the
-            // continuation never drains) must not accrue a pile of them — the
-            // bound that keeps "continue" from running away.
-            if s.queue.iter().any(|m| {
-                m.cmid
-                    .as_deref()
-                    .is_some_and(|c| c.starts_with(AUTO_CONTINUE_PREFIX))
-            }) {
-                return;
-            }
-            let (prompt, partial) = last_turn_texts(&s.log);
-            // EMPTY-RESULT case: the turn was cut off before producing anything, so
-            // there's nothing to "continue from" — re-issue the ORIGINAL prompt, but
-            // WRAPPED in the auto-retry framing (NOT verbatim: a bare re-send reads
-            // as a fresh user request → the agent re-runs side effects → loop). A
-            // "here's what you produced: <nothing>" message would be nonsense, hence
-            // the separate retry template. Nothing at all (no prompt either) → don't
-            // enqueue, so a content-less interruption can't seed a continue.
-            let text = if partial.trim().is_empty() {
-                if prompt.trim().is_empty() {
-                    return;
-                }
-                render_template(
-                    DEFAULT_RETRY_TEMPLATE,
-                    &[("prompt", &prompt), ("cwd", &s.meta.cwd)],
-                )
-            } else {
-                render_template(
-                    &template,
-                    &[
-                        ("partial", &partial),
-                        ("prompt", &prompt),
-                        ("cwd", &s.meta.cwd),
-                    ],
-                )
-            };
-            let id = self.next_qid();
-            let cmid = format!("{AUTO_CONTINUE_PREFIX}{id}");
-            // FRONT of the queue: the interrupted turn was running BEFORE anything
-            // queued behind it, so its continuation must run first (the queue was
-            // *waiting on* that turn), not after the backlog.
-            s.queue.insert(
-                0,
-                QueuedMessage {
-                    id,
-                    text,
-                    content: Vec::new(),
-                    cmid: Some(cmid),
-                    schedule: None,
-                },
-            );
-            // A continuation is the system telling the agent to finish its OWN work
-            // — never an answer to a question — so it must not sit behind a stale
-            // confirm-detect hold. (The death-edge clear above usually handles this;
-            // this is the belt-and-braces for any path that enqueues without one.)
-            s.meta.awaiting_user = false;
-        }
-        self.emit_pending(session_id);
     }
 
     // --- Generic optimistic-sync channel (@shared-utils/sync arbiter) --------
@@ -3670,9 +3454,8 @@ impl Hub {
             }
             // A turn that died/was cut off is NOT "awaiting your reply" — the agent
             // didn't ask a question, it got interrupted. Clear the confirm-detect
-            // hold so it doesn't block the auto-resume continuation (which inserts
-            // at the queue FRONT and must drain to revive the turn). The judge only
-            // runs on a clean Busy→Running end, so these death edges need the
+            // hold so the next user-authored queued message can drain. The judge
+            // only runs on a clean Busy→Running end, so these death edges need the
             // explicit clear.
             if matches!(
                 status,
@@ -4475,14 +4258,6 @@ impl Hub {
         self.drain_head(session_id, true, true);
     }
 
-    /// Overlay "Resume" for an interrupted turn: inject the auto-resume
-    /// continuation and drain it now (manual → revives + bypasses holds). A no-op
-    /// if there's nothing to continue from.
-    pub fn resume_turn(&self, session_id: &str) {
-        self.enqueue_continuation(session_id);
-        self.drain_head(session_id, true, true);
-    }
-
     /// Overlay "Retry" for an errored/crashed turn: re-run the last user prompt
     /// (reviving the session). No-op if there's no prior prompt.
     pub fn retry_turn(&self, session_id: &str) {
@@ -4535,7 +4310,7 @@ impl Hub {
         // ready; with messages already queued — or a crashed/exited session — it
         // just parks the prompt at the queue FRONT and emits pending. That left
         // Retry looking like "added to the top of the queue, now send it yourself".
-        // Drain the head WITH revive (the same path resume_turn uses) so Retry runs
+        // Drain the head WITH revive so Retry runs
         // the prompt immediately, reviving a dead session — no manual send. Safe
         // after a direct dispatch too: force_submit set `in_flight`, so `ready`
         // returns false and this drain no-ops (no double send).
@@ -5308,7 +5083,6 @@ mod runtime_reconciliation_tests {
                 status: Status::Busy,
                 origin: SessionOrigin::Web,
                 agent_session_id: Some("agent-1".to_owned()),
-                auto_resume: Some(false),
                 awaiting_user: false,
                 done: false,
                 judging: false,
@@ -5352,6 +5126,16 @@ mod runtime_reconciliation_tests {
         }
     }
 
+    fn pending(id: &str, text: &str, cmid: &str) -> QueuedMessage {
+        QueuedMessage {
+            id: id.to_owned(),
+            text: text.to_owned(),
+            content: Vec::new(),
+            cmid: Some(cmid.to_owned()),
+            schedule: None,
+        }
+    }
+
     #[test]
     fn placeholder_cannot_settle_restored_busy_turn() {
         let hub = Hub::new();
@@ -5388,6 +5172,31 @@ mod runtime_reconciliation_tests {
         );
 
         assert_eq!(hub.status("session-3"), Some(Status::Interrupted));
+    }
+
+    #[test]
+    fn restore_discards_retired_continuations_but_keeps_user_work() {
+        let hub = Hub::new();
+        let mut restored = restored_busy("session-4");
+        restored.queue = vec![
+            pending("q1", "legacy queue continuation", "__cont__old"),
+            pending("q2", "user queued message", "user-cmid"),
+        ];
+        restored.drafts = vec![
+            pending("q3", "legacy draft continuation", "__cont__draft"),
+            pending("q4", "user draft", "draft-cmid"),
+        ];
+
+        hub.restore_with_workers(vec![restored], &[]);
+
+        assert_eq!(hub.status("session-4"), Some(Status::Interrupted));
+        let Some(Outbound::SyncPatch { value, .. }) = hub.queue_resync("session-4") else {
+            panic!("queue resync missing");
+        };
+        assert_eq!(value["queue"].as_array().unwrap().len(), 1);
+        assert_eq!(value["queue"][0]["text"], "user queued message");
+        assert_eq!(value["drafts"].as_array().unwrap().len(), 1);
+        assert_eq!(value["drafts"][0]["text"], "user draft");
     }
 }
 

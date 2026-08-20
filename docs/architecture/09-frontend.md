@@ -113,8 +113,9 @@ User-role rows are not all human. `derive` attaches a `promptOrigin` (`human` /
 `cowboy` / `agent`) from the persisted update, or recovers it from the older
 `autoResumed` flag, `<system-reminder>` markup, and Grok Build design-review
 writer follow-ups (`/tmp/grok-…`, `review_file`). Only `actor: human` uses the
-right-aligned primary bubble and starts an Explore question page. Cowboy
-auto-resume and schedule notes stay on the human rail as muted cards. Agent
+right-aligned primary bubble and starts an Explore question page. Historical
+Cowboy continuation notes and current schedule notes stay on the human rail as
+muted cards. Agent
 runtime injections sit on the agent rail: left-aligned, with the provider mark
 (the Grok / xAI logo for Grok) and a short sender label, never a human bubble.
 Grok review follow-ups collapse to "Addressing review findings" with Details.

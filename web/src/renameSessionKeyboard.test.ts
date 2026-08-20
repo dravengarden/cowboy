@@ -36,7 +36,7 @@ Deno.test("session rename focuses its real input inside the initiating tap", () 
   );
   const renameOpener = appSource.slice(
     renameOpenerStart,
-    appSource.indexOf("autoResumeDefault=", renameOpenerStart),
+    appSource.indexOf("loaded={sessionsLoaded}", renameOpenerStart),
   );
   assertEquals(renameOpener.includes("claimKeyboard()"), false);
   assertEquals(renameOpener.includes("setTimeout"), false);

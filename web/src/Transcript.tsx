@@ -1463,7 +1463,7 @@ function MessageBubble({
       )}
     </Box>
   ));
-  // Non-human user-role prompts (Cowboy auto-resume/schedule, agent runtime)
+  // Non-human user-role prompts (historical Cowboy continuation/schedule, agent runtime)
   // stay on the timeline but never use the primary-filled human bubble.
   if (mine && origin && !human) {
     return (

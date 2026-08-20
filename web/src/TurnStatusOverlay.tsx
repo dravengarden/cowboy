@@ -6,7 +6,6 @@ import ExpandMoreRounded from "@mui/icons-material/ExpandMoreRounded";
 import type { Status } from "./protocol";
 import {
   dismissAwaiting,
-  resumeTurn,
   setPaused,
   useJudgeResult,
 } from "./store";
@@ -123,11 +122,9 @@ export function TurnStatusOverlay({
       icon: <ArrowUpwardRounded sx={{ fontSize: 18 }} />,
       onClick: () => dismissAwaiting(sessionId),
     };
-  } else if (kind === "interrupted") {
-    action = { label: "Resume", onClick: () => resumeTurn(sessionId) };
   } else if (kind === "paused") {
     // Release the manual queue pause — the queue drain picks back up (waiting for
-    // any in-flight turn to end first). Mirrors the interrupted "Resume".
+    // any in-flight turn to end first).
     action = { label: "Resume", onClick: () => setPaused(sessionId, false) };
   }
   // Symmetric padding (centred text) when there's no trailing control; otherwise

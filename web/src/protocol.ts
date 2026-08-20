@@ -52,10 +52,6 @@ export interface SessionMeta {
   /** True for a machine-driven, view-only system session: the UI hides its
    *  composer and shows a "System" badge. Persisted. */
   system?: boolean;
-  /** Per-session auto-resume OVERRIDE: `null`/absent = inherit the global
-   *  default (`settings['session.autoResume.default']`); `true`/`false` = force.
-   *  Effective = override ?? default (see store `effectiveAutoResume`). */
-  auto_resume?: boolean | null;
   /** True when the confirm-detect skill judged the agent's last turn as awaiting
    *  the user (a question/confirmation): the queue is held and the awaiting
    *  widget shows. Transient (never persisted) — resets to false on restart. */
@@ -231,8 +227,8 @@ export type Outbound =
   // state's sync client. See store.ts `sync_patch`. (Queue + drafts flow here as
   // state "queue:<session_id>" — no dedicated `queues` message anymore.)
   | { type: "sync_patch"; state: string; version: number; value: unknown; confirmed: string[]; resync?: boolean }
-  // Global key-value settings (auto-resume default flag + continuation template).
-  // Sent on connect + re-broadcast on every edit. See store.ts `settings`.
+  // Compatibility tombstone for clients cached before automatic resume was
+  // retired. Current clients ignore the empty snapshot.
   | { type: "settings"; settings: Record<string, unknown> }
   // The static skill registry (prompt + extract), sent once on connect.
   | { type: "skills"; skills: SkillView[] }
@@ -393,16 +389,20 @@ export type Inbound =
   // Inspector widget: delete one judge run from a session's history, or clear all.
   | { type: "remove_judge_run"; session_id: string; id: string }
   | { type: "clear_judge_runs"; session_id: string }
-  // Auto-resume (tasks/archive/2026/07/session-auto-resume): per-session override
-  // (`value: null` = inherit the global default) + a global setting upsert.
-  | { type: "set_session_auto_resume"; session_id: string; value: boolean | null }
   // Confirm-detect: clear/set the "awaiting user" hold (the awaiting widget's
   // dismiss / Send). `awaiting: false` = "not a question" → drain the held queue.
   | { type: "set_awaiting"; session_id: string; awaiting: boolean }
   | { type: "set_paused"; session_id: string; paused: boolean }
-  // Overlay actions for interrupted / errored turns.
-  | { type: "resume_turn"; session_id: string }
+  // Overlay action for errored turns.
   | { type: "retry_turn"; session_id: string }
+  // Deprecated rollout tombstones. Current clients never send these; current
+  // controllers accept them as no-ops for stale service-worker clients.
+  | {
+    type: "set_session_auto_resume";
+    session_id: string;
+    value: boolean | null;
+  }
+  | { type: "resume_turn"; session_id: string }
   | { type: "set_setting"; key: string; value: unknown };
 
 // End of Inbound wire union.

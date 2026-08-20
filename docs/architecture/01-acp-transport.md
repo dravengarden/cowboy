@@ -120,12 +120,12 @@ sent it.
 | `actor` | Known `source` values | Who sent it |
 |---|---|---|
 | `human` | `composer` | The person typed or attached it |
-| `cowboy` | `auto-resume`, `schedule` | Cowboy issued the prompt (`__cont__`, `__wake__`, `__sched__`) |
+| `cowboy` | `auto-resume` (historical), `schedule` | Cowboy issued the prompt (`__cont__`, `__wake__`, `__sched__`) |
 | `agent` | `runtime`, `review` | The agent runtime injected it (a Grok `<system-reminder>`, or Grok Build's design-review writer follow-up) |
 
 New senders add a `source` string under one of those three actors. They do not
-invent a fourth actor. Cowboy still writes `autoResumed: true` on non-human
-echoes so older clients keep the muted-note path.
+invent a fourth actor. Historical continuation echoes retain `autoResumed: true`
+so old transcripts keep the muted-note path.
 
 Inbound ACP `user_message_chunk` events from the agent are classified the same
 way. A Grok background-task reminder is stamped `actor: agent`,
@@ -137,9 +137,10 @@ echoed that prompt (with `promptOrigin`), so the inbound copy is dropped.
 `derive` hides the same replay in already-persisted logs: a `lifecycle: busy`
 between the two copies would otherwise become a second user bubble.
 
-**Auto-resume tagging:** a `cmid` starting with the `__cont__` prefix is
-`cowboy` / `auto-resume`. The UI renders it as a resumed-turn note rather than a
-user bubble.
+**Historical continuation tagging:** a persisted `cmid` starting with the
+retired `__cont__` prefix is `cowboy` / `auto-resume`. The UI renders it as a
+resumed-turn note rather than a user bubble; Cowboy no longer creates these
+prompts.
 
 ## Turn liveness: manual recovery, no auto-kill
 

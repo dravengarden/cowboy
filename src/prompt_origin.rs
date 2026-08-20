@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::agent_model::{AUTO_CONTINUE_PREFIX, SCHED_PREFIX, WAKEUP_PREFIX};
+use crate::agent_model::{LEGACY_AUTO_CONTINUE_PREFIX, SCHED_PREFIX, WAKEUP_PREFIX};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -57,7 +57,7 @@ impl PromptOrigin {
 
 pub fn origin_from_cmid(cmid: Option<&str>) -> PromptOrigin {
     match cmid {
-        Some(value) if value.starts_with(AUTO_CONTINUE_PREFIX) => {
+        Some(value) if value.starts_with(LEGACY_AUTO_CONTINUE_PREFIX) => {
             PromptOrigin::cowboy("auto-resume")
         }
         Some(value) if value.starts_with(WAKEUP_PREFIX) || value.starts_with(SCHED_PREFIX) => {

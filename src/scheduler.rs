@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use tokio::sync::mpsc;
 
 /// Marks a fired-wakeup prompt's echo so the UI can render it as a "↻ scheduled
-/// wakeup" note rather than a user bubble (mirrors `AUTO_CONTINUE_PREFIX`).
+/// wakeup" note rather than a user bubble.
 pub use crate::agent_model::WAKEUP_PREFIX;
 use crate::core::Hub;
 

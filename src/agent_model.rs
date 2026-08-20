@@ -61,7 +61,8 @@ pub enum Event {
     },
 }
 
-/// Optimistic-message markers interpreted by the ACP echo boundary.
-pub(crate) const AUTO_CONTINUE_PREFIX: &str = "__cont__";
+/// Retired synthetic-continuation marker. Kept only to classify historical
+/// events and purge queued rows written by older controllers.
+pub(crate) const LEGACY_AUTO_CONTINUE_PREFIX: &str = "__cont__";
 pub(crate) const SCHED_PREFIX: &str = "__sched__";
 pub const WAKEUP_PREFIX: &str = "__wake__";

@@ -52,7 +52,6 @@ import type { SxProps, Theme } from "@mui/material";
 import {
     Add,
     ArrowBackIosNew,
-    Bolt,
     Check as CheckIcon,
     ChevronRight,
     Circle,
@@ -109,9 +108,6 @@ import {
 } from "./protocol";
 import { currentConfigOptionName, providerConfigOptions } from "./providerConfigOptions";
 import {
-    AUTO_RESUME_DEFAULT_KEY,
-    AUTO_RESUME_TEMPLATE_KEY,
-    DEFAULT_CONTINUATION_TEMPLATE,
     holdStorePresentation,
     markSessionHydrated,
     notify,
@@ -120,8 +116,6 @@ import {
     releaseInactiveHistory,
     reorderSessions,
     send,
-    setSessionAutoResume,
-    setSetting,
     useStoreSelector,
 } from "./store";
 import { useSortable } from "./useSortable";
@@ -414,44 +408,10 @@ function StatusDot({
     );
 }
 
-// Auto-resume indicator (tasks/archive/2026/07/session-auto-resume). Shown whenever the
-// session's EFFECTIVE auto-resume is on — override if set, else the global
-// default — so turning the global default on marks every inherited session too.
-// Effective-off (incl. an explicit opt-out) shows nothing. While a session is
-// actually mid-resume (Interrupted + on), a spinner replaces the glyph. Orthogonal
-// to StatusDot (what the session IS now); this says what happens after a restart.
-function AutoResumeBadge({
-    meta,
-    defaultOn,
-}: {
-    meta: SessionMeta;
-    defaultOn: boolean;
-}): React.JSX.Element | null {
-    const effective = meta.auto_resume ?? defaultOn;
-    if (!effective) return null;
-    if (meta.status === "interrupted") {
-        return (
-            <Tooltip title="Auto-resume: continuing the interrupted turn…" enterDelay={300}>
-                <CircularProgress
-                    size={13}
-                    thickness={6}
-                    disableShrink
-                    sx={{ flexShrink: 0, color: "warning.main" }}
-                />
-            </Tooltip>
-        );
-    }
-    return (
-        <Tooltip title="Auto-resume on" enterDelay={300}>
-            <Bolt sx={{ fontSize: 16, flexShrink: 0, color: "info.main" }} />
-        </Tooltip>
-    );
-}
-
 // Scheduled-draft indicator: shown when a session has ≥1 draft with a future
 // fire time (`next_schedule_ms` = the soonest). A calm clock glyph in info blue
 // (a pending schedule is a notice, not a status/failure — conventions/ui.md §4),
-// orthogonal to StatusDot, mirroring AutoResumeBadge. Tooltip spells out when.
+// orthogonal to StatusDot. Tooltip spells out when.
 function ScheduleBadge({ meta }: { meta: SessionMeta }): React.JSX.Element | null {
     const ms = meta.next_schedule_ms;
     if (ms === undefined) return null;
@@ -580,7 +540,6 @@ function SessionList({
     onRequestInfo,
     onRequestReload,
     onRequestRename,
-    autoResumeDefault,
     loaded,
     desktop,
     mobileDrawer = false,
@@ -598,7 +557,6 @@ function SessionList({
     onRequestInfo: (s: SessionMeta) => void;
     onRequestReload: (s: SessionMeta) => void;
     onRequestRename: (s: SessionMeta) => void;
-    autoResumeDefault: boolean;
     // True once the first session list has arrived over the WS. Until then the
     // list is genuinely UNKNOWN (not "empty") — distinguishing the two avoids the
     // false "No sessions yet." flash on a reload before the snapshot lands.
@@ -1040,7 +998,6 @@ function SessionList({
                                         />
                                     )}
                                     <SessionProjectionBadge sessionId={s.id} />
-                                    <AutoResumeBadge meta={s} defaultOn={autoResumeDefault} />
                                     <ScheduleBadge meta={s} />
                                 </Stack>
                             }
@@ -1232,34 +1189,6 @@ function SessionList({
                     );
                 })}
                 <Divider />
-                <ListSubheader sx={{ lineHeight: "32px", bgcolor: "transparent" }}>
-                    Auto-resume
-                </ListSubheader>
-                {(
-                    [
-                        { v: null, label: `Default (${autoResumeDefault ? "on" : "off"})` },
-                        { v: true, label: "On" },
-                        { v: false, label: "Off" },
-                    ] as const
-                ).map((opt) => {
-                    const current = (menuAnchor?.row.auto_resume ?? null) === opt.v;
-                    return (
-                        <MenuItem
-                            key={String(opt.v)}
-                            selected={current}
-                            onClick={(): void => {
-                                if (menuAnchor) setSessionAutoResume(menuAnchor.row.id, opt.v);
-                                setMenuAnchor(null);
-                            }}
-                        >
-                            <ListItemIcon>
-                                {current ? <CheckIcon fontSize="medium" /> : null}
-                            </ListItemIcon>
-                            <ListItemText primary={opt.label} />
-                        </MenuItem>
-                    );
-                })}
-                <Divider />
                 <MenuItem
                     onClick={(): void => {
                         if (menuAnchor) onRequestDelete(menuAnchor.row);
@@ -1349,15 +1278,6 @@ function SessionList({
                             ] as const).map((opt) => {
                                 const current = menuProjection === opt.v;
                                 return <Button data-session-shortcut={opt.shortcut.toLowerCase()} key={opt.v} fullWidth startIcon={current ? <CheckIcon /> : <Box sx={{ width: 24 }} />} onClick={(): void => setMenuProjection(opt.v)} sx={{ justifyContent: "flex-start" }}>
-                                    <Box component="span" sx={{ flex: 1, textAlign: "left" }}>{opt.label}</Box>
-                                    <Kbd keys={opt.shortcut} />
-                                </Button>;
-                            })}
-                            <Divider sx={{ my: 0.5 }} />
-                            <Typography variant="overline" color="text.secondary" sx={{ px: 1 }}>Auto-resume</Typography>
-                            {([ { v: null, label: `Default (${autoResumeDefault ? "on" : "off"})`, shortcut: "D" }, { v: true, label: "On", shortcut: "O" }, { v: false, label: "Off", shortcut: "F" } ] as const).map((opt) => {
-                                const current = (menuAnchor?.row.auto_resume ?? null) === opt.v;
-                                return <Button data-session-shortcut={opt.shortcut.toLowerCase()} key={String(opt.v)} fullWidth startIcon={current ? <CheckIcon /> : <Box sx={{ width: 24 }} />} onClick={(): void => { if (menuAnchor) setSessionAutoResume(menuAnchor.row.id, opt.v); setMenuAnchor(null); }} sx={{ justifyContent: "flex-start" }}>
                                     <Box component="span" sx={{ flex: 1, textAlign: "left" }}>{opt.label}</Box>
                                     <Kbd keys={opt.shortcut} />
                                 </Button>;
@@ -2012,8 +1932,6 @@ export function App({
     const sessions = useStoreSelector((snapshot) => snapshot.sessions);
     const lastError = useStoreSelector((snapshot) => snapshot.lastError);
     const sessionsLoaded = useStoreSelector((snapshot) => snapshot.sessionsLoaded);
-    const settings = useStoreSelector((snapshot) => snapshot.settings);
-    const autoResumeDefaultOn = settings[AUTO_RESUME_DEFAULT_KEY] === true;
     // The error notice is monotonically `seq`-stamped so the same message
     // text triggers the snackbar twice if it happens again. Tracking the
     // `seq` we've shown means we don't re-open after the user dismisses.
@@ -2518,7 +2436,6 @@ export function App({
                 // or post-gesture focus is needed.
                 flushSync(() => setPendingRename(s));
             }}
-            autoResumeDefault={autoResumeDefaultOn}
             loaded={sessionsLoaded}
             desktop={surface === "desktop"}
             mobileDrawer={mobile}
@@ -3926,19 +3843,6 @@ export function App({
 // other app's settings + the portal's launcher. Touch is a preference list;
 // the root page has no in-flow title because the sheet handle already marks
 // the surface and the floating footer dismisses it.
-// Sample values for the continuation-template live preview, so the preview works
-// even with no real interruption on hand (the "示例数据" source).
-const AUTO_RESUME_SAMPLE: Record<string, string> = {
-    partial: "好的,我来重构鉴权模块。先抽出 token 校验:\n\n```ts\nexport function verifyToken(",
-    prompt: "重构 auth 模块,把 token 校验抽成独立函数",
-    cwd: "/home/draven/proj",
-};
-function interpolateTemplate(template: string, vars: Record<string, string>): string {
-    // Mirror src/core.rs render_template: replace {{var}}; unknown vars stay
-    // verbatim (so a typo is visible in the preview, not silently dropped).
-    return template.replace(/\{\{(\w+)\}\}/g, (m, k: string) => vars[k] ?? m);
-}
-
 function DesktopSettingsChoice({
     active,
     children,
@@ -4241,8 +4145,6 @@ function DesktopSettingsContent({
     const composerDebug = useComposerDebugSetting();
     const reading = useReadingSettings();
     const selectedFont = getFontPreset(reading.fontVariant);
-    const settings = useStoreSelector((snapshot) => snapshot.settings);
-    const autoResume = settings[AUTO_RESUME_DEFAULT_KEY] === true;
     return (
         <Box
             sx={{
@@ -4326,136 +4228,12 @@ function DesktopSettingsContent({
                     <DesktopSettingsRow shortcut="M" shortcutAvailable={shortcutsAvailable} label="Vim keybindings" description="Modal editing in the composer">
                         <DesktopSettingsChoice active={vim} onClick={() => setVimSetting(!vim)} ariaLabel="Toggle Vim keybindings">{vim ? "On" : "Off"}</DesktopSettingsChoice>
                     </DesktopSettingsRow>
-                    <DesktopSettingsRow shortcut="A" shortcutAvailable={shortcutsAvailable} label="Auto-resume" description="Continue interrupted turns after restart">
-                        <DesktopSettingsChoice active={autoResume} onClick={() => setSetting(AUTO_RESUME_DEFAULT_KEY, !autoResume)} ariaLabel="Toggle automatic turn resume">{autoResume ? "On" : "Off"}</DesktopSettingsChoice>
-                    </DesktopSettingsRow>
                     <DesktopSettingsRow shortcut="D" shortcutAvailable={shortcutsAvailable} label="Debug mode" description="Verbose composer input logs for agents">
                         <DesktopSettingsChoice active={composerDebug} onClick={() => { const next = !composerDebug; setComposerDebugSetting(next); reportComposerDebugModeChanged(next); }} ariaLabel="Toggle composer debug mode">{composerDebug ? "On" : "Off"}</DesktopSettingsChoice>
                     </DesktopSettingsRow>
                 </Box>
-                <Divider sx={{ my: 1 }} />
-                <AutoResumeSettings showToggle={false} />
             </DesktopModalBlock>
         </Box>
-    );
-}
-
-// Global auto-resume settings (tasks/archive/2026/07/session-auto-resume): the default
-// toggle + a collapsed continuation-template editor with a live interpolated
-// preview. Server-authoritative (reads `state.settings`, writes via setSetting).
-function AutoResumeSettings({ showToggle = true }: { showToggle?: boolean } = {}): React.JSX.Element {
-    const settings = useStoreSelector((snapshot) => snapshot.settings);
-    const defaultOn = settings[AUTO_RESUME_DEFAULT_KEY] === true;
-    const saved =
-        typeof settings[AUTO_RESUME_TEMPLATE_KEY] === "string"
-            ? (settings[AUTO_RESUME_TEMPLATE_KEY] as string)
-            : DEFAULT_CONTINUATION_TEMPLATE;
-    const [editorOpen, setEditorOpen] = useState(false);
-    const [draft, setDraft] = useState(saved);
-    const dirty = draft !== saved;
-    const preview = interpolateTemplate(draft, AUTO_RESUME_SAMPLE);
-    // This disclosure sits near the bottom of the settings sheet, so expanding it
-    // reveals the editor BELOW the fold. Pull the revealed content into view (next
-    // frame, after it's laid out) so you don't have to hand-scroll. `block: "end"`
-    // brings the bottom (the Save row) up; `nearest` would only reveal the top.
-    const editorRef = useRef<HTMLDivElement>(null);
-    useEffect(() => {
-        if (!editorOpen) return undefined;
-        const id = requestAnimationFrame(() => {
-            editorRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
-        });
-        return () => cancelAnimationFrame(id);
-    }, [editorOpen]);
-    return (
-        <Stack spacing={1}>
-            {showToggle && <Typography variant="overline" color="text.secondary">
-                Interrupted turns
-            </Typography>}
-            {showToggle && <Stack
-                direction="row"
-                alignItems="center"
-                justifyContent="space-between"
-                spacing={2}
-            >
-                <Stack sx={{ minWidth: 0 }}>
-                    <Typography variant="body2">Auto-resume interrupted turns</Typography>
-                    <Typography variant="caption" color="text.secondary">
-                        After a restart, an interrupted turn auto-continues with what it already
-                        produced. May repeat side effects it already ran — enable only for tasks
-                        that are safe to retry.
-                    </Typography>
-                </Stack>
-                <Switch
-                    checked={defaultOn}
-                    onChange={(e): void => setSetting(AUTO_RESUME_DEFAULT_KEY, e.target.checked)}
-                    inputProps={{ "aria-label": "Auto-resume interrupted turns" }}
-                />
-            </Stack>}
-            <Button
-                size="small"
-                color="inherit"
-                onClick={(): void => setEditorOpen((v) => !v)}
-                startIcon={editorOpen ? <ExpandLess /> : <ExpandMore />}
-                sx={{ alignSelf: "flex-start", textTransform: "none", color: "text.secondary" }}
-            >
-                Customize continuation message
-            </Button>
-            {editorOpen && (
-                <Stack ref={editorRef} spacing={1}>
-                    <Typography variant="caption" color="text.secondary">
-                        Variables: {"{{partial}}"} produced so far · {"{{prompt}}"} original
-                        prompt · {"{{cwd}}"} working directory
-                    </Typography>
-                    <TextField
-                        multiline
-                        minRows={4}
-                        maxRows={10}
-                        fullWidth
-                        value={draft}
-                        onChange={(e): void => setDraft(e.target.value)}
-                        slotProps={{ input: { sx: { fontSize: 13, fontFamily: "monospace" } } }}
-                    />
-                    <Stack direction="row" spacing={1}>
-                        <Button
-                            size="small"
-                            variant="contained"
-                            disabled={!dirty}
-                            onClick={(): void => setSetting(AUTO_RESUME_TEMPLATE_KEY, draft)}
-                        >
-                            Save
-                        </Button>
-                        <Button
-                            size="small"
-                            color="inherit"
-                            onClick={(): void => {
-                                setDraft(DEFAULT_CONTINUATION_TEMPLATE);
-                                setSetting(AUTO_RESUME_TEMPLATE_KEY, DEFAULT_CONTINUATION_TEMPLATE);
-                            }}
-                        >
-                            Reset to default
-                        </Button>
-                    </Stack>
-                    <Typography variant="caption" color="text.secondary">
-                        Preview (sample data)
-                    </Typography>
-                    <Box
-                        sx={{
-                            p: 1,
-                            borderRadius: 1,
-                            border: 1,
-                            borderColor: "divider",
-                            bgcolor: "action.hover",
-                            fontSize: 13,
-                            whiteSpace: "pre-wrap",
-                            maxHeight: 200,
-                            overflowY: "auto",
-                        }}
-                    >
-                        {preview}
-                    </Box>
-                </Stack>
-            )}
-        </Stack>
     );
 }
 
@@ -5836,7 +5614,7 @@ function SettingsShell({
                 <MobileSettingsRoute
                     id="agent"
                     title="Agent behavior"
-                    description="Diagnostics and interrupted turns"
+                    description="Composer diagnostics"
                     activeSection={mobileSettingsSection}
                     onChange={changeMobileSettingsSection}
                 >
@@ -5868,8 +5646,6 @@ function SettingsShell({
                         inputProps={{ "aria-label": "Composer debug mode" }}
                     />
                 </Stack>
-                <Divider />
-                <AutoResumeSettings />
                     </Stack>
                 </MobileSettingsRoute>
                 <MobileSettingsRoute
@@ -5981,7 +5757,6 @@ function SettingsShell({
                                             ["T", "Theme"], ["F", "Reading font"],
                                             ["Z", "Font size"], ["P", "Padding"],
                                             ["R", "Line height"], ["M", "Vim"],
-                                            ["A", "Auto-resume"],
                                         ] as const).map(([shortcut, title]) => ({
                                             shortcut,
                                             title,

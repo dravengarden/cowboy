@@ -11,7 +11,6 @@ function session(id: string, cwd: string): SessionMeta {
     status: "running",
     origin: "web",
     agent_session_id: null,
-    auto_resume: null,
     awaiting_user: false,
     done: false,
     judging: false,

@@ -68,23 +68,22 @@ Recovery rests on four facts:
 ```mermaid
 flowchart TB
     BOOT["daemon boots"] --> RESTORE["Hub restore<br/>from Postgres"]
-    RESTORE --> META["sessions + event logs +<br/>queue/drafts/settings"]
+    RESTORE --> META["sessions + event logs +<br/>queue/drafts"]
     META --> WAIT["bounded Machine runtime<br/>reconciliation"]
     WAIT -->|"connected owner"| ADOPT["adopt detached turn<br/>without interruption"]
-    WAIT -->|"no owner"| INT{"status =<br/>Interrupted?"}
-    INT -->|"auto-resume on"| ENQ["enqueue continuation<br/>(__cont__ cmid)"]
-    INT -->|off| IDLE["leave idle,<br/>revive on open"]
-    ENQ --> REV["revive agent<br/>(session/load)"]
+    WAIT -->|"no owner"| INT["status = Interrupted"]
+    INT --> IDLE["leave stopped until<br/>user-authored work"]
+    IDLE --> REV["revive agent on send<br/>(session/load)"]
 
     style RESTORE fill:#eef2ff,stroke:#6366f1
     style ADOPT fill:#dcfce7,stroke:#16a34a
-    style ENQ fill:#dcfce7,stroke:#16a34a
+    style REV fill:#dcfce7,stroke:#16a34a
 ```
 
 Workers that survived are adopted at boot. Dead historical sessions are **not**
 all revived — that would spawn dozens of subprocesses nobody is using. They are
-revived lazily on the first `send`/`ensure_alive`, except interrupted sessions
-opted into auto-resume, which are continued proactively.
+revived lazily on the first user-authored send or explicit queued-message send.
+Opening an interrupted session does not revive it or synthesize a prompt.
 
 Generation drain, broker restart, heartbeat isolation, and rollback are covered
 in [Zero-interruption rolling updates](12-rolling-updates.md).

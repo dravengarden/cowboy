@@ -56,7 +56,7 @@ PostgreSQL is built incrementally by the immutable `migrations/*.sql` history
 | `0003_pending` | `queue` + `drafts` JSONB arrays |
 | `0004_session_position` | `position` for user reordering |
 | `0005_session_soft_delete` | `deleted_at` — soft-delete for the purge window |
-| `0006_auto_resume` | `auto_resume` per-session override |
+| `0006_auto_resume` | legacy `auto_resume` column, retained for immutable migration history |
 | `0007_inference` | `inference_config` + `inference_secrets` tables |
 | `0008_turn_verdict` | `awaiting_user` + `done` (persisted confirm verdict) |
 | `0009_judge_runs` | `judge_runs` JSONB history |
@@ -95,8 +95,10 @@ retry behavior, DTOs, pagination, and error contracts do not expose the backend.
 count + queue/drafts/judge runs in one restore. Mutations mirror the `StoreWrite`
 variants: `insert_session`, batched event UPSERT, `update_status`, `update_verdict`, `update_title`,
 `update_agent_session_id`, `delete_session`, `update_pending`,
-`update_session_order`, `update_auto_resume`, `update_judge_runs`, plus settings
-(`load_settings` / `put_setting`). `purge_deleted()` hard-deletes soft-deleted rows.
+`update_session_order`, `update_judge_runs`, and Mobile review state.
+`purge_deleted()` hard-deletes soft-deleted rows. The legacy `auto_resume` column
+and settings table are deliberately ignored so old migrations stay immutable and
+a rollback can still read its schema.
 
 ## NUL-byte stripping
 

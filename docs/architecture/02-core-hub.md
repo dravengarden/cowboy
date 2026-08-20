@@ -11,7 +11,7 @@ Each `Session` (private to the Hub) carries:
 
 - **`SessionMeta`** — `id`, `provider`, stable Machine workspace identity,
   isolated runtime `cwd`, `title`, `status`, `origin`,
-  `agent_session_id` (for resume), `auto_resume` override, and the confirm-detect
+  `agent_session_id` (for resume), and the confirm-detect
   flags `awaiting_user` / `done` / `judging`, plus `paused` / `system`.
 - an **event log** — `Vec<Envelope>` — and the `next_seq` counter.
 - per-session **config options**, the **queue** and **drafts**, an editing hold,
@@ -59,12 +59,12 @@ The send path has two doors. **`Prompt`** is the direct/API path (send now).
 queue / awaiting-user hold. Beyond those:
 
 - session lifecycle — `NewSession`, `OpenSession`, `DeleteSession`,
-  `RenameSession`, `Cancel`, `ResumeTurn`, `RetryTurn`
-- per-session toggles — `SetSessionAutoResume`, `SetAwaiting`, `SetPaused`
+  `RenameSession`, `Cancel`, `RetryTurn`
+- per-session toggles — `SetAwaiting`, `SetPaused`
 - queue / draft ops — `RemoveQueued`, `EditQueued`, `ClearQueue`,
   `RequestSendQueued`, `ForcePushQueued`, `QueuedToDraft`, `AddDraft`,
   `EditDraft`, `ActivateDraft`, `MoveDraft`, … (all routed through the sync arbiter)
-- config — `SetConfigOption`, `SetSetting`
+- config — `SetConfigOption`
 - ordering — `ReorderSessions`, `ReorderQueue`, `ReorderDrafts`
 - `Sync { state, id, name, args }` — the generic optimistic-sync mutation
 
@@ -77,7 +77,7 @@ queue / awaiting-user hold. Beyond those:
 | `Event` | a single live envelope |
 | `ConfigOptions` | the agent's advertised per-session config (mode / model / effort) |
 | `SyncPatch` | generic sync state (queue / drafts / order) |
-| `Settings` | global auto-resume default + continuation template |
+| `Settings` | empty compatibility tombstone for stale cached clients |
 | `InferenceConfig` | per-provider model + whether a key is set (never the key) |
 | `Skills` | the static skill registry |
 | `JudgeResult` / `JudgeHistory` | confirm-detect verdict + the capped run history |
@@ -107,20 +107,27 @@ older history is paged on demand (see [Server & wire API](06-server-api.md)).
 The Hub never touches the database directly. Each state change emits a
 **`StoreWrite`** variant — `InsertSession`, `AppendEvent`, `UpdateStatus`,
 `UpdateVerdict`, `UpdateTitle`, `SetAgentSessionId`, `DeleteSession`,
-`UpdatePending`, `UpdateSessionOrder`, `UpdateAutoResume`, `UpdateJudgeRuns`,
-`PutSetting`, `PutInferenceConfig`, `PutInferenceSecret` — onto a bounded mpsc
+`UpdatePending`, `UpdateSessionOrder`, `UpdateJudgeRuns`, and Mobile review state
+— onto a bounded mpsc
 channel drained in reduced batches by the background writer task
 ([Storage](05-storage.md)). The hot path never blocks on the DB; overflow and
 exhausted retries explicitly degrade health.
 
-## Auto-resume of interrupted turns
+## Interrupted turns
 
 On controller startup, a persisted Busy session first remains guarded while
 Machine runtimes reconnect. A connected worker snapshot adopts the original
 turn without adding an interruption marker. Broker launch-registry placeholders
 are not live-owner evidence and cannot settle this reconciliation. Only when the
 bounded grace expires without a connected owner does the Hub mark the session
-`Interrupted`. If its effective auto-resume setting is on (global default or
-per-session override), the Hub then enqueues a continuation prompt tagged with
-the `__cont__` cmid prefix, so it is deduped and rendered as a resumed-turn note
-rather than a user message. A retry template handles the empty-partial case.
+`Interrupted`. It does not enqueue a continuation or revive the provider.
+User-authored work remains in the normal durable queue and can be sent next;
+opening the session only exposes the interruption state. During restore, legacy
+`__cont__` queue and draft rows from older controllers are removed so an upgrade
+cannot execute a stale synthetic turn. Their historical transcript rows remain
+readable.
+
+Cached clients may still send the retired `SetSessionAutoResume`, `ResumeTurn`,
+and `SetSetting` commands during a service-worker rollout. The controller accepts
+them as no-ops and sends an empty `Settings` snapshot, preventing the old UI from
+re-enabling the behavior.

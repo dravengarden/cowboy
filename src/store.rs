@@ -849,18 +849,6 @@ impl Store {
         dispatch_storage!(self, update_cwd(session_id, cwd, title))
     }
 
-    pub async fn update_auto_resume(&self, session_id: &str, value: Option<bool>) -> Result<()> {
-        dispatch_storage!(self, update_auto_resume(session_id, value))
-    }
-
-    pub async fn load_settings(&self) -> Result<Vec<(String, serde_json::Value)>> {
-        dispatch_storage!(self, load_settings())
-    }
-
-    pub async fn put_setting(&self, key: &str, value: &serde_json::Value) -> Result<()> {
-        dispatch_storage!(self, put_setting(key, value))
-    }
-
     pub async fn update_mobile_review_state(
         &self,
         session_id: &str,
@@ -1636,7 +1624,7 @@ impl PostgresStorage {
         let session_rows: Vec<SessionRow> = sqlx::query_as::<_, SessionRow>(
             "SELECT id, provider, provider_version, provider_generation_digest, \
              provider_auth_generation, provider_behavior, machine_id, workspace_id, workspace_name, workspace_source_path, \
-             cwd, title, origin, status, agent_session_id, auto_resume, \
+             cwd, title, origin, status, agent_session_id, \
              awaiting_user, done, system, next_seq, queue, drafts, judge_runs, \
              config_options, config_preferences, mobile_review_state, created_at \
              FROM sessions WHERE deleted_at IS NULL ORDER BY position ASC NULLS LAST, created_at ASC",
@@ -2195,55 +2183,6 @@ impl PostgresStorage {
         .execute(&self.pool)
         .await
         .with_context(|| format!("UPDATE session cwd {session_id}"))?;
-        Ok(())
-    }
-
-    /// Persist a session's auto-resume OVERRIDE (`None` = inherit the global
-    /// default, `Some(true/false)` = force). Mirrors `update_status` — only this
-    /// column + `updated_at` move.
-    ///
-    /// # Errors
-    /// If the UPDATE fails.
-    pub async fn update_auto_resume(&self, session_id: &str, value: Option<bool>) -> Result<()> {
-        sqlx::query("UPDATE sessions SET auto_resume = $1, updated_at = now() WHERE id = $2")
-            .bind(value)
-            .bind(session_id)
-            .execute(&self.pool)
-            .await
-            .with_context(|| format!("UPDATE session auto_resume {session_id}"))?;
-        Ok(())
-    }
-
-    /// Load the whole global key-value settings table (small; read once on
-    /// startup). Returns `(key, value)` pairs.
-    ///
-    /// # Errors
-    /// If the query fails.
-    pub async fn load_settings(&self) -> Result<Vec<(String, serde_json::Value)>> {
-        let rows: Vec<(String, serde_json::Value)> =
-            sqlx::query_as("SELECT key, value FROM settings")
-                .fetch_all(&self.pool)
-                .await
-                .context("SELECT settings")?;
-        Ok(rows)
-    }
-
-    /// Upsert one global setting (`value` is JSONB).
-    ///
-    /// # Errors
-    /// If the UPSERT fails.
-    pub async fn put_setting(&self, key: &str, value: &serde_json::Value) -> Result<()> {
-        let mut value = value.clone();
-        strip_nul(&mut value);
-        sqlx::query(
-            "INSERT INTO settings(key, value, updated_at) VALUES ($1, $2, now()) \
-             ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = now()",
-        )
-        .bind(key)
-        .bind(&value)
-        .execute(&self.pool)
-        .await
-        .with_context(|| format!("UPSERT setting {key}"))?;
         Ok(())
     }
 
@@ -5098,7 +5037,6 @@ struct SessionRow {
     origin: String,
     status: String,
     agent_session_id: Option<String>,
-    auto_resume: Option<bool>,
     awaiting_user: bool,
     done: bool,
     system: bool,
@@ -5135,7 +5073,6 @@ impl SessionRow {
             status: status_from_str(&self.status),
             origin: origin_from_str(&self.origin),
             agent_session_id: self.agent_session_id,
-            auto_resume: self.auto_resume,
             // Restored from the DB (migration 0008) so a finished session keeps its
             // "Task complete" across a daemon restart — a done session has no next
             // turn to re-judge. `crashed`/`interrupted` status still takes overlay
@@ -5188,7 +5125,6 @@ mod storage_contract_tests {
             status: Status::Starting,
             origin: SessionOrigin::Web,
             agent_session_id: None,
-            auto_resume: None,
             awaiting_user: false,
             done: false,
             judging: false,
@@ -5456,7 +5392,6 @@ mod storage_contract_tests {
                 Some("Storage contract retargeted"),
             )
             .await?;
-        store.update_auto_resume(session_id, Some(false)).await?;
         store
             .update_mobile_review_state(
                 session_id,
@@ -5501,9 +5436,6 @@ mod storage_contract_tests {
                     latency_ms: 12,
                 }],
             )
-            .await?;
-        store
-            .put_setting("storage.contract", &serde_json::json!({"enabled": true}))
             .await?;
         store
             .upsert_wakeup(session_id, 1_900_000_000_000, "continue")
@@ -5577,7 +5509,6 @@ mod storage_contract_tests {
         );
         assert_eq!(restored.meta.title, "Storage contract retargeted");
         assert_eq!(restored.meta.cwd, "/tmp/cowboy-retargeted");
-        assert_eq!(restored.meta.auto_resume, Some(false));
         assert!(restored.meta.awaiting_user);
         assert!(!restored.meta.done);
         assert_eq!(restored.events.len(), 2);
@@ -5610,11 +5541,6 @@ mod storage_contract_tests {
         assert!(previous_cursor.is_none());
         assert!(previous_reached_start);
 
-        let settings = store.load_settings().await?;
-        assert!(settings.iter().any(|(key, value)| {
-            key == "storage.contract"
-                && value.get("enabled") == Some(&serde_json::Value::Bool(true))
-        }));
         assert!(
             store
                 .load_wakeups()

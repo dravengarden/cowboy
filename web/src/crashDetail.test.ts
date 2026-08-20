@@ -51,10 +51,32 @@ const overlaySource = await Deno.readTextFile(
 const transcriptSource = await Deno.readTextFile(
   new URL("./Transcript.tsx", import.meta.url),
 );
+const appSource = await Deno.readTextFile(
+  new URL("./App.tsx", import.meta.url),
+);
+const storeSource = await Deno.readTextFile(
+  new URL("./store.ts", import.meta.url),
+);
+const protocolSource = await Deno.readTextFile(
+  new URL("./protocol.ts", import.meta.url),
+);
 
 Deno.test("composer overlay does not retry a crashed turn", () => {
   assertEquals(overlaySource.includes("retryTurn"), false);
   assertEquals(overlaySource.includes("Agent error"), false);
   assertEquals(transcriptSource.includes("hideLiveCrashDuplicate"), true);
   assertEquals(transcriptSource.includes("prettifyCrashDetail"), true);
+});
+
+Deno.test("interrupted turns expose status without synthetic resume controls", () => {
+  assertEquals(overlaySource.includes("resumeTurn"), false);
+  assertEquals(overlaySource.includes('label: "Resume"'), true);
+  assertEquals(storeSource.includes('type: "resume_turn"'), false);
+  assertEquals(protocolSource.includes('type: "resume_turn"'), true);
+  assertEquals(
+    protocolSource.includes("Deprecated rollout tombstones"),
+    true,
+  );
+  assertEquals(appSource.includes("Auto-resume"), false);
+  assertEquals(appSource.includes("AutoResumeSettings"), false);
 });

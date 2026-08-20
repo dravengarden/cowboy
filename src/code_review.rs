@@ -1538,7 +1538,10 @@ mod tests {
         let (worktree, inner) = provider
             .language_buffer_key("projects/external/src/lib.rs")
             .expect("projected files should lease against the registered checkout");
-        assert_eq!(worktree, dir.join("projects/external").canonicalize().unwrap());
+        assert_eq!(
+            worktree,
+            dir.join("projects/external").canonicalize().unwrap()
+        );
         assert_eq!(inner, PathBuf::from("src/lib.rs"));
         assert!(
             provider

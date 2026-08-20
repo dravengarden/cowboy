@@ -81,7 +81,6 @@ struct SqliteSessionRow {
     origin: String,
     status: String,
     agent_session_id: Option<String>,
-    auto_resume: Option<bool>,
     awaiting_user: bool,
     done: bool,
     system: bool,
@@ -1282,7 +1281,6 @@ impl SqliteSessionRow {
             status: status_from_str(&self.status),
             origin: origin_from_str(&self.origin),
             agent_session_id: self.agent_session_id,
-            auto_resume: self.auto_resume,
             awaiting_user: self.awaiting_user,
             done: self.done,
             system: self.system,
@@ -1907,7 +1905,7 @@ impl SqliteStorage {
         let session_rows: Vec<SqliteSessionRow> = sqlx::query_as(
             "SELECT id, provider, provider_version, provider_generation_digest, \
              provider_auth_generation, provider_behavior, machine_id, workspace_id, workspace_name, workspace_source_path, \
-             cwd, title, origin, status, agent_session_id, auto_resume, \
+             cwd, title, origin, status, agent_session_id, \
              awaiting_user, done, system, next_seq, queue, drafts, judge_runs, \
              config_options, config_preferences, mobile_review_state, created_at_ms \
              FROM sessions WHERE deleted_at_ms IS NULL \
@@ -2356,44 +2354,6 @@ impl SqliteStorage {
         .execute(&self.pool)
         .await
         .with_context(|| format!("UPDATE SQLite session cwd {session_id}"))?;
-        Ok(())
-    }
-
-    pub(super) async fn update_auto_resume(
-        &self,
-        session_id: &str,
-        value: Option<bool>,
-    ) -> Result<()> {
-        sqlx::query("UPDATE sessions SET auto_resume = ?1, updated_at_ms = ?2 WHERE id = ?3")
-            .bind(value)
-            .bind(now_ms())
-            .bind(session_id)
-            .execute(&self.pool)
-            .await
-            .with_context(|| format!("UPDATE SQLite session auto_resume {session_id}"))?;
-        Ok(())
-    }
-
-    pub(super) async fn load_settings(&self) -> Result<Vec<(String, serde_json::Value)>> {
-        sqlx::query_as("SELECT key, value FROM settings")
-            .fetch_all(&self.pool)
-            .await
-            .context("SELECT SQLite settings")
-    }
-
-    pub(super) async fn put_setting(&self, key: &str, value: &serde_json::Value) -> Result<()> {
-        let mut value = value.clone();
-        strip_nul(&mut value);
-        sqlx::query(
-            "INSERT INTO settings(key, value, updated_at_ms) VALUES (?1, ?2, ?3) \
-             ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at_ms = excluded.updated_at_ms",
-        )
-        .bind(key)
-        .bind(&value)
-        .bind(now_ms())
-        .execute(&self.pool)
-        .await
-        .with_context(|| format!("UPSERT SQLite setting {key}"))?;
         Ok(())
     }
 

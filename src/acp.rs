@@ -2639,7 +2639,7 @@ async fn run_session(
                 // per block so each renders as its own bubble. The FIRST echo
                 // carries the originating client's cmid so that client reconciles
                 // its optimistic chat bubble by id (the rest are untagged).
-                // A daemon-originated turn — an auto-resume continuation (cmid
+                // A daemon-originated turn — a legacy auto-resume continuation (cmid
                 // "__cont__…") or a fired ScheduleWakeup ("__wake__…") — is flagged
                 // on the echo (persisted in the payload) so the UI renders it as a
                 // distinct "↻ resumed turn" note: it isn't something the user

@@ -131,9 +131,10 @@ export function questionTitle(item: RenderItem, ordinal: number): string {
 
 /**
  * Project canonical render items into stable question pages. Existing history
- * has no page metadata, so every human prompt begins a page. Auto-resume echoes
- * stay inside the preceding page. Explicit merge/split metadata can layer over
- * these deterministic boundaries without changing the event timeline.
+ * has no page metadata, so every human prompt begins a page. Historical
+ * continuation echoes stay inside the preceding page. Explicit merge/split
+ * metadata can layer over these deterministic boundaries without changing the
+ * event timeline.
  */
 export function deriveQuestionPages(items: RenderItem[]): QuestionPage[] {
   const pages: QuestionPage[] = [];
