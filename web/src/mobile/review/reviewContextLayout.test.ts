@@ -43,6 +43,22 @@ Deno.test("symbol navigation disables actions without destinations", () => {
   assertStringIncludes(source, "data-navigation-status={availability}");
 });
 
+Deno.test("mobile symbol choices separate the current symbol from a tidy responsive grid", () => {
+  assertStringIncludes(source, "data-mobile-symbol-current");
+  assertStringIncludes(source, "data-mobile-symbol-grid");
+  assertStringIncludes(
+    source,
+    'gridTemplateColumns: "repeat(auto-fit, minmax(7rem, 1fr))"',
+  );
+  assertStringIncludes(source, 'minHeight: 44');
+  assertEquals(
+    source.includes(
+      'flexWrap={inspectCandidatesExpanded ? "wrap" : "nowrap"}',
+    ),
+    false,
+  );
+});
+
 Deno.test("session context leads with the active session without a history row", () => {
   assertEquals(source.includes("function ContextPreviousSessionRow"), false);
   assertEquals(source.includes('label = "Previous session"'), false);

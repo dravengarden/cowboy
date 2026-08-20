@@ -1052,18 +1052,9 @@ function DocumentView({
       candidate.row === inspectTarget?.row &&
       candidate.column === inspectTarget.column
     ) ?? inspectCandidates[0];
-  const collapsedCandidates = selectedCandidate
-    ? [
-      selectedCandidate,
-      ...inspectCandidates.filter((candidate) =>
-        candidate !== selectedCandidate
-      ).slice(0, 1),
-    ]
-    : [];
-  const hiddenCandidateCount = Math.max(
-    0,
-    inspectCandidates.length - collapsedCandidates.length,
-  );
+  const alternativeCandidates = selectedCandidate
+    ? inspectCandidates.filter((candidate) => candidate !== selectedCandidate)
+    : inspectCandidates;
   const mobileCandidateSelector = inspectCandidates.length > 1
     ? (
       <Box
@@ -1075,63 +1066,121 @@ function DocumentView({
           borderColor: "divider",
         }}
       >
-        <Stack
-          direction="row"
-          useFlexGap
-          gap={0.75}
-          alignItems="flex-start"
+        <ButtonBase
+          data-mobile-symbol-current
+          aria-expanded={inspectCandidatesExpanded}
+          aria-label={inspectCandidatesExpanded
+            ? "Collapse symbol list"
+            : `Show ${alternativeCandidates.length} other symbols`}
+          onClick={() => {
+            navigationHaptic();
+            setInspectCandidatesExpanded((expanded) => !expanded);
+          }}
+          sx={(theme) => ({
+            width: "100%",
+            minHeight: 48,
+            px: 1.25,
+            py: 0.75,
+            gap: 1,
+            justifyContent: "flex-start",
+            borderRadius: 1.75,
+            textAlign: "left",
+            bgcolor: alpha(theme.palette.primary.main, 0.08),
+          })}
         >
-          <Stack
-            direction="row"
-            useFlexGap
-            flexWrap={inspectCandidatesExpanded ? "wrap" : "nowrap"}
-            gap={0.75}
+          <Box
+            aria-hidden="true"
             sx={{
-              flex: 1,
-              minWidth: 0,
-              ...(inspectCandidatesExpanded
-                ? {
-                  maxHeight: 120,
-                  overflowY: "auto",
-                  overscrollBehaviorY: "contain",
-                  touchAction: "pan-y",
-                  WebkitOverflowScrolling: "touch",
-                }
-                : { overflow: "hidden" }),
+              width: 8,
+              height: 8,
+              flex: "0 0 auto",
+              borderRadius: "50%",
+              bgcolor: "primary.main",
             }}
-          >
-            {(inspectCandidatesExpanded
-              ? inspectCandidates
-              : collapsedCandidates).map(
-                candidateChip,
-              )}
-          </Stack>
-          {(hiddenCandidateCount > 0 || inspectCandidatesExpanded) && (
-            <Button
-              size="small"
-              variant="text"
-              aria-expanded={inspectCandidatesExpanded}
-              onClick={() => {
-                navigationHaptic();
-                setInspectCandidatesExpanded((expanded) => !expanded);
-              }}
-              endIcon={inspectCandidatesExpanded
-                ? <KeyboardArrowUp />
-                : <KeyboardArrowDown />}
+          />
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ display: "block", lineHeight: 1.1 }}
+            >
+              Current symbol
+            </Typography>
+            <Typography
+              noWrap
+              title={selectedCandidate?.label}
               sx={{
-                minWidth: 0,
-                height: 32,
-                px: 1,
-                flex: "0 0 auto",
-                textTransform: "none",
+                mt: 0.25,
+                color: "primary.main",
+                fontFamily: "var(--cowboy-font-mono)",
+                fontSize: "0.875rem",
+                fontWeight: 700,
               }}
             >
-              {inspectCandidatesExpanded
-                ? "Collapse"
-                : `+${hiddenCandidateCount}`}
-            </Button>
-          )}
-        </Stack>
+              {selectedCandidate?.label}
+            </Typography>
+          </Box>
+          <Typography
+            variant="caption"
+            color="primary.main"
+            sx={{ flex: "0 0 auto", fontWeight: 700 }}
+          >
+            +{alternativeCandidates.length}
+          </Typography>
+          {inspectCandidatesExpanded
+            ? <KeyboardArrowUp sx={{ fontSize: "1.25rem" }} />
+            : <KeyboardArrowDown sx={{ fontSize: "1.25rem" }} />}
+        </ButtonBase>
+        {inspectCandidatesExpanded && (
+          <Box
+            data-mobile-symbol-grid
+            sx={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(7rem, 1fr))",
+              gap: 0.75,
+              mt: 1,
+              maxHeight: "min(32vh, 224px)",
+              overflowY: "auto",
+              overscrollBehaviorY: "contain",
+              touchAction: "pan-y",
+              WebkitOverflowScrolling: "touch",
+            }}
+          >
+            {alternativeCandidates.map((candidate) => (
+              <ButtonBase
+                key={`${candidate.row}:${candidate.column}:${candidate.label}`}
+                title={candidate.label}
+                onClick={() => {
+                  navigationHaptic();
+                  setInspectCandidatesExpanded(false);
+                  inspectPoint(candidate, inspectCandidates, false);
+                }}
+                sx={{
+                  minWidth: 0,
+                  minHeight: 44,
+                  px: 1.25,
+                  justifyContent: "flex-start",
+                  border: 1,
+                  borderColor: "divider",
+                  borderRadius: 1.5,
+                  bgcolor: "background.paper",
+                }}
+              >
+                <Typography
+                  noWrap
+                  sx={{
+                    minWidth: 0,
+                    fontFamily: "var(--cowboy-font-mono)",
+                    fontSize: "0.8125rem",
+                    fontWeight: 550,
+                  }}
+                >
+                  {candidate.label}
+                </Typography>
+              </ButtonBase>
+            ))}
+          </Box>
+        )}
       </Box>
     )
     : null;
