@@ -242,21 +242,31 @@ export function TimeRangeButton({
           <Stack spacing={0.75}>
             <Typography variant="caption" color="text.secondary" fontWeight={700}>Quick ranges</Typography>
             <Stack direction="row" useFlexGap flexWrap="wrap" gap={0.75}>
-              {QUICK_RANGES.filter((range) => timeRangeDuration(range) <= maxDurationMs).map((range) => (
-                <Chip
-                  key={timeRangeLabel(range)}
-                  label={timeRangeLabel(range)}
-                  size="small"
-                  color={sameRange(candidate, range) ? "primary" : "default"}
-                  variant={sameRange(candidate, range) ? "filled" : "outlined"}
-                  onClick={() => {
-                    if (range.mode !== "relative") return;
-                    setMode("relative");
-                    setAmount(range.amount);
-                    setUnit(range.unit);
-                  }}
-                />
-              ))}
+              {QUICK_RANGES.filter((range) => timeRangeDuration(range) <= maxDurationMs).map((range) => {
+                const selected = sameRange(candidate, range);
+                return (
+                  <Chip
+                    key={timeRangeLabel(range)}
+                    label={timeRangeLabel(range)}
+                    size="small"
+                    aria-pressed={selected}
+                    color={selected ? "primary" : "default"}
+                    variant={selected ? "filled" : "outlined"}
+                    sx={{
+                      "&&[aria-pressed='true'], &&[aria-pressed='true']:hover, &&[aria-pressed='true'].Mui-focusVisible": {
+                        backgroundColor: "primary.main",
+                        color: "primary.contrastText",
+                      },
+                    }}
+                    onClick={() => {
+                      if (range.mode !== "relative") return;
+                      setMode("relative");
+                      setAmount(range.amount);
+                      setUnit(range.unit);
+                    }}
+                  />
+                );
+              })}
             </Stack>
           </Stack>
           <ToggleButtonGroup
