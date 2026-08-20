@@ -16,23 +16,38 @@
 
 import { Box, Button, Typography } from "@mui/material";
 import { Component, type ErrorInfo, type ReactNode } from "react";
-import { isModuleLoadError } from "./moduleRecovery";
+import { isModuleLoadError, latestBundleRecoveryUrl } from "./moduleRecovery";
 import { CRASH_INCIDENT_SEVERITY, reportClientIncident, reportClientLog } from "./observability";
 
 interface State {
   readonly error: Error | undefined;
+  readonly recovering: boolean;
+  readonly recoveryFailed: boolean;
 }
 
 const MODULE_RECOVERY_KEY = "cowboy.module-recovery-at";
 const MODULE_RECOVERY_COOLDOWN_MS = 30_000;
 
-async function recoverLatestBundle(force = false): Promise<void> {
+async function boundedRecoveryFetch(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = globalThis.setTimeout(() => controller.abort(), 4_000);
+  try {
+    return await globalThis.fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    globalThis.clearTimeout(timeout);
+  }
+}
+
+async function recoverLatestBundle(force = false): Promise<boolean> {
   const desktopRecovery = (globalThis as typeof globalThis & {
     __cowboyRecoverLatestBundle?: (force?: boolean) => Promise<void>;
   }).__cowboyRecoverLatestBundle;
   if (desktopRecovery) {
     await desktopRecovery(force);
-    return;
+    return true;
   }
   const now = Date.now();
   let previous = 0;
@@ -42,28 +57,51 @@ async function recoverLatestBundle(force = false): Promise<void> {
     // Some embedded/private contexts deny sessionStorage. Recovery must still
     // work; the in-memory page is about to be replaced anyway.
   }
-  if (!force && Number.isFinite(previous) && now - previous < MODULE_RECOVERY_COOLDOWN_MS) return;
+  if (!force && Number.isFinite(previous) && now - previous < MODULE_RECOVERY_COOLDOWN_MS) {
+    return false;
+  }
   try {
     globalThis.sessionStorage.setItem(MODULE_RECOVERY_KEY, String(now));
   } catch {
     // Best-effort loop guard; continue to the network recovery path.
   }
-  try {
-    const registration = await navigator.serviceWorker?.getRegistration();
-    await registration?.update();
-  } catch {
-    // Reload still recovers through the network-first navigation path when the
-    // SW update probe itself is unavailable.
+  // Do not wait for the Service Worker updater: native WKWebView has no SW API,
+  // and WebKit can leave registration.update() pending while backgrounded.
+  if ("serviceWorker" in navigator) {
+    void navigator.serviceWorker.getRegistration()
+      .then((registration) => registration?.update())
+      .catch(() => undefined);
   }
-  globalThis.location.reload();
+  const target = await latestBundleRecoveryUrl(
+    globalThis.location.href,
+    globalThis.location.origin,
+    boundedRecoveryFetch,
+    () => now,
+  );
+  if (!target) return false;
+  globalThis.location.replace(target);
+  return true;
 }
 
 export class AppErrorBoundary extends Component<{ children: ReactNode }, State> {
-  override state: State = { error: undefined };
+  override state: State = {
+    error: undefined,
+    recovering: false,
+    recoveryFailed: false,
+  };
 
   static getDerivedStateFromError(error: Error): State {
-    return { error };
+    return { error, recovering: false, recoveryFailed: false };
   }
+
+  private readonly recover = async (force: boolean): Promise<void> => {
+    if (this.state.recovering) return;
+    this.setState({ recovering: true, recoveryFailed: false });
+    const navigating = await recoverLatestBundle(force);
+    if (!navigating) {
+      this.setState({ recovering: false, recoveryFailed: true });
+    }
+  };
 
   override componentDidCatch(error: Error, info: ErrorInfo): void {
     // Keep the stack in the console for a dev/remote-debug session; the card
@@ -77,11 +115,11 @@ export class AppErrorBoundary extends Component<{ children: ReactNode }, State> 
     reportClientIncident("client_render_failure", CRASH_INCIDENT_SEVERITY, error, {
       component_stack: componentStack,
     });
-    if (isModuleLoadError(error)) void recoverLatestBundle();
+    if (isModuleLoadError(error)) void this.recover(false);
   }
 
   override render(): ReactNode {
-    const { error } = this.state;
+    const { error, recovering, recoveryFailed } = this.state;
     if (!error) {
       return this.props.children;
     }
@@ -112,13 +150,19 @@ export class AppErrorBoundary extends Component<{ children: ReactNode }, State> 
         <Typography variant="body2" sx={{ maxWidth: 480, opacity: 0.9, wordBreak: "break-word" }}>
           {error.message || "The app hit an unexpected error and couldn’t render."}
         </Typography>
+        {recoveryFailed && (
+          <Typography variant="body2" sx={{ maxWidth: 480, opacity: 0.9 }}>
+            The latest app bundle is not ready yet. Check the connection and retry.
+          </Typography>
+        )}
         <Button
           variant="contained"
           color="inherit"
-          onClick={() => void recoverLatestBundle(true)}
+          disabled={recovering}
+          onClick={() => void this.recover(true)}
           sx={{ mt: 1, color: "error.main", fontWeight: 600 }}
         >
-          Update & reload
+          {recovering ? "Checking update…" : recoveryFailed ? "Retry update" : "Update & reload"}
         </Button>
       </Box>
     );

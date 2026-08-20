@@ -2157,3 +2157,13 @@ Desktop Vim + IME checks:
     `aria-pressed` attribute. Mark touch activation and override latched hover
     and focus-visible paint with the same authoritative selected/unselected
     material; preserve ordinary mouse hover and keyboard focus behavior.
+
+91. **Mobile module recovery must prove the new bundle before navigation.**
+    Native WKWebView exposes no Service Worker API, and a bare
+    `location.reload()` may reuse stale HTML or the failed module graph. On a
+    module-load crash, fetch the network index with `cache: no-store`, parse its
+    module entry, and verify that entry is available with a JavaScript content
+    type. Only then navigate with a cache-busting `location.replace()` URL.
+    Keep the error surface mounted with explicit checking/retry feedback when
+    the deploy hand-off or network is not ready; never reload the same stale
+    document in a loop.
