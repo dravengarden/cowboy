@@ -1,4 +1,4 @@
-import { assertStringIncludes } from "jsr:@std/assert";
+import { assertEquals, assertStringIncludes } from "jsr:@std/assert";
 
 const appSource = await Deno.readTextFile(
   new URL("./ReviewApp.tsx", import.meta.url),
@@ -72,4 +72,15 @@ Deno.test("commit patches are not rendered inside the repository drawer", () => 
   if (repositorySource.includes("fetchGitCommitDiff")) {
     throw new Error("Repository drawer must not own commit patch rendering");
   }
+});
+
+Deno.test("tab close confirmation uses the medium Cowboy corner radius", () => {
+  const content = appSource.indexOf("data-review-tab-close-confirm");
+  const start = appSource.lastIndexOf("<Popover", content);
+  const end = appSource.indexOf("</Popover>", content);
+  const confirmation = appSource.slice(start, end);
+
+  assertEquals(start >= 0 && content > start && end > content, true);
+  assertStringIncludes(confirmation, "borderRadius: 1.5");
+  assertEquals(confirmation.includes("borderRadius: 2.5"), false);
 });

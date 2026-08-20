@@ -38,9 +38,9 @@ export function Kbd(
 // While `open`, Command/Ctrl+Enter confirms the modal. Capture phase so it beats a
 // focused editor's own Enter (which would otherwise insert a newline before the
 // dialog saw the key). A bare Enter is deliberately consumed without confirming,
-// including when a confirm button owns focus. Esc is intentionally NOT handled here — MUI's Dialog /
-// Popover already close on Escape via their `onClose`, so wiring it again would
-// double-fire; this hook only adds the affirmative key.
+// including when a confirm button owns focus. Esc is intentionally NOT handled here —
+// the owning Dialog, Popover, or non-modal Popper closes it, so wiring it again
+// would double-fire; this hook only adds the affirmative key.
 //
 // Ignores auto-REPEAT (`e.repeat`): the force confirm is opened by HOLDING ⌘⏎,
 // so the Enter is still down and repeating when the modal appears — without this

@@ -972,6 +972,7 @@ Deno.test("pending Force push confirmation keeps the native editor and anchor mo
   assertEquals(confirmation.includes("<Popover"), false);
   assertEquals(confirmation.includes("<ClickAwayListener"), true);
   assertEquals(confirmation.includes('aria-modal="false"'), true);
+  assertEquals(confirmation.includes("borderRadius: 1.5"), true);
   assertEquals(
     confirmation.match(
       /onPointerDown=\{\(event\): void => event\.preventDefault\(\)\}/g,
@@ -979,6 +980,41 @@ Deno.test("pending Force push confirmation keeps the native editor and anchor mo
       ?.length,
     2,
   );
+});
+
+Deno.test("main Force push confirmation preserves native keyboard focus", () => {
+  const confirmationStart = composerSource.indexOf(
+    "/* Force-push confirm — opened by a completed long-press on Queue.",
+  );
+  const confirmationEnd = composerSource.indexOf(
+    "/* Inline-image actions are deliberately non-modal.",
+    confirmationStart,
+  );
+  const confirmation = composerSource.slice(confirmationStart, confirmationEnd);
+  const triggerStart = composerSource.lastIndexOf(
+    'aria-label="force push"',
+    confirmationStart,
+  );
+  const triggerEnd = composerSource.indexOf("</IconButton>", triggerStart);
+  const trigger = composerSource.slice(triggerStart, triggerEnd);
+
+  assertEquals(
+    confirmationStart >= 0 && confirmationEnd > confirmationStart,
+    true,
+  );
+  assertEquals(confirmation.includes("<Popper"), true);
+  assertEquals(confirmation.includes("<Popover"), false);
+  assertEquals(confirmation.includes("<ClickAwayListener"), true);
+  assertEquals(confirmation.includes('aria-modal="false"'), true);
+  assertEquals(confirmation.includes("borderRadius: 1.5"), true);
+  assertEquals(
+    confirmation.match(
+      /onPointerDown=\{\(event\): void => event\.preventDefault\(\)\}/g,
+    )?.length,
+    2,
+  );
+  assertEquals(triggerStart >= 0 && triggerEnd > triggerStart, true);
+  assertEquals(trigger.includes("event.preventDefault()"), true);
 });
 
 Deno.test("mobile keyboard dismissal belongs to the fixed lower editing rail", () => {

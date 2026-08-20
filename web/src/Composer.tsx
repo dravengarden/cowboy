@@ -33,7 +33,6 @@ import {
   Menu,
   MenuItem,
   Paper,
-  Popover,
   Popper,
   Snackbar,
   Stack,
@@ -1253,7 +1252,8 @@ export function ComposerWorkspace({
   const [cancelOpen, setCancelOpen] = useState(false);
   // Long-press-send → force-push: hold the Queue button ~450ms to pop a confirm
   // that interrupts the running turn and runs this prompt next (skipping the
-  // queue). `holding` drives the fill ring; `forceAnchor` anchors the popover.
+  // queue). `holding` drives the fill ring; `forceAnchor` anchors the non-modal
+  // confirmation without ending the iOS editor focus session.
   const [holding, setHolding] = useState(false);
   const [forceAnchor, setForceAnchor] = useState<HTMLElement | null>(null);
   const [clearComposerAnchor, setClearComposerAnchor] = useState<
@@ -1271,6 +1271,18 @@ export function ComposerWorkspace({
     return (): void =>
       globalThis.removeEventListener("keydown", closeOnEscape, true);
   }, [clearComposerAnchor]);
+  useEffect(() => {
+    if (forceAnchor === null) return undefined;
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape" || isImeKeyEvent(event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setForceAnchor(null);
+    };
+    globalThis.addEventListener("keydown", closeOnEscape, true);
+    return (): void =>
+      globalThis.removeEventListener("keydown", closeOnEscape, true);
+  }, [forceAnchor]);
   const [desktopMoreAnchor, setDesktopMoreAnchor] = useState<
     HTMLElement | null
   >(null);
@@ -3101,6 +3113,8 @@ export function ComposerWorkspace({
                             disabled={!sendable ||
                               !(busy || starting || paused)}
                             sx={TOOLBAR_ICON_BTN}
+                            onPointerDown={(event): void =>
+                              event.preventDefault()}
                             onClick={(e): void =>
                               setForceAnchor(e.currentTarget)}
                           >
@@ -3256,64 +3270,79 @@ export function ComposerWorkspace({
           to the button, rising above it. Confirm interrupts the running turn and
           runs this prompt next (skipping the queue). */
       }
-      <Popover
+      <Popper
         open={forceAnchor !== null}
         anchorEl={forceAnchor}
-        onClose={(): void => setForceAnchor(null)}
-        anchorOrigin={{ vertical: "top", horizontal: "center" }}
-        transformOrigin={{ vertical: "bottom", horizontal: "center" }}
-        slotProps={{
-          paper: { sx: { mt: -1, maxWidth: 268, borderRadius: 2 } },
-        }}
+        placement="top"
+        modifiers={[
+          { name: "offset", options: { offset: [0, 8] } },
+          {
+            name: "flip",
+            options: { fallbackPlacements: ["bottom", "right", "left"] },
+          },
+          { name: "preventOverflow", options: { padding: 8 } },
+        ]}
+        sx={{ zIndex: (theme) => theme.zIndex.modal }}
       >
-        <Box sx={{ p: 1.5 }}>
-          <Stack
-            direction="row"
-            spacing={0.75}
-            alignItems="center"
-            sx={{ mb: 0.5 }}
+        <ClickAwayListener onClickAway={(): void => setForceAnchor(null)}>
+          <Paper
+            role="dialog"
+            aria-modal="false"
+            aria-label="Force push confirmation"
+            sx={{ maxWidth: 268, borderRadius: 1.5, boxShadow: 8 }}
           >
-            <Bolt fontSize="small" color="warning" />
-            <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-              Force push
-            </Typography>
-          </Stack>
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            sx={{ display: "block", lineHeight: 1.5 }}
-          >
-            {busy || starting
-              ? "Interrupt the current turn and run this now, skipping the queue."
-              : "Send this now, ahead of the paused queue."}
-          </Typography>
-          <Stack
-            direction="row"
-            justifyContent="flex-end"
-            spacing={1}
-            sx={{ mt: 1.5 }}
-          >
-            <Button
-              size="small"
-              color="inherit"
-              onClick={(): void => setForceAnchor(null)}
-            >
-              Cancel
-              <Kbd keys="Esc" />
-            </Button>
-            <NetworkButton
-              size="small"
-              variant="contained"
-              color="warning"
-              startIcon={<Bolt />}
-              networkAction={confirmForce}
-            >
-              Force push
-              <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-            </NetworkButton>
-          </Stack>
-        </Box>
-      </Popover>
+            <Box sx={{ p: 1.5 }}>
+              <Stack
+                direction="row"
+                spacing={0.75}
+                alignItems="center"
+                sx={{ mb: 0.5 }}
+              >
+                <Bolt fontSize="small" color="warning" />
+                <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+                  Force push
+                </Typography>
+              </Stack>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ display: "block", lineHeight: 1.5 }}
+              >
+                {busy || starting
+                  ? "Interrupt the current turn and run this now, skipping the queue."
+                  : "Send this now, ahead of the paused queue."}
+              </Typography>
+              <Stack
+                direction="row"
+                justifyContent="flex-end"
+                spacing={1}
+                sx={{ mt: 1.5 }}
+              >
+                <Button
+                  size="small"
+                  color="inherit"
+                  onPointerDown={(event): void => event.preventDefault()}
+                  onClick={(): void => setForceAnchor(null)}
+                >
+                  Cancel
+                  <Kbd keys="Esc" />
+                </Button>
+                <NetworkButton
+                  size="small"
+                  variant="contained"
+                  color="warning"
+                  startIcon={<Bolt />}
+                  onPointerDown={(event): void => event.preventDefault()}
+                  networkAction={confirmForce}
+                >
+                  Force push
+                  <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+                </NetworkButton>
+              </Stack>
+            </Box>
+          </Paper>
+        </ClickAwayListener>
+      </Popper>
       {
         /* Inline-image actions are deliberately non-modal. MUI Popover is built on
           Modal/FocusTrap, which steals CM6 focus and closes the iOS keyboard as
@@ -5173,7 +5202,7 @@ function PendingRow({
             role="dialog"
             aria-modal="false"
             aria-label="Force push confirmation"
-            sx={{ maxWidth: 240, borderRadius: 2, boxShadow: 8 }}
+            sx={{ maxWidth: 240, borderRadius: 1.5, boxShadow: 8 }}
           >
             <Box sx={{ p: 1.5 }}>
               <Typography variant="body2" sx={{ mb: 1 }}>

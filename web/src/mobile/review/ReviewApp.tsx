@@ -2750,7 +2750,7 @@ export function ReviewApp({
             paper: {
               sx: {
                 width: "min(300px, calc(100vw - 32px))",
-                borderRadius: 2.5,
+                borderRadius: 1.5,
               },
             },
           }}

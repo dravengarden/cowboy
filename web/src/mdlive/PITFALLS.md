@@ -2119,3 +2119,13 @@ Desktop Vim + IME checks:
     Obsidian surface must dim and restore `theme-color` with its scrim. A tall
     destination list also keeps the shared Close island as an overlay, with
     scroll clearance inside the list rather than a separate solid footer.
+
+87. **Main Composer Force push must keep the native editor as first responder.**
+    The Queue-row confirmation already used a non-modal `Popper`, but the main
+    Composer Bolt still opened MUI `Popover`. Its `Modal`/focus lifecycle blurred
+    the textarea and lowered the iOS keyboard before the user chose Cancel or
+    Force push. Keep both Force push confirmations on anchored, non-modal
+    `Popper` cards; prevent pointer-down focus transfer on the trigger and both
+    decision buttons, and release the editor only after authoritative delivery
+    success. Anchored decision cards use the medium 12px Cowboy radius rather
+    than the 16–20px floating-card radius.
