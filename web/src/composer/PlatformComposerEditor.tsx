@@ -13,6 +13,7 @@ import {
   type ComposerEditorSelection,
 } from "../ComposerEditor";
 import { ComposerTextarea } from "../ComposerTextarea";
+import { IME_COMPOSITION_END_HOLD_MS, imeOwnsEditable } from "../imeKey";
 import { useSurfaceProfile } from "../surface/SurfaceProfile";
 import {
   isDesktopVimRuntimeLoaded,
@@ -96,26 +97,54 @@ export const PlatformComposerEditor = forwardRef<
   onChangeRef.current = props.onChange;
   // Native Pinyin candidate confirmation is still one composition. Swapping
   // the textarea for CM6 (or back) in that window wipes marked text — the
-  // candidate tap looks like it did nothing and composition dies. Hold the
-  // committed host until compositionend; Obsidian never remounts mid-IME.
+  // candidate tap looks like it did nothing and composition dies. iOS
+  // backspace also fires a false compositionend before leftover-latin
+  // compositionstart; remounting there parks the caret at `调|a`. Hold the
+  // committed host through that window; Obsidian never remounts mid-IME.
   const composingRef = useRef(false);
+  const compositionEndedAtRef = useRef(0);
+  const compositionEndHoldTimerRef = useRef(0);
+  const [, setImeHoldEpoch] = useState(0);
+  const nativeImeOwns = (): boolean =>
+    imeOwnsEditable(
+      composingRef.current,
+      compositionEndedAtRef.current,
+      Date.now(),
+    );
   useEffect(() => {
     const start = (): void => {
       composingRef.current = true;
+      compositionEndedAtRef.current = 0;
+      if (compositionEndHoldTimerRef.current !== 0) {
+        globalThis.clearTimeout(compositionEndHoldTimerRef.current);
+        compositionEndHoldTimerRef.current = 0;
+      }
     };
     const end = (): void => {
       composingRef.current = false;
+      compositionEndedAtRef.current = Date.now();
+      if (compositionEndHoldTimerRef.current !== 0) {
+        globalThis.clearTimeout(compositionEndHoldTimerRef.current);
+      }
+      compositionEndHoldTimerRef.current = globalThis.setTimeout(() => {
+        compositionEndHoldTimerRef.current = 0;
+        compositionEndedAtRef.current = 0;
+        setImeHoldEpoch((epoch) => epoch + 1);
+      }, IME_COMPOSITION_END_HOLD_MS);
     };
     document.addEventListener("compositionstart", start, true);
     document.addEventListener("compositionend", end, true);
     return (): void => {
       document.removeEventListener("compositionstart", start, true);
       document.removeEventListener("compositionend", end, true);
+      if (compositionEndHoldTimerRef.current !== 0) {
+        globalThis.clearTimeout(compositionEndHoldTimerRef.current);
+      }
     };
   }, []);
   const nativeTouch = holdTouchEditorKind(
     committedNativeTouchRef.current,
-    composingRef.current,
+    nativeImeOwns(),
     shouldUseNativeTouchEditor(surface.kind, touchValue),
   );
   // The iOS paste-permission alert temporarily owns focus. When the accepted
@@ -127,7 +156,11 @@ export const PlatformComposerEditor = forwardRef<
   const handleChange = useCallback((next: string): void => {
     const nextNative = holdTouchEditorKind(
       committedNativeTouchRef.current,
-      composingRef.current,
+      imeOwnsEditable(
+        composingRef.current,
+        compositionEndedAtRef.current,
+        Date.now(),
+      ),
       shouldUseNativeTouchEditor(surfaceKindRef.current, next),
     );
     const demoting = !committedNativeTouchRef.current && nextNative;

@@ -17,7 +17,7 @@ import { insertNativeInlineImages } from "./composer/mobileCompactEditorPolicy";
 import { attachComposerInputDebug } from "./composer/composerInputDebug";
 import { reportMobileNativePasteEvent } from "./composer/mobileNativePasteTelemetry";
 import { hasDraftMod, hasSendMod } from "./platform";
-import { isImeKeyEvent } from "./imeKey";
+import { imeOwnsEditable, isImeKeyEvent } from "./imeKey";
 import type { AvailableCommand } from "./protocol";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 import {
@@ -202,6 +202,13 @@ export const ComposerTextarea = forwardRef<
   // one render behind.
   const lastNativeValueRef = useRef<string | null>(null);
   const composingRef = useRef(false);
+  const compositionEndedAtRef = useRef(0);
+  const nativeImeOwns = (): boolean =>
+    imeOwnsEditable(
+      composingRef.current,
+      compositionEndedAtRef.current,
+      Date.now(),
+    );
   const selectedSlashCommandRef = useRef<string | null>(null);
   const [trigger, setTrigger] = useState<Trigger | null>(null);
   const [options, setOptions] = useState<PickerOption[]>([]);
@@ -254,7 +261,7 @@ export const ComposerTextarea = forwardRef<
 
   const measureNativeOverflow = (): void => {
     const ta = inputRef.current;
-    if (!ta || composingRef.current) return;
+    if (!ta || nativeImeOwns()) return;
     if (!expanded) {
       const needed = nativeTextareaFittedHeight(ta.scrollHeight);
       // Collapsing to height:auto while focused races UIKit's caret overlay
@@ -368,9 +375,14 @@ export const ComposerTextarea = forwardRef<
     }
     // iOS Pinyin backspace updates the DOM without a React `input` event.
     // Candidate-bar resize then re-renders this parent with a stale `value`
-    // and would clobber marked text (`u o|sa`). Obsidian never writes the
-    // editable during composition.
-    if (composingRef.current) return;
+    // and would clobber marked text (`u o|sa`). A false compositionend before
+    // the leftover-latin compositionstart is the same window: writing value
+    // + setSelectionRange parks the caret in front of the leftover (`调|a`).
+    // Obsidian/CM6 never write the editable in that hold.
+    if (nativeImeOwns()) {
+      lastNativeValueRef.current = ta.value;
+      return;
+    }
     if (lastNativeValueRef.current === ta.value) return;
     const previous = ta.value;
     const from = ta.selectionStart ?? previous.length;
@@ -792,8 +804,12 @@ export const ComposerTextarea = forwardRef<
             }
           }
           lastNativeValueRef.current = e.target.value;
-          composingRef.current =
-            (e.nativeEvent as InputEvent).isComposing === true;
+          // iOS fires input(isComposing=false) between compositionend and
+          // the leftover-latin compositionstart. Clearing the flag here
+          // would let the [value] layout effect move the caret (`调|a`).
+          if ((e.nativeEvent as InputEvent).isComposing === true) {
+            composingRef.current = true;
+          }
           onChange(e.target.value);
           sync(
             e.target.value,
@@ -803,6 +819,7 @@ export const ComposerTextarea = forwardRef<
         }}
         onCompositionStart={(e): void => {
           composingRef.current = true;
+          compositionEndedAtRef.current = 0;
           lastNativeValueRef.current = e.currentTarget.value;
         }}
         onCompositionUpdate={(e): void => {
@@ -811,6 +828,7 @@ export const ComposerTextarea = forwardRef<
         }}
         onCompositionEnd={(e): void => {
           composingRef.current = false;
+          compositionEndedAtRef.current = Date.now();
           lastNativeValueRef.current = e.currentTarget.value;
           onChange(e.currentTarget.value);
           sync(

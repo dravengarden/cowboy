@@ -2071,3 +2071,26 @@ Desktop Vim + IME checks:
     during composition. **Fix:** skip the native value write and height
     measure while composing; treat composing `deleteContentBackward` as
     IME-protected (no `backspaceChain`). Do not claim pitfall #69 fixed.
+
+84. **iOS Pinyin compositionend is not a safe caret-write window.** Symptom:
+    while backspacing native Pinyin, the caret jumps forward and leaves a
+    latin letter (`调|a`). Distinct from #83 (`u o|sa` from writing stale
+    React *during* composing=true). iOS Pinyin backspace often fires
+    `compositionend` (commits CJK, clears marked text) then
+    `compositionstart` with leftover latin. React 18 flushes the
+    compositionend `onChange` between those events: ComposerTextarea's
+    `[value]` layout effect sees `composingRef=false`, native already has
+    leftover `a`, and writes `ta.value` + `setSelectionRange` from the
+    committed snapshot. The IME then inserts `a` at its stored range while
+    the host caret sits before it. The `input` handler can also set
+    `composingRef=false` from `isComposing=false` on the input that
+    follows compositionend, defeating a composing-only skip. A same-turn
+    textarea↔CM6 remount in that gap does the same. Obsidian/CM6 never
+    write the editable; they set `composing=-1` on end and delay flushing
+    composition ~50ms in case start returns
+    (`@codemirror/view` InputState). **Fix:** `imeOwnsEditable` treats
+    50ms after compositionend as still IME-owned; input `isComposing=false`
+    must not clear the flag; skip value/selection/height writes and host
+    swap in that hold; keep `lastNativeValueRef` on the live DOM so a later
+    stale React render cannot clobber leftover latin. Do not
+    `preventDefault` IME beforeinput. Do not claim pitfall #69 fixed.

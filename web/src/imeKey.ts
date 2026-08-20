@@ -71,3 +71,25 @@ export function isImeProtectedInput(
 ): boolean {
   return event.isComposing || editorComposing || isImeInputType(event.inputType);
 }
+
+/**
+ * iOS Pinyin backspace often fires compositionend and then compositionstart
+ * in the next task, inserting leftover latin at the IME's stored range.
+ * Host writes (`textarea.value` / setSelectionRange) in that gap move the
+ * caret in front of the leftover (`调|a`). CM6/Obsidian never write the
+ * editable; they set composing=-1 on end and only flush composition after
+ * ~50ms if start did not arrive. Cowboy's React textarea must treat that
+ * window as still IME-owned. `compositionEndedAt` is 0 when there is no hold.
+ */
+export const IME_COMPOSITION_END_HOLD_MS = 50;
+
+export function imeOwnsEditable(
+  composing: boolean,
+  compositionEndedAt: number,
+  now: number,
+  holdMs = IME_COMPOSITION_END_HOLD_MS,
+): boolean {
+  if (composing) return true;
+  if (compositionEndedAt <= 0) return false;
+  return now - compositionEndedAt < holdMs;
+}

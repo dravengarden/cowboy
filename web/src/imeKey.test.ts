@@ -1,5 +1,7 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
+  IME_COMPOSITION_END_HOLD_MS,
+  imeOwnsEditable,
   isImeInputType,
   isImeKeyEvent,
   isImeProtectedInput,
@@ -62,4 +64,14 @@ Deno.test("iOS IME backspace stays protected while composing", () => {
     }),
     false,
   );
+});
+
+Deno.test("iOS Pinyin compositionend still owns the editable until start or hold", () => {
+  assertEquals(IME_COMPOSITION_END_HOLD_MS, 50);
+  assertEquals(imeOwnsEditable(true, 0, 1_000), true);
+  assertEquals(imeOwnsEditable(false, 0, 1_000), false);
+  assertEquals(imeOwnsEditable(false, 1_000, 1_000), true);
+  assertEquals(imeOwnsEditable(false, 1_000, 1_049), true);
+  assertEquals(imeOwnsEditable(false, 1_000, 1_050), false);
+  assertEquals(imeOwnsEditable(true, 1_000, 2_000), true);
 });

@@ -6,6 +6,9 @@ const textareaSource = await Deno.readTextFile(
 const editorSource = await Deno.readTextFile(
   new URL("../ComposerEditor.tsx", import.meta.url),
 );
+const platformSource = await Deno.readTextFile(
+  new URL("./PlatformComposerEditor.tsx", import.meta.url),
+);
 
 Deno.test("native textarea keeps React rerenders from replacing iOS selection", () => {
   assertEquals(textareaSource.includes('<TextField'), false);
@@ -21,8 +24,34 @@ Deno.test("native textarea keeps React rerenders from replacing iOS selection", 
     textareaSource.includes("mapNativeSelectionThroughValueChange"),
     true,
   );
-  assertEquals(textareaSource.includes("if (composingRef.current) return;"), true);
+  assertEquals(textareaSource.includes("if (nativeImeOwns())"), true);
+  assertEquals(textareaSource.includes("imeOwnsEditable"), true);
   assertEquals(textareaSource.includes("onCompositionUpdate"), true);
+  assertEquals(
+    textareaSource.includes("compositionEndedAtRef.current = Date.now()"),
+    true,
+  );
+  assertEquals(
+    textareaSource.includes(
+      "if ((e.nativeEvent as InputEvent).isComposing === true)",
+    ),
+    true,
+  );
+  assertEquals(
+    textareaSource.includes(
+      "composingRef.current =\n            (e.nativeEvent as InputEvent).isComposing === true",
+    ),
+    false,
+  );
+});
+
+Deno.test("touch host swap waits out the iOS compositionend hold", () => {
+  assertEquals(platformSource.includes("IME_COMPOSITION_END_HOLD_MS"), true);
+  assertEquals(platformSource.includes("imeOwnsEditable"), true);
+  assertEquals(
+    platformSource.includes("compositionEndedAtRef.current = Date.now()"),
+    true,
+  );
 });
 
 Deno.test("CM6 backspace does not steal iOS IME composition deletes", () => {
