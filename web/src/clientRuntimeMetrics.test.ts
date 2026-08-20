@@ -51,6 +51,7 @@ Deno.test("About storage distinguishes service and current-device metrics", asyn
   assert(source.includes('"App storage used"'));
   assert(source.includes('"App storage allowance"'));
   assert(source.includes("`Up to ${formatBytes(metrics.storageQuotaBytes)}`"));
-  assert(source.includes('"Not exposed by browser"'));
-  assert(source.includes('["JS heap", heap]'));
+  assert(source.includes("heap === undefined ? []"));
+  assert(source.includes('[["JS heap", heap] as const]'));
+  assert(!source.includes('"Not exposed by browser"'));
 });

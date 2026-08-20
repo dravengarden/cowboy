@@ -1776,7 +1776,7 @@ function ClientStorageInfoSection(): React.JSX.Element {
     );
   }
   const heap = metrics.jsHeapUsedBytes === undefined
-    ? "Not exposed by browser"
+    ? undefined
     : metrics.jsHeapLimitBytes === undefined
     ? formatBytes(metrics.jsHeapUsedBytes)
     : `${formatBytes(metrics.jsHeapUsedBytes)} / ${
@@ -1804,7 +1804,7 @@ function ClientStorageInfoSection(): React.JSX.Element {
           "Cache buckets",
           metrics.cacheBuckets?.toLocaleString() ?? "Unavailable",
         ],
-        ["JS heap", heap],
+        ...(heap === undefined ? [] : [["JS heap", heap] as const]),
         ["Surface", metrics.surface],
         ["Service worker", metrics.serviceWorker],
       ]}
