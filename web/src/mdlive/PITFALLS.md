@@ -2057,6 +2057,13 @@ Desktop Vim + IME checks:
     this normalization in `clipboardFiles`; do not add browser checks or a
     second paste-event guard to the editors.
 
+    **macOS wrapper metadata (2026-08-20):** Chrome can expose equal-length
+    `files` and file-item lists for one paste while assigning the two wrappers
+    different names or modification times. Equal representation counts are the
+    stronger signal that these are parallel views of the same ordered list;
+    return the direct files once. Only unequal counts use metadata pairing so
+    WebKit item-only entries remain available.
+
 83. **iOS native Pinyin backspace must not rewrite the editable.** Symptom:
     while composing (`放到` + pinyin for `右上角吧`), Backspace sometimes
     leaves latin fragments in the document (`u o|sa`) with a stuck caret
