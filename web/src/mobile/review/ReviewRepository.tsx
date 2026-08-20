@@ -287,6 +287,7 @@ export function ReviewRepository({
           )}
         </Stack>
         <Stack
+          data-mobile-repository-tabs
           direction="row"
           role="tablist"
           aria-label="Repository views"
@@ -303,24 +304,53 @@ export function ReviewRepository({
                 key={value}
                 role="tab"
                 aria-selected={selected}
+                disableRipple
                 size="small"
-                color={selected ? "primary" : "inherit"}
                 startIcon={icon}
-                onClick={() => setSection(value)}
+                onPointerDown={(event): void => {
+                  if (event.pointerType === "touch") {
+                    event.currentTarget.dataset.touchActivated = "true";
+                  } else if (event.pointerType === "mouse") {
+                    delete event.currentTarget.dataset.touchActivated;
+                  }
+                }}
+                onPointerEnter={(event): void => {
+                  if (event.pointerType === "mouse") {
+                    delete event.currentTarget.dataset.touchActivated;
+                  }
+                }}
+                onKeyDown={(event): void => {
+                  delete event.currentTarget.dataset.touchActivated;
+                }}
+                onClick={(event): void => {
+                  setSection(value);
+                  if (event.currentTarget.dataset.touchActivated === "true") {
+                    event.currentTarget.blur();
+                  }
+                }}
                 sx={{
                   flex: 1,
                   minWidth: 0,
                   borderRadius: 2,
-                  color: selected ? undefined : "text.secondary",
-                  fontWeight: selected ? 700 : 500,
-                  bgcolor: selected ? "action.selected" : "transparent",
+                  color: "text.secondary",
+                  fontWeight: 500,
+                  bgcolor: "transparent",
                   textTransform: "none",
-                  // iOS synthesizes :hover after a tap. Don't leave a sticky
-                  // primary wash on the tab you just left.
-                  "@media (hover: none), (pointer: coarse)": {
-                    "&:hover": {
-                      bgcolor: selected ? "action.selected" : "transparent",
-                    },
+                  "&[aria-selected='true']": {
+                    bgcolor: "action.selected",
+                    color: "primary.main",
+                    fontWeight: 700,
+                  },
+                  "&[data-touch-activated='true'][aria-selected='false']:hover, &[data-touch-activated='true'][aria-selected='false'].Mui-focusVisible": {
+                    bgcolor: "transparent",
+                    color: "text.secondary",
+                  },
+                  "&[data-touch-activated='true'][aria-selected='true']:hover, &[data-touch-activated='true'][aria-selected='true'].Mui-focusVisible": {
+                    bgcolor: "action.selected",
+                    color: "primary.main",
+                  },
+                  "&[data-touch-activated='true']:active": {
+                    bgcolor: "action.selected",
                   },
                 }}
               >

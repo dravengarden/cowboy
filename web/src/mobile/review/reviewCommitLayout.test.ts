@@ -44,20 +44,20 @@ Deno.test("repository history opens commit content on the main review surface", 
   assertStringIncludes(appSource, 'mode === "git" && commitTarget');
 });
 
-Deno.test("repository tabs mute idle labels instead of painting every tab primary", () => {
+Deno.test("repository tabs retain authoritative selected paint after an iOS touch", () => {
+  const start = repositorySource.indexOf("data-mobile-repository-tabs");
+  const end = repositorySource.indexOf("</Stack>", start);
+  const tabs = repositorySource.slice(start, end);
+  assertStringIncludes(tabs, "disableRipple");
+  assertStringIncludes(tabs, 'event.currentTarget.dataset.touchActivated = "true"');
+  assertStringIncludes(tabs, "event.currentTarget.blur()");
+  assertStringIncludes(tabs, "&[aria-selected='true']");
   assertStringIncludes(
-    repositorySource,
-    'color={selected ? "primary" : "inherit"}',
+    tabs,
+    "[data-touch-activated='true'][aria-selected='true']:hover",
   );
-  assertStringIncludes(
-    repositorySource,
-    'color: selected ? undefined : "text.secondary"',
-  );
-  assertStringIncludes(repositorySource, "fontWeight: selected ? 700 : 500");
-  assertStringIncludes(
-    repositorySource,
-    '"@media (hover: none), (pointer: coarse)"',
-  );
+  assertStringIncludes(tabs, 'bgcolor: "action.selected"');
+  assertEquals(tabs.includes('"@media (hover: none), (pointer: coarse)"'), false);
 });
 
 Deno.test("repository footer keeps Settings and close in one capsule", () => {
