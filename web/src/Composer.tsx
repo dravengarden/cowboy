@@ -80,7 +80,7 @@ import {
   type ComposerEditorSelection,
   PlatformComposerEditor,
 } from "./composer/PlatformComposerEditor";
-import { MobileDecisionDock } from "./MobileThumbDock";
+import { MobileDecisionActions } from "./MobileDecisionActions";
 import { useComposerDraftController } from "./composer/useComposerDraftController";
 import {
   type NativeClipboardImagePasteRequest,
@@ -6926,7 +6926,15 @@ function ComposerSheet({
       actions={useSheetSurface
         ? (
           editingTitle
-            ? undefined
+            ? (
+              <MobileDecisionActions
+                onCancel={cancelTitle}
+                confirmLabel="Save"
+                onConfirm={saveTitle}
+                confirmDisabled={!trimmedTitle}
+                preserveFocus
+              />
+            )
             : <MobileSheetDismiss onClose={close} />
         )
         : undefined}
@@ -7138,16 +7146,6 @@ function ComposerSheet({
         onClose={(): void => setReloadConfirm(false)}
       />
       </Sheet>
-      {useSheetSurface && (
-        <MobileDecisionDock
-          open={open && editingTitle}
-          onCancel={cancelTitle}
-          confirmLabel="Save"
-          onConfirm={saveTitle}
-          confirmDisabled={!trimmedTitle}
-          preserveFocus
-        />
-      )}
     </>
   );
 }
