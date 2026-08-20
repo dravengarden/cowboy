@@ -34,13 +34,6 @@ export function SessionReloadDialog({
         if (!action.pending) onClose();
       }}
       title="Reload this session?"
-      dock={{
-        cancelDisabled: action.pending,
-        confirmLabel: "Reload",
-        confirmDisabled: action.pending,
-        confirmBusy: action.pending,
-        onConfirm: confirm,
-      }}
       actions={
         <>
           <Button color="inherit" onClick={onClose} disabled={action.pending}>

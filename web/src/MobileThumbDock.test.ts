@@ -36,11 +36,17 @@ Deno.test("decision dock is the shared cancel/confirm island pair", () => {
   assertEquals(source.includes("export const SHEET_THUMB_CLEARANCE"), true);
 });
 
-Deno.test("delete rename and session info share the viewport dock", () => {
-  assertEquals(appSource.includes('title="Delete this session?"'), true);
-  assertEquals(appSource.includes("<MobileDecisionDock"), true);
-  assertEquals(appSource.includes('confirmLabel="Delete"'), true);
-  assertEquals(appSource.includes('confirmLabel="Save"'), true);
-  assertEquals(appSource.includes('title="Session info"'), true);
-  assertEquals(appSource.includes('label: "Close"'), true);
+Deno.test("compact confirm sheets keep Cancel and the labeled action", () => {
+  const deleteShell = appSource.slice(
+    appSource.indexOf("function DeleteSessionShell("),
+    appSource.indexOf("function LoadingState("),
+  );
+  const renameShell = appSource.slice(
+    appSource.indexOf("function RenameSessionShell("),
+    appSource.indexOf("// --- Info:"),
+  );
+  assertEquals(deleteShell.includes("<MobileDecisionDock"), false);
+  assertEquals(renameShell.includes("<MobileDecisionDock"), false);
+  assertEquals(deleteShell.includes("Cancel"), true);
+  assertEquals(renameShell.includes("Save"), true);
 });

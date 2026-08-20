@@ -1501,16 +1501,6 @@ function ProviderUsageCard({
         title={resetMode === "schedule"
           ? "Schedule nearest reset"
           : "Use nearest reset now?"}
-        dock={{
-          cancelDisabled: resetBusy,
-          confirmLabel: resetMode === "schedule" ? "Schedule reset" : "Reset now",
-          confirmDisabled: resetBusy || confirmText !== "confirm" ||
-            (resetMode === "schedule" && !scheduleValid),
-          confirmBusy: resetBusy,
-          onConfirm: () => {
-            void submitReset();
-          },
-        }}
         actions={
           <>
             <Button onClick={closeResetDialog} disabled={resetBusy}>

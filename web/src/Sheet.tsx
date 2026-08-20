@@ -2,7 +2,6 @@ import { Dialog, DialogContent, useMediaQuery, useTheme } from "@mui/material";
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { BottomSheet, type BottomSheetProps } from "./_shell";
-import { MobileDecisionDock } from "./MobileThumbDock";
 import { ObsidianSheet } from "./ObsidianSheet";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 
@@ -25,17 +24,11 @@ export function Sheet(
   props: Omit<BottomSheetProps, "frosted"> & {
     desktopMaxWidth?: number;
     portal?: boolean;
-    dockClearance?: boolean;
   },
 ): ReactNode {
   const theme = useTheme();
   const widthIsMobile = useMediaQuery(theme.breakpoints.down("sm"));
-  const {
-    desktopMaxWidth,
-    portal = false,
-    dockClearance = false,
-    ...bottomSheetProps
-  } = props;
+  const { desktopMaxWidth, portal = false, ...bottomSheetProps } = props;
   // Content-heavy Cowboy workbenches may claim the available Desktop canvas.
   // Cover sheets stay on DetentSheet; compact phone/tablet sheets use the
   // flush bottom card.
@@ -87,7 +80,6 @@ export function Sheet(
         onClose={props.onClose}
         title={props.title}
         actions={props.actions}
-        dockClearance={dockClearance}
         ariaLabel={typeof props.title === "string" ? props.title : undefined}
       >
         {props.children}
@@ -117,61 +109,34 @@ export function useConfirmSheetSurface(): boolean {
   return useSurfaceProfile().kind !== "desktop";
 }
 
-export interface ConfirmSheetDock {
-  readonly cancelLabel?: string | undefined;
-  readonly cancelDisabled?: boolean | undefined;
-  readonly confirmLabel: string;
-  readonly confirmDisabled?: boolean | undefined;
-  readonly confirmBusy?: boolean | undefined;
-  readonly onConfirm: () => void;
-}
-
 export function ConfirmSheet({
   open,
   onClose,
   title,
   children,
   actions,
-  dock,
   wide = false,
 }: {
   open: boolean;
   onClose: () => void;
   title?: ReactNode;
   children: ReactNode;
-  actions?: ReactNode | undefined;
-  dock?: ConfirmSheetDock | undefined;
+  actions?: ReactNode;
   wide?: boolean;
 }): ReactNode {
   const forceSheet = useConfirmSheetSurface();
-  const useDock = forceSheet && dock != null;
   return (
-    <>
-      <Sheet
-        open={open}
-        onClose={onClose}
-        title={title}
-        actions={useDock ? undefined : actions}
-        dockClearance={useDock}
-        wide={wide}
-        portal
-        forceSheet={forceSheet}
-        mobileDismiss={useDock || actions != null ? "none" : "footer"}
-      >
-        {children}
-      </Sheet>
-      {dock == null ? null : (
-        <MobileDecisionDock
-          open={open && useDock}
-          cancelLabel={dock.cancelLabel}
-          onCancel={onClose}
-          cancelDisabled={dock.cancelDisabled}
-          confirmLabel={dock.confirmLabel}
-          onConfirm={dock.onConfirm}
-          confirmDisabled={dock.confirmDisabled}
-          confirmBusy={dock.confirmBusy}
-        />
-      )}
-    </>
+    <Sheet
+      open={open}
+      onClose={onClose}
+      title={title}
+      actions={actions}
+      wide={wide}
+      portal
+      forceSheet={forceSheet}
+      mobileDismiss={actions == null ? "footer" : "none"}
+    >
+      {children}
+    </Sheet>
   );
 }

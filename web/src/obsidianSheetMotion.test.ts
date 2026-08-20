@@ -79,6 +79,4 @@ Deno.test("phone sheets use the compact Obsidian card, not a floating footer pad
   );
   assertEquals(modalSource.includes("backdropFilter"), false);
   assert(modalSource.includes('justifyContent: "space-between"'));
-  assert(modalSource.includes("dockClearance"));
-  assert(modalSource.includes("SHEET_THUMB_CLEARANCE"));
 });

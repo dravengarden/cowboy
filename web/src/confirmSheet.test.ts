@@ -36,29 +36,7 @@ Deno.test("ConfirmSheet forces the compact Obsidian card on mobile and tablet", 
   assert(sheetSource.includes("<ObsidianSheet"));
   assert(sheetSource.includes("useCompactCard"));
   assert(
-    sheetSource.includes(
-      'mobileDismiss={useDock || actions != null ? "none" : "footer"}',
-    ),
-  );
-  assert(sheetSource.includes("<MobileDecisionDock"));
-  assert(sheetSource.includes("dockClearance={useDock}"));
-});
-
-Deno.test("phone-facing confirms supply a mobile decision dock", () => {
-  assert(
-    composerSource.includes(
-      'confirmLabel: action.destructive ? "Clear" : "Compact"',
-    ),
-  );
-  assert(composerSource.includes('cancelLabel: "Keep running"'));
-  assert(reloadSource.includes('confirmLabel: "Reload"'));
-  assert(fullscreenSource.includes('cancelLabel: "Keep editing"'));
-  assert(appSource.includes('confirmLabel: "Update and roll out"'));
-  assert(infoSource.includes('confirmLabel: resetMode === "schedule"'));
-  assert(infoSource.includes('"Schedule reset"'));
-  assert(infoSource.includes('"Reset now"'));
-  assert(
-    providerSource.includes('confirmLabel: "Uninstall and remove sessions"'),
+    sheetSource.includes('mobileDismiss={actions == null ? "footer" : "none"}'),
   );
 });
 

@@ -199,7 +199,6 @@ import {
 import { ConfirmSheet, Sheet } from "./Sheet";
 import {
     MobileDecisionDock,
-    MobileThumbDock,
     SHEET_THUMB_CLEARANCE,
 } from "./MobileThumbDock";
 import { Kbd, useConfirmEnter } from "./Kbd";
@@ -4922,10 +4921,6 @@ function MachinesContent({ embedded = false }: { embedded?: boolean } = {}): Rea
                 open={updateConfirmation !== null}
                 onClose={() => setUpdateConfirmation(null)}
                 title="Roll out this update?"
-                dock={{
-                    confirmLabel: "Update and roll out",
-                    onConfirm: confirmMachineUpdate,
-                }}
                 actions={
                     <>
                         <Button color="inherit" onClick={() => setUpdateConfirmation(null)}>
@@ -6039,15 +6034,13 @@ function DeleteSessionShell({
     useConfirmEnter(session !== null, onConfirm);
     if (!session) return null;
     return (
-        <>
         <Sheet
             forceSheet={navbarAtBottom}
             open
             onClose={onClose}
             title="Delete this session?"
             mobileDismiss="none"
-            dockClearance={navbarAtBottom}
-            actions={navbarAtBottom ? undefined : (
+            actions={
                 <>
                     <Button onClick={onClose} color="inherit">
                         Cancel
@@ -6058,19 +6051,12 @@ function DeleteSessionShell({
                         <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
                     </Button>
                 </>
-            )}
+            }
         >
             <Typography variant="body2" color="text.secondary">
                 Any in-flight turn is cancelled. The agent transcript on this session will be lost.
             </Typography>
         </Sheet>
-        <MobileDecisionDock
-            open={navbarAtBottom}
-            onCancel={onClose}
-            confirmLabel="Delete"
-            onConfirm={onConfirm}
-        />
-        </>
     );
 }
 
@@ -6183,15 +6169,13 @@ function RenameSessionShell({
     };
     useConfirmEnter(desktop, submit, { suppressBareEnter: false });
     return (
-        <>
         <Sheet
             forceSheet={navbarAtBottom}
             open
             onClose={onClose}
             title="Rename session"
             mobileDismiss="none"
-            dockClearance={navbarAtBottom}
-            actions={navbarAtBottom ? undefined : (
+            actions={
                 <>
                     <Button onClick={onClose} color="inherit">
                         Cancel
@@ -6216,7 +6200,7 @@ function RenameSessionShell({
                         />
                     </Button>
                 </>
-            )}
+            }
         >
             <TextField
                 fullWidth
@@ -6237,14 +6221,6 @@ function RenameSessionShell({
                 helperText="Shown in the sidebar and the title bar."
             />
         </Sheet>
-        <MobileDecisionDock
-            open={navbarAtBottom}
-            onCancel={onClose}
-            confirmLabel="Save"
-            onConfirm={submit}
-            confirmDisabled={!canSave}
-        />
-        </>
     );
 }
 
@@ -6361,38 +6337,14 @@ function SessionInfoShell(
         body = <SessionOverviewRows info={info} live={session} />;
     }
     return (
-        <>
         <Sheet
             forceSheet={navbarAtBottom}
             cover={navbarAtBottom}
             open
             onClose={onClose}
             title="Session info"
-            mobileDismiss="none"
         >
-            <Box sx={navbarAtBottom ? { pb: SHEET_THUMB_CLEARANCE } : undefined}>
-                {body}
-            </Box>
+            {body}
         </Sheet>
-        <MobileThumbDock
-            open={navbarAtBottom}
-            left={
-                <MobileSheetActionGroup
-                    actions={[{
-                        key: "close",
-                        label: "Close",
-                        onPress: onClose,
-                        icon: (
-                            <CloseIcon
-                                aria-hidden
-                                fontSize="small"
-                                sx={{ transform: "translate(-0.75px, -0.5px)" }}
-                            />
-                        ),
-                    }]}
-                />
-            }
-        />
-        </>
     );
 }
