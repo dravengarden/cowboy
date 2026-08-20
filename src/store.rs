@@ -2417,8 +2417,8 @@ impl PostgresStorage {
         let mut referenced = HashSet::new();
         // Extract only the small artifact URLs in Postgres. Pulling every
         // matching JSON payload across the driver made startup GC deserialize
-        // hundreds of large transcript events and dominated controller peak
-        // memory even though rows were consumed as a stream.
+        // hundreds of large transcript events, adding avoidable allocation and
+        // latency even though rows were consumed as a stream.
         let mut rows = sqlx::query(
             "SELECT DISTINCT value #>> ARRAY[]::text[] AS reference \
              FROM events \
