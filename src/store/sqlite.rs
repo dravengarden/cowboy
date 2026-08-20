@@ -2575,16 +2575,23 @@ impl SqliteStorage {
         .await
         .context("purge soft-deleted SQLite sessions")?;
         let mut referenced = HashSet::new();
-        let mut rows =
-            sqlx::query("SELECT payload FROM events WHERE payload LIKE '%/api/artifacts/%'")
-                .fetch(&self.pool);
+        let mut rows = sqlx::query(
+            "SELECT DISTINCT tree.value AS reference \
+             FROM events \
+             CROSS JOIN json_tree(events.payload) AS tree \
+             WHERE tree.type = 'text' AND tree.value LIKE '/api/artifacts/%'",
+        )
+        .fetch(&self.pool);
         while let Some(row) = rows
             .try_next()
             .await
             .context("scan retained SQLite artifact references")?
         {
-            let payload: serde_json::Value = row.try_get("payload")?;
-            crate::artifacts::collect_references(&payload, &mut referenced);
+            let reference: String = row.try_get("reference")?;
+            crate::artifacts::collect_references(
+                &serde_json::Value::String(reference),
+                &mut referenced,
+            );
         }
         let artifacts_removed = self
             .artifacts

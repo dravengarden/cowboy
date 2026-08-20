@@ -2415,16 +2415,29 @@ impl PostgresStorage {
         .await
         .context("purge soft-deleted sessions")?;
         let mut referenced = HashSet::new();
-        let mut rows =
-            sqlx::query("SELECT payload FROM events WHERE payload::text LIKE '%/api/artifacts/%'")
-                .fetch(&self.pool);
+        // Extract only the small artifact URLs in Postgres. Pulling every
+        // matching JSON payload across the driver made startup GC deserialize
+        // hundreds of large transcript events and dominated controller peak
+        // memory even though rows were consumed as a stream.
+        let mut rows = sqlx::query(
+            "SELECT DISTINCT value #>> ARRAY[]::text[] AS reference \
+             FROM events \
+             CROSS JOIN LATERAL jsonb_path_query( \
+                 payload, \
+                 'strict $.** ? (@.type() == \"string\" && @ starts with \"/api/artifacts/\")'::jsonpath \
+             ) AS value",
+        )
+        .fetch(&self.pool);
         while let Some(row) = rows
             .try_next()
             .await
             .context("scan retained PostgreSQL artifact references")?
         {
-            let payload: serde_json::Value = row.try_get("payload")?;
-            crate::artifacts::collect_references(&payload, &mut referenced);
+            let reference: String = row.try_get("reference")?;
+            crate::artifacts::collect_references(
+                &serde_json::Value::String(reference),
+                &mut referenced,
+            );
         }
         let artifacts_removed = self
             .artifacts
