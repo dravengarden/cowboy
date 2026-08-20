@@ -191,6 +191,7 @@ import {
     NativeReleaseUpdatePrompt,
 } from "./_shell";
 import { ConfirmSheet, Sheet } from "./Sheet";
+import { MobileDecisionActions } from "./MobileDecisionActions";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { isImeKeyEvent } from "./imeKey";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
@@ -1733,38 +1734,17 @@ function NewSessionDialog({
                 footer={
                     <Box
                         data-new-session-footer-actions
-                        sx={{
-                            width: "100%",
-                            display: "flex",
-                            justifyContent: "space-between",
-                            alignItems: "center",
-                            pointerEvents: "none",
-                        }}
+                        sx={{ width: "100%" }}
                     >
-                        <Box sx={{ width: 54, pointerEvents: "auto" }}>
-                            <MobileSheetActionGroup
-                                actions={[{
-                                    key: "cancel",
-                                    label: "Cancel",
-                                    disabled: creating,
-                                    onPress: creating ? (): void => {} : onClose,
-                                    icon: <CloseIcon fontSize="small" />,
-                                }]}
-                            />
-                        </Box>
-                        <Box sx={{ width: 54, pointerEvents: "auto" }}>
-                            <MobileSheetActionGroup
-                                actions={[{
-                                    key: "create",
-                                    label: creating ? "Preparing session" : "Create session",
-                                    disabled: !canCreate,
-                                    onPress: create,
-                                    icon: creating
-                                        ? <CircularProgress size={18} color="inherit" />
-                                        : <CheckIcon fontSize="small" />,
-                                }]}
-                            />
-                        </Box>
+                        <MobileDecisionActions
+                            onCancel={creating ? (): void => {} : onClose}
+                            cancelDisabled={creating}
+                            confirmLabel={creating ? "Creating…" : "Create"}
+                            onConfirm={create}
+                            confirmDisabled={!canCreate}
+                            confirmBusy={creating}
+                            preserveFocus
+                        />
                     </Box>
                 }
                 header={
