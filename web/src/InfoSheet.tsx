@@ -64,6 +64,10 @@ import {
   validTimeRange,
 } from "./observabilityTimeRange";
 import { ConfirmSheet, Sheet } from "./Sheet";
+import {
+  type ClientRuntimeMetrics,
+  readClientRuntimeMetrics,
+} from "./clientRuntimeMetrics";
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${String(n)} B`;
@@ -1677,7 +1681,43 @@ function UsageInfoSection(): React.JSX.Element {
 
 // Storage/runtime metrics (GET /api/metrics). Migrated here from user Settings —
 // it's daemon system info, not a user preference.
-function StorageInfoSection(): React.JSX.Element {
+function MetricsGrid({
+  metrics,
+}: {
+  metrics: readonly (readonly [string, string])[];
+}): React.JSX.Element {
+  return (
+    <Box
+      sx={{
+        display: "grid",
+        gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+        gap: 0.75,
+      }}
+    >
+      {metrics.map(([label, value]) => (
+        <Box
+          key={label}
+          sx={{
+            minWidth: 0,
+            px: 1,
+            py: 0.8,
+            borderRadius: 1.25,
+            bgcolor: "action.hover",
+          }}
+        >
+          <Typography variant="caption" color="text.secondary" display="block">
+            {label}
+          </Typography>
+          <Typography variant="body2" fontWeight={700} sx={{ mt: 0.2 }}>
+            {value}
+          </Typography>
+        </Box>
+      ))}
+    </Box>
+  );
+}
+
+function ServiceStorageInfoSection(): React.JSX.Element {
   const [m, setM] = useState<MetricsData | null>(null);
   useEffect(() => {
     const ctrl = new AbortController();
@@ -1715,34 +1755,61 @@ function StorageInfoSection(): React.JSX.Element {
       ),
     ],
   ] as const;
+  return <MetricsGrid metrics={metrics} />;
+}
+
+function ClientStorageInfoSection(): React.JSX.Element {
+  const [metrics, setMetrics] = useState<ClientRuntimeMetrics | null>(null);
+  useEffect(() => {
+    let active = true;
+    void readClientRuntimeMetrics().then((value) => {
+      if (active) setMetrics(value);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+  if (!metrics) {
+    return (
+      <Typography variant="body2" sx={{ color: "text.secondary" }}>
+        Loading…
+      </Typography>
+    );
+  }
+  const heap = metrics.jsHeapUsedBytes === undefined
+    ? "Unavailable"
+    : metrics.jsHeapLimitBytes === undefined
+    ? formatBytes(metrics.jsHeapUsedBytes)
+    : `${formatBytes(metrics.jsHeapUsedBytes)} / ${
+      formatBytes(metrics.jsHeapLimitBytes)
+    }`;
   return (
-    <Box
-      sx={{
-        display: "grid",
-        gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-        gap: 0.75,
-      }}
-    >
-      {metrics.map(([label, value]) => (
-        <Box
-          key={label}
-          sx={{
-            minWidth: 0,
-            px: 1,
-            py: 0.8,
-            borderRadius: 1.25,
-            bgcolor: "action.hover",
-          }}
-        >
-          <Typography variant="caption" color="text.secondary" display="block">
-            {label}
-          </Typography>
-          <Typography variant="body2" fontWeight={700} sx={{ mt: 0.2 }}>
-            {value}
-          </Typography>
-        </Box>
-      ))}
-    </Box>
+    <MetricsGrid
+      metrics={[
+        [
+          "Storage used",
+          metrics.storageUsageBytes === undefined
+            ? "Unavailable"
+            : formatBytes(metrics.storageUsageBytes),
+        ],
+        [
+          "Storage quota",
+          metrics.storageQuotaBytes === undefined
+            ? "Unavailable"
+            : formatBytes(metrics.storageQuotaBytes),
+        ],
+        ["Local state", formatBytes(metrics.bytes)],
+        ["Local entries", metrics.entries.toLocaleString()],
+        ["Local drafts", metrics.drafts.toLocaleString()],
+        [
+          "Cache buckets",
+          metrics.cacheBuckets?.toLocaleString() ?? "Unavailable",
+        ],
+        ["JS heap", heap],
+        ["Surface", metrics.surface],
+        ["Service worker", metrics.serviceWorker],
+      ]}
+    />
   );
 }
 
@@ -1895,7 +1962,24 @@ export function InfoContent({
           <Typography variant="overline" color="text.secondary">
             Storage
           </Typography>
-          <StorageInfoSection />
+          <Stack spacing={0.75} data-storage-scope="service">
+            <Typography variant="caption" fontWeight={700}>
+              Service
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              Shared Cowboy daemon and durable session store
+            </Typography>
+            <ServiceStorageInfoSection />
+          </Stack>
+          <Stack spacing={0.75} sx={{ pt: 1 }} data-storage-scope="client">
+            <Typography variant="caption" fontWeight={700}>
+              Client
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              This browser or app on the current device
+            </Typography>
+            <ClientStorageInfoSection />
+          </Stack>
         </Stack>
         {!desktop && <Divider />}
         <Stack
