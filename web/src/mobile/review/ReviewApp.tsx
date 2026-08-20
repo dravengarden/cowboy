@@ -136,6 +136,25 @@ import {
 } from "./reviewTabs";
 import { restoreReviewScrollTop } from "./reviewScrollPosition";
 
+const SYMBOL_NAVIGATION_KINDS = [
+  "definition",
+  "declaration",
+  "typeDefinition",
+  "implementation",
+  "references",
+] as const satisfies readonly CodeNavigationKind[];
+
+type SymbolNavigationAvailability = Record<
+  CodeNavigationKind,
+  "checking" | "available" | "unavailable"
+>;
+
+function checkingSymbolNavigation(): SymbolNavigationAvailability {
+  return Object.fromEntries(
+    SYMBOL_NAVIGATION_KINDS.map((kind) => [kind, "checking"]),
+  ) as SymbolNavigationAvailability;
+}
+
 const CodeViewer = lazy(() => import("./CodeViewer"));
 
 type ReviewMachineInventory = {
@@ -447,6 +466,12 @@ function DocumentView({
     { row: number; column: number } | undefined
   >();
   const [navigation, setNavigation] = useState<CodeLocation[]>([]);
+  const [navigationAvailability, setNavigationAvailability] = useState(
+    checkingSymbolNavigation,
+  );
+  const [navigationResults, setNavigationResults] = useState<
+    Partial<Record<CodeNavigationKind, CodeLocation[]>>
+  >({});
   const [inspectCandidates, setInspectCandidates] = useState<
     CodeInspectCandidate[]
   >([]);
@@ -456,8 +481,8 @@ function DocumentView({
   const [inspectAnchor, setInspectAnchor] = useState<
     { top: number; left: number } | undefined
   >();
-  const [navigationLoading, setNavigationLoading] = useState(false);
   const hoverController = useRef<AbortController | undefined>(undefined);
+  const navigationController = useRef<AbortController | undefined>(undefined);
   const fileRetry = useRef<{ key: string; count: number }>({
     key: "",
     count: 0,
@@ -638,40 +663,70 @@ function DocumentView({
     target.path,
   ]);
 
+  useEffect(() => {
+    navigationController.current?.abort();
+    setNavigationResults({});
+    setNavigationAvailability(checkingSymbolNavigation());
+    if (
+      !hoverOpen || !inspectTarget ||
+      (target.kind === "diff" && target.scope !== "unstaged")
+    ) return undefined;
+    const controller = new AbortController();
+    navigationController.current = controller;
+    for (const kind of SYMBOL_NAVIGATION_KINDS) {
+      void fetchCodeNavigation(
+        sessionId,
+        target.path,
+        inspectTarget.row,
+        inspectTarget.column,
+        kind,
+        controller.signal,
+      ).then((result) => {
+        if (controller.signal.aborted) return;
+        setNavigationResults((current) => ({
+          ...current,
+          [kind]: result.locations,
+        }));
+        setNavigationAvailability((current) => ({
+          ...current,
+          [kind]: result.locations.length > 0 ? "available" : "unavailable",
+        }));
+      }).catch(() => {
+        if (controller.signal.aborted) return;
+        setNavigationAvailability((current) => ({
+          ...current,
+          [kind]: "unavailable",
+        }));
+      });
+    }
+    return () => controller.abort();
+  }, [
+    hoverOpen,
+    inspectTarget?.column,
+    inspectTarget?.row,
+    sessionId,
+    target.kind,
+    target.path,
+    target.kind === "diff" ? target.scope : undefined,
+  ]);
+
   const navigate = useCallback((kind: CodeNavigationKind): void => {
     if (
       !inspectTarget ||
-      (target.kind === "diff" && target.scope !== "unstaged")
+      (target.kind === "diff" && target.scope !== "unstaged") ||
+      navigationAvailability[kind] !== "available"
     ) return;
-    hoverController.current?.abort();
-    const controller = new AbortController();
-    hoverController.current = controller;
+    const locations = navigationResults[kind];
+    if (!locations?.length) return;
     setNavigation([]);
-    setNavigationLoading(true);
-    void fetchCodeNavigation(
-      sessionId,
-      target.path,
-      inspectTarget.row,
-      inspectTarget.column,
-      kind,
-      controller.signal,
-    ).then((result) => {
-      if (controller.signal.aborted) return;
-      const onlyLocation = result.locations.length === 1
-        ? result.locations[0]
-        : undefined;
-      if (onlyLocation) {
-        setHoverOpen(false);
-        onNavigate(onlyLocation, inspectTarget);
-      } else {
-        setNavigation(result.locations);
-      }
-    }).catch(() => {
-      if (!controller.signal.aborted) setNavigation([]);
-    }).finally(() => {
-      if (!controller.signal.aborted) setNavigationLoading(false);
-    });
-  }, [inspectTarget, onNavigate, sessionId, target]);
+    const onlyLocation = locations.length === 1 ? locations[0] : undefined;
+    if (onlyLocation) {
+      setHoverOpen(false);
+      onNavigate(onlyLocation, inspectTarget);
+    } else {
+      setNavigation(locations);
+    }
+  }, [inspectTarget, navigationAvailability, navigationResults, onNavigate, target]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1080,6 +1135,28 @@ function DocumentView({
       </Box>
     )
     : null;
+  const navigationButton = (
+    kind: CodeNavigationKind,
+    label: string,
+  ): React.JSX.Element => {
+    const availability = navigationAvailability[kind];
+    return (
+      <Button
+        size="small"
+        disabled={availability !== "available"}
+        data-navigation-kind={kind}
+        data-navigation-status={availability}
+        aria-label={availability === "available"
+          ? label
+          : availability === "checking"
+          ? `${label} checking`
+          : `${label} unavailable`}
+        onClick={() => navigate(kind)}
+      >
+        {label}
+      </Button>
+    );
+  };
   const symbolContent = (
     <Stack spacing={1.5} sx={{ pb: 2 }}>
       {hoverLoading
@@ -1178,40 +1255,13 @@ function DocumentView({
         )}
       {!hoverLoading && !hoverError && (
         <Stack direction="row" useFlexGap flexWrap="wrap" gap={1}>
-          <Button
-            size="small"
-            onClick={() =>
-              navigate("definition")}
-          >
-            Definition
-          </Button>
-          <Button
-            size="small"
-            onClick={() =>
-              navigate("declaration")}
-          >
-            Declaration
-          </Button>
-          <Button
-            size="small"
-            onClick={() =>
-              navigate("typeDefinition")}
-          >
-            Type
-          </Button>
-          <Button
-            size="small"
-            onClick={() =>
-              navigate("implementation")}
-          >
-            Implementations
-          </Button>
-          <Button size="small" onClick={() => navigate("references")}>
-            References
-          </Button>
+          {navigationButton("definition", "Definition")}
+          {navigationButton("declaration", "Declaration")}
+          {navigationButton("typeDefinition", "Type")}
+          {navigationButton("implementation", "Implementations")}
+          {navigationButton("references", "References")}
         </Stack>
       )}
-      {navigationLoading && <CircularProgress size={20} />}
       {navigation.map((location) => (
         <Button
           key={`${location.path}:${location.start.row}:${location.start.column}`}

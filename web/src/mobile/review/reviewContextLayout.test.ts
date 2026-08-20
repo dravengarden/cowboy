@@ -23,6 +23,26 @@ Deno.test("review sheets portal off the product-pager containing block", () => {
   assertStringIncludes(source.slice(contextAt, contextAt + 180), "portal");
 });
 
+Deno.test("symbol navigation disables actions without destinations", () => {
+  for (
+    const kind of [
+      "definition",
+      "declaration",
+      "typeDefinition",
+      "implementation",
+      "references",
+    ]
+  ) {
+    assertStringIncludes(source, `navigationButton("${kind}"`);
+  }
+  assertStringIncludes(
+    source,
+    'result.locations.length > 0 ? "available" : "unavailable"',
+  );
+  assertStringIncludes(source, 'disabled={availability !== "available"}');
+  assertStringIncludes(source, "data-navigation-status={availability}");
+});
+
 Deno.test("session context leads with the active session without a history row", () => {
   assertEquals(source.includes("function ContextPreviousSessionRow"), false);
   assertEquals(source.includes('label = "Previous session"'), false);
