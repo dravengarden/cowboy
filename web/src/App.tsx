@@ -1734,7 +1734,25 @@ function NewSessionDialog({
                 footer={
                     <Box
                         data-new-session-footer-actions
-                        sx={{ width: "100%" }}
+                        sx={{
+                            width: "100%",
+                            position: "relative",
+                            // Separate the stationary decision row from the
+                            // scrolling form without making it a heavy toolbar.
+                            // Extend through DetentSheet's 16px side gutter.
+                            "&::before": {
+                                content: '""',
+                                position: "absolute",
+                                left: -2,
+                                right: -2,
+                                top: -0.5,
+                                height: 1,
+                                bgcolor: "divider",
+                                boxShadow: (t) =>
+                                    `0 -8px 18px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.22 : 0.08)}`,
+                                pointerEvents: "none",
+                            },
+                        }}
                     >
                         <MobileDecisionActions
                             onCancel={creating ? (): void => {} : onClose}
@@ -2514,6 +2532,20 @@ export function App({
                 "&:has([data-detent-sheet='true']) [data-detent-sheet-chrome='true']": {
                     opacity: 0,
                     pointerEvents: "none",
+                },
+                // A cover sheet owns the visible viewport while it is open. On
+                // iOS, underlying momentum scrollers otherwise keep their
+                // independently composited native scroll indicators, which can
+                // paint through the opaque cover and resemble duplicate sheet
+                // scrollbars. Freeze only the page layers behind New Session;
+                // the DetentSheet body remains the sole vertical scroll owner.
+                "&:has([data-detent-sheet='true'][aria-label='New session']) [data-mobile-overflow-layer='true']": {
+                    overflowY: "hidden !important",
+                    WebkitOverflowScrolling: "auto",
+                },
+                "&:has([data-detent-sheet='true'][aria-label='New session']) [data-detent-sheet='true'] [data-mobile-overflow-layer='true']": {
+                    overflowY: "auto !important",
+                    WebkitOverflowScrolling: "touch",
                 },
                 ...(surface === "desktop" && {
                     "& [data-desktop-region]": {

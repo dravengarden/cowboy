@@ -28,6 +28,21 @@ Deno.test("mobile new session uses labeled Cancel and Create actions", () => {
   );
   assertEquals(dialog.includes("footerOverlay"), false);
   assertEquals(dialog.includes("data-new-session-footer-actions"), true);
+  assertEquals(dialog.includes('content: \'""\''), true);
+  assertEquals(dialog.includes('bgcolor: "divider"'), true);
+  assertEquals(dialog.includes("0 -8px 18px"), true);
+  assertEquals(
+    appSource.includes(
+      "[data-detent-sheet='true'][aria-label='New session']) [data-mobile-overflow-layer='true']",
+    ),
+    true,
+  );
+  assertEquals(
+    appSource.includes(
+      "[data-detent-sheet='true'][aria-label='New session']) [data-detent-sheet='true'] [data-mobile-overflow-layer='true']",
+    ),
+    true,
+  );
 });
 
 Deno.test("session title editing uses labeled Cancel and Save actions", async () => {
