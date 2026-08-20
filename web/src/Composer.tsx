@@ -3619,13 +3619,12 @@ export function ComposerWorkspace({
           // snatch the Undo away before the user can reach it.
           if (reason !== "clickaway") setMoveUndo(null);
         }}
-        anchorOrigin={{ vertical: "top", horizontal: "center" }}
-        // MUI's default Mobile top=8 sits entirely behind an iPhone status bar
-        // (only its bottom shadow remains visible). Keep the Undo toast inside
-        // both safe-area and horizontal viewport bounds.
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+        // Match the app-level mobile snackbar: stay above the bottom navigation
+        // and composer actions while respecting the home-indicator safe area.
         sx={{
-          top: {
-            xs: "calc(env(safe-area-inset-top, 0px) + 8px)",
+          bottom: {
+            xs: "calc(env(safe-area-inset-bottom, 0px) + 96px)",
             sm: 24,
           },
           width: { xs: "calc(100% - 16px)", sm: "auto" },

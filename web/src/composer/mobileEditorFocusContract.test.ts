@@ -591,10 +591,16 @@ Deno.test("fullscreen primary action survives a swallowed Safari click", () => {
   assertEquals(primaryButton.includes("primaryTap.onClick"), true);
 });
 
-Deno.test("move-draft undo toast clears the iOS status safe area", () => {
+Deno.test("move-draft undo toast stays above the mobile bottom controls", () => {
   assertEquals(
     composerSource.includes(
-      'xs: "calc(env(safe-area-inset-top, 0px) + 8px)"',
+      'anchorOrigin={{ vertical: "bottom", horizontal: "center" }}',
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      'xs: "calc(env(safe-area-inset-bottom, 0px) + 96px)"',
     ),
     true,
   );
