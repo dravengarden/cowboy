@@ -34,6 +34,22 @@ Deno.test("decision dock is the shared cancel/confirm island pair", () => {
   assertEquals(source.includes('key: "cancel"'), true);
   assertEquals(source.includes('key: "confirm"'), true);
   assertEquals(source.includes("export const SHEET_THUMB_CLEARANCE"), true);
+  assertEquals(source.includes("onPointerDownCapture={preserveInput}"), true);
+});
+
+Deno.test("session title editing uses corner Cancel and Save islands", async () => {
+  const composerSource = await Deno.readTextFile(
+    new URL("./Composer.tsx", import.meta.url),
+  );
+  const settings = composerSource.slice(
+    composerSource.indexOf("function ComposerSheet("),
+    composerSource.indexOf("function SessionInfoSection("),
+  );
+  assertEquals(settings.includes("<MobileDecisionDock"), true);
+  assertEquals(settings.includes('confirmLabel="Save"'), true);
+  assertEquals(settings.includes("onCancel={cancelTitle}"), true);
+  assertEquals(settings.includes("preserveFocus"), true);
+  assertEquals(settings.includes('aria-label="save session title"'), false);
 });
 
 Deno.test("compact confirm sheets keep Cancel and the labeled action", () => {

@@ -80,6 +80,7 @@ import {
   type ComposerEditorSelection,
   PlatformComposerEditor,
 } from "./composer/PlatformComposerEditor";
+import { MobileDecisionDock } from "./MobileThumbDock";
 import { useComposerDraftController } from "./composer/useComposerDraftController";
 import {
   type NativeClipboardImagePasteRequest,
@@ -292,7 +293,7 @@ import type {
 } from "./protocol";
 import { sessionProjectLabel } from "./sessionProject";
 import { ConfirmSheet, Sheet } from "./Sheet";
-import { FloatingActionIsland, MobileSheetDismiss } from "./_shell";
+import { MobileSheetDismiss } from "./_shell";
 import {
   OPEN_SESSION_SETTINGS_EVENT,
   type SessionSettingsFocus,
@@ -6897,6 +6898,11 @@ function ComposerSheet({
     titleInputRef.current?.blur();
     setTitleFocused(false);
   };
+  const cancelTitle = (): void => {
+    setTitle(displayTitle);
+    titleInputRef.current?.blur();
+    setTitleFocused(false);
+  };
   const close = (): void => {
     setTitle(displayTitle);
     setTitleFocused(false);
@@ -6917,7 +6923,8 @@ function ComposerSheet({
   });
   const editingTitle = titleFocused || titleDirty;
   return (
-    <Sheet
+    <>
+      <Sheet
       open={open}
       onClose={close}
       forceSheet={useSheetSurface}
@@ -6927,40 +6934,7 @@ function ComposerSheet({
       actions={useSheetSurface
         ? (
           editingTitle
-            ? (
-              <Box
-                sx={{
-                  width: "100%",
-                  display: "flex",
-                  justifyContent: "center",
-                }}
-              >
-                <FloatingActionIsland maxWidth={54}>
-                  <ButtonBase
-                    aria-label="save session title"
-                    disabled={!trimmedTitle}
-                    onPointerDown={(event): void => {
-                      // Keep the title input mounted and focused until click. If
-                      // WebKit blurs first, the footer changes back to Close and
-                      // swallows the intended Save tap.
-                      event.preventDefault();
-                      event.stopPropagation();
-                    }}
-                    onClick={saveTitle}
-                    sx={{
-                      width: 46,
-                      height: 46,
-                      borderRadius: 999,
-                      color: "text.primary",
-                      "&:active": { transform: "scale(0.97)" },
-                      "&.Mui-disabled": { color: "text.disabled" },
-                    }}
-                  >
-                    <Check fontSize="small" />
-                  </ButtonBase>
-                </FloatingActionIsland>
-              </Box>
-            )
+            ? undefined
             : <MobileSheetDismiss onClose={close} />
         )
         : undefined}
@@ -7171,7 +7145,18 @@ function ComposerSheet({
         session={reloadConfirm ? session : null}
         onClose={(): void => setReloadConfirm(false)}
       />
-    </Sheet>
+      </Sheet>
+      {useSheetSurface && (
+        <MobileDecisionDock
+          open={open && editingTitle}
+          onCancel={cancelTitle}
+          confirmLabel="Save"
+          onConfirm={saveTitle}
+          confirmDisabled={!trimmedTitle}
+          preserveFocus
+        />
+      )}
+    </>
   );
 }
 

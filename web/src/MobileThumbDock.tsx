@@ -1,4 +1,4 @@
-import { type ReactNode } from "react";
+import { type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import CheckIcon from "@mui/icons-material/Check";
 import CloseIcon from "@mui/icons-material/Close";
@@ -83,6 +83,7 @@ export function MobileDecisionDock({
   onConfirm,
   confirmDisabled = false,
   confirmBusy = false,
+  preserveFocus = false,
 }: {
   readonly open: boolean;
   readonly cancelLabel?: string | undefined;
@@ -92,39 +93,48 @@ export function MobileDecisionDock({
   readonly onConfirm: () => void;
   readonly confirmDisabled?: boolean | undefined;
   readonly confirmBusy?: boolean | undefined;
+  /** Keep the current input mounted and focused until the action click runs. */
+  readonly preserveFocus?: boolean | undefined;
 }): ReactNode {
+  const preserveInput = preserveFocus
+    ? (event: ReactPointerEvent): void => event.preventDefault()
+    : undefined;
   return (
     <MobileThumbDock
       open={open}
       left={
-        <MobileSheetActionGroup
-          actions={[{
-            key: "cancel",
-            label: cancelLabel,
-            disabled: cancelDisabled,
-            onPress: onCancel,
-            icon: (
-              <CloseIcon
-                aria-hidden
-                fontSize="small"
-                sx={{ transform: "translate(-0.75px, -0.5px)" }}
-              />
-            ),
-          }]}
-        />
+        <Box onPointerDownCapture={preserveInput}>
+          <MobileSheetActionGroup
+            actions={[{
+              key: "cancel",
+              label: cancelLabel,
+              disabled: cancelDisabled,
+              onPress: onCancel,
+              icon: (
+                <CloseIcon
+                  aria-hidden
+                  fontSize="small"
+                  sx={{ transform: "translate(-0.75px, -0.5px)" }}
+                />
+              ),
+            }]}
+          />
+        </Box>
       }
       right={
-        <MobileSheetActionGroup
-          actions={[{
-            key: "confirm",
-            label: confirmLabel,
-            disabled: confirmDisabled || confirmBusy,
-            onPress: onConfirm,
-            icon: confirmBusy
-              ? <CircularProgress size={18} color="inherit" />
-              : <CheckIcon fontSize="small" />,
-          }]}
-        />
+        <Box onPointerDownCapture={preserveInput}>
+          <MobileSheetActionGroup
+            actions={[{
+              key: "confirm",
+              label: confirmLabel,
+              disabled: confirmDisabled || confirmBusy,
+              onPress: onConfirm,
+              icon: confirmBusy
+                ? <CircularProgress size={18} color="inherit" />
+                : <CheckIcon fontSize="small" />,
+            }]}
+          />
+        </Box>
       }
     />
   );
