@@ -3928,10 +3928,6 @@ function OptimisticDraftRow({
           ? alpha(t.palette.info.main, 0.06)
           : "background.paper",
         ...(failed && { borderLeft: `3px solid ${t.palette.error.main}` }),
-        ...(sending && !failed &&
-          { borderLeft: `3px solid ${t.palette.primary.main}` }),
-        ...(syncing && !failed && !sending &&
-          { borderLeft: `3px solid ${t.palette.info.main}` }),
       })}
     >
       {sending && (

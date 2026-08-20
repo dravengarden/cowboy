@@ -1614,8 +1614,6 @@ function ToolCard({
             outline: "none",
             "&:focus-visible": {
               bgcolor: "action.focus",
-              boxShadow: (theme) =>
-                `inset 3px 0 0 ${alpha(theme.palette.primary.main, 0.78)}`,
             },
           }),
         }}
@@ -1790,8 +1788,6 @@ function ToolTranscriptContext({
           columnGap: 1,
           textAlign: "left",
           alignItems: "center",
-          borderLeft: 2,
-          borderColor: open ? "primary.main" : "divider",
         }}
       >
         <Box sx={{ minWidth: 0 }}>
@@ -1842,8 +1838,6 @@ function ToolTranscriptContext({
           sx={{
             px: 1.25,
             pb: 1.25,
-            borderLeft: 2,
-            borderColor: "primary.main",
           }}
         >
           {blocks.map((block) => (
@@ -2246,8 +2240,6 @@ function ToolDetailsBrowser({
                       alignItems: "center",
                       textAlign: "left",
                       bgcolor: selected ? "action.selected" : "transparent",
-                      borderLeft: 2,
-                      borderColor: selected ? "primary.main" : "transparent",
                     }}
                   >
                     <Typography
@@ -2496,8 +2488,6 @@ function ToolDetailsBrowser({
                 gap: 1,
                 alignItems: "center",
                 textAlign: "left",
-                borderLeft: 3,
-                borderColor: active ? "primary.main" : "transparent",
                 bgcolor: active ? "action.selected" : "transparent",
                 "&:hover": { bgcolor: "action.hover" },
                 "&:focus-visible": {

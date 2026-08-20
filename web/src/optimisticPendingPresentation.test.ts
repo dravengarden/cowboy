@@ -28,6 +28,23 @@ Deno.test("unsynced rows show an uploading mark and failed rows offer return-to-
   assert(body.includes("Waiting to sync"));
   assert(body.includes("returnFailedQueued"));
   assert(body.includes("returnLabelForHome"));
+  assertEquals(
+    body.includes("borderLeft: `3px solid ${t.palette.primary.main}`"),
+    false,
+  );
+  assertEquals(
+    body.includes("borderLeft: `3px solid ${t.palette.info.main}`"),
+    false,
+  );
+});
+
+Deno.test("tool UI selection uses fill instead of purple leading rails", () => {
+  assertEquals(transcript.includes("borderLeft: 2"), false);
+  assertEquals(transcript.includes("borderLeft: 3"), false);
+  assertEquals(
+    transcript.includes("`inset 3px 0 0 ${alpha(theme.palette.primary.main, 0.78)}`"),
+    false,
+  );
 });
 
 Deno.test("MessagePreview renders cowboy-att tokens as composer inline images", () => {
