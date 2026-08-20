@@ -117,3 +117,20 @@ Deno.test("Code chrome uses Agent instead of a local settings sheet", () => {
   assert(reviewSettingsSource.includes("export function ReviewSettingsContent"));
   assert(fileTreeSource.includes('openAppSettings({ section: "code" })'));
 });
+
+Deno.test("Context tabs retain the selected pill after an iOS touch", () => {
+  const tabs = reviewAppSource.slice(
+    reviewAppSource.indexOf("data-mobile-context-tabs"),
+    reviewAppSource.indexOf('contextTab === "sessions"', reviewAppSource.indexOf("data-mobile-context-tabs")),
+  );
+  assert(tabs.includes("disableRipple"));
+  assert(tabs.includes('event.currentTarget.dataset.touchActivated = "true"'));
+  assert(tabs.includes("event.currentTarget.blur()"));
+  assert(tabs.includes("&[aria-selected='true']"));
+  assert(
+    tabs.includes(
+      "[data-touch-activated='true'][aria-selected='true']:hover",
+    ),
+  );
+  assert(tabs.includes('bgcolor: "action.selected"'));
+});
