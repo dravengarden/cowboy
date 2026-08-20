@@ -2789,7 +2789,13 @@ export function ReviewApp({
             ref={sessionListRef}
             spacing={1.5}
             sx={{
-              height: "calc(100dvh - 148px)",
+              // DetentSheet reserves 76px + safe-area for its generic floating
+              // footer. This list owns its own Close-island scroll clearance,
+              // so extend through that reservation instead of rendering both
+              // clearances as one empty band below the session rows.
+              height:
+                "calc(100dvh - 148px + 76px + env(safe-area-inset-bottom, 0px))",
+              mb: "calc(-76px - env(safe-area-inset-bottom, 0px))",
               minHeight: 0,
               ...mobileNativeYScrollSx,
               pb: "calc(88px + env(safe-area-inset-bottom, 0px))",

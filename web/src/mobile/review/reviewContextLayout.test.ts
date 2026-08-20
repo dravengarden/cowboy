@@ -36,6 +36,21 @@ Deno.test("session context leads with the active session without a history row",
   );
 });
 
+Deno.test("session context list consumes duplicate floating-footer clearance", () => {
+  assertStringIncludes(
+    source,
+    '"calc(100dvh - 148px + 76px + env(safe-area-inset-bottom, 0px))"',
+  );
+  assertStringIncludes(
+    source,
+    'mb: "calc(-76px - env(safe-area-inset-bottom, 0px))"',
+  );
+  assertStringIncludes(
+    source,
+    'pb: "calc(88px + env(safe-area-inset-bottom, 0px))"',
+  );
+});
+
 Deno.test("project targets do not inherit worktree-only labels", () => {
   assertStringIncludes(source, 'contextLabel={projectCodeContext ? "Project code" : "Worktree"}');
   assertStringIncludes(source, 'Open context. Current project code');

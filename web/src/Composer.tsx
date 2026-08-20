@@ -232,6 +232,7 @@ import {
   editQueued,
   forcePushQueued,
   moveDraft,
+  openSession,
   type QueuedMessage,
   queuedToDraft,
   removeDraft,
@@ -251,6 +252,7 @@ import {
   useConnected,
   useStoreSelector,
 } from "./store";
+import { setActiveSessionId } from "./controlPlane";
 import { ScheduleSheet } from "./ScheduleSheet";
 import { fireLabel } from "./scheduleTime";
 import { haptic, importantHaptic, navigationHaptic } from "./haptic";
@@ -3604,17 +3606,36 @@ export function ComposerWorkspace({
         }}
         message={moveUndo ? `Moved to ${moveUndo.toTitle}` : ""}
         action={
-          <Button
-            color="primary"
-            size="small"
-            onClick={(): void => {
-              if (moveUndo) moveDraft(moveUndo.toId, moveUndo.id, sessionId);
-              setMoveUndo(null);
-            }}
-            sx={{ textTransform: "none" }}
-          >
-            Undo
-          </Button>
+          <Stack direction="row" spacing={0.25}>
+            <Button
+              color="primary"
+              size="small"
+              onClick={(): void => {
+                if (!moveUndo) return;
+                navigationHaptic();
+                globalThis.dispatchEvent(
+                  new CustomEvent("cowboy:transcript-save-viewport"),
+                );
+                openSession(moveUndo.toId);
+                setActiveSessionId(moveUndo.toId);
+                setMoveUndo(null);
+              }}
+              sx={{ textTransform: "none" }}
+            >
+              Open
+            </Button>
+            <Button
+              color="primary"
+              size="small"
+              onClick={(): void => {
+                if (moveUndo) moveDraft(moveUndo.toId, moveUndo.id, sessionId);
+                setMoveUndo(null);
+              }}
+              sx={{ textTransform: "none" }}
+            >
+              Undo
+            </Button>
+          </Stack>
         }
       />
     </Box>

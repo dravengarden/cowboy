@@ -586,6 +586,21 @@ Deno.test("move-draft undo toast clears the iOS status safe area", () => {
   );
 });
 
+Deno.test("move-draft toast can open the destination session", () => {
+  const toastStart = composerSource.indexOf(
+    'message={moveUndo ? `Moved to ${moveUndo.toTitle}` : ""}',
+  );
+  const toast = composerSource.slice(
+    toastStart,
+    composerSource.indexOf("</Snackbar>", toastStart),
+  );
+  assertEquals(toastStart >= 0, true);
+  assertEquals(toast.includes("openSession(moveUndo.toId)"), true);
+  assertEquals(toast.includes("setActiveSessionId(moveUndo.toId)"), true);
+  assertEquals(toast.includes("Open"), true);
+  assertEquals(toast.includes("Undo"), true);
+});
+
 Deno.test("move-draft destination list matches the Obsidian sheet title inset", () => {
   const sheetStart = composerSource.indexOf('title="Move draft to…"');
   const sheet = composerSource.slice(

@@ -2103,3 +2103,12 @@ Desktop Vim + IME checks:
     nested pending-content action and open the shared lightbox directly; editable
     Composer images retain their Preview/Delete popper. Keep the rest of the
     preview non-interactive and do not add card-wide pointer or touch interception.
+
+86. **A Move-draft acknowledgement must preserve both recovery and navigation.**
+    The Composer owns the post-move Snackbar because the source Draft panel may
+    unmount when its last row moves. Keep the destination session id in that
+    state: Undo moves the row back, while Open uses the same active-session and
+    revive-on-open path as first-level session navigation. Save the source
+    transcript viewport before switching. Do not make the destination title a
+    label-only acknowledgement that forces the user to reopen Sessions and find
+    the target manually.
