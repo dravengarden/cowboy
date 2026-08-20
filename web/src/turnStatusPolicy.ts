@@ -4,8 +4,7 @@ export type TurnStatusKind =
   | "awaiting"
   | "paused"
   | "done"
-  | "interrupted"
-  | "error";
+  | "interrupted";
 
 export interface TurnStatusSignals {
   status: Status;
@@ -33,7 +32,10 @@ export function deriveTurnStatusKind({
 }: TurnStatusSignals): TurnStatusKind | null {
   if (status === "busy" || status === "starting") return null;
   if (working) return null;
-  if (status === "crashed") return "error";
+  // Crashes belong to SessionStatusBar + a new user message. Overlay Retry
+  // only re-ran the last prompt, which is the wrong recovery for quota and
+  // similar provider stops.
+  if (status === "crashed") return null;
   if (status === "interrupted") return "interrupted";
   if (judging) return null;
   if (awaitingUser) return "awaiting";

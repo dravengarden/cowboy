@@ -33,3 +33,10 @@ Deno.test("settled actionable turn states remain Composer-owned", () => {
   assertEquals(deriveTurnStatusKind({ ...settled, paused: true }), "paused");
   assertEquals(deriveTurnStatusKind({ ...settled, done: true }), "done");
 });
+
+Deno.test("crashes stay on the transcript status bar instead of overlay Retry", () => {
+  assertEquals(
+    deriveTurnStatusKind({ ...settled, status: "crashed" }),
+    null,
+  );
+});

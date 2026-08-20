@@ -101,6 +101,10 @@ import {
   type PromptOrigin,
   type RenderItem,
 } from "./derive";
+import {
+  hideLiveCrashDuplicate,
+  prettifyCrashDetail,
+} from "./crashDetail";
 import { PromptOriginNote } from "./PromptOriginNote";
 import type { Envelope, Status } from "./protocol";
 import {
@@ -2895,8 +2899,7 @@ const ItemView = memo(function ItemView({
             variant="caption"
             sx={{ fontWeight: interrupted ? 600 : 400 }}
           >
-            {item.status}
-            {item.detail ? `: ${item.detail}` : ""}
+            {item.detail ? prettifyCrashDetail(item.detail) : item.status}
           </Typography>
         </Stack>
       );
@@ -3002,8 +3005,9 @@ function SessionStatusBar({
   } else if (status === "crashed") {
     tone = "error";
     icon = <ErrorOutline fontSize="small" />;
-    text = crashDetail ??
-      "Agent stopped unexpectedly — send a message to restart it.";
+    text = crashDetail
+      ? prettifyCrashDetail(crashDetail)
+      : "Agent stopped unexpectedly — send a message to restart it.";
   } else if (status === "exited") {
     tone = "neutral";
     icon = <Bedtime fontSize="small" />;
@@ -3317,11 +3321,13 @@ export function Transcript({
   ]);
   const crashDetail = useMemo(() => latestCrashDetail(allItems), [allItems]);
   const liveItems = useMemo(
-    () =>
-      visibleItemKeys
+    () => {
+      const visible = visibleItemKeys
         ? allItems.filter((item) => visibleItemKeys.has(item.key))
-        : allItems,
-    [allItems, visibleItemKeys],
+        : allItems;
+      return hideLiveCrashDuplicate(visible, status, crashDetail);
+    },
+    [allItems, visibleItemKeys, status, crashDetail],
   );
   const liveItemsRef = useRef(liveItems);
   liveItemsRef.current = liveItems;

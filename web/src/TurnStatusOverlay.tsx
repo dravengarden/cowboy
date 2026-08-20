@@ -7,7 +7,6 @@ import type { Status } from "./protocol";
 import {
   dismissAwaiting,
   resumeTurn,
-  retryTurn,
   setPaused,
   useJudgeResult,
 } from "./store";
@@ -31,7 +30,6 @@ const KIND_META: Record<TurnStatusKind, { color: PaletteKey; label: string }> = 
   done: { color: "success", label: "Task complete" },
   interrupted: { color: "warning", label: "Turn interrupted" },
   paused: { color: "warning", label: "Queue paused" },
-  error: { color: "error", label: "Agent error" },
 };
 
 export function TurnStatusOverlay({
@@ -131,8 +129,6 @@ export function TurnStatusOverlay({
     // Release the manual queue pause — the queue drain picks back up (waiting for
     // any in-flight turn to end first). Mirrors the interrupted "Resume".
     action = { label: "Resume", onClick: () => setPaused(sessionId, false) };
-  } else if (kind === "error") {
-    action = { label: "Retry", onClick: () => retryTurn(sessionId) };
   }
   // Symmetric padding (centred text) when there's no trailing control; otherwise
   // tighten the right so the button sits in.

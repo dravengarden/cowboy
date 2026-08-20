@@ -57,6 +57,33 @@ Deno.test("structured agent questions are not presented as tool approvals", () =
   }
 });
 
+Deno.test("derive collapses equivalent crash JSON dumps onto one row", () => {
+  const dump =
+    'Internal error: { "message": "You\'ve hit your usage limit.", "codexErrorInfo": "usageLimitExceeded" }';
+  const items = derive([
+    {
+      session_id: "s1",
+      seq: 1,
+      kind: "lifecycle",
+      status: "crashed",
+      detail: dump,
+    },
+    {
+      session_id: "s1",
+      seq: 2,
+      kind: "lifecycle",
+      status: "crashed",
+      detail: "You've hit your usage limit.",
+    },
+  ]);
+  if (items.length !== 1 || items[0]?.kind !== "lifecycle") {
+    throw new Error("equivalent crash dumps should render once");
+  }
+  if (items[0].detail !== "You've hit your usage limit.") {
+    throw new Error("the collapsed crash should keep the human sentence");
+  }
+});
+
 Deno.test("derive collapses repeated terminal lifecycle projections", () => {
   const detail = "Gemini personal access retired";
   const items = derive([detail, null, null].map((projectedDetail, index): Envelope => ({

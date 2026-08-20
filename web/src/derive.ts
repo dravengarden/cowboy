@@ -4,6 +4,7 @@
 // transcript model — no code editor / file tree / git, just the conversation.
 
 import { stripImageTokens } from "./attachments";
+import { crashDetailsMatch } from "./crashDetail";
 import type { AcpUpdate, Envelope, PermissionOption, PlanEntry, Status } from "./protocol";
 import {
   isHumanPrompt,
@@ -452,7 +453,9 @@ export function derive(timeline: Envelope[]): RenderItem[] {
           const previous = items.at(-1);
           if (
             previous?.kind === "lifecycle" && previous.status === env.status &&
-            (previous.detail === env.detail || previous.detail === null || env.detail === null)
+            (previous.detail === env.detail || previous.detail === null ||
+              env.detail === null ||
+              crashDetailsMatch(previous.detail, env.detail))
           ) {
             if (env.detail !== null) previous.detail = env.detail;
             previous.key = String(env.seq);
