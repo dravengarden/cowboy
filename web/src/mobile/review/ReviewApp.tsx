@@ -1422,6 +1422,7 @@ function DocumentView({
                 ? `Symbols · ${inspectCandidates.length}`
                 : "Symbol"}
               forceSheet
+              mobileDismiss="footer"
               portal
             >
               {mobileCandidateSelector}
