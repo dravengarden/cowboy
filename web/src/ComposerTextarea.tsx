@@ -792,7 +792,8 @@ export const ComposerTextarea = forwardRef<
             }
           }
           lastNativeValueRef.current = e.target.value;
-          composingRef.current = e.nativeEvent.isComposing;
+          composingRef.current =
+            (e.nativeEvent as InputEvent).isComposing === true;
           onChange(e.target.value);
           sync(
             e.target.value,
