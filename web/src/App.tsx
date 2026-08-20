@@ -1730,27 +1730,14 @@ function NewSessionDialog({
                 frosted
                 ariaLabel="New session"
                 surfaceColor={theme.palette.background.default}
-                header={
-                    <Box sx={{ pl: 2, pr: 2, pb: 1 }}>
-                        <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
-                            New session
-                        </Typography>
-                    </Box>
-                }
-            >
-                <Box sx={{ px: 2 }}>
-                    {form}
+                footer={
                     <Box
-                        data-new-session-sticky-actions
+                        data-new-session-footer-actions
                         sx={{
-                            position: "sticky",
-                            bottom: 0,
-                            zIndex: 2,
+                            width: "100%",
                             display: "flex",
                             justifyContent: "space-between",
                             alignItems: "center",
-                            pt: 2,
-                            pb: "max(12px, env(safe-area-inset-bottom, 0px))",
                             pointerEvents: "none",
                         }}
                     >
@@ -1779,6 +1766,17 @@ function NewSessionDialog({
                             />
                         </Box>
                     </Box>
+                }
+                header={
+                    <Box sx={{ pl: 2, pr: 2, pb: 1 }}>
+                        <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+                            New session
+                        </Typography>
+                    </Box>
+                }
+            >
+                <Box sx={{ px: 2 }}>
+                    {form}
                 </Box>
             </DetentSheet>
             </>

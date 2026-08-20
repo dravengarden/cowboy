@@ -13,15 +13,17 @@ const composerSource = await Deno.readTextFile(
   new URL("./Composer.tsx", import.meta.url),
 );
 
-Deno.test("mobile new session actions stay at the sticky form end", () => {
+Deno.test("mobile new session actions stay in the non-overlay sheet footer", () => {
   const dialog = appSource.slice(
     appSource.indexOf("function NewSessionDialog("),
     appSource.indexOf("const EMPTY_TRANSCRIPT_TIMELINE"),
   );
   assertEquals(dialog.includes("<MobileDecisionDock"), false);
   assertEquals(dialog.includes("footerOverlay"), false);
-  assertEquals(dialog.includes("data-new-session-sticky-actions"), true);
-  assertEquals(dialog.includes('position: "sticky"'), true);
+  assertEquals(dialog.includes("data-new-session-footer-actions"), true);
+  assertEquals(dialog.includes("data-new-session-sticky-actions"), false);
+  assertEquals(dialog.includes('position: "sticky"'), false);
+  assertEquals(dialog.includes("footer={"), true);
   assertEquals(dialog.includes("SHEET_THUMB_CLEARANCE"), false);
   assertEquals(dialog.includes('title="New session"'), true);
 });

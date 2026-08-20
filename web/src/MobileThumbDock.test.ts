@@ -19,15 +19,17 @@ Deno.test("thumb dock pins islands to the visual viewport corners", () => {
   assertEquals(source.includes('height: "var(--vv-height, 100dvh)"'), false);
 });
 
-Deno.test("mobile new session keeps its actions sticky at the form end", () => {
+Deno.test("mobile new session keeps its actions in the non-overlay sheet footer", () => {
   const dialog = appSource.slice(
     appSource.indexOf("function NewSessionDialog("),
     appSource.indexOf("const EMPTY_TRANSCRIPT_TIMELINE"),
   );
   assertEquals(dialog.includes("<MobileDecisionDock"), false);
   assertEquals(dialog.includes("footerOverlay"), false);
-  assertEquals(dialog.includes("data-new-session-sticky-actions"), true);
-  assertEquals(dialog.includes('position: "sticky"'), true);
+  assertEquals(dialog.includes("data-new-session-footer-actions"), true);
+  assertEquals(dialog.includes("data-new-session-sticky-actions"), false);
+  assertEquals(dialog.includes('position: "sticky"'), false);
+  assertEquals(dialog.includes("footer={"), true);
   assertEquals(dialog.includes("SHEET_THUMB_CLEARANCE"), false);
 });
 
