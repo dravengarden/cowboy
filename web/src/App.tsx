@@ -191,10 +191,6 @@ import {
     NativeReleaseUpdatePrompt,
 } from "./_shell";
 import { ConfirmSheet, Sheet } from "./Sheet";
-import {
-    MobileDecisionDock,
-    SHEET_THUMB_CLEARANCE,
-} from "./MobileThumbDock";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { isImeKeyEvent } from "./imeKey";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
@@ -1742,17 +1738,49 @@ function NewSessionDialog({
                     </Box>
                 }
             >
-                <Box sx={{ px: 2, pb: SHEET_THUMB_CLEARANCE }}>{form}</Box>
+                <Box sx={{ px: 2 }}>
+                    {form}
+                    <Box
+                        data-new-session-sticky-actions
+                        sx={{
+                            position: "sticky",
+                            bottom: 0,
+                            zIndex: 2,
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            pt: 2,
+                            pb: "max(12px, env(safe-area-inset-bottom, 0px))",
+                            pointerEvents: "none",
+                        }}
+                    >
+                        <Box sx={{ width: 54, pointerEvents: "auto" }}>
+                            <MobileSheetActionGroup
+                                actions={[{
+                                    key: "cancel",
+                                    label: "Cancel",
+                                    disabled: creating,
+                                    onPress: creating ? (): void => {} : onClose,
+                                    icon: <CloseIcon fontSize="small" />,
+                                }]}
+                            />
+                        </Box>
+                        <Box sx={{ width: 54, pointerEvents: "auto" }}>
+                            <MobileSheetActionGroup
+                                actions={[{
+                                    key: "create",
+                                    label: creating ? "Preparing session" : "Create session",
+                                    disabled: !canCreate,
+                                    onPress: create,
+                                    icon: creating
+                                        ? <CircularProgress size={18} color="inherit" />
+                                        : <CheckIcon fontSize="small" />,
+                                }]}
+                            />
+                        </Box>
+                    </Box>
+                </Box>
             </DetentSheet>
-            <MobileDecisionDock
-                open={open}
-                onCancel={creating ? (): void => {} : onClose}
-                cancelDisabled={creating}
-                confirmLabel={creating ? "Preparing session" : "Create session"}
-                onConfirm={create}
-                confirmDisabled={!canCreate}
-                confirmBusy={creating}
-            />
             </>
         );
     }

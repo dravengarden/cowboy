@@ -19,14 +19,16 @@ Deno.test("thumb dock pins islands to the visual viewport corners", () => {
   assertEquals(source.includes('height: "var(--vv-height, 100dvh)"'), false);
 });
 
-Deno.test("mobile new session uses the thumb dock instead of a sheet footer", () => {
+Deno.test("mobile new session keeps its actions sticky at the form end", () => {
   const dialog = appSource.slice(
     appSource.indexOf("function NewSessionDialog("),
     appSource.indexOf("const EMPTY_TRANSCRIPT_TIMELINE"),
   );
-  assertEquals(dialog.includes("<MobileDecisionDock"), true);
+  assertEquals(dialog.includes("<MobileDecisionDock"), false);
   assertEquals(dialog.includes("footerOverlay"), false);
-  assertEquals(dialog.includes("SHEET_THUMB_CLEARANCE"), true);
+  assertEquals(dialog.includes("data-new-session-sticky-actions"), true);
+  assertEquals(dialog.includes('position: "sticky"'), true);
+  assertEquals(dialog.includes("SHEET_THUMB_CLEARANCE"), false);
 });
 
 Deno.test("decision dock is the shared cancel/confirm island pair", () => {
