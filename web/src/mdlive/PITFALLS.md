@@ -2111,4 +2111,7 @@ Desktop Vim + IME checks:
     revive-on-open path as first-level session navigation. Save the source
     transcript viewport before switching. Do not make the destination title a
     label-only acknowledgement that forces the user to reopen Sessions and find
-    the target manually.
+    the target manually. The destination picker itself must portal out of the
+    transformed floating Composer: otherwise its fixed `bottom: 0` resolves
+    against the Composer containing block and leaves the Mobile navbar-height
+    strip exposed below a tall picker instead of docking to the viewport.

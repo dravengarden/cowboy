@@ -3517,6 +3517,7 @@ export function ComposerWorkspace({
         open={moveSrcId !== null}
         onClose={(): void => setMoveSrcId(null)}
         title="Move draft to…"
+        portal
       >
         {
           /* Bleed the list to the card so rows share the title inset. A

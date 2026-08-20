@@ -607,6 +607,7 @@ Deno.test("move-draft destination list matches the Obsidian sheet title inset", 
     sheetStart,
     composerSource.indexOf("</Sheet>", sheetStart),
   );
+  assertEquals(sheet.includes("portal"), true);
   assertEquals(sheet.includes("<List disablePadding sx={{ mx: -2.25, pb: 1 }}>"), true);
   assertEquals(sheet.includes('width: "100%"'), true);
   assertEquals(sheet.includes('flex: "1 1 0px"'), true);
