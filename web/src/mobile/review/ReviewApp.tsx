@@ -164,16 +164,24 @@ function ReviewModeSwitcher({
       aria-label="Switch between Git changes and Worktree files"
       sx={{
         display: "flex",
+        alignItems: "center",
         flex: "0 0 auto",
-        height: 36,
-        p: "2px",
-        borderRadius: "18px",
+        boxSizing: "border-box",
+        height: 40,
+        p: "3px",
+        gap: "2px",
+        borderRadius: "20px",
         border: 1,
-        borderColor: "divider",
-        bgcolor: (theme) => alpha(theme.palette.text.primary, 0.055),
+        borderColor: (theme) => alpha(theme.palette.text.primary, 0.1),
+        bgcolor: (theme) => alpha(theme.palette.text.primary, 0.04),
         transform: "none",
         willChange: "auto",
         WebkitTapHighlightColor: "transparent",
+        "& .MuiSvgIcon-root": {
+          // Root-relative geometry keeps both mode glyphs in step with the
+          // global font-size setting instead of freezing them at 17px.
+          fontSize: "1.125rem",
+        },
       }}
     >
       <ButtonBase
@@ -184,12 +192,17 @@ function ReviewModeSwitcher({
           width: 36,
           height: 32,
           borderRadius: "16px",
-          bgcolor: mode === "git" ? "background.paper" : "transparent",
-          color: mode === "git" ? "primary.main" : "text.disabled",
+          bgcolor: (theme) => mode === "git"
+            ? alpha(
+              theme.palette.primary.main,
+              theme.palette.mode === "dark" ? 0.24 : 0.13,
+            )
+            : "transparent",
+          color: mode === "git" ? "primary.main" : "text.secondary",
           transform: "none",
         }}
       >
-        <DifferenceOutlined sx={{ fontSize: 17 }} />
+        <DifferenceOutlined />
       </ButtonBase>
       <ButtonBase
         aria-label="Worktree files"
@@ -199,12 +212,17 @@ function ReviewModeSwitcher({
           width: 36,
           height: 32,
           borderRadius: "16px",
-          bgcolor: mode === "files" ? "background.paper" : "transparent",
-          color: mode === "files" ? "primary.main" : "text.disabled",
+          bgcolor: (theme) => mode === "files"
+            ? alpha(
+              theme.palette.primary.main,
+              theme.palette.mode === "dark" ? 0.24 : 0.13,
+            )
+            : "transparent",
+          color: mode === "files" ? "primary.main" : "text.secondary",
           transform: "none",
         }}
       >
-        <AccountTreeOutlined sx={{ fontSize: 17 }} />
+        <AccountTreeOutlined />
       </ButtonBase>
     </Box>
   );

@@ -56,6 +56,16 @@ Deno.test("Code chrome uses Agent instead of a local settings sheet", () => {
     assertEquals(switcher.includes("translateX"), false);
     assertEquals(switcher.includes("boxShadow"), false);
     assert(switcher.includes('transform: "none"'));
+    assert(switcher.includes('height: 40'));
+    assert(switcher.includes('alignItems: "center"'));
+    assert(switcher.includes('boxSizing: "border-box"'));
+    assert(switcher.includes('fontSize: "1.125rem"'));
+    assert(switcher.includes("theme.palette.primary.main"));
+    assertEquals(switcher.includes("fontSize: 17"), false);
+    assertEquals(
+      switcher.includes('bgcolor: mode === "git" ? "background.paper"'),
+      false,
+    );
   }
   assert(reviewAppSource.includes('data-mobile-review-sidebar="true"'));
   assert(
