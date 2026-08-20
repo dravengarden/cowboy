@@ -13,7 +13,7 @@ import {
   Stack,
   Typography,
 } from "@mui/material";
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
 import {
   fetchGitCommit,
@@ -21,6 +21,7 @@ import {
   type GitCommitDetail,
   type GitCommitSummary,
 } from "./codeApi";
+import { restoreReviewScrollTop } from "./reviewScrollPosition";
 
 function shortOid(oid: string): string {
   return oid.slice(0, 8);
@@ -37,15 +38,24 @@ function CommitPatch({
   sessionId,
   oid,
   path,
+  scrollKey,
+  readScrollPosition,
+  rememberScrollPosition,
 }: {
   sessionId: string;
   oid: string;
   path: string;
+  scrollKey: string;
+  readScrollPosition: (key: string) => unknown;
+  rememberScrollPosition: (key: string, top: number) => void;
 }): React.JSX.Element {
   const [patch, setPatch] = useState<
     Awaited<ReturnType<typeof fetchGitCommitDiff>>
   >();
   const [error, setError] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const restoreFrame = useRef(0);
+  const appliedRestore = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -61,12 +71,37 @@ function CommitPatch({
     return () => controller.abort();
   }, [oid, path, sessionId]);
 
+  useLayoutEffect(() => {
+    if (!patch || appliedRestore.current === scrollKey) return undefined;
+    globalThis.cancelAnimationFrame(restoreFrame.current);
+    restoreFrame.current = globalThis.requestAnimationFrame(() => {
+      const element = scrollRef.current;
+      if (!element || appliedRestore.current === scrollKey) return;
+      appliedRestore.current = scrollKey;
+      const restored = restoreReviewScrollTop(
+        element,
+        readScrollPosition(scrollKey),
+      );
+      rememberScrollPosition(scrollKey, restored);
+    });
+    return () => globalThis.cancelAnimationFrame(restoreFrame.current);
+  }, [patch, readScrollPosition, rememberScrollPosition, scrollKey]);
+
   const allLines = patch?.text.split("\n") ?? [];
   const lines = allLines.slice(0, 5_000);
   return (
     <Stack component="main" sx={{ height: 1, minHeight: 0 }}>
       <Box
+        ref={scrollRef}
         data-review-commit-patch
+        data-mobile-overflow-layer="true"
+        onScroll={(event) => {
+          if (appliedRestore.current !== scrollKey) return;
+          rememberScrollPosition(
+            scrollKey,
+            event.currentTarget.scrollTop,
+          );
+        }}
         sx={{
           flex: 1,
           minHeight: 0,
@@ -118,15 +153,23 @@ export function ReviewCommit({
   selectedPath,
   onSelectPath,
   onFiles,
+  readScrollPosition,
+  rememberScrollPosition,
 }: {
   sessionId: string;
   commit: GitCommitSummary;
   selectedPath?: string | undefined;
   onSelectPath: (path: string | undefined) => void;
   onFiles?: (paths: readonly string[]) => void;
+  readScrollPosition: (key: string) => unknown;
+  rememberScrollPosition: (key: string, top: number) => void;
 }): React.JSX.Element {
   const [detail, setDetail] = useState<GitCommitDetail>();
   const [error, setError] = useState(false);
+  const overviewScrollKey = `${sessionId}:commit:${commit.oid}:overview`;
+  const overviewScrollRef = useRef<HTMLDivElement>(null);
+  const overviewRestoreFrame = useRef(0);
+  const appliedOverviewRestore = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -146,12 +189,43 @@ export function ReviewCommit({
   }, [detail, onFiles]);
   useEffect(() => () => onFiles?.([]), [onFiles]);
 
+  useLayoutEffect(() => {
+    if (
+      selectedPath || !detail ||
+      appliedOverviewRestore.current === overviewScrollKey
+    ) return undefined;
+    globalThis.cancelAnimationFrame(overviewRestoreFrame.current);
+    overviewRestoreFrame.current = globalThis.requestAnimationFrame(() => {
+      const element = overviewScrollRef.current;
+      if (!element || appliedOverviewRestore.current === overviewScrollKey) {
+        return;
+      }
+      appliedOverviewRestore.current = overviewScrollKey;
+      const restored = restoreReviewScrollTop(
+        element,
+        readScrollPosition(overviewScrollKey),
+      );
+      rememberScrollPosition(overviewScrollKey, restored);
+    });
+    return () => globalThis.cancelAnimationFrame(overviewRestoreFrame.current);
+  }, [
+    detail,
+    overviewScrollKey,
+    readScrollPosition,
+    rememberScrollPosition,
+    selectedPath,
+  ]);
+
   if (selectedPath) {
+    const scrollKey = `${sessionId}:commit:${commit.oid}:${selectedPath}:patch`;
     return (
       <CommitPatch
         sessionId={sessionId}
         oid={commit.oid}
         path={selectedPath}
+        scrollKey={scrollKey}
+        readScrollPosition={readScrollPosition}
+        rememberScrollPosition={rememberScrollPosition}
       />
     );
   }
@@ -159,9 +233,17 @@ export function ReviewCommit({
   const body = detail ? commitBody(detail.message, commit.subject) : "";
   return (
     <Box
+      ref={overviewScrollRef}
       component="main"
       data-review-commit
       data-mobile-overflow-layer="true"
+      onScroll={(event) => {
+        if (appliedOverviewRestore.current !== overviewScrollKey) return;
+        rememberScrollPosition(
+          overviewScrollKey,
+          event.currentTarget.scrollTop,
+        );
+      }}
       sx={{
         flex: 1,
         minHeight: 0,

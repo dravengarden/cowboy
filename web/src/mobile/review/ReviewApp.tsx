@@ -41,6 +41,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -132,6 +133,7 @@ import {
   reviewTabKey,
   toggleReviewTabPin,
 } from "./reviewTabs";
+import { restoreReviewScrollTop } from "./reviewScrollPosition";
 
 const CodeViewer = lazy(() => import("./CodeViewer"));
 
@@ -350,6 +352,8 @@ function DocumentView({
   onSymbolOpenChange,
   onVisibleSourceLine,
   onBufferUnavailable,
+  readScrollPosition,
+  rememberScrollPosition,
 }: {
   sessionId: string;
   target: Exclude<ReviewTarget, { kind: "changes" }>;
@@ -366,6 +370,8 @@ function DocumentView({
   onSymbolOpenChange: (point: SymbolPoint | undefined) => void;
   onVisibleSourceLine: (line: number) => void;
   onBufferUnavailable: () => void;
+  readScrollPosition: (key: string) => unknown;
+  rememberScrollPosition: (key: string, top: number) => void;
 }): React.JSX.Element {
   const surface = useSurfaceProfile();
   const settings = useReviewSettings();
@@ -411,6 +417,46 @@ function DocumentView({
   const positionTimer = useRef<number | undefined>(undefined);
   const pendingPosition = useRef<number | undefined>(undefined);
   const hunks = target.kind === "diff" ? diffHunkLines(text) : [];
+  const tabKey = target.kind === "source"
+    ? `source:${target.path}`
+    : `diff:${target.scope}:${target.path}`;
+  const scrollKey = `${sessionId}:${tabKey}`;
+  const outerScrollKey = `${scrollKey}:page`;
+  const editorScrollKey = `${scrollKey}:editor`;
+  const outerScrollRef = useRef<HTMLDivElement>(null);
+  const outerRestoreFrame = useRef(0);
+  const appliedOuterRestore = useRef<string | undefined>(undefined);
+  const outerScrollable = markdownPreview || previewKind === "mermaid" ||
+    mediaPreview || settings.softWrap;
+
+  useLayoutEffect(() => {
+    if (
+      !outerScrollable || loading || error || loadedPath !== target.path ||
+      appliedOuterRestore.current === outerScrollKey
+    ) return undefined;
+    globalThis.cancelAnimationFrame(outerRestoreFrame.current);
+    outerRestoreFrame.current = globalThis.requestAnimationFrame(() => {
+      const element = outerScrollRef.current;
+      if (!element || appliedOuterRestore.current === outerScrollKey) return;
+      appliedOuterRestore.current = outerScrollKey;
+      const restored = restoreReviewScrollTop(
+        element,
+        readScrollPosition(outerScrollKey),
+      );
+      rememberScrollPosition(outerScrollKey, restored);
+    });
+    return () => globalThis.cancelAnimationFrame(outerRestoreFrame.current);
+  }, [
+    error,
+    loadedPath,
+    loading,
+    outerScrollKey,
+    outerScrollable,
+    readScrollPosition,
+    rememberScrollPosition,
+    target.path,
+    text,
+  ]);
 
   const persistVisibleLine = useCallback((line: number): void => {
     if (target.kind !== "source") return;
@@ -1205,6 +1251,7 @@ function DocumentView({
         </Stack>
       )}
       <Box
+        ref={outerScrollRef}
         data-mobile-overflow-layer={
           markdownPreview || previewKind === "mermaid" || mediaPreview ||
               settings.softWrap
@@ -1219,6 +1266,15 @@ function DocumentView({
             ? "auto"
             : "hidden",
         }}
+        onScroll={outerScrollable
+          ? (event) => {
+            if (appliedOuterRestore.current !== outerScrollKey) return;
+            rememberScrollPosition(
+              outerScrollKey,
+              event.currentTarget.scrollTop,
+            );
+          }
+          : undefined}
       >
         {mediaPreview && (previewKind === "image" || previewKind === "svg")
           ? (
@@ -1304,6 +1360,9 @@ function DocumentView({
                 onVisibleLine={target.kind === "source"
                   ? persistVisibleLine
                   : undefined}
+                scrollRestoreKey={editorScrollKey}
+                savedScrollTop={readScrollPosition(editorScrollKey)}
+                onScrollTopChange={rememberScrollPosition}
               />
             </Suspense>
           )}
@@ -1469,6 +1528,18 @@ export function ReviewApp({
   }>();
   const [languageData, setLanguageData] = useState<CodeLanguage>();
   const [tabs, setTabs] = useState<ReviewTab[]>([]);
+  const tabScrollPositions = useRef(new Map<string, unknown>());
+  const readScrollPosition = useCallback(
+    (key: string): unknown => tabScrollPositions.current.get(key),
+    [],
+  );
+  const rememberScrollPosition = useCallback(
+    (key: string, top: number): void => {
+      if (!Number.isFinite(top) || top < 0) return;
+      tabScrollPositions.current.set(key, top);
+    },
+    [],
+  );
   const [tabCloseRequest, setTabCloseRequest] = useState<TabCloseRequest>();
   const [gitQueue, setGitQueue] = useState<GitReviewEntry[]>([]);
   const [navigationHistory, setNavigationHistory] = useState<
@@ -2426,6 +2497,8 @@ export function ReviewApp({
                   ? { commit: current.commit, ...(path ? { path } : {}) }
                   : current)}
               onFiles={setCommitPaths}
+              readScrollPosition={readScrollPosition}
+              rememberScrollPosition={rememberScrollPosition}
             />
           )
           : target.kind === "changes"
@@ -2488,6 +2561,8 @@ export function ReviewApp({
                 }
               }}
               onBufferUnavailable={requestBufferRecovery}
+              readScrollPosition={readScrollPosition}
+              rememberScrollPosition={rememberScrollPosition}
               onNavigate={(location, origin) => {
                 if (target.kind !== "source") return;
                 const previous: CodeNavigationEntry = {

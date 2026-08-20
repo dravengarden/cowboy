@@ -16,7 +16,7 @@ import {
 import CodeMirror from "@uiw/react-codemirror";
 import { Box, useTheme } from "@mui/material";
 import { alpha } from "@mui/material/styles";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   HighlightStyle,
   type LanguageSupport,
@@ -39,6 +39,7 @@ import {
   isMobileCodeSwipeFrozen,
 } from "../../mobileCodeSurface";
 import type { CodeLanguage } from "./codeApi";
+import { restoreReviewScrollTop } from "./reviewScrollPosition";
 
 export interface CodeInspectCandidate {
   label: string;
@@ -353,6 +354,9 @@ export default function CodeViewer({
   semanticHighlighting,
   onInspect,
   onVisibleLine,
+  scrollRestoreKey,
+  savedScrollTop,
+  onScrollTopChange,
 }: {
   text: string;
   kind: "source" | "diff";
@@ -371,15 +375,21 @@ export default function CodeViewer({
     anchor: { top: number; left: number },
   ) => void) | undefined;
   onVisibleLine?: ((line: number) => void) | undefined;
+  scrollRestoreKey: string;
+  savedScrollTop?: unknown;
+  onScrollTopChange: (key: string, top: number) => void;
 }): React.JSX.Element {
   const theme = useTheme();
   const editorRef = useRef<EditorView | null>(null);
   const freezeDisposeRef = useRef<(() => void) | undefined>(undefined);
   const appliedRevealRequest = useRef<number | undefined>(undefined);
+  const appliedScrollRestore = useRef<string | undefined>(undefined);
+  const scrollRestoreFrame = useRef(0);
   const [language, setLanguage] = useState<LanguageSupport | null>(null);
 
   useEffect(() => {
     return () => {
+      globalThis.cancelAnimationFrame(scrollRestoreFrame.current);
       freezeDisposeRef.current?.();
       freezeDisposeRef.current = undefined;
     };
@@ -739,6 +749,15 @@ export default function CodeViewer({
         }),
       );
     }
+    values.push(
+      EditorView.updateListener.of((update) => {
+        if (
+          !update.viewportChanged || softWrap ||
+          appliedScrollRestore.current !== scrollRestoreKey
+        ) return;
+        onScrollTopChange(scrollRestoreKey, update.view.scrollDOM.scrollTop);
+      }),
+    );
     return values;
   }, [
     diagnostics,
@@ -748,11 +767,41 @@ export default function CodeViewer({
     language,
     languageData,
     onInspect,
+    onScrollTopChange,
     onVisibleLine,
+    scrollRestoreKey,
     semanticHighlighting,
     softWrap,
     text,
     theme,
+  ]);
+
+  useLayoutEffect(() => {
+    const view = editorRef.current;
+    if (
+      !view ||
+      softWrap ||
+      revealRequestId !== undefined ||
+      appliedScrollRestore.current === scrollRestoreKey
+    ) return undefined;
+    scrollRestoreFrame.current = globalThis.requestAnimationFrame(() => {
+      const current = editorRef.current;
+      if (!current || appliedScrollRestore.current === scrollRestoreKey) return;
+      appliedScrollRestore.current = scrollRestoreKey;
+      const restored = restoreReviewScrollTop(
+        current.scrollDOM,
+        savedScrollTop,
+      );
+      onScrollTopChange(scrollRestoreKey, restored);
+    });
+    return () => globalThis.cancelAnimationFrame(scrollRestoreFrame.current);
+  }, [
+    onScrollTopChange,
+    revealRequestId,
+    savedScrollTop,
+    scrollRestoreKey,
+    softWrap,
+    text,
   ]);
 
   useEffect(() => {
@@ -845,6 +894,20 @@ export default function CodeViewer({
           editorRef.current = view;
           freezeDisposeRef.current?.();
           freezeDisposeRef.current = bindCodeViewerSwipeFreeze(view);
+          if (!softWrap && revealRequestId === undefined) {
+            globalThis.cancelAnimationFrame(scrollRestoreFrame.current);
+            scrollRestoreFrame.current = globalThis.requestAnimationFrame(
+              () => {
+                if (appliedScrollRestore.current === scrollRestoreKey) return;
+                appliedScrollRestore.current = scrollRestoreKey;
+                const restored = restoreReviewScrollTop(
+                  view.scrollDOM,
+                  savedScrollTop,
+                );
+                onScrollTopChange(scrollRestoreKey, restored);
+              },
+            );
+          }
         }}
         basicSetup={{
           lineNumbers: true,

@@ -9,6 +9,9 @@ const repositorySource = await Deno.readTextFile(
 const commitSource = await Deno.readTextFile(
   new URL("./ReviewCommit.tsx", import.meta.url),
 );
+const codeViewerSource = await Deno.readTextFile(
+  new URL("./CodeViewer.tsx", import.meta.url),
+);
 
 Deno.test("repository history pages older commits instead of a 128-commit wall", () => {
   if (repositorySource.includes("Showing the newest 128 commits")) {
@@ -72,6 +75,16 @@ Deno.test("commit patches are not rendered inside the repository drawer", () => 
   if (repositorySource.includes("fetchGitCommitDiff")) {
     throw new Error("Repository drawer must not own commit patch rendering");
   }
+});
+
+Deno.test("review tabs retain independent fail-safe scroll surfaces", () => {
+  assertStringIncludes(appSource, "tabScrollPositions");
+  assertStringIncludes(appSource, "outerScrollKey");
+  assertStringIncludes(appSource, "editorScrollKey");
+  assertStringIncludes(codeViewerSource, "restoreReviewScrollTop");
+  assertStringIncludes(codeViewerSource, "scrollRestoreKey");
+  assertStringIncludes(commitSource, "overviewScrollKey");
+  assertStringIncludes(commitSource, 'data-mobile-overflow-layer="true"');
 });
 
 Deno.test("tab close confirmation uses the medium Cowboy corner radius", () => {
