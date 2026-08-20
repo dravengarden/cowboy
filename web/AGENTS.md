@@ -80,9 +80,12 @@ the peek, or freeze the session list to make a swipe cheaper.
   and parallel context. Minimalism must never hide useful capability or add
   interaction layers merely to make the surface look clean.
 - A user who knows basic Vim must be productive without memorising Cowboy-only
-  shortcuts. Prefer standard Vim motion, a small global Mod+letter map,
-  contextual status-line hints, and a searchable command palette. Do not add a
-  Space leader layer: it proved slower than direct, visible commands here.
+  shortcuts. Prefer standard Vim motion, convenient bare contextual keys, the
+  editor's second-Escape one-shot workspace map, contextual status-line hints,
+  and a searchable command palette. Chrome non-conflict is a core requirement;
+  every new binding follows the executable policy in
+  [`src/desktop/FOCUS.md`](src/desktop/FOCUS.md). Do not add a Space leader
+  layer: it proved slower than direct, visible commands here.
 - Prefer MUI's native component semantics and composition for Desktop UI:
   AppBar/Toolbar, Tabs, Menu, List, Select, Dialog, Tooltip, theme tokens, and
   `sx`. Build custom primitives only where MUI has no suitable interaction

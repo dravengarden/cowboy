@@ -13,7 +13,7 @@ export function DesktopSessionShortcut({
   title: string;
 }): React.JSX.Element {
   const workspace = useDesktopWorkspace();
-  const modifier = isMac ? "⌘" : "Ctrl+";
+  const modifier = isMac ? "⌥" : "Alt+";
   return (
     <Tooltip title={`Switch to ${title} · ${modifier}${digit}`} enterDelay={450}>
       <Box
@@ -21,7 +21,7 @@ export function DesktopSessionShortcut({
         className="cowboy-session-shortcut"
         sx={{
           display: "inline-flex",
-          // Mod+1…0 is global navigation, so its affordance must not disappear
+          // Alt/Option+1…0 is global navigation, so its affordance must not disappear
           // merely because another pane owns keyboard focus. Focus strengthens
           // the hint; it no longer determines whether the hint exists.
           opacity: active

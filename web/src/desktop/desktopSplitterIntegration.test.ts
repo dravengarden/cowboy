@@ -23,16 +23,12 @@ Deno.test("every Desktop vertical boundary exposes the shared splitter contract"
   );
 });
 
-Deno.test("Mod brackets resize immediately and own an exclusive H/L mode", () => {
-  assert(commandsSource.includes("desktopResizeSelectChord(event, isMac)"));
-  assert(commandsSource.includes("desktopWidthResizeDirection(event, isMac)"));
-  assert(commandsSource.includes("resolveDesktopResizeSplitter("));
-  assert(commandsSource.includes('commandKey === "<" || commandKey === ">"'));
-  assert(commandsSource.includes("if (isModifierKey(commandKey)) return"));
+Deno.test("bare backslash enters an exclusive H/L Resize mode", () => {
+  assert(commandsSource.includes('workspace.mode === "command"'));
+  assert(commandsSource.includes("DESKTOP_WORKSPACE_COMMANDS"));
   assert(commandsSource.includes("if (isModifierKey(key)) return"));
   assert(!commandsSource.includes('key.toLowerCase() === "r"'));
-  assert(commandsSource.includes("selectAndAdjustSplitter("));
-  assert(commandsSource.includes("-DESKTOP_SPLITTER_STEP"));
+  assert(commandsSource.includes("delta: left ? -step : step"));
   assert(commandsSource.includes('lower === "h" || lower === "l"'));
   assert(commandsSource.includes("DESKTOP_SPLITTER_LARGE_STEP"));
   assert(commandsSource.includes("adjacentDesktopSplitter("));

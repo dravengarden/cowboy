@@ -440,8 +440,11 @@ here says otherwise.
     line as `REC @x · Q Stop`; all other Vim search/command dialogs retain their
     upstream behavior. This runtime remains dynamically imported by Desktop
     only; Mobile receives neither the focus reset nor the macro UI. Prompt
-    region shortcuts use modified global chords (`Mod+P/I/Y/D`) so bare Vim
-    paste, macro, delete, and motion commands always remain editor-owned.
+    Region shortcuts use bare keys outside editors. In the main Composer the
+    first Escape remains Vim-owned and returns Insert to Normal; a second plain
+    Normal Escape arms a one-shot workspace command state (`S/E/P/C/T/Y/D/N/W`,
+    `:`, `?`, `,`, `\`) for 1.2 seconds. This keeps bare Vim paste, macro,
+    delete, and motion commands editor-owned without reusing Chrome shortcuts.
     The same CJK input source can mark any physical Normal-mode keydown on the
     non-editable sink as `isComposing`/229 even though no marked-text transaction
     exists there. Do not discard those events: route the complete letter,
@@ -1078,8 +1081,9 @@ Desktop Vim + IME checks:
 - [ ] Typing/composition keeps the same `.cm-content` node and emits no callback-
       identity `StateEffect.reconfigure` after the document transaction.
 - [ ] Escape returns focus to the command sink and the status line shows `IME SAFE`.
-- [ ] `Mod+P` focuses and expands a visible Plan from any Agent region;
-      bare `p/P` remains native Vim paste in every composer state.
+- [ ] Bare `P` focuses and expands a visible Plan outside editors; inside the
+      Composer, `Esc`, then `P`, does the same while bare `p/P` remains native
+      Vim paste in Normal mode.
 - [ ] At a mobile viewport, the Desktop Vim/IME chunk is not requested and Mobile
       editor behavior is unchanged.
 

@@ -19,15 +19,11 @@ import { DesktopShortcutsDialog } from "./DesktopShortcutsDialog";
 import {
   DESKTOP_FOCUS_PLAN_SHORTCUT,
   DESKTOP_FOCUS_PROMPT_SHORTCUT,
-  DESKTOP_RESIZE_NARROW_SHORTCUT,
   DESKTOP_RESIZE_SELECT_SHORTCUT,
-  DESKTOP_RESIZE_WIDEN_SHORTCUT,
+  DESKTOP_SHORTCUTS,
 } from "./workspaceShortcuts";
 import {
-  DESKTOP_SPLITTER_ADJUST_EVENT,
-  DESKTOP_SPLITTER_STEP,
   preferredDesktopSplitter,
-  resolveDesktopResizeSplitter,
   visibleDesktopSplitterIds,
 } from "../desktopSplitterKeyboard";
 import { DESKTOP_INSET_RADIUS } from "../DesktopEmbeddedControl";
@@ -82,8 +78,7 @@ export function DesktopCommandHost({
       title: "Keyboard Shortcuts",
       description: "Vim navigation and commands for the current Desktop context",
       group: "Help",
-      shortcut: "Mod+/",
-      allowInEditor: true,
+      shortcut: DESKTOP_SHORTCUTS.shortcuts,
       run: () => setShortcutsOpen(true),
     },
     {
@@ -91,8 +86,7 @@ export function DesktopCommandHost({
       title: "Open Command Palette",
       description: "Search every registered Desktop command",
       group: "Open",
-      shortcut: "Mod+K",
-      allowInEditor: true,
+      shortcut: DESKTOP_SHORTCUTS.commands,
       run: () => {
         setQuery("");
         setSelected(0);
@@ -104,16 +98,14 @@ export function DesktopCommandHost({
       title: "New Session",
       description: "Create a Cowboy session",
       group: "Session",
-      shortcut: "Mod+N",
-      allowInEditor: true,
+      shortcut: DESKTOP_SHORTCUTS.newSession,
       run: onNewSession,
     },
     {
       id: "settings.open",
       title: "Open Settings",
       group: "Settings",
-      shortcut: "Mod+\u002c",
-      allowInEditor: true,
+      shortcut: DESKTOP_SHORTCUTS.settings,
       run: onOpenSettings,
     },
     {
@@ -121,8 +113,7 @@ export function DesktopCommandHost({
       title: "Focus Top Bar",
       description: "Move keyboard focus to session controls and usage",
       group: "Workspace",
-      shortcut: "Mod+T",
-      allowInEditor: true,
+      shortcut: DESKTOP_SHORTCUTS.focusTopbar,
       when: () => document.querySelector("[data-desktop-region='topbar.controls']") !== null,
       run: () => workspace.focusRegion("topbar.controls"),
     },
@@ -130,8 +121,7 @@ export function DesktopCommandHost({
       id: "workspace.focusSessions",
       title: "Focus Sessions",
       group: "Workspace",
-      shortcut: "Mod+E",
-      allowInEditor: true,
+      shortcut: DESKTOP_SHORTCUTS.focusSessions,
       run: () => workspace.focusPane("sessions"),
     },
     {
@@ -140,15 +130,13 @@ export function DesktopCommandHost({
       description: "Return to the Prompt editor in Vim Normal mode",
       group: "Workspace",
       shortcut: DESKTOP_FOCUS_PROMPT_SHORTCUT,
-      allowInEditor: true,
       run: () => workspace.focusRegion("prompt.composer"),
     },
     {
       id: "workspace.focusConversation",
       title: "Focus Conversation",
       group: "Workspace",
-      shortcut: "Mod+L",
-      allowInEditor: true,
+      shortcut: DESKTOP_SHORTCUTS.focusConversation,
       run: () => workspace.focusPane("conversation"),
     },
     {
@@ -158,7 +146,6 @@ export function DesktopCommandHost({
         "Enter Resize mode on the nearest vertical split, then H/L to move it",
       group: "Workspace",
       shortcut: DESKTOP_RESIZE_SELECT_SHORTCUT,
-      allowInEditor: true,
       run: () => {
         if (workspace.selectedSplitter !== null) {
           workspace.setSelectedSplitter(null);
@@ -174,50 +161,23 @@ export function DesktopCommandHost({
           workspace.focusedPane,
           workspace.productMode,
         );
-        if (splitter) workspace.setSelectedSplitter(splitter);
+        if (splitter) {
+          workspace.setSelectedSplitter(splitter);
+          requestAnimationFrame(() =>
+            document.querySelector<HTMLElement>(
+              `[data-desktop-splitter="${CSS.escape(splitter)}"]`,
+            )?.focus({ preventScroll: true })
+          );
+        }
       },
     },
     {
-      id: "workspace.resizeNarrow",
-      title: "Narrow Nearest Pane",
-      description: "Shrink the nearest visible vertical split and enter Resize mode",
+      id: "workspace.cycleRegion",
+      title: "Cycle Workspace Region",
+      description: "Move focus to the next visible Desktop region",
       group: "Workspace",
-      shortcut: DESKTOP_RESIZE_NARROW_SHORTCUT,
-      allowInEditor: true,
-      run: () => {
-        const splitter = resolveDesktopResizeSplitter(
-          visibleDesktopSplitterIds(),
-          workspace.selectedSplitter,
-          workspace.focusedPane,
-          workspace.productMode,
-        );
-        if (!splitter) return;
-        workspace.setSelectedSplitter(splitter);
-        globalThis.dispatchEvent(new CustomEvent(DESKTOP_SPLITTER_ADJUST_EVENT, {
-          detail: { splitter, delta: -DESKTOP_SPLITTER_STEP },
-        }));
-      },
-    },
-    {
-      id: "workspace.resizeWiden",
-      title: "Widen Nearest Pane",
-      description: "Grow the nearest visible vertical split and enter Resize mode",
-      group: "Workspace",
-      shortcut: DESKTOP_RESIZE_WIDEN_SHORTCUT,
-      allowInEditor: true,
-      run: () => {
-        const splitter = resolveDesktopResizeSplitter(
-          visibleDesktopSplitterIds(),
-          workspace.selectedSplitter,
-          workspace.focusedPane,
-          workspace.productMode,
-        );
-        if (!splitter) return;
-        workspace.setSelectedSplitter(splitter);
-        globalThis.dispatchEvent(new CustomEvent(DESKTOP_SPLITTER_ADJUST_EVENT, {
-          detail: { splitter, delta: DESKTOP_SPLITTER_STEP },
-        }));
-      },
+      shortcut: DESKTOP_SHORTCUTS.cycleRegion,
+      run: () => workspace.cycleRegion(),
     },
     {
       id: "prompt.focusPlan",
@@ -225,11 +185,10 @@ export function DesktopCommandHost({
       description: "Move keyboard focus to the current task plan",
       group: "Prompt",
       shortcut: DESKTOP_FOCUS_PLAN_SHORTCUT,
-      allowInEditor: true,
       when: () => document.querySelector("[data-desktop-region='prompt.plan']") !== null,
       disabledReason: "The agent has not published a plan",
-      // Mod+P is Cowboy's global Plan command. Consume it while Plan is absent
-      // so the same chord never falls through to the browser's Print action.
+      // P is a stable workspace command. Consume it while Plan is absent so the
+      // same visible key never changes meaning with transient Plan availability.
       consumeWhenDisabled: true,
       run: () => workspace.focusRegion("prompt.plan"),
     },
@@ -239,8 +198,7 @@ export function DesktopCommandHost({
       description:
         "Open and focus queued prompts, or close them when the queue already owns focus",
       group: "Prompt",
-      shortcut: "Mod+Y",
-      allowInEditor: true,
+      shortcut: DESKTOP_SHORTCUTS.focusQueue,
       contexts: ["prompt"],
       when: () => document.querySelector("[data-desktop-region='prompt.queued']") !== null,
       disabledReason: "The queue is empty",
@@ -263,8 +221,7 @@ export function DesktopCommandHost({
       title: "Focus Drafts",
       description: "Move keyboard focus to parked drafts",
       group: "Prompt",
-      shortcut: "Mod+D",
-      allowInEditor: true,
+      shortcut: DESKTOP_SHORTCUTS.focusDrafts,
       contexts: ["prompt"],
       when: () => document.querySelector("[data-desktop-region='prompt.draft']") !== null,
       disabledReason: "There are no drafts",
@@ -399,7 +356,11 @@ export function DesktopCommandHost({
         shortcutGroups={[
           {
             slots: [
-              { shortcut: "Mod+K", label: "Palette", availability: "active" },
+              {
+                shortcut: DESKTOP_SHORTCUTS.commands,
+                label: "Palette",
+                availability: "active",
+              },
             ],
           },
           {

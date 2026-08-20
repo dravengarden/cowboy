@@ -28,7 +28,7 @@ Bare product shortcuts (`F` Follow, `Z` Reading, `V` History/Explore, top-bar
 `R`/`U`/`L`/`C`/`X`/`S`, run-config mnemonics) match the physical letter with
 or without Shift. They are not a second Shift-modified command. Vim regions
 keep case: `g`/`gg` versus `G`, and list/transcript `j`/`k`/`h`/`l`. Modified
-chords (`Mod+I`, `Mod+Shift+P`) still require their exact Shift state.
+chords (`Mod+Enter`, `Shift+J`) still require their exact Shift state.
 
 ### One truthful shortcut state machine
 
@@ -80,12 +80,13 @@ surfaces add `Ctrl-D/U` for half-page motion, `Ctrl-F/B` for full-page motion,
 and `gg/G` for the two ends. A visible shortcut bar is a live legend for these
 surface-owned motions. Text inputs, CodeMirror, native selection, and active IME
 composition always own their native keys before workspace navigation.
-Browser Find / Open / Downloads / view-source chords are swallowed so a
-Desktop PWA cannot surface Chrome chrome; OS window, edit, reload, zoom,
-and DevTools chords stay with the host.
+Chrome shortcuts stay with Chrome whenever Cowboy has no matching command. Do
+not install a blanket keydown shield for Find, Open, Downloads, address-bar,
+tab, window, reload, zoom, or DevTools actions. The narrow intentional
+overrides are specified in the collision policy below.
 While an editable field owns focus, the workbench motions become inactive and
 the field/search owner may become active. `Esc` first returns focus to the
-workbench; a second `Esc` may close it.
+workbench; in the main Composer a second `Esc` arms the one-shot workspace map.
 
 ### Shortcut slots and bars
 
@@ -120,12 +121,10 @@ turn one held prefix into a completed double-key command.
 
 ## Navigation
 
-- `Ctrl-w h/l`: adjacent pane.
-- `Ctrl-w j/k`: adjacent region in the current pane.
-- `Ctrl-w w`: cycle every visible region.
-- `Mod-\`: enter Resize mode on the nearest vertical split. `H/L` then
-  moves it. `Mod-[` / `Mod-]` still nudge immediately. `Ctrl-w </>` remains
-  as the Vim window-width alias.
+- `S/E/P/C/T`: focus Sessions, Editor, Plan, Conversation, or Top Bar.
+- `Y/D`: focus Queue or Drafts; `W` cycles visible regions.
+- `Alt/Option+1…0`: switch to one of the first ten Sessions globally.
+- `\`: enter Resize mode on the nearest vertical split. `H/L` then moves it.
 - `j/k`, `gg`, `G`: item navigation outside text-editing controls. Conversation
   is a reader rather than an item list, so the same keys scroll by line or jump
   to the oldest/latest output there.
@@ -137,7 +136,7 @@ turn one held prefix into a completed double-key command.
 - `Enter`: default item action. In Sessions, `l` and `Enter` open the selected
   session and move focus to its Prompt editor; entering the Sessions region
   always starts on the currently open session.
-- Sessions use `p` to enter or leave Pin reorder mode. While pinned, `j/k`
+- Sessions use `o` to enter or leave Order reorder mode. While pinned, `j/k`
   moves the selected session instead of moving selection, and `Esc` releases
   the mode. `h` opens the selected session's Settings directly; the trailing
   three-dot menu retains secondary actions such as Rename and Delete.
@@ -155,7 +154,7 @@ turn one held prefix into a completed double-key command.
   In Sessions this switches the active session immediately while retaining
   focus in the rail, so the next `j/k` continues from the selected row.
 - `Mod-j/k`: reorder the focused Queue or Draft item. Sessions use the more
-  deliberate Pin mode above so ordinary navigation and reordering cannot be
+  deliberate Order mode above so ordinary navigation and reordering cannot be
   confused.
 Text inputs and CodeMirror retain their own Vim/IME semantics. Workspace list
 navigation must never intercept unmodified keys while a text-editing target
@@ -225,20 +224,22 @@ searches every registered command; the status line lists only actions available
 in the current region.
 
 The Desktop-only shortcut dialog opens from the status-line `? Shortcuts`
-entry or `Mod+/`. `Mod+k` opens the all-command palette.
+entry or bare `?`. Bare `:` opens the all-command palette. Outside an editor,
+workspace commands are direct: `S` Sessions, `E` Editor, `P` Plan, `C`
+Conversation, `T` Top Bar, `Y` Queue, `D` Drafts, `N` New Session, `W` next
+region, `,` Settings, and `\` Resize. In the main Composer, the first `Esc`
+returns to Normal and a second `Esc` arms the same one-key workspace map for
+1.2 seconds.
 
-Bare `f` is the pointerless escape hatch: it overlays short home-row labels on
-every visible actionable control. Type a label to focus and activate that
-target, or press Escape to cancel. Labels are recomputed while scrolling and
-when dialogs mutate, so the same mechanism covers the workspace, Tool History
-inspector, menus, and modal actions without every control needing a bespoke
-shortcut.
+Desktop does not reserve bare `F` for a page-wide target overlay. Focus moves
+through the direct workspace map, native focus, contextual Vim motions, and the
+Command Palette; Conversation keeps `F` for Following.
 
 Shortcut hints implement the core state machine above with three discovery
 levels:
 
-1. global shortcuts are always visible but quiet (`Mod+E/I/L/T`, `Mod+N`,
-   `Mod+,`) because they work without first focusing a region;
+1. global shortcuts are always visible but quiet (`S/E/P/C/T`, `N`, `,`,
+   and `Alt/Option+1…0`) because they work without first focusing a region;
 2. contextual shortcuts float over their action only while the owning region is
    focused (Prompt subregions and list item actions), so they add no layout
    width and disappear when attention moves elsewhere;
@@ -261,7 +262,7 @@ while the list owns Normal-mode focus, `G` is available and the numeric slots
 remain inactive. Pressing `G` makes the prefix active and numeric slots
 available. A valid slot focuses that exact row and a second `G` focuses the
 first row. Cancellation follows the shared sequential-chord law, so a modified
-global command such as `Mod+I` still returns to Composer immediately.
+global command such as `Alt/Option+1` still switches sessions immediately.
 
 List-row action hints are item-scoped: focusing Queue or Drafts reveals hints
 only on the current `[data-desktop-item]`, never on every row merely because the
@@ -269,39 +270,47 @@ region owns focus. A badge must describe an actual binding; `L`/`Enter` belongs
 on the focused row's Edit action, while unbound pointer actions stay unlabelled.
 
 Never invent a hint for an action that is not wired. Contextual hints anchor to
-the bottom-right of their target. Prefer one primary modifier and one positional
-or mnemonic key while retaining native semantic chords such as `Mod+S`. Put secondary Cowboy-specific actions in
-the searchable command palette. Shared modal shells may use the same visual
-primitive, but must hide it on the touch product.
+the bottom-right of their target. Prefer a convenient bare contextual key; then
+a standard semantic or Vim chord; then one browser-safe modifier. Use a
+sequence only when those choices are exhausted. Do not add a Space leader.
+Keep native semantic chords such as `Mod+S`, and put secondary Cowboy-specific
+actions in the searchable command palette. Shared modal shells may use the
+same visual primitive, but must hide it on the touch product.
 
-### macOS collision policy
+### Browser and operating-system collision policy
 
-Every Desktop shortcut must pass the checked-in macOS collision audit before
-it can enter the command registry. The policy follows Apple's system shortcut
-contract and the conventions users depend on in editors and browsers:
+Not conflicting with Chrome is a core Desktop requirement, in ordinary tabs
+and installed PWAs. Every registered command must pass both checked-in audits:
+`chromeShortcutPolicy.ts` and `macShortcutPolicy.ts`.
 
-- never capture destructive or system-owned chords such as `Mod+Q/W/H/M`,
-  `Mod+Tab`, `Mod+Space`, `Ctrl+Mod+Q/F`, `Alt+Mod+Esc`, or
-  `Shift+Mod+3/4/5`;
-- common application chords may be used only with matching native semantics:
-  `Mod+N` creates a session, `Mod+,` opens Settings, `Mod+S` saves a draft,
-  and `Mod+1…0` switches session tabs;
-- global Cowboy workspace navigation uses mnemonic `Mod+E/I/L/T` for Sessions,
-  Editor, Log, and Top Bar. Focused Top Bar uses bare `R/U/C/X/S` for Run
-  Configuration, Usage, Compact, Clear, and Stop; `Mod+1…0` remains global
-  session slots;
-- macOS input-source and dead-key chords (`Ctrl+Space`, `Ctrl+Alt+Space`,
-  `Alt+E/I/N/U`) are reserved so Cowboy never breaks accent or IME entry;
-- do not assign bare `Q` to Cowboy navigation. A key pressed while Command is
-  being released can otherwise become `Mod+Q` and quit the native shell;
-- Vim-native keys remain unmodified and are active only in Normal mode or the
-  focused non-editor region. IME composition and text editing always win.
+- Chrome tab, window, address-bar, history, download, bookmark, navigation,
+  reload, print, find, zoom, and DevTools chords are unavailable to Cowboy.
+  Examples include `Ctrl/Cmd+N/T/W/L/K/E/P/R/F/J/H/D/1…0/Tab` and
+  `Alt+Left/Right`. Do not rely on `preventDefault()` to make one usable.
+- A Chrome chord may be overridden only when the Cowboy action has the same
+  established semantic or is a standard Vim reader motion in an exclusively
+  owned context. The current exceptions are `Ctrl/Cmd+S` Save Draft and
+  Conversation/Reading `Ctrl+D/U/F/B`. Additions require an explicit policy
+  entry, tests, visible help, and an update to this section.
+- When Cowboy has no command, do not swallow the event. Chrome Find, Open,
+  Downloads, view-source, and other browser behavior must continue to work.
+- macOS destructive and system chords such as `Cmd+Q/W/H/M/Tab/Space`, input
+  source chords, screenshots, and Option dead keys stay reserved. Bare `Q` is
+  also reserved because it can become `Cmd+Q` while Command is being released.
+- Workspace navigation uses the bare map above outside editors and the
+  second-`Esc` one-shot map inside Vim. IME composition and editable Insert
+  mode always win.
+- Session slots are the deliberate cross-platform modifier exception:
+  `Alt+1…0` on Windows/Linux and `Option+1…0` on macOS. All ten slots are
+  reserved even when a slot is empty, so the key never changes meaning with
+  session count.
 
-`macShortcutPolicy.ts` is the executable source of truth. A conflicting
-registered command throws during development and fails the frontend test gate;
-update the policy and this document together when intentionally adding an
-exception. The reference inventory is Apple's official Mac keyboard-shortcut
-guide: <https://support.apple.com/en-us/102650>.
+For every new shortcut, update the central shortcut constants, both collision
+audits where relevant, policy tests, visible hints, and this guide. Acceptance
+must include real Chrome on macOS and Windows/Linux; extensions and user-level
+OS remaps are outside the static guarantee. Reference inventories:
+[Chrome keyboard shortcuts](https://support.google.com/chrome/answer/157179)
+and [Apple Mac keyboard shortcuts](https://support.apple.com/en-us/102650).
 
 An expanded Queue or Draft region starts on its first row. `j/k` moves the row
 selection, while `l` or `Enter` opens the selected message for editing. The
@@ -350,10 +359,10 @@ projection: entering it preserves the selected projection and changes only the
 product mode. Its visible `Z` slot is inactive outside Conversation and available
 while Conversation owns focus, matching the registered command exactly.
 
-`Mod+I` always enters `prompt.composer` and its Vim Normal-mode command sink,
+Bare `E` always enters `prompt.composer` and its Vim Normal-mode command sink,
 even when Sessions, Conversation, Plan, Queue, or Draft currently owns focus.
-`Mod+P` always enters Plan. When no Plan exists the command remains reserved
-and disabled, rather than falling through to the browser's Print action.
+Bare `P` enters Plan. When no Plan exists the command remains reserved and
+disabled rather than acquiring a transient second meaning.
 
 The Composer is the exception: its caret and outlined editing canvas already
 communicate focus, so `prompt.composer` must not receive the generic region
@@ -362,18 +371,15 @@ top bar is the highlighted workspace region, the hidden Prompt Vim sink must
 not consume typed keys or IME input; those keys belong to the highlighted
 chrome and must not pop Prompt into Insert.
 
-`Ctrl-K` and `Ctrl-J` move vertically between the active pane and
-`topbar.controls`. Prompt Plan, Queue, and Draft are auxiliary panels rather
-than Vim windows; enter them through their dedicated commands, so vertical
-window movement never collapses or selects them as an intermediate stop.
+Bare `W` cycles visible workspace regions. Prompt Plan, Queue, and Draft are
+auxiliary panels rather than Vim windows; enter them through their dedicated
+commands, so region cycling never collapses or selects them as an intermediate
+stop.
 
-`Mod-\` selects the nearest visible vertical boundary and enters layout
+Bare `\` selects the nearest visible vertical boundary and enters layout
 Resize mode without moving it: Sessions / Prompt from Sessions, Prompt /
 Conversation from either work pane, or Page index / Page in Reading mode.
-Pressing `Mod-\` again leaves the mode. `Mod-[` and `Mod-]` still shrink or
-grow immediately. `Ctrl-W <` and `Ctrl-W >` remain as the Vim window-width
-alias and leave `Ctrl-W R` available for its standard rotate meaning. The
-selected bar uses the shared accent and keycap language; `H/L` moves it by
+The selected bar uses the shared accent and keycap language; `H/L` moves it by
 16px, `Shift-H/L` moves it by 48px, `Tab` cycles visible bars, and `Esc` or
 `Enter` returns to the previously focused region.
 Resize mode is exclusive, so unrelated bare keys never leak into lists,
@@ -384,6 +390,6 @@ Queue and Draft use the same list contract as Sessions: `J/K` selects, `gg` and
 `G` jump to the ends, and `1` through `0` jump to one of the first ten visible
 slots once that list owns focus. Clicking a visible number does the same jump.
 `G` then `1…0` remains available as the sequential form. `L`/`Enter` opens the
-selected message editor. `P` pins reorder mode
+selected message editor. `O` pins Order reorder mode
 so `J/K` moves the message and `Esc` releases it. Inside the editor, `Mod+Enter`
 saves and `Esc` cancels, with both returning focus to the originating list row.

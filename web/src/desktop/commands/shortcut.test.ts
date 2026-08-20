@@ -134,34 +134,15 @@ Deno.test("Alt shortcuts use physical keys under macOS Option input", () => {
   }, true));
 });
 
-Deno.test("Mod backslash enters Resize mode under an IME", () => {
-  assert(matchesShortcut(parseShortcut("Mod+\\"), {
+Deno.test("bare backslash enters Resize mode under an IME", () => {
+  assert(matchesShortcut(parseShortcut("\\"), {
     key: "Process",
     code: "Backslash",
-    metaKey: true,
+    metaKey: false,
     ctrlKey: false,
     shiftKey: false,
     altKey: false,
-  }, true));
-});
-
-Deno.test("Mod bracket resize shortcuts use physical keys under an IME", () => {
-  assert(matchesShortcut(parseShortcut("Mod+["), {
-    key: "Process",
-    code: "BracketLeft",
-    metaKey: true,
-    ctrlKey: false,
-    shiftKey: false,
-    altKey: false,
-  }, true));
-  assert(matchesShortcut(parseShortcut("Mod+]"), {
-    key: "Process",
-    code: "BracketRight",
-    metaKey: true,
-    ctrlKey: false,
-    shiftKey: false,
-    altKey: false,
-  }, true));
+  }, true, true));
 });
 
 Deno.test("bare product letters ignore Shift; modified chords do not", () => {
@@ -214,4 +195,23 @@ Deno.test("bare contextual shortcuts use physical keys only when explicitly safe
   };
   assertFalse(matchesShortcut(shortcut, imeKey, true));
   assert(matchesShortcut(shortcut, imeKey, true, true));
+});
+
+Deno.test("bare product punctuation accepts the Shift used to produce its symbol", () => {
+  assert(matchesShortcut(parseShortcut(":"), {
+    key: ":",
+    code: "Semicolon",
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: true,
+    altKey: false,
+  }, false, true));
+  assert(matchesShortcut(parseShortcut("?"), {
+    key: "?",
+    code: "Slash",
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: true,
+    altKey: false,
+  }, true, true));
 });
