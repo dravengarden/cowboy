@@ -470,6 +470,20 @@ export function MobileProductShell({
         ...mobilePeekRestLayerSx,
         ...mobilePresentationMovingRootSx("data-mobile-product-moving"),
         ...mobileSheetPresentationSx,
+        // New Session is a cover: its DetentSheet body is the only visible
+        // vertical scroll owner. iOS keeps every background momentum scroller
+        // as an independent compositor tile, and their native indicators can
+        // paint through the otherwise opaque cover. Tie the freeze to the
+        // sheet's actual DOM lifetime (not the open registry), so removal also
+        // restores every Agent/Review scroller even after a portaled dismiss.
+        "&:has([data-detent-sheet='true'][aria-label='New session']) [data-mobile-overflow-layer='true']": {
+          overflowY: "hidden !important",
+          WebkitOverflowScrolling: "auto",
+        },
+        "&:has([data-detent-sheet='true'][aria-label='New session']) [data-detent-sheet='true'] [data-mobile-overflow-layer='true']": {
+          overflowY: "auto !important",
+          WebkitOverflowScrolling: "touch",
+        },
       }}
     >
       <MobileConnectionBanner store={controlPlaneConnection} />

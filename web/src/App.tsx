@@ -2533,20 +2533,6 @@ export function App({
                     opacity: 0,
                     pointerEvents: "none",
                 },
-                // A cover sheet owns the visible viewport while it is open. On
-                // iOS, underlying momentum scrollers otherwise keep their
-                // independently composited native scroll indicators, which can
-                // paint through the opaque cover and resemble duplicate sheet
-                // scrollbars. Freeze only the page layers behind New Session;
-                // the DetentSheet body remains the sole vertical scroll owner.
-                "&:has([data-detent-sheet='true'][aria-label='New session']) [data-mobile-overflow-layer='true']": {
-                    overflowY: "hidden !important",
-                    WebkitOverflowScrolling: "auto",
-                },
-                "&:has([data-detent-sheet='true'][aria-label='New session']) [data-detent-sheet='true'] [data-mobile-overflow-layer='true']": {
-                    overflowY: "auto !important",
-                    WebkitOverflowScrolling: "touch",
-                },
                 ...(surface === "desktop" && {
                     "& [data-desktop-region]": {
                         position: "relative",

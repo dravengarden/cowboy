@@ -6,6 +6,9 @@ const source = await Deno.readTextFile(
 const appSource = await Deno.readTextFile(
   new URL("./App.tsx", import.meta.url),
 );
+const mobileProductShellSource = await Deno.readTextFile(
+  new URL("./mobile/shell/MobileProductShell.tsx", import.meta.url),
+);
 
 Deno.test("mobile decisions use a shared labeled action footer", () => {
   assertEquals(source.includes("export function MobileDecisionActions("), true);
@@ -32,13 +35,13 @@ Deno.test("mobile new session uses labeled Cancel and Create actions", () => {
   assertEquals(dialog.includes('bgcolor: "divider"'), true);
   assertEquals(dialog.includes("0 -8px 18px"), true);
   assertEquals(
-    appSource.includes(
+    mobileProductShellSource.includes(
       "[data-detent-sheet='true'][aria-label='New session']) [data-mobile-overflow-layer='true']",
     ),
     true,
   );
   assertEquals(
-    appSource.includes(
+    mobileProductShellSource.includes(
       "[data-detent-sheet='true'][aria-label='New session']) [data-detent-sheet='true'] [data-mobile-overflow-layer='true']",
     ),
     true,
