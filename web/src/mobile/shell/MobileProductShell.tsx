@@ -12,6 +12,7 @@ import {
   OBSIDIAN_DRAWER_FLICK_PX_PER_MS,
   obsidianDrawerAbandonsToScroll,
   obsidianDrawerClaimsSwipe,
+  obsidianDrawerDominance,
   obsidianDrawerLockPx,
 } from "../../obsidianDrawerGesture";
 import {
@@ -89,8 +90,7 @@ function ignoredGestureTarget(
         element?.closest(
             "input, textarea, [contenteditable='true'], [data-mobile-pager-ignore]",
           ) != null ||
-        hasHorizontalScroller(target, boundary) ||
-        hasVerticalScroller(target, boundary)))
+        hasHorizontalScroller(target, boundary)))
   );
 }
 
@@ -272,6 +272,7 @@ export function MobileProductShell({
       }
       const now = performance.now();
       const width = shell.clientWidth;
+      const scrollable = hasVerticalScroller(event.target, shell);
       presentationWidth = width;
       gesture = {
         product: productRef.current,
@@ -287,9 +288,9 @@ export function MobileProductShell({
         // an iOS vertical pan permanently cancels native scrolling.
         lockPx: obsidianDrawerLockPx(
           false,
-          event.target instanceof Element &&
-            event.target.closest("[data-mobile-overflow-layer='true']") != null,
+          scrollable,
         ),
+        dominance: obsidianDrawerDominance(scrollable),
       };
       prepareNavigationHaptic();
       // Promote both pages before the 2 px claim so the first translate
@@ -335,7 +336,12 @@ export function MobileProductShell({
           direction: deltaX < 0 ? "left" as const : "right" as const,
           distance: Math.abs(deltaX),
         }
-        : obsidianDrawerClaimsSwipe(deltaX, deltaY, gesture.lockPx);
+        : obsidianDrawerClaimsSwipe(
+          deltaX,
+          deltaY,
+          gesture.lockPx,
+          gesture.dominance,
+        );
       if (!swipe || !pagerDirectionAllowed(gesture.product, deltaX)) return;
       if (!gesture.locked) {
         gesture.locked = true;

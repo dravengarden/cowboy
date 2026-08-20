@@ -5,10 +5,12 @@ import {
   OBSIDIAN_DRAWER_COMMIT_PROGRESS,
   OBSIDIAN_DRAWER_FLICK_PX_PER_MS,
   OBSIDIAN_DRAWER_RAIL_SLOP_PX,
+  OBSIDIAN_DRAWER_SCROLL_DOMINANCE,
   OBSIDIAN_DRAWER_SCROLL_SLOP_PX,
   OBSIDIAN_DRAWER_TRACK_PX,
   obsidianDrawerAbandonsToScroll,
   obsidianDrawerClaimsSwipe,
+  obsidianDrawerDominance,
   obsidianDrawerLockPx,
   obsidianDrawerRubberOffset,
   obsidianDrawerShouldOpen,
@@ -61,20 +63,27 @@ Deno.test("rail slop stays above a session-row tap", () => {
 
 Deno.test("scrollable content waits past incidental horizontal tremor", () => {
   const lockPx = obsidianDrawerLockPx(false, true);
+  const dominance = obsidianDrawerDominance(true);
   assertEquals(lockPx, OBSIDIAN_DRAWER_SCROLL_SLOP_PX);
+  assertEquals(dominance, OBSIDIAN_DRAWER_SCROLL_DOMINANCE);
   assertEquals(
-    obsidianDrawerClaimsSwipe(3, 1, lockPx),
+    obsidianDrawerClaimsSwipe(11, 9, lockPx, dominance),
     null,
   );
   assertEquals(obsidianDrawerAbandonsToScroll(4, 25), true);
   assertEquals(
-    obsidianDrawerClaimsSwipe(lockPx, 1, lockPx),
+    obsidianDrawerClaimsSwipe(lockPx, 4, lockPx, dominance),
     { direction: "right", distance: lockPx },
   );
   assertEquals(
-    obsidianDrawerLockPx(true, true),
-    OBSIDIAN_DRAWER_RAIL_SLOP_PX,
+    obsidianDrawerClaimsSwipe(lockPx, 14, lockPx, dominance),
+    null,
   );
+  assertEquals(
+    obsidianDrawerLockPx(true, true),
+    OBSIDIAN_DRAWER_SCROLL_SLOP_PX,
+  );
+  assertEquals(obsidianDrawerDominance(false), 1);
 });
 
 Deno.test("the first clear axis wins between scroll and swipe", () => {

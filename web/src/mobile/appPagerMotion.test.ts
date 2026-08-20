@@ -80,11 +80,11 @@ Deno.test("vertical transcript pans release horizontal recognizers", () => {
   assertEquals(pagerSource.includes("obsidianDrawerClaimsSwipe"), true);
   assertEquals(pagerSource.includes("gesture.lockPx"), true);
   assertEquals(
-    pagerSource.includes("[data-mobile-overflow-layer='true']"),
+    pagerSource.includes("hasVerticalScroller(event.target, shell)"),
     true,
   );
   assertEquals(
-    pagerSource.includes("hasVerticalScroller(target, boundary)"),
+    pagerSource.includes("gesture.dominance"),
     true,
   );
 });

@@ -26,6 +26,7 @@ export interface PagerGesture {
   velocity: number;
   locked: boolean;
   lockPx: number;
+  dominance: number;
 }
 
 export function predictPagerOffset(

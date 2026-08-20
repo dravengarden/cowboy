@@ -12,7 +12,8 @@
  *  tap-vs-swipe conflict in the same way. */
 
 export const OBSIDIAN_DRAWER_TRACK_PX = 2;
-export const OBSIDIAN_DRAWER_SCROLL_SLOP_PX = 10;
+export const OBSIDIAN_DRAWER_SCROLL_SLOP_PX = 18;
+export const OBSIDIAN_DRAWER_SCROLL_DOMINANCE = 1.35;
 export const OBSIDIAN_DRAWER_RAIL_SLOP_PX = 11;
 export const OBSIDIAN_DRAWER_COMMIT_PROGRESS = 0.5;
 export const OBSIDIAN_DRAWER_FLICK_PX_PER_MS = 0.3;
@@ -28,10 +29,14 @@ export function obsidianDrawerLockPx(
   fromRail: boolean,
   fromScrollableContent = false,
 ): number {
-  if (fromRail) return OBSIDIAN_DRAWER_RAIL_SLOP_PX;
-  return fromScrollableContent
-    ? OBSIDIAN_DRAWER_SCROLL_SLOP_PX
-    : OBSIDIAN_DRAWER_TRACK_PX;
+  if (fromScrollableContent) return OBSIDIAN_DRAWER_SCROLL_SLOP_PX;
+  return fromRail ? OBSIDIAN_DRAWER_RAIL_SLOP_PX : OBSIDIAN_DRAWER_TRACK_PX;
+}
+
+export function obsidianDrawerDominance(
+  fromScrollableContent: boolean,
+): number {
+  return fromScrollableContent ? OBSIDIAN_DRAWER_SCROLL_DOMINANCE : 1;
 }
 
 export function obsidianDrawerAbandonsToScroll(
@@ -56,9 +61,10 @@ export function obsidianDrawerClaimsSwipe(
   normalizedDelta: number,
   deltaY: number,
   lockPx: number,
+  dominance = 1,
 ): { direction: "left" | "right"; distance: number } | null {
   const distance = Math.abs(normalizedDelta);
-  if (distance < lockPx || distance <= Math.abs(deltaY)) return null;
+  if (distance < lockPx || distance <= Math.abs(deltaY) * dominance) return null;
   return {
     direction: normalizedDelta < 0 ? "left" : "right",
     distance,

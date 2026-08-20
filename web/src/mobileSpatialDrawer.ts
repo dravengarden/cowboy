@@ -15,6 +15,7 @@ import {
   OBSIDIAN_DRAWER_COMMIT_PROGRESS,
   obsidianDrawerAbandonsToScroll,
   obsidianDrawerClaimsSwipe,
+  obsidianDrawerDominance,
   obsidianDrawerLockPx,
   obsidianDrawerRubberOffset,
   obsidianDrawerShouldOpen,
@@ -87,6 +88,7 @@ export function bindMobileSpatialDrawer({
     startOpen: boolean;
     width: number;
     lockPx: number;
+    dominance: number;
     thresholdHaptic: boolean;
     samples: DrawerVelocitySample[];
   } | null = null;
@@ -336,13 +338,13 @@ export function bindMobileSpatialDrawer({
       expandedSelection(globalThis.getSelection?.() ?? null) ||
       focusedInputOverlayOwnsGesture ||
       target?.closest(ignoreSelector) ||
-      hasHorizontalScroller(event.target, gestureTarget) ||
-      hasVerticalScroller(event.target, gestureTarget)
+      hasHorizontalScroller(event.target, gestureTarget)
     ) {
       gesture = null;
       return;
     }
     const now = performance.now();
+    const scrollable = hasVerticalScroller(event.target, gestureTarget);
     const startOpen = getOpen();
     const width = presentationWidth > 1 ? presentationWidth : drawerWidth();
     presentationWidth = width;
@@ -353,7 +355,7 @@ export function bindMobileSpatialDrawer({
     // to distinguish an iOS vertical pan from incidental horizontal tremor.
     const lockPx = obsidianDrawerLockPx(
       target !== null && drawer.contains(target),
-      target?.closest("[data-mobile-overflow-layer='true']") != null,
+      scrollable,
     );
     gesture = {
       x: touch.clientX,
@@ -367,6 +369,7 @@ export function bindMobileSpatialDrawer({
       startOpen,
       width,
       lockPx,
+      dominance: obsidianDrawerDominance(scrollable),
       thresholdHaptic: false,
       samples: [{ t: now, x: touch.clientX }],
     };
@@ -420,6 +423,7 @@ export function bindMobileSpatialDrawer({
         normalizedDelta,
         deltaY,
         gesture.lockPx,
+        gesture.dominance,
       );
     if (
       !swipe ||
