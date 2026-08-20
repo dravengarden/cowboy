@@ -362,7 +362,6 @@ const TOOLBAR_MIN_H = {
   minHeight: 34,
   "@media (pointer: coarse)": { minHeight: 40 },
 } as const;
-const MOBILE_COMPOSER_INPUT_EDITOR_MIN_H = 80;
 
 // MUI's Button start-icon selector assigns a fixed px size with more
 // specificity than an SvgIcon's own sx prop. Own the glyph size at the button
@@ -2202,7 +2201,6 @@ export function ComposerWorkspace({
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area]":
               {
                 flex: "0 1 auto",
-                minHeight: MOBILE_COMPOSER_INPUT_EDITOR_MIN_H,
                 maxHeight: "min(42dvh, 22rem)",
                 overflow: "hidden",
               },
@@ -5595,7 +5593,6 @@ function PendingRow({
                 bgcolor: mobileFocusedComposerFill,
                 backgroundImage: "none",
                 flex: "0 1 auto",
-                minHeight: MOBILE_COMPOSER_INPUT_EDITOR_MIN_H,
                 maxHeight: "min(42dvh, 22rem)",
                 overflow: "hidden",
               },

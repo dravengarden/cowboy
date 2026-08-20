@@ -2179,3 +2179,15 @@ Desktop Vim + IME checks:
     clamping. Keep this as a short-lived arrival effect—do not add a persistent
     panel `ResizeObserver`, per-frame React state, or editor focus/selection
     writes merely to repair preview geometry.
+
+93. **Fullscreen collapse must not give the compact editor a second height
+    owner.** The compact native textarea remounts and measures its real content
+    during the synchronous fullscreen-to-inline focus transfer. A separate
+    keyboard-focused `80px` minimum on `[data-mobile-editor-area]` then made the
+    parent taller than the empty/one-line `48px` textarea, producing a blank band
+    only when collapse successfully preserved the keyboard. Keep keyboard-open
+    state for the formatting dock and IME transaction, but let the resting
+    editor-area minimum plus the textarea/CM6 content determine compact height.
+    Apply the same rule to Queue/Draft editors. Do not clear the keyboard flag,
+    delay focus restoration, or add another viewport measurement to hide the
+    extra space.
