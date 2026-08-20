@@ -2521,15 +2521,18 @@ export function ReviewApp({
             aria-label="Code Review controls"
             sx={{
               pb: "max(calc(env(safe-area-inset-bottom) - 18px), 12px)",
+              // Match Agent's bottom AppBar: safe-area on the chrome, then the
+              // Toolbar's default 16px gutter so Open Agent lines up with the
+              // Sessions hamburger.
               pl: "env(safe-area-inset-left, 0px)",
-              pr: "max(env(safe-area-inset-right, 0px), 10px)",
+              pr: "env(safe-area-inset-right, 0px)",
             }}
           >
             <Toolbar
               variant="dense"
               sx={{
                 minHeight: 44,
-                px: 1,
+                px: 2,
                 gap: 0.5,
                 "@media (min-width: 600px)": { minHeight: 44 },
               }}
