@@ -133,12 +133,14 @@ export function cmTheme(theme: Theme, mono = false): Extension {
       // Insert mode owns a real native caret (required by macOS/iOS IME). Vim's
       // synchronous mode callback publishes `.cm-vim-native-caret` before the
       // WebView commits focus, so the stale Vim layer cannot share a paint with
-      // the native caret. `.cm-focused` remains a defensive focus fallback.
-      // Normal/Visual publish neither selector and retain their block cursor.
-      "&.cm-vim-native-caret .cm-cursorLayer.cm-vimCursorLayer, &.cm-focused .cm-cursorLayer.cm-vimCursorLayer":
-        {
-          display: "none !important",
-        },
+      // the native caret. Browser focus is deliberately NOT a fallback: Desktop
+      // workspace navigation focuses `.cm-content` before the Normal-mode sink
+      // takes ownership, and hiding the layer from `.cm-focused` leaves that
+      // legitimate Normal frame with neither a native nor a Vim cursor.
+      // Normal/Visual remove this class and retain their block cursor.
+      "&.cm-vim-native-caret .cm-cursorLayer.cm-vimCursorLayer": {
+        display: "none !important",
+      },
       ".cm-placeholder": { color: theme.palette.text.disabled },
       "&.cm-focused": { outline: "none" },
       // Selection — use the MUI selection token in both the focused and

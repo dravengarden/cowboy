@@ -41,4 +41,11 @@ Deno.test("the Vim runtime and theme consume the explicit cursor owner", async (
     themeSource.includes(".cm-cursorLayer.cm-vimCursorLayer"),
     true,
   );
+  assertEquals(
+    themeSource.includes(
+      "&.cm-focused .cm-cursorLayer.cm-vimCursorLayer",
+    ),
+    false,
+    "browser focus must not hide Normal mode's Vim cursor",
+  );
 });

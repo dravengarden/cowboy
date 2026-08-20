@@ -347,11 +347,15 @@ here says otherwise.
     Markdown list where the logical and decorated DOM positions differ. The
     Desktop Vim runtime must synchronously toggle `.cm-vim-native-caret` from
     its actual `insertMode`; the theme hides only the stale Vim cursor layer
-    under that class (with `.cm-focused` as a fallback). Command-sink
-    Normal/Visual states remove the class and retain their block cursor and
-    custom Visual decorations. Never solve this by hiding the native caret or
-    adding `drawSelection()`—both break IME ownership. Status: fixed in
-    cowboy-v1401 with a cursor-owner contract test.
+    under that class. Do not add `.cm-focused` as a fallback: Desktop workspace
+    focus restoration deliberately focuses `.cm-content` before the
+    Normal-mode sink takes ownership, and the fallback hides the block cursor
+    while upstream Vim has already made the native caret transparent.
+    Command-sink Normal/Visual states remove the class and retain their block
+    cursor and custom Visual decorations. Never solve this by hiding the native
+    caret or adding `drawSelection()`—both break IME ownership. Status: fixed in
+    cowboy-v1401 with a cursor-owner contract test; the browser-focus fallback
+    regression was removed in cowboy-v1544.
 
     Focus calls are also ownership changes. A direct Insert command may focus
     CodeMirror before Vim applies its logical selection, but the following Vim
