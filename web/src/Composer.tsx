@@ -3517,6 +3517,7 @@ export function ComposerWorkspace({
         open={moveSrcId !== null}
         onClose={(): void => setMoveSrcId(null)}
         title="Move draft to…"
+        mobileDismiss="footer"
         portal
       >
         {

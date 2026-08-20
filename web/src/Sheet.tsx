@@ -81,6 +81,7 @@ export function Sheet(
         title={props.title}
         actions={props.actions}
         ariaLabel={typeof props.title === "string" ? props.title : undefined}
+        floatingDismiss={props.mobileDismiss === "footer"}
       >
         {props.children}
       </ObsidianSheet>,

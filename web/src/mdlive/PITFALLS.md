@@ -2114,4 +2114,8 @@ Desktop Vim + IME checks:
     the target manually. The destination picker itself must portal out of the
     transformed floating Composer: otherwise its fixed `bottom: 0` resolves
     against the Composer containing block and leaves the Mobile navbar-height
-    strip exposed below a tall picker instead of docking to the viewport.
+    strip exposed below a tall picker instead of docking to the viewport. A
+    portaled scrim still cannot paint the native standalone status bar, so the
+    Obsidian surface must dim and restore `theme-color` with its scrim. A tall
+    destination list also keeps the shared Close island as an overlay, with
+    scroll clearance inside the list rather than a separate solid footer.

@@ -59,8 +59,7 @@ Deno.test("phone sheets use the compact Obsidian card, not a floating footer pad
   assert(modalSource.includes("data-obsidian-sheet"));
   assert(modalSource.includes("OBSIDIAN_SHEET_SETTLE_EASING"));
   assertEquals(modalSource.includes("footerOverlay"), false);
-  assertEquals(modalSource.includes("calc(76px"), false);
-  assertEquals(modalSource.includes("MobileSheetDismiss"), false);
+  assert(modalSource.includes("MobileSheetDismiss"));
   // Home indicator is inside the card. Lifting the whole sheet by
   // safe-area would float it off the bottom, unlike Obsidian.
   assertEquals(
@@ -79,4 +78,13 @@ Deno.test("phone sheets use the compact Obsidian card, not a floating footer pad
   );
   assertEquals(modalSource.includes("backdropFilter"), false);
   assert(modalSource.includes('justifyContent: "space-between"'));
+});
+
+Deno.test("compact sheets can dim the status bar and float dismissal over content", () => {
+  assert(modalSource.includes('meta[name="theme-color"]'));
+  assert(modalSource.includes("OBSIDIAN_SHEET_SCRIM_MAX"));
+  assert(modalSource.includes("floatingDismiss"));
+  assert(modalSource.includes("calc(76px"));
+  assert(modalSource.includes('<MobileSheetDismiss onClose={dismiss} />'));
+  assert(sheetSource.includes('floatingDismiss={props.mobileDismiss === "footer"}'));
 });

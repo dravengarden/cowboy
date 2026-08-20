@@ -14,14 +14,15 @@ import {
   useRef,
   useState,
 } from "react";
-import { Box, Paper, Typography } from "@mui/material";
+import { Box, Paper, Typography, useTheme } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import { markDetentSheetOpen } from "./_shell/detent-sheet-open.ts";
-import { haptic as fireHaptic } from "./_shell";
+import { haptic as fireHaptic, MobileSheetDismiss } from "./_shell";
 import {
   OBSIDIAN_SHEET_INSET_PX,
   OBSIDIAN_SHEET_MAX_FRACTION,
   OBSIDIAN_SHEET_RADIUS_PX,
+  OBSIDIAN_SHEET_SCRIM_MAX,
   OBSIDIAN_SHEET_SETTLE_EASING,
   obsidianSheetScale,
   obsidianSheetScrimOpacity,
@@ -36,6 +37,30 @@ const HANDLE_HEIGHT = 18;
 const SAFE_INSIDE =
   "max(8px, calc(env(safe-area-inset-bottom, 0px) - var(--kb-inset, 0px)))";
 
+function dimHex(base: string, dim: number): string {
+  const hex = base.trim().replace(/^#/u, "");
+  const full = hex.length === 3 ? [...hex].map((c) => c + c).join("") : hex;
+  if (full.length !== 6 || /[^0-9a-f]/iu.test(full)) return base;
+  const factor = 1 - Math.min(1, Math.max(0, dim));
+  const channel = (index: number): string =>
+    Math.round(Number.parseInt(full.slice(index, index + 2), 16) * factor)
+      .toString(16)
+      .padStart(2, "0");
+  return `#${channel(0)}${channel(2)}${channel(4)}`;
+}
+
+function setStatusBarColor(color: string): void {
+  const { head } = globalThis.document;
+  if (!head) return;
+  for (const meta of head.querySelectorAll('meta[name="theme-color"]')) {
+    meta.remove();
+  }
+  const meta = globalThis.document.createElement("meta");
+  meta.setAttribute("name", "theme-color");
+  meta.setAttribute("content", color);
+  head.append(meta);
+}
+
 function prefersReducedMotion(): boolean {
   return globalThis.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ===
     true;
@@ -48,6 +73,7 @@ export interface ObsidianSheetProps {
   readonly children: ReactNode;
   readonly actions?: ReactNode | undefined;
   readonly ariaLabel?: string | undefined;
+  readonly floatingDismiss?: boolean | undefined;
 }
 
 export function ObsidianSheet({
@@ -57,7 +83,10 @@ export function ObsidianSheet({
   children,
   actions,
   ariaLabel,
+  floatingDismiss = false,
 }: ObsidianSheetProps): ReactNode {
+  const theme = useTheme();
+  const surfaceColor = theme.palette.background.default;
   const sheetRef = useRef<HTMLDivElement | null>(null);
   const scrimRef = useRef<HTMLDivElement | null>(null);
   const yRef = useRef(0);
@@ -74,6 +103,17 @@ export function ObsidianSheet({
   const onCloseRef = useRef(onClose);
   const dismissingRef = useRef(false);
   onCloseRef.current = onClose;
+
+  useEffect(() => {
+    setStatusBarColor(
+      open
+        ? dimHex(surfaceColor, OBSIDIAN_SHEET_SCRIM_MAX)
+        : surfaceColor,
+    );
+    return () => {
+      if (open) setStatusBarColor(surfaceColor);
+    };
+  }, [open, surfaceColor]);
 
   const paint = useCallback((y: number, animate: boolean): void => {
     yRef.current = y;
@@ -364,12 +404,35 @@ export function ObsidianSheet({
             WebkitOverflowScrolling: "touch",
             overscrollBehavior: "contain",
             px: 2.25,
-            pb: actions == null ? SAFE_INSIDE : 0.75,
+            pb: actions == null
+              ? floatingDismiss
+                ? `calc(76px + ${SAFE_INSIDE})`
+                : SAFE_INSIDE
+              : 0.75,
             "[data-detent-moving] &": { transform: "none" },
           }}
         >
           {children}
         </Box>
+        {actions == null && floatingDismiss
+          ? (
+            <Box
+              sx={{
+                position: "absolute",
+                left: 0,
+                right: 0,
+                bottom: 0,
+                zIndex: 2,
+                px: 2,
+                pb: SAFE_INSIDE,
+                pointerEvents: "none",
+                "& > *": { pointerEvents: "auto" },
+              }}
+            >
+              <MobileSheetDismiss onClose={dismiss} />
+            </Box>
+          )
+          : null}
         {actions == null ? null : (
           <Box
             sx={{
