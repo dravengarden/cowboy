@@ -2129,3 +2129,14 @@ Desktop Vim + IME checks:
     decision buttons, and release the editor only after authoritative delivery
     success. Anchored decision cards use the medium 12px Cowboy radius rather
     than the 16–20px floating-card radius.
+
+88. **Inline-image Preview/Delete must commit on reliable touch pointerup.**
+    Their non-modal Popper correctly preserves the iOS keyboard by preventing
+    pointer-down focus transfer, but Mobile Safari may then omit the synthetic
+    click while the focused editor or scroll momentum still owns the gesture.
+    A click-only Delete consequently does nothing. Route both image actions
+    through `useReliableTouchTap`: a stationary touch commits on pointerup and
+    consumes its paired compatibility click, while mouse, keyboard, and
+    assistive clicks retain ordinary activation. Keep pointer-down default
+    prevention so neither button steals CM6 focus. Do not add a delayed refocus,
+    modify the image decoration, or intercept touches on the editor canvas.

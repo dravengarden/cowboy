@@ -1221,6 +1221,40 @@ export function ComposerWorkspace({
       return null;
     });
   }, []);
+  const previewSelectedImage = useCallback((): void => {
+    // Resolve from the INLINE-IMAGE REGISTRY (all surfaces register there),
+    // not the local `attachments` — otherwise Preview no-ops in the expanded
+    // editor whose image lives in editAttachments.
+    const id = imgSel?.id;
+    const att = (id ? getInlineAttachment(id) : undefined) ??
+      attachments.find((attachment) => attachment.id === id);
+    // Preview leaves writing for the lightbox, so collapse two-track chrome
+    // and drop the software keyboard instead of leaving ∧∨✓ over the image.
+    noteMobileKeyboardDismissed();
+    setMobileKeyboardDismissed(true);
+    dismissMobileSoftwareKeyboard();
+    releaseMobileComposerFocus();
+    if (att) openLightbox([att], 0);
+    closeImgSel();
+  }, [attachments, closeImgSel, imgSel]);
+  const deleteSelectedImage = useCallback((): void => {
+    if (imgSel) {
+      editorRef.current?.deleteImage(imgSel.id);
+      setAttachments((previous) =>
+        previous.filter((attachment) => attachment.id !== imgSel.id)
+      );
+    }
+    closeImgSel();
+  }, [closeImgSel, imgSel, setAttachments]);
+  // iOS can omit the compatibility click after a touch that also preserves
+  // the focused editor. Commit stationary image actions on pointerup while
+  // retaining ordinary mouse, keyboard, and assistive click activation.
+  const imagePreviewTap = useReliableTouchTap<HTMLButtonElement>(
+    previewSelectedImage,
+  );
+  const imageDeleteTap = useReliableTouchTap<HTMLButtonElement>(
+    deleteSelectedImage,
+  );
   useEffect(() => {
     setImageTapHandler((id, el, x, y) => {
       setImgSel((prev) => {
@@ -3392,25 +3426,14 @@ export function ComposerWorkspace({
               <Button
                 color="inherit"
                 startIcon={<Visibility />}
-                onPointerDown={(event): void => event.preventDefault()}
-                onClick={(): void => {
-                  // Resolve from the INLINE-IMAGE REGISTRY (all surfaces register there),
-                  // not the local `attachments` — otherwise Preview no-ops in the
-                  // expanded/overlay editor whose image lives in editAttachments (the
-                  // reported "展开页面无法预览"). Fall back to the local array just in case.
-                  const id = imgSel?.id;
-                  const att = (id ? getInlineAttachment(id) : undefined) ??
-                    attachments.find((a) => a.id === id);
-                  // Delete keeps the editor session. Preview leaves writing for
-                  // the lightbox, so collapse two-track chrome and drop the
-                  // software keyboard instead of leaving ∧∨✓ over the image.
-                  noteMobileKeyboardDismissed();
-                  setMobileKeyboardDismissed(true);
-                  dismissMobileSoftwareKeyboard();
-                  releaseMobileComposerFocus();
-                  if (att) openLightbox([att], 0);
-                  closeImgSel();
+                onPointerDown={(event): void => {
+                  event.preventDefault();
+                  imagePreviewTap.onPointerDown(event);
                 }}
+                onPointerMove={imagePreviewTap.onPointerMove}
+                onPointerUp={imagePreviewTap.onPointerUp}
+                onPointerCancel={imagePreviewTap.onPointerCancel}
+                onClick={imagePreviewTap.onClick}
                 sx={INLINE_IMAGE_ACTION_BUTTON_SX}
               >
                 Preview
@@ -3418,16 +3441,14 @@ export function ComposerWorkspace({
               <Button
                 color="error"
                 startIcon={<DeleteOutline />}
-                onPointerDown={(event): void => event.preventDefault()}
-                onClick={(): void => {
-                  if (imgSel) {
-                    editorRef.current?.deleteImage(imgSel.id);
-                    setAttachments((prev) =>
-                      prev.filter((a) => a.id !== imgSel.id)
-                    );
-                  }
-                  closeImgSel();
+                onPointerDown={(event): void => {
+                  event.preventDefault();
+                  imageDeleteTap.onPointerDown(event);
                 }}
+                onPointerMove={imageDeleteTap.onPointerMove}
+                onPointerUp={imageDeleteTap.onPointerUp}
+                onPointerCancel={imageDeleteTap.onPointerCancel}
+                onClick={imageDeleteTap.onClick}
                 sx={INLINE_IMAGE_ACTION_BUTTON_SX}
               >
                 Delete

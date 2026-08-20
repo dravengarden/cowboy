@@ -64,16 +64,43 @@ Deno.test("fullscreen keeps only images without CM inline tokens in its tray", (
 });
 
 Deno.test("inline-image Preview dismisses the software keyboard before the lightbox", () => {
-  const previewStart = composerSource.indexOf("Preview\n              </Button>");
+  const previewStart = composerSource.indexOf(
+    "const previewSelectedImage = useCallback",
+  );
   const preview = composerSource.slice(
-    composerSource.lastIndexOf("<Button", previewStart),
     previewStart,
+    composerSource.indexOf("const deleteSelectedImage", previewStart),
   );
   assertEquals(previewStart >= 0, true);
   assertEquals(preview.includes("noteMobileKeyboardDismissed();"), true);
   assertEquals(preview.includes("dismissMobileSoftwareKeyboard();"), true);
   assertEquals(preview.includes("releaseMobileComposerFocus();"), true);
   assertEquals(preview.includes("openLightbox([att], 0)"), true);
+});
+
+Deno.test("inline-image actions commit reliable touch pointerup without blurring the editor", () => {
+  assertEquals(
+    composerSource.includes(
+      "const imageDeleteTap = useReliableTouchTap<HTMLButtonElement>(",
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes("imageDeleteTap.onPointerDown(event);"),
+    true,
+  );
+  assertEquals(
+    composerSource.includes("onPointerUp={imageDeleteTap.onPointerUp}"),
+    true,
+  );
+  assertEquals(
+    composerSource.includes("onClick={imageDeleteTap.onClick}"),
+    true,
+  );
+  assertEquals(
+    composerSource.includes("onPointerUp={imagePreviewTap.onPointerUp}"),
+    true,
+  );
 });
 
 Deno.test("pending cards preview token-backed images inline instead of a second chip", () => {
