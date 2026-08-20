@@ -1501,6 +1501,24 @@ function ProviderManagement(
             entry.provider_id === uninstallPlan?.provider_id
           )?.manifest.display.name ?? "Provider"
         } from ${machine?.display_name ?? "Machine"}?`}
+        dock={{
+          confirmLabel: "Uninstall and remove sessions",
+          confirmDisabled: Boolean(uninstallPlan?.active_session_ids.length) &&
+            !confirmActive,
+          onConfirm: () => {
+            void confirmUninstall().catch((cause: unknown) => {
+              const detail = cause instanceof Error
+                ? cause.message
+                : "Provider uninstall failed";
+              if (uninstallPlan) {
+                setErrors((current) => ({
+                  ...current,
+                  [uninstallPlan.provider_id]: detail,
+                }));
+              }
+            });
+          },
+        }}
         actions={
           <>
             <Button color="inherit" onClick={() => setUninstallPlan(null)}>

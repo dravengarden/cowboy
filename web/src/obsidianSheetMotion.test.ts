@@ -43,7 +43,10 @@ Deno.test("scale and scrim interpolate from closed to open", () => {
   assertEquals(obsidianSheetScale(0, 0), 1);
   assertEquals(obsidianSheetScrimOpacity(200, 200), 0);
   assertEquals(obsidianSheetScrimOpacity(0, 200), OBSIDIAN_SHEET_SCRIM_MAX);
-  assertEquals(obsidianSheetScrimOpacity(100, 200), OBSIDIAN_SHEET_SCRIM_MAX / 2);
+  assertEquals(
+    obsidianSheetScrimOpacity(100, 200),
+    OBSIDIAN_SHEET_SCRIM_MAX / 2,
+  );
   assertEquals(
     obsidianSheetTransform(40, 0.98),
     "translate3d(0, 40px, 0) scale(0.98)",
@@ -76,4 +79,6 @@ Deno.test("phone sheets use the compact Obsidian card, not a floating footer pad
   );
   assertEquals(modalSource.includes("backdropFilter"), false);
   assert(modalSource.includes('justifyContent: "space-between"'));
+  assert(modalSource.includes("dockClearance"));
+  assert(modalSource.includes("SHEET_THUMB_CLEARANCE"));
 });

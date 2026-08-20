@@ -565,6 +565,12 @@ function SessionActionConfirmDialog({
       open={action !== null}
       onClose={onClose}
       title={action !== null ? `${action.label}?` : undefined}
+      dock={action === null ? undefined : {
+        confirmLabel: action.destructive ? "Clear" : "Compact",
+        onConfirm: () => {
+          void onConfirm();
+        },
+      }}
       actions={action === null ? undefined : (
         <>
           <Button
@@ -6178,6 +6184,11 @@ function StopConfirmDialog({
       open={open}
       onClose={onClose}
       title="Stop the running turn?"
+      dock={{
+        cancelLabel: "Keep running",
+        confirmLabel: "Stop",
+        onConfirm,
+      }}
       actions={
         <>
           <Button

@@ -16,7 +16,8 @@ export function SessionReloadDialog({
 }): React.JSX.Element {
   const action = useNetworkActionState();
   const open = session !== null && session !== undefined;
-  const activeTurn = session?.status === "busy" || session?.status === "starting";
+  const activeTurn = session?.status === "busy" ||
+    session?.status === "starting";
   const confirm = (): void => {
     if (!session) return;
     void action.run(async () => {
@@ -33,6 +34,13 @@ export function SessionReloadDialog({
         if (!action.pending) onClose();
       }}
       title="Reload this session?"
+      dock={{
+        cancelDisabled: action.pending,
+        confirmLabel: "Reload",
+        confirmDisabled: action.pending,
+        confirmBusy: action.pending,
+        onConfirm: confirm,
+      }}
       actions={
         <>
           <Button color="inherit" onClick={onClose} disabled={action.pending}>
@@ -41,7 +49,9 @@ export function SessionReloadDialog({
           </Button>
           <Button
             variant="contained"
-            startIcon={action.progress ? <CircularProgress size={16} color="inherit" /> : <Refresh />}
+            startIcon={action.progress
+              ? <CircularProgress size={16} color="inherit" />
+              : <Refresh />}
             aria-busy={action.pending || undefined}
             disabled={action.pending}
             onClick={confirm}

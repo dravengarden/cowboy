@@ -29,14 +29,36 @@ Deno.test("ConfirmSheet forces the compact Obsidian card on mobile and tablet", 
   assert(sheetSource.includes("export function ConfirmSheet("));
   assert(sheetSource.includes("export function useConfirmSheetSurface("));
   assert(
-    sheetSource.includes("return useSurfaceProfile().kind !== \"desktop\""),
+    sheetSource.includes('return useSurfaceProfile().kind !== "desktop"'),
   );
   assert(sheetSource.includes("forceSheet={forceSheet}"));
   assert(sheetSource.includes("portal"));
   assert(sheetSource.includes("<ObsidianSheet"));
   assert(sheetSource.includes("useCompactCard"));
   assert(
-    sheetSource.includes('mobileDismiss={actions == null ? "footer" : "none"}'),
+    sheetSource.includes(
+      'mobileDismiss={useDock || actions != null ? "none" : "footer"}',
+    ),
+  );
+  assert(sheetSource.includes("<MobileDecisionDock"));
+  assert(sheetSource.includes("dockClearance={useDock}"));
+});
+
+Deno.test("phone-facing confirms supply a mobile decision dock", () => {
+  assert(
+    composerSource.includes(
+      'confirmLabel: action.destructive ? "Clear" : "Compact"',
+    ),
+  );
+  assert(composerSource.includes('cancelLabel: "Keep running"'));
+  assert(reloadSource.includes('confirmLabel: "Reload"'));
+  assert(fullscreenSource.includes('cancelLabel: "Keep editing"'));
+  assert(appSource.includes('confirmLabel: "Update and roll out"'));
+  assert(infoSource.includes('confirmLabel: resetMode === "schedule"'));
+  assert(infoSource.includes('"Schedule reset"'));
+  assert(infoSource.includes('"Reset now"'));
+  assert(
+    providerSource.includes('confirmLabel: "Uninstall and remove sessions"'),
   );
 });
 
@@ -55,7 +77,9 @@ Deno.test("phone-facing confirmation prompts use ConfirmSheet, not a raw Dialog"
     assertEquals(source.includes("<Dialog "), false);
   }
   assert(composerSource.includes('title="Stop the running turn?"'));
-  assert(composerSource.includes("title={action !== null ? `${action.label}?`"));
+  assert(
+    composerSource.includes("title={action !== null ? `${action.label}?`"),
+  );
   assert(reloadSource.includes('title="Reload this session?"'));
   assert(fullscreenSource.includes('title="Ignore modifications?"'));
   assert(appSource.includes('title="Roll out this update?"'));
@@ -64,7 +88,15 @@ Deno.test("phone-facing confirmation prompts use ConfirmSheet, not a raw Dialog"
 });
 
 Deno.test("desktop-owned session confirms stay centered dialogs", () => {
-  assert(desktopTopBarSource.includes("<DialogTitle>Clear conversation?</DialogTitle>"));
-  assert(desktopTopBarSource.includes("<DialogTitle>Compact conversation?</DialogTitle>"));
+  assert(
+    desktopTopBarSource.includes(
+      "<DialogTitle>Clear conversation?</DialogTitle>",
+    ),
+  );
+  assert(
+    desktopTopBarSource.includes(
+      "<DialogTitle>Compact conversation?</DialogTitle>",
+    ),
+  );
   assertEquals(desktopTopBarSource.includes("<ConfirmSheet"), false);
 });

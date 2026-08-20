@@ -18,10 +18,9 @@ Deno.test("mobile new session uses the visual-viewport thumb dock", () => {
     appSource.indexOf("function NewSessionDialog("),
     appSource.indexOf("const EMPTY_TRANSCRIPT_TIMELINE"),
   );
-  assertEquals(dialog.includes("<MobileThumbDock"), true);
+  assertEquals(dialog.includes("<MobileDecisionDock"), true);
   assertEquals(dialog.includes("footerOverlay"), false);
-  assertEquals(dialog.includes('key: "cancel"'), true);
-  assertEquals(dialog.includes('key: "create"'), true);
+  assertEquals(dialog.includes("SHEET_THUMB_CLEARANCE"), true);
   assertEquals(dialog.includes('title="New session"'), true);
 });
 
@@ -50,7 +49,10 @@ Deno.test("new session navigation precedes Machine preparation completion", () =
   assertEquals(composerSource.includes('aria-label="preparing session"'), true);
   assertEquals(composerSource.includes("if (preparing) return false;"), true);
   assertEquals(appSource.includes("if (mobile) claimKeyboard();"), true);
-  assertEquals(appSource.includes("const openNewSession = (): void => {"), true);
+  assertEquals(
+    appSource.includes("const openNewSession = (): void => {"),
+    true,
+  );
   assertEquals(
     appSource.includes(
       "titleRef.current?.focus({ preventScroll: true });\n            titleRef.current?.select();\n        }, 120);",

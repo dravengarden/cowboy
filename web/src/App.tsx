@@ -197,7 +197,11 @@ import {
     NativeReleaseUpdatePrompt,
 } from "./_shell";
 import { ConfirmSheet, Sheet } from "./Sheet";
-import { MobileThumbDock } from "./MobileThumbDock";
+import {
+    MobileDecisionDock,
+    MobileThumbDock,
+    SHEET_THUMB_CLEARANCE,
+} from "./MobileThumbDock";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { isImeKeyEvent } from "./imeKey";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
@@ -1819,40 +1823,16 @@ function NewSessionDialog({
                     </Box>
                 }
             >
-                <Box sx={{ px: 2, pb: "88px" }}>{form}</Box>
+                <Box sx={{ px: 2, pb: SHEET_THUMB_CLEARANCE }}>{form}</Box>
             </DetentSheet>
-            <MobileThumbDock
+            <MobileDecisionDock
                 open={open}
-                left={
-                    <MobileSheetActionGroup
-                        actions={[{
-                            key: "cancel",
-                            label: "Cancel",
-                            disabled: creating,
-                            onPress: creating ? (): void => {} : onClose,
-                            icon: (
-                                <CloseIcon
-                                    aria-hidden
-                                    fontSize="small"
-                                    sx={{ transform: "translate(-0.75px, -0.5px)" }}
-                                />
-                            ),
-                        }]}
-                    />
-                }
-                right={
-                    <MobileSheetActionGroup
-                        actions={[{
-                            key: "create",
-                            label: creating ? "Preparing session" : "Create session",
-                            disabled: !canCreate,
-                            onPress: create,
-                            icon: creating
-                                ? <CircularProgress size={18} color="inherit" />
-                                : <CheckIcon fontSize="small" />,
-                        }]}
-                    />
-                }
+                onCancel={creating ? (): void => {} : onClose}
+                cancelDisabled={creating}
+                confirmLabel={creating ? "Preparing session" : "Create session"}
+                onConfirm={create}
+                confirmDisabled={!canCreate}
+                confirmBusy={creating}
             />
             </>
         );
@@ -4942,6 +4922,10 @@ function MachinesContent({ embedded = false }: { embedded?: boolean } = {}): Rea
                 open={updateConfirmation !== null}
                 onClose={() => setUpdateConfirmation(null)}
                 title="Roll out this update?"
+                dock={{
+                    confirmLabel: "Update and roll out",
+                    onConfirm: confirmMachineUpdate,
+                }}
                 actions={
                     <>
                         <Button color="inherit" onClick={() => setUpdateConfirmation(null)}>
@@ -6055,13 +6039,15 @@ function DeleteSessionShell({
     useConfirmEnter(session !== null, onConfirm);
     if (!session) return null;
     return (
+        <>
         <Sheet
             forceSheet={navbarAtBottom}
             open
             onClose={onClose}
             title="Delete this session?"
             mobileDismiss="none"
-            actions={
+            dockClearance={navbarAtBottom}
+            actions={navbarAtBottom ? undefined : (
                 <>
                     <Button onClick={onClose} color="inherit">
                         Cancel
@@ -6072,12 +6058,19 @@ function DeleteSessionShell({
                         <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
                     </Button>
                 </>
-            }
+            )}
         >
             <Typography variant="body2" color="text.secondary">
                 Any in-flight turn is cancelled. The agent transcript on this session will be lost.
             </Typography>
         </Sheet>
+        <MobileDecisionDock
+            open={navbarAtBottom}
+            onCancel={onClose}
+            confirmLabel="Delete"
+            onConfirm={onConfirm}
+        />
+        </>
     );
 }
 
@@ -6190,13 +6183,15 @@ function RenameSessionShell({
     };
     useConfirmEnter(desktop, submit, { suppressBareEnter: false });
     return (
+        <>
         <Sheet
             forceSheet={navbarAtBottom}
             open
             onClose={onClose}
             title="Rename session"
             mobileDismiss="none"
-            actions={
+            dockClearance={navbarAtBottom}
+            actions={navbarAtBottom ? undefined : (
                 <>
                     <Button onClick={onClose} color="inherit">
                         Cancel
@@ -6221,7 +6216,7 @@ function RenameSessionShell({
                         />
                     </Button>
                 </>
-            }
+            )}
         >
             <TextField
                 fullWidth
@@ -6242,6 +6237,14 @@ function RenameSessionShell({
                 helperText="Shown in the sidebar and the title bar."
             />
         </Sheet>
+        <MobileDecisionDock
+            open={navbarAtBottom}
+            onCancel={onClose}
+            confirmLabel="Save"
+            onConfirm={submit}
+            confirmDisabled={!canSave}
+        />
+        </>
     );
 }
 
@@ -6358,14 +6361,38 @@ function SessionInfoShell(
         body = <SessionOverviewRows info={info} live={session} />;
     }
     return (
+        <>
         <Sheet
             forceSheet={navbarAtBottom}
             cover={navbarAtBottom}
             open
             onClose={onClose}
             title="Session info"
+            mobileDismiss="none"
         >
-            {body}
+            <Box sx={navbarAtBottom ? { pb: SHEET_THUMB_CLEARANCE } : undefined}>
+                {body}
+            </Box>
         </Sheet>
+        <MobileThumbDock
+            open={navbarAtBottom}
+            left={
+                <MobileSheetActionGroup
+                    actions={[{
+                        key: "close",
+                        label: "Close",
+                        onPress: onClose,
+                        icon: (
+                            <CloseIcon
+                                aria-hidden
+                                fontSize="small"
+                                sx={{ transform: "translate(-0.75px, -0.5px)" }}
+                            />
+                        ),
+                    }]}
+                />
+            }
+        />
+        </>
     );
 }

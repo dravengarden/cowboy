@@ -1,7 +1,13 @@
 import { type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Box } from "@mui/material";
+import CheckIcon from "@mui/icons-material/Check";
+import CloseIcon from "@mui/icons-material/Close";
+import { Box, CircularProgress } from "@mui/material";
+import { MobileSheetActionGroup } from "./_shell";
 import { useKeyboardOpen } from "./keyboardInset";
+
+/** Trailing body pad so inner sheet scroll can clear the corner islands. */
+export const SHEET_THUMB_CLEARANCE = "88px";
 
 const Z = 1260;
 
@@ -11,8 +17,7 @@ function islandPin(side: "left" | "right", keyboardOpen: boolean): object {
     : "max(12px, env(safe-area-inset-bottom, 0px))";
   return {
     position: "fixed",
-    top:
-      `calc(var(--vv-offset, 0px) + var(--vv-height, 100dvh) - ${inset})`,
+    top: `calc(var(--vv-offset, 0px) + var(--vv-height, 100dvh) - ${inset})`,
     transform: "translateY(-100%)",
     [side]: 16,
     zIndex: Z,
@@ -62,4 +67,65 @@ export function MobileThumbDock({
   return globalThis.document?.body
     ? createPortal(dock, globalThis.document.body)
     : dock;
+}
+
+/**
+ * Cancel / confirm islands for mobile sheets. Same geometry as New session:
+ * pinned to the visual-viewport corners so the sheet body can scroll behind
+ * them, including while the software keyboard is up.
+ */
+export function MobileDecisionDock({
+  open,
+  cancelLabel = "Cancel",
+  onCancel,
+  cancelDisabled = false,
+  confirmLabel,
+  onConfirm,
+  confirmDisabled = false,
+  confirmBusy = false,
+}: {
+  readonly open: boolean;
+  readonly cancelLabel?: string;
+  readonly onCancel: () => void;
+  readonly cancelDisabled?: boolean;
+  readonly confirmLabel: string;
+  readonly onConfirm: () => void;
+  readonly confirmDisabled?: boolean;
+  readonly confirmBusy?: boolean;
+}): ReactNode {
+  return (
+    <MobileThumbDock
+      open={open}
+      left={
+        <MobileSheetActionGroup
+          actions={[{
+            key: "cancel",
+            label: cancelLabel,
+            disabled: cancelDisabled,
+            onPress: onCancel,
+            icon: (
+              <CloseIcon
+                aria-hidden
+                fontSize="small"
+                sx={{ transform: "translate(-0.75px, -0.5px)" }}
+              />
+            ),
+          }]}
+        />
+      }
+      right={
+        <MobileSheetActionGroup
+          actions={[{
+            key: "confirm",
+            label: confirmLabel,
+            disabled: confirmDisabled || confirmBusy,
+            onPress: onConfirm,
+            icon: confirmBusy
+              ? <CircularProgress size={18} color="inherit" />
+              : <CheckIcon fontSize="small" />,
+          }]}
+        />
+      }
+    />
+  );
 }

@@ -6,13 +6,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import {
-  Box,
-  Button,
-  IconButton,
-  Tooltip,
-  useTheme,
-} from "@mui/material";
+import { Box, Button, IconButton, Tooltip, useTheme } from "@mui/material";
 import {
   AttachFile,
   Bolt,
@@ -410,6 +404,11 @@ export function FullscreenComposer({
         open={discardOpen}
         onClose={(): void => setDiscardOpen(false)}
         title="Ignore modifications?"
+        dock={{
+          cancelLabel: "Keep editing",
+          confirmLabel: "Ignore modifications",
+          onConfirm: onDiscard,
+        }}
         actions={
           <>
             <Button onClick={(): void => setDiscardOpen(false)}>

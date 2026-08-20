@@ -28,6 +28,7 @@ import {
   obsidianSheetSettleMs,
   obsidianSheetTransform,
 } from "./obsidianSheetMotion";
+import { SHEET_THUMB_CLEARANCE } from "./MobileThumbDock";
 
 const Z = 1250;
 const PROJECTION_MS = 110;
@@ -48,6 +49,8 @@ export interface ObsidianSheetProps {
   readonly children: ReactNode;
   readonly actions?: ReactNode | undefined;
   readonly ariaLabel?: string | undefined;
+  /** Extra trailing pad when a visual-viewport thumb dock overlays this card. */
+  readonly dockClearance?: boolean | undefined;
 }
 
 export function ObsidianSheet({
@@ -57,6 +60,7 @@ export function ObsidianSheet({
   children,
   actions,
   ariaLabel,
+  dockClearance = false,
 }: ObsidianSheetProps): ReactNode {
   const sheetRef = useRef<HTMLDivElement | null>(null);
   const scrimRef = useRef<HTMLDivElement | null>(null);
@@ -364,7 +368,11 @@ export function ObsidianSheet({
             WebkitOverflowScrolling: "touch",
             overscrollBehavior: "contain",
             px: 2.25,
-            pb: actions == null ? SAFE_INSIDE : 0.75,
+            pb: dockClearance
+              ? `calc(${SHEET_THUMB_CLEARANCE} + ${SAFE_INSIDE})`
+              : actions == null
+              ? SAFE_INSIDE
+              : 0.75,
             "[data-detent-moving] &": { transform: "none" },
           }}
         >
