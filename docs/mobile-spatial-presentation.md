@@ -72,6 +72,37 @@ gesture root (shell)
 8. Chrome Blink on the Mac debug profile cannot prove iOS pin, IME, or
    visual-viewport bugs. Ship after a PWA Update and physical-device check
    for those classes.
+9. **A chrome or toggle change in a swipe surface is a swipe-path change.**
+   Intermittent hitch is assemble-at-prepare: iOS relocates nested
+   compositor tiles inside the peek's `translate3d`. Moving a button,
+   adding a switch, or restyling the Review header is in this class even
+   when the gesture math is untouched.
+
+### 2.1 Surfaces that inherit the swipe compositor
+
+Edits in these trees must keep the peek a **single standing layer**. Read
+this section before changing any of them:
+
+| Surface | Typical files |
+|---|---|
+| Sessions / Review drawers | `mobileSpatialDrawer.ts`, `ReviewDrawerShell.tsx`, Sessions AppBar |
+| Agent↔Review pager | `mobile/appPagerMotion.ts`, `MobileProductShell.tsx` |
+| Peek chrome | Review header, Review bottom nav, Agent composer + navbar, frost slab, dim |
+| Peek content | Transcript, README, wrap-on Review CodeMirror (`mobileCodeSurface.ts`) |
+
+Do **not** add, inside those trees, a descendant that self-promotes:
+
+- inner `transform` (`translateX` thumbs, sliding pills, MUI `Switch`)
+- `box-shadow` or filter on that moving child
+- `will-change: transform` at rest on a descendant
+- `backdrop-filter` toggled on swipe claim
+- `-webkit-overflow-scrolling: touch` on wrap-on code
+- `setState` on `touchstart` or swipe claim
+
+Selected chrome is paint-only: background and color. If a control needs a
+sliding thumb, it does not belong in the peek. The Review Git/files header
+control is a two-icon fill for this reason — a Switch thumb nested in the
+peek paid an extra tile assemble on every wrap-on source swipe.
 
 ## 3. Drawer motion
 

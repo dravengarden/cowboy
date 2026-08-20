@@ -53,19 +53,23 @@ drawer and Agent↔Review pager must stay 1:1 on iPhone whether the peek
 shows Transcript, README, or a wrap-off CodeMirror justfile. This is a
 core Mobile requirement, not a later polish pass.
 
-Before changing Sessions/Review swipe, peek chrome, composer frost,
-Transcript paint cost, or Code Review's editor/tree on Mobile, read
-[`docs/mobile-spatial-presentation.md`](../docs/mobile-spatial-presentation.md).
-It is the core contract: jank-free swipe, 1:1 `translate3d`, complementary
-rail, follower layers for iOS pin, live-row recycle without a JS
-virtualizer, a standing peek compositor layer (arm on finger-down; first
-tracking frame only writes transform), wrap-on Review source as a
-workspace swipe (live CodeMirror, no sticky gutters, no touch-scroll
-tile; wrap-off keeps the native X bar), and paint/hit split for the dim.
-Intermittent frame drops are assemble-at-prepare, not tracking math —
-do not retune the cubic or `setState` on `touchstart` to chase them. Do
-not hide or snapshot the editor, re-pin the rail, scale the peek, or
-freeze the session list to make a swipe cheaper.
+Before changing Sessions/Review swipe, peek chrome (Review header or
+bottom nav, Agent composer/navbar), composer frost, Transcript paint
+cost, or Code Review's editor/tree on Mobile, read
+[`docs/mobile-spatial-presentation.md`](../docs/mobile-spatial-presentation.md)
+§2.1. Those regions inherit the peek compositor: a header toggle or
+MUI `Switch` is a swipe-path change. Nested `transform` / drop shadow
+inside `translate3d` reassembles tiles every frame. Keep selected chrome
+paint-only. The rest of the contract: jank-free swipe, 1:1
+`translate3d`, complementary rail, follower layers for iOS pin, live-row
+recycle without a JS virtualizer, a standing peek compositor layer (arm
+on finger-down; first tracking frame only writes transform), wrap-on
+Review source as a workspace swipe (live CodeMirror, no sticky gutters,
+no touch-scroll tile; wrap-off keeps the native X bar), and paint/hit
+split for the dim. Intermittent frame drops are assemble-at-prepare, not
+tracking math — do not retune the cubic or `setState` on `touchstart` to
+chase them. Do not hide or snapshot the editor, re-pin the rail, scale
+the peek, or freeze the session list to make a swipe cheaper.
 
 ## Desktop and mobile are separate products
 
