@@ -27,11 +27,11 @@ import {
   Chip,
   CircularProgress,
   Divider,
+  ButtonBase,
   IconButton,
   ListItemButton,
   Popover,
   Stack,
-  Switch,
   Toolbar,
   Typography,
 } from "@mui/material";
@@ -153,102 +153,59 @@ function ReviewModeSwitcher({
   mode: ReviewMode;
   onChange: (mode: ReviewMode) => void;
 }): React.JSX.Element {
+  // Paint-only selected fill. A sliding thumb with its own transform and
+  // drop shadow sits inside the Review peek's compositor layer, so iOS
+  // reassembles that nested tile on every swipe frame
+  // (docs/mobile-spatial-presentation.md).
   return (
     <Box
-      component="label"
       data-mobile-review-mode-switcher
-      title={mode === "git" ? "Git changes" : "Worktree files"}
+      role="group"
+      aria-label="Switch between Git changes and Worktree files"
       sx={{
-        width: 76,
-        height: 44,
-        display: "grid",
-        placeItems: "center",
+        display: "flex",
         flex: "0 0 auto",
-        cursor: "pointer",
+        height: 36,
+        p: "2px",
+        borderRadius: "18px",
+        border: 1,
+        borderColor: "divider",
+        bgcolor: (theme) => alpha(theme.palette.text.primary, 0.055),
+        transform: "none",
+        willChange: "auto",
         WebkitTapHighlightColor: "transparent",
       }}
     >
-      <Box
-        data-mobile-review-mode-switch-track
+      <ButtonBase
+        aria-label="Git changes"
+        aria-pressed={mode === "git"}
+        onClick={() => onChange("git")}
         sx={{
-          position: "relative",
-          width: 72,
-          height: 36,
+          width: 36,
+          height: 32,
+          borderRadius: "16px",
+          bgcolor: mode === "git" ? "background.paper" : "transparent",
+          color: mode === "git" ? "primary.main" : "text.disabled",
+          transform: "none",
         }}
       >
-        <Switch
-          checked={mode === "files"}
-          onChange={(_, checked) => onChange(checked ? "files" : "git")}
-          slotProps={{
-            input: {
-              "aria-label": "Switch between Git changes and Worktree files",
-            },
-          }}
-          sx={(theme) => ({
-            position: "absolute",
-            inset: 0,
-            width: 72,
-            height: 36,
-            p: 0,
-            "& .MuiSwitch-switchBase": {
-              p: "4px",
-              transitionDuration: "180ms",
-              "&.Mui-checked": {
-                transform: "translateX(36px)",
-                color: "transparent",
-              },
-              "&.Mui-checked + .MuiSwitch-track": {
-                bgcolor: alpha(theme.palette.text.primary, 0.055),
-                opacity: 1,
-              },
-              "&.Mui-focusVisible .MuiSwitch-thumb": {
-                outline: `2px solid ${theme.palette.primary.main}`,
-                outlineOffset: 2,
-              },
-            },
-            "& .MuiSwitch-thumb": {
-              width: 28,
-              height: 28,
-              bgcolor: alpha(theme.palette.primary.main, 0.2),
-              border: `1px solid ${alpha(theme.palette.primary.main, 0.42)}`,
-              boxShadow: "0 2px 7px rgba(0, 0, 0, 0.22)",
-            },
-            "& .MuiSwitch-track": {
-              borderRadius: "18px",
-              border: `1px solid ${theme.palette.divider}`,
-              bgcolor: alpha(theme.palette.text.primary, 0.055),
-              opacity: 1,
-            },
-          })}
-        />
-        <Stack
-          aria-hidden
-          direction="row"
-          sx={{
-            position: "absolute",
-            inset: 0,
-            pointerEvents: "none",
-            zIndex: 2,
-          }}
-        >
-          <Box sx={{ width: 36, display: "grid", placeItems: "center" }}>
-            <DifferenceOutlined
-              sx={{
-                fontSize: 17,
-                color: mode === "git" ? "primary.main" : "text.disabled",
-              }}
-            />
-          </Box>
-          <Box sx={{ width: 36, display: "grid", placeItems: "center" }}>
-            <AccountTreeOutlined
-              sx={{
-                fontSize: 17,
-                color: mode === "files" ? "primary.main" : "text.disabled",
-              }}
-            />
-          </Box>
-        </Stack>
-      </Box>
+        <DifferenceOutlined sx={{ fontSize: 17 }} />
+      </ButtonBase>
+      <ButtonBase
+        aria-label="Worktree files"
+        aria-pressed={mode === "files"}
+        onClick={() => onChange("files")}
+        sx={{
+          width: 36,
+          height: 32,
+          borderRadius: "16px",
+          bgcolor: mode === "files" ? "background.paper" : "transparent",
+          color: mode === "files" ? "primary.main" : "text.disabled",
+          transform: "none",
+        }}
+      >
+        <AccountTreeOutlined sx={{ fontSize: 17 }} />
+      </ButtonBase>
     </Box>
   );
 }
