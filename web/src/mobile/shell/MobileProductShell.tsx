@@ -10,9 +10,9 @@ import { isAnyDetentSheetOpen } from "../../_shell/detent-sheet-open";
 import { MobileConnectionBanner } from "../MobileConnectionBanner";
 import {
   OBSIDIAN_DRAWER_FLICK_PX_PER_MS,
-  OBSIDIAN_DRAWER_TRACK_PX,
   obsidianDrawerAbandonsToScroll,
   obsidianDrawerClaimsSwipe,
+  obsidianDrawerLockPx,
 } from "../../obsidianDrawerGesture";
 import {
   expandedSelection,
@@ -280,6 +280,14 @@ export function MobileProductShell({
         lastAt: now,
         velocity: 0,
         locked: false,
+        // A real vertical scroller needs enough axis evidence before JS calls
+        // preventDefault(). Otherwise a 2 px horizontal tremor at the start of
+        // an iOS vertical pan permanently cancels native scrolling.
+        lockPx: obsidianDrawerLockPx(
+          false,
+          event.target instanceof Element &&
+            event.target.closest("[data-mobile-overflow-layer='true']") != null,
+        ),
       };
       prepareNavigationHaptic();
       // Promote both pages before the 2 px claim so the first translate
@@ -325,7 +333,7 @@ export function MobileProductShell({
           direction: deltaX < 0 ? "left" as const : "right" as const,
           distance: Math.abs(deltaX),
         }
-        : obsidianDrawerClaimsSwipe(deltaX, deltaY, OBSIDIAN_DRAWER_TRACK_PX);
+        : obsidianDrawerClaimsSwipe(deltaX, deltaY, gesture.lockPx);
       if (!swipe || !pagerDirectionAllowed(gesture.product, deltaX)) return;
       if (!gesture.locked) {
         gesture.locked = true;

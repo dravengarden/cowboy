@@ -324,7 +324,7 @@ export function bindMobileSpatialDrawer({
 
   const onTouchStart = (event: TouchEvent): void => {
     const touch = event.touches[0];
-    const target = event.target instanceof HTMLElement ? event.target : null;
+    const target = event.target instanceof Element ? event.target : null;
     const inputOverlay = target?.closest("[data-mobile-keyboard-open]");
     const focusedInputOverlayOwnsGesture = inputOverlayOwnsDrawerGesture(
       inputOverlay?.getAttribute("data-mobile-keyboard-open") === "true",
@@ -346,10 +346,12 @@ export function bindMobileSpatialDrawer({
     presentationWidth = width;
     publishDrawerWidth(width);
     prepareNavigationHaptic();
-    // Session-row taps live on the rail and keep a tap-sized slop. The
-    // peeking page uses Obsidian's two-pixel |dx| > |dy| claim.
+    // Session-row taps keep a tap-sized slop. Non-scrolling page chrome uses
+    // Obsidian's two-pixel claim, while real overflow layers wait long enough
+    // to distinguish an iOS vertical pan from incidental horizontal tremor.
     const lockPx = obsidianDrawerLockPx(
       target !== null && drawer.contains(target),
+      target?.closest("[data-mobile-overflow-layer='true']") != null,
     );
     gesture = {
       x: touch.clientX,

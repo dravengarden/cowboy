@@ -12,6 +12,7 @@
  *  tap-vs-swipe conflict in the same way. */
 
 export const OBSIDIAN_DRAWER_TRACK_PX = 2;
+export const OBSIDIAN_DRAWER_SCROLL_SLOP_PX = 10;
 export const OBSIDIAN_DRAWER_RAIL_SLOP_PX = 11;
 export const OBSIDIAN_DRAWER_COMMIT_PROGRESS = 0.5;
 export const OBSIDIAN_DRAWER_FLICK_PX_PER_MS = 0.3;
@@ -23,8 +24,14 @@ export interface DrawerVelocitySample {
   x: number;
 }
 
-export function obsidianDrawerLockPx(fromRail: boolean): number {
-  return fromRail ? OBSIDIAN_DRAWER_RAIL_SLOP_PX : OBSIDIAN_DRAWER_TRACK_PX;
+export function obsidianDrawerLockPx(
+  fromRail: boolean,
+  fromScrollableContent = false,
+): number {
+  if (fromRail) return OBSIDIAN_DRAWER_RAIL_SLOP_PX;
+  return fromScrollableContent
+    ? OBSIDIAN_DRAWER_SCROLL_SLOP_PX
+    : OBSIDIAN_DRAWER_TRACK_PX;
 }
 
 export function obsidianDrawerAbandonsToScroll(

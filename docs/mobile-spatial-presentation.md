@@ -63,7 +63,7 @@ gesture root (shell)
    the reader follows the live edge.
 6. The peek is already one compositor layer at rest. Collapse per-row
    `contain` on `[data-mobile-drawer-surface] [data-key]` standing, and
-   arm hold + peek `will-change` on finger-down. The 2 px claim only
+   arm hold + peek `will-change` on finger-down. The horizontal claim only
    writes `translate3d` and freezes overflow. Do not add or remove
    `backdrop-filter` on the dedicated frost follower during a drawer
    swipe — toggling it rebuilds that layer on the first tracking frames.
@@ -108,9 +108,13 @@ peek paid an extra tile assemble on every wrap-on source swipe.
 
 ### Finger tracking
 
-`web/src/obsidianDrawerGesture.ts` is the recognizer. The workspace claims a
-one-finger swipe when `|dx| > |dy|` past two CSS pixels, then writes
-`translate3d` every `touchmove`. Velocity is the last 100 ms of samples.
+`web/src/obsidianDrawerGesture.ts` is the recognizer. Non-scrolling chrome
+claims a one-finger swipe when `|dx| > |dy|` past two CSS pixels. A touch that
+starts inside a real `[data-mobile-overflow-layer]` waits for 10 px of
+horizontal evidence before calling `preventDefault()`: iOS permanently cancels
+native vertical scrolling if a 2 px horizontal tremor wins the first sample.
+After the claim, the recognizer writes `translate3d` every `touchmove`.
+Velocity is the last 100 ms of samples.
 Release: a flick (≥ 0.3 px/ms) wins, otherwise the nearer rest state
 (50%). Overscroll uses the UIScrollView rubber-band, not a linear 0.18
 scale.
@@ -118,12 +122,14 @@ scale.
 The Sessions rail keeps an 11 px slop so a row tap is not a close. That
 slop is Cowboy-specific.
 
-Do not restore the old 4–12 px lock plus 1.15 axis ratio plus 34/66
-magnetic thresholds. Those made the page feel late and sticky.
+Do not restore the old global 4–12 px lock plus 1.15 axis ratio plus 34/66
+magnetic thresholds. The 10 px scroll-layer exception protects native pan;
+non-scrolling chrome must retain the two-pixel claim.
 
 `web/src/mobileSpatialDrawer.ts` owns arm, prepare, lock, 1:1 write, settle, and
 follower transforms. Finger-down arms the peek layer (store hold + peek
-`will-change`). Prepare at 2 px only claims the swipe: `transition: none`,
+`will-change`). Prepare at the direction lock only claims the swipe:
+`transition: none`,
 follower promotion, overflow flatten. AppBar/nav CSS must not include
 `transform` in a standing transition; that interpolates the follower and
 the bottom trails the peek by a half-beat.
@@ -276,7 +282,8 @@ These already failed or were rejected:
   React commit *is* the hitch. Use a pause ref; unfollow when
   reader-owned scroll leaves the live edge.
 - Apply overflow flatten on finger-down. That steals the first vertical
-  scroll pixel. Overflow freeze waits for the 2 px horizontal claim.
+  scroll pixel. Overflow freeze waits for the horizontal claim (2 px on
+  chrome, 10 px when the touch starts in a scroll layer).
 - Write `transform-origin`, `box-shadow`, or `setAttribute` inside
   `applySlide`. Touchmove writes only `transform` (and `transition: none`).
 
@@ -302,7 +309,7 @@ Do not retune easing or claim thresholds to chase that. Split the work:
 |---|---|---|
 | Rest | `contain: none` on peek rows (`mobilePeekRestLayerSx`); identity translate on the page | `overflow: hidden` on the scroller; `will-change` on bottom chrome; strip a dedicated frost follower |
 | Finger-down | `holdStorePresentation`; `will-change` on peek + mask / both pager pages | React commit; unfollow; overflow freeze |
-| 2 px claim | `transition: none`; first `translate3d` | `setAttribute` that restyles overflow; toggle frost |
+| 2 px chrome / 10 px scroll-layer claim | `transition: none`; first `translate3d` | `setAttribute` that restyles overflow; toggle frost |
 | Each `touchmove` | `transform` (+ `transition: none`) | `setAttribute`, `setState`, `transform-origin`, `box-shadow` |
 | Next frame | Mark moving, flatten overflow, fire the freeze event | Restyle N rows |
 

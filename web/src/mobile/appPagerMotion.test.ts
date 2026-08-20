@@ -78,4 +78,9 @@ Deno.test("vertical transcript pans release horizontal recognizers", () => {
   assertEquals(obsidianDrawerAbandonsToScroll(7, 13), true);
   assertEquals(obsidianDrawerAbandonsToScroll(30, 8), false);
   assertEquals(pagerSource.includes("obsidianDrawerClaimsSwipe"), true);
+  assertEquals(pagerSource.includes("gesture.lockPx"), true);
+  assertEquals(
+    pagerSource.includes("[data-mobile-overflow-layer='true']"),
+    true,
+  );
 });

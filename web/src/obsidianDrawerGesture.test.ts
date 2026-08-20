@@ -5,6 +5,7 @@ import {
   OBSIDIAN_DRAWER_COMMIT_PROGRESS,
   OBSIDIAN_DRAWER_FLICK_PX_PER_MS,
   OBSIDIAN_DRAWER_RAIL_SLOP_PX,
+  OBSIDIAN_DRAWER_SCROLL_SLOP_PX,
   OBSIDIAN_DRAWER_TRACK_PX,
   obsidianDrawerAbandonsToScroll,
   obsidianDrawerClaimsSwipe,
@@ -55,6 +56,24 @@ Deno.test("rail slop stays above a session-row tap", () => {
       OBSIDIAN_DRAWER_RAIL_SLOP_PX,
     ),
     { direction: "right", distance: OBSIDIAN_DRAWER_RAIL_SLOP_PX },
+  );
+});
+
+Deno.test("scrollable content waits past incidental horizontal tremor", () => {
+  const lockPx = obsidianDrawerLockPx(false, true);
+  assertEquals(lockPx, OBSIDIAN_DRAWER_SCROLL_SLOP_PX);
+  assertEquals(
+    obsidianDrawerClaimsSwipe(3, 1, lockPx),
+    null,
+  );
+  assertEquals(obsidianDrawerAbandonsToScroll(4, 25), true);
+  assertEquals(
+    obsidianDrawerClaimsSwipe(lockPx, 1, lockPx),
+    { direction: "right", distance: lockPx },
+  );
+  assertEquals(
+    obsidianDrawerLockPx(true, true),
+    OBSIDIAN_DRAWER_RAIL_SLOP_PX,
   );
 });
 

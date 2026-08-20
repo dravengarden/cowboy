@@ -25,6 +25,7 @@ export interface PagerGesture {
   lastAt: number;
   velocity: number;
   locked: boolean;
+  lockPx: number;
 }
 
 export function predictPagerOffset(
