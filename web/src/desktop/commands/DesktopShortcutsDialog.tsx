@@ -13,9 +13,9 @@ import { useDesktopCommands } from "./DesktopCommandProvider";
 import {
   DESKTOP_FOCUS_PLAN_SHORTCUT,
   DESKTOP_FOCUS_PROMPT_SHORTCUT,
-  DESKTOP_RESIZE_NARROW_SHORTCUT,
   DESKTOP_RESIZE_SELECT_SHORTCUT,
-  DESKTOP_RESIZE_WIDEN_SHORTCUT,
+  DESKTOP_SESSION_SLOTS_LABEL,
+  DESKTOP_SHORTCUTS,
 } from "./workspaceShortcuts";
 import { DesktopModal } from "../DesktopModal";
 
@@ -26,11 +26,13 @@ interface ShortcutRow {
 }
 
 const NAVIGATION: ShortcutRow[] = [
-  { keys: ["Mod+E"], title: "Focus Sessions / Sidebar" },
+  { keys: [DESKTOP_SHORTCUTS.focusSessions], title: "Focus Sessions / Sidebar" },
   { keys: [DESKTOP_FOCUS_PROMPT_SHORTCUT], title: "Focus Message the Agent" },
   { keys: [DESKTOP_FOCUS_PLAN_SHORTCUT], title: "Focus Plan" },
-  { keys: ["Mod+L"], title: "Focus Conversation Log" },
-  { keys: ["Mod+T"], title: "Focus Top Bar" },
+  { keys: [DESKTOP_SHORTCUTS.focusConversation], title: "Focus Conversation Log" },
+  { keys: [DESKTOP_SHORTCUTS.focusTopbar], title: "Focus Top Bar" },
+  { keys: [DESKTOP_SHORTCUTS.newSession], title: "Create a new Session" },
+  { keys: [DESKTOP_SHORTCUTS.settings], title: "Open Settings" },
   { keys: ["R"], title: "Open Run Configuration in Top Bar" },
   { keys: ["U"], title: "Open Usage Limits in Top Bar" },
   { keys: ["L"], title: "Reload Session Runtime in Top Bar" },
@@ -38,29 +40,25 @@ const NAVIGATION: ShortcutRow[] = [
   { keys: ["X"], title: "Clear Conversation in Top Bar" },
   { keys: ["S"], title: "Stop Current Turn in Top Bar" },
   {
-    keys: ["Mod+Y", "Mod+D"],
+    keys: [DESKTOP_SHORTCUTS.focusQueue, DESKTOP_SHORTCUTS.focusDrafts],
     title: "Queue / Drafts inside Prompt",
     description:
       `${DESKTOP_FOCUS_PROMPT_SHORTCUT} always returns to the editor; the composer keeps native Vim commands`,
   },
-  { keys: ["Ctrl", "W", "H/L"], title: "Move between workspace panes" },
-  { keys: ["Ctrl", "W", "J/K"], title: "Move between regions in a pane" },
-  { keys: ["Ctrl", "W", "W"], title: "Cycle focus regions" },
+  { keys: [DESKTOP_SHORTCUTS.cycleRegion], title: "Cycle visible workspace regions" },
   {
     keys: [DESKTOP_RESIZE_SELECT_SHORTCUT],
     title: "Select the nearest layout resize bar",
     description:
-      "Enter Resize mode without moving the bar. H/L then resizes, Shift+H/L uses a larger step, Tab selects the next visible bar, and Esc, Enter, or Mod+\\ finishes. Mod+[ / Mod+] still nudge immediately",
-  },
-  {
-    keys: [DESKTOP_RESIZE_NARROW_SHORTCUT, DESKTOP_RESIZE_WIDEN_SHORTCUT],
-    title: "Nudge the nearest layout bar",
-    description:
-      "Shrink or grow immediately and stay in Resize mode. Ctrl+W </> remains as the Vim window-width alias",
+      "Enter Resize mode without moving the bar. H/L then resizes, Shift+H/L uses a larger step, Tab selects the next visible bar, and Esc or Enter finishes",
   },
   { keys: ["J/K"], title: "Move through items in list regions" },
-  { keys: ["Mod+1…0"], title: "Switch directly to a visible session from anywhere" },
-  { keys: ["Mod+J/K"], title: "Reorder the focused item when supported" },
+  {
+    keys: [DESKTOP_SESSION_SLOTS_LABEL],
+    title: "Switch directly to a visible session from anywhere",
+  },
+  { keys: ["Shift+J/K"], title: "Reorder the focused item when supported" },
+  { keys: ["O"], title: "Toggle continuous Order mode for list reordering" },
   { keys: ["G", "G"], title: "First item" },
   { keys: ["Shift+G"], title: "Last item" },
   {
@@ -76,11 +74,17 @@ const NAVIGATION: ShortcutRow[] = [
   { keys: ["Enter"], title: "Open or activate the focused item" },
   { keys: ["I"], title: "Edit the focused item" },
   { keys: ["Esc"], title: "Leave edit mode or close the active layer" },
+  {
+    keys: ["Esc", "Esc", "workspace key"],
+    title: "Jump from the editor to a workspace surface",
+    description:
+      "The first Escape reaches Vim Normal; the second arms S/E/P/C/T/Y/D/N/W, colon, question mark, comma, backslash, or a session digit",
+  },
 ];
 
 const DISCOVERY: ShortcutRow[] = [
-  { keys: ["Mod+/"], title: "Open this shortcut guide from anywhere" },
-  { keys: ["Mod+K"], title: "Open Command Palette" },
+  { keys: [DESKTOP_SHORTCUTS.shortcuts], title: "Open this shortcut guide" },
+  { keys: [DESKTOP_SHORTCUTS.commands], title: "Open Command Palette" },
 ];
 
 const CONVERSATION: ShortcutRow[] = [
@@ -217,7 +221,11 @@ export function DesktopShortcutsDialog({
       width={920}
       shortcutGroups={[
         {
-          slots: [{ shortcut: "Mod+/", label: "Guide", availability: "active" }],
+          slots: [{
+            shortcut: DESKTOP_SHORTCUTS.shortcuts,
+            label: "Guide",
+            availability: "active",
+          }],
         },
         { slots: [{ shortcut: "Esc", label: "Close" }] },
       ]}

@@ -3,7 +3,6 @@ import type {
   DesktopProductMode,
   DesktopSplitterId,
 } from "./DesktopWorkspaceController";
-import { workspaceCommandKey } from "./commands/workspaceCommandKey";
 
 export const DESKTOP_SPLITTER_ADJUST_EVENT =
   "cowboy:desktop-splitter-adjust";
@@ -77,45 +76,4 @@ export function resolveDesktopResizeSplitter(
 ): DesktopSplitterId | null {
   if (selected && visible.includes(selected)) return selected;
   return preferredDesktopSplitter(visible, pane, productMode);
-}
-
-/** Mod+\ enters layout Resize mode without moving the bar. */
-export function desktopResizeSelectChord(
-  event: {
-    code: string;
-    key: string;
-    shiftKey: boolean;
-    metaKey: boolean;
-    ctrlKey: boolean;
-    altKey: boolean;
-  },
-  mac: boolean,
-): boolean {
-  const usesMod = mac
-    ? event.metaKey && !event.ctrlKey
-    : event.ctrlKey && !event.metaKey;
-  if (!usesMod || event.altKey || event.shiftKey) return false;
-  return workspaceCommandKey(event) === "\\";
-}
-
-/** Mod+[ narrows and Mod+] widens the nearest visible vertical boundary. */
-export function desktopWidthResizeDirection(
-  event: {
-    code: string;
-    key: string;
-    shiftKey: boolean;
-    metaKey: boolean;
-    ctrlKey: boolean;
-    altKey: boolean;
-  },
-  mac: boolean,
-): -1 | 1 | null {
-  const usesMod = mac
-    ? event.metaKey && !event.ctrlKey
-    : event.ctrlKey && !event.metaKey;
-  if (!usesMod || event.altKey || event.shiftKey) return null;
-  const key = workspaceCommandKey(event);
-  if (key === "[") return -1;
-  if (key === "]") return 1;
-  return null;
 }

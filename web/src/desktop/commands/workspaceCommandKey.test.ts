@@ -63,6 +63,17 @@ Deno.test("workspace Resize-mode command uses the physical backslash key", () =>
   );
 });
 
+Deno.test("workspace discovery commands use physical shifted punctuation", () => {
+  assert.equal(
+    workspaceCommandKey({ code: "Semicolon", key: "Process", shiftKey: true }),
+    ":",
+  );
+  assert.equal(
+    workspaceCommandKey({ code: "Slash", key: "Process", shiftKey: true }),
+    "?",
+  );
+});
+
 Deno.test("workspace resize commands use physical angle-bracket keys", () => {
   assert.equal(
     workspaceCommandKey({ code: "Comma", key: "Process", shiftKey: true }),

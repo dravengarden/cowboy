@@ -195,6 +195,7 @@ import { MobileDecisionActions } from "./MobileDecisionActions";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { isImeKeyEvent } from "./imeKey";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
+import { DESKTOP_SHORTCUTS } from "./desktop/commands/workspaceShortcuts";
 import { InfoContent } from "./InfoSheet";
 import { UsageLogs } from "./UsageLogs";
 import { SegmentedPill } from "./SegmentedPill";
@@ -563,7 +564,7 @@ function SessionList({
     phone?: boolean;
 }): React.JSX.Element {
     // Desktop-only modal list state. Normal mode navigates with j/k; Pin turns
-    // the same keys into spatial reorder commands until P/Esc (or opening a
+    // the same keys into spatial reorder commands until O/Esc (or opening a
     // session) releases it. This is intentionally local UI state, not synced
     // session metadata.
     const [pinned, setPinned] = useState(false);
@@ -816,7 +817,7 @@ function SessionList({
                     } : undefined}
                 >
                     New session
-                    {desktop && <Kbd keys={`${MOD_LABEL}N`} variant="global" />}
+                    {desktop && <Kbd keys={DESKTOP_SHORTCUTS.newSession} variant="global" />}
                 </Button>
                 {desktop && pinned && (
                     <Box
@@ -2490,9 +2491,9 @@ export function App({
             {surface === "desktop" && (
                 <Suspense fallback={null}>
                     <DesktopRegionShortcut
-                        shortcut="Mod+E"
+                        shortcut={DESKTOP_SHORTCUTS.focusSessions}
                         title="Focus Sessions"
-                        singleKeycap={`${MOD_LABEL}E`}
+                        singleKeycap={DESKTOP_SHORTCUTS.focusSessions}
                     />
                 </Suspense>
             )}
@@ -2786,7 +2787,7 @@ export function App({
                         role="separator"
                         aria-orientation="vertical"
                         aria-label="Resize sidebar"
-                        title="Resize layout · Mod+\\"
+                        title={`Resize layout · ${DESKTOP_SHORTCUTS.resize}`}
                         aria-valuemin={SIDEBAR_MIN}
                         aria-valuemax={SIDEBAR_MAX}
                         aria-valuenow={Math.round(sidebarWidth)}
@@ -3360,17 +3361,17 @@ export function App({
                                     )}
                                     <Suspense fallback={null}>
                                         <DesktopRegionShortcut
-                                            shortcut="Mod+T"
+                                            shortcut={DESKTOP_SHORTCUTS.focusTopbar}
                                             title="Focus Top Bar"
-                                            singleKeycap={`${MOD_LABEL}T`}
+                                            singleKeycap={DESKTOP_SHORTCUTS.focusTopbar}
                                             sx={{ mx: 0.5 }}
                                         />
                                     </Suspense>
                                     <Divider orientation="vertical" flexItem sx={{ mx: 0.75, my: 0.75 }} />
                                     <Suspense fallback={null}>
                                         <DesktopContextShortcut
-                                            badge={`${MOD_LABEL},`}
-                                            shortcut={`${MOD_LABEL}, · Settings`}
+                                            badge={DESKTOP_SHORTCUTS.settings}
+                                            shortcut={`${DESKTOP_SHORTCUTS.settings} · Settings`}
                                             placement="inline"
                                             alwaysVisible
                                         >
@@ -3730,7 +3731,9 @@ export function App({
                                             onClick={openNewSession}
                                         >
                                             New session
-                                            {surface === "desktop" && <Kbd keys={`${MOD_LABEL}N`} variant="global" />}
+                                            {surface === "desktop" && (
+                                                <Kbd keys={DESKTOP_SHORTCUTS.newSession} variant="global" />
+                                            )}
                                         </Button>
                                     </>
                                 )

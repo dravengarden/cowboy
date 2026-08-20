@@ -36,31 +36,29 @@ Deno.test("macOS destructive and system shortcuts are rejected", () => {
 });
 
 Deno.test("common Command shortcuts require matching native semantics", () => {
-  assertEquals(macShortcutConflict("session.new", "Mod+N"), null);
-  assertEquals(macShortcutConflict("settings.open", "Mod+,"), null);
   assertEquals(macShortcutConflict("composer.saveDraft", "Mod+S"), null);
-  assertEquals(macShortcutConflict("workspace.focusSessions", "Mod+E"), null);
-  assertEquals(macShortcutConflict("workspace.focusTopbar", "Mod+T"), null);
+  assertEquals(macShortcutConflict("composer.more", "Mod+."), null);
   assertThrows(() => assertMacShortcutAllowed("unrelated", "Mod+S"));
+  assertThrows(() => assertMacShortcutAllowed("settings.open", "Mod+,"));
 });
 
-Deno.test("Cowboy workspace chords avoid Command collisions", () => {
+Deno.test("Cowboy workspace keys avoid Command collisions", () => {
   for (const [commandId, shortcut] of [
-    ["workspace.focusSessions", "Mod+E"],
+    ["workspace.focusSessions", "S"],
     ["workspace.focusPrompt", DESKTOP_FOCUS_PROMPT_SHORTCUT],
     ["prompt.focusPlan", DESKTOP_FOCUS_PLAN_SHORTCUT],
-    ["workspace.focusConversation", "Mod+L"],
-    ["workspace.focusTopbar", "Mod+T"],
-    ["commandPalette.open", "Mod+K"],
-    ["shortcuts.open", "Mod+/"],
-    ["workspace.resizeNarrow", "Mod+["],
-    ["workspace.resizeWiden", "Mod+]"],
-    ["workspace.enterResize", "Mod+\\"],
+    ["workspace.focusConversation", "C"],
+    ["workspace.focusTopbar", "T"],
+    ["commandPalette.open", ":"],
+    ["shortcuts.open", "?"],
+    ["workspace.enterResize", "\\"],
+    ["session.slot1", "Alt+1"],
+    ["session.slot0", "Alt+0"],
   ] as const) {
     assertEquals(macShortcutConflict(commandId, shortcut), null);
   }
   assertThrows(() => assertMacShortcutAllowed("unrelated", "Mod+E"));
   assertThrows(() => assertMacShortcutAllowed("prompt.focusQueue", "Q"));
-  assertEquals(macShortcutConflict("prompt.focusQueue", "Mod+Y"), null);
-  assertEquals(macShortcutConflict("prompt.focusDrafts", "Mod+D"), null);
+  assertEquals(macShortcutConflict("prompt.focusQueue", "Y"), null);
+  assertEquals(macShortcutConflict("prompt.focusDrafts", "D"), null);
 });

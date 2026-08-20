@@ -17,9 +17,9 @@ import {
 } from "./shortcut";
 import { workspaceCommandKey } from "./workspaceCommandKey";
 import { assertMacShortcutAllowed } from "./macShortcutPolicy";
+import { assertChromeShortcutAllowed } from "./chromeShortcutPolicy";
 import { desktopImeOwnsKey } from "./imeShortcut";
 import { desktopOverlayOwnsShortcuts } from "./desktopShortcutScope";
-import { desktopBrowserChromeShortcut } from "./desktopBrowserChrome";
 import {
   desktopShouldBlockStaleVimSink,
   desktopVimSinkShouldHandleKeys,
@@ -30,13 +30,13 @@ import {
   DESKTOP_SPLITTER_ADJUST_EVENT,
   DESKTOP_SPLITTER_LARGE_STEP,
   DESKTOP_SPLITTER_STEP,
-  desktopResizeSelectChord,
-  desktopWidthResizeDirection,
-  preferredDesktopSplitter,
-  resolveDesktopResizeSplitter,
   visibleDesktopSplitterIds,
 } from "../desktopSplitterKeyboard";
 import type { DesktopSplitterId } from "../DesktopWorkspaceController";
+import {
+  DESKTOP_WORKSPACE_COMMAND_EVENT,
+  DESKTOP_WORKSPACE_COMMANDS,
+} from "./workspaceShortcuts";
 
 export interface DesktopCommand {
   id: string;
@@ -129,9 +129,9 @@ export function DesktopCommandProvider(
   { children }: { children: React.ReactNode },
 ): React.JSX.Element {
   const commands = useRef(new Map<string, DesktopCommand>());
-  const windowChord = useRef<number | null>(null);
   const itemChord = useRef<number | null>(null);
   const pendingJumpChord = useRef<PendingJumpChord | null>(null);
+  const workspaceCommandTimer = useRef<number | null>(null);
   const [revision, setRevision] = useState(0);
   const [pendingJumpRegion, setPendingJumpRegion] = useState<string | null>(null);
   const workspace = useDesktopWorkspace();
@@ -154,6 +154,7 @@ export function DesktopCommandProvider(
   }, []);
   const register = useCallback((command: DesktopCommand): () => void => {
     assertMacShortcutAllowed(command.id, command.shortcut);
+    assertChromeShortcutAllowed(command.id, command.shortcut);
     commands.current.set(command.id, command);
     setRevision((value) => value + 1);
     return () => {
@@ -181,6 +182,27 @@ export function DesktopCommandProvider(
     list: () => [...commands.current.values()],
     commands: commandList,
   }), [commandList, execute, register]);
+
+  useEffect(() => {
+    const armWorkspaceCommand = (): void => {
+      if (workspaceCommandTimer.current !== null) {
+        globalThis.clearTimeout(workspaceCommandTimer.current);
+      }
+      workspace.setMode("command");
+      workspaceCommandTimer.current = globalThis.setTimeout(() => {
+        workspaceCommandTimer.current = null;
+        workspace.setMode("normal");
+      }, 1200);
+    };
+    globalThis.addEventListener(DESKTOP_WORKSPACE_COMMAND_EVENT, armWorkspaceCommand);
+    return () => {
+      globalThis.removeEventListener(DESKTOP_WORKSPACE_COMMAND_EVENT, armWorkspaceCommand);
+      if (workspaceCommandTimer.current !== null) {
+        globalThis.clearTimeout(workspaceCommandTimer.current);
+        workspaceCommandTimer.current = null;
+      }
+    };
+  }, [workspace.setMode]);
 
   useEffect(() => {
     const chord = pendingJumpChord.current;
@@ -231,10 +253,7 @@ export function DesktopCommandProvider(
         ) {
           event.stopPropagation();
         }
-        if (windowChord.current !== null) {
-          globalThis.clearTimeout(windowChord.current);
-          windowChord.current = null;
-        }
+        if (workspace.mode === "command") workspace.setMode("normal");
         if (itemChord.current !== null) {
           globalThis.clearTimeout(itemChord.current);
           itemChord.current = null;
@@ -246,6 +265,7 @@ export function DesktopCommandProvider(
       // map. Relinquish the workspace map before it consumes those keys.
       if (desktopOverlayOwnsShortcuts(document)) {
         clearPendingJumpChord();
+        if (workspace.mode === "command") workspace.setMode("normal");
         return;
       }
       const selectSplitter = (splitter: DesktopSplitterId | null): void => {
@@ -257,52 +277,61 @@ export function DesktopCommandProvider(
           )?.focus({ preventScroll: true })
         );
       };
-      const selectAndAdjustSplitter = (
-        splitter: DesktopSplitterId | null,
-        delta: number,
-      ): void => {
-        if (splitter === null) return;
-        selectSplitter(splitter);
-        globalThis.dispatchEvent(new CustomEvent(
-          DESKTOP_SPLITTER_ADJUST_EVENT,
-          { detail: { splitter, delta } },
-        ));
+      const selectSessionSlot = (digit: string): void => {
+        const sessionsRegion = document.querySelector<HTMLElement>(
+          "[data-desktop-region='sessions.list']",
+        );
+        const sessions = visibleRegionItems(sessionsRegion);
+        const slot = Number(digit);
+        const session = sessions[slot === 0 ? 9 : slot - 1];
+        if (!session) return;
+        const id = session.dataset.desktopItem;
+        session.click();
+        workspace.focusRegion("sessions.list");
+        if (id) {
+          requestAnimationFrame(() =>
+            sessionsRegion?.querySelector<HTMLElement>(
+              `[data-desktop-item="${CSS.escape(id)}"]`,
+            )?.focus({ preventScroll: true })
+          );
+        }
       };
-      if (desktopResizeSelectChord(event, isMac)) {
-        event.preventDefault();
-        event.stopPropagation();
-        if (workspace.selectedSplitter !== null) {
-          workspace.setSelectedSplitter(null);
-          if (workspace.focusedRegion) {
-            requestAnimationFrame(() =>
-              workspace.focusRegion(workspace.focusedRegion as string)
-            );
+      if (workspace.mode === "command") {
+        const key = workspaceCommandKey(event);
+        if (isModifierKey(key)) return;
+        if (event.metaKey || event.ctrlKey || event.altKey) {
+          workspace.setMode("normal");
+        } else if (key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          workspace.setMode("normal");
+          return;
+        } else {
+          const digit = /^(?:Digit|Numpad)([0-9])$/.exec(event.code)?.[1];
+          const commandId = DESKTOP_WORKSPACE_COMMANDS[key.toLowerCase()];
+          if (digit || commandId) {
+            event.preventDefault();
+            event.stopPropagation();
+            workspace.setMode("normal");
+            if (digit) {
+              selectSessionSlot(digit);
+            } else if (commandId) {
+              const command = commands.current.get(commandId);
+              const inContext = command &&
+                (!command.contexts || command.contexts.includes(workspace.focusedPane)) &&
+                (!command.regions || (!!workspace.focusedRegion &&
+                  command.regions.includes(workspace.focusedRegion)));
+              if (inContext && command.when?.() !== false) command.run();
+            }
+            return;
           }
+          workspace.setMode("normal");
+          // The one-shot command state owns one bare continuation. Unknown
+          // keys cancel without leaking into Vim operators or row actions.
+          event.preventDefault();
+          event.stopPropagation();
           return;
         }
-        selectSplitter(
-          preferredDesktopSplitter(
-            visibleDesktopSplitterIds(),
-            workspace.focusedPane,
-            workspace.productMode,
-          ),
-        );
-        return;
-      }
-      const widthDirection = desktopWidthResizeDirection(event, isMac);
-      if (widthDirection !== null) {
-        event.preventDefault();
-        event.stopPropagation();
-        selectAndAdjustSplitter(
-          resolveDesktopResizeSplitter(
-            visibleDesktopSplitterIds(),
-            workspace.selectedSplitter,
-            workspace.focusedPane,
-            workspace.productMode,
-          ),
-          widthDirection * DESKTOP_SPLITTER_STEP,
-        );
-        return;
       }
       if (workspace.selectedSplitter !== null) {
         const visible = visibleDesktopSplitterIds();
@@ -367,7 +396,7 @@ export function DesktopCommandProvider(
       // that chord: a valid 1-9/0 (or a second G) jumps, while Escape, a
       // unrelated bare key cancels without leaking through to destructive row
       // actions such as X. A new modified/global chord cancels G but remains
-      // available (for example Mod+I still enters Composer). Moving focus/editor
+      // available (for example Alt+1 switches sessions). Moving focus/editor
       // mode clears the chord without swallowing the new surface's first key.
       const pendingChord = pendingJumpChord.current;
       if (pendingChord) {
@@ -405,36 +434,6 @@ export function DesktopCommandProvider(
       }
       if (workspace.productMode === "reading") {
         const key = workspaceCommandKey(event);
-        if (windowChord.current !== null) {
-          if (isModifierKey(key)) return;
-          globalThis.clearTimeout(windowChord.current);
-          windowChord.current = null;
-          if (key === "<" || key === ">") {
-            event.preventDefault();
-            event.stopPropagation();
-            const visible = visibleDesktopSplitterIds();
-            selectAndAdjustSplitter(
-              preferredDesktopSplitter(
-                visible,
-                workspace.focusedPane,
-                workspace.productMode,
-              ),
-              key === "<" ? -DESKTOP_SPLITTER_STEP : DESKTOP_SPLITTER_STEP,
-            );
-            return;
-          }
-        }
-        if (
-          event.ctrlKey && !event.metaKey && !event.altKey &&
-          key.toLowerCase() === "w"
-        ) {
-          event.preventDefault();
-          event.stopPropagation();
-          windowChord.current = globalThis.setTimeout(() => {
-            windowChord.current = null;
-          }, 1200);
-          return;
-        }
         const readingSidebarOwnsKey = Boolean(eventElement?.closest(
           "[data-reading-question-sidebar]",
         ));
@@ -514,75 +513,6 @@ export function DesktopCommandProvider(
         // paging), but never enter Agent's pane, queue, draft, or session map.
         return;
       }
-      // Direct Vim window movement. Keep Ctrl-W + motion below for users who
-      // prefer the canonical two-stroke form, while Ctrl-H/J/K/L provides the
-      // fast one-stroke path between Desktop regions. Resolve through
-      // `workspaceCommandKey`, never `event.key`, so a CJK input source cannot
-      // translate or hide the physical navigation keys. An active composition
-      // has already returned above and remains exclusively owned by the IME.
-      if (
-        event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey
-      ) {
-        const key = workspaceCommandKey(event).toLowerCase();
-        if (["h", "j", "k", "l"].includes(key)) {
-          event.preventDefault();
-          event.stopPropagation();
-          if (key === "h") workspace.focusAdjacentPane(-1);
-          else if (key === "l") workspace.focusAdjacentPane(1);
-          else if (key === "j") workspace.focusAdjacentRegion(1);
-          else workspace.focusAdjacentRegion(-1);
-          return;
-        }
-      }
-      // Standard Vim window navigation. The first Ctrl-W arms a short chord;
-      // the following h/l moves panes, j/k moves vertical regions in the current
-      // pane, w cycles every visible region, and </> resizes the nearest vertical
-      // boundary. Capture-phase handling keeps the same contract while the CM6
-      // editor owns keyboard focus.
-      if (windowChord.current !== null) {
-        const commandKey = workspaceCommandKey(event);
-        if (isModifierKey(commandKey)) return;
-        globalThis.clearTimeout(windowChord.current);
-        windowChord.current = null;
-        const key = commandKey.toLowerCase();
-        if (
-          ["h", "j", "k", "l", "w"].includes(key) ||
-          commandKey === "<" || commandKey === ">"
-        ) {
-          event.preventDefault();
-          event.stopPropagation();
-          if (key === "h") workspace.focusAdjacentPane(-1);
-          else if (key === "l") workspace.focusAdjacentPane(1);
-          else if (key === "j") workspace.focusAdjacentRegion(1);
-          else if (key === "k") workspace.focusAdjacentRegion(-1);
-          else if (commandKey === "<" || commandKey === ">") {
-            const visible = visibleDesktopSplitterIds();
-            selectAndAdjustSplitter(
-              preferredDesktopSplitter(
-                visible,
-                workspace.focusedPane,
-                workspace.productMode,
-              ),
-              commandKey === "<"
-                ? -DESKTOP_SPLITTER_STEP
-                : DESKTOP_SPLITTER_STEP,
-            );
-          }
-          else workspace.cycleRegion();
-          return;
-        }
-      }
-      if (
-        event.ctrlKey && !event.metaKey && !event.altKey &&
-        workspaceCommandKey(event).toLowerCase() === "w"
-      ) {
-        event.preventDefault();
-        event.stopPropagation();
-        windowChord.current = globalThis.setTimeout(() => {
-          windowChord.current = null;
-        }, 1200);
-        return;
-      }
       const region = workspace.focusedRegion
         ? document.querySelector<HTMLElement>(
           `[data-desktop-region="${CSS.escape(workspace.focusedRegion)}"]`,
@@ -590,43 +520,21 @@ export function DesktopCommandProvider(
         : null;
       const items = visibleRegionItems(region);
       const scrollNavigation = region?.dataset.desktopNavigation === "scroll";
-      const mod = isMac
-        ? event.metaKey && !event.ctrlKey
-        : event.ctrlKey && !event.metaKey;
-      // Sessions are first-level application navigation, so Mod+1…0 switches
-      // directly by slot from anywhere in the workspace.
+      // Sessions are first-level application navigation. Alt/Option+1…0 is
+      // browser-safe on every Desktop platform and works even from Insert mode.
       if (
-        workspace.mode === "normal" && mod && !event.altKey && !event.shiftKey &&
+        event.altKey && !event.metaKey &&
+        !event.ctrlKey && !event.shiftKey &&
         document.querySelector("[role='dialog'], [role='menu']") === null
       ) {
         const match = /^(?:Digit|Numpad)([0-9])$/.exec(event.code);
         if (match?.[1]) {
-          const sessionsRegion = document.querySelector<HTMLElement>(
-            "[data-desktop-region='sessions.list']",
-          );
-          const sessions = visibleRegionItems(sessionsRegion);
-          const digit = Number(match[1]);
-          const session = sessions[digit === 0 ? 9 : digit - 1];
-          if (session) {
-            event.preventDefault();
-            event.stopPropagation();
-            const id = session.dataset.desktopItem;
-            session.click();
-            // Positional session selection also enters the Sessions keyboard
-            // region. The row remains the active list item for J/K, while
-            // L/Enter explicitly opens its Prompt editor. Previously this only
-            // happened when Sessions already owned focus, leaving Mod+number
-            // visually selected but keyboard focus stranded in another pane.
-            workspace.focusRegion("sessions.list");
-            if (id) {
-              requestAnimationFrame(() =>
-                sessionsRegion?.querySelector<HTMLElement>(
-                  `[data-desktop-item="${CSS.escape(id)}"]`,
-                )?.focus({ preventScroll: true })
-              );
-            }
-            return;
-          }
+          // Reserve every slot consistently. An unavailable slot is an inactive
+          // Cowboy command, never a layout-dependent Option character.
+          event.preventDefault();
+          event.stopPropagation();
+          selectSessionSlot(match[1]);
+          return;
         }
       }
       const widgets = scrollNavigation ? conversationWidgets(region) : [];
@@ -722,12 +630,11 @@ export function DesktopCommandProvider(
           }
         }
       }
-      // Reordering remains contextual to the focused list. Positional Mod+number
-      // access is reserved globally for Sessions above; local lists use standard
-      // Vim j/k, gg/G and Enter. Queue and Draft additionally expose a local,
-      // two-stroke G -> number jump below instead of overloading Mod+number.
+      // Reordering remains contextual to the focused list. Shift+J/K is a
+      // direct Vim-style variation and avoids Chrome's Ctrl+J/K commands.
       if (
-        workspace.mode === "normal" && mod && !event.altKey && !event.shiftKey &&
+        workspace.mode === "normal" && event.shiftKey && !event.altKey &&
+        !event.ctrlKey && !event.metaKey &&
         !textEditorOwnsKey &&
         document.querySelector("[role='dialog'], [role='menu']") === null
       ) {
@@ -793,7 +700,7 @@ export function DesktopCommandProvider(
               return;
             }
           }
-          if (sessionsList && key.toLowerCase() === "p" && !event.repeat) {
+          if (sessionsList && key.toLowerCase() === "o" && !event.repeat) {
             event.preventDefault();
             event.stopPropagation();
             region.querySelector<HTMLElement>("ul")?.dispatchEvent(
@@ -819,7 +726,7 @@ export function DesktopCommandProvider(
             }));
             return;
           }
-          if (pendingList && key.toLowerCase() === "p" && !event.repeat) {
+          if (pendingList && key.toLowerCase() === "o" && !event.repeat) {
             event.preventDefault();
             event.stopPropagation();
             region.querySelector<HTMLElement>("[data-desktop-pending-list]")?.dispatchEvent(
@@ -981,13 +888,6 @@ export function DesktopCommandProvider(
         if (!disabled) command.run();
         return;
       }
-      // After Cowboy commands have had their chance, swallow leftover Chrome
-      // Find / Open / Downloads chords so a PWA never surfaces browser chrome.
-      if (desktopBrowserChromeShortcut(event, isMac)) {
-        event.preventDefault();
-        event.stopPropagation();
-        return;
-      }
       // Conversation/top-bar chrome can be highlighted while the hidden Prompt
       // sink still has DOM focus. Stop the event here so `i`/`a`/IME cannot
       // pop Prompt into Insert.
@@ -1003,10 +903,6 @@ export function DesktopCommandProvider(
     globalThis.addEventListener("keydown", onKeyDown, true);
     return () => {
       globalThis.removeEventListener("keydown", onKeyDown, true);
-      if (windowChord.current !== null) {
-        globalThis.clearTimeout(windowChord.current);
-        windowChord.current = null;
-      }
       if (itemChord.current !== null) {
         globalThis.clearTimeout(itemChord.current);
         itemChord.current = null;

@@ -125,7 +125,7 @@ export function DesktopComposerCommandBindings({
       id: "composer.jumpFront",
       title: "Jump prompt to front of queue",
       group: "Prompt actions",
-      shortcut: "Mod+J",
+      shortcut: "Alt+J",
       allowInEditor: true,
       contexts: ["prompt"],
       regions: ["prompt.composer"],

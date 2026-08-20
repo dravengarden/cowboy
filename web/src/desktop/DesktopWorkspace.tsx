@@ -9,7 +9,6 @@ import { DesktopRegionShortcut } from "./DesktopRegionShortcut";
 import { DesktopConversationControls } from "./DesktopConversationControls";
 import { DesktopReadingModeControl } from "./DesktopReadingModeControl";
 import { desktopEmbeddedControlSx } from "./DesktopEmbeddedControl";
-import { MOD_LABEL } from "../platform";
 import { ShortcutKeycap } from "../ShortcutKeycap";
 import type { TranscriptProjection } from "../explore/exploreStore";
 import { DesktopReadingQuestionDirectory } from "../explore/ExploreSurface";
@@ -18,7 +17,10 @@ import {
   type DesktopCommand,
   useDesktopCommand,
 } from "./commands/DesktopCommandProvider";
-import { DESKTOP_FOCUS_PROMPT_SHORTCUT } from "./commands/workspaceShortcuts";
+import {
+  DESKTOP_FOCUS_PROMPT_SHORTCUT,
+  DESKTOP_SHORTCUTS,
+} from "./commands/workspaceShortcuts";
 import { DesktopSplitterHint } from "./DesktopSplitterHint";
 import {
   clampReadingQuestionsWidth,
@@ -114,7 +116,7 @@ function PaneHeader({
       <DesktopRegionShortcut
         shortcut={shortcut.value}
         title={shortcut.title}
-        singleKeycap={`${MOD_LABEL}${shortcut.value.slice(-1)}`}
+        singleKeycap={shortcut.value}
         sx={{ ml: 0.5 }}
       />
     </Box>
@@ -322,7 +324,7 @@ export function DesktopWorkspace({
               role="separator"
               aria-orientation="vertical"
               aria-label="Resize page index"
-              title="Resize layout · Mod+\\"
+              title={`Resize layout · ${DESKTOP_SHORTCUTS.resize}`}
               aria-valuemin={READING_QUESTIONS_MIN}
               aria-valuemax={READING_QUESTIONS_MAX}
               aria-valuenow={Math.round(questionsWidth)}
@@ -423,7 +425,7 @@ export function DesktopWorkspace({
         role="separator"
         aria-orientation="vertical"
         aria-label="Resize composer column"
-        title="Resize layout · Mod+\\"
+        title={`Resize layout · ${DESKTOP_SHORTCUTS.resize}`}
         aria-valuemin={COMPOSER_COL_MIN}
         aria-valuemax={COMPOSER_COL_MAX}
         aria-valuenow={Math.round(promptWidth)}
@@ -477,7 +479,7 @@ export function DesktopWorkspace({
       >
         <PaneHeader
           pane="conversation"
-          shortcut={{ value: "Mod+L", title: "Focus Conversation" }}
+          shortcut={{ value: DESKTOP_SHORTCUTS.focusConversation, title: "Focus Conversation" }}
           actions={(
             <>
               <DesktopProjectionToggle

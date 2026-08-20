@@ -201,6 +201,8 @@ import {
 import {
   DESKTOP_FOCUS_PLAN_SHORTCUT,
   DESKTOP_FOCUS_PROMPT_SHORTCUT,
+  DESKTOP_SHORTCUTS,
+  DESKTOP_WORKSPACE_COMMAND_EVENT,
 } from "./desktop/commands/workspaceShortcuts";
 import { listJumpKey } from "./desktop/commands/listNavigation";
 import { shortcutAvailability } from "./desktop/commands/shortcutAvailability";
@@ -1946,7 +1948,7 @@ export function ComposerWorkspace({
                   <DesktopRegionShortcut
                     shortcut={DESKTOP_FOCUS_PLAN_SHORTCUT}
                     title="Focus Plan"
-                    singleKeycap={`${MOD_LABEL}P`}
+                    singleKeycap={DESKTOP_FOCUS_PLAN_SHORTCUT}
                   />
                 </Suspense>
               )
@@ -2421,6 +2423,10 @@ export function ComposerWorkspace({
                   setCancelOpen(true);
                   return true;
                 }
+                if (desktop) {
+                  globalThis.dispatchEvent(new Event(DESKTOP_WORKSPACE_COMMAND_EVENT));
+                  return true;
+                }
                 return false;
               }}
             />
@@ -2646,8 +2652,8 @@ export function ComposerWorkspace({
                           >
                             <VerticalAlignTop fontSize="small" />
                           </IconButton>,
-                          `${MOD_LABEL}J`,
-                          `${MOD_LABEL}J · jump to front`,
+                          `${ALT_LABEL}J`,
+                          `${ALT_LABEL}J · jump to front`,
                           sendable && queue.length > 0,
                         )}
                       </span>
@@ -4511,20 +4517,20 @@ function PendingPanel({
               {kind === "queued" && (
                 <Suspense fallback={null}>
                   <DesktopRegionShortcut
-                    shortcut="Mod+Y"
+                    shortcut={DESKTOP_SHORTCUTS.focusQueue}
                     title={visuallyCollapsed
                       ? "Open and focus queue"
                       : "Close queue when focused"}
-                    singleKeycap={`${MOD_LABEL}Y`}
+                    singleKeycap={DESKTOP_SHORTCUTS.focusQueue}
                   />
                 </Suspense>
               )}
               {kind === "draft" && (
                 <Suspense fallback={null}>
                   <DesktopRegionShortcut
-                    shortcut="Mod+D"
+                    shortcut={DESKTOP_SHORTCUTS.focusDrafts}
                     title="Focus drafts"
-                    singleKeycap={`${MOD_LABEL}D`}
+                    singleKeycap={DESKTOP_SHORTCUTS.focusDrafts}
                   />
                 </Suspense>
               )}

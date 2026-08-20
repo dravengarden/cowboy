@@ -13,6 +13,8 @@ import {
   DESKTOP_FOCUS_PLAN_SHORTCUT,
   DESKTOP_FOCUS_PROMPT_SHORTCUT,
   DESKTOP_RESIZE_HINT,
+  DESKTOP_SESSION_SLOTS_LABEL,
+  DESKTOP_SHORTCUTS,
 } from "./commands/workspaceShortcuts";
 
 function Segment({
@@ -103,7 +105,7 @@ function regionHints(
         { keys: "GG/G", label: "First/last" },
         { keys: "L/Enter", label: "Open prompt" },
         { keys: "H", label: "Settings" },
-        { keys: "P", label: "Pin reorder" },
+        { keys: "O", label: "Order mode" },
       ];
     case "prompt.plan":
       return [
@@ -118,7 +120,7 @@ function regionHints(
         { keys: "GG/G", label: "First/last" },
         { keys: "G→1…0", label: "Direct jump" },
         { keys: "L/Enter", label: "Edit" },
-        { keys: "P", label: "Pin reorder" },
+        { keys: "O", label: "Order mode" },
       ];
     case "conversation.transcript":
       return projection === "explore" ? EXPLORE_HINTS : HISTORY_HINTS;
@@ -150,11 +152,16 @@ export function DesktopStatusLine({
   const connected = useStoreSelector((snapshot) => snapshot.connected);
   const promptEditorContext = focusedRegion?.startsWith("prompt.") === true;
   const resizingLayout = workspace.selectedSplitter !== null;
+  const workspaceCommandMode = mode === "command";
   const effectiveMode = resizingLayout
     ? "resize"
+    : workspaceCommandMode
+    ? "command"
     : promptEditorContext && vimEnabled ? vimMode : mode;
   const modeColor = resizingLayout
     ? "primary.main"
+    : workspaceCommandMode
+    ? "secondary.main"
     : promptEditorContext && vimEnabled
     ? (VIM_MODE_COLOR[vimMode] ?? "primary.main")
     : "primary.main";
@@ -177,8 +184,8 @@ export function DesktopStatusLine({
       focusedRegion !== "prompt.composer"
     ? [
       { keys: DESKTOP_FOCUS_PLAN_SHORTCUT, label: "Plan" },
-      { keys: "Mod+Y", label: "Queue" },
-      { keys: "Mod+D", label: "Drafts" },
+      { keys: DESKTOP_SHORTCUTS.focusQueue, label: "Queue" },
+      { keys: DESKTOP_SHORTCUTS.focusDrafts, label: "Drafts" },
       { keys: DESKTOP_FOCUS_PROMPT_SHORTCUT, label: "Editor" },
     ]
     : [];
@@ -186,11 +193,11 @@ export function DesktopStatusLine({
     ...promptRegions,
     ...regionHints(focusedRegion, status, projection),
     ...(focusedRegion === "sessions.list" && itemCount > 0
-      ? [{ keys: "Mod+1…0", label: "Switch" }]
+      ? [{ keys: DESKTOP_SESSION_SLOTS_LABEL, label: "Switch" }]
       : []),
     ...(regionElement?.dataset.desktopReorderable === "true" &&
         focusedRegion !== "sessions.list"
-      ? [{ keys: "Mod+J/K", label: "Reorder" }]
+      ? [{ keys: "Shift+J/K", label: "Reorder" }]
       : []),
     ...(focusedRegion === "conversation.transcript" &&
       workspace.productMode === "agent"
@@ -212,6 +219,16 @@ export function DesktopStatusLine({
       { keys: "Shift+H/L", label: "Large step" },
       { keys: "Tab", label: "Next bar" },
       { keys: "Esc/Enter", label: "Done" },
+    ]
+    : workspaceCommandMode
+    ? [
+      { keys: "S/E/P/C/T", label: "Focus" },
+      { keys: "Y/D", label: "Queue/drafts" },
+      { keys: "1…0", label: "Session" },
+      { keys: "N", label: "New" },
+      { keys: "W", label: "Next region" },
+      { keys: ":/?", label: "Commands/help" },
+      { keys: "Esc", label: "Cancel" },
     ]
     : ordinaryHints;
   const paneLabel = resizingLayout
@@ -336,7 +353,7 @@ export function DesktopStatusLine({
         <Segment
           label={
             <Stack direction="row" spacing={0.55} alignItems="center">
-              <DesktopShortcut shortcut="Mod+K" quiet />
+              <DesktopShortcut shortcut={DESKTOP_SHORTCUTS.commands} quiet />
               <Box component="span">Commands</Box>
             </Stack>
           }
@@ -349,11 +366,11 @@ export function DesktopStatusLine({
         <Segment
           label={
             <Stack direction="row" spacing={0.55} alignItems="center">
-              <DesktopShortcut shortcut="Mod+/" quiet />
+              <DesktopShortcut shortcut={DESKTOP_SHORTCUTS.shortcuts} quiet />
               <Box component="span">Shortcuts</Box>
             </Stack>
           }
-          tooltip="Open the Desktop keyboard shortcut guide (Mod+/)"
+          tooltip={`Open the Desktop keyboard shortcut guide (${DESKTOP_SHORTCUTS.shortcuts})`}
           onClick={(): void => {
             commands.execute("shortcuts.open");
           }}

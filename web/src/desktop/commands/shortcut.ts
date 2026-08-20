@@ -55,16 +55,20 @@ export function matchesShortcut(
     (/^\d$/.test(stroke.key) &&
       (event.code === `Digit${stroke.key}` ||
         event.code === `Numpad${stroke.key}`));
+  const producedBareSymbol = !stroke.mod && !stroke.ctrl && !stroke.alt &&
+    !stroke.shift && [":", "?"].includes(stroke.key) &&
+    event.key.toLowerCase() === stroke.key;
   return keyMatches &&
     event.metaKey === expectedMeta &&
     event.ctrlKey === expectedCtrl &&
-    (productLetterIgnoresShift(stroke) || event.shiftKey === stroke.shift) &&
+    (productLetterIgnoresShift(stroke) || producedBareSymbol ||
+      event.shiftKey === stroke.shift) &&
     event.altKey === stroke.alt;
 }
 
 /// Bare product letters (`F`, `Z`, `V`) treat Shift/Caps as case, not a
 /// modifier. Vim regions keep `g`/`G` outside this matcher. Modified chords
-/// (`Mod+I`, `Mod+Shift+P`) still require an exact Shift state.
+/// (`Mod+Enter`, `Shift+J`) still require an exact Shift state.
 export function productLetterIgnoresShift(stroke: ShortcutStroke): boolean {
   return !stroke.shift && !stroke.mod && !stroke.ctrl && !stroke.alt &&
     stroke.key.length === 1 && /[a-z]/.test(stroke.key);
