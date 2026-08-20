@@ -2140,3 +2140,12 @@ Desktop Vim + IME checks:
     assistive clicks retain ordinary activation. Keep pointer-down default
     prevention so neither button steals CM6 focus. Do not add a delayed refocus,
     modify the image decoration, or intercept touches on the editor canvas.
+
+89. **Reversible inline-image deletion must retain bytes for CM6 Undo.**
+    The Markdown token, React attachment array, and render registry are separate
+    state. Delete removes the token and reconciles it out of the authoritative
+    attachment array, but must not immediately forget the registry entry: CM6
+    history restores only document text. When Undo reintroduces a `cowboy-att:`
+    token, recover the matching cached image into the attachment array so both
+    the widget and a later send regain the original bytes. The attachment array,
+    not the cache, remains authoritative after an unreversed deletion.

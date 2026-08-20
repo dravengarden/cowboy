@@ -113,6 +113,23 @@ Deno.test("deleted inline tokens remove only their image attachments", () => {
   );
 });
 
+Deno.test("undo restores deleted image bytes from the inline registry cache", () => {
+  const inline = attachment("inline", true);
+  const token = "![shot](cowboy-att:inline)";
+
+  const deleted = reconcileDeletedInlineImages(token, "", [inline]);
+  assertEquals(deleted, []);
+  assertEquals(
+    reconcileDeletedInlineImages(
+      "",
+      token,
+      deleted,
+      (id) => id === inline.id ? inline : undefined,
+    ),
+    [inline],
+  );
+});
+
 Deno.test("an image attachment remains while any matching token remains", () => {
   const inline = attachment("inline", true);
   const previous = "![one](cowboy-att:inline)\n![two](cowboy-att:inline)";

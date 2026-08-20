@@ -5011,7 +5011,7 @@ function PendingRow({
     editTextRef.current = next;
     pendingEditDirtyRef.current = true;
     setEditAttachments((current) =>
-      reconcileDeletedInlineImages(previous, next, current)
+      reconcileDeletedInlineImages(previous, next, current, getInlineAttachment)
     );
     setDraft(next);
   };

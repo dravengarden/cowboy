@@ -69,6 +69,25 @@ Deno.test("image decorations stay an inline token replace without a presentation
   assertEquals(source.includes("inlineImagePresentation"), false);
 });
 
+Deno.test("reversible image deletion retains the registry entry for undo", async () => {
+  const source = await Deno.readTextFile(
+    new URL("./inlineImages.ts", import.meta.url),
+  );
+  const popoverDelete = source.slice(
+    source.indexOf("export function removeImageTokenById"),
+    source.indexOf("const IMG_BLOCK_RE"),
+  );
+  const backspaceDelete = source.slice(
+    source.indexOf("export function deleteImageTokenBackward"),
+    source.indexOf(
+      "// Stage 1:",
+      source.indexOf("export function deleteImageTokenBackward"),
+    ),
+  );
+  assertEquals(popoverDelete.includes("forgetInlineAttachment"), false);
+  assertEquals(backspaceDelete.includes("forgetInlineAttachment"), false);
+});
+
 Deno.test("image deletion maps carets before, inside, and after the removed block", () => {
   const from = 6;
   const to = 20;

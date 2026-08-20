@@ -328,7 +328,8 @@ export function insertImageToken(view: EditorView, a: Attachment): void {
 
 /// Remove a specific image (by id) from the doc — the popover's Delete action.
 /// Finds the lone-token line, deletes it plus its surrounding line breaks, and
-/// forgets the bytes. No-op if the token isn't present.
+/// retains the registry entry for CM6 Undo. The host attachment array remains
+/// authoritative for persistence and sending. No-op if the token isn't present.
 export function removeImageTokenById(view: EditorView, id: string): void {
   const { doc } = view.state;
   for (let i = 1; i <= doc.lines; i++) {
@@ -337,7 +338,6 @@ export function removeImageTokenById(view: EditorView, id: string): void {
     let match: RegExpExecArray | null;
     while ((match = IMG_TOKEN_RE.exec(line.text)) !== null) {
       if (match[2] !== id) continue;
-      forgetInlineAttachment(id);
       const tokenFrom = line.from + match.index;
       const tokenTo = tokenFrom + match[0].length;
       const { from, to } = LONE_TOKEN_RE.test(line.text)
@@ -361,7 +361,8 @@ const IMG_BLOCK_RE = /\n?!\[[^\]]*\]\(cowboy-att:([^)]+)\)\n?$/;
 
 /// TWO-STAGE Backspace for inline images, so a stray keypress can't wipe a picture:
 ///   • caret right after an image block → SELECT it (don't delete) + ring it;
-///   • that image block already selected → DELETE it (token + newlines) + forget.
+///   • that image block already selected → DELETE it (token + newlines), retaining
+///     the render cache so CM6 Undo can restore the picture.
 /// Returns false otherwise so the normal / @-token Backspace still runs. Wire it
 /// BEFORE deleteTokenBackward.
 export function deleteImageTokenBackward(view: EditorView): boolean {
@@ -373,7 +374,6 @@ export function deleteImageTokenBackward(view: EditorView): boolean {
     const sel = state.sliceDoc(range.from, range.to);
     const m = /^\n?!\[[^\]]*\]\(cowboy-att:([^)]+)\)\n?$/.exec(sel);
     if (m === null) return false; // a normal selection → default Backspace
-    if (m[1] !== undefined) forgetInlineAttachment(m[1]);
     view.dispatch({
       changes: { from: range.from, to: range.to },
       selection: { anchor: range.from },

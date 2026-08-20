@@ -460,29 +460,53 @@ export function promoteUnplacedImageTokens(
 }
 
 /**
- * Keep attachment bytes in lockstep with inline-image token deletion.
+ * Keep attachment bytes in lockstep with inline-image token edits.
  *
  * Images and their `cowboy-att:` markers intentionally live in separate state.
  * A CodeMirror delete changes the document first; without this reconciliation,
  * saving a draft re-sends the stale image block and the server restores the
  * picture. Only images that had a token in the previous text are eligible for
  * removal, so legacy/gallery-only attachments and non-image files stay intact.
+ * When CM6 Undo restores a token, recover its cached attachment so the widget
+ * and the eventual prompt regain the same image bytes instead of rendering the
+ * token's filename fallback.
  */
 export function reconcileDeletedInlineImages(
   previousText: string,
   nextText: string,
   attachments: Attachment[],
+  recoverAttachment?: (id: string) => Attachment | undefined,
 ): Attachment[] {
-  const previousIds = new Set(imageTokensInText(previousText).map((token) => token.id));
+  const previousIds = new Set(
+    imageTokensInText(previousText).map((token) => token.id),
+  );
   // Ordinary text input is overwhelmingly the hot path. Preserve the array
   // identity when no inline image can have been removed so React state bails
   // out instead of scheduling an attachment update for every keystroke.
-  if (previousIds.size === 0) return attachments;
+  if (previousIds.size === 0 && recoverAttachment === undefined) {
+    return attachments;
+  }
   const nextIds = new Set(imageTokensInText(nextText).map((token) => token.id));
   const reconciled = attachments.filter((attachment) =>
-    !attachment.isImage || !previousIds.has(attachment.id) || nextIds.has(attachment.id)
+    !attachment.isImage || !previousIds.has(attachment.id) ||
+    nextIds.has(attachment.id)
   );
-  return reconciled.length === attachments.length ? attachments : reconciled;
+  if (recoverAttachment === undefined) {
+    return reconciled.length === attachments.length ? attachments : reconciled;
+  }
+  const knownIds = new Set(reconciled.map((attachment) => attachment.id));
+  const restored = [...reconciled];
+  for (const id of nextIds) {
+    if (knownIds.has(id)) continue;
+    const attachment = recoverAttachment(id);
+    if (!attachment?.isImage) continue;
+    restored.push(attachment);
+    knownIds.add(id);
+  }
+  return restored.length === attachments.length &&
+      restored.every((attachment, index) => attachment === attachments[index])
+    ? attachments
+    : restored;
 }
 
 /// Drop every inline-image token from `text` (for any plain-text view — the

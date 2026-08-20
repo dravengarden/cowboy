@@ -18,6 +18,7 @@ import {
 } from "../attachments";
 import { getDraft, setDraft } from "../draftStore";
 import {
+  getInlineAttachment,
   registerInlineAttachment,
   seedInlineAttachments,
 } from "../inlineImages";
@@ -126,6 +127,7 @@ export function useComposerDraftController(
       previous,
       next,
       currentAttachments,
+      getInlineAttachment,
     );
     if (reconciled !== currentAttachments) {
       attachmentsRef.current = reconciled;
