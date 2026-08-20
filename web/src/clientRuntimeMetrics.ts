@@ -81,7 +81,10 @@ export async function readClientRuntimeMetrics(): Promise<
   const standalone =
     globalThis.matchMedia?.("(display-mode: standalone)").matches === true;
   const storageUsageBytes = finiteBytes(estimate.usage);
+  // This is the browser's per-origin ceiling, not used or free device space.
   const storageQuotaBytes = finiteBytes(estimate.quota);
+  // performance.memory is a non-standard Chromium extension. WebKit omits it,
+  // so callers must present the missing value as an unsupported browser metric.
   const jsHeapUsedBytes = finiteBytes(performanceMemory?.usedJSHeapSize);
   const jsHeapLimitBytes = finiteBytes(performanceMemory?.jsHeapSizeLimit);
   return {

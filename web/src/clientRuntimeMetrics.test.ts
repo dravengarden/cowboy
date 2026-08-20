@@ -48,6 +48,9 @@ Deno.test("About storage distinguishes service and current-device metrics", asyn
   assert(source.includes('data-storage-scope="client"'));
   assert(source.includes("Shared Cowboy daemon and durable session store"));
   assert(source.includes("This browser or app on the current device"));
-  assert(source.includes('"Storage used"'));
+  assert(source.includes('"App storage used"'));
+  assert(source.includes('"App storage allowance"'));
+  assert(source.includes("`Up to ${formatBytes(metrics.storageQuotaBytes)}`"));
+  assert(source.includes('"Not exposed by browser"'));
   assert(source.includes('["JS heap", heap]'));
 });

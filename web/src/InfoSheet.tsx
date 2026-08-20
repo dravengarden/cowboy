@@ -1776,7 +1776,7 @@ function ClientStorageInfoSection(): React.JSX.Element {
     );
   }
   const heap = metrics.jsHeapUsedBytes === undefined
-    ? "Unavailable"
+    ? "Not exposed by browser"
     : metrics.jsHeapLimitBytes === undefined
     ? formatBytes(metrics.jsHeapUsedBytes)
     : `${formatBytes(metrics.jsHeapUsedBytes)} / ${
@@ -1786,16 +1786,16 @@ function ClientStorageInfoSection(): React.JSX.Element {
     <MetricsGrid
       metrics={[
         [
-          "Storage used",
+          "App storage used",
           metrics.storageUsageBytes === undefined
             ? "Unavailable"
             : formatBytes(metrics.storageUsageBytes),
         ],
         [
-          "Storage quota",
+          "App storage allowance",
           metrics.storageQuotaBytes === undefined
             ? "Unavailable"
-            : formatBytes(metrics.storageQuotaBytes),
+            : `Up to ${formatBytes(metrics.storageQuotaBytes)}`,
         ],
         ["Local state", formatBytes(metrics.bytes)],
         ["Local entries", metrics.entries.toLocaleString()],
