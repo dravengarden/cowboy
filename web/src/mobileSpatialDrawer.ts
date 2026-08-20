@@ -25,6 +25,7 @@ import {
 import {
   expandedSelection,
   hasHorizontalScroller,
+  hasVerticalScroller,
   inputOverlayOwnsDrawerGesture,
 } from "./touchGestures";
 
@@ -335,7 +336,8 @@ export function bindMobileSpatialDrawer({
       expandedSelection(globalThis.getSelection?.() ?? null) ||
       focusedInputOverlayOwnsGesture ||
       target?.closest(ignoreSelector) ||
-      hasHorizontalScroller(event.target, gestureTarget)
+      hasHorizontalScroller(event.target, gestureTarget) ||
+      hasVerticalScroller(event.target, gestureTarget)
     ) {
       gesture = null;
       return;

@@ -4,6 +4,7 @@ import {
   horizontalSwipe,
   inputOverlayOwnsDrawerGesture,
   isPairedTouchClick,
+  isVerticalScrollContainer,
   MOBILE_DRAWER_DIRECTION_LOCK_PX,
   RELIABLE_TOUCH_TAP_MOVE_SLOP_PX,
   shouldFreezePreviewPointer,
@@ -62,6 +63,21 @@ Deno.test("horizontal navigation requires a substantial phone swipe", () => {
   assertEquals(swipeCommits(94, 390), true);
   assertEquals(swipeCommits(111, 1024), false);
   assertEquals(swipeCommits(112, 1024), true);
+});
+
+Deno.test("real vertical overflow remains native instead of reserving a swipe", () => {
+  assertEquals(
+    isVerticalScrollContainer({ clientHeight: 600, scrollHeight: 1800 }, "auto"),
+    true,
+  );
+  assertEquals(
+    isVerticalScrollContainer({ clientHeight: 600, scrollHeight: 600 }, "auto"),
+    false,
+  );
+  assertEquals(
+    isVerticalScrollContainer({ clientHeight: 600, scrollHeight: 1800 }, "hidden"),
+    false,
+  );
 });
 
 Deno.test("preview movement freeze belongs only to a primary mouse press", () => {

@@ -17,6 +17,7 @@ import {
 import {
   expandedSelection,
   hasHorizontalScroller,
+  hasVerticalScroller,
   swipeCommits,
 } from "../../touchGestures";
 import type { Mode as ThemeMode } from "../../theme";
@@ -86,9 +87,10 @@ function ignoredGestureTarget(
     (!explicitlyAllowsPager &&
       (focusedComposerOwnsGesture ||
         element?.closest(
-          "input, textarea, [contenteditable='true'], [data-mobile-pager-ignore]",
-        ) != null ||
-        hasHorizontalScroller(target, boundary)))
+            "input, textarea, [contenteditable='true'], [data-mobile-pager-ignore]",
+          ) != null ||
+        hasHorizontalScroller(target, boundary) ||
+        hasVerticalScroller(target, boundary)))
   );
 }
 

@@ -83,4 +83,8 @@ Deno.test("vertical transcript pans release horizontal recognizers", () => {
     pagerSource.includes("[data-mobile-overflow-layer='true']"),
     true,
   );
+  assertEquals(
+    pagerSource.includes("hasVerticalScroller(target, boundary)"),
+    true,
+  );
 });

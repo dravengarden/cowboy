@@ -95,3 +95,32 @@ export function hasHorizontalScroller(target: EventTarget | null, boundary: HTML
   }
   return false;
 }
+
+/** Keep native vertical scrolling authoritative inside a real overflow layer.
+ *
+ * A non-passive ancestor recognizer cannot safely "give the gesture back" after
+ * one early horizontal sample has called preventDefault(): iOS cancels the
+ * complete native pan at that point. Do not reserve workspace/drawer swipes
+ * from an already-scrollable Y surface; surrounding chrome remains available
+ * for horizontal navigation.
+ */
+export function hasVerticalScroller(
+  target: EventTarget | null,
+  boundary: HTMLElement,
+): boolean {
+  let node = target instanceof HTMLElement ? target : null;
+  while (node && node !== boundary) {
+    const style = globalThis.getComputedStyle(node);
+    if (isVerticalScrollContainer(node, style.overflowY)) return true;
+    node = node.parentElement;
+  }
+  return false;
+}
+
+export function isVerticalScrollContainer(
+  geometry: Pick<HTMLElement, "clientHeight" | "scrollHeight">,
+  overflowY: string,
+): boolean {
+  return geometry.scrollHeight > geometry.clientHeight + 2 &&
+    (overflowY === "auto" || overflowY === "scroll");
+}
