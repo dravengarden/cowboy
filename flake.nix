@@ -169,7 +169,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-TEHFkdj4UBAjXMPnkCbt70geS6ZVtbODyUCloxw2fQ0=";
+        hash = "sha256-kwX4KOx/GTXO5i3cX677lg6ItifKhFMwAAEs7T7Y5N0=";
         preBuild = ''
           vendor_util="$(command -v fetch-cargo-vendor-util-v2 || command -v fetch-cargo-vendor-util)"
           if grep -q "https://crates.io/api/v1/crates/" "$vendor_util"; then
@@ -193,6 +193,17 @@
         version = "0.1.0";
         src = cowboy-src;
         cargoDeps = cowboy-cargo-deps;
+        # jemalloc's configure probes use -Werror while Nix enables
+        # _FORTIFY_SOURCE; keep C probes optimized so glibc does not reject
+        # that valid combination during debug test builds.
+        CFLAGS = "-O1";
+        # Cowboy is a low-throughput control plane with bursty JSON restore
+        # allocations. Prefer promptly releasing memory over allocator
+        # throughput: one arena, no thread cache, no dirty/muzzy decay, and no
+        # retained virtual mappings. abort_conf makes a typo fail the build/run
+        # instead of silently falling back to a higher-residency default.
+        JEMALLOC_SYS_WITH_MALLOC_CONF =
+          "abort_conf:true,background_thread:true,narenas:1,tcache:false,dirty_decay_ms:0,muzzy_decay_ms:0,retain:false,metadata_thp:disabled,thp:never";
         cargoBuildFlags = [
           "--bin"
           "cowboy"
@@ -469,6 +480,9 @@
       };
 
       devShells.${system}.default = pkgs.mkShell {
+        # See the controller package note above. This only affects C build
+        # scripts; rustc keeps the profile selected by Cargo.
+        CFLAGS = "-O1";
         # Rust toolchain plus opt-in sccache, and the frontend toolchain
         # (the shared pinned deno 2.8.1 + node 24 for any node-shaped tool that
         # deno's npm interop can't shim).

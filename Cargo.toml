@@ -89,6 +89,12 @@ x25519-dalek = { version = "2", features = ["static_secrets"] }
 ignore = "0.4"
 nucleo-matcher = "0.3"
 
+# The long-lived control plane handles bursty restore/transcript allocations.
+# jemalloc returns those pages to the OS more predictably than glibc malloc;
+# the controller release supplies the memory-first compile-time configuration.
+[target.'cfg(all(not(target_env = "msvc"), not(target_family = "wasm")))'.dependencies]
+tikv-jemallocator = "0.7"
+
 [dev-dependencies]
 syn = { version = "2", features = ["full"] }
 
