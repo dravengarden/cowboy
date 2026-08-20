@@ -58,10 +58,19 @@ export function clipboardFiles(
   clipboard: Pick<DataTransfer, "files" | "items">,
 ): File[] {
   const files = Array.from(clipboard.files);
+  const fileItems = Array.from(clipboard.items).filter((item) =>
+    item.kind === "file"
+  );
+  // Chromium exposes the same ordered clipboard file list through both APIs,
+  // but macOS can give the item wrapper a different name or lastModified. Equal
+  // representation counts are therefore the stronger identity signal. Keep the
+  // direct files once; unequal counts still need the matching path below for
+  // WebKit's item-only entries.
+  if (files.length > 0 && files.length === fileItems.length) return files;
+
   const directFiles = [...files];
   const matchedDirect = new Set<number>();
-  for (const item of Array.from(clipboard.items)) {
-    if (item.kind !== "file") continue;
+  for (const item of fileItems) {
     const file = item.getAsFile();
     if (!file) continue;
     const directIndex = directFiles.findIndex((direct, index) =>

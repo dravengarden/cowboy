@@ -57,6 +57,23 @@ Deno.test("clipboard files dedupe Chromium's distinct wrappers", () => {
   assertEquals(clipboardFiles(clipboard), [direct]);
 });
 
+Deno.test("clipboard files dedupe parallel Chromium wrappers with divergent metadata", () => {
+  const direct = new File(["same bytes"], "Screenshot 2026-08-20.png", {
+    type: "image/png",
+    lastModified: 123,
+  });
+  const itemWrapper = new File(["same bytes"], "image.png", {
+    type: "image/png",
+    lastModified: 0,
+  });
+  const clipboard = {
+    files: [direct],
+    items: [{ kind: "file", getAsFile: () => itemWrapper }],
+  } as unknown as Pick<DataTransfer, "files" | "items">;
+
+  assertEquals(clipboardFiles(clipboard), [direct]);
+});
+
 Deno.test("clipboard files preserve multiple equal-metadata files", () => {
   const file = (): File =>
     new File(["same bytes"], "image.png", {
