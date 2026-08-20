@@ -31,9 +31,11 @@ Deno.test("mobile new session uses labeled Cancel and Create actions", () => {
   );
   assertEquals(dialog.includes("footerOverlay"), false);
   assertEquals(dialog.includes("data-new-session-footer-actions"), true);
-  assertEquals(dialog.includes('content: \'""\''), true);
-  assertEquals(dialog.includes('bgcolor: "divider"'), true);
-  assertEquals(dialog.includes("0 -8px 18px"), true);
+  assertEquals(dialog.includes('width: "calc(100% + 32px)"'), true);
+  assertEquals(dialog.includes("mx: -2"), true);
+  assertEquals(dialog.includes("borderTop: 1"), true);
+  assertEquals(dialog.includes('bgcolor: "background.default"'), true);
+  assertEquals(dialog.includes("0 -8px 18px"), false);
   assertEquals(
     mobileProductShellSource.includes(
       "[data-detent-sheet='true'][aria-label='New session']) [data-mobile-overflow-layer='true']",

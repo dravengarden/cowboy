@@ -1735,23 +1735,19 @@ function NewSessionDialog({
                     <Box
                         data-new-session-footer-actions
                         sx={{
-                            width: "100%",
-                            position: "relative",
-                            // Separate the stationary decision row from the
-                            // scrolling form without making it a heavy toolbar.
-                            // Extend through DetentSheet's 16px side gutter.
-                            "&::before": {
-                                content: '""',
-                                position: "absolute",
-                                left: -2,
-                                right: -2,
-                                top: -0.5,
-                                height: 1,
-                                bgcolor: "divider",
-                                boxShadow: (t) =>
-                                    `0 -8px 18px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.22 : 0.08)}`,
-                                pointerEvents: "none",
-                            },
+                            // DetentSheet owns a 16px footer gutter. Bleed this
+                            // shelf back to the sheet edges so it reads as
+                            // bottom chrome, not as a tinted card floating in
+                            // the form. A single hairline is enough separation;
+                            // the old wide shadow was composited by iOS as a
+                            // large purple rectangle over the frosted cover.
+                            width: "calc(100% + 32px)",
+                            mx: -2,
+                            px: 2,
+                            pt: 0.75,
+                            bgcolor: "background.default",
+                            borderTop: 1,
+                            borderColor: "divider",
                         }}
                     >
                         <MobileDecisionActions
