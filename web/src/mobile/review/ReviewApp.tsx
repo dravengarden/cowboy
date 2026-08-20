@@ -2546,6 +2546,75 @@ export function ReviewApp({
               >
                 <ChatBubbleOutline />
               </IconButton>
+              {target.kind !== "changes" && !(
+                target.kind === "source" &&
+                isMarkdownReviewPath(target.path) &&
+                markdownPreview
+              ) && (
+                <IconButton
+                  aria-label={settings.softWrap
+                    ? "Disable line wrapping"
+                    : "Enable line wrapping"}
+                  color={settings.softWrap ? "primary" : "default"}
+                  onClick={() =>
+                    updateReviewSettings({ softWrap: !settings.softWrap })}
+                >
+                  <WrapText />
+                </IconButton>
+              )}
+              {target.kind === "source" && isMarkdownReviewPath(target.path) &&
+                (
+                  <IconButton
+                    aria-label={markdownPreview
+                      ? "Show Markdown source"
+                      : "Preview Markdown"}
+                    aria-pressed={markdownPreview}
+                    color={markdownPreview ? "primary" : "default"}
+                    onClick={() => setMarkdownPreview((value) => !value)}
+                  >
+                    <VisibilityOutlined />
+                  </IconButton>
+                )}
+              {target.kind === "diff" && (
+                <>
+                  <Box sx={{ flex: 1 }} />
+                  <IconButton
+                    aria-label="Previous change"
+                    disabled={reviewIndex <= 0}
+                    onClick={() => moveReview(-1)}
+                  >
+                    <ChevronLeft />
+                  </IconButton>
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ minWidth: 52, textAlign: "center" }}
+                  >
+                    {reviewIndex + 1} / {target.queue.length}
+                  </Typography>
+                  <IconButton
+                    aria-label="Next change"
+                    disabled={reviewIndex >= target.queue.length - 1}
+                    onClick={() => moveReview(1)}
+                  >
+                    <ChevronRight />
+                  </IconButton>
+                </>
+              )}
+              <Box sx={{ flex: 1 }} />
+              {target.kind === "source" && (
+                <IconButton
+                  aria-label="Open file outline"
+                  aria-pressed={outlineOpen}
+                  color={outlineOpen ? "primary" : "default"}
+                  onClick={() => {
+                    navigationHaptic();
+                    setOutlineOpen(true);
+                  }}
+                >
+                  <FormatListBulleted />
+                </IconButton>
+              )}
               <Box
                 component="label"
                 data-mobile-review-mode-switcher
@@ -2646,75 +2715,6 @@ export function ReviewApp({
                   </Stack>
                 </Box>
               </Box>
-              {target.kind !== "changes" && !(
-                target.kind === "source" &&
-                isMarkdownReviewPath(target.path) &&
-                markdownPreview
-              ) && (
-                <IconButton
-                  aria-label={settings.softWrap
-                    ? "Disable line wrapping"
-                    : "Enable line wrapping"}
-                  color={settings.softWrap ? "primary" : "default"}
-                  onClick={() =>
-                    updateReviewSettings({ softWrap: !settings.softWrap })}
-                >
-                  <WrapText />
-                </IconButton>
-              )}
-              {target.kind === "source" && isMarkdownReviewPath(target.path) &&
-                (
-                  <IconButton
-                    aria-label={markdownPreview
-                      ? "Show Markdown source"
-                      : "Preview Markdown"}
-                    aria-pressed={markdownPreview}
-                    color={markdownPreview ? "primary" : "default"}
-                    onClick={() => setMarkdownPreview((value) => !value)}
-                  >
-                    <VisibilityOutlined />
-                  </IconButton>
-                )}
-              {target.kind === "diff" && (
-                <>
-                  <Box sx={{ flex: 1 }} />
-                  <IconButton
-                    aria-label="Previous change"
-                    disabled={reviewIndex <= 0}
-                    onClick={() => moveReview(-1)}
-                  >
-                    <ChevronLeft />
-                  </IconButton>
-                  <Typography
-                    variant="caption"
-                    color="text.secondary"
-                    sx={{ minWidth: 52, textAlign: "center" }}
-                  >
-                    {reviewIndex + 1} / {target.queue.length}
-                  </Typography>
-                  <IconButton
-                    aria-label="Next change"
-                    disabled={reviewIndex >= target.queue.length - 1}
-                    onClick={() => moveReview(1)}
-                  >
-                    <ChevronRight />
-                  </IconButton>
-                </>
-              )}
-              <Box sx={{ flex: 1 }} />
-              {target.kind === "source" && (
-                <IconButton
-                  aria-label="Open file outline"
-                  aria-pressed={outlineOpen}
-                  color={outlineOpen ? "primary" : "default"}
-                  onClick={() => {
-                    navigationHaptic();
-                    setOutlineOpen(true);
-                  }}
-                >
-                  <FormatListBulleted />
-                </IconButton>
-              )}
               <IconButton
                 data-mobile-review-sidebar="true"
                 aria-label={drawerOpen

@@ -51,6 +51,20 @@ Deno.test("Code chrome uses Agent instead of a local settings sheet", () => {
     reviewAppSource.indexOf('data-mobile-open-agent="true"') >
       reviewAppSource.indexOf('aria-label="Code Review controls"'),
   );
+  {
+    const controls = reviewAppSource.slice(
+      reviewAppSource.indexOf('aria-label="Code Review controls"'),
+      reviewAppSource.indexOf("data-review-tab-close-confirm"),
+    );
+    const agent = controls.indexOf('data-mobile-open-agent="true"');
+    const switcher = controls.indexOf("data-mobile-review-mode-switcher");
+    const sidebar = controls.indexOf('data-mobile-review-sidebar="true"');
+    assert(agent >= 0 && switcher > agent && sidebar > switcher);
+    assertEquals(
+      controls.slice(switcher, sidebar).includes("WrapText"),
+      false,
+    );
+  }
   assert(reviewAppSource.includes("ChatBubbleOutline"));
   assertEquals(reviewAppSource.includes("ArrowBackIosNew"), false);
   assertEquals(reviewSettingsSource.includes("SettingsSheet"), false);
