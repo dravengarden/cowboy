@@ -2191,3 +2191,17 @@ Desktop Vim + IME checks:
     Apply the same rule to Queue/Draft editors. Do not clear the keyboard flag,
     delay focus restoration, or add another viewport measurement to hide the
     extra space.
+
+94. **A returned cover sheet must not make `innerHeight` the PWA layout
+    authority.** iOS can change viewport modes after a portaled Settings/Info
+    cover closes. On the next keyboard presentation, `innerHeight` may already
+    equal the short visual viewport while the percentage-height `html` and
+    `#root` boxes still paint to the old bottom. Taking the minimum across all
+    three reports a false zero keyboard overlap and leaves the Composer behind
+    the native form accessory and keyboard. Measure the painted height from the
+    two DOM boxes (using their smaller valid height) and use `innerHeight` only
+    when neither DOM measurement exists. The inverse case remains safe: when
+    resizes-content really shortened either DOM box, that smaller box still
+    prevents a double lift. Do not add an unconditional accessory constant or
+    move the Composer with focus effects; both reintroduce the ordinary PWA
+    blank band and disturb native selection/IME ownership.

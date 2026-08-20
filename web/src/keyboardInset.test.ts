@@ -75,6 +75,19 @@ Deno.test("PWA inset follows the painted box, not a stale innerHeight", () => {
   // Layout did not shrink: the painted page still extends under the keyboard.
   assertEquals(paintedLayoutHeight(844, 844, 844), 844);
   assertEquals(keyboardCoverOverlap(844, 510), 334);
+  // Returning from a portaled cover can make innerHeight follow the keyboard
+  // before the percentage-height html/root boxes do. The DOM still paints
+  // below the visual viewport, so the composer needs the full overlap.
+  assertEquals(paintedLayoutHeight(510, 844, 844), 844);
+  assertEquals(
+    keyboardCoverOverlap(paintedLayoutHeight(510, 844, 844), 510),
+    334,
+  );
+  // If either actual app box has resized, it remains the smaller painted box.
+  assertEquals(paintedLayoutHeight(510, 844, 510), 510);
+  assertEquals(paintedLayoutHeight(510, 510, 844), 510);
+  // innerHeight remains the safe fallback outside a mounted browser document.
+  assertEquals(paintedLayoutHeight(510, 0, 0), 510);
   // Chrome jitter of a few pixels is not a covered keyboard.
   assertEquals(keyboardCoverOverlap(510, 504), 0);
   // Safari tabs: layout already shrank for the keyboard; visualViewport

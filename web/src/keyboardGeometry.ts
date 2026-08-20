@@ -55,11 +55,6 @@ export function clampKeyboardOverlap(
   return Math.min(overlap, max);
 }
 
-/** iOS Safari often keeps `window.innerHeight` on the pre-keyboard layout
- *  viewport after `interactive-widget=resizes-content` (or Safari chrome)
- *  has already shortened the painted `html` / `#root` box. Padding must
- *  follow the painted box. Using the stale innerHeight double-lifts the
- *  composer above chrome that is already outside the webview. */
 /** Layout box that `position:fixed` actually uses. iOS Safari tabs keep
  *  `html.clientHeight` on the pre-keyboard page while `innerHeight` tracks
  *  the visual viewport — min() with innerHeight (paintedLayoutHeight) would
@@ -91,6 +86,12 @@ export function visualViewportBox(
   return { offset, height };
 }
 
+/** iOS Safari can move `window.innerHeight` independently from the CSS boxes
+ *  that actually contain the app. Usually it stays at the pre-keyboard height
+ *  after `html` / `#root` have shortened; after dismissing a portaled cover it
+ *  can do the inverse and shrink while both DOM boxes stay tall. In either
+ *  direction the DOM boxes own the painted layout. `innerHeight` is only a
+ *  fallback when neither box has a usable measurement. */
 export function paintedLayoutHeight(
   innerHeight: number,
   clientHeight: number,
@@ -98,10 +99,7 @@ export function paintedLayoutHeight(
 ): number {
   const painted = [clientHeight, rootHeight].filter((height) => height > 0);
   const smallestPainted = painted.length > 0 ? Math.min(...painted) : 0;
-  if (innerHeight > 0 && smallestPainted > 0) {
-    return Math.min(innerHeight, smallestPainted);
-  }
-  return innerHeight > 0 ? innerHeight : smallestPainted;
+  return smallestPainted > 0 ? smallestPainted : innerHeight;
 }
 
 /** URL-bar / status-bar jitter allowed when learning a new rest height.
