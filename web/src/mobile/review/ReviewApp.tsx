@@ -146,6 +146,113 @@ type ReviewMachineInventory = {
   }[];
 };
 
+function ReviewModeSwitcher({
+  mode,
+  onChange,
+}: {
+  mode: ReviewMode;
+  onChange: (mode: ReviewMode) => void;
+}): React.JSX.Element {
+  return (
+    <Box
+      component="label"
+      data-mobile-review-mode-switcher
+      title={mode === "git" ? "Git changes" : "Worktree files"}
+      sx={{
+        width: 76,
+        height: 44,
+        display: "grid",
+        placeItems: "center",
+        flex: "0 0 auto",
+        cursor: "pointer",
+        WebkitTapHighlightColor: "transparent",
+      }}
+    >
+      <Box
+        data-mobile-review-mode-switch-track
+        sx={{
+          position: "relative",
+          width: 72,
+          height: 36,
+        }}
+      >
+        <Switch
+          checked={mode === "files"}
+          onChange={(_, checked) => onChange(checked ? "files" : "git")}
+          slotProps={{
+            input: {
+              "aria-label": "Switch between Git changes and Worktree files",
+            },
+          }}
+          sx={(theme) => ({
+            position: "absolute",
+            inset: 0,
+            width: 72,
+            height: 36,
+            p: 0,
+            "& .MuiSwitch-switchBase": {
+              p: "4px",
+              transitionDuration: "180ms",
+              "&.Mui-checked": {
+                transform: "translateX(36px)",
+                color: "transparent",
+              },
+              "&.Mui-checked + .MuiSwitch-track": {
+                bgcolor: alpha(theme.palette.text.primary, 0.055),
+                opacity: 1,
+              },
+              "&.Mui-focusVisible .MuiSwitch-thumb": {
+                outline: `2px solid ${theme.palette.primary.main}`,
+                outlineOffset: 2,
+              },
+            },
+            "& .MuiSwitch-thumb": {
+              width: 28,
+              height: 28,
+              bgcolor: alpha(theme.palette.primary.main, 0.2),
+              border: `1px solid ${alpha(theme.palette.primary.main, 0.42)}`,
+              boxShadow: "0 2px 7px rgba(0, 0, 0, 0.22)",
+            },
+            "& .MuiSwitch-track": {
+              borderRadius: "18px",
+              border: `1px solid ${theme.palette.divider}`,
+              bgcolor: alpha(theme.palette.text.primary, 0.055),
+              opacity: 1,
+            },
+          })}
+        />
+        <Stack
+          aria-hidden
+          direction="row"
+          sx={{
+            position: "absolute",
+            inset: 0,
+            pointerEvents: "none",
+            zIndex: 2,
+          }}
+        >
+          <Box sx={{ width: 36, display: "grid", placeItems: "center" }}>
+            <DifferenceOutlined
+              sx={{
+                fontSize: 17,
+                color: mode === "git" ? "primary.main" : "text.disabled",
+              }}
+            />
+          </Box>
+          <Box sx={{ width: 36, display: "grid", placeItems: "center" }}>
+            <AccountTreeOutlined
+              sx={{
+                fontSize: 17,
+                color: mode === "files" ? "primary.main" : "text.disabled",
+              }}
+            />
+          </Box>
+        </Stack>
+      </Box>
+    </Box>
+  );
+}
+
 function sessionStatusColor(status: SessionMeta["status"]): string {
   switch (status) {
     case "running":
@@ -2316,6 +2423,7 @@ export function ReviewApp({
               {targetIsReviewed ? <CheckCircle /> : <CheckCircleOutline />}
             </IconButton>
           )}
+          <ReviewModeSwitcher mode={mode} onChange={activateReviewMode} />
         </Stack>
         {!workspace
           ? (
@@ -2618,106 +2726,6 @@ export function ReviewApp({
                   <FormatListBulleted />
                 </IconButton>
               )}
-              <Box
-                component="label"
-                data-mobile-review-mode-switcher
-                title={mode === "git" ? "Git changes" : "Worktree files"}
-                sx={{
-                  width: 76,
-                  height: 44,
-                  display: "grid",
-                  placeItems: "center",
-                  cursor: "pointer",
-                  WebkitTapHighlightColor: "transparent",
-                }}
-              >
-                <Box
-                  data-mobile-review-mode-switch-track
-                  sx={{
-                    position: "relative",
-                    width: 72,
-                    height: 36,
-                  }}
-                >
-                  <Switch
-                    checked={mode === "files"}
-                    onChange={(_, checked) =>
-                      activateReviewMode(checked ? "files" : "git")}
-                    slotProps={{
-                      input: {
-                        "aria-label": "Switch between Git changes and Worktree files",
-                      },
-                    }}
-                    sx={(theme) => ({
-                      position: "absolute",
-                      inset: 0,
-                      width: 72,
-                      height: 36,
-                      p: 0,
-                      "& .MuiSwitch-switchBase": {
-                        p: "4px",
-                        transitionDuration: "180ms",
-                        "&.Mui-checked": {
-                          transform: "translateX(36px)",
-                          color: "transparent",
-                        },
-                        "&.Mui-checked + .MuiSwitch-track": {
-                          bgcolor: alpha(theme.palette.text.primary, 0.055),
-                          opacity: 1,
-                        },
-                        "&.Mui-focusVisible .MuiSwitch-thumb": {
-                          outline: `2px solid ${theme.palette.primary.main}`,
-                          outlineOffset: 2,
-                        },
-                      },
-                      "& .MuiSwitch-thumb": {
-                        width: 28,
-                        height: 28,
-                        bgcolor: alpha(theme.palette.primary.main, 0.2),
-                        border: `1px solid ${alpha(theme.palette.primary.main, 0.42)}`,
-                        boxShadow: "0 2px 7px rgba(0, 0, 0, 0.22)",
-                      },
-                      "& .MuiSwitch-track": {
-                        borderRadius: "18px",
-                        border: `1px solid ${theme.palette.divider}`,
-                        bgcolor: alpha(theme.palette.text.primary, 0.055),
-                        opacity: 1,
-                      },
-                    })}
-                  />
-                  <Stack
-                    aria-hidden
-                    direction="row"
-                    sx={{
-                      position: "absolute",
-                      inset: 0,
-                      pointerEvents: "none",
-                      zIndex: 2,
-                    }}
-                  >
-                    <Box sx={{ width: 36, display: "grid", placeItems: "center" }}>
-                      <DifferenceOutlined
-                        sx={{
-                          fontSize: 17,
-                          color: mode === "git"
-                            ? "primary.main"
-                            : "text.disabled",
-                        }}
-                      />
-                    </Box>
-                    <Box sx={{ width: 36, display: "grid", placeItems: "center" }}>
-                      <AccountTreeOutlined
-                        sx={{
-                          fontSize: 17,
-                          color: mode === "files"
-                            ? "primary.main"
-                            : "text.disabled",
-                        }}
-                      />
-                    </Box>
-                  </Stack>
-                </Box>
-              </Box>
               <IconButton
                 data-mobile-review-sidebar="true"
                 aria-label={drawerOpen

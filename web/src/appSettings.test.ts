@@ -52,18 +52,17 @@ Deno.test("Code chrome uses Agent instead of a local settings sheet", () => {
       reviewAppSource.indexOf('aria-label="Code Review controls"'),
   );
   {
+    const header = reviewAppSource.slice(
+      reviewAppSource.indexOf("minHeight: 52"),
+      reviewAppSource.indexOf('aria-label="Code Review controls"'),
+    );
     const controls = reviewAppSource.slice(
       reviewAppSource.indexOf('aria-label="Code Review controls"'),
       reviewAppSource.indexOf("data-review-tab-close-confirm"),
     );
-    const agent = controls.indexOf('data-mobile-open-agent="true"');
-    const switcher = controls.indexOf("data-mobile-review-mode-switcher");
-    const sidebar = controls.indexOf('data-mobile-review-sidebar="true"');
-    assert(agent >= 0 && switcher > agent && sidebar > switcher);
-    assertEquals(
-      controls.slice(switcher, sidebar).includes("WrapText"),
-      false,
-    );
+    assert(header.includes("<ReviewModeSwitcher"));
+    assertEquals(controls.includes("data-mobile-review-mode-switcher"), false);
+    assertEquals(controls.includes("<ReviewModeSwitcher"), false);
   }
   assert(reviewAppSource.includes("ChatBubbleOutline"));
   assert(
