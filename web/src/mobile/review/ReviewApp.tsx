@@ -35,7 +35,7 @@ import {
   Toolbar,
   Typography,
 } from "@mui/material";
-import { alpha } from "@mui/material/styles";
+import { alpha, type SxProps, type Theme } from "@mui/material/styles";
 import {
   lazy,
   Suspense,
@@ -159,6 +159,55 @@ function ReviewModeSwitcher({
   // drop shadow sits inside the Review peek's compositor layer, so iOS
   // reassembles that nested tile on every swipe frame
   // (docs/mobile-spatial-presentation.md).
+  const markTouchActivation = (
+    event: React.PointerEvent<HTMLButtonElement>,
+  ): void => {
+    if (event.pointerType === "touch") {
+      event.currentTarget.dataset.touchActivated = "true";
+    } else if (event.pointerType === "mouse") {
+      delete event.currentTarget.dataset.touchActivated;
+    }
+  };
+  const clearMouseActivation = (
+    event: React.PointerEvent<HTMLButtonElement>,
+  ): void => {
+    if (event.pointerType === "mouse") {
+      delete event.currentTarget.dataset.touchActivated;
+    }
+  };
+  const modeButtonSx: SxProps<Theme> = {
+    width: 36,
+    height: 32,
+    borderRadius: "16px",
+    bgcolor: "transparent",
+    color: "text.secondary",
+    transform: "none",
+    "&[aria-pressed='true']": {
+      bgcolor: (theme) =>
+        alpha(
+          theme.palette.primary.main,
+          theme.palette.mode === "dark" ? 0.24 : 0.13,
+        ),
+      color: "primary.main",
+    },
+    // iOS can retain ButtonBase's synthetic hover/focus paint after the icon
+    // color has already followed aria-pressed. Reassert the authoritative
+    // selected/unselected material on that same attribute instead of leaving
+    // a stale circle under the previously touched mode.
+    "&[data-touch-activated='true'][aria-pressed='false']:hover, &[data-touch-activated='true'][aria-pressed='false'].Mui-focusVisible": {
+      bgcolor: "transparent",
+    },
+    "&[data-touch-activated='true'][aria-pressed='true']:hover, &[data-touch-activated='true'][aria-pressed='true'].Mui-focusVisible": {
+      bgcolor: (theme) =>
+        alpha(
+          theme.palette.primary.main,
+          theme.palette.mode === "dark" ? 0.24 : 0.13,
+        ),
+    },
+    "&[data-touch-activated='true']:active": {
+      bgcolor: "action.selected",
+    },
+  };
   return (
     <Box
       data-mobile-review-mode-switcher
@@ -187,42 +236,40 @@ function ReviewModeSwitcher({
       }}
     >
       <ButtonBase
+        disableRipple
         aria-label="Git changes"
         aria-pressed={mode === "git"}
-        onClick={() => onChange("git")}
-        sx={{
-          width: 36,
-          height: 32,
-          borderRadius: "16px",
-          bgcolor: (theme) => mode === "git"
-            ? alpha(
-              theme.palette.primary.main,
-              theme.palette.mode === "dark" ? 0.24 : 0.13,
-            )
-            : "transparent",
-          color: mode === "git" ? "primary.main" : "text.secondary",
-          transform: "none",
+        onPointerDown={markTouchActivation}
+        onPointerEnter={clearMouseActivation}
+        onKeyDown={(event): void => {
+          delete event.currentTarget.dataset.touchActivated;
         }}
+        onClick={(event): void => {
+          onChange("git");
+          if (event.currentTarget.dataset.touchActivated === "true") {
+            event.currentTarget.blur();
+          }
+        }}
+        sx={modeButtonSx}
       >
         <DifferenceOutlined />
       </ButtonBase>
       <ButtonBase
+        disableRipple
         aria-label="Worktree files"
         aria-pressed={mode === "files"}
-        onClick={() => onChange("files")}
-        sx={{
-          width: 36,
-          height: 32,
-          borderRadius: "16px",
-          bgcolor: (theme) => mode === "files"
-            ? alpha(
-              theme.palette.primary.main,
-              theme.palette.mode === "dark" ? 0.24 : 0.13,
-            )
-            : "transparent",
-          color: mode === "files" ? "primary.main" : "text.secondary",
-          transform: "none",
+        onPointerDown={markTouchActivation}
+        onPointerEnter={clearMouseActivation}
+        onKeyDown={(event): void => {
+          delete event.currentTarget.dataset.touchActivated;
         }}
+        onClick={(event): void => {
+          onChange("files");
+          if (event.currentTarget.dataset.touchActivated === "true") {
+            event.currentTarget.blur();
+          }
+        }}
+        sx={modeButtonSx}
       >
         <AccountTreeOutlined />
       </ButtonBase>

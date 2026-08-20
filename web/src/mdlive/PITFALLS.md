@@ -2149,3 +2149,11 @@ Desktop Vim + IME checks:
     token, recover the matching cached image into the attachment array so both
     the widget and a later send regain the original bytes. The attachment array,
     not the cache, remains authoritative after an unreversed deletion.
+
+90. **Review mode selection paint must derive from `aria-pressed`.**
+    On iOS, the Changes / Worktree ButtonBase icon can repaint for the new mode
+    while a dynamic-class background or TouchRipple tile remains under the old
+    button. Disable ripple and style both color and fill from the button's own
+    `aria-pressed` attribute. Mark touch activation and override latched hover
+    and focus-visible paint with the same authoritative selected/unselected
+    material; preserve ordinary mouse hover and keyboard focus behavior.
