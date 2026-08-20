@@ -26,6 +26,7 @@ import {
   OBSIDIAN_SHEET_SETTLE_EASING,
   obsidianSheetScale,
   obsidianSheetScrimOpacity,
+  obsidianSheetScrimPointerEvents,
   obsidianSheetSettleMs,
   obsidianSheetTransform,
 } from "./obsidianSheetMotion";
@@ -146,9 +147,13 @@ export function ObsidianSheet({
         ? `opacity ${String(settle)}ms ${OBSIDIAN_SHEET_SETTLE_EASING}`
         : "none";
       scrim.style.opacity = String(opacity);
-      // A dismissed-but-mounted scrim at opacity 0 would still eat every
-      // scroll if onClose is delayed. Keep it out of the hit tree.
-      scrim.style.pointerEvents = opacity > 0.02 ? "auto" : "none";
+      // A closing scrim must keep owning the pointer stream until unmount.
+      // Otherwise iOS WebKit's delayed synthetic click can hit the code below
+      // and open another inspector while this sheet is disappearing.
+      scrim.style.pointerEvents = obsidianSheetScrimPointerEvents(
+        opacity,
+        dismissingRef.current,
+      );
     }
   }, []);
 
@@ -293,8 +298,23 @@ export function ObsidianSheet({
       <Box
         ref={scrimRef}
         aria-hidden
-        onPointerDown={(event) => event.stopPropagation()}
+        data-obsidian-sheet-scrim="true"
+        onPointerDown={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          event.currentTarget.setPointerCapture(event.pointerId);
+        }}
+        onPointerUp={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          dismiss();
+        }}
+        onPointerCancel={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        }}
         onClick={(event) => {
+          event.preventDefault();
           event.stopPropagation();
           dismiss();
         }}

@@ -9,6 +9,7 @@ import {
   OBSIDIAN_SHEET_SETTLE_MS,
   obsidianSheetScale,
   obsidianSheetScrimOpacity,
+  obsidianSheetScrimPointerEvents,
   obsidianSheetSettleMs,
   obsidianSheetTransform,
 } from "./obsidianSheetMotion.ts";
@@ -51,6 +52,17 @@ Deno.test("scale and scrim interpolate from closed to open", () => {
     obsidianSheetTransform(40, 0.98),
     "translate3d(0, 40px, 0) scale(0.98)",
   );
+});
+
+Deno.test("closing scrim remains hit-testable until the sheet unmounts", () => {
+  assertEquals(obsidianSheetScrimPointerEvents(0.48, false), "auto");
+  assertEquals(obsidianSheetScrimPointerEvents(0, false), "none");
+  assertEquals(obsidianSheetScrimPointerEvents(0, true), "auto");
+  assert(modalSource.includes('data-obsidian-sheet-scrim="true"'));
+  assert(modalSource.includes("event.currentTarget.setPointerCapture"));
+  assert(modalSource.includes("onPointerUp={(event) =>"));
+  assert(modalSource.includes("event.preventDefault()"));
+  assert(modalSource.includes("event.stopPropagation()"));
 });
 
 Deno.test("phone sheets use the compact Obsidian card, not a floating footer pad", () => {

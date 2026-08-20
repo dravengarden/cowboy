@@ -50,6 +50,19 @@ export function obsidianSheetScrimOpacity(
   return clamp01((closedPx - Math.abs(y)) / closedPx) * max;
 }
 
+/**
+ * Keep a closing scrim in the hit-test tree until its sheet unmounts. iOS
+ * WebKit may dispatch a delayed synthetic click after pointerup; making the
+ * now-transparent scrim click-through during the settle animation would send
+ * that click to the page beneath it.
+ */
+export function obsidianSheetScrimPointerEvents(
+  opacity: number,
+  dismissing: boolean,
+): "auto" | "none" {
+  return opacity > 0.02 || dismissing ? "auto" : "none";
+}
+
 export function obsidianSheetTransform(y: number, scale: number): string {
   return `translate3d(0, ${String(y)}px, 0) scale(${String(scale)})`;
 }
