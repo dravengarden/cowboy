@@ -118,11 +118,11 @@ export function useConfirmSheetSurface(): boolean {
 }
 
 export interface ConfirmSheetDock {
-  readonly cancelLabel?: string;
-  readonly cancelDisabled?: boolean;
+  readonly cancelLabel?: string | undefined;
+  readonly cancelDisabled?: boolean | undefined;
   readonly confirmLabel: string;
-  readonly confirmDisabled?: boolean;
-  readonly confirmBusy?: boolean;
+  readonly confirmDisabled?: boolean | undefined;
+  readonly confirmBusy?: boolean | undefined;
   readonly onConfirm: () => void;
 }
 
@@ -139,8 +139,8 @@ export function ConfirmSheet({
   onClose: () => void;
   title?: ReactNode;
   children: ReactNode;
-  actions?: ReactNode;
-  dock?: ConfirmSheetDock;
+  actions?: ReactNode | undefined;
+  dock?: ConfirmSheetDock | undefined;
   wide?: boolean;
 }): ReactNode {
   const forceSheet = useConfirmSheetSurface();

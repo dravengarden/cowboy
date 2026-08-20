@@ -404,11 +404,13 @@ export function FullscreenComposer({
         open={discardOpen}
         onClose={(): void => setDiscardOpen(false)}
         title="Ignore modifications?"
-        dock={{
-          cancelLabel: "Keep editing",
-          confirmLabel: "Ignore modifications",
-          onConfirm: onDiscard,
-        }}
+        dock={onDiscard
+          ? {
+            cancelLabel: "Keep editing",
+            confirmLabel: "Ignore modifications",
+            onConfirm: onDiscard,
+          }
+          : undefined}
         actions={
           <>
             <Button onClick={(): void => setDiscardOpen(false)}>

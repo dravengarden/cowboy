@@ -85,13 +85,13 @@ export function MobileDecisionDock({
   confirmBusy = false,
 }: {
   readonly open: boolean;
-  readonly cancelLabel?: string;
+  readonly cancelLabel?: string | undefined;
   readonly onCancel: () => void;
-  readonly cancelDisabled?: boolean;
+  readonly cancelDisabled?: boolean | undefined;
   readonly confirmLabel: string;
   readonly onConfirm: () => void;
-  readonly confirmDisabled?: boolean;
-  readonly confirmBusy?: boolean;
+  readonly confirmDisabled?: boolean | undefined;
+  readonly confirmBusy?: boolean | undefined;
 }): ReactNode {
   return (
     <MobileThumbDock
