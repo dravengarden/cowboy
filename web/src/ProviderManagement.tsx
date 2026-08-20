@@ -13,7 +13,7 @@ import {
   Typography,
 } from "@mui/material";
 import { ArrowBackRounded } from "@mui/icons-material";
-import { alpha, useTheme } from "@mui/material/styles";
+import { alpha } from "@mui/material/styles";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import {
@@ -41,7 +41,6 @@ import {
   ProviderMarkStack,
   ProviderSurface,
 } from "./ProviderSurface";
-import { providerVisual } from "./providerVisual";
 import { copyText } from "./clipboard";
 import {
   closeAuthenticationBrowser,
@@ -189,12 +188,6 @@ function ProviderManagementIdentity({
   consumers?: readonly ProviderCatalogEntry[];
   providerId: string;
 }): React.JSX.Element {
-  const theme = useTheme();
-  const accent = providerVisual(
-    providerId,
-    theme.palette.mode,
-    version,
-  ).primary;
   const items = consumers.length > 0 ? consumers : [{
     manifest,
     provider_id: providerId,
@@ -224,10 +217,14 @@ function ProviderManagementIdentity({
                 minWidth: 32,
                 minHeight: 32,
                 flexShrink: 0,
-                color: accent,
+                color: "text.primary",
               }}
             >
-              <ProviderMarkStack manifests={[manifest]} size={26} />
+              <ProviderMarkStack
+                manifests={[manifest]}
+                size={26}
+                monochromeColor="inherit"
+              />
             </Box>
           )
           : null}
@@ -287,7 +284,7 @@ function ProviderManagementIdentity({
           <Box
             data-provider-management-mark
             data-provider-credential-consumers
-            sx={{ color: accent, minWidth: 0 }}
+            sx={{ minWidth: 0 }}
           >
             <ProviderMarkStack
               manifests={items.map((item) => item.manifest)}

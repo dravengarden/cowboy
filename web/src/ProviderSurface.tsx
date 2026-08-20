@@ -95,6 +95,7 @@ export function ProviderMark({
   className,
   appearance = "plain",
   scaleWithFont = true,
+  monochromeColor = "accent",
 }: {
   manifest: ProviderUiManifest;
   role?: UiAsset["role"];
@@ -102,6 +103,7 @@ export function ProviderMark({
   className?: string | undefined;
   appearance?: "plain" | "accentBadge";
   scaleWithFont?: boolean;
+  monochromeColor?: "accent" | "inherit";
 }): React.JSX.Element | null {
   const theme = useTheme();
   const assetId = role === "logo"
@@ -114,7 +116,8 @@ export function ProviderMark({
     candidate.role === role
   );
   if (!asset) return null;
-  const markColor = asset.content.kind === "vector_path" &&
+  const markColor = monochromeColor === "accent" &&
+      asset.content.kind === "vector_path" &&
       asset.content.gradient === undefined && asset.content.fill === undefined
     ? readableProviderMarkColor(manifest.display.accent, theme)
     : undefined;
@@ -163,12 +166,14 @@ export function ProviderMarkStack({
   labeled = false,
   className,
   scaleWithFont = true,
+  monochromeColor = "accent",
 }: {
   manifests: readonly ProviderUiManifest[];
   size?: number;
   labeled?: boolean;
   className?: string;
   scaleWithFont?: boolean;
+  monochromeColor?: "accent" | "inherit";
 }): React.JSX.Element | null {
   if (manifests.length === 0) return null;
   return (
@@ -210,6 +215,7 @@ export function ProviderMarkStack({
             manifest={manifest}
             size={size}
             scaleWithFont={scaleWithFont}
+            monochromeColor={monochromeColor}
           />
           {labeled
             ? (

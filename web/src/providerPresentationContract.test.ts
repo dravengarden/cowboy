@@ -251,6 +251,11 @@ Deno.test("Service credential management renders one card per typed authenticati
     false,
   );
   assertEquals(managementSource.includes("<ProviderMarkStack"), true);
+  assertEquals(
+    managementSource.includes('monochromeColor="inherit"'),
+    true,
+  );
+  assertEquals(managementSource.includes('color: "text.primary"'), true);
   assertEquals(managementSource.includes("ProviderCredentialMarks"), false);
   assertEquals(managementSource.includes("entries.slice(0, 4)"), false);
 });
@@ -272,6 +277,14 @@ Deno.test("Provider marks preserve host component classes and compact chip spaci
   assertEquals(surfaceSource.includes("className?: string | undefined;"), true);
   assertEquals(surfaceSource.includes("className={className}"), true);
   assertEquals(surfaceSource.includes("data-provider-mark-stack"), true);
+  assertEquals(
+    surfaceSource.includes('monochromeColor?: "accent" | "inherit";'),
+    true,
+  );
+  assertEquals(
+    surfaceSource.includes('monochromeColor={monochromeColor}'),
+    true,
+  );
   assertEquals(surfaceSource.includes("data-provider-identity-item"), true);
   assertEquals(surfaceSource.includes("flexWrap: \"wrap\""), true);
   assertEquals(surfaceSource.includes("ml: index === 0 ? 0 : `-${pull}`"), false);
