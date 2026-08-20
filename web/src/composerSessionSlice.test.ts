@@ -52,9 +52,6 @@ Deno.test("composer session slice reacts to every visible composer field", () =>
     [{ ...active, provider_version: "1.0.1" }, other],
     [{ ...active, provider_generation_digest: `sha256:${"2".repeat(64)}` }, other],
     [{ ...active, paused: true }, other],
-    [{ ...active, awaiting_user: true }, other],
-    [{ ...active, done: true }, other],
-    [{ ...active, judging: true }, other],
     [{ ...active, context_used: 11 }, other],
     [{ ...active, context_size: 101 }, other],
     [active, { ...other, title: "Renamed" }],
@@ -78,7 +75,6 @@ Deno.test("composer sheet session ignores metadata it does not render", () => {
     usage: { used: 10, size: 100, raw: null, observed_at_ms: 2 },
     context_used: 40,
     context_size: 200,
-    judging: true,
     next_schedule_ms: 123,
   }));
   assert(!sameComposerSheetSession(active, { ...active, title: "Renamed" }));

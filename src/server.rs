@@ -38,8 +38,8 @@ use crate::acp::AgentCommand;
 use crate::cli::ServeArgs;
 use crate::code_review::CodeProvider as _;
 use crate::core::{
-    DispatchReq, Envelope, Event, Hub, Inbound, JudgeReq, Outbound, PersistenceHealth,
-    RestoredSession, SessionOrigin, Status, StoreSink, StoreWrite,
+    DispatchReq, Envelope, Event, Hub, Inbound, Outbound, PersistenceHealth, RestoredSession,
+    SessionOrigin, Status, StoreSink, StoreWrite,
 };
 use crate::diff_snapshot::{DiffSnapshotCache, DiffSnapshotKey};
 use crate::machine_control::MachineControl;
@@ -280,7 +280,6 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                     next_seq: ls.next_seq,
                     queue: ls.queue,
                     drafts: ls.drafts,
-                    judge_runs: ls.judge_runs,
                     config_options: ls.config_options,
                     config_preferences: ls.config_preferences,
                     mobile_review_state: ls.mobile_review_state,
@@ -612,18 +611,6 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         }
     });
 
-    // One bounded queue feeds one long-lived Codex app-server process; every
-    // judgment uses a fresh ephemeral Luna thread. The worker starts/calibrates
-    // lazily, so daemon readiness never waits on an external model call.
-    let (judge_tx, judge_rx) = mpsc::channel::<JudgeReq>(256);
-    hub.set_judge_tx(judge_tx);
-    let judge_hub = hub.clone();
-    let judge_command = args.codex_command.clone();
-    let judge_task = tokio::spawn(async move {
-        crate::core::run_judge_worker(judge_hub, judge_rx, judge_command).await;
-        tracing::error!("Codex judge worker exited unexpectedly");
-    });
-
     // Honor agent `ScheduleWakeup`s: fires a wake-prompt (via the same dispatch
     // path) at the scheduled time. Without this, an ACP-driven agent's scheduled
     // self-checks never fire and get consumed by the next user turn instead.
@@ -720,7 +707,6 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         shutdown_tx,
     )
     .await;
-    judge_task.abort();
     scheduler_task.abort();
     reset_task.abort();
     runtime_reconciliation_task.abort();
@@ -797,16 +783,6 @@ async fn run_web_push_notifications(
             {
                 Some((NotificationCategory::Permission, envelope.session_id))
             }
-            Outbound::JudgeResult {
-                session_id,
-                done: true,
-                ..
-            } => Some((NotificationCategory::Completed, session_id)),
-            Outbound::JudgeResult {
-                session_id,
-                awaiting_user: true,
-                ..
-            } => Some((NotificationCategory::Input, session_id)),
             Outbound::Error {
                 session_id: Some(session_id),
                 ..
@@ -1301,15 +1277,6 @@ async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyhow::Result<
                 })
                 .await
         }
-        StoreWrite::UpdateVerdict {
-            session_id,
-            awaiting_user,
-            done,
-        } => {
-            store
-                .update_verdict(session_id, *awaiting_user, *done)
-                .await
-        }
         StoreWrite::UpdateTitle { session_id, title } => {
             store.update_title(session_id, title).await
         }
@@ -1346,9 +1313,6 @@ async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyhow::Result<
             drafts,
         } => store.update_pending(session_id, queue, drafts).await,
         StoreWrite::UpdateSessionOrder { order } => store.update_session_order(order).await,
-        StoreWrite::UpdateJudgeRuns { session_id, runs } => {
-            store.update_judge_runs(session_id, runs).await
-        }
         StoreWrite::UpdateMobileReviewState { session_id, value } => {
             store.update_mobile_review_state(session_id, value).await
         }
@@ -7719,7 +7683,7 @@ struct SessionBootstrapResponse {
 
 /// Hydrate only the session the reader actually opened. The WebSocket connect
 /// path deliberately carries global metadata only; replaying every transcript,
-/// config option, queue, and judge history made mobile reconnects multi-megabyte
+/// config option and queue state made mobile reconnects multi-megabyte
 /// affairs. Live events can overlap this response and are deduplicated by seq.
 async fn api_session_bootstrap(
     State(state): State<Arc<AppState>>,
@@ -7751,10 +7715,6 @@ fn focused_session_bootstrap(hub: &Hub, session_id: &str) -> Option<Vec<Outbound
     if let Some(queue) = hub.queue_resync(session_id) {
         messages.push(queue);
     }
-    messages.push(Outbound::JudgeHistory {
-        session_id: session_id.to_owned(),
-        runs: hub.judge_history(session_id),
-    });
     Some(messages)
 }
 
@@ -8123,9 +8083,6 @@ fn global_bootstrap(hub: &Hub) -> Vec<Outbound> {
             // settings snapshot as auto-resume disabled during rollout.
             settings: Default::default(),
         },
-        Outbound::Skills {
-            skills: hub.skills_snapshot(),
-        },
     ];
     messages.extend(hub.sync_resync());
     messages
@@ -8290,7 +8247,6 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
         | Inbound::DeleteSession { session_id }
         | Inbound::RenameSession { session_id, .. }
         | Inbound::SetSessionAutoResume { session_id, .. }
-        | Inbound::SetAwaiting { session_id, .. }
         | Inbound::SetPaused { session_id, .. }
         | Inbound::ResumeTurn { session_id }
         | Inbound::RetryTurn { session_id }
@@ -8315,9 +8271,7 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
         | Inbound::ScheduleDraft { session_id, .. }
         | Inbound::UnscheduleDraft { session_id, .. }
         | Inbound::ReorderQueue { session_id, .. }
-        | Inbound::ReorderDrafts { session_id, .. }
-        | Inbound::RemoveJudgeRun { session_id, .. }
-        | Inbound::ClearJudgeRuns { session_id } => Some(session_id.clone()),
+        | Inbound::ReorderDrafts { session_id, .. } => Some(session_id.clone()),
         // Sync mutations are state-scoped (title/order), not session-scoped — a
         // failure surfaces as a daemon-level error (None).
         Inbound::NewSession { .. }
@@ -8469,13 +8423,6 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
         Inbound::SetSessionAutoResume { .. }
         | Inbound::ResumeTurn { .. }
         | Inbound::SetSetting { .. } => Ok(()),
-        Inbound::SetAwaiting {
-            session_id,
-            awaiting,
-        } => {
-            state.hub.set_awaiting(&session_id, awaiting);
-            Ok(())
-        }
         Inbound::SetPaused { session_id, paused } => {
             state.hub.set_paused(&session_id, paused);
             Ok(())
@@ -8625,8 +8572,8 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
                     force_cancel_with_watchdog(state, &session_id)
                 } else {
                     // Not busy: force_submit front-inserted the prompt but nothing
-                    // dispatched it — a PAUSED (or awaiting-user) queue HOLDS the
-                    // auto-drain. A force-push is an explicit "send this now", so
+                    // dispatched it — a PAUSED queue HOLDS the auto-drain. A
+                    // force-push is an explicit "send this now", so
                     // drain the head MANUALLY here: bypass the hold and run it now,
                     // WITHOUT resuming the rest of the held queue. No-op when the
                     // head already dispatched (idle + empty queue).
@@ -8768,14 +8715,6 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
         }
         Inbound::ReorderDrafts { session_id, order } => {
             state.hub.reorder_drafts(&session_id, &order);
-            Ok(())
-        }
-        Inbound::RemoveJudgeRun { session_id, id } => {
-            state.hub.remove_judge_run(&session_id, &id);
-            Ok(())
-        }
-        Inbound::ClearJudgeRuns { session_id } => {
-            state.hub.clear_judge_runs(&session_id);
             Ok(())
         }
     };
@@ -9069,9 +9008,7 @@ mod bootstrap_tests {
         );
         assert!(!messages.iter().any(|message| matches!(
             message,
-            Outbound::Snapshot { .. }
-                | Outbound::ConfigOptions { .. }
-                | Outbound::JudgeHistory { .. }
+            Outbound::Snapshot { .. } | Outbound::ConfigOptions { .. }
         )));
         assert!(!messages.iter().any(|message| matches!(
             message,
@@ -9107,9 +9044,8 @@ mod bootstrap_tests {
         assert_eq!(snapshots[0].0, "focused");
         assert_eq!(snapshots[0].1.len(), 1);
         assert!(messages.iter().all(|message| match message {
-            Outbound::Snapshot { session_id, .. }
-            | Outbound::ConfigOptions { session_id, .. }
-            | Outbound::JudgeHistory { session_id, .. } => session_id == "focused",
+            Outbound::Snapshot { session_id, .. } | Outbound::ConfigOptions { session_id, .. } =>
+                session_id == "focused",
             Outbound::SyncPatch { state, .. } => state == "queue:focused",
             _ => true,
         }));

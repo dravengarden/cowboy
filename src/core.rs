@@ -51,6 +51,10 @@ const BROADCAST_CAPACITY: usize = 1_024;
 /// above is the primary bound; this limits render work for many tiny events.
 pub const HISTORY_PAGE: usize = 64;
 
+fn now_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+
 fn estimated_json_bytes(value: &serde_json::Value) -> usize {
     match value {
         serde_json::Value::Null => 4,
@@ -296,112 +300,6 @@ fn last_turn_texts(log: &[Envelope]) -> (String, String) {
     (prompt, partial)
 }
 
-/// Extract only the final agent answer for L2 classification. Codex labels its
-/// commentary/final phases explicitly; other ACP providers fall back to the
-/// last message-id group. Long answers retain both the opening result and the
-/// closing question, where the useful classification signals usually live.
-fn last_judge_text(log: &[Envelope]) -> String {
-    #[derive(Clone)]
-    struct Chunk {
-        id: Option<String>,
-        final_answer: bool,
-        text: String,
-    }
-
-    let last_user = log.iter().rposition(|env| {
-        matches!(
-            &env.event,
-            Event::Update { update }
-                if update.get("sessionUpdate").and_then(serde_json::Value::as_str)
-                    == Some("user_message_chunk")
-        )
-    });
-    let Some(start) = last_user else {
-        return String::new();
-    };
-    let chunks: Vec<Chunk> = log[start..]
-        .iter()
-        .filter_map(|env| {
-            let Event::Update { update } = &env.event else {
-                return None;
-            };
-            if update
-                .get("sessionUpdate")
-                .and_then(serde_json::Value::as_str)
-                != Some("agent_message_chunk")
-            {
-                return None;
-            }
-            Some(Chunk {
-                id: update
-                    .get("messageId")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned),
-                final_answer: update
-                    .pointer("/_meta/codex/phase")
-                    .and_then(serde_json::Value::as_str)
-                    == Some("final_answer"),
-                text: update
-                    .pointer("/content/text")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned(),
-            })
-        })
-        .collect();
-    let selected = chunks
-        .iter()
-        .rev()
-        .find(|c| c.final_answer)
-        .or_else(|| chunks.last());
-    let Some(selected) = selected else {
-        return String::new();
-    };
-    let mut text = if let Some(id) = selected.id.as_deref() {
-        chunks
-            .iter()
-            .filter(|c| c.id.as_deref() == Some(id) && (!selected.final_answer || c.final_answer))
-            .map(|c| c.text.as_str())
-            .collect::<String>()
-    } else {
-        selected.text.clone()
-    };
-    text.retain(|c| c != '\0');
-    truncate_judge_text(text.trim())
-}
-
-fn truncate_judge_text(text: &str) -> String {
-    const MAX: usize = 4_096;
-    const HEAD: usize = 1_536;
-    const MARKER: &str = "\n[…中间已截断…]\n";
-    const MARKER_CHARS: usize = 11;
-    let count = text.chars().count();
-    if count <= MAX {
-        return text.to_owned();
-    }
-    let head: String = text.chars().take(HEAD).collect();
-    let tail: String = text
-        .chars()
-        .rev()
-        .take(MAX - HEAD - MARKER_CHARS)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-    format!("{head}{MARKER}{tail}")
-}
-
-/// The ACP stop-reason string from the most recent `TurnEnd` event, if any. Read
-/// by the confirm-detect L1 (a non-`EndTurn` stop ⇒ the turn was cut off, not a
-/// question). `acp.rs` pushes `TurnEnd` to the log just before flipping the
-/// status, so it's already present when the turn-end judge runs.
-fn last_stop_reason(log: &[Envelope]) -> Option<String> {
-    log.iter().rev().find_map(|e| match &e.event {
-        Event::TurnEnd { stop_reason } => Some(stop_reason.clone()),
-        _ => None,
-    })
-}
-
 /// Session metadata for the list view (no event log).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMeta {
@@ -444,28 +342,6 @@ pub struct SessionMeta {
     /// agent assigns one, and for providers that don't support resume.
     #[serde(default)]
     pub agent_session_id: Option<String>,
-    /// True when the confirm-detect skill judged the agent's last turn as
-    /// "awaiting the user" (a question/confirmation). Like `editing`, it PAUSES
-    /// the whole drain so the next queued message isn't auto-sent as a wrong
-    /// answer; it also drives the awaiting widget. Lives in the broadcast meta so
-    /// clients see it. Persisted (migration 0008) so a held session survives a
-    /// daemon restart; `serde(default)` only covers old clients omitting it.
-    #[serde(default)]
-    pub awaiting_user: bool,
-    /// True when the confirm-detect skill judged the agent's last turn as having
-    /// COMPLETED the task (drives the green "Task complete" overlay + a future
-    /// notification). Persisted (migration 0008) so a finished session keeps it
-    /// across a restart; re-judged each turn, cleared when the user sends / a new
-    /// turn starts (a stale value is harmless — busy/crashed take overlay priority).
-    #[serde(default)]
-    pub done: bool,
-    /// True while the async confirm-detect L2 judge is IN FLIGHT for the last
-    /// turn (between the provisional hold and the verdict landing). Drives the
-    /// pill's "Judging…" loading state so the purple "Waiting for your reply"
-    /// doesn't flash prematurely. Transient — never persisted, resets to false on
-    /// restart; `serde(default)` covers old clients + the restore path.
-    #[serde(default)]
-    pub judging: bool,
     /// User-set MANUAL PAUSE of the queue drain (the ⏸ toggle). While true the
     /// auto-drain is HELD — queued messages don't advance even after the current
     /// turn ends — but the running turn is NOT interrupted (it finishes). The
@@ -672,14 +548,6 @@ pub struct DispatchReq {
     pub cmid: Option<String>,
 }
 
-/// One ambiguous normal turn handed to the shared Codex classifier worker.
-#[derive(Debug, Clone)]
-pub struct JudgeReq {
-    pub session_id: String,
-    pub seq: u64,
-    pub final_text: String,
-}
-
 /// One session's full persisted state, handed to
 /// [`Hub::restore_reconciling_runtime`] at startup.
 pub struct RestoredSession {
@@ -690,8 +558,6 @@ pub struct RestoredSession {
     pub next_seq: u64,
     pub queue: Vec<QueuedMessage>,
     pub drafts: Vec<QueuedMessage>,
-    /// Persisted confirm-detect judge-run history (newest first), capped.
-    pub judge_runs: Vec<JudgeRun>,
     /// Latest agent-advertised config options, retained so a new device can
     /// render the session controls before its worker is warm.
     pub config_options: Option<serde_json::Value>,
@@ -699,47 +565,6 @@ pub struct RestoredSession {
     /// recreated. Defaults are seeded for newly-created OpenAI sessions.
     pub config_preferences: serde_json::Value,
     pub mobile_review_state: serde_json::Value,
-}
-
-/// One persisted confirm-detect judge run — the verdict PLUS the raw LLM I/O,
-/// kept as a per-session history that backs the inspector widget (long-press the
-/// turn-status pill). This is the durable superset of the live `JudgeResult`
-/// broadcast: same fields, plus an `id` for delete and an `at` for display/sort.
-///
-/// `id` is server-minted as `<at>-<seq>` (unix-ms + the turn's judge_seq). The
-/// timestamp makes it monotonic ACROSS restarts, so a run minted after a restart
-/// (when `judge_seq` resets to 0) can never collide with a persisted one — the
-/// only key the client deletes by.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct JudgeRun {
-    pub id: String,
-    /// Unix-ms when the verdict landed.
-    pub at: i64,
-    /// "L1" (deterministic stop-reason) or "L2" (the Codex judge).
-    pub layer: String,
-    pub awaiting_user: bool,
-    pub done: bool,
-    pub confidence: f32,
-    pub reason: String,
-    /// The model id (L2) or empty (L1).
-    pub model: String,
-    /// What the judge looked at — the agent's final text.
-    pub input: String,
-    /// The model's raw output (L2) or the L1 reason.
-    pub output: String,
-    pub cache_hit: u32,
-    pub cache_miss: u32,
-    pub latency_ms: u64,
-}
-
-/// How many judge runs to keep per session. The raw input (the agent's full final
-/// message) can be a few KB, and the whole array is rewritten as JSONB on every
-/// turn, so this caps both the wire/broadcast size and the DB write.
-const JUDGE_HISTORY_CAP: usize = 30;
-
-/// Unix-ms now — the `at`/id stamp for a judge run.
-fn now_ms() -> i64 {
-    chrono::Utc::now().timestamp_millis()
 }
 
 /// Per-session info for the UI's session-info dialog — the metadata plus the
@@ -796,15 +621,6 @@ struct Session {
     /// stuck turn while a Busy -> Running -> Busy replacement invalidates every
     /// watchdog armed for the previous turn.
     lifecycle_epoch: u64,
-    /// Monotonic counter bumped on every turn-end judge dispatch. The async
-    /// confirm-detect verdict carries the seq it was issued under and is applied
-    /// ONLY if still current — a newer turn-end supersedes a stale verdict (the
-    /// stale-clear race in plan.md Risks). Not persisted; resets to 0 on restart.
-    judge_seq: u64,
-    /// Confirm-detect judge-run history (newest first), capped at
-    /// [`JUDGE_HISTORY_CAP`]. Server-authoritative + persisted (migration 0009);
-    /// backs the inspector widget. Broadcast as [`Outbound::JudgeHistory`].
-    judge_runs: Vec<JudgeRun>,
     /// Mobile-only code-review workspace state. Desktop never consumes it.
     mobile_review: MobileReviewState,
 }
@@ -982,10 +798,6 @@ pub enum Inbound {
         #[serde(default)]
         value: Option<bool>,
     },
-    /// Clear/set a session's confirm-detect "awaiting user" hold from the awaiting
-    /// widget. The user dismissing it (`false`) means "not a question" → the hold
-    /// lifts and the queue drains. Broadcasts the updated session list.
-    SetAwaiting { session_id: String, awaiting: bool },
     /// User toggle: manually pause/resume the queue drain. Holds the auto-drain
     /// without interrupting the running turn (see [`Hub::set_paused`]).
     SetPaused { session_id: String, paused: bool },
@@ -1173,11 +985,6 @@ pub enum Inbound {
         session_id: String,
         order: Vec<String>,
     },
-    /// Delete one run from a session's confirm-detect judge history (the
-    /// inspector widget's per-item delete).
-    RemoveJudgeRun { session_id: String, id: String },
-    /// Clear a session's entire confirm-detect judge history.
-    ClearJudgeRuns { session_id: String },
 }
 
 /// What the server pushes to a WebSocket client.
@@ -1245,39 +1052,6 @@ pub enum Outbound {
     Settings {
         settings: std::collections::HashMap<String, serde_json::Value>,
     },
-    /// The registered skills (id/title/description + the prompt template + the
-    /// extraction rule), so the Info sheet can render each skill's prompt verbatim.
-    /// Static — sent once on connect.
-    Skills { skills: Vec<SkillView> },
-    /// The confirm-detect judge's full result for a turn — the verdict PLUS the
-    /// observability detail the overlay's "raw data" expand shows. Sent after each
-    /// judge; the client keeps the latest per session. NOT persisted.
-    JudgeResult {
-        session_id: String,
-        /// "L1" (deterministic stop-reason) or "L2" (the Codex judge).
-        layer: String,
-        awaiting_user: bool,
-        done: bool,
-        confidence: f32,
-        reason: String,
-        /// The model id (L2) or empty (L1).
-        model: String,
-        /// What the judge looked at — the agent's final text.
-        input: String,
-        /// The model's raw output (L2) or the L1 reason.
-        output: String,
-        cache_hit: u32,
-        cache_miss: u32,
-        latency_ms: u64,
-    },
-    /// A session's confirm-detect judge-run HISTORY (newest first), capped. The
-    /// durable, server-authoritative superset of `JudgeResult` that backs the
-    /// inspector widget. Sent per session on connect + re-broadcast on every new
-    /// run / per-item delete / clear.
-    JudgeHistory {
-        session_id: String,
-        runs: Vec<JudgeRun>,
-    },
     /// An error to surface to the user (bad command, unknown session, ...).
     /// Broadcast to every connected client — cowboy's "one shared progress"
     /// design means any window watching the same session should see why a
@@ -1309,13 +1083,6 @@ pub enum StoreWrite {
         session_id: String,
         occurred_at_ms: i64,
         message: String,
-    },
-    /// Persist the confirm-detect turn-end verdict (so a done/awaiting session
-    /// survives a daemon restart — migration 0008).
-    UpdateVerdict {
-        session_id: String,
-        awaiting_user: bool,
-        done: bool,
     },
     UpdateTitle {
         session_id: String,
@@ -1358,13 +1125,6 @@ pub enum StoreWrite {
     /// arranged list survives a daemon restart.
     UpdateSessionOrder {
         order: Vec<String>,
-    },
-    /// Persist a session's confirm-detect judge-run history (whole list, as JSONB
-    /// — migration 0009). Written on every add / delete / clear, like
-    /// [`StoreWrite::UpdatePending`].
-    UpdateJudgeRuns {
-        session_id: String,
-        runs: Vec<JudgeRun>,
     },
     /// Persist one session's Mobile-only code-review workspace state.
     UpdateMobileReviewState {
@@ -1493,18 +1253,6 @@ impl StoreSink {
     }
 }
 
-/// Client-facing, owned view of a registered skill (the static `SkillMeta` has
-/// `&'static str` fields, which `Outbound`'s `Deserialize` can't target — so we
-/// snapshot it into owned strings for the wire).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct SkillView {
-    pub id: String,
-    pub title: String,
-    pub description: String,
-    pub prompt_template: String,
-    pub extract: String,
-}
-
 /// Live arbiter state for the title-sync channel (the @shared-utils/sync
 /// reference arbiter, in Rust). Coordinates optimistic cross-terminal renames:
 /// each accepted mutation bumps `version` and yields a snapshot patch (the whole
@@ -1561,9 +1309,6 @@ struct HubInner {
     /// in tests), in which case a drain decision is computed but no prompt is
     /// actually sent. See [`DispatchReq`].
     dispatch_tx: Mutex<Option<mpsc::Sender<DispatchReq>>>,
-    /// Hand-off to the single shared Codex classifier worker. Each normal
-    /// `EndTurn` judgment gets an isolated Luna thread on one app-server process.
-    judge_tx: Mutex<Option<mpsc::Sender<JudgeReq>>>,
     /// Hand-off to the background scheduler task that fires agent-armed
     /// `ScheduleWakeup`s. Set once at startup via [`Hub::set_scheduler_tx`];
     /// `None` until then (and in tests) ⇒ wakeups are simply not honored.
@@ -1637,7 +1382,6 @@ impl Hub {
                 tx,
                 store_tx,
                 dispatch_tx: Mutex::new(None),
-                judge_tx: Mutex::new(None),
                 scheduler_tx: Mutex::new(None),
                 sync: Mutex::new(HashMap::new()),
                 next_qid: AtomicU64::new(1),
@@ -1651,11 +1395,6 @@ impl Hub {
     /// client connects. Until set, drains compute but dispatch nothing.
     pub fn set_dispatch_tx(&self, tx: mpsc::Sender<DispatchReq>) {
         *self.inner.dispatch_tx.lock() = Some(tx);
-    }
-
-    /// Wire the shared Codex classifier queue. Called once at server startup.
-    pub fn set_judge_tx(&self, tx: mpsc::Sender<JudgeReq>) {
-        *self.inner.judge_tx.lock() = Some(tx);
     }
 
     /// Wire the background scheduler's hand-off channel (mirrors
@@ -1862,7 +1601,6 @@ impl Hub {
                     next_seq,
                     mut queue,
                     mut drafts,
-                    judge_runs,
                     config_options,
                     config_preferences,
                     mobile_review_state,
@@ -1960,8 +1698,6 @@ impl Hub {
                                 worker.current_turn_id.is_some() || worker.pending_prompt_count > 0
                             }),
                         lifecycle_epoch: 0,
-                        judge_seq: 0,
-                        judge_runs,
                         mobile_review: MobileReviewState::from_stored(mobile_review_state),
                     },
                 );
@@ -2337,9 +2073,6 @@ impl Hub {
             status: Status::Starting,
             origin,
             agent_session_id: None,
-            awaiting_user: false,
-            done: false,
-            judging: false,
             paused: false,
             system,
             context_used: 0,
@@ -2366,8 +2099,6 @@ impl Hub {
                     editing: None,
                     in_flight: false,
                     lifecycle_epoch: 0,
-                    judge_seq: 0,
-                    judge_runs: Vec::new(),
                     mobile_review: MobileReviewState::default(),
                 },
             );
@@ -2444,67 +2175,6 @@ impl Hub {
         self.broadcast_sessions();
     }
 
-    /// Snapshot the static skill registry into owned wire views (Info sheet).
-    #[must_use]
-    pub fn skills_snapshot(&self) -> Vec<SkillView> {
-        crate::skills::registry()
-            .into_iter()
-            .map(|m| SkillView {
-                id: m.id.to_owned(),
-                title: m.title.to_owned(),
-                description: m.description.to_owned(),
-                prompt_template: m.prompt_template.to_owned(),
-                extract: m.extract.to_owned(),
-            })
-            .collect()
-    }
-
-    /// Whether a session is currently holding for "awaiting user".
-    #[must_use]
-    #[cfg(test)]
-    pub fn is_awaiting(&self, session_id: &str) -> bool {
-        self.inner
-            .sessions
-            .lock()
-            .get(session_id)
-            .is_some_and(|s| s.meta.awaiting_user)
-    }
-
-    /// Set/clear a session's "awaiting user" hold. Broadcasts the session list so
-    /// the awaiting widget updates; clearing also resumes the drain.
-    /// Write-behind the current turn-end verdict so it survives a restart (0008).
-    fn persist_verdict(&self, session_id: &str, awaiting_user: bool, done: bool) {
-        if let Some(tx) = self.inner.store_tx.as_ref() {
-            let _ = tx.send(StoreWrite::UpdateVerdict {
-                session_id: session_id.to_owned(),
-                awaiting_user,
-                done,
-            });
-        }
-    }
-
-    pub fn set_awaiting(&self, session_id: &str, awaiting: bool) {
-        // `Some(done)` when the awaiting flag actually flipped — carries the
-        // unchanged `done` so the persisted pair stays consistent.
-        let changed = {
-            let mut sessions = self.inner.sessions.lock();
-            match sessions.get_mut(session_id) {
-                Some(s) if s.meta.awaiting_user != awaiting => {
-                    s.meta.awaiting_user = awaiting;
-                    Some(s.meta.done)
-                }
-                _ => None,
-            }
-        };
-        if let Some(done) = changed {
-            self.persist_verdict(session_id, awaiting, done);
-            self.broadcast_sessions();
-            if !awaiting {
-                self.try_drain(session_id);
-            }
-        }
-    }
-
     /// Manually PAUSE / RESUME the queue drain (the user's ⏸ toggle). Pausing
     /// holds the auto-drain (`drain_head` returns early on `paused`) WITHOUT
     /// touching the running turn — it finishes normally; only the next queued
@@ -2553,273 +2223,6 @@ impl Hub {
         if changed {
             self.broadcast_sessions();
         }
-    }
-
-    /// Mark a session as mid-judge — the async L2 confirm-detect is in flight, so
-    /// the pill shows "Judging…" instead of prematurely flashing the provisional
-    /// "Waiting for your reply". Broadcast-only (transient, not persisted); no-op
-    /// if the flag is unchanged.
-    fn set_judging(&self, session_id: &str, judging: bool) {
-        let changed = {
-            let mut sessions = self.inner.sessions.lock();
-            match sessions.get_mut(session_id) {
-                Some(s) if s.meta.judging != judging => {
-                    s.meta.judging = judging;
-                    true
-                }
-                _ => false,
-            }
-        };
-        if changed {
-            self.broadcast_sessions();
-        }
-    }
-
-    fn judge_is_current(&self, session_id: &str, seq: u64) -> bool {
-        self.inner
-            .sessions
-            .lock()
-            .get(session_id)
-            .is_some_and(|s| s.judge_seq == seq)
-    }
-
-    fn set_judging_if_current(&self, session_id: &str, seq: u64, judging: bool) {
-        let changed = {
-            let mut sessions = self.inner.sessions.lock();
-            match sessions.get_mut(session_id) {
-                Some(s) if s.judge_seq == seq && s.meta.judging != judging => {
-                    s.meta.judging = judging;
-                    true
-                }
-                _ => false,
-            }
-        };
-        if changed {
-            self.broadcast_sessions();
-        }
-    }
-
-    /// Apply a confirm-detect verdict under the `judge_seq` stale-guard: set the
-    /// hold to `v.awaiting_user` only if no newer turn-end has superseded `seq`.
-    /// Broadcasts and resumes the drain when the hold clears.
-    fn apply_verdict(&self, session_id: &str, seq: u64, v: &crate::skills::Verdict) -> bool {
-        let resume = {
-            let mut sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get_mut(session_id) else {
-                return false;
-            };
-            if s.judge_seq != seq {
-                return false; // a newer turn-end already re-judged — drop this verdict
-            }
-            let resume = s.meta.awaiting_user && !v.awaiting_user;
-            s.meta.awaiting_user = v.awaiting_user;
-            s.meta.done = v.done;
-            resume
-        };
-        self.persist_verdict(session_id, v.awaiting_user, v.done);
-        self.broadcast_sessions();
-        if resume {
-            self.try_drain(session_id);
-        }
-        true
-    }
-
-    /// Turn-end hook: classify the agent's last message with the confirm-detect
-    /// skill. L1 (the agent provider's deterministic stop-reason rule) runs inline
-    /// and short-circuits; only an ambiguous `EndTurn` spawns the async L2 judge.
-    ///
-    /// Recall-first (design §I): before the async judge, set `awaiting_user=true`
-    /// synchronously so the drain can't release a queued prompt as a wrong answer.
-    /// The verdict is applied under the `judge_seq` guard — `false` clears + drains,
-    /// `true` keeps the hold; a repeated classifier failure clears it so the queue
-    /// cannot deadlock. `done` is logged for completion notifications.
-    fn judge_turn_end(&self, session_id: &str) {
-        let (final_text, seq, stop_reason) = {
-            let mut sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get_mut(session_id) else {
-                return;
-            };
-            s.judge_seq = s.judge_seq.wrapping_add(1);
-            (
-                last_judge_text(&s.log),
-                s.judge_seq,
-                last_stop_reason(&s.log),
-            )
-        };
-        // L1: deterministic, no LLM. A cut-off/cancelled turn settles here; only a
-        // normal `EndTurn` returns None and falls through to L2.
-        if let Some(v) = crate::provider::confirm::l1(&crate::provider::confirm::TurnEndCtx {
-            stop_reason: stop_reason.as_deref(),
-        }) {
-            let at = now_ms();
-            self.emit_and_record_judge(
-                session_id,
-                JudgeRun {
-                    id: format!("{at}-{seq}"),
-                    at,
-                    layer: "L1".to_owned(),
-                    awaiting_user: v.awaiting_user,
-                    done: v.done,
-                    confidence: v.confidence,
-                    reason: v.reason.clone(),
-                    model: String::new(),
-                    input: final_text.clone(),
-                    output: v.reason.clone(),
-                    cache_hit: 0,
-                    cache_miss: 0,
-                    latency_ms: 0,
-                },
-            );
-            let _ = self.apply_verdict(session_id, seq, &v);
-            return;
-        }
-        // Nothing the agent said this turn → nothing to judge; don't hold.
-        if final_text.trim().is_empty() {
-            self.set_awaiting(session_id, false);
-            return;
-        }
-        // Provisional hold while the async L2 judge runs + flag it judging so the
-        // pill shows "Judging…" rather than the provisional "Waiting for your reply".
-        self.set_awaiting(session_id, true);
-        self.set_judging(session_id, true);
-        let req = JudgeReq {
-            session_id: session_id.to_owned(),
-            seq,
-            final_text,
-        };
-        let sent = self
-            .inner
-            .judge_tx
-            .lock()
-            .as_ref()
-            .is_some_and(|tx| tx.try_send(req.clone()).is_ok());
-        if !sent {
-            self.finish_judge_failure(req, "classifier worker unavailable");
-        }
-    }
-
-    fn finish_judge_failure(&self, req: JudgeReq, error: &str) {
-        if !self.judge_is_current(&req.session_id, req.seq) {
-            return;
-        }
-        tracing::warn!(session = %req.session_id, %error, "confirm-detect judge failed; clearing provisional hold");
-        let at = now_ms();
-        let reason = format!("judge failed: {error}");
-        let verdict = crate::skills::Verdict {
-            reason: reason.clone(),
-            ..Default::default()
-        };
-        if !self.apply_verdict(&req.session_id, req.seq, &verdict) {
-            return;
-        }
-        self.emit_and_record_judge(
-            &req.session_id,
-            JudgeRun {
-                id: format!("{at}-{}", req.seq),
-                at,
-                layer: "L2".to_owned(),
-                awaiting_user: false,
-                done: false,
-                confidence: 0.0,
-                reason: reason.clone(),
-                model: crate::inference::codex::MODEL.to_owned(),
-                input: req.final_text,
-                output: String::new(),
-                cache_hit: 0,
-                cache_miss: 0,
-                latency_ms: 0,
-            },
-        );
-        self.set_judging_if_current(&req.session_id, req.seq, false);
-    }
-
-    /// Broadcast a judge run for the LIVE overlay (`JudgeResult`, latest-per-
-    /// session — the pill's quick-peek expand) AND append it to the durable,
-    /// per-session history (the inspector widget). One call from both judge
-    /// layers so the two surfaces never diverge.
-    fn emit_and_record_judge(&self, session_id: &str, run: JudgeRun) {
-        self.broadcast(Outbound::JudgeResult {
-            session_id: session_id.to_owned(),
-            layer: run.layer.clone(),
-            awaiting_user: run.awaiting_user,
-            done: run.done,
-            confidence: run.confidence,
-            reason: run.reason.clone(),
-            model: run.model.clone(),
-            input: run.input.clone(),
-            output: run.output.clone(),
-            cache_hit: run.cache_hit,
-            cache_miss: run.cache_miss,
-            latency_ms: run.latency_ms,
-        });
-        let runs = {
-            let mut sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get_mut(session_id) else {
-                return;
-            };
-            s.judge_runs.insert(0, run); // newest first
-            s.judge_runs.truncate(JUDGE_HISTORY_CAP);
-            s.judge_runs.clone()
-        };
-        self.persist_and_emit_judge_runs(session_id, runs);
-    }
-
-    /// Write-behind the whole history + broadcast it. Shared by add/delete/clear.
-    fn persist_and_emit_judge_runs(&self, session_id: &str, runs: Vec<JudgeRun>) {
-        if let Some(tx) = self.inner.store_tx.as_ref() {
-            let _ = tx.send(StoreWrite::UpdateJudgeRuns {
-                session_id: session_id.to_owned(),
-                runs: runs.clone(),
-            });
-        }
-        self.broadcast(Outbound::JudgeHistory {
-            session_id: session_id.to_owned(),
-            runs,
-        });
-    }
-
-    /// Delete one run from a session's judge history (inspector per-item delete).
-    /// No-op (no broadcast) if the id isn't present.
-    pub fn remove_judge_run(&self, session_id: &str, id: &str) {
-        let runs = {
-            let mut sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get_mut(session_id) else {
-                return;
-            };
-            let before = s.judge_runs.len();
-            s.judge_runs.retain(|r| r.id != id);
-            if s.judge_runs.len() == before {
-                return; // nothing removed → don't churn
-            }
-            s.judge_runs.clone()
-        };
-        self.persist_and_emit_judge_runs(session_id, runs);
-    }
-
-    /// Clear a session's entire judge history. No-op if already empty.
-    pub fn clear_judge_runs(&self, session_id: &str) {
-        {
-            let mut sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get_mut(session_id) else {
-                return;
-            };
-            if s.judge_runs.is_empty() {
-                return;
-            }
-            s.judge_runs.clear();
-        }
-        self.persist_and_emit_judge_runs(session_id, Vec::new());
-    }
-
-    /// Snapshot a session's judge history for the connect seed. Empty for an
-    /// unknown session.
-    #[must_use]
-    pub fn judge_history(&self, session_id: &str) -> Vec<JudgeRun> {
-        self.inner
-            .sessions
-            .lock()
-            .get(session_id)
-            .map_or_else(Vec::new, |s| s.judge_runs.clone())
     }
 
     // --- Generic optimistic-sync channel (@shared-utils/sync arbiter) --------
@@ -3429,7 +2832,6 @@ impl Hub {
         status: Status,
         detail: Option<String>,
     ) -> bool {
-        let turn_ended;
         {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -3452,22 +2854,6 @@ impl Hub {
             {
                 s.in_flight = false;
             }
-            // A turn that died/was cut off is NOT "awaiting your reply" — the agent
-            // didn't ask a question, it got interrupted. Clear the confirm-detect
-            // hold so the next user-authored queued message can drain. The judge
-            // only runs on a clean Busy→Running end, so these death edges need the
-            // explicit clear.
-            if matches!(
-                status,
-                Status::Exited | Status::Crashed | Status::Interrupted
-            ) {
-                s.meta.awaiting_user = false;
-                s.meta.done = false;
-            }
-            // A true turn-end (Busy → Running) is where the agent handed control
-            // back — the point to ask the confirm-detect skill "is it waiting on
-            // me?". Captured here under the lock; the judge runs after we release.
-            turn_ended = was == Status::Busy && status == Status::Running;
             if was != status {
                 s.lifecycle_epoch = s.lifecycle_epoch.wrapping_add(1);
             }
@@ -3481,13 +2867,6 @@ impl Hub {
         }
         self.push(session_id, Event::Lifecycle { status, detail });
         self.broadcast_sessions();
-        // On a turn-end, judge whether the agent is awaiting the user BEFORE the
-        // drain can release the next queued prompt. The judge sets a provisional
-        // hold synchronously, so try_drain below is a no-op until the shared Codex
-        // worker either clears it (drains) or confirms it (stays held).
-        if turn_ended {
-            self.judge_turn_end(session_id);
-        }
         // A turn-end / death may make the session drainable — try the next
         // queued prompt now (no-op if still busy, held, or nothing queued).
         self.try_drain(session_id);
@@ -3735,11 +3114,6 @@ impl Hub {
         });
     }
 
-    /// Broadcast an arbitrary outbound message to every connected client.
-    pub fn broadcast(&self, msg: Outbound) {
-        let _ = self.inner.tx.send(msg);
-    }
-
     // --- Queue + drafts (server-authoritative, synced to every terminal) ------
 
     /// Current status of a session, if it exists. Lets the server decide
@@ -3857,9 +3231,6 @@ impl Hub {
         if self.inner.dispatch_tx.lock().is_none() {
             return;
         }
-        // The awaiting-user hold below applies only to automatic drain. An
-        // explicit manual send always gets through, so a queue cannot remain
-        // trapped behind a stale classifier verdict.
         let req = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -3868,15 +3239,8 @@ impl Hub {
             if !Self::ready(s, allow_revive) {
                 return;
             }
-            // The agent's last turn was judged "awaiting the user" → hold the whole
-            // queue so the next message isn't auto-sent as a wrong answer. A manual
-            // send overrides this (the user chose to send anyway).
-            if !manual && s.meta.awaiting_user {
-                return;
-            }
             // The user MANUALLY paused the drain (the ⏸ toggle) → hold the queue
-            // exactly like awaiting_user: the running turn still finishes, but no
-            // queued message auto-advances until they resume. A manual send still
+            // after the running turn finishes. A manual send still
             // overrides (the user can force a specific message through).
             if !manual && s.meta.paused {
                 return;
@@ -3912,7 +3276,7 @@ impl Hub {
         self.drain_head(session_id, false, false);
     }
 
-    /// MANUAL drain of the queue head: bypasses the paused / awaiting-user holds
+    /// MANUAL drain of the queue head: bypasses the paused hold
     /// (the user explicitly chose "send now") and revives a dormant session. Used
     /// by force-push so a ⚡ on a PAUSED queue runs the front message immediately
     /// WITHOUT resuming the rest of the held queue.
@@ -4029,7 +3393,6 @@ impl Hub {
         }
         let wired = self.inner.dispatch_tx.lock().is_some();
         let mut dispatch = None;
-        let mut cleared_awaiting = false;
         {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -4042,14 +3405,6 @@ impl Hub {
                 && s.queue.iter().any(|m| m.cmid.as_deref() == Some(c))
             {
                 return;
-            }
-            // The user is actively sending → they've engaged with whatever the
-            // agent asked, so the "awaiting your reply" state is resolved. Clear it
-            // now so the widget vanishes immediately (the next turn re-judges).
-            if s.meta.awaiting_user || s.meta.done {
-                s.meta.awaiting_user = false;
-                s.meta.done = false;
-                cleared_awaiting = true;
             }
             if wired && Self::ready(s, true) && s.queue.is_empty() {
                 s.in_flight = true;
@@ -4069,9 +3424,6 @@ impl Hub {
                     schedule: None,
                 });
             }
-        }
-        if cleared_awaiting {
-            self.broadcast_sessions();
         }
         match dispatch {
             // Dispatched straight through — never touched a list, so no flicker
@@ -4102,7 +3454,6 @@ impl Hub {
         let wired = self.inner.dispatch_tx.lock().is_some();
         let mut dispatch = None;
         let mut interrupt = false;
-        let mut cleared_awaiting = false;
         {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -4112,12 +3463,6 @@ impl Hub {
                 && s.queue.iter().any(|m| m.cmid.as_deref() == Some(c))
             {
                 return false;
-            }
-            // Explicit send → the "awaiting your reply" state is resolved; clear it.
-            if s.meta.awaiting_user || s.meta.done {
-                s.meta.awaiting_user = false;
-                s.meta.done = false;
-                cleared_awaiting = true;
             }
             if wired && Self::ready(s, true) && s.queue.is_empty() {
                 // Idle + nothing queued → straight dispatch, identical to submit.
@@ -4145,9 +3490,6 @@ impl Hub {
                 );
                 interrupt = interrupt_on_busy;
             }
-        }
-        if cleared_awaiting {
-            self.broadcast_sessions();
         }
         match dispatch {
             Some(req) => self.send_dispatch(req),
@@ -4509,7 +3851,6 @@ impl Hub {
         // and the normal drain runs it when the queue resumes / the turn ends.
         let wired = self.inner.dispatch_tx.lock().is_some();
         let mut dispatch = None;
-        let mut cleared_awaiting = false;
         {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -4519,14 +3860,6 @@ impl Hub {
                 && s.queue.iter().any(|q| q.cmid.as_deref() == Some(c))
             {
                 return;
-            }
-            // A fired schedule is the user's pre-committed "reply" → clear any
-            // awaiting-user hold so it isn't stranded behind that widget. (Pause is
-            // a separate, deliberate hold and is NOT cleared here.)
-            if s.meta.awaiting_user || s.meta.done {
-                s.meta.awaiting_user = false;
-                s.meta.done = false;
-                cleared_awaiting = true;
             }
             if wired && !s.meta.paused && Self::ready(s, true) && s.queue.is_empty() {
                 s.in_flight = true;
@@ -4551,9 +3884,6 @@ impl Hub {
                     s.queue.push(msg);
                 }
             }
-        }
-        if cleared_awaiting {
-            self.broadcast_sessions();
         }
         match dispatch {
             Some(req) => self.send_dispatch(req),
@@ -4959,108 +4289,6 @@ mod config_preference_tests {
     }
 }
 
-/// Run the single shared Luna classifier worker. The app-server process stays
-/// warm, while each judgment gets an isolated ephemeral thread with an identical
-/// static prefix. A failed or timed-out request discards the process; the next
-/// retry recalibrates it. The queue stays bounded by the server-side channel.
-pub async fn run_judge_worker(hub: Hub, mut rx: mpsc::Receiver<JudgeReq>, command: String) {
-    let mut judge = crate::inference::codex::CodexJudge::new(command);
-    let mut circuit_opened_at: Option<std::time::Instant> = None;
-    while let Some(req) = rx.recv().await {
-        // The judge is an advisory turn-end classifier, never part of the agent's
-        // critical path. When the model endpoint is unhealthy, one slow request
-        // must not hold this session for a minute and then serially do the same to
-        // every session behind it. Probe once with a short deadline; after a
-        // failure, fail open for a cooldown and drain queued requests immediately.
-        if circuit_opened_at
-            .is_some_and(|opened| opened.elapsed() < std::time::Duration::from_mins(1))
-        {
-            hub.finish_judge_failure(req, "classifier circuit open");
-            continue;
-        }
-        circuit_opened_at = None;
-
-        let started = std::time::Instant::now();
-        let call = tokio::time::timeout(
-            std::time::Duration::from_secs(8),
-            judge.complete(&req.final_text),
-        )
-        .await;
-        let response = match call {
-            Ok(Ok(response)) => response,
-            Ok(Err(error)) => {
-                let error = error.to_string();
-                judge.reset();
-                circuit_opened_at = Some(std::time::Instant::now());
-                tracing::warn!(session = %req.session_id, %error, "Codex judge failed; opening circuit");
-                hub.finish_judge_failure(req, &error);
-                continue;
-            }
-            Err(_) => {
-                let error = "Codex judge timed out after 8s";
-                judge.reset();
-                circuit_opened_at = Some(std::time::Instant::now());
-                tracing::warn!(session = %req.session_id, "Codex judge timed out; opening circuit");
-                hub.finish_judge_failure(req, error);
-                continue;
-            }
-        };
-        match crate::skills::confirm::classify_response(response) {
-            Ok(outcome) => {
-                if !hub.judge_is_current(&req.session_id, req.seq) {
-                    continue;
-                }
-                let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-                let (hit, miss) = outcome
-                    .usage
-                    .as_ref()
-                    .map_or((0, 0), |u| (u.cache_hit_tokens, u.cache_miss_tokens));
-                tracing::info!(
-                    session = %req.session_id,
-                    awaiting = outcome.verdict.awaiting_user,
-                    done = outcome.verdict.done,
-                    confidence = outcome.verdict.confidence,
-                    reason = %outcome.verdict.reason,
-                    latency_ms,
-                    cache_hit = hit,
-                    cache_miss = miss,
-                    "confirm-detect verdict"
-                );
-                let at = now_ms();
-                if !hub.apply_verdict(&req.session_id, req.seq, &outcome.verdict) {
-                    continue;
-                }
-                hub.emit_and_record_judge(
-                    &req.session_id,
-                    JudgeRun {
-                        id: format!("{at}-{}", req.seq),
-                        at,
-                        layer: outcome.layer.to_owned(),
-                        awaiting_user: outcome.verdict.awaiting_user,
-                        done: outcome.verdict.done,
-                        confidence: outcome.verdict.confidence,
-                        reason: outcome.verdict.reason.clone(),
-                        model: crate::inference::codex::MODEL.to_owned(),
-                        input: req.final_text.clone(),
-                        output: outcome.raw_output,
-                        cache_hit: hit,
-                        cache_miss: miss,
-                        latency_ms,
-                    },
-                );
-                hub.set_judging_if_current(&req.session_id, req.seq, false);
-            }
-            Err(error) => {
-                let error = error.to_string();
-                judge.reset();
-                circuit_opened_at = Some(std::time::Instant::now());
-                tracing::warn!(session = %req.session_id, %error, "parse Codex judge verdict failed; opening circuit");
-                hub.finish_judge_failure(req, &error);
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod runtime_reconciliation_tests {
     use super::*;
@@ -5083,9 +4311,6 @@ mod runtime_reconciliation_tests {
                 status: Status::Busy,
                 origin: SessionOrigin::Web,
                 agent_session_id: Some("agent-1".to_owned()),
-                awaiting_user: false,
-                done: false,
-                judging: false,
                 paused: false,
                 system: false,
                 context_used: 0,
@@ -5099,7 +4324,6 @@ mod runtime_reconciliation_tests {
             next_seq: 0,
             queue: Vec::new(),
             drafts: Vec::new(),
-            judge_runs: Vec::new(),
             config_options: None,
             config_preferences: serde_json::json!({}),
             mobile_review_state: serde_json::Value::Null,
@@ -5201,36 +4425,8 @@ mod runtime_reconciliation_tests {
 }
 
 #[cfg(test)]
-mod confirm_hold_tests {
+mod core_tests {
     use super::*;
-
-    fn update(seq: u64, kind: &str, text: &str, id: &str, phase: Option<&str>) -> Envelope {
-        let mut value = serde_json::json!({
-            "sessionUpdate": kind,
-            "messageId": id,
-            "content": { "type": "text", "text": text }
-        });
-        if let Some(phase) = phase {
-            value["_meta"] = serde_json::json!({ "codex": { "phase": phase } });
-        }
-        Envelope {
-            session_id: "s".to_owned(),
-            seq,
-            event: Event::Update { update: value },
-            cmid: None,
-        }
-    }
-
-    #[test]
-    fn judge_input_prefers_only_codex_final_answer() {
-        let log = vec![
-            update(1, "user_message_chunk", "task", "u", None),
-            update(2, "agent_message_chunk", "working", "a", Some("commentary")),
-            update(3, "agent_message_chunk", "done ", "a", Some("final_answer")),
-            update(4, "agent_message_chunk", "now", "a", Some("final_answer")),
-        ];
-        assert_eq!(last_judge_text(&log), "done now");
-    }
 
     #[test]
     fn watchdog_revision_does_not_claim_the_replacement_turn() {
@@ -5285,27 +4481,6 @@ mod confirm_hold_tests {
             None,
         ));
         assert_eq!(hub.status("status-stuck"), Some(Status::Interrupted));
-    }
-
-    #[test]
-    fn judge_input_falls_back_to_last_agent_message_group() {
-        let log = vec![
-            update(1, "user_message_chunk", "task", "u", None),
-            update(2, "agent_message_chunk", "old", "a", None),
-            update(3, "agent_message_chunk", "new ", "b", None),
-            update(4, "agent_message_chunk", "answer", "b", None),
-        ];
-        assert_eq!(last_judge_text(&log), "new answer");
-    }
-
-    #[test]
-    fn judge_input_truncates_unicode_and_keeps_both_ends() {
-        let text = format!("START{}END", "界".repeat(5_000));
-        let truncated = truncate_judge_text(&text);
-        assert!(truncated.starts_with("START"));
-        assert!(truncated.ends_with("END"));
-        assert!(truncated.contains("中间已截断"));
-        assert_eq!(truncated.chars().count(), 4_096);
     }
 
     fn hub_with_session(id: &str) -> Hub {
@@ -5405,16 +4580,6 @@ mod confirm_hold_tests {
         assert!(hub.remove_queued_by_cmid("s", "acp-1"));
         assert_eq!(hub.session_info("s").unwrap().queue_count, 0);
         assert!(!hub.remove_queued_by_cmid("s", "acp-1"));
-    }
-
-    #[test]
-    fn awaiting_hold_toggles() {
-        let hub = hub_with_session("s2");
-        assert!(!hub.is_awaiting("s2"));
-        hub.set_awaiting("s2", true);
-        assert!(hub.is_awaiting("s2"), "judge held the queue");
-        hub.set_awaiting("s2", false);
-        assert!(!hub.is_awaiting("s2"), "clearing resumes the drain");
     }
 
     // The queue texts as clients would see them (via the resync patch).
@@ -6041,6 +5206,25 @@ mod confirm_hold_tests {
         assert_eq!(dispatched.text, "after reset");
         assert!(rx.try_recv().is_err());
         assert!(queue_texts(&hub, "reset-queue").is_empty());
+    }
+
+    #[tokio::test]
+    async fn clean_turn_end_drains_next_message_without_classifier_hold() {
+        let hub = hub_with_session("queue-after-turn");
+        let (tx, mut rx) = mpsc::channel(4);
+        hub.set_dispatch_tx(tx);
+        hub.set_status("queue-after-turn", Status::Running, None);
+
+        hub.submit("queue-after-turn", "first".to_owned(), vec![], None);
+        assert_eq!(rx.recv().await.expect("first dispatch").text, "first");
+        hub.submit("queue-after-turn", "second".to_owned(), vec![], None);
+        assert_eq!(queue_texts(&hub, "queue-after-turn"), vec!["second"]);
+
+        hub.set_status("queue-after-turn", Status::Busy, None);
+        hub.set_status("queue-after-turn", Status::Running, None);
+
+        assert_eq!(rx.recv().await.expect("turn-end dispatch").text, "second");
+        assert!(queue_texts(&hub, "queue-after-turn").is_empty());
     }
 
     #[tokio::test]

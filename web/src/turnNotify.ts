@@ -120,7 +120,7 @@ if (typeof globalThis.addEventListener === "function") {
 //              resolve — reads as a question / "your turn".
 //  - error   : a LOW descending pair on a triangle wave (A4→D#4) — darker + buzzier,
 //              unmistakably "something went wrong".
-export type AlertKind = "done" | "decision" | "error";
+export type AlertKind = "decision" | "error";
 
 interface Note {
   freq: number;
@@ -131,10 +131,6 @@ interface Note {
 }
 
 const NOTES: Record<AlertKind, readonly Note[]> = {
-  done: [
-    { freq: 880, type: "sine", at: 0, dur: 0.18, peak: 0.18 },
-    { freq: 1318.5, type: "sine", at: 0.1, dur: 0.18, peak: 0.18 },
-  ],
   decision: [
     { freq: 783.99, type: "sine", at: 0, dur: 0.16, peak: 0.15 },
     { freq: 1046.5, type: "sine", at: 0.12, dur: 0.24, peak: 0.15 },
@@ -145,10 +141,9 @@ const NOTES: Record<AlertKind, readonly Note[]> = {
   ],
 };
 
-// Vibration rhythm per kind (Android only): a single tap for done, a double "ask"
-// for decision, a longer urgent pattern for error.
+// Vibration rhythm per kind (Android only): a double "ask" for decision and a
+// longer urgent pattern for error.
 const BUZZ: Record<AlertKind, number | number[]> = {
-  done: 30,
   decision: [20, 60, 20],
   error: [55, 40, 55],
 };
@@ -185,10 +180,7 @@ function playChime(kind: AlertKind): void {
 
 /**
  * Fire the attention alert if enabled: play the kind's chime + (Android) its
- * vibration. Called from the store ONLY for the three things that need the user:
- * a finished task (`done`), a point where they must decide (`decision` — the judge
- * saw a question, or a permission request), and an agent problem (`error`). NOT
- * for mid-turn churn, a plain continue, or a force-push (those produce no verdict).
+ * vibration. Called from the store for a permission decision or an agent problem.
  */
 export function fireAlert(kind: AlertKind): void {
   const wantSound = notify.get();

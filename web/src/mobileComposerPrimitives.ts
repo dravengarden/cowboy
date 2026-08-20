@@ -27,7 +27,7 @@ export const mobileComposerStackGap = 4;
 
 /** One external clearance after whichever row owns the live Transcript tail.
  * Row internals must never manufacture their own boundary exception: Markdown,
- * Thinking, Judging, optimistic messages, and Page footers all terminate above
+ * Thinking, optimistic messages, and Page footers all terminate above
  * this same spacer. */
 export const mobileTranscriptTailGap = 12;
 

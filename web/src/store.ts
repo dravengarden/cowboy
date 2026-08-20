@@ -59,12 +59,9 @@ import {
   type Envelope,
   type Inbound,
   isPureTerminalOutputDelta,
-  type JudgeResult,
-  type JudgeRun,
   type Outbound,
   type SessionBootstrapResponse,
   type SessionMeta,
-  type SkillView,
   type WireQueued,
 } from "./protocol";
 import { mergeCanonicalTimeline } from "./canonicalTimeline";
@@ -165,16 +162,6 @@ export interface State {
   // converges on the arbiter's `sync_patch`. Ids absent here fall back to the
   // broadcast SessionMeta.title.
   titleOverrides: Record<string, string>;
-  // The static skill registry (prompt + extract) from the `skills` broadcast.
-  skills: SkillView[];
-  // Latest confirm-detect judge result per session (drives the overlay's raw-data
-  // expand). Keyed by session id.
-  judgeResults: Record<string, JudgeResult>;
-  // The confirm-detect judge-run HISTORY per session (newest first, capped),
-  // server-authoritative + persisted. Backs the inspector widget (long-press the
-  // turn-status pill). Keyed by session id; populated by the `judge_history`
-  // broadcast (connect seed + every add/delete/clear).
-  judgeRuns: Record<string, JudgeRun[]>;
   // Mobile-only code-review workspace state. The daemon persists and syncs it
   // across Mobile clients; Desktop UI never reads or writes this field.
   mobileReviewStates: Record<string, MobileReviewState>;
@@ -195,9 +182,6 @@ let state: State = {
   drafts: new Map(),
   optimisticMessages: new Map(),
   titleOverrides: {},
-  skills: [],
-  judgeResults: {},
-  judgeRuns: {},
   mobileReviewStates: {},
 };
 // React reads only this published snapshot. `state` above remains canonical and
@@ -242,24 +226,14 @@ function evictTranscriptSessions(sessionIds: readonly string[]): void {
   const timelines = new Map(state.timelines);
   const hydrated = new Set(state.hydrated);
   const pagination = new Map(state.pagination);
-  const judgeRuns = { ...state.judgeRuns };
-  const judgeResults = { ...state.judgeResults };
   let changed = false;
   for (const sessionId of evicted) {
     changed = timelines.delete(sessionId) || changed;
     changed = hydrated.delete(sessionId) || changed;
     changed = pagination.delete(sessionId) || changed;
-    if (sessionId in judgeRuns) {
-      delete judgeRuns[sessionId];
-      changed = true;
-    }
-    if (sessionId in judgeResults) {
-      delete judgeResults[sessionId];
-      changed = true;
-    }
   }
   if (changed) {
-    setState({ ...state, timelines, hydrated, pagination, judgeRuns, judgeResults });
+    setState({ ...state, timelines, hydrated, pagination });
   }
 }
 
@@ -990,12 +964,8 @@ function handle(msg: Outbound): void {
       const env = msg.envelope;
       const clearsContext = env.kind === "update" &&
         env.update.sessionUpdate === "context_cleared";
-      // Attention alert — a permission request needs a DECISION. A plain `turn_end`
-      // is NOT alerted here: a finished turn might be done, still-working, or a
-      // force-push landing — only the confirm-detect verdict (case "judge_result")
-      // knows which, so the done/decision chimes fire there. These are LIVE events;
-      // snapshot/history replays go through `case "snapshot"`, so past turns never
-      // re-ding. `fireAlert` no-ops when the setting is off / the tab is visible.
+      // Attention alert — a permission request needs a decision. Snapshot/history
+      // replays take another reducer path, so past requests never re-alert.
       if (env.kind === "permission_request") fireAlert("decision");
       // The dispatched prompt's user-echo carries the originating client's cmid
       // → CONFIRMS the optimistic chat bubble. Cross-signal: a submit GUESSED as
@@ -1084,36 +1054,6 @@ function handle(msg: Outbound): void {
     }
     case "settings": {
       // Compatibility tombstone from controllers spanning the rollout.
-      break;
-    }
-    case "skills": {
-      setState({ ...state, skills: msg.skills });
-      break;
-    }
-    case "judge_result": {
-      setState({ ...state, judgeResults: { ...state.judgeResults, [msg.session_id]: msg } });
-      // The semantic attention alert: the verdict is what makes a turn-end worth a
-      // sound. `done` → the completion chime; `awaiting_user` (the agent asked
-      // something) → the decision chime. A plain continue / a force-push lands here
-      // with both false → no sound. (The provisional hold doesn't send a
-      // judge_result — only a real L1/L2 verdict does.)
-      // Haptic on the SAME semantic turn-end the chime fires on — gated on the
-      // independent vibration setting (separate from sound), but NOT on tab-hidden:
-      // a native haptic only registers while the app is foreground, which is exactly
-      // when the "it finished / it needs you" buzz is wanted.
-      if (msg.done) {
-        fireAlert("done");
-        if (vibrateAlertOn()) notifyHaptic("success");
-      } else if (msg.awaiting_user) {
-        fireAlert("decision");
-        if (vibrateAlertOn()) notifyHaptic("warning");
-      }
-      break;
-    }
-    case "judge_history": {
-      if (transcriptIsCached(msg.session_id)) {
-        setState({ ...state, judgeRuns: { ...state.judgeRuns, [msg.session_id]: msg.runs } });
-      }
       break;
     }
     case "error": {
@@ -1708,11 +1648,6 @@ export function renameSession(sessionId: string, title: string): void {
   const trimmed = title.trim();
   if (trimmed === "") return;
   titleSync.mutate("rename", { session_id: sessionId, title: trimmed });
-}
-
-/** The registered skills (prompt + extract), for the Info sheet viewer. */
-export function useSkills(): SkillView[] {
-  return useStoreSelector((snapshot) => snapshot.skills);
 }
 
 /** Whether the live WS is currently open. False the moment it drops (onclose),
@@ -2437,45 +2372,13 @@ export function resetSession(sessionId: string): Promise<void> {
   );
 }
 
-// Lift the confirm-detect "awaiting user" hold (the awaiting widget's dismiss /
-// Send). `false` = "the agent wasn't really asking" → the queue drains. Non-
-// optimistic: the daemon `broadcast_sessions()` reflects the cleared flag within
-// a round-trip.
-export function dismissAwaiting(sessionId: string): void {
-  send({ type: "set_awaiting", session_id: sessionId, awaiting: false });
-}
-
 // Manually PAUSE / RESUME the queue drain (the ⏸ toggle). Paused holds the
 // auto-drain — queued messages don't advance even after the current turn ends —
 // without interrupting the running turn. The daemon broadcasts the flag back, so
 // every terminal reflects it within a round-trip (non-optimistic, like
-// dismissAwaiting).
+// setPaused).
 export function setPaused(sessionId: string, paused: boolean): void {
   send({ type: "set_paused", session_id: sessionId, paused });
-}
-
-/** The latest confirm-detect judge result for a session (overlay raw-data expand). */
-export function useJudgeResult(sessionId: string): JudgeResult | undefined {
-  return useStoreSelector((snapshot) => snapshot.judgeResults[sessionId]);
-}
-
-const EMPTY_RUNS: JudgeRun[] = [];
-
-/** A session's confirm-detect judge-run history (newest first), for the inspector
- *  widget. Server-authoritative — stable empty array when none yet. */
-export function useJudgeRuns(sessionId: string): JudgeRun[] {
-  return useStoreSelector((snapshot) => snapshot.judgeRuns[sessionId] ?? EMPTY_RUNS);
-}
-
-/** Delete one judge run from a session's inspector history (server-authoritative;
- *  the `judge_history` re-broadcast reflects it across terminals). */
-export function removeJudgeRun(sessionId: string, id: string): void {
-  send({ type: "remove_judge_run", session_id: sessionId, id });
-}
-
-/** Clear a session's entire judge history. */
-export function clearJudgeRuns(sessionId: string): void {
-  send({ type: "clear_judge_runs", session_id: sessionId });
 }
 
 /** Overlay "Retry": re-run the last prompt of an errored/crashed turn. */

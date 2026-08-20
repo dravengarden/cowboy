@@ -41,8 +41,6 @@ mod diff_snapshot;
 mod files;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod grok;
-#[cfg(feature = "full")]
-mod inference;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod machine_auth;
 #[cfg(feature = "machine-host")]
@@ -91,8 +89,6 @@ mod scheduler;
 mod server;
 #[cfg(feature = "machine-host")]
 mod session_workspace;
-#[cfg(feature = "full")]
-mod skills;
 #[cfg(feature = "full")]
 mod store;
 #[cfg(feature = "full")]

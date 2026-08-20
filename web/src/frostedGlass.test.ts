@@ -112,10 +112,10 @@ Deno.test("the Explore page dock yields to the focused mobile composer", () => {
   );
 });
 
-Deno.test("transient activity is transcript-owned with a zero-jump pill handoff", () => {
+Deno.test("reconnect activity is transcript-owned and judge UI stays retired", () => {
   assertEquals(TURN_STATUS_PILL_MIN_HEIGHT, 36);
   assertEquals(
-    transcriptActivitySource.includes("data-transcript-turn-activity={kind}"),
+    transcriptActivitySource.includes('data-transcript-turn-activity="reconnecting"'),
     true,
   );
   assertEquals(
@@ -136,23 +136,24 @@ Deno.test("transient activity is transcript-owned with a zero-jump pill handoff"
   );
   assertEquals(
     transcriptSource.includes('data-transcript-tail-row="judging"'),
-    true,
+    false,
   );
   assertEquals(
     transcriptSource.includes('data-transcript-tail-row="reconnecting"'),
     true,
   );
   assertEquals(turnStatusSource.includes('label: "Reconnecting…"'), false);
-  assertEquals(transcriptSource.includes("showJudging && ("), true);
+  assertEquals(transcriptSource.includes("showJudging && ("), false);
   assertEquals(
     transcriptSource.includes("<TranscriptJudgingActivity />"),
-    true,
+    false,
   );
   assertEquals(
     transcriptSource.includes("data-transcript-tail-clearance"),
     true,
   );
-  assertEquals(appSource.includes("judging={judging}"), true);
+  assertEquals(appSource.includes("judging={judging}"), false);
+  assertEquals(transcriptActivitySource.includes("Judging…"), false);
 });
 
 Deno.test("mobile composer chrome restores resting frost without a swipe filter", () => {

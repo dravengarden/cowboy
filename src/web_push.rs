@@ -62,8 +62,6 @@ struct StoredSubscriptions {
 
 #[derive(Debug, Clone, Copy)]
 pub enum NotificationCategory {
-    Completed,
-    Input,
     Permission,
     Error,
 }
@@ -71,8 +69,6 @@ pub enum NotificationCategory {
 impl NotificationCategory {
     fn enabled(self, categories: &NotificationCategories) -> bool {
         match self {
-            Self::Completed => categories.completed,
-            Self::Input => categories.input,
             Self::Permission => categories.permission,
             Self::Error => categories.error,
         }
@@ -80,8 +76,6 @@ impl NotificationCategory {
 
     fn name(self) -> &'static str {
         match self {
-            Self::Completed => "completed",
-            Self::Input => "input",
             Self::Permission => "permission",
             Self::Error => "error",
         }
@@ -89,8 +83,6 @@ impl NotificationCategory {
 
     fn copy(self) -> (&'static str, &'static str) {
         match self {
-            Self::Completed => ("Cowboy finished", "A session is ready to review."),
-            Self::Input => ("Cowboy needs your input", "Open the session to continue."),
             Self::Permission => ("Cowboy needs permission", "Review the pending request."),
             Self::Error => ("Cowboy session error", "Open the session for details."),
         }

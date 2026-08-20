@@ -39,8 +39,8 @@ mod sqlite;
 use sqlite::SqliteStorage;
 
 use crate::core::{
-    Envelope, Event, JudgeRun, QuestionPageSummary, QueuedMessage, SessionMeta, SessionOrigin,
-    Status, bound_history_page, question_summary_title,
+    Envelope, Event, QuestionPageSummary, QueuedMessage, SessionMeta, SessionOrigin, Status,
+    bound_history_page, question_summary_title,
 };
 
 fn valid_machine_id(value: &str) -> bool {
@@ -85,7 +85,7 @@ fn hex_sha256(value: &[u8]) -> String {
 ///
 /// Postgres `jsonb` cannot represent `U+0000`: an INSERT/UPDATE carrying one
 /// fails with `ERROR: unsupported Unicode escape sequence`, and our write-behind
-/// writer then drops the whole intent (the event / queue / judge-run is lost,
+/// writer then drops the whole intent (the event or queue mutation is lost,
 /// logged as "store writer failed an intent"). Agent stdout and pasted prompts
 /// occasionally carry stray NUL bytes (terminal control noise); they carry no
 /// meaning in our stored text, so we drop them rather than lose the row. Call
@@ -138,8 +138,6 @@ pub struct LoadedSession {
     /// Persisted send-queue + drafts (cross-terminal sync survives restart).
     pub queue: Vec<QueuedMessage>,
     pub drafts: Vec<QueuedMessage>,
-    /// Persisted confirm-detect judge-run history (newest first), capped.
-    pub judge_runs: Vec<JudgeRun>,
     /// Latest agent-advertised config options, retained for a fresh device.
     pub config_options: Option<serde_json::Value>,
     /// User-selected config values that must survive worker recreation.
@@ -808,15 +806,6 @@ impl Store {
         dispatch_storage!(self, update_status(session_id, status))
     }
 
-    pub async fn update_verdict(
-        &self,
-        session_id: &str,
-        awaiting_user: bool,
-        done: bool,
-    ) -> Result<()> {
-        dispatch_storage!(self, update_verdict(session_id, awaiting_user, done))
-    }
-
     pub async fn update_agent_session_id(
         &self,
         session_id: &str,
@@ -883,10 +872,6 @@ impl Store {
         drafts: &[QueuedMessage],
     ) -> Result<()> {
         dispatch_storage!(self, update_pending(session_id, queue, drafts))
-    }
-
-    pub async fn update_judge_runs(&self, session_id: &str, runs: &[JudgeRun]) -> Result<()> {
-        dispatch_storage!(self, update_judge_runs(session_id, runs))
     }
 
     pub async fn upsert_wakeup(
@@ -1625,7 +1610,7 @@ impl PostgresStorage {
             "SELECT id, provider, provider_version, provider_generation_digest, \
              provider_auth_generation, provider_behavior, machine_id, workspace_id, workspace_name, workspace_source_path, \
              cwd, title, origin, status, agent_session_id, \
-             awaiting_user, done, system, next_seq, queue, drafts, judge_runs, \
+             system, next_seq, queue, drafts, \
              config_options, config_preferences, mobile_review_state, created_at \
              FROM sessions WHERE deleted_at IS NULL ORDER BY position ASC NULLS LAST, created_at ASC",
         )
@@ -1658,7 +1643,7 @@ impl PostgresStorage {
                 // hard error: one corrupt/legacy row must not fail the whole
                 // `load_all` and so block the daemon from starting at all (that
                 // bricks EVERY session — a blank UI for the user). Same
-                // "tolerate one bad row" philosophy as queue/drafts/judge_runs
+                // "tolerate one bad row" philosophy as queue/drafts
                 // below. The skipped seq leaves a gap, which the client tolerates.
                 let event: Event = match serde_json::from_value(er.payload) {
                     Ok(ev) => ev,
@@ -1688,8 +1673,6 @@ impl PostgresStorage {
                 serde_json::from_value(row.queue.clone()).unwrap_or_default();
             let drafts: Vec<QueuedMessage> =
                 serde_json::from_value(row.drafts.clone()).unwrap_or_default();
-            let judge_runs: Vec<JudgeRun> =
-                serde_json::from_value(row.judge_runs.clone()).unwrap_or_default();
             let config_options = row.config_options.clone();
             let config_preferences = if row.config_preferences.is_object() {
                 row.config_preferences.clone()
@@ -1705,7 +1688,6 @@ impl PostgresStorage {
                 next_seq,
                 queue,
                 drafts,
-                judge_runs,
                 config_options,
                 config_preferences,
                 mobile_review_state,
@@ -2073,29 +2055,6 @@ impl PostgresStorage {
         Ok(())
     }
 
-    /// Persist the confirm-detect turn-end verdict so a finished/awaiting session
-    /// survives a daemon restart (migration 0008).
-    ///
-    /// # Errors
-    /// If the UPDATE fails.
-    pub async fn update_verdict(
-        &self,
-        session_id: &str,
-        awaiting_user: bool,
-        done: bool,
-    ) -> Result<()> {
-        sqlx::query(
-            "UPDATE sessions SET awaiting_user = $1, done = $2, updated_at = now() WHERE id = $3",
-        )
-        .bind(awaiting_user)
-        .bind(done)
-        .bind(session_id)
-        .execute(&self.pool)
-        .await
-        .with_context(|| format!("UPDATE session verdict {session_id}"))?;
-        Ok(())
-    }
-
     /// Persist the downstream agent's own session id (the ACP id it returns
     /// from `session/new`). Stored so a revived agent can resume the prior
     /// conversation via `session/load` instead of starting blank. Mirrors the
@@ -2291,24 +2250,6 @@ impl PostgresStorage {
         .execute(&self.pool)
         .await
         .with_context(|| format!("UPDATE session pending {session_id}"))?;
-        Ok(())
-    }
-
-    /// Persist a session's confirm-detect judge-run history (the whole list, as
-    /// `jsonb`; migration 0009). Whole-list overwrite like [`Self::update_pending`];
-    /// the daemon caps the list, so it stays small.
-    ///
-    /// # Errors
-    /// If serializing the list fails or the UPDATE fails.
-    pub async fn update_judge_runs(&self, session_id: &str, runs: &[JudgeRun]) -> Result<()> {
-        let mut runs_json = serde_json::to_value(runs).context("serialize judge_runs")?;
-        strip_nul(&mut runs_json);
-        sqlx::query("UPDATE sessions SET judge_runs = $1, updated_at = now() WHERE id = $2")
-            .bind(&runs_json)
-            .bind(session_id)
-            .execute(&self.pool)
-            .await
-            .with_context(|| format!("UPDATE session judge_runs {session_id}"))?;
         Ok(())
     }
 
@@ -5037,13 +4978,10 @@ struct SessionRow {
     origin: String,
     status: String,
     agent_session_id: Option<String>,
-    awaiting_user: bool,
-    done: bool,
     system: bool,
     next_seq: i64,
     queue: serde_json::Value,
     drafts: serde_json::Value,
-    judge_runs: serde_json::Value,
     config_options: Option<serde_json::Value>,
     config_preferences: serde_json::Value,
     mobile_review_state: serde_json::Value,
@@ -5073,17 +5011,9 @@ impl SessionRow {
             status: status_from_str(&self.status),
             origin: origin_from_str(&self.origin),
             agent_session_id: self.agent_session_id,
-            // Restored from the DB (migration 0008) so a finished session keeps its
-            // "Task complete" across a daemon restart — a done session has no next
-            // turn to re-judge. `crashed`/`interrupted` status still takes overlay
-            // precedence, and the next turn re-judges + re-persists.
-            awaiting_user: self.awaiting_user,
-            done: self.done,
             // Restored from the DB (migration 0010) — a system session stays
             // view-only across a daemon restart.
             system: self.system,
-            // Transient — a restored session is never mid-judge.
-            judging: false,
             // Transient — the manual pause is in-memory only (not persisted), so a
             // restored session always comes back un-paused.
             paused: false,
@@ -5125,9 +5055,6 @@ mod storage_contract_tests {
             status: Status::Starting,
             origin: SessionOrigin::Web,
             agent_session_id: None,
-            awaiting_user: false,
-            done: false,
-            judging: false,
             paused: false,
             system: false,
             context_used: 0,
@@ -5372,7 +5299,6 @@ mod storage_contract_tests {
             .parse::<u64>()?;
         assert_eq!(store.next_session_number().await?, numeric_id + 1);
         store.update_status(session_id, Status::Running).await?;
-        store.update_verdict(session_id, true, false).await?;
         store
             .update_agent_session_id(session_id, Some("agent-thread"))
             .await?;
@@ -5414,26 +5340,6 @@ mod storage_contract_tests {
                     content: Vec::new(),
                     cmid: None,
                     schedule: None,
-                }],
-            )
-            .await?;
-        store
-            .update_judge_runs(
-                session_id,
-                &[JudgeRun {
-                    id: "judge-1".to_owned(),
-                    at: 1_900_000_000_000,
-                    layer: "L2".to_owned(),
-                    awaiting_user: true,
-                    done: false,
-                    confidence: 0.9,
-                    reason: "storage contract".to_owned(),
-                    model: "gpt-test".to_owned(),
-                    input: "input".to_owned(),
-                    output: "output".to_owned(),
-                    cache_hit: 1,
-                    cache_miss: 0,
-                    latency_ms: 12,
                 }],
             )
             .await?;
@@ -5509,13 +5415,10 @@ mod storage_contract_tests {
         );
         assert_eq!(restored.meta.title, "Storage contract retargeted");
         assert_eq!(restored.meta.cwd, "/tmp/cowboy-retargeted");
-        assert!(restored.meta.awaiting_user);
-        assert!(!restored.meta.done);
         assert_eq!(restored.events.len(), 2);
         assert_eq!(restored.next_seq, 2);
         assert_eq!(restored.queue[0].id, "queue-1");
         assert_eq!(restored.drafts[0].id, "draft-1");
-        assert_eq!(restored.judge_runs[0].id, "judge-1");
         assert_eq!(
             restored.config_options.as_ref().unwrap()["model"],
             "gpt-test"

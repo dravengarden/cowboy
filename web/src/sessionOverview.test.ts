@@ -79,7 +79,7 @@ Deno.test("session overview keeps a single directory when checkout is the cwd", 
   assertEquals(rows.Context, "Not reported");
 });
 
-Deno.test("session overview status stacks judging awaiting done and pause", () => {
+Deno.test("session overview status reports lifecycle and manual queue pause", () => {
   assertEquals(sessionOverviewStatus(info()), "Running…");
   assertEquals(
     sessionOverviewStatus(info({ paused: true })),
@@ -88,25 +88,9 @@ Deno.test("session overview status stacks judging awaiting done and pause", () =
   assertEquals(
     sessionOverviewStatus(info({
       status: "running",
-      awaiting_user: true,
-    })),
-    "Live · Awaiting reply",
-  );
-  assertEquals(
-    sessionOverviewStatus(info({
-      status: "running",
-      judging: true,
-      awaiting_user: true,
-    })),
-    "Live · Judging…",
-  );
-  assertEquals(
-    sessionOverviewStatus(info({
-      status: "running",
-      done: true,
       paused: true,
     })),
-    "Live · Done · Queue paused",
+    "Live · Queue paused",
   );
 });
 

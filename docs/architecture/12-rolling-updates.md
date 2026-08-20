@@ -18,7 +18,7 @@ flowchart LR
     style W2 fill:#dcfce7,stroke:#16a34a
 ```
 
-- `cowboy.service` owns the API, WebSocket connections, Hub, scheduler, judge,
+- `cowboy.service` owns the API, WebSocket connections, Hub, scheduler,
   and Postgres write-behind. It does not parent ACP workers in production.
 - `cowboy-machine.service` is owned by the user's systemd manager and reconnects
   outbound to the Cowboy controller.

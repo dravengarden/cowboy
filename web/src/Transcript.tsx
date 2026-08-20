@@ -107,10 +107,7 @@ import {
 } from "./crashDetail";
 import { PromptOriginNote } from "./PromptOriginNote";
 import type { Envelope, Status } from "./protocol";
-import {
-  TranscriptJudgingActivity,
-  TranscriptReconnectingActivity,
-} from "./TranscriptTurnActivity";
+import { TranscriptReconnectingActivity } from "./TranscriptTurnActivity";
 import {
   canonicalTimeline,
   discardMessage,
@@ -3165,7 +3162,6 @@ export function Transcript({
   emptyContext,
   loading,
   connected,
-  judging = false,
   topInset,
   bottomInset,
   onScrollableChange,
@@ -3200,9 +3196,6 @@ export function Transcript({
    *  stale and the agent is unreachable, so we must NOT keep spinning "thinking".
    *  The connection banner communicates the disconnect instead. */
   connected: boolean;
-  /** Transient post-turn judge work. It belongs to the live Transcript tail;
-   * settled/actionable verdicts remain in the Composer status stack. */
-  judging?: boolean | undefined;
   /** Extra top padding for the scroll content (a CSS length), so content clears
    *  the bottom-mode glass status-bar strip at rest. Undefined = none. */
   topInset?: string | undefined;
@@ -3414,11 +3407,6 @@ export function Transcript({
   // spinner is wrong; the ConnectionBanner conveys the disconnect and reconnect
   // re-broadcasts the real status.
   const working = connected && busy && liveTail;
-  // The judge is launched only after Busy settles back to Running. Requiring
-  // that authoritative state prevents a stale flag from surviving a crash,
-  // interruption, reconnect, or immediately-started next turn as a false live
-  // activity row.
-  const showJudging = judging && connected && liveTail && status === "running";
   // Reconnection is transient transport activity, not Composer state. Keep its
   // debounced indication at the live Transcript tail so Plan/Pending/Input do
   // not move when the socket reconnects.
@@ -5176,11 +5164,6 @@ export function Transcript({
                     WebkitUserSelect: "none",
                   }}
                 />
-              )}
-              {showJudging && (
-                <Box data-transcript-tail-row="judging" sx={{ py: 0.625 }}>
-                  <TranscriptJudgingActivity />
-                </Box>
               )}
               {showReconnecting && (
                 <Box data-transcript-tail-row="reconnecting" sx={{ py: 0.625 }}>

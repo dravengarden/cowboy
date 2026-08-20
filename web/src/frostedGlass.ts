@@ -47,7 +47,7 @@ export function frostedPill(t: Theme, toneMain: string): Record<string, unknown>
     WebkitBackdropFilter: BLUR,
     boxShadow: [
       // Keep the elevation close to the pill. A broad downward shadow used to
-      // cross the boundary seam and visually merge Judging with the Composer.
+      // cross the boundary seam and visually merge status with the Composer.
       `${FROSTED_PILL_DROP_SHADOW_GEOMETRY} ${
         alpha(t.palette.common.black, dark ? 0.5 : 0.18)
       }`,

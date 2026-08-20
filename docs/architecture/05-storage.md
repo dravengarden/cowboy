@@ -58,8 +58,8 @@ PostgreSQL is built incrementally by the immutable `migrations/*.sql` history
 | `0005_session_soft_delete` | `deleted_at` — soft-delete for the purge window |
 | `0006_auto_resume` | legacy `auto_resume` column, retained for immutable migration history |
 | `0007_inference` | `inference_config` + `inference_secrets` tables |
-| `0008_turn_verdict` | `awaiting_user` + `done` (persisted confirm verdict) |
-| `0009_judge_runs` | `judge_runs` JSONB history |
+| `0008_turn_verdict` | legacy confirm-verdict columns, retained only for immutable migration history |
+| `0009_judge_runs` | legacy judge-run history, retained only for immutable migration history |
 | `0010_system_session` | `system` flag for machine-driven, view-only sessions |
 | `0011_scheduled_wakeups` | persisted agent wakeups |
 | `0012_compact_event_log` | drops the duplicate event index, removes transient telemetry, folds legacy tool updates into their initial row |
@@ -92,13 +92,13 @@ dispatches to `PostgresStorage` or `SqliteStorage`. `StoreWrite`, the reducer,
 retry behavior, DTOs, pagination, and error contracts do not expose the backend.
 
 `load_all()` returns every session's metadata + hot event tail + total event
-count + queue/drafts/judge runs in one restore. Mutations mirror the `StoreWrite`
-variants: `insert_session`, batched event UPSERT, `update_status`, `update_verdict`, `update_title`,
+count + queue/drafts in one restore. Mutations mirror the `StoreWrite`
+variants: `insert_session`, batched event UPSERT, `update_status`, `update_title`,
 `update_agent_session_id`, `delete_session`, `update_pending`,
-`update_session_order`, `update_judge_runs`, and Mobile review state.
-`purge_deleted()` hard-deletes soft-deleted rows. The legacy `auto_resume` column
-and settings table are deliberately ignored so old migrations stay immutable and
-a rollback can still read its schema.
+`update_session_order`, and Mobile review state. `purge_deleted()` hard-deletes
+soft-deleted rows. The legacy `auto_resume`, confirm-verdict, and judge-run
+columns and settings table are deliberately ignored so old migrations stay
+immutable and a rollback can still read its schema.
 
 ## NUL-byte stripping
 

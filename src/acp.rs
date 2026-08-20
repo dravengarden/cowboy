@@ -1728,7 +1728,7 @@ struct ClientState {
     /// Cowboy synthesizes Grok's pre-standard permission selector. Sharing its
     /// live value with the permission callback mirrors Grok's own headless
     /// client: Always Approve answers any residual shell-gate request locally,
-    /// while Default and Auto continue through the human/classifier path.
+    /// while Default and Auto continue through the human approval path.
     grok_permission_mode: Arc<Mutex<GrokPermissionMode>>,
     /// While `true`, incoming `session/update` notifications are dropped rather
     /// than pushed to the Hub. Set only around a `session/load` resume: the

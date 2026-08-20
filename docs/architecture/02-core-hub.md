@@ -11,11 +11,10 @@ Each `Session` (private to the Hub) carries:
 
 - **`SessionMeta`** — `id`, `provider`, stable Machine workspace identity,
   isolated runtime `cwd`, `title`, `status`, `origin`,
-  `agent_session_id` (for resume), and the confirm-detect
-  flags `awaiting_user` / `done` / `judging`, plus `paused` / `system`.
+  `agent_session_id` (for resume), plus `paused` / `system`.
 - an **event log** — `Vec<Envelope>` — and the `next_seq` counter.
 - per-session **config options**, the **queue** and **drafts**, an editing hold,
-  an `in_flight` flag, and the **judge runs** history.
+  and an `in_flight` flag.
 
 `Status` is a small state machine:
 
@@ -55,12 +54,11 @@ arbiter assigns `seq`, ordering is global and unambiguous across all clients.
 ## Inbound commands (clients → Hub)
 
 The send path has two doors. **`Prompt`** is the direct/API path (send now).
-**`Submit`** is the Web UI path: queue-aware, carries a `cmid`, and respects the
-queue / awaiting-user hold. Beyond those:
+**`Submit`** is the Web UI path: queue-aware and carries a `cmid`. Beyond those:
 
 - session lifecycle — `NewSession`, `OpenSession`, `DeleteSession`,
   `RenameSession`, `Cancel`, `RetryTurn`
-- per-session toggles — `SetAwaiting`, `SetPaused`
+- per-session toggles — `SetPaused`
 - queue / draft ops — `RemoveQueued`, `EditQueued`, `ClearQueue`,
   `RequestSendQueued`, `ForcePushQueued`, `QueuedToDraft`, `AddDraft`,
   `EditDraft`, `ActivateDraft`, `MoveDraft`, … (all routed through the sync arbiter)
@@ -78,9 +76,6 @@ queue / awaiting-user hold. Beyond those:
 | `ConfigOptions` | the agent's advertised per-session config (mode / model / effort) |
 | `SyncPatch` | generic sync state (queue / drafts / order) |
 | `Settings` | empty compatibility tombstone for stale cached clients |
-| `InferenceConfig` | per-provider model + whether a key is set (never the key) |
-| `Skills` | the static skill registry |
-| `JudgeResult` / `JudgeHistory` | confirm-detect verdict + the capped run history |
 | `Error` | a rejected command, broadcast to all |
 
 ## Fan-out & reconnect
@@ -106,8 +101,8 @@ older history is paged on demand (see [Server & wire API](06-server-api.md)).
 
 The Hub never touches the database directly. Each state change emits a
 **`StoreWrite`** variant — `InsertSession`, `AppendEvent`, `UpdateStatus`,
-`UpdateVerdict`, `UpdateTitle`, `SetAgentSessionId`, `DeleteSession`,
-`UpdatePending`, `UpdateSessionOrder`, `UpdateJudgeRuns`, and Mobile review state
+`UpdateTitle`, `SetAgentSessionId`, `DeleteSession`, `UpdatePending`,
+`UpdateSessionOrder`, and Mobile review state
 — onto a bounded mpsc
 channel drained in reduced batches by the background writer task
 ([Storage](05-storage.md)). The hot path never blocks on the DB; overflow and

@@ -168,8 +168,8 @@ pub struct ServeArgs {
     )]
     pub victoria_metrics_url: String,
 
-    /// Codex CLI used by the shared Luna classifier app-server. The self-managed
-    /// `/opt` install follows Codex's own update channel on hawk.
+    /// Codex CLI used to query `OpenAI` account usage. The self-managed `/opt`
+    /// install follows Codex's own update channel on hawk.
     #[arg(
         long,
         env = "COWBOY_CODEX_COMMAND",

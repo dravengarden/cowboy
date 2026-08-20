@@ -52,17 +52,6 @@ export interface SessionMeta {
   /** True for a machine-driven, view-only system session: the UI hides its
    *  composer and shows a "System" badge. Persisted. */
   system?: boolean;
-  /** True when the confirm-detect skill judged the agent's last turn as awaiting
-   *  the user (a question/confirmation): the queue is held and the awaiting
-   *  widget shows. Transient (never persisted) — resets to false on restart. */
-  awaiting_user?: boolean;
-  /** True when the last turn was judged as having COMPLETED the task (green "done"
-   *  overlay). Transient, never persisted. */
-  done?: boolean;
-  /** True while the async confirm-detect L2 judge is in flight for the last turn
-   *  (between the provisional hold and the verdict). Drives the pill's "Judging…"
-   *  loading state. Transient, never persisted. */
-  judging?: boolean;
   /** User-set MANUAL PAUSE of the queue drain (the ⏸ toggle). While true queued
    *  messages don't auto-advance (even after the turn ends), but the running turn
    *  isn't interrupted. Released by the user to resume. Transient, never
@@ -230,56 +219,12 @@ export type Outbound =
   // Compatibility tombstone for clients cached before automatic resume was
   // retired. Current clients ignore the empty snapshot.
   | { type: "settings"; settings: Record<string, unknown> }
-  // The static skill registry (prompt + extract), sent once on connect.
-  | { type: "skills"; skills: SkillView[] }
-  // The confirm-detect judge's full result for a turn (verdict + raw I/O for the
-  // overlay's "raw data" expand). Latest-per-session.
-  | ({ type: "judge_result" } & JudgeResult)
-  // A session's confirm-detect judge-run HISTORY (newest first), capped. Backs the
-  // inspector widget (long-press the turn-status pill). Hydrated with the focused
-  // session + re-broadcast on every new run / per-item delete / clear.
-  | { type: "judge_history"; session_id: string; runs: JudgeRun[] }
   | { type: "error"; session_id?: string; message: string };
 
 /** Focused-session hydration returned by the HTTP bootstrap route. Every item
  * uses the normal Outbound reducer so HTTP and live WebSocket overlap dedupes. */
 export interface SessionBootstrapResponse {
   messages: Outbound[];
-}
-
-/** A registered skill as the daemon exposes it — the prompt template + extraction
- *  rule are rendered verbatim in the Info sheet so they're inspectable. */
-export interface SkillView {
-  id: string;
-  title: string;
-  description: string;
-  prompt_template: string;
-  extract: string;
-}
-
-/** One confirm-detect judge run — the verdict + the observability detail the
- *  overlay's "raw data" expand surfaces. */
-export interface JudgeResult {
-  session_id: string;
-  layer: string; // "L1" | "L2"
-  awaiting_user: boolean;
-  done: boolean;
-  confidence: number;
-  reason: string;
-  model: string;
-  input: string;
-  output: string;
-  cache_hit: number;
-  cache_miss: number;
-  latency_ms: number;
-}
-
-/** One persisted judge run — the `JudgeResult` detail (minus `session_id`, which
- *  rides on the `JudgeHistory` wrapper) plus the durable `id` (delete key) and
- *  `at` (unix-ms). Backs the inspector widget's history list. */
-export interface JudgeRun extends Omit<JudgeResult, "session_id"> {
-  id: string;
-  at: number;
 }
 
 export type Inbound =
@@ -386,12 +331,6 @@ export type Inbound =
   | { type: "reorder_sessions"; order: string[] }
   | { type: "reorder_queue"; session_id: string; order: string[] }
   | { type: "reorder_drafts"; session_id: string; order: string[] }
-  // Inspector widget: delete one judge run from a session's history, or clear all.
-  | { type: "remove_judge_run"; session_id: string; id: string }
-  | { type: "clear_judge_runs"; session_id: string }
-  // Confirm-detect: clear/set the "awaiting user" hold (the awaiting widget's
-  // dismiss / Send). `awaiting: false` = "not a question" → drain the held queue.
-  | { type: "set_awaiting"; session_id: string; awaiting: boolean }
   | { type: "set_paused"; session_id: string; paused: boolean }
   // Overlay action for errored turns.
   | { type: "retry_turn"; session_id: string }

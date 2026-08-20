@@ -199,7 +199,6 @@ import { UsageLogs } from "./UsageLogs";
 import { SegmentedPill } from "./SegmentedPill";
 import { fireLabel, fireRel } from "./scheduleTime";
 import { ResourceLightbox } from "./ResourceLightbox";
-import { JudgeInspectorHost } from "./JudgeInspector";
 import { desktopFocusBoundary, desktopFocusFill, type Mode as ThemeMode } from "./theme";
 import { persisted } from "./_store/mod.ts";
 import { desktopImeOwnsKey } from "./desktop/commands/imeShortcut";
@@ -1849,10 +1848,6 @@ const StoreTranscript = memo(function StoreTranscript({
         snapshot.hydrated.has(sessionId)
     );
     const connected = useStoreSelector((snapshot) => snapshot.connected);
-    const judging = useStoreSelector((snapshot) =>
-        snapshot.sessions.find((session) => session.id === sessionId)?.judging ??
-        false
-    );
     const session = useStoreSelector((snapshot) =>
         snapshot.sessions.find((candidate) => candidate.id === sessionId)
     );
@@ -1887,7 +1882,6 @@ const StoreTranscript = memo(function StoreTranscript({
             cwd={cwd}
             loading={!hydrated}
             connected={connected}
-            judging={judging}
             topInset={topInset}
             bottomInset={bottomInset}
             onScrollableChange={onScrollableChange}
@@ -1904,7 +1898,6 @@ const StoreTranscript = memo(function StoreTranscript({
             cwd={cwd}
             loading={!hydrated}
             connected={connected}
-            judging={judging}
             emptyContext={emptyContext}
             topInset={topInset}
             bottomInset={bottomInset}
@@ -2171,8 +2164,6 @@ export function App({
         }
         openMobileProduct("review");
     });
-    // (The no-judge-key warning now lives in the unified TurnStatusOverlay — the
-    // blue "no key" pill — so it's no longer a separate top-of-content Notice.)
     // Desktop sidebar width + live-drag flag. Width is a pixel value (not the
     // old fluid clamp) so the divider can set it directly; `resizing` drives
     // the handle's active highlight and a body-wide drag cursor / no-select.
@@ -3827,7 +3818,6 @@ export function App({
                 onClose={(): void => setPendingReload(null)}
             />
             <ResourceLightbox />
-            <JudgeInspectorHost forceSheet={navbarAtBottom} />
             <SettingsController
                 ref={settingsControllerRef}
                 mobile={mobile}

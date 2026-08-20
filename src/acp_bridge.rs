@@ -1137,10 +1137,7 @@ impl Bridge {
             Outbound::BootstrapComplete
             | Outbound::Ping
             | Outbound::SyncPatch { .. }
-            | Outbound::Settings { .. }
-            | Outbound::Skills { .. }
-            | Outbound::JudgeResult { .. }
-            | Outbound::JudgeHistory { .. } => {}
+            | Outbound::Settings { .. } => {}
         }
         Ok(())
     }
@@ -1482,9 +1479,6 @@ fn apply_bootstrap_outbound(state: &Arc<Mutex<BridgeState>>, outbound: Outbound)
         | Outbound::Ping
         | Outbound::SyncPatch { .. }
         | Outbound::Settings { .. }
-        | Outbound::Skills { .. }
-        | Outbound::JudgeResult { .. }
-        | Outbound::JudgeHistory { .. }
         | Outbound::Error { .. } => {}
     }
 }
@@ -1601,9 +1595,6 @@ mod tests {
             status: Status::Busy,
             origin: crate::core::SessionOrigin::Api,
             agent_session_id: None,
-            awaiting_user: false,
-            done: false,
-            judging: false,
             paused: false,
             system: false,
             context_used: 0,

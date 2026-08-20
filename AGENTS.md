@@ -91,7 +91,7 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
 
 ## Frontend
 Composer (mdlive / CM6), optimistic-send, transcript (column-reverse scroll),
-confirm-detection, the Tauri native shell — see `web/AGENTS.md` and the
+the Tauri native shell — see `web/AGENTS.md` and the
 `cowboy-*` memories.
 
 Mobile horizontal swipe (Sessions/Review drawers and the Agent↔Review

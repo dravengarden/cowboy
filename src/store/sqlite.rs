@@ -81,13 +81,10 @@ struct SqliteSessionRow {
     origin: String,
     status: String,
     agent_session_id: Option<String>,
-    awaiting_user: bool,
-    done: bool,
     system: bool,
     next_seq: i64,
     queue: serde_json::Value,
     drafts: serde_json::Value,
-    judge_runs: serde_json::Value,
     config_options: Option<serde_json::Value>,
     config_preferences: serde_json::Value,
     mobile_review_state: serde_json::Value,
@@ -1281,10 +1278,7 @@ impl SqliteSessionRow {
             status: status_from_str(&self.status),
             origin: origin_from_str(&self.origin),
             agent_session_id: self.agent_session_id,
-            awaiting_user: self.awaiting_user,
-            done: self.done,
             system: self.system,
-            judging: false,
             paused: false,
             context_used: 0,
             context_size: 0,
@@ -1906,7 +1900,7 @@ impl SqliteStorage {
             "SELECT id, provider, provider_version, provider_generation_digest, \
              provider_auth_generation, provider_behavior, machine_id, workspace_id, workspace_name, workspace_source_path, \
              cwd, title, origin, status, agent_session_id, \
-             awaiting_user, done, system, next_seq, queue, drafts, judge_runs, \
+             system, next_seq, queue, drafts, \
              config_options, config_preferences, mobile_review_state, created_at_ms \
              FROM sessions WHERE deleted_at_ms IS NULL \
              ORDER BY position IS NULL, position ASC, created_at_ms ASC",
@@ -1940,7 +1934,6 @@ impl SqliteStorage {
             let next_seq = u64::try_from(row.next_seq).unwrap_or(0);
             let queue = serde_json::from_value(row.queue.clone()).unwrap_or_default();
             let drafts = serde_json::from_value(row.drafts.clone()).unwrap_or_default();
-            let judge_runs = serde_json::from_value(row.judge_runs.clone()).unwrap_or_default();
             let config_options = row.config_options.clone();
             let config_preferences = if row.config_preferences.is_object() {
                 row.config_preferences.clone()
@@ -1956,7 +1949,6 @@ impl SqliteStorage {
                 next_seq,
                 queue,
                 drafts,
-                judge_runs,
                 config_options,
                 config_preferences,
                 mobile_review_state,
@@ -2256,25 +2248,6 @@ impl SqliteStorage {
         Ok(())
     }
 
-    pub(super) async fn update_verdict(
-        &self,
-        session_id: &str,
-        awaiting_user: bool,
-        done: bool,
-    ) -> Result<()> {
-        sqlx::query(
-            "UPDATE sessions SET awaiting_user = ?1, done = ?2, updated_at_ms = ?3 WHERE id = ?4",
-        )
-        .bind(awaiting_user)
-        .bind(done)
-        .bind(now_ms())
-        .bind(session_id)
-        .execute(&self.pool)
-        .await
-        .with_context(|| format!("UPDATE SQLite session verdict {session_id}"))?;
-        Ok(())
-    }
-
     pub(super) async fn update_agent_session_id(
         &self,
         session_id: &str,
@@ -2461,23 +2434,6 @@ impl SqliteStorage {
         .execute(&self.pool)
         .await
         .with_context(|| format!("UPDATE SQLite session pending {session_id}"))?;
-        Ok(())
-    }
-
-    pub(super) async fn update_judge_runs(
-        &self,
-        session_id: &str,
-        runs: &[JudgeRun],
-    ) -> Result<()> {
-        let mut runs_json = serde_json::to_value(runs).context("serialize SQLite judge_runs")?;
-        strip_nul(&mut runs_json);
-        sqlx::query("UPDATE sessions SET judge_runs = ?1, updated_at_ms = ?2 WHERE id = ?3")
-            .bind(&runs_json)
-            .bind(now_ms())
-            .bind(session_id)
-            .execute(&self.pool)
-            .await
-            .with_context(|| format!("UPDATE SQLite session judge_runs {session_id}"))?;
         Ok(())
     }
 

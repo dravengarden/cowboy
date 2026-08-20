@@ -23,9 +23,6 @@ pub(crate) use crate::provider_behavior::legacy_behavior;
 
 pub(crate) const DEEPSEEK_SESSION_ID_ENV: &str = "COWBOY_DEEPSEEK_SESSION_ID";
 
-// Provider-independent protocol stop-reason classification.
-pub mod confirm;
-
 /// How to spawn one provider's ACP adapter as a subprocess.
 #[derive(Debug, Clone)]
 pub struct LaunchSpec {
