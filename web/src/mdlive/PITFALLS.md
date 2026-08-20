@@ -2167,3 +2167,15 @@ Desktop Vim + IME checks:
     Keep the error surface mounted with explicit checking/retry feedback when
     the deploy hand-off or network is not ready; never reload the same stale
     document in a loop.
+
+92. **A newly queued or drafted message is an item navigation target, not a
+    nearest-edge hint.** `block: nearest` and a single early geometry sample can
+    leave only the new card's thumbnail visible: the Queue/Draft Collapse is
+    still opening, or its image decodes after WebKit first decides the row is
+    already visible. Anchor the arrived row inside its own pending scrollport,
+    then repeat that same idempotent reveal after the Collapse settles and after
+    images inside that row load. A card taller than the scrollport falls back to
+    its top edge; an ordinary card is fully visible after browser scroll-range
+    clamping. Keep this as a short-lived arrival effect—do not add a persistent
+    panel `ResizeObserver`, per-frame React state, or editor focus/selection
+    writes merely to repair preview geometry.

@@ -4151,30 +4151,50 @@ function PendingPanel({
       setArrivalFlash(arrival);
     });
   }, [kind]);
+  const revealArrivalRow = useCallback((): void => {
+    if (arrivalFlash === null) return;
+    const row = scrollRef.current?.querySelector<HTMLElement>(
+      '[data-pending-row-flash="true"]',
+    );
+    if (row) scrollPendingRowIntoView(row);
+  }, [arrivalFlash]);
   useEffect(() => {
     if (arrivalFlash === null) return undefined;
     const timer = globalThis.setTimeout(
       () => setArrivalFlash(null),
       PENDING_ARRIVAL_FLASH_MS,
     );
-    const reveal = (): void => {
-      const row = scrollRef.current?.querySelector<HTMLElement>(
+    let laterFrame = 0;
+    let imageFrame = 0;
+    const frame = globalThis.requestAnimationFrame(() => {
+      laterFrame = globalThis.requestAnimationFrame(revealArrivalRow);
+    });
+    const settle = globalThis.setTimeout(revealArrivalRow, 180);
+    const lateSettle = globalThis.setTimeout(revealArrivalRow, 420);
+    const list = scrollRef.current;
+    const onImageLoad = (event: Event): void => {
+      const row = list?.querySelector<HTMLElement>(
         '[data-pending-row-flash="true"]',
       );
-      if (row) scrollPendingRowIntoView(row);
+      if (
+        row === null || row === undefined ||
+        !(event.target instanceof HTMLImageElement) ||
+        !row.contains(event.target)
+      ) return;
+      globalThis.cancelAnimationFrame(imageFrame);
+      imageFrame = globalThis.requestAnimationFrame(revealArrivalRow);
     };
-    let laterFrame = 0;
-    const frame = globalThis.requestAnimationFrame(() => {
-      laterFrame = globalThis.requestAnimationFrame(reveal);
-    });
-    const settle = globalThis.setTimeout(reveal, 180);
+    list?.addEventListener("load", onImageLoad, true);
     return (): void => {
       globalThis.clearTimeout(timer);
       globalThis.clearTimeout(settle);
+      globalThis.clearTimeout(lateSettle);
       globalThis.cancelAnimationFrame(frame);
       if (laterFrame !== 0) globalThis.cancelAnimationFrame(laterFrame);
+      if (imageFrame !== 0) globalThis.cancelAnimationFrame(imageFrame);
+      list?.removeEventListener("load", onImageLoad, true);
     };
-  }, [arrivalFlash]);
+  }, [arrivalFlash, revealArrivalRow]);
   const toggleCollapsed = (): void => {
     // Explicit haptic: the collapse/expand header is a custom clickable row, NOT a
     // MuiButtonBase, so the global delegation doesn't see it. Light disclosure tap.
@@ -4641,6 +4661,7 @@ function PendingPanel({
       }
       <Collapse
         in={!visuallyCollapsed}
+        onEntered={revealArrivalRow}
         sx={{
           willChange: "height",
           // Large attachment previews otherwise re-enter layout + paint on

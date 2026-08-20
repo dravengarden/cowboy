@@ -1,5 +1,8 @@
 import { assertEquals } from "jsr:@std/assert";
-import { pendingRowMatchesArrival } from "./pendingPanelState.ts";
+import {
+  pendingRowMatchesArrival,
+  pendingRowRevealDelta,
+} from "./pendingPanelState.ts";
 
 const composerSource = await Deno.readTextFile(
   new URL("./Composer.tsx", import.meta.url),
@@ -40,6 +43,13 @@ Deno.test("staging a draft or queue item expands that panel and flashes the row"
   assertEquals(composerSource.includes("subscribePendingArrival"), true);
   assertEquals(composerSource.includes("data-pending-row-flash"), true);
   assertEquals(composerSource.includes("scrollPendingRowIntoView"), true);
+});
+
+Deno.test("an arrived row is anchored instead of accepting partial visibility", () => {
+  assertEquals(pendingRowRevealDelta(520, 200), 312);
+  assertEquals(pendingRowRevealDelta(208, 200), 0);
+  assertEquals(composerSource.includes("onEntered={revealArrivalRow}"), true);
+  assertEquals(composerSource.includes('addEventListener("load", onImageLoad, true)'), true);
 });
 
 Deno.test("queue and draft bulk actions live in the header kebab", () => {

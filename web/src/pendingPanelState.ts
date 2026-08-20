@@ -38,17 +38,28 @@ export function pendingRowMatchesArrival(
 }
 
 export const PENDING_ARRIVAL_FLASH_MS = 1400;
+export const PENDING_ROW_REVEAL_INSET_PX = 8;
+
+export function pendingRowRevealDelta(
+  rowTop: number,
+  portTop: number,
+): number {
+  return rowTop - portTop - PENDING_ROW_REVEAL_INSET_PX;
+}
 
 export function scrollPendingRowIntoView(row: HTMLElement): void {
   const port = row.closest<HTMLElement>(
     "[data-mobile-pending-scrollport], [data-desktop-pending-list]",
   );
   if (port === null) {
-    row.scrollIntoView({ block: "nearest" });
+    row.scrollIntoView({ block: "start" });
     return;
   }
   const rowRect = row.getBoundingClientRect();
   const portRect = port.getBoundingClientRect();
-  if (rowRect.top >= portRect.top && rowRect.bottom <= portRect.bottom) return;
-  port.scrollTop += rowRect.top - portRect.top - 8;
+  // An arrival is an explicit navigation target, not a generic "make some part
+  // visible" request. Anchor that row even when WebKit currently considers it
+  // visible: a thumbnail can decode after this measurement and otherwise grow
+  // the highlighted card back below the scrollport edge.
+  port.scrollTop += pendingRowRevealDelta(rowRect.top, portRect.top);
 }
