@@ -5,6 +5,12 @@ import { attachmentTrayForSurface } from "./attachmentPresentation.ts";
 const composerSource = await Deno.readTextFile(
   new URL("../Composer.tsx", import.meta.url),
 );
+const inlineImagesSource = await Deno.readTextFile(
+  new URL("../inlineImages.ts", import.meta.url),
+);
+const messagePreviewSource = await Deno.readTextFile(
+  new URL("../MessagePreview.tsx", import.meta.url),
+);
 
 function attachment(id: string, isImage: boolean, previewUrl = "data:image/png;base64,c2hvdA=="): Attachment {
   return {
@@ -73,6 +79,33 @@ Deno.test("inline-image Preview dismisses the software keyboard before the light
 Deno.test("pending cards preview token-backed images inline instead of a second chip", () => {
   assertEquals(composerSource.includes("attachmentTrayForSurface(seedAttachments, seedText)"), true);
   assertEquals(composerSource.includes("<MessagePreview text={seedText} attachments={seedAttachments} />"), true);
+});
+
+Deno.test("pending inline images open the lightbox instead of starting an edit", () => {
+  assertEquals(
+    messagePreviewSource.includes(
+      '"& .cm-inline-image": { pointerEvents: "auto", cursor: "pointer" }',
+    ),
+    true,
+  );
+  assertEquals(
+    inlineImagesSource.includes(
+      'img.dataset.pendingContentAction = "attachment-preview"',
+    ),
+    true,
+  );
+  assertEquals(
+    inlineImagesSource.includes(
+      "const readOnly = !view.state.facet(EditorView.editable)",
+    ),
+    true,
+  );
+  assertEquals(
+    inlineImagesSource.includes(
+      "if (readOnly) {\n          activateReadOnlyPreview();\n          return;\n        }",
+    ),
+    true,
+  );
 });
 
 Deno.test("pending edit surfaces retain previews for attachments without inline tokens", () => {

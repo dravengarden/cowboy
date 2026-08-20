@@ -88,6 +88,7 @@ class InlineImageWidget extends WidgetType {
   override toDOM(view: EditorView): HTMLElement {
     const att = registry.get(this.id);
     if (att?.isImage && isLoadablePreviewUrl(att.previewUrl)) {
+      const readOnly = !view.state.facet(EditorView.editable);
       const widget = document.createElement("span");
       widget.className = "cm-inline-image-widget";
       widget.contentEditable = "false";
@@ -111,6 +112,16 @@ class InlineImageWidget extends WidgetType {
       img.src = att.previewUrl;
       img.alt = att.name;
       img.draggable = false;
+      if (readOnly) {
+        // A parked Queue/Draft preview is otherwise one large edit hit target.
+        // Mark the thumbnail as an independent nested control so the outer
+        // reliable touch handler does not begin editing before the synthetic
+        // mouse event opens the lightbox.
+        img.dataset.pendingContentAction = "attachment-preview";
+        img.role = "button";
+        img.tabIndex = 0;
+        img.setAttribute("aria-label", `Preview ${att.name}`);
+      }
       // Keep the caret visible after a paste: a tall inline image only gets its
       // real height once the <img> LOADS, so a scrollIntoView at insert time would
       // measure it as 0 and under-scroll — leaving the just-landed caret below the
@@ -126,17 +137,37 @@ class InlineImageWidget extends WidgetType {
         });
       });
       const id = this.id;
+      const activateReadOnlyPreview = (): void => openLightbox([att], 0);
       // mousedown (not click): beat CM's own pointer handling and stop the press
       // from moving the caret into the atomic widget. Hand off to the host's
-      // selection popover (preview / delete); fall back to the lightbox directly.
+      // selection popover (preview / delete). Read-only pending cards bypass the
+      // editing popover and open their image preview directly.
       img.addEventListener("mousedown", (e) => {
         e.preventDefault();
         e.stopPropagation();
+        if (readOnly) {
+          activateReadOnlyPreview();
+          return;
+        }
         // Hand the tap point to the host so the popover opens at the finger, not
         // anchored to this (possibly tall) image's bottom edge.
         if (imageTapHandler !== null) imageTapHandler(id, img, e.clientX, e.clientY);
         else openLightbox([att], 0);
       });
+      img.addEventListener("click", (event) => {
+        // mousedown already activated pointer input. Keep its compatibility
+        // click from bubbling into the pending row's edit target.
+        event.preventDefault();
+        event.stopPropagation();
+      });
+      if (readOnly) {
+        img.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          event.stopPropagation();
+          activateReadOnlyPreview();
+        });
+      }
       widget.appendChild(img);
       return widget;
     }

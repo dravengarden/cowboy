@@ -2094,3 +2094,12 @@ Desktop Vim + IME checks:
     swap in that hold; keep `lastNativeValueRef` on the live DOM so a later
     stale React render cannot clobber leftover latin. Do not
     `preventDefault` IME beforeinput. Do not claim pitfall #69 fixed.
+
+85. **A parked Queue/Draft image is a preview target, not an edit target.**
+    `MessagePreview` keeps its read-only CodeMirror canvas pointer-inert so text
+    taps enter the row edit transaction, but that also made inline thumbnails
+    pass through to the outer pending-card tap handler. Re-enable pointer events
+    only on `.cm-inline-image`. In a read-only EditorView, mark that image as a
+    nested pending-content action and open the shared lightbox directly; editable
+    Composer images retain their Preview/Delete popper. Keep the rest of the
+    preview non-interactive and do not add card-wide pointer or touch interception.

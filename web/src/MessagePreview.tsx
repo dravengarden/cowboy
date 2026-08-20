@@ -112,9 +112,11 @@ function MessagePreviewImpl({
               WebkitMaskImage:
                 "linear-gradient(to bottom, #000 0, #000 calc(100% - 1.35em), transparent 100%)",
             }),
-          // The preview is non-interactive — taps select the row to edit, they
-          // don't place a caret or follow a link inside the read-only editor.
+          // The preview canvas is non-interactive — taps select the row to edit,
+          // while an inline image opts back into pointer events so it can open
+          // the lightbox directly without entering the edit transaction.
           "& .cm-editor": { backgroundColor: "transparent", pointerEvents: "none" },
+          "& .cm-inline-image": { pointerEvents: "auto", cursor: "pointer" },
           "& .cm-content": {
             padding: 0,
             caretColor: "transparent",
