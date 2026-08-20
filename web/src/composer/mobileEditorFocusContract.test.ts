@@ -113,7 +113,25 @@ Deno.test("multi-image mobile composers scroll the focused caret above the keybo
   );
   assertEquals(editorSource.includes("revealSelection: (): void =>"), true);
   assertEquals(
-    editorSource.includes("EditorView.scrollIntoView(view.state.selection.main.head"),
+    editorSource.includes(
+      "function revealFocusedSelection(view: EditorView): void",
+    ),
+    true,
+  );
+  assertEquals(
+    editorSource.includes(
+      "EditorView.scrollIntoView(view.state.selection.main.head",
+    ),
+    true,
+  );
+  assertEquals(
+    editorSource.includes(
+      "globalThis.requestAnimationFrame(() => revealFocusedSelection(view));",
+    ),
+    true,
+  );
+  assertEquals(
+    editorSource.includes("if (!touchInput || !view.hasFocus) return false;"),
     true,
   );
   assertEquals(

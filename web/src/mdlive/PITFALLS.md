@@ -2212,3 +2212,15 @@ Desktop Vim + IME checks:
     prevents a double lift. Do not add an unconditional accessory constant or
     move the Composer with focus effects; both reintroduce the ordinary PWA
     blank band and disturb native selection/IME ownership.
+
+95. **A tap while the keyboard is already open must reveal the new CM6 caret.**
+    The multi-image Composer has a bounded internal `.cm-scroller`. Its existing
+    reveal effect runs only when the shared keyboard signal changes from closed
+    to open. Tapping a different document position while that keyboard remains
+    open changes CodeMirror's logical selection without crossing that boundary,
+    so the caret can stay below the editor viewport. Observe the completed CM6
+    `click`, then on the next animation frame dispatch only
+    `EditorView.scrollIntoView` for the current selection. Do not prevent the
+    click, write a selection, focus again, or add a pointerdown handler: UIKit
+    must keep ownership of long-press Paste/Select and IME. Native textarea
+    selection reveal remains browser-owned and unchanged.

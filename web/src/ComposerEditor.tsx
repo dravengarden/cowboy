@@ -153,6 +153,16 @@ export interface ComposerEditorHandle {
   redo: () => void;
 }
 
+function revealFocusedSelection(view: EditorView): void {
+  if (!view.hasFocus || !view.dom.isConnected) return;
+  view.dispatch({
+    effects: EditorView.scrollIntoView(view.state.selection.main.head, {
+      y: "nearest",
+      yMargin: 12,
+    }),
+  });
+}
+
 // Reads the actual Vim state from the loaded module's CM5-compat handle. Escape
 // stays with Vim through Insert, Visual, and operator/key-prefix states; only
 // plain Normal delegates to Cowboy chrome. The same handle also drives the
@@ -417,13 +427,7 @@ export const ComposerEditor = forwardRef<
     hasFocus: (): boolean => cmRef.current?.view?.hasFocus ?? false,
     revealSelection: (): void => {
       const view = cmRef.current?.view;
-      if (!view?.hasFocus) return;
-      view.dispatch({
-        effects: EditorView.scrollIntoView(view.state.selection.main.head, {
-          y: "nearest",
-          yMargin: 12,
-        }),
-      });
+      if (view) revealFocusedSelection(view);
     },
     getValue: (): string => cmRef.current?.view?.state.doc.toString() ?? "",
     getSelection: (): ComposerEditorSelection => {
@@ -762,6 +766,16 @@ export const ComposerEditor = forwardRef<
       // is lifted out to the composer as attachments; only a files-bearing
       // paste is swallowed, so plain-text paste keeps CodeMirror's behaviour.
       EditorView.domEventHandlers({
+        click: (_event, view): boolean => {
+          if (!touchInput || !view.hasFocus) return false;
+          // The keyboard may already be open, so the outer false->true keyboard
+          // transition cannot reveal a newly tapped caret. Wait until WebKit and
+          // CM6 have committed the native click selection, then scroll only the
+          // editor viewport. This does not prevent the click, rewrite selection,
+          // or observe pointerdown, so UIKit keeps long-press and IME ownership.
+          globalThis.requestAnimationFrame(() => revealFocusedSelection(view));
+          return false;
+        },
         paste: (event): boolean => {
           const cb = event.clipboardData;
           if (!cb) return false;
