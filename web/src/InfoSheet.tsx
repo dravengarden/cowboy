@@ -19,7 +19,6 @@ import {
 import { ExpandMore, Refresh } from "@mui/icons-material";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
-import { useSkills } from "./store";
 import { NetworkButton, NetworkIconButton } from "./NetworkActionFeedback";
 import {
   DEEPSEEK_CACHE_MIN_HIT_LABEL,
@@ -1814,7 +1813,7 @@ function ClientStorageInfoSection(): React.JSX.Element {
 }
 
 // The Info tab's body — rendered inside the merged Settings sheet (no own Sheet
-// wrapper). Holds the classifier/skills viewer and daemon system info.
+// wrapper). Holds provider usage, storage, and client diagnostics.
 export function InfoContent({
   desktop = false,
   aside,
@@ -1822,8 +1821,6 @@ export function InfoContent({
   desktop?: boolean;
   aside?: React.ReactNode;
 } = {}): React.JSX.Element {
-  const skills = useSkills();
-
   return (
     <Box
       sx={desktop
@@ -1841,117 +1838,6 @@ export function InfoContent({
       </Box>
       {!desktop && <Divider />}
       <Stack spacing={desktop ? 1.25 : 2.5}>
-        <Box
-          sx={desktop
-            ? { p: 1.5, border: 1, borderColor: "divider", borderRadius: 2 }
-            : undefined}
-        >
-          <Typography variant="overline" color="text.secondary">
-            Turn classifier
-          </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-            Normal turn endings use isolated Codex Luna threads on one shared
-            app-server; deterministic stop reasons need no model call.
-          </Typography>
-          <InfoRow k="Runtime" v="Codex app-server" />
-          <InfoRow k="Model" v="gpt-5.6-luna" />
-        </Box>
-
-        {
-          /* Skills — provider-agnostic capability units run at turn-end. Each is
-            expandable to show the exact prompt + how the output is extracted, so
-            the judgment logic is inspectable (not a black box). */
-        }
-        <Box
-          sx={desktop
-            ? { p: 1.5, border: 1, borderColor: "divider", borderRadius: 2 }
-            : undefined}
-        >
-        <Typography variant="overline" color="text.secondary">
-          Skills
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-          Run after each turn to classify what the agent did.
-        </Typography>
-        <Stack spacing={1}>
-          {skills.length === 0 && (
-            <Typography variant="caption" color="text.secondary">
-              No skills reported (connecting…).
-            </Typography>
-          )}
-          {skills.map((sk) => (
-            <Accordion
-              key={sk.id}
-              disableGutters
-              elevation={0}
-              sx={{
-                border: 1,
-                borderColor: "divider",
-                borderRadius: "10px !important",
-                bgcolor: "transparent",
-                "&:before": { display: "none" },
-                "& .MuiAccordionSummary-root": { minHeight: 52 },
-                "& .MuiAccordionSummary-content": { my: 1 },
-              }}
-            >
-              <AccordionSummary expandIcon={<ExpandMore />}>
-                <Box>
-                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                    {sk.title}
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary">
-                    {sk.description}
-                  </Typography>
-                </Box>
-              </AccordionSummary>
-              <AccordionDetails>
-                <Stack spacing={1.5}>
-                  <Box>
-                    <Typography
-                      variant="caption"
-                      color="text.secondary"
-                      sx={{ fontWeight: 600 }}
-                    >
-                      Prompt
-                    </Typography>
-                    <Box
-                      component="pre"
-                      sx={{
-                        m: 0,
-                        mt: 0.5,
-                        p: 1,
-                        borderRadius: 1.5,
-                        bgcolor: "action.hover",
-                        fontSize: 11,
-                        lineHeight: 1.5,
-                        whiteSpace: "pre-wrap",
-                        wordBreak: "break-word",
-                        maxHeight: 260,
-                        overflow: "auto",
-                      }}
-                    >
-                      {sk.prompt_template}
-                    </Box>
-                  </Box>
-                  <Box>
-                    <Typography
-                      variant="caption"
-                      color="text.secondary"
-                      sx={{ fontWeight: 600 }}
-                    >
-                      Extraction
-                    </Typography>
-                    <Typography variant="body2" sx={{ mt: 0.5 }}>
-                      {sk.extract}
-                    </Typography>
-                  </Box>
-                </Stack>
-              </AccordionDetails>
-            </Accordion>
-          ))}
-        </Stack>
-        </Box>
-
         {!desktop && <Divider />}
         <Stack
           spacing={1}

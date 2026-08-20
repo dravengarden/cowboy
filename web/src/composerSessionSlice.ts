@@ -14,9 +14,6 @@ export interface ComposerSessionSlice {
   providerVersion: string | undefined;
   providerDigest: string | undefined;
   paused: boolean;
-  awaitingUser: boolean;
-  done: boolean;
-  judging: boolean;
   contextUsed: number;
   contextSize: number;
   destinations: ComposerDestination[];
@@ -42,9 +39,6 @@ export function composerSessionSlice(
     providerVersion: active?.provider_version,
     providerDigest: active?.provider_generation_digest,
     paused: active?.paused ?? false,
-    awaitingUser: active?.awaiting_user ?? false,
-    done: active?.done ?? false,
-    judging: active?.judging ?? false,
     contextUsed: active?.context_used ?? 0,
     contextSize: active?.context_size ?? 0,
     destinations: sessions
@@ -64,9 +58,6 @@ export function sameComposerSessionSlice(
       a.providerVersion === b.providerVersion &&
       a.providerDigest === b.providerDigest &&
       a.paused === b.paused &&
-      a.awaitingUser === b.awaitingUser &&
-      a.done === b.done &&
-      a.judging === b.judging &&
       a.contextUsed === b.contextUsed &&
       a.contextSize === b.contextSize &&
       a.destinations.length === b.destinations.length &&
@@ -78,7 +69,7 @@ export function sameComposerSessionSlice(
 }
 
 /** Equality for the navbar's normally-closed session settings sheet. Usage,
- * judging, scheduling and other row-only metadata do not appear there. */
+ * scheduling and other row-only metadata do not appear there. */
 export function sameComposerSheetSession(
   a: SessionMeta | undefined,
   b: SessionMeta | undefined,

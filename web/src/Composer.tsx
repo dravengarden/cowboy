@@ -1915,11 +1915,7 @@ export function ComposerWorkspace({
             sessionId={sessionId}
             status={status}
             working={turnWorking}
-            awaitingUser={sessionState.awaitingUser}
-            done={sessionState.done}
-            judging={sessionState.judging}
             paused={sessionState.paused}
-            queue={queue}
             onFocusComposer={(): void => editorRef.current?.focus()}
           />
         )

@@ -313,14 +313,6 @@ and older hosts reject it instead of guessing.
   request metadata. Its ordinary ACP session modes stay independently routed to
   `session/set_mode`.
 
-## Protocol-level L1 confirm detection
-
-`src/provider/confirm.rs` contains one Provider-independent ACP stop-reason
-rule. A non-`EndTurn` stop is deterministically incomplete and skips the
-expensive L2 judge; an absent or ordinary `EndTurn` is ambiguous and falls
-through to L2. There is no Provider-ID rule table. See
-[Confirm-detect & inference](07-confirm-inference.md).
-
 ## Out-of-process Provider runtime
 
 An installed release supplies its own generation-local executable graph and

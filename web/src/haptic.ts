@@ -8,7 +8,7 @@
 // that was never actually wired into the native shell, so every call here was a
 // silent no-op on iOS. The shell registers `tauri-plugin-haptics` and the shared
 // primitive invokes it directly — so delegating here makes ALL existing call sites
-// (force-push, jump-to-front, judge long-press) finally buzz on iOS, and any new
+// (force-push and jump-to-front) finally buzz on iOS, and any new
 // call site is pure web (next deploy, no app reinstall).
 
 import {

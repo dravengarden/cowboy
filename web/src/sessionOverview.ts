@@ -77,15 +77,9 @@ export function sessionOverviewSections(
 }
 
 export function sessionOverviewStatus(
-  info: Pick<
-    SessionMeta,
-    "status" | "judging" | "awaiting_user" | "done" | "paused"
-  >,
+  info: Pick<SessionMeta, "status" | "paused">,
 ): string {
   const parts = [lifecycleStatus(info.status)];
-  if (info.judging) parts.push("Judging…");
-  else if (info.awaiting_user) parts.push("Awaiting reply");
-  else if (info.done) parts.push("Done");
   if (info.paused) parts.push("Queue paused");
   return parts.join(" · ");
 }

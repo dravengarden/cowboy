@@ -69,8 +69,9 @@ Deno.test("drawer swipe does not React-render on transcript finger-down", () => 
 Deno.test("the growing row stays in the scroller paint flow", () => {
   assertEquals(transcriptRowContainment(true), "none");
   assertEquals(transcriptRowContainment(false), "layout paint");
+  assertEquals(transcriptRowContainment(false, true), "layout");
   assert(
-    /contain:\s*transcriptRowContainment\(\s*item\.key === streamingRowKey/
+    /contain:\s*transcriptRowContainment\(\s*item\.key === streamingRowKey,\s*item\.kind === "message" &&\s*item\.chunks\.some\(\(chunk\) => chunk\.type === "image"\)/
       .test(
         transcriptSource,
       ),

@@ -71,10 +71,9 @@ and replay unacked events when the control plane reconnects.
 | Transport | `src/acp.rs` | the **only** module touching `agent-client-protocol` |
 | Lifetime | `src/supervisor.rs`, `src/machine_broker.rs`, `src/worker.rs` | route / detach / drain / resume / rollback |
 | Runtime IPC | `src/runtime_wire.rs`, `src/remote_runtime.rs` | version negotiation, fencing, replay, idempotency |
-| Providers | `src/provider/*` | launch specs + per-provider confirm rules |
+| Providers | `src/provider/*` | launch specs + Provider runtime contracts |
 | Server | `src/server.rs` | axum REST + WS + runtime static-file root |
 | Storage | `src/store.rs`, `migrations/*` | Postgres write-behind, restore |
-| Confirm | `src/skills/`, `src/inference/` | deterministic L1 + shared Codex Luna L2 |
 | Files | `src/files.rs` | gitignore-aware `@` file picker |
 | Frontend | `web/src/*` | independently built React SPA |
 
@@ -88,8 +87,8 @@ flowchart TB
     D --> E["agent streams<br/>session/update"]
     E --> F["Hub.push(Event)<br/>broadcast to all"]
     F --> G["clients render;<br/>writer persists"]
-    E --> H["TurnEnd →<br/>confirm-detect judge"]
-    H --> F
+    E --> H["TurnEnd →<br/>drain next queued prompt"]
+    H --> B
 
     style B fill:#eef2ff,stroke:#6366f1
     style F fill:#dcfce7,stroke:#16a34a
@@ -103,13 +102,12 @@ Read the chapters in order; each one zooms into a box above:
 4. [Providers](04-providers.md)
 5. [Storage](05-storage.md)
 6. [Server & wire API](06-server-api.md)
-7. [Confirm-detect & inference](07-confirm-inference.md)
-8. [Codex-owned memory boundary](08-memory.md)
-9. [Frontend](09-frontend.md)
-10. [Build & deploy](10-deploy-build.md)
-11. [Operations](11-operations.md)
-12. [Zero-interruption rolling updates](12-rolling-updates.md)
-13. [Multi-machine runtime](15-multi-machine.md)
+7. [Codex-owned memory boundary](08-memory.md)
+8. [Frontend](09-frontend.md)
+9. [Build & deploy](10-deploy-build.md)
+10. [Operations](11-operations.md)
+11. [Zero-interruption rolling updates](12-rolling-updates.md)
+12. [Multi-machine runtime](15-multi-machine.md)
 
 Zed setup and the ACP bridge's current compatibility boundary are documented in
 [Zed ACP integration](../integrations/zed.md).

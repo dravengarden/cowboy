@@ -26,7 +26,6 @@ material, operational guidance, research evidence, and historical notes.
 - [`architecture/04-providers.md`](architecture/04-providers.md) — 04 Providers
 - [`architecture/05-storage.md`](architecture/05-storage.md) — 05 Storage
 - [`architecture/06-server-api.md`](architecture/06-server-api.md) — 06 Server Api, including the history-preserving session reload endpoint
-- [`architecture/07-confirm-inference.md`](architecture/07-confirm-inference.md) — 07 Confirm Inference
 - [`architecture/08-memory.md`](architecture/08-memory.md) — 08 Memory
 - [`architecture/09-frontend.md`](architecture/09-frontend.md) — 09 Frontend, including global scaling and native iOS scroll elasticity contracts
 - [`architecture/10-deploy-build.md`](architecture/10-deploy-build.md) — 10 Deploy Build

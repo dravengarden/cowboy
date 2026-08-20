@@ -11,12 +11,8 @@ function session(id: string, cwd: string): SessionMeta {
     status: "running",
     origin: "web",
     agent_session_id: null,
-    awaiting_user: false,
-    done: false,
-    judging: false,
     paused: false,
     system: false,
-    turn_verdict: null,
     schedule: null,
     usage: null,
   };

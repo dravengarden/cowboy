@@ -214,15 +214,13 @@ buttons must compose that primitive (or its hook when gesture/ref handling
 requires retaining the native MUI button) rather than implementing private
 spinners, disabled delays, or timeout guesses.
 
-## Turn status & confirm
+## Turn completion and permissions
 
-The turn-status pill (`SegmentedPill.tsx`) reflects the confirm-detect verdict
-([Confirm-detect & inference](07-confirm-inference.md)): busy (spinner), "waiting
-for you" (`awaiting_user`), "done" (`done`), or "judging…" during L2 inference. A
-long-press opens `JudgeInspector.tsx` — the per-session judge-run history (raw
-I/O, confidence, L1-vs-L2 layer, model). `PermissionOverlay.tsx` renders the
-floating Allow/Reject buttons; first-response-wins clears them on every surface at
-once.
+Turn completion is driven directly by ACP lifecycle state. When a turn ends,
+the Hub drains the next queued prompt unless the user explicitly paused the
+queue; there is no secondary classifier or inferred waiting state.
+`PermissionOverlay.tsx` renders the floating Allow/Reject buttons;
+first-response-wins clears them on every surface at once.
 
 ## PWA & native shell
 
