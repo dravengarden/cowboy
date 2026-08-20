@@ -5265,13 +5265,15 @@ export function Transcript({
                       py: 0.625,
                       display: "flex",
                       flexDirection: "column",
-                      // Settled rows stay independently painted so a streamed
-                      // sibling cannot expose a stale tool-card layer. Keep the
-                      // actively growing row in the scroller's paint flow so
-                      // WebKit commits its new raster and column-reverse scroll
-                      // compensation in the same frame.
+                      // Settled text/tool rows stay independently painted so a
+                      // streamed sibling cannot expose a stale layer. Lazy
+                      // image rows keep layout containment only: iOS WebKit can
+                      // otherwise retain an empty off-screen paint layer and
+                      // hide the entire user bubble when it scrolls into view.
                       contain: transcriptRowContainment(
                         item.key === streamingRowKey,
+                        item.kind === "message" &&
+                          item.chunks.some((chunk) => chunk.type === "image"),
                       ),
                       color: locatedToolKey === item.key
                         ? "primary.main"
