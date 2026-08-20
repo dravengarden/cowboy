@@ -1913,11 +1913,27 @@ impl SqliteStorage {
         for row in session_rows {
             let id = row.id.clone();
             let event_rows: Vec<EventRow> = sqlx::query_as(
-                "SELECT seq, payload, count(*) OVER() AS total_count \
-                 FROM events WHERE session_id = ?1 ORDER BY seq DESC LIMIT ?2",
+                "WITH recent AS MATERIALIZED ( \
+                     SELECT seq, payload FROM events \
+                     WHERE session_id = ?1 ORDER BY seq DESC LIMIT ?2 \
+                 ), sized AS ( \
+                     SELECT seq, payload, \
+                            row_number() OVER (ORDER BY seq DESC) AS recent_rank, \
+                            sum(length(CAST(payload AS BLOB)) + ?4) \
+                                OVER (ORDER BY seq DESC) AS cumulative_bytes \
+                     FROM recent \
+                 ), totals AS ( \
+                     SELECT count(*) AS total_count FROM events WHERE session_id = ?1 \
+                 ) \
+                 SELECT sized.seq, sized.payload, totals.total_count \
+                 FROM sized CROSS JOIN totals \
+                 WHERE sized.recent_rank = 1 OR sized.cumulative_bytes <= ?3 \
+                 ORDER BY sized.seq DESC",
             )
             .bind(&id)
             .bind(i64::try_from(crate::core::HOT_TAIL).unwrap_or(i64::MAX))
+            .bind(i64::try_from(crate::core::HOT_TAIL_MAX_BYTES).unwrap_or(i64::MAX))
+            .bind(i64::try_from(id.len().saturating_add(64)).unwrap_or(i64::MAX))
             .fetch_all(&self.pool)
             .await
             .with_context(|| format!("SELECT SQLite events for {id}"))?;
@@ -1925,12 +1941,16 @@ impl SqliteStorage {
                 .first()
                 .and_then(|event| u64::try_from(event.total_count).ok())
                 .unwrap_or(0);
-            let reached_start = event_count <= u64::try_from(event_rows.len()).unwrap_or(u64::MAX);
-            let events = event_rows
+            let mut reached_start =
+                event_count <= u64::try_from(event_rows.len()).unwrap_or(u64::MAX);
+            let mut events: Vec<_> = event_rows
                 .into_iter()
                 .rev()
                 .filter_map(|event| decode_event_row(event, &id, "restore"))
                 .collect();
+            if crate::core::bound_restored_hot_log(&mut events) {
+                reached_start = false;
+            }
             let next_seq = u64::try_from(row.next_seq).unwrap_or(0);
             let queue = serde_json::from_value(row.queue.clone()).unwrap_or_default();
             let drafts = serde_json::from_value(row.drafts.clone()).unwrap_or_default();

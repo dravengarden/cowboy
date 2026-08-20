@@ -1622,11 +1622,28 @@ impl PostgresStorage {
         for row in session_rows {
             let id = row.id.clone();
             let event_rows: Vec<EventRow> = sqlx::query_as::<_, EventRow>(
-                "SELECT seq, payload, count(*) OVER() AS total_count \
-                 FROM events WHERE session_id = $1 ORDER BY seq DESC LIMIT $2",
+                "WITH recent AS MATERIALIZED ( \
+                     SELECT seq, payload FROM events \
+                     WHERE session_id = $1 ORDER BY seq DESC LIMIT $2 \
+                 ), sized AS ( \
+                     SELECT seq, payload, \
+                            row_number() OVER (ORDER BY seq DESC) AS recent_rank, \
+                            sum(octet_length(payload::text) + $4) \
+                                OVER (ORDER BY seq DESC) AS cumulative_bytes \
+                     FROM recent \
+                 ), totals AS ( \
+                     SELECT count(*)::bigint AS total_count \
+                     FROM events WHERE session_id = $1 \
+                 ) \
+                 SELECT sized.seq, sized.payload, totals.total_count \
+                 FROM sized CROSS JOIN totals \
+                 WHERE sized.recent_rank = 1 OR sized.cumulative_bytes <= $3 \
+                 ORDER BY sized.seq DESC",
             )
             .bind(&id)
             .bind(i64::try_from(crate::core::HOT_TAIL).unwrap_or(i64::MAX))
+            .bind(i64::try_from(crate::core::HOT_TAIL_MAX_BYTES).unwrap_or(i64::MAX))
+            .bind(i64::try_from(id.len().saturating_add(64)).unwrap_or(i64::MAX))
             .fetch_all(&self.pool)
             .await
             .with_context(|| format!("SELECT events for {id}"))?;
@@ -1635,7 +1652,8 @@ impl PostgresStorage {
                 .first()
                 .and_then(|r| u64::try_from(r.total_count).ok())
                 .unwrap_or(0);
-            let reached_start = event_count <= u64::try_from(event_rows.len()).unwrap_or(u64::MAX);
+            let mut reached_start =
+                event_count <= u64::try_from(event_rows.len()).unwrap_or(u64::MAX);
             let mut events = Vec::with_capacity(event_rows.len());
             for er in event_rows.into_iter().rev() {
                 let seq_for_log = er.seq;
@@ -1665,6 +1683,9 @@ impl PostgresStorage {
                     // cmid is a live-only reconcile tag, never persisted.
                     cmid: None,
                 });
+            }
+            if crate::core::bound_restored_hot_log(&mut events) {
+                reached_start = false;
             }
             let next_seq = u64::try_from(row.next_seq).unwrap_or(0);
             // Tolerate a malformed/legacy payload by degrading to empty rather
@@ -5639,6 +5660,47 @@ mod storage_contract_tests {
         Ok(())
     }
 
+    async fn assert_restore_hot_tail_is_byte_bounded(
+        store: &Store,
+        session_id: &str,
+    ) -> Result<()> {
+        store.migrate().await?;
+        store.insert_session(&session(session_id)).await?;
+        let payload = "x".repeat(384 * 1024);
+        let events: Vec<_> = (0..5)
+            .map(|seq| Envelope {
+                session_id: session_id.to_owned(),
+                seq,
+                event: Event::Update {
+                    update: serde_json::json!({
+                        "sessionUpdate": "tool_call_update",
+                        "payload": payload,
+                    }),
+                },
+                cmid: None,
+            })
+            .collect();
+        store
+            .upsert_event_batch(&events, &HashMap::from([(session_id.to_owned(), 5)]))
+            .await?;
+
+        let loaded = store
+            .load_all()
+            .await?
+            .into_iter()
+            .find(|loaded| loaded.meta.id == session_id)
+            .context("byte-bounded restore session missing")?;
+        assert_eq!(loaded.event_count, 5);
+        assert!(!loaded.reached_start);
+        assert_eq!(loaded.events.last().map(|event| event.seq), Some(4));
+        assert!(loaded.events.len() < events.len());
+        let restored_bytes = loaded.events.iter().fold(0usize, |size, event| {
+            size.saturating_add(crate::core::estimated_envelope_bytes(event))
+        });
+        assert!(restored_bytes <= crate::core::HOT_TAIL_MAX_BYTES);
+        Ok(())
+    }
+
     #[tokio::test]
     async fn sqlite_implements_storage_contract() {
         let root = std::env::temp_dir().join(format!(
@@ -5650,6 +5712,9 @@ mod storage_contract_tests {
         let url = format!("sqlite://{}", root.join("cowboy.sqlite3").display());
         let store = Store::connect(&url, root.join("artifacts")).await.unwrap();
         run_storage_contract(&store, "sess-900000001")
+            .await
+            .unwrap();
+        assert_restore_hot_tail_is_byte_bounded(&store, "sess-900000011")
             .await
             .unwrap();
         drop(store);
@@ -5670,6 +5735,9 @@ mod storage_contract_tests {
         run_storage_contract(&store, "sess-900000003")
             .await
             .unwrap();
+        assert_restore_hot_tail_is_byte_bounded(&store, "sess-900000013")
+            .await
+            .unwrap();
         drop(store);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -5684,6 +5752,9 @@ mod storage_contract_tests {
         std::fs::create_dir_all(&root).unwrap();
         let store = Store::connect(&url, root.join("artifacts")).await.unwrap();
         run_storage_contract(&store, "sess-900000002")
+            .await
+            .unwrap();
+        assert_restore_hot_tail_is_byte_bounded(&store, "sess-900000012")
             .await
             .unwrap();
         drop(store);

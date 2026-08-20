@@ -45,7 +45,7 @@ const HOT_TAIL_TRIM_BATCH: usize = 200;
 /// Soft heap budget for one persisted session's canonical hot tail. A count
 /// limit alone is ineffective for screenshots and multi-megabyte tool results.
 /// Keep at least the newest event so the cursor always advances.
-const HOT_TAIL_MAX_BYTES: usize = 8 * 1024 * 1024;
+pub(crate) const HOT_TAIL_MAX_BYTES: usize = 1024 * 1024;
 const BROADCAST_CAPACITY: usize = 1_024;
 /// Event-count ceiling for the cursor-based HTTP history route. The byte budget
 /// above is the primary bound; this limits render work for many tiny events.
@@ -75,7 +75,7 @@ fn estimated_json_bytes(value: &serde_json::Value) -> usize {
 
 /// A cheap soft estimate used only for retention. Walking a JSON string is O(1)
 /// (`String::len`), unlike serializing the ever-growing text on every token.
-fn estimated_envelope_bytes(envelope: &Envelope) -> usize {
+pub(crate) fn estimated_envelope_bytes(envelope: &Envelope) -> usize {
     let base = envelope
         .session_id
         .len()
@@ -108,6 +108,17 @@ fn trim_hot_log(log: &mut Vec<Envelope>, log_bytes: &mut usize, trim_count_batch
     log.drain(..drop_count);
     *log_bytes = retained_bytes;
     true
+}
+
+/// Enforce the canonical in-memory hot-tail budget after restoring persisted
+/// events. Storage applies an approximate serialized-byte bound before rows
+/// cross the process boundary; this exact model-side pass accounts for decoded
+/// strings and keeps the newest event when it alone exceeds the budget.
+pub(crate) fn bound_restored_hot_log(log: &mut Vec<Envelope>) -> bool {
+    let mut log_bytes = log.iter().fold(0usize, |size, envelope| {
+        size.saturating_add(estimated_envelope_bytes(envelope))
+    });
+    trim_hot_log(log, &mut log_bytes, false)
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -4814,7 +4825,7 @@ mod core_tests {
             SessionOrigin::Api,
             false,
         );
-        let payload = "x".repeat(1024 * 1024);
+        let payload = "x".repeat(384 * 1024);
         for n in 0..12 {
             hub.push(
                 "byte-hot-tail",
@@ -4834,6 +4845,36 @@ mod core_tests {
         assert!(session.log_bytes <= HOT_TAIL_MAX_BYTES);
         assert!(!session.reached_start);
         assert_eq!(session.event_count, 12);
+    }
+
+    #[test]
+    fn persisted_hub_keeps_one_oversized_newest_event() {
+        let (tx, _rx) = mpsc::channel(4);
+        let health = std::sync::Arc::new(PersistenceHealth::default());
+        let hub = Hub::with_store(Some(StoreSink::new(tx, health)));
+        hub.create_local_session(
+            "oversized-hot-tail".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "oversized-hot-tail".to_owned(),
+            SessionOrigin::Api,
+            false,
+        );
+        hub.push(
+            "oversized-hot-tail",
+            Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "tool_call_update",
+                    "payload": "x".repeat(HOT_TAIL_MAX_BYTES + 1),
+                }),
+            },
+        );
+
+        let sessions = hub.inner.sessions.lock();
+        let session = sessions.get("oversized-hot-tail").expect("session");
+        assert_eq!(session.log.len(), 1);
+        assert!(session.log_bytes > HOT_TAIL_MAX_BYTES);
+        assert_eq!(session.event_count, 1);
     }
 
     #[test]
