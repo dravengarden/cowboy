@@ -81,6 +81,6 @@ Deno.test("tab close confirmation uses the medium Cowboy corner radius", () => {
   const confirmation = appSource.slice(start, end);
 
   assertEquals(start >= 0 && content > start && end > content, true);
-  assertStringIncludes(confirmation, "borderRadius: 1.5");
+  assertStringIncludes(confirmation, 'borderRadius: "12px"');
   assertEquals(confirmation.includes("borderRadius: 2.5"), false);
 });

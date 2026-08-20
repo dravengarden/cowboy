@@ -972,7 +972,7 @@ Deno.test("pending Force push confirmation keeps the native editor and anchor mo
   assertEquals(confirmation.includes("<Popover"), false);
   assertEquals(confirmation.includes("<ClickAwayListener"), true);
   assertEquals(confirmation.includes('aria-modal="false"'), true);
-  assertEquals(confirmation.includes("borderRadius: 1.5"), true);
+  assertEquals(confirmation.includes('borderRadius: "12px"'), true);
   assertEquals(
     confirmation.match(
       /onPointerDown=\{\(event\): void => event\.preventDefault\(\)\}/g,
@@ -1006,7 +1006,7 @@ Deno.test("main Force push confirmation preserves native keyboard focus", () => 
   assertEquals(confirmation.includes("<Popover"), false);
   assertEquals(confirmation.includes("<ClickAwayListener"), true);
   assertEquals(confirmation.includes('aria-modal="false"'), true);
-  assertEquals(confirmation.includes("borderRadius: 1.5"), true);
+  assertEquals(confirmation.includes('borderRadius: "12px"'), true);
   assertEquals(
     confirmation.match(
       /onPointerDown=\{\(event\): void => event\.preventDefault\(\)\}/g,

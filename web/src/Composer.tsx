@@ -3289,7 +3289,7 @@ export function ComposerWorkspace({
             role="dialog"
             aria-modal="false"
             aria-label="Force push confirmation"
-            sx={{ maxWidth: 268, borderRadius: 1.5, boxShadow: 8 }}
+            sx={{ maxWidth: 268, borderRadius: "12px", boxShadow: 8 }}
           >
             <Box sx={{ p: 1.5 }}>
               <Stack
@@ -5202,7 +5202,7 @@ function PendingRow({
             role="dialog"
             aria-modal="false"
             aria-label="Force push confirmation"
-            sx={{ maxWidth: 240, borderRadius: 1.5, boxShadow: 8 }}
+            sx={{ maxWidth: 240, borderRadius: "12px", boxShadow: 8 }}
           >
             <Box sx={{ p: 1.5 }}>
               <Typography variant="body2" sx={{ mb: 1 }}>
