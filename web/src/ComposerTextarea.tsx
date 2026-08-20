@@ -201,6 +201,7 @@ export const ComposerTextarea = forwardRef<
   // This ref also protects a just-accepted keystroke while its React mirror is
   // one render behind.
   const lastNativeValueRef = useRef<string | null>(null);
+  const composingRef = useRef(false);
   const selectedSlashCommandRef = useRef<string | null>(null);
   const [trigger, setTrigger] = useState<Trigger | null>(null);
   const [options, setOptions] = useState<PickerOption[]>([]);
@@ -253,7 +254,7 @@ export const ComposerTextarea = forwardRef<
 
   const measureNativeOverflow = (): void => {
     const ta = inputRef.current;
-    if (!ta) return;
+    if (!ta || composingRef.current) return;
     if (!expanded) {
       const needed = nativeTextareaFittedHeight(ta.scrollHeight);
       // Collapsing to height:auto while focused races UIKit's caret overlay
@@ -365,6 +366,11 @@ export const ComposerTextarea = forwardRef<
       if (ta?.value === value) lastNativeValueRef.current = null;
       return;
     }
+    // iOS Pinyin backspace updates the DOM without a React `input` event.
+    // Candidate-bar resize then re-renders this parent with a stale `value`
+    // and would clobber marked text (`u o|sa`). Obsidian never writes the
+    // editable during composition.
+    if (composingRef.current) return;
     if (lastNativeValueRef.current === ta.value) return;
     const previous = ta.value;
     const from = ta.selectionStart ?? previous.length;
@@ -786,12 +792,31 @@ export const ComposerTextarea = forwardRef<
             }
           }
           lastNativeValueRef.current = e.target.value;
+          composingRef.current = e.nativeEvent.isComposing;
           onChange(e.target.value);
           sync(
             e.target.value,
             e.target.selectionStart ?? e.target.value.length,
           );
           rememberSelection(e.target as HTMLTextAreaElement);
+        }}
+        onCompositionStart={(e): void => {
+          composingRef.current = true;
+          lastNativeValueRef.current = e.currentTarget.value;
+        }}
+        onCompositionUpdate={(e): void => {
+          composingRef.current = true;
+          lastNativeValueRef.current = e.currentTarget.value;
+        }}
+        onCompositionEnd={(e): void => {
+          composingRef.current = false;
+          lastNativeValueRef.current = e.currentTarget.value;
+          onChange(e.currentTarget.value);
+          sync(
+            e.currentTarget.value,
+            e.currentTarget.selectionStart ?? e.currentTarget.value.length,
+          );
+          rememberSelection(e.currentTarget);
         }}
         onSelect={(e): void => {
           const ta = e.target as HTMLTextAreaElement;

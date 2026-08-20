@@ -58,3 +58,16 @@ const IME_INPUT_TYPES = new Set([
 export function isImeInputType(inputType: string | undefined): boolean {
   return inputType !== undefined && IME_INPUT_TYPES.has(inputType);
 }
+
+/**
+ * iOS Pinyin backspace often uses `deleteContentBackward` while
+ * `isComposing` is still true — not `deleteCompositionText`. Obsidian
+ * never preventDefaults or dispatches in that window. Cowboy must not
+ * either: a host transaction commits the marked latin (`u o|sa`).
+ */
+export function isImeProtectedInput(
+  event: Pick<InputEvent, "inputType" | "isComposing">,
+  editorComposing = false,
+): boolean {
+  return event.isComposing || editorComposing || isImeInputType(event.inputType);
+}

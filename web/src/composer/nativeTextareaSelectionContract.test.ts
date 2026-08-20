@@ -21,6 +21,16 @@ Deno.test("native textarea keeps React rerenders from replacing iOS selection", 
     textareaSource.includes("mapNativeSelectionThroughValueChange"),
     true,
   );
+  assertEquals(textareaSource.includes("if (composingRef.current) return;"), true);
+  assertEquals(textareaSource.includes("onCompositionUpdate"), true);
+});
+
+Deno.test("CM6 backspace does not steal iOS IME composition deletes", () => {
+  assertEquals(editorSource.includes("isImeProtectedInput(e, view.composing)"), true);
+  assertEquals(
+    editorSource.includes("view.composing ? false : backspaceChain(view)"),
+    true,
+  );
 });
 
 Deno.test("ordinary native input bypasses MUI trailing-newline selection rewrites", () => {

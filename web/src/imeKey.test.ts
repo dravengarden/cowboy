@@ -1,5 +1,9 @@
 import { assertEquals } from "jsr:@std/assert";
-import { isImeInputType, isImeKeyEvent } from "./imeKey.ts";
+import {
+  isImeInputType,
+  isImeKeyEvent,
+  isImeProtectedInput,
+} from "./imeKey.ts";
 
 Deno.test("IME keyboard events include active and legacy WebKit composition", () => {
   assertEquals(
@@ -34,4 +38,28 @@ Deno.test("IME beforeinput types are the candidate-confirm family", () => {
   assertEquals(isImeInputType("insertLineBreak"), false);
   assertEquals(isImeInputType("deleteContentBackward"), false);
   assertEquals(isImeInputType(undefined), false);
+});
+
+Deno.test("iOS IME backspace stays protected while composing", () => {
+  assertEquals(
+    isImeProtectedInput({
+      inputType: "deleteContentBackward",
+      isComposing: true,
+    }),
+    true,
+  );
+  assertEquals(
+    isImeProtectedInput(
+      { inputType: "deleteContentBackward", isComposing: false },
+      true,
+    ),
+    true,
+  );
+  assertEquals(
+    isImeProtectedInput({
+      inputType: "deleteContentBackward",
+      isComposing: false,
+    }),
+    false,
+  );
 });

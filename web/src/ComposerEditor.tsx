@@ -31,7 +31,7 @@ import {
 import { cmTheme } from "./cmTheme";
 import { livePreviewExtensions } from "./composerExtensions";
 import { hasDraftMod, hasSendMod } from "./platform";
-import { isImeInputType, isImeKeyEvent } from "./imeKey";
+import { isImeKeyEvent, isImeProtectedInput } from "./imeKey";
 import {
   deleteEmptyCodeFenceBackward,
   deleteTokenBackward,
@@ -876,7 +876,10 @@ export const ComposerEditor = forwardRef<
       ),
       // Physical-keyboard path: a real `keydown` drives the chain via the keymap.
       Prec.high(keymap.of([
-        { key: "Backspace", run: backspaceChain },
+        {
+          key: "Backspace",
+          run: (view): boolean => view.composing ? false : backspaceChain(view),
+        },
         ...(touchInput
           ? [{ key: "Enter", run: moveCaretOffImageLine }]
           : []),
@@ -893,7 +896,7 @@ export const ComposerEditor = forwardRef<
       Prec.high(
         EditorView.domEventHandlers({
           beforeinput: (e, view): boolean => {
-            if (isImeInputType(e.inputType)) return false;
+            if (isImeProtectedInput(e, view.composing)) return false;
             if (
               touchInput &&
               (e.inputType === "insertLineBreak" ||

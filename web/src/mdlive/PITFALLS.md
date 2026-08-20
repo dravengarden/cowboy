@@ -2056,3 +2056,18 @@ Desktop Vim + IME checks:
     files for iOS and retaining genuinely repeated equal-metadata files. Keep
     this normalization in `clipboardFiles`; do not add browser checks or a
     second paste-event guard to the editors.
+
+83. **iOS native Pinyin backspace must not rewrite the editable.** Symptom:
+    while composing (`放到` + pinyin for `右上角吧`), Backspace sometimes
+    leaves latin fragments in the document (`u o|sa`) with a stuck caret
+    in the middle. Native Pinyin often shrinks marked text with
+    `deleteContentBackward` + `isComposing` (not `deleteCompositionText`)
+    and may update the textarea DOM without a React `input` event. The
+    candidate bar then resizes `visualViewport`, React re-renders, and
+    ComposerTextarea's `[value]` layout effect wrote the stale React
+    draft over the live marked text. CM6's image/token `backspaceChain`
+    on the same `deleteContentBackward` could `preventDefault` in that
+    window. Obsidian never writes the editable or intercepts beforeinput
+    during composition. **Fix:** skip the native value write and height
+    measure while composing; treat composing `deleteContentBackward` as
+    IME-protected (no `backspaceChain`). Do not claim pitfall #69 fixed.
