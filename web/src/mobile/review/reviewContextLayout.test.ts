@@ -11,7 +11,7 @@ const storeSource = await Deno.readTextFile(
 );
 
 Deno.test("review sheets portal off the product-pager containing block", () => {
-  const symbolsAt = source.indexOf('? `Symbols · ${inspectCandidates.length}`');
+  const symbolsAt = source.indexOf("? `Symbols · ${inspectCandidates.length}`");
   assertEquals(symbolsAt >= 0, true);
   const symbolsSheet = source.slice(symbolsAt, symbolsAt + 240);
   assertStringIncludes(symbolsSheet, "portal");
@@ -43,17 +43,29 @@ Deno.test("symbol navigation disables actions without destinations", () => {
   assertStringIncludes(source, "data-navigation-status={availability}");
 });
 
-Deno.test("mobile symbol choices separate the current symbol from a tidy responsive grid", () => {
+Deno.test("mobile symbol choices keep a stable correctable grid", () => {
   assertStringIncludes(source, "data-mobile-symbol-current");
   assertStringIncludes(source, "data-mobile-symbol-grid");
+  assertStringIncludes(source, "data-mobile-symbol-choice");
+  assertStringIncludes(source, 'data-selected={selected ? "true" : undefined}');
+  assertStringIncludes(source, "aria-pressed={selected}");
+  assertStringIncludes(source, "{inspectCandidates.map((candidate) => {");
   assertStringIncludes(
     source,
     'gridTemplateColumns: "repeat(auto-fit, minmax(7rem, 1fr))"',
   );
-  assertStringIncludes(source, 'minHeight: 44');
+  assertStringIncludes(source, "minHeight: 44");
   assertEquals(
     source.includes(
       'flexWrap={inspectCandidatesExpanded ? "wrap" : "nowrap"}',
+    ),
+    false,
+  );
+  const gridStart = source.indexOf("data-mobile-symbol-grid");
+  const gridEnd = source.indexOf("</Box>", gridStart);
+  assertEquals(
+    source.slice(gridStart, gridEnd).includes(
+      "setInspectCandidatesExpanded(false)",
     ),
     false,
   );
@@ -67,11 +79,12 @@ Deno.test("session context leads with the active session without a history row",
     'useState<"sessions" | "projects">(\n    "sessions",',
   );
   assertStringIncludes(source, "Current session");
-  assertStringIncludes(source, 'currentSession ? "Other sessions" : "Sessions"');
   assertStringIncludes(
     source,
-    "sessions.filter((session) => session.id !== activeSessionId)",
+    'currentSession ? "Other sessions" : "Sessions"',
   );
+  assertStringIncludes(source, "sessions.filter((session) =>");
+  assertStringIncludes(source, "session.id !== activeSessionId");
 });
 
 Deno.test("session context list consumes duplicate floating-footer clearance", () => {
@@ -90,15 +103,27 @@ Deno.test("session context list consumes duplicate floating-footer clearance", (
 });
 
 Deno.test("project targets do not inherit worktree-only labels", () => {
-  assertStringIncludes(source, 'contextLabel={projectCodeContext ? "Project code" : "Worktree"}');
-  assertStringIncludes(source, 'Open context. Current project code');
-  assertStringIncludes(source, '`Project code · ${projectCodeContext.project}`');
+  assertStringIncludes(
+    source,
+    'contextLabel={projectCodeContext ? "Project code" : "Worktree"}',
+  );
+  assertStringIncludes(source, "Open context. Current project code");
+  assertStringIncludes(
+    source,
+    "`Project code · ${projectCodeContext.project}`",
+  );
   assertStringIncludes(treeSource, 'contextLabel = "Worktree"');
   assertStringIncludes(treeSource, "{contextLabel}");
 });
 
 Deno.test("registered project code does not enter the session review sync channel", () => {
-  assertStringIncludes(storeSource, 'if (sessionId.startsWith("workspace::")) {');
-  assertStringIncludes(storeSource, "const mutate = mobileReviewMutators[name]");
+  assertStringIncludes(
+    storeSource,
+    'if (sessionId.startsWith("workspace::")) {',
+  );
+  assertStringIncludes(
+    storeSource,
+    "const mutate = mobileReviewMutators[name]",
+  );
   assertStringIncludes(storeSource, "const value = mutate(current, args)");
 });

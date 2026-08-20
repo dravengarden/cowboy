@@ -24,10 +24,10 @@ import {
   Badge,
   Box,
   Button,
+  ButtonBase,
   Chip,
   CircularProgress,
   Divider,
-  ButtonBase,
   IconButton,
   ListItemButton,
   Popover,
@@ -214,16 +214,18 @@ function ReviewModeSwitcher({
     // color has already followed aria-pressed. Reassert the authoritative
     // selected/unselected material on that same attribute instead of leaving
     // a stale circle under the previously touched mode.
-    "&[data-touch-activated='true'][aria-pressed='false']:hover, &[data-touch-activated='true'][aria-pressed='false'].Mui-focusVisible": {
-      bgcolor: "transparent",
-    },
-    "&[data-touch-activated='true'][aria-pressed='true']:hover, &[data-touch-activated='true'][aria-pressed='true'].Mui-focusVisible": {
-      bgcolor: (theme) =>
-        alpha(
-          theme.palette.primary.main,
-          theme.palette.mode === "dark" ? 0.24 : 0.13,
-        ),
-    },
+    "&[data-touch-activated='true'][aria-pressed='false']:hover, &[data-touch-activated='true'][aria-pressed='false'].Mui-focusVisible":
+      {
+        bgcolor: "transparent",
+      },
+    "&[data-touch-activated='true'][aria-pressed='true']:hover, &[data-touch-activated='true'][aria-pressed='true'].Mui-focusVisible":
+      {
+        bgcolor: (theme) =>
+          alpha(
+            theme.palette.primary.main,
+            theme.palette.mode === "dark" ? 0.24 : 0.13,
+          ),
+      },
     "&[data-touch-activated='true']:active": {
       bgcolor: "action.selected",
     },
@@ -726,7 +728,13 @@ function DocumentView({
     } else {
       setNavigation(locations);
     }
-  }, [inspectTarget, navigationAvailability, navigationResults, onNavigate, target]);
+  }, [
+    inspectTarget,
+    navigationAvailability,
+    navigationResults,
+    onNavigate,
+    target,
+  ]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1146,39 +1154,47 @@ function DocumentView({
               WebkitOverflowScrolling: "touch",
             }}
           >
-            {alternativeCandidates.map((candidate) => (
-              <ButtonBase
-                key={`${candidate.row}:${candidate.column}:${candidate.label}`}
-                title={candidate.label}
-                onClick={() => {
-                  navigationHaptic();
-                  setInspectCandidatesExpanded(false);
-                  inspectPoint(candidate, inspectCandidates, false);
-                }}
-                sx={{
-                  minWidth: 0,
-                  minHeight: 44,
-                  px: 1.25,
-                  justifyContent: "flex-start",
-                  border: 1,
-                  borderColor: "divider",
-                  borderRadius: 1.5,
-                  bgcolor: "background.paper",
-                }}
-              >
-                <Typography
-                  noWrap
-                  sx={{
-                    minWidth: 0,
-                    fontFamily: "var(--cowboy-font-mono)",
-                    fontSize: "0.8125rem",
-                    fontWeight: 550,
+            {inspectCandidates.map((candidate) => {
+              const selected = candidate === selectedCandidate;
+              return (
+                <ButtonBase
+                  key={`${candidate.row}:${candidate.column}:${candidate.label}`}
+                  data-mobile-symbol-choice
+                  data-selected={selected ? "true" : undefined}
+                  aria-pressed={selected}
+                  title={candidate.label}
+                  onClick={selected ? undefined : () => {
+                    navigationHaptic();
+                    inspectPoint(candidate, inspectCandidates, false);
                   }}
+                  sx={(theme) => ({
+                    minWidth: 0,
+                    minHeight: 44,
+                    px: 1.25,
+                    justifyContent: "flex-start",
+                    border: 1,
+                    borderColor: selected ? "primary.main" : "divider",
+                    borderRadius: 1.5,
+                    color: selected ? "primary.main" : "text.primary",
+                    bgcolor: selected
+                      ? alpha(theme.palette.primary.main, 0.12)
+                      : "background.paper",
+                  })}
                 >
-                  {candidate.label}
-                </Typography>
-              </ButtonBase>
-            ))}
+                  <Typography
+                    noWrap
+                    sx={{
+                      minWidth: 0,
+                      fontFamily: "var(--cowboy-font-mono)",
+                      fontSize: "0.8125rem",
+                      fontWeight: selected ? 700 : 550,
+                    }}
+                  >
+                    {candidate.label}
+                  </Typography>
+                </ButtonBase>
+              );
+            })}
           </Box>
         )}
       </Box>
@@ -1399,12 +1415,11 @@ function DocumentView({
       )}
       <Box
         ref={outerScrollRef}
-        data-mobile-overflow-layer={
-          markdownPreview || previewKind === "mermaid" || mediaPreview ||
-              settings.softWrap
-            ? "true"
-            : undefined
-        }
+        data-mobile-overflow-layer={markdownPreview ||
+            previewKind === "mermaid" || mediaPreview ||
+            settings.softWrap
+          ? "true"
+          : undefined}
         sx={{
           flex: 1,
           minHeight: 0,
@@ -2268,7 +2283,8 @@ export function ReviewApp({
   const currentSession = sessions.find((session) =>
     session.id === activeSessionId
   );
-  const currentProject = projectCodeContext?.project ?? repositoryContext?.project ??
+  const currentProject = projectCodeContext?.project ??
+    repositoryContext?.project ??
     (currentSession ? reviewSessionProject(currentSession) : undefined);
   const currentMachineId = projectCodeContext?.machineId ??
     currentSession?.machine_id ?? "local";
@@ -2276,7 +2292,9 @@ export function ReviewApp({
     machine.id === currentMachineId
   );
   const currentRegisteredWorkspace = currentMachineInventory?.workspaces.find(
-    (registered) => registered.id === (projectCodeContext?.workspaceId ?? currentSession?.workspace_id),
+    (registered) =>
+      registered.id ===
+        (projectCodeContext?.workspaceId ?? currentSession?.workspace_id),
   ) ?? currentMachineInventory?.workspaces.find((registered) =>
     registered.display_name === currentProject
   );
@@ -2285,20 +2303,26 @@ export function ReviewApp({
     currentRegisteredWorkspace?.canonical_path,
   ) ?? undefined;
   const contextProjects = useMemo(
-    () => orderReviewContextProjects(
-      buildReviewContextProjects(
-        sessions,
+    () =>
+      orderReviewContextProjects(
+        buildReviewContextProjects(
+          sessions,
+          currentMachineId,
+          (currentMachineInventory?.workspaces ?? []).map((registered) => ({
+            id: registered.id,
+            displayName: registered.display_name,
+            canonicalPath: registered.canonical_path,
+          })),
+        ),
+        currentProject,
         currentMachineId,
-        (currentMachineInventory?.workspaces ?? []).map((registered) => ({
-          id: registered.id,
-          displayName: registered.display_name,
-          canonicalPath: registered.canonical_path,
-        })),
       ),
-      currentProject,
+    [
       currentMachineId,
-    ),
-    [currentMachineId, currentMachineInventory?.workspaces, currentProject, sessions],
+      currentMachineInventory?.workspaces,
+      currentProject,
+      sessions,
+    ],
   );
   const selectedContextProject = contextProjects.find((project) =>
     project.key === contextProjectKey
@@ -2312,7 +2336,9 @@ export function ReviewApp({
   const previousSession = previousSessionId
     ? sessionById.get(previousSessionId)
     : undefined;
-  const contextReturnSession = projectCodeContext ? currentSession : previousSession;
+  const contextReturnSession = projectCodeContext
+    ? currentSession
+    : previousSession;
   useEffect(() => {
     const next = activeSessionId;
     const previous = observedSessionRef.current;
@@ -2385,7 +2411,10 @@ export function ReviewApp({
     });
     return () => cancelAnimationFrame(frame);
   }, [contextProjectKey, contextTab, sessionSwitcherOpen]);
-  const switchSession = (session: SessionMeta, rememberCurrent = true): void => {
+  const switchSession = (
+    session: SessionMeta,
+    rememberCurrent = true,
+  ): void => {
     navigationHaptic();
     const currentId = activeSessionId;
     if (rememberCurrent && currentId && currentId !== session.id) {
@@ -2520,7 +2549,9 @@ export function ReviewApp({
               type="button"
               aria-label={projectCodeContext
                 ? `Open context. Current project code ${projectCodeContext.project}`
-                : `Switch session. Current session ${currentSession?.title ?? "none"}`}
+                : `Switch session. Current session ${
+                  currentSession?.title ?? "none"
+                }`}
               onClick={openContextSwitcher}
               sx={{
                 display: "flex",
@@ -2566,7 +2597,7 @@ export function ReviewApp({
                 {projectCodeContext
                   ? `Project code · ${projectCodeContext.project}`
                   : currentSession?.title ?? currentProject ??
-                  (workspace ? "Loading session…" : "Choose session")}
+                    (workspace ? "Loading session…" : "Choose session")}
                 {!projectCodeContext && currentProject &&
                     currentSession?.title !== currentProject
                   ? ` · ${currentProject}`
@@ -2651,9 +2682,11 @@ export function ReviewApp({
               commit={commitTarget.commit}
               selectedPath={commitTarget.path}
               onSelectPath={(path) =>
-                setCommitTarget((current) => current
-                  ? { commit: current.commit, ...(path ? { path } : {}) }
-                  : current)}
+                setCommitTarget((current) =>
+                  current
+                    ? { commit: current.commit, ...(path ? { path } : {}) }
+                    : current
+                )}
               onFiles={setCommitPaths}
               readScrollPosition={readScrollPosition}
               rememberScrollPosition={rememberScrollPosition}
@@ -2937,8 +2970,12 @@ export function ReviewApp({
               <IconButton
                 data-mobile-review-sidebar="true"
                 aria-label={drawerOpen
-                  ? `Close ${mode === "git" ? "Git changes" : "file tree"} sidebar`
-                  : `Open ${mode === "git" ? "Git changes" : "file tree"} sidebar`}
+                  ? `Close ${
+                    mode === "git" ? "Git changes" : "file tree"
+                  } sidebar`
+                  : `Open ${
+                    mode === "git" ? "Git changes" : "file tree"
+                  } sidebar`}
                 aria-pressed={drawerOpen}
                 sx={{
                   color: "text.primary",
@@ -3053,7 +3090,10 @@ export function ReviewApp({
             }}
           >
             {contextError && (
-              <Alert severity="error" onClose={() => setContextError(undefined)}>
+              <Alert
+                severity="error"
+                onClose={() => setContextError(undefined)}
+              >
                 {contextError}
               </Alert>
             )}
@@ -3089,7 +3129,9 @@ export function ReviewApp({
                     }}
                     onClick={(event): void => {
                       setContextTab(value);
-                      if (event.currentTarget.dataset.touchActivated === "true") {
+                      if (
+                        event.currentTarget.dataset.touchActivated === "true"
+                      ) {
                         event.currentTarget.blur();
                       }
                     }}
@@ -3104,13 +3146,15 @@ export function ReviewApp({
                         bgcolor: "action.selected",
                         color: "text.primary",
                       },
-                      "&[data-touch-activated='true'][aria-selected='false']:hover, &[data-touch-activated='true'][aria-selected='false'].Mui-focusVisible": {
-                        bgcolor: "transparent",
-                      },
-                      "&[data-touch-activated='true'][aria-selected='true']:hover, &[data-touch-activated='true'][aria-selected='true'].Mui-focusVisible": {
-                        bgcolor: "action.selected",
-                        color: "text.primary",
-                      },
+                      "&[data-touch-activated='true'][aria-selected='false']:hover, &[data-touch-activated='true'][aria-selected='false'].Mui-focusVisible":
+                        {
+                          bgcolor: "transparent",
+                        },
+                      "&[data-touch-activated='true'][aria-selected='true']:hover, &[data-touch-activated='true'][aria-selected='true'].Mui-focusVisible":
+                        {
+                          bgcolor: "action.selected",
+                          color: "text.primary",
+                        },
                       "&[data-touch-activated='true']:active": {
                         bgcolor: "action.selected",
                       },
@@ -3128,7 +3172,11 @@ export function ReviewApp({
                     <Typography
                       variant="overline"
                       color="text.secondary"
-                      sx={{ px: 1.25, fontWeight: 700, letterSpacing: "0.09em" }}
+                      sx={{
+                        px: 1.25,
+                        fontWeight: 700,
+                        letterSpacing: "0.09em",
+                      }}
                     >
                       Current session
                     </Typography>
@@ -3139,17 +3187,25 @@ export function ReviewApp({
                     />
                   </Stack>
                 )}
-                {sessions.some((session) => session.id !== activeSessionId) && (
+                {sessions.some((session) =>
+                  session.id !== activeSessionId
+                ) && (
                   <Stack spacing={0.5}>
                     <Typography
                       variant="overline"
                       color="text.secondary"
-                      sx={{ px: 1.25, fontWeight: 700, letterSpacing: "0.09em" }}
+                      sx={{
+                        px: 1.25,
+                        fontWeight: 700,
+                        letterSpacing: "0.09em",
+                      }}
                     >
                       {currentSession ? "Other sessions" : "Sessions"}
                     </Typography>
                     <Stack divider={<Divider flexItem />}>
-                      {sessions.filter((session) => session.id !== activeSessionId).map(
+                      {sessions.filter((session) =>
+                        session.id !== activeSessionId
+                      ).map(
                         (session) => (
                           <ContextSessionRow
                             key={session.id}
@@ -3193,10 +3249,17 @@ export function ReviewApp({
                           <Typography variant="body2" fontWeight={650} noWrap>
                             {project.label}
                           </Typography>
-                          <Typography variant="caption" color="text.secondary" noWrap>
-                            {project.machineId} · {project.worktrees.length}{" "}
-                            worktree{project.worktrees.length === 1 ? "" : "s"} ·{" "}
-                            {project.sessions.length} session{project.sessions.length === 1 ? "" : "s"}
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            noWrap
+                          >
+                            {project.machineId} · {project.worktrees.length}
+                            {" "}
+                            worktree{project.worktrees.length === 1 ? "" : "s"}
+                            {" "}
+                            · {project.sessions.length}{" "}
+                            session{project.sessions.length === 1 ? "" : "s"}
                           </Typography>
                         </Box>
                         <ChevronRight color="disabled" fontSize="small" />
@@ -3210,16 +3273,23 @@ export function ReviewApp({
               <Stack spacing={1.25}>
                 <ListItemButton
                   onClick={() => setContextProjectKey(undefined)}
-                  sx={{ alignSelf: "flex-start", minHeight: 44, borderRadius: 2 }}
+                  sx={{
+                    alignSelf: "flex-start",
+                    minHeight: 44,
+                    borderRadius: 2,
+                  }}
                 >
                   <ChevronLeft sx={{ mr: 0.75 }} />
-                  <Typography variant="body2" fontWeight={650}>All projects</Typography>
+                  <Typography variant="body2" fontWeight={650}>
+                    All projects
+                  </Typography>
                 </ListItemButton>
                 {selectedContextProject.registeredWorkspace && (
                   <ListItemButton
                     selected={projectCodeContext?.workspaceId ===
-                      selectedContextProject.registeredWorkspace.id &&
-                      projectCodeContext.machineId === selectedContextProject.machineId}
+                        selectedContextProject.registeredWorkspace.id &&
+                      projectCodeContext.machineId ===
+                        selectedContextProject.machineId}
                     onClick={() => openProjectTarget(selectedContextProject)}
                     sx={{
                       minHeight: 64,
@@ -3232,7 +3302,11 @@ export function ReviewApp({
                       <Typography variant="body2" fontWeight={700} noWrap>
                         Project code
                       </Typography>
-                      <Typography variant="caption" color="text.secondary" noWrap>
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        noWrap
+                      >
                         Browse the current merged checkout
                       </Typography>
                       <Typography
@@ -3241,7 +3315,8 @@ export function ReviewApp({
                         sx={{ display: "block" }}
                         noWrap
                       >
-                        {selectedContextProject.registeredWorkspace.canonicalPath}
+                        {selectedContextProject.registeredWorkspace
+                          .canonicalPath}
                       </Typography>
                     </Box>
                     <ChevronRight color="disabled" fontSize="small" />
@@ -3273,12 +3348,19 @@ export function ReviewApp({
                         }}
                         sx={{ minHeight: 64, px: 1.25, borderRadius: 1.5 }}
                       >
-                        <AccountTreeOutlined color="primary" sx={{ mr: 1.25 }} />
+                        <AccountTreeOutlined
+                          color="primary"
+                          sx={{ mr: 1.25 }}
+                        />
                         <Box sx={{ flex: 1, minWidth: 0 }}>
                           <Typography variant="body2" fontWeight={700} noWrap>
                             {label}
                           </Typography>
-                          <Typography variant="caption" color="text.secondary" noWrap>
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            noWrap
+                          >
                             {onlySession
                               ? `Open worktree · ${onlySession.title}`
                               : `Open worktree · ${worktree.sessions.length} sessions`}
@@ -3296,7 +3378,11 @@ export function ReviewApp({
                       </ListItemButton>
                       {worktree.sessions.length > 1 && (
                         <Stack
-                          sx={{ ml: 2.25, borderLeft: 1, borderColor: "divider" }}
+                          sx={{
+                            ml: 2.25,
+                            borderLeft: 1,
+                            borderColor: "divider",
+                          }}
                           divider={<Divider flexItem />}
                         >
                           {worktree.sessions.map((session) => (
