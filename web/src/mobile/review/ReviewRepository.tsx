@@ -168,6 +168,7 @@ function HistoryCommitSkeleton(
 export function ReviewRepository({
   sessionId,
   machineLabel,
+  projectPath,
   onOpenDiff,
   onOpenCommit,
   reviewed,
@@ -177,6 +178,7 @@ export function ReviewRepository({
 }: {
   sessionId: string | undefined;
   machineLabel?: string;
+  projectPath?: string;
   onOpenDiff: (entry: GitReviewEntry, queue: GitReviewEntry[]) => void;
   onOpenCommit: (commit: GitCommitSummary) => void;
   reviewed: ReadonlySet<string>;
@@ -271,18 +273,43 @@ export function ReviewRepository({
           pb: 1,
         }}
       >
-        <Stack
-          direction="row"
-          alignItems="baseline"
-          spacing={0.75}
-          sx={{ px: 0.5, mb: 1 }}
-        >
-          <Typography variant="subtitle1" fontWeight={700}>
-            Repository
-          </Typography>
-          {machineLabel && (
-            <Typography variant="caption" color="text.secondary">
-              on {machineLabel}
+        <Stack spacing={0.35} sx={{ px: 0.5, mb: 1 }}>
+          <Stack direction="row" alignItems="center" spacing={0.75}>
+            <Typography variant="subtitle1" fontWeight={700}>
+              Repository
+            </Typography>
+            {machineLabel && (
+              <Chip
+                label={machineLabel}
+                size="small"
+                color="primary"
+                variant="outlined"
+                sx={{
+                  height: 22,
+                  borderRadius: "11px",
+                  fontSize: "0.6875rem",
+                  fontWeight: 600,
+                  "& .MuiChip-label": { px: 0.9 },
+                }}
+              />
+            )}
+          </Stack>
+          {projectPath && (
+            <Typography
+              data-repository-project-path
+              variant="caption"
+              color="text.secondary"
+              title={projectPath}
+              sx={{
+                display: "-webkit-box",
+                overflow: "hidden",
+                overflowWrap: "anywhere",
+                WebkitBoxOrient: "vertical",
+                WebkitLineClamp: 2,
+                lineHeight: 1.35,
+              }}
+            >
+              {projectPath}
             </Typography>
           )}
         </Stack>

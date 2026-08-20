@@ -1,6 +1,10 @@
 import { assertEquals } from "jsr:@std/assert";
 import type { SessionMeta } from "./protocol";
-import { sessionDisplayDirectory, sessionProjectLabel } from "./sessionProject";
+import {
+  sessionDisplayDirectory,
+  sessionProjectDirectory,
+  sessionProjectLabel,
+} from "./sessionProject";
 
 function session(overrides: Partial<SessionMeta> = {}): SessionMeta {
   return {
@@ -53,4 +57,23 @@ Deno.test("session list shows the selected source directory instead of its workt
     "/home/draven/columbus/projects/cowboy",
   );
   assertEquals(sessionDisplayDirectory(session()), "/tmp/worktree/sess-1");
+});
+
+Deno.test("repository project path never falls back to the session worktree", () => {
+  const isolated = session({
+    workspace_source_path: "/home/draven/columbus/projects/cowboy",
+    cwd: "/home/draven/.local/state/cowboy-machine/worktrees/sess-1",
+  });
+  assertEquals(
+    sessionProjectDirectory(
+      isolated,
+      "/home/draven/columbus/projects/cowboy/main",
+    ),
+    "/home/draven/columbus/projects/cowboy/main",
+  );
+  assertEquals(
+    sessionProjectDirectory(isolated),
+    "/home/draven/columbus/projects/cowboy",
+  );
+  assertEquals(sessionProjectDirectory(session()), null);
 });

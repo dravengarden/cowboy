@@ -60,6 +60,13 @@ Deno.test("repository tabs retain authoritative selected paint after an iOS touc
   assertEquals(tabs.includes('"@media (hover: none), (pointer: coarse)"'), false);
 });
 
+Deno.test("repository header uses a machine chip and stable project path", () => {
+  assertStringIncludes(repositorySource, "label={machineLabel}");
+  assertStringIncludes(repositorySource, "data-repository-project-path");
+  assertStringIncludes(appSource, "{ projectPath: currentProjectPath }");
+  assertStringIncludes(appSource, "currentRegisteredWorkspace?.canonical_path");
+});
+
 Deno.test("repository footer keeps Settings and close in one capsule", () => {
   assertStringIncludes(repositorySource, 'key: "settings"');
   assertStringIncludes(repositorySource, 'key: "close"');

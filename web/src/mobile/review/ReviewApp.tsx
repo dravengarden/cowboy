@@ -56,6 +56,7 @@ import { importantHaptic, navigationHaptic } from "../../haptic";
 import { Markdown } from "../../Markdown";
 import { Sheet } from "../../Sheet";
 import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
+import { sessionProjectDirectory } from "../../sessionProject";
 import {
   mutateMobileReview,
   openSession,
@@ -2175,6 +2176,15 @@ export function ReviewApp({
   const currentMachineInventory = machineInventories.find((machine) =>
     machine.id === currentMachineId
   );
+  const currentRegisteredWorkspace = currentMachineInventory?.workspaces.find(
+    (registered) => registered.id === (projectCodeContext?.workspaceId ?? currentSession?.workspace_id),
+  ) ?? currentMachineInventory?.workspaces.find((registered) =>
+    registered.display_name === currentProject
+  );
+  const currentProjectPath = projectCodeContext?.cwd ?? sessionProjectDirectory(
+    currentSession,
+    currentRegisteredWorkspace?.canonical_path,
+  ) ?? undefined;
   const contextProjects = useMemo(
     () => orderReviewContextProjects(
       buildReviewContextProjects(
@@ -2362,6 +2372,7 @@ export function ReviewApp({
             key={`${workspace?.sessionId ?? "none"}:${dataRevision}`}
             sessionId={workspace?.sessionId}
             machineLabel={currentSession?.machine_id ?? "hawk"}
+            {...(currentProjectPath ? { projectPath: currentProjectPath } : {})}
             onOpenDiff={openDiff}
             onOpenCommit={openCommit}
             reviewed={new Set(Object.keys(reviewProgress))}

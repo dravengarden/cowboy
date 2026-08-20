@@ -5,6 +5,15 @@ export function sessionDisplayDirectory(session: SessionMeta): string {
   return session.workspace_source_path?.trim() || session.cwd;
 }
 
+/** Stable project checkout for repository chrome; never substitute a session worktree. */
+export function sessionProjectDirectory(
+  session: SessionMeta | undefined,
+  registeredPath?: string,
+): string | null {
+  return registeredPath?.trim() || session?.workspace_source_path?.trim() ||
+    null;
+}
+
 /** Human-readable stable project/workspace identity for session surfaces. */
 export function sessionProjectLabel(session: SessionMeta): string | null {
   const workspaceName = session.workspace_name?.trim();
