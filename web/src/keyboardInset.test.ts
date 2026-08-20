@@ -174,7 +174,13 @@ Deno.test("New session is a cover sheet on the mobile navbar so Title clears the
   assertEquals(html.includes("--vv-height"), true);
   assertEquals(html.includes("[data-obsidian-sheet]"), true);
   assertEquals(
-    html.includes('[aria-hidden="true"][style*="opacity: 0"]'),
+    html.includes(
+      '[aria-hidden="true"]:not([data-obsidian-sheet-scrim="true"])[style*="opacity: 0;"]',
+    ),
     true,
+  );
+  assertEquals(
+    html.includes('[aria-hidden="true"][style*="opacity: 0"]'),
+    false,
   );
 });

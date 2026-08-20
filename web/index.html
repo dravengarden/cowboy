@@ -83,7 +83,7 @@
       /* DetentSheet paints scrim opacity inline. After dismiss the catcher
          can sit at opacity 0 until React unmounts; on iOS that still
          swallows scrolling for the rest of the session. */
-      [aria-hidden="true"][style*="opacity: 0"] {
+      [aria-hidden="true"]:not([data-obsidian-sheet-scrim="true"])[style*="opacity: 0;"] {
         pointer-events: none !important;
       }
       /* Pre-mount app-shell splash. Painted with the document — before the SPA
