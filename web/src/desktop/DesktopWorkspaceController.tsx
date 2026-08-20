@@ -84,10 +84,11 @@ function focusElement(element: HTMLElement | null): void {
   // the workspace. Falling back to row one made the first J/K jump unrelated
   // to what the user was looking at. Other list regions retain their first-row
   // default, while explicit focus targets still beat that generic fallback.
-  // A contextual Editor jump is navigation, not an Insert command. Prefer the
-  // Desktop Vim command sink so it lands explicitly in Normal; when Vim is off,
-  // fall back to the native CodeMirror content surface.
-  (composerCommandSink ?? composer ?? currentItem ?? preferred ?? firstItem ?? planToggle ?? element).focus({
+  // Focusing Prompt must not change the editor's modal state or caret. Focus
+  // CodeMirror's content surface first; the Vim runtime transfers focus to its
+  // command sink itself when the preserved state is Normal/Visual, while Insert
+  // retains the native editable and its selection.
+  (composer ?? composerCommandSink ?? currentItem ?? preferred ?? firstItem ?? planToggle ?? element).focus({
     preventScroll: true,
   });
   element.scrollIntoView({ block: "nearest", inline: "nearest" });

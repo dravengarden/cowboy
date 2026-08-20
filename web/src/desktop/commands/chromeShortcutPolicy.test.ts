@@ -1,10 +1,14 @@
-import { assertEquals, assertThrows } from "jsr:@std/assert";
+import { assert, assertEquals, assertThrows } from "jsr:@std/assert";
 import {
   assertChromeShortcutAllowed,
   chromeShortcutConflict,
   INTENTIONAL_CHROME_VIM_OVERRIDES,
 } from "./chromeShortcutPolicy.ts";
-import { DESKTOP_SHORTCUTS } from "./workspaceShortcuts.ts";
+import {
+  DESKTOP_SHORTCUTS,
+  DESKTOP_WORKSPACE_COMMANDS,
+  desktopWorkspacePrefix,
+} from "./workspaceShortcuts.ts";
 
 const providerSource = await Deno.readTextFile(
   new URL("./DesktopCommandProvider.tsx", import.meta.url),
@@ -17,7 +21,6 @@ Deno.test("Chrome tab, window, address, and numbered-tab chords are rejected", (
       "Mod+T",
       "Mod+W",
       "Mod+L",
-      "Mod+K",
       "Mod+E",
       "Mod+,",
       "Mod+[",
@@ -34,48 +37,44 @@ Deno.test("Chrome tab, window, address, and numbered-tab chords are rejected", (
       "F12",
     ]
   ) {
-    assertThrows(() => assertChromeShortcutAllowed("test.command", shortcut));
+    assertThrows(() => assertChromeShortcutAllowed("test.command", shortcut, false));
   }
+});
+
+Deno.test("workspace prefix follows Chrome's platform-specific K behavior", () => {
+  assertEquals(desktopWorkspacePrefix(true), "Mod+K");
+  assertEquals(desktopWorkspacePrefix(false), "Alt+K");
+  assertEquals(chromeShortcutConflict("workspace.prefix", "Mod+K", true), null);
+  assertThrows(() => assertChromeShortcutAllowed("workspace.prefix", "Mod+K", false));
+  assertEquals(chromeShortcutConflict("workspace.prefix", "Alt+K", false), null);
 });
 
 Deno.test("native save is the only registered semantic Chrome override", () => {
-  assertEquals(chromeShortcutConflict("composer.saveDraft", "Mod+S"), null);
-  assertThrows(() => assertChromeShortcutAllowed("unrelated", "Mod+S"));
-  assertThrows(() => assertChromeShortcutAllowed("unrelated", "Mod+F"));
-  assertThrows(() => assertChromeShortcutAllowed("unrelated", "Mod+J"));
+  assertEquals(chromeShortcutConflict("composer.saveDraft", "Mod+S", true), null);
+  assertThrows(() => assertChromeShortcutAllowed("unrelated", "Mod+S", true));
+  assertThrows(() => assertChromeShortcutAllowed("unrelated", "Mod+F", true));
+  assertThrows(() => assertChromeShortcutAllowed("unrelated", "Mod+J", true));
 });
 
-Deno.test("bare workspace keys and Alt session slots remain browser-safe", () => {
-  for (const shortcut of ["S", "E", "P", "C", "T", "N", ":", "?", "Alt+1", "Alt+0"]) {
-    assertEquals(chromeShortcutConflict("test.command", shortcut), null);
+Deno.test("direct product chords and Alt session slots remain browser-safe", () => {
+  for (const shortcut of ["Mod+Shift+P", "Mod+/", "Mod+.", "Alt+1", "Alt+0"]) {
+    assertEquals(chromeShortcutConflict("test.command", shortcut, true), null);
   }
 });
 
-Deno.test("the canonical workspace map stays direct and Chrome-safe", () => {
-  assertEquals(DESKTOP_SHORTCUTS, {
-    shortcuts: "?",
-    commands: ":",
-    newSession: "N",
-    settings: ",",
-    focusTopbar: "T",
-    focusSessions: "S",
-    focusPrompt: "E",
-    focusConversation: "C",
-    focusPlan: "P",
-    focusQueue: "Y",
-    focusDrafts: "D",
-    cycleRegion: "W",
-    resize: "\\",
-    sessionSlots: "Alt+1…0",
-  });
+Deno.test("workspace navigation has no global bare-letter shortcut", () => {
+  assertEquals(Object.keys(DESKTOP_WORKSPACE_COMMANDS).sort(), [
+    ",", "c", "d", "l", "n", "p", "q", "r", "s", "t", "w",
+  ]);
+  for (const shortcut of Object.values(DESKTOP_SHORTCUTS)) {
+    assert(!/^[a-z]$/i.test(shortcut));
+  }
 });
 
-Deno.test("every registered Desktop command passes the Chrome policy", () => {
-  assertEquals(
-    providerSource.includes("assertChromeShortcutAllowed(command.id, command.shortcut)"),
-    true,
-  );
-  assertEquals(providerSource.includes("desktopBrowserChromeShortcut"), false);
+Deno.test("every registered Desktop command passes browser and product policy", () => {
+  assert(providerSource.includes("assertChromeShortcutAllowed(command.id, command.shortcut, isMac)"));
+  assert(providerSource.includes("assertShortcutRegistrationAllowed(command"));
+  assert(providerSource.includes("matchesDesktopWorkspacePrefix(event)"));
 });
 
 Deno.test("intentional Chrome overrides are limited to reader Vim motions", () => {

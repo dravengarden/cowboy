@@ -17,10 +17,9 @@ import {
 import { DesktopShortcut } from "./DesktopKeycap";
 import { DesktopShortcutsDialog } from "./DesktopShortcutsDialog";
 import {
-  DESKTOP_FOCUS_PLAN_SHORTCUT,
-  DESKTOP_FOCUS_PROMPT_SHORTCUT,
-  DESKTOP_RESIZE_SELECT_SHORTCUT,
   DESKTOP_SHORTCUTS,
+  DESKTOP_WORKSPACE_KEYS,
+  DESKTOP_WORKSPACE_PREFIX,
 } from "./workspaceShortcuts";
 import {
   preferredDesktopSplitter,
@@ -79,6 +78,7 @@ export function DesktopCommandHost({
       description: "Vim navigation and commands for the current Desktop context",
       group: "Help",
       shortcut: DESKTOP_SHORTCUTS.shortcuts,
+      allowInEditor: true,
       run: () => setShortcutsOpen(true),
     },
     {
@@ -87,6 +87,7 @@ export function DesktopCommandHost({
       description: "Search every registered Desktop command",
       group: "Open",
       shortcut: DESKTOP_SHORTCUTS.commands,
+      allowInEditor: true,
       run: () => {
         setQuery("");
         setSelected(0);
@@ -98,14 +99,14 @@ export function DesktopCommandHost({
       title: "New Session",
       description: "Create a Cowboy session",
       group: "Session",
-      shortcut: DESKTOP_SHORTCUTS.newSession,
+      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.newSession],
       run: onNewSession,
     },
     {
       id: "settings.open",
       title: "Open Settings",
       group: "Settings",
-      shortcut: DESKTOP_SHORTCUTS.settings,
+      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.settings],
       run: onOpenSettings,
     },
     {
@@ -113,7 +114,7 @@ export function DesktopCommandHost({
       title: "Focus Top Bar",
       description: "Move keyboard focus to session controls and usage",
       group: "Workspace",
-      shortcut: DESKTOP_SHORTCUTS.focusTopbar,
+      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.focusTopbar],
       when: () => document.querySelector("[data-desktop-region='topbar.controls']") !== null,
       run: () => workspace.focusRegion("topbar.controls"),
     },
@@ -121,22 +122,22 @@ export function DesktopCommandHost({
       id: "workspace.focusSessions",
       title: "Focus Sessions",
       group: "Workspace",
-      shortcut: DESKTOP_SHORTCUTS.focusSessions,
+      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.focusSessions],
       run: () => workspace.focusPane("sessions"),
     },
     {
       id: "workspace.focusPrompt",
       title: "Focus Message the Agent",
-      description: "Return to the Prompt editor in Vim Normal mode",
+      description: "Return to the Prompt editor without changing its Vim mode or caret",
       group: "Workspace",
-      shortcut: DESKTOP_FOCUS_PROMPT_SHORTCUT,
+      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.focusPrompt],
       run: () => workspace.focusRegion("prompt.composer"),
     },
     {
       id: "workspace.focusConversation",
       title: "Focus Conversation",
       group: "Workspace",
-      shortcut: DESKTOP_SHORTCUTS.focusConversation,
+      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.focusConversation],
       run: () => workspace.focusPane("conversation"),
     },
     {
@@ -145,7 +146,7 @@ export function DesktopCommandHost({
       description:
         "Enter Resize mode on the nearest vertical split, then H/L to move it",
       group: "Workspace",
-      shortcut: DESKTOP_RESIZE_SELECT_SHORTCUT,
+      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.resize],
       run: () => {
         if (workspace.selectedSplitter !== null) {
           workspace.setSelectedSplitter(null);
@@ -176,7 +177,7 @@ export function DesktopCommandHost({
       title: "Cycle Workspace Region",
       description: "Move focus to the next visible Desktop region",
       group: "Workspace",
-      shortcut: DESKTOP_SHORTCUTS.cycleRegion,
+      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.cycleRegion],
       run: () => workspace.cycleRegion(),
     },
     {
@@ -184,11 +185,10 @@ export function DesktopCommandHost({
       title: "Focus Plan",
       description: "Move keyboard focus to the current task plan",
       group: "Prompt",
-      shortcut: DESKTOP_FOCUS_PLAN_SHORTCUT,
+      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.focusPlan],
       when: () => document.querySelector("[data-desktop-region='prompt.plan']") !== null,
       disabledReason: "The agent has not published a plan",
-      // P is a stable workspace command. Consume it while Plan is absent so the
-      // same visible key never changes meaning with transient Plan availability.
+      // The prefix continuation is stable even while Plan is absent.
       consumeWhenDisabled: true,
       run: () => workspace.focusRegion("prompt.plan"),
     },
@@ -198,8 +198,7 @@ export function DesktopCommandHost({
       description:
         "Open and focus queued prompts, or close them when the queue already owns focus",
       group: "Prompt",
-      shortcut: DESKTOP_SHORTCUTS.focusQueue,
-      contexts: ["prompt"],
+      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.focusQueue],
       when: () => document.querySelector("[data-desktop-region='prompt.queued']") !== null,
       disabledReason: "The queue is empty",
       run: () => {
@@ -221,8 +220,7 @@ export function DesktopCommandHost({
       title: "Focus Drafts",
       description: "Move keyboard focus to parked drafts",
       group: "Prompt",
-      shortcut: DESKTOP_SHORTCUTS.focusDrafts,
-      contexts: ["prompt"],
+      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.focusDrafts],
       when: () => document.querySelector("[data-desktop-region='prompt.draft']") !== null,
       disabledReason: "There are no drafts",
       run: () => {
@@ -232,14 +230,6 @@ export function DesktopCommandHost({
         if (toggle?.getAttribute("aria-expanded") === "false") toggle.click();
         requestAnimationFrame(() => workspace.focusRegion("prompt.draft"));
       },
-    },
-    {
-      id: "conversation.focusTranscript",
-      title: "Focus Transcript",
-      group: "Conversation",
-      shortcut: "C",
-      contexts: ["conversation"],
-      run: () => workspace.focusRegion("conversation.transcript"),
     },
     {
       id: "conversation.enterReadingMode",
@@ -465,9 +455,9 @@ export function DesktopCommandHost({
                     : command.disabledReason ?? "Unavailable")
                   : command.description ?? command.id}
               />
-              {command.shortcut && (
+              {(command.shortcut || command.sequence) && (
                 <DesktopShortcut
-                  shortcut={command.shortcut}
+                  shortcut={command.shortcut ?? command.sequence?.join(" → ") ?? ""}
                   availability={command.when?.() === false ? "inactive" : "available"}
                 />
               )}

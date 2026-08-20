@@ -196,6 +196,7 @@ import { Kbd, useConfirmEnter } from "./Kbd";
 import { isImeKeyEvent } from "./imeKey";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { DESKTOP_SHORTCUTS } from "./desktop/commands/workspaceShortcuts";
+import { DesktopShortcut } from "./desktop/commands/DesktopKeycap";
 import { InfoContent } from "./InfoSheet";
 import { UsageLogs } from "./UsageLogs";
 import { SegmentedPill } from "./SegmentedPill";
@@ -817,7 +818,7 @@ function SessionList({
                     } : undefined}
                 >
                     New session
-                    {desktop && <Kbd keys={DESKTOP_SHORTCUTS.newSession} variant="global" />}
+                    {desktop && <DesktopShortcut shortcut={DESKTOP_SHORTCUTS.newSession} quiet />}
                 </Button>
                 {desktop && pinned && (
                     <Box
@@ -3746,7 +3747,7 @@ export function App({
                                         >
                                             New session
                                             {surface === "desktop" && (
-                                                <Kbd keys={DESKTOP_SHORTCUTS.newSession} variant="global" />
+                                                <DesktopShortcut shortcut={DESKTOP_SHORTCUTS.newSession} quiet />
                                             )}
                                         </Button>
                                     </>

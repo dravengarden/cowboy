@@ -85,8 +85,11 @@ Workspace bindings must not steal valid editor Vim sequences.
 ### Direct discovery and sequential commands
 
 Cowboy does not add a Space leader layer. Basic Vim motion, a small stable
-global `Mod+letter` map, contextual key slots, `Mod+K` Command Palette, and
-`Mod+/` shortcut guide are faster here and remain visible without another mode.
+workspace prefix (`Cmd+K` on macOS, `Alt+K` on Windows/Linux), contextual key
+slots, `Mod+Shift+P` Command Palette, and `Mod+/` shortcut guide remain visible
+and usable from editor Insert/Normal/Visual modes. Global bare product letters
+are forbidden; bare letters belong only to an explicitly focused non-editor
+context.
 
 Every live key slot uses one state machine:
 
@@ -115,7 +118,7 @@ of targets; covering the content with generated key tokens raises visual and
 cognitive load and conflicts with Prompt Vim's native `f<char>` motion.
 
 Keyboard reachability comes from native focus order, direct Vim motions,
-visible contextual shortcuts, and `Mod+K` Command Palette. New controls must
+visible contextual shortcuts, and `Mod+Shift+P` Command Palette. New controls must
 join those mechanisms instead of adding a page-wide overlay.
 
 ### Persistent key badges
@@ -181,6 +184,7 @@ interface DesktopCommand {
   group: string[];
   icon?: ReactNode;
   shortcut?: string;
+  sequence?: readonly string[];
   contexts?: DesktopPane[];
   danger?: "confirm" | "destructive";
   when?: (context: DesktopContext) => boolean;
@@ -190,9 +194,8 @@ interface DesktopCommand {
 
 One registry powers:
 
-- direct shortcuts;
 - direct and sequential shortcuts;
-- command palette and `:` command line;
+- command palette;
 - persistent badges;
 - toolbar menus and disabled explanations.
 

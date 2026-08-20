@@ -15,8 +15,9 @@ function hasPendingKeys(keys: string | readonly string[] | undefined): boolean {
  * Vim owns Escape until the editor is in plain Normal mode.
  *
  * Insert, Visual, and operator/key-prefix states must first normalize through
- * Vim. Only a second Escape from plain Normal may reach Cowboy's surrounding
- * transaction (stop, discard edit, close layer). With Vim disabled, Cowboy
+ * Vim. Only a later Escape from plain Normal may reach Cowboy's active
+ * surrounding transaction (discard edit or close layer). It never arms
+ * workspace navigation. With Vim disabled, Cowboy
  * retains the established direct Escape behavior.
  */
 export function vimEscapeBelongsToApp(

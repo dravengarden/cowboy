@@ -81,9 +81,12 @@ the peek, or freeze the session list to make a swipe cheaper.
   interaction layers merely to make the surface look clean.
 - A user who knows basic Vim must be productive without memorising Cowboy-only
   shortcuts. Prefer standard Vim motion, convenient bare contextual keys, the
-  editor's second-Escape one-shot workspace map, contextual status-line hints,
-  and a searchable command palette. Chrome non-conflict is a core requirement;
-  every new binding follows the executable policy in
+  platform workspace prefix (`Cmd+K` on macOS, `Alt+K` elsewhere), contextual
+  status-line hints, and a searchable `Mod+Shift+P` command palette. The prefix
+  works in Vim Insert/Normal/Visual and native inputs but never during IME
+  composition or through an exclusive modal/menu. Global bare product letters
+  are forbidden. Chrome non-conflict is a core requirement; every new binding
+  follows the executable policy in
   [`src/desktop/FOCUS.md`](src/desktop/FOCUS.md). Do not add a Space leader
   layer: it proved slower than direct, visible commands here.
 - Prefer MUI's native component semantics and composition for Desktop UI:

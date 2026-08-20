@@ -3,6 +3,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { ShortcutKeycap } from "../../ShortcutKeycap";
 import { useOptionalDesktopWorkspace } from "../DesktopWorkspaceController";
 import { useDesktopListJumpChord } from "./DesktopCommandProvider";
+import { DesktopShortcut } from "./DesktopKeycap";
 import { shortcutAvailability } from "./shortcutAvailability";
 
 /**
@@ -128,12 +129,22 @@ export function DesktopContextShortcut({
             pointerEvents: "none",
           }}
         >
-          <ShortcutKeycap
-            keyLabel={badge}
-            variant={inline ? "global" : "context"}
-            accent={availability !== "inactive"}
-            availability={availability}
-          />
+          {badge.includes(" → ")
+            ? (
+              <DesktopShortcut
+                shortcut={badge}
+                quiet={inline}
+                availability={availability}
+              />
+            )
+            : (
+              <ShortcutKeycap
+                keyLabel={badge}
+                variant={inline ? "global" : "context"}
+                accent={availability !== "inactive"}
+                availability={availability}
+              />
+            )}
         </Box>
       )}
     </Box>

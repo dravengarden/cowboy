@@ -99,6 +99,7 @@ import {
   useDesktopCommand,
 } from "./commands/DesktopCommandProvider";
 import { shortcutAvailability } from "./commands/shortcutAvailability";
+import { DESKTOP_SHORTCUTS } from "./commands/workspaceShortcuts";
 import {
   desktopTopBarTimelineSlice,
   sameDesktopTopBarTimelineSlice,
@@ -1407,13 +1408,14 @@ export function DesktopTopBarControls({
     {
       id: "topbar.stop",
       title: "Stop Current Turn",
-      group: "Top Bar",
-      shortcut: "S",
-      regions: ["topbar.controls"],
+      group: "Global",
+      shortcut: DESKTOP_SHORTCUTS.stop,
+      allowInEditor: true,
       when: () =>
         document.querySelector(
           "[data-desktop-topbar-action='stop']:not(:disabled)",
         ) !== null,
+      consumeWhenDisabled: true,
       run: () =>
         document.querySelector<HTMLButtonElement>(
           "[data-desktop-topbar-action='stop']",

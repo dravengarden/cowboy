@@ -428,23 +428,25 @@ here says otherwise.
     remain. Keep a synchronous previous-text ref because CM6 changes can arrive
     faster than React renders.
 
-16. **Desktop Vim state must not leak across workspace focus changes.** A
+16. **Desktop Vim state needs an explicit workspace focus policy.** A
     Composer, queued-message editor, or draft editor can remain mounted after
     focus moves to Sessions, Conversation, Top Bar, or another Prompt region.
     Upstream Vim therefore kept Insert/Visual/operator-pending state alive and
     rendered macro recording as an unthemed inline `recording @x` dialog.
-    **Fix (`desktop/vim/imeAutoInsertVim.ts`):** a true focus exit from the
-    editor (not the internal contenteditable ↔ command-sink handoff) sends one
-    Vim Escape, clears partial commands, and stops any active macro. Intercept
-    only upstream's macro-recording dialog and publish it to the Desktop status
-    line as `REC @x · Q Stop`; all other Vim search/command dialogs retain their
+    **Fix (`desktop/vim/imeAutoInsertVim.ts`):** distinguish an in-workspace
+    focus transfer from a true editor exit. The workspace prefix preserves
+    Insert/Visual mode, selection, and caret, while clearing partial operators
+    and stopping any active macro so commands cannot leak into another region.
+    A true exit still sends Vim Escape and normalizes every mode. Intercept only
+    upstream's macro-recording dialog and publish it to the Desktop status line
+    as `REC @x · Q Stop`; all other Vim search/command dialogs retain their
     upstream behavior. This runtime remains dynamically imported by Desktop
-    only; Mobile receives neither the focus reset nor the macro UI. Prompt
-    Region shortcuts use bare keys outside editors. In the main Composer the
-    first Escape remains Vim-owned and returns Insert to Normal; a second plain
-    Normal Escape arms a one-shot workspace command state (`S/E/P/C/T/Y/D/N/W`,
-    `:`, `?`, `,`, `\`) for 1.2 seconds. This keeps bare Vim paste, macro,
-    delete, and motion commands editor-owned without reusing Chrome shortcuts.
+    only; Mobile receives neither the focus policy nor the macro UI. Workspace
+    navigation uses `Cmd+K` on macOS and `Alt+K` elsewhere, captured before the
+    editor in every Vim mode but after IME and exclusive-overlay ownership.
+    `Esc` only unwinds the current editor/layer and never arms navigation. This
+    keeps bare Vim paste, macro, delete, and motion commands editor-owned without
+    reusing Chrome shortcuts.
     The same CJK input source can mark any physical Normal-mode keydown on the
     non-editable sink as `isComposing`/229 even though no marked-text transaction
     exists there. Do not discard those events: route the complete letter,
@@ -1081,9 +1083,10 @@ Desktop Vim + IME checks:
 - [ ] Typing/composition keeps the same `.cm-content` node and emits no callback-
       identity `StateEffect.reconfigure` after the document transaction.
 - [ ] Escape returns focus to the command sink and the status line shows `IME SAFE`.
-- [ ] Bare `P` focuses and expands a visible Plan outside editors; inside the
-      Composer, `Esc`, then `P`, does the same while bare `p/P` remains native
-      Vim paste in Normal mode.
+- [ ] Workspace prefix then `L` focuses and expands a visible Plan from outside
+      the editor and from Insert/Normal/Visual; bare `p/P` remains native Vim
+      paste in Normal mode. Prefix then `P` returns to Prompt with the prior
+      Insert/Visual mode, selection, and caret intact.
 - [ ] At a mobile viewport, the Desktop Vim/IME chunk is not requested and Mobile
       editor behavior is unchanged.
 

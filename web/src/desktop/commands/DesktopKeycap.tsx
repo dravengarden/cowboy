@@ -1,4 +1,4 @@
-import { Stack } from "@mui/material";
+import { Box, Stack } from "@mui/material";
 import {
   ShortcutKeycap,
   type ShortcutKeycapAvailability,
@@ -32,7 +32,7 @@ export function DesktopShortcut(
     availability?: ShortcutKeycapAvailability;
   },
 ): React.JSX.Element {
-  const keys = shortcut.split("+").filter(Boolean);
+  const strokes = shortcut.split(" → ").filter(Boolean);
   return (
     <Stack
       direction="row"
@@ -40,13 +40,27 @@ export function DesktopShortcut(
       alignItems="center"
       aria-label={shortcut}
     >
-      {keys.map((key, index) => (
-        <DesktopKeycap
-          key={`${key}-${String(index)}`}
-          keyLabel={key}
-          quiet={quiet}
-          availability={availability}
-        />
+      {strokes.map((stroke, strokeIndex) => (
+        <Stack
+          key={`${stroke}-${String(strokeIndex)}`}
+          direction="row"
+          spacing={0.35}
+          alignItems="center"
+        >
+          {strokeIndex > 0 && (
+            <Box component="span" aria-hidden sx={{ fontSize: "0.625rem", color: "text.disabled" }}>
+              →
+            </Box>
+          )}
+          {stroke.split("+").filter(Boolean).map((key, keyIndex) => (
+            <DesktopKeycap
+              key={`${key}-${String(keyIndex)}`}
+              keyLabel={key}
+              quiet={quiet}
+              availability={availability}
+            />
+          ))}
+        </Stack>
       ))}
     </Stack>
   );

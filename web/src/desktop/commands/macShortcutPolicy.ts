@@ -2,7 +2,8 @@ import { parseShortcut } from "./shortcut";
 
 const SEMANTIC_MAC_SHORTCUTS = new Map<string, ReadonlySet<string>>([
   ["mod+s", new Set(["composer.saveDraft"])],
-  ["mod+.", new Set(["composer.more"])],
+  ["mod+.", new Set(["topbar.stop"])],
+  ["mod+k", new Set(["workspace.prefix"])],
 ]);
 
 const RESERVED_MAC_SHORTCUTS = new Map<string, string>([
@@ -36,6 +37,7 @@ const COMMON_APP_SHORTCUTS = new Map<string, string>([
   ["mod+e", "Common editor/search action"],
   ["mod+f", "Find"],
   ["mod+i", "Italic"],
+  ["mod+k", "Add link"],
   ["mod+l", "Location/address field"],
   ["mod+o", "Open"],
   ["mod+p", "Print"],

@@ -1,4 +1,5 @@
 import { parseShortcut } from "./shortcut";
+import { isMac } from "../../platform";
 
 const SEMANTIC_CHROME_SHORTCUTS = new Map<string, ReadonlySet<string>>([
   ["mod+s", new Set(["composer.saveDraft"])],
@@ -35,7 +36,6 @@ const CHROME_SHORTCUTS = new Map<string, string>([
   ["mod+,", "Open Settings"],
   ["mod+[", "Back (macOS)"],
   ["mod+]", "Forward (macOS)"],
-  ["mod+k", "Search from the address bar"],
   ["mod+e", "Search from the address bar"],
   ["mod+p", "Print"],
   ["mod+s", "Save page"],
@@ -95,6 +95,7 @@ function canonicalShortcut(shortcut: string): string {
 export function chromeShortcutConflict(
   commandId: string,
   shortcut?: string,
+  mac = isMac,
 ): string | null {
   if (!shortcut) return null;
   const canonical = canonicalShortcut(shortcut);
@@ -104,6 +105,11 @@ export function chromeShortcutConflict(
       ? null
       : `${shortcut} needs a matching application semantic`;
   }
+  // Chromium registers Ctrl-K as an omnibox search shortcut only outside
+  // macOS. Chrome on macOS leaves Command-K to the page/application.
+  if (canonical === "mod+k" && !mac) {
+    return `${shortcut} conflicts with Chrome Search from the address bar`;
+  }
   const chromeAction = CHROME_SHORTCUTS.get(canonical);
   return chromeAction ? `${shortcut} conflicts with Chrome ${chromeAction}` : null;
 }
@@ -111,8 +117,9 @@ export function chromeShortcutConflict(
 export function assertChromeShortcutAllowed(
   commandId: string,
   shortcut?: string,
+  mac = isMac,
 ): void {
-  const conflict = chromeShortcutConflict(commandId, shortcut);
+  const conflict = chromeShortcutConflict(commandId, shortcut, mac);
   if (conflict) {
     throw new Error(`Unsafe Desktop shortcut for ${commandId}: ${conflict}`);
   }

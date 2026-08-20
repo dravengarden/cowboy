@@ -202,7 +202,6 @@ import {
   DESKTOP_FOCUS_PLAN_SHORTCUT,
   DESKTOP_FOCUS_PROMPT_SHORTCUT,
   DESKTOP_SHORTCUTS,
-  DESKTOP_WORKSPACE_COMMAND_EVENT,
 } from "./desktop/commands/workspaceShortcuts";
 import { listJumpKey } from "./desktop/commands/listNavigation";
 import { shortcutAvailability } from "./desktop/commands/shortcutAvailability";
@@ -756,59 +755,44 @@ function ComposeBar(
       >
         <Tooltip title="Slash command / skill">
           <span>
-            {desktopShortcut(
-              <IconButton
-                aria-label="slash command"
-                disabled={dead}
-                sx={TOOLBAR_ICON_BTN}
-                onClick={(): void => onTrigger("/")}
+            <IconButton
+              aria-label="slash command"
+              disabled={dead}
+              sx={TOOLBAR_ICON_BTN}
+              onClick={(): void => onTrigger("/")}
+            >
+              <Box
+                component="span"
+                sx={{ fontSize: "1.25rem", fontWeight: 700, lineHeight: 1 }}
               >
-                <Box
-                  component="span"
-                  sx={{ fontSize: "1.25rem", fontWeight: 700, lineHeight: 1 }}
-                >
-                  /
-                </Box>
-              </IconButton>,
-              `${ALT_LABEL}/`,
-              `${ALT_LABEL}/ · slash command`,
-              !dead,
-            )}
+                /
+              </Box>
+            </IconButton>
           </span>
         </Tooltip>
         <Tooltip title="Reference a file (@)">
           <span>
-            {desktopShortcut(
-              <IconButton
-                aria-label="reference a file"
-                disabled={dead}
-                sx={TOOLBAR_ICON_BTN}
-                onClick={(): void => onTrigger("@")}
-              >
-                <AlternateEmail />
-              </IconButton>,
-              `${ALT_LABEL}R`,
-              `${ALT_LABEL}R · reference a file`,
-              !dead,
-            )}
+            <IconButton
+              aria-label="reference a file"
+              disabled={dead}
+              sx={TOOLBAR_ICON_BTN}
+              onClick={(): void => onTrigger("@")}
+            >
+              <AlternateEmail />
+            </IconButton>
           </span>
         </Tooltip>
         {onAttach && (
           <Tooltip title="Attach image or file">
             <span>
-              {desktopShortcut(
-                <IconButton
-                  aria-label="attach image or file"
-                  disabled={dead}
-                  sx={TOOLBAR_ICON_BTN}
-                  onClick={onAttach}
-                >
-                  <AttachFile />
-                </IconButton>,
-                `${ALT_LABEL}A`,
-                `${ALT_LABEL}A · attach file`,
-                !dead,
-              )}
+              <IconButton
+                aria-label="attach image or file"
+                disabled={dead}
+                sx={TOOLBAR_ICON_BTN}
+                onClick={onAttach}
+              >
+                <AttachFile />
+              </IconButton>
             </span>
           </Tooltip>
         )}
@@ -925,17 +909,13 @@ function ComposeBar(
         {onExpand && (
           <Tooltip title="Expand editor">
             <span>
-              {desktopShortcut(
-                <IconButton
-                  aria-label="expand editor"
-                  sx={TOOLBAR_ICON_BTN}
-                  onClick={onExpand}
-                >
-                  <OpenInFull />
-                </IconButton>,
-                `${ALT_LABEL}E`,
-                `${ALT_LABEL}E · expand editor`,
-              )}
+              <IconButton
+                aria-label="expand editor"
+                sx={TOOLBAR_ICON_BTN}
+                onClick={onExpand}
+              >
+                <OpenInFull />
+              </IconButton>
             </span>
           </Tooltip>
         )}
@@ -2414,21 +2394,6 @@ export function ComposerWorkspace({
               onVimMode={setVimMode}
               onPasteFiles={(files): void =>
                 addFiles(files, { preserveFocus: true })}
-              onEscape={(): boolean => {
-                // Esc cancels a running turn (via the confirm modal), but only when a
-                // turn is actually in flight — otherwise leave Esc to the editor. In
-                // vim, ComposerEditor only calls this once we're already in normal
-                // mode, so insert-mode Esc still just exits to normal.
-                if (busy) {
-                  setCancelOpen(true);
-                  return true;
-                }
-                if (desktop) {
-                  globalThis.dispatchEvent(new Event(DESKTOP_WORKSPACE_COMMAND_EVENT));
-                  return true;
-                }
-                return false;
-              }}
             />
           </Box>
         )}
@@ -2539,64 +2504,49 @@ export function ComposerWorkspace({
               >
                 <Tooltip title="Slash command / skill">
                   <span>
-                    {desktopShortcut(
-                      <IconButton
-                        size="small"
-                        aria-label="slash command"
-                        disabled={dead}
-                        onClick={(): void =>
-                          editorRef.current?.insertTrigger("/")}
+                    <IconButton
+                      size="small"
+                      aria-label="slash command"
+                      disabled={dead}
+                      onClick={(): void =>
+                        editorRef.current?.insertTrigger("/")}
+                    >
+                      <Box
+                        component="span"
+                        sx={{
+                          fontSize: "1.1rem",
+                          fontWeight: 700,
+                          lineHeight: 1,
+                        }}
                       >
-                        <Box
-                          component="span"
-                          sx={{
-                            fontSize: "1.1rem",
-                            fontWeight: 700,
-                            lineHeight: 1,
-                          }}
-                        >
-                          /
-                        </Box>
-                      </IconButton>,
-                      `${ALT_LABEL}/`,
-                      `${ALT_LABEL}/ · slash command`,
-                      !dead,
-                    )}
+                        /
+                      </Box>
+                    </IconButton>
                   </span>
                 </Tooltip>
                 <Tooltip title="Reference a file (@)">
                   <span>
-                    {desktopShortcut(
-                      <IconButton
-                        size="small"
-                        aria-label="reference a file"
-                        disabled={dead}
-                        onClick={(): void =>
-                          editorRef.current?.insertTrigger("@")}
-                      >
-                        <AlternateEmail fontSize="small" />
-                      </IconButton>,
-                      `${ALT_LABEL}R`,
-                      `${ALT_LABEL}R · reference a file`,
-                      !dead,
-                    )}
+                    <IconButton
+                      size="small"
+                      aria-label="reference a file"
+                      disabled={dead}
+                      onClick={(): void =>
+                        editorRef.current?.insertTrigger("@")}
+                    >
+                      <AlternateEmail fontSize="small" />
+                    </IconButton>
                   </span>
                 </Tooltip>
                 <Tooltip title="Attach image or file">
                   <span>
-                    {desktopShortcut(
-                      <IconButton
-                        size="small"
-                        aria-label="attach image or file"
-                        disabled={dead}
-                        onClick={(): void => fileInputRef.current?.click()}
-                      >
-                        <AttachFile fontSize="small" />
-                      </IconButton>,
-                      `${ALT_LABEL}A`,
-                      `${ALT_LABEL}A · attach file`,
-                      !dead,
-                    )}
+                    <IconButton
+                      size="small"
+                      aria-label="attach image or file"
+                      disabled={dead}
+                      onClick={(): void => fileInputRef.current?.click()}
+                    >
+                      <AttachFile fontSize="small" />
+                    </IconButton>
                   </span>
                 </Tooltip>
                 <Box sx={{ flex: 1 }} />
@@ -2622,40 +2572,30 @@ export function ComposerWorkspace({
                     </Tooltip>
                     <Tooltip title="Schedule send">
                       <span>
-                        {desktopShortcut(
-                          <IconButton
-                            size="small"
-                            aria-label="schedule send"
-                            disabled={!sendable}
-                            onClick={(): void =>
-                              setScheduleTarget({
-                                id: undefined,
-                                initial: null,
-                              })}
-                          >
-                            <Schedule fontSize="small" />
-                          </IconButton>,
-                          `${ALT_LABEL}S`,
-                          `${ALT_LABEL}S · schedule prompt`,
-                          sendable,
-                        )}
+                        <IconButton
+                          size="small"
+                          aria-label="schedule send"
+                          disabled={!sendable}
+                          onClick={(): void =>
+                            setScheduleTarget({
+                              id: undefined,
+                              initial: null,
+                            })}
+                        >
+                          <Schedule fontSize="small" />
+                        </IconButton>
                       </span>
                     </Tooltip>
                     <Tooltip title="Jump to front of queue">
                       <span>
-                        {desktopShortcut(
-                          <IconButton
-                            size="small"
-                            aria-label="jump to front of queue"
-                            disabled={!sendable || queue.length === 0}
-                            onClick={jumpToFront}
-                          >
-                            <VerticalAlignTop fontSize="small" />
-                          </IconButton>,
-                          `${ALT_LABEL}J`,
-                          `${ALT_LABEL}J · jump to front`,
-                          sendable && queue.length > 0,
-                        )}
+                        <IconButton
+                          size="small"
+                          aria-label="jump to front of queue"
+                          disabled={!sendable || queue.length === 0}
+                          onClick={jumpToFront}
+                        >
+                          <VerticalAlignTop fontSize="small" />
+                        </IconButton>
                       </span>
                     </Tooltip>
                     <Tooltip title="Force push">
@@ -2684,23 +2624,19 @@ export function ComposerWorkspace({
                 {!desktopActionsExpanded && (
                   <Tooltip title="More delivery options">
                     <span>
-                      {desktopShortcut(
-                        <IconButton
-                          ref={desktopMoreButtonRef}
-                          size="small"
-                          aria-label="more delivery options"
-                          aria-controls={desktopMoreAnchor
-                            ? "desktop-composer-more"
-                            : undefined}
-                          aria-expanded={desktopMoreAnchor ? "true" : undefined}
-                          onClick={(e): void =>
-                            setDesktopMoreAnchor(e.currentTarget)}
-                        >
-                          <MoreVert fontSize="small" />
-                        </IconButton>,
-                        `${MOD_LABEL}.`,
-                        `${MOD_LABEL}. · more prompt actions`,
-                      )}
+                      <IconButton
+                        ref={desktopMoreButtonRef}
+                        size="small"
+                        aria-label="more delivery options"
+                        aria-controls={desktopMoreAnchor
+                          ? "desktop-composer-more"
+                          : undefined}
+                        aria-expanded={desktopMoreAnchor ? "true" : undefined}
+                        onClick={(e): void =>
+                          setDesktopMoreAnchor(e.currentTarget)}
+                      >
+                        <MoreVert fontSize="small" />
+                      </IconButton>
                     </span>
                   </Tooltip>
                 )}
@@ -6349,11 +6285,11 @@ export function AutoScrollAndStop({
                 Stop
               </Box>
               <ShortcutKeycap
-                keyLabel="S"
+                keyLabel={`${MOD_LABEL}.`}
                 variant="global"
-                accent={desktopShortcutActive || cancelOpen}
+                accent={cancelOpen}
                 availability={shortcutAvailability(
-                  Boolean(desktopShortcutActive && busy),
+                  busy,
                   cancelOpen,
                 )}
                 sx={{ flexShrink: 0, ml: 0.5 }}

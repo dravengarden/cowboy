@@ -274,7 +274,7 @@ export const ComposerEditor = forwardRef<
     // Called on Escape when it should act on the app, not the editor: Vim off,
     // or Vim on in plain Normal mode. Insert, Visual, operator-pending, and
     // partial prefixes normalize through Vim first, so a later plain-Normal
-    // Escape reaches here (Zed-style). Returns true when consumed.
+    // Escape may unwind an active surrounding edit/layer. Returns true when consumed.
     onEscape?: () => boolean;
     // Called with image / file blobs found on a clipboard paste (a screenshot,
     // a copied image). When it handles them the editor swallows the paste so
@@ -929,8 +929,8 @@ export const ComposerEditor = forwardRef<
       ),
       // Escape belongs to Vim until it reaches plain Normal mode: Insert exits
       // to Normal, Visual clears its selection, and pending operators/prefixes
-      // cancel. Only the next Normal-mode Escape reaches Cowboy's surrounding
-      // transaction. With Vim off, Cowboy keeps its direct Escape behavior.
+      // cancel. Only a later Normal-mode Escape may reach Cowboy's active
+      // surrounding transaction. With Vim off, Cowboy keeps its direct Escape behavior.
       // High precedence keeps the ownership decision ahead of defaultKeymap's
       // clear-selection Escape.
       Prec.high(

@@ -34,9 +34,11 @@ import {
 } from "../desktopSplitterKeyboard";
 import type { DesktopSplitterId } from "../DesktopWorkspaceController";
 import {
-  DESKTOP_WORKSPACE_COMMAND_EVENT,
+  desktopWorkspaceContinuationKey,
   DESKTOP_WORKSPACE_COMMANDS,
+  matchesDesktopWorkspacePrefix,
 } from "./workspaceShortcuts";
+import { assertShortcutRegistrationAllowed } from "./shortcutRegistrationPolicy";
 
 export interface DesktopCommand {
   id: string;
@@ -44,6 +46,8 @@ export interface DesktopCommand {
   description?: string;
   group: string;
   shortcut?: string;
+  /** Ordered strokes for a prefix command. Sequences are not direct shortcuts. */
+  sequence?: readonly string[];
   contexts?: DesktopPane[];
   regions?: string[];
   /** Global commands skip text editors unless explicitly opted in. */
@@ -135,6 +139,23 @@ export function DesktopCommandProvider(
   const [revision, setRevision] = useState(0);
   const [pendingJumpRegion, setPendingJumpRegion] = useState<string | null>(null);
   const workspace = useDesktopWorkspace();
+  const clearWorkspaceCommand = useCallback((): void => {
+    if (workspaceCommandTimer.current !== null) {
+      globalThis.clearTimeout(workspaceCommandTimer.current);
+      workspaceCommandTimer.current = null;
+    }
+    workspace.setMode("normal");
+  }, [workspace.setMode]);
+  const armWorkspaceCommand = useCallback((): void => {
+    if (workspaceCommandTimer.current !== null) {
+      globalThis.clearTimeout(workspaceCommandTimer.current);
+    }
+    workspace.setMode("command");
+    workspaceCommandTimer.current = globalThis.setTimeout(() => {
+      workspaceCommandTimer.current = null;
+      workspace.setMode("normal");
+    }, 2000);
+  }, [workspace.setMode]);
   const clearPendingJumpChord = useCallback((): void => {
     const chord = pendingJumpChord.current;
     if (chord) globalThis.clearTimeout(chord.timer);
@@ -154,7 +175,13 @@ export function DesktopCommandProvider(
   }, []);
   const register = useCallback((command: DesktopCommand): () => void => {
     assertMacShortcutAllowed(command.id, command.shortcut);
-    assertChromeShortcutAllowed(command.id, command.shortcut);
+    assertChromeShortcutAllowed(command.id, command.shortcut, isMac);
+    const prefixStroke = command.sequence?.[0];
+    if (prefixStroke) {
+      assertMacShortcutAllowed("workspace.prefix", prefixStroke);
+      assertChromeShortcutAllowed("workspace.prefix", prefixStroke, isMac);
+    }
+    assertShortcutRegistrationAllowed(command, commands.current.values());
     commands.current.set(command.id, command);
     setRevision((value) => value + 1);
     return () => {
@@ -184,25 +211,13 @@ export function DesktopCommandProvider(
   }), [commandList, execute, register]);
 
   useEffect(() => {
-    const armWorkspaceCommand = (): void => {
-      if (workspaceCommandTimer.current !== null) {
-        globalThis.clearTimeout(workspaceCommandTimer.current);
-      }
-      workspace.setMode("command");
-      workspaceCommandTimer.current = globalThis.setTimeout(() => {
-        workspaceCommandTimer.current = null;
-        workspace.setMode("normal");
-      }, 1200);
-    };
-    globalThis.addEventListener(DESKTOP_WORKSPACE_COMMAND_EVENT, armWorkspaceCommand);
     return () => {
-      globalThis.removeEventListener(DESKTOP_WORKSPACE_COMMAND_EVENT, armWorkspaceCommand);
       if (workspaceCommandTimer.current !== null) {
         globalThis.clearTimeout(workspaceCommandTimer.current);
         workspaceCommandTimer.current = null;
       }
     };
-  }, [workspace.setMode]);
+  }, []);
 
   useEffect(() => {
     const chord = pendingJumpChord.current;
@@ -253,7 +268,7 @@ export function DesktopCommandProvider(
         ) {
           event.stopPropagation();
         }
-        if (workspace.mode === "command") workspace.setMode("normal");
+        if (workspaceCommandTimer.current !== null) clearWorkspaceCommand();
         if (itemChord.current !== null) {
           globalThis.clearTimeout(itemChord.current);
           itemChord.current = null;
@@ -262,11 +277,52 @@ export function DesktopCommandProvider(
         return;
       }
       // A visible configuration popover advertises and owns its own J/K/H/L
-      // map. Relinquish the workspace map before it consumes those keys.
+      // map. Relinquish the workspace prefix before it consumes those keys.
       if (desktopOverlayOwnsShortcuts(document)) {
         clearPendingJumpChord();
-        if (workspace.mode === "command") workspace.setMode("normal");
+        if (workspaceCommandTimer.current !== null) clearWorkspaceCommand();
         return;
+      }
+      // Workspace navigation is a browser-safe two-stroke prefix. Capture the
+      // prefix before Vim, CodeMirror, or a native input can interpret it; IME
+      // and exclusive overlays already had first refusal above.
+      if (matchesDesktopWorkspacePrefix(event)) {
+        event.preventDefault();
+        event.stopPropagation();
+        clearPendingJumpChord();
+        if (!event.repeat) armWorkspaceCommand();
+        return;
+      }
+      if (workspaceCommandTimer.current !== null) {
+        const key = desktopWorkspaceContinuationKey(event);
+        if (key !== null && isModifierKey(key)) return;
+        if (key === null) {
+          // A distinct modified chord starts a new transaction. Cancel the
+          // prefix and let that shortcut continue through the normal matcher.
+          clearWorkspaceCommand();
+        } else {
+          event.preventDefault();
+          event.stopPropagation();
+          if (event.repeat) return;
+          clearWorkspaceCommand();
+          if (key === "Escape") return;
+          const commandId = DESKTOP_WORKSPACE_COMMANDS[key.toLowerCase()];
+          if (!commandId) return;
+          const command = commands.current.get(commandId);
+          const inContext = command &&
+            (!command.contexts || command.contexts.includes(workspace.focusedPane)) &&
+            (!command.regions || (!!workspace.focusedRegion &&
+              command.regions.includes(workspace.focusedRegion)));
+          if (inContext && command.when?.() !== false) {
+            if (workspace.productMode !== "agent") workspace.setProductMode("agent");
+            if (
+              workspace.selectedSplitter !== null &&
+              commandId !== "workspace.enterResize"
+            ) workspace.setSelectedSplitter(null);
+            command.run();
+          }
+          return;
+        }
       }
       const selectSplitter = (splitter: DesktopSplitterId | null): void => {
         if (splitter === null) return;
@@ -296,43 +352,6 @@ export function DesktopCommandProvider(
           );
         }
       };
-      if (workspace.mode === "command") {
-        const key = workspaceCommandKey(event);
-        if (isModifierKey(key)) return;
-        if (event.metaKey || event.ctrlKey || event.altKey) {
-          workspace.setMode("normal");
-        } else if (key === "Escape") {
-          event.preventDefault();
-          event.stopPropagation();
-          workspace.setMode("normal");
-          return;
-        } else {
-          const digit = /^(?:Digit|Numpad)([0-9])$/.exec(event.code)?.[1];
-          const commandId = DESKTOP_WORKSPACE_COMMANDS[key.toLowerCase()];
-          if (digit || commandId) {
-            event.preventDefault();
-            event.stopPropagation();
-            workspace.setMode("normal");
-            if (digit) {
-              selectSessionSlot(digit);
-            } else if (commandId) {
-              const command = commands.current.get(commandId);
-              const inContext = command &&
-                (!command.contexts || command.contexts.includes(workspace.focusedPane)) &&
-                (!command.regions || (!!workspace.focusedRegion &&
-                  command.regions.includes(workspace.focusedRegion)));
-              if (inContext && command.when?.() !== false) command.run();
-            }
-            return;
-          }
-          workspace.setMode("normal");
-          // The one-shot command state owns one bare continuation. Unknown
-          // keys cancel without leaking into Vim operators or row actions.
-          event.preventDefault();
-          event.stopPropagation();
-          return;
-        }
-      }
       if (workspace.selectedSplitter !== null) {
         const visible = visibleDesktopSplitterIds();
         const splitter = document.querySelector<HTMLElement>(
@@ -432,6 +451,21 @@ export function DesktopCommandProvider(
           }
         }
       }
+      // Sessions are first-level application navigation. Alt/Option+1…0 is
+      // browser-safe on every Desktop platform and works from Insert and
+      // Reading modes as well as ordinary workspace regions.
+      if (
+        event.altKey && !event.metaKey &&
+        !event.ctrlKey && !event.shiftKey
+      ) {
+        const match = /^(?:Digit|Numpad)([0-9])$/.exec(event.code);
+        if (match?.[1]) {
+          event.preventDefault();
+          event.stopPropagation();
+          selectSessionSlot(match[1]);
+          return;
+        }
+      }
       if (workspace.productMode === "reading") {
         const key = workspaceCommandKey(event);
         const readingSidebarOwnsKey = Boolean(eventElement?.closest(
@@ -520,23 +554,6 @@ export function DesktopCommandProvider(
         : null;
       const items = visibleRegionItems(region);
       const scrollNavigation = region?.dataset.desktopNavigation === "scroll";
-      // Sessions are first-level application navigation. Alt/Option+1…0 is
-      // browser-safe on every Desktop platform and works even from Insert mode.
-      if (
-        event.altKey && !event.metaKey &&
-        !event.ctrlKey && !event.shiftKey &&
-        document.querySelector("[role='dialog'], [role='menu']") === null
-      ) {
-        const match = /^(?:Digit|Numpad)([0-9])$/.exec(event.code);
-        if (match?.[1]) {
-          // Reserve every slot consistently. An unavailable slot is an inactive
-          // Cowboy command, never a layout-dependent Option character.
-          event.preventDefault();
-          event.stopPropagation();
-          selectSessionSlot(match[1]);
-          return;
-        }
-      }
       const widgets = scrollNavigation ? conversationWidgets(region) : [];
       const activeWidget = document.activeElement instanceof HTMLElement
         ? document.activeElement.closest<HTMLElement>("[data-desktop-widget-toggle]")
@@ -846,13 +863,9 @@ export function DesktopCommandProvider(
         }
       }
       if (event.defaultPrevented || event.repeat) return;
-      // Region/context commands intentionally shadow a global command using the
-      // same chord when the focused surface owns a more specific action.
-      const rankedCommands = [...commands.current.values()].sort((left, right) =>
-        Number(Boolean(right.regions || right.contexts)) -
-        Number(Boolean(left.regions || left.contexts))
-      );
-      for (const command of rankedCommands) {
+      // Registration rejects overlapping direct chords, so command behavior is
+      // stable and independent of component mount order.
+      for (const command of commands.current.values()) {
         if (!command.shortcut) continue;
         if (
           command.contexts && !command.contexts.includes(workspace.focusedPane)
@@ -912,7 +925,13 @@ export function DesktopCommandProvider(
         pendingJumpChord.current = null;
       }
     };
-  }, [armPendingJumpChord, clearPendingJumpChord, workspace]);
+  }, [
+    armPendingJumpChord,
+    armWorkspaceCommand,
+    clearPendingJumpChord,
+    clearWorkspaceCommand,
+    workspace,
+  ]);
 
   return (
     <DesktopCommandContext.Provider value={value}>

@@ -38,12 +38,11 @@ const NAVIGATION: ShortcutRow[] = [
   { keys: ["L"], title: "Reload Session Runtime in Top Bar" },
   { keys: ["C"], title: "Compact Conversation in Top Bar" },
   { keys: ["X"], title: "Clear Conversation in Top Bar" },
-  { keys: ["S"], title: "Stop Current Turn in Top Bar" },
   {
     keys: [DESKTOP_SHORTCUTS.focusQueue, DESKTOP_SHORTCUTS.focusDrafts],
     title: "Queue / Drafts inside Prompt",
     description:
-      `${DESKTOP_FOCUS_PROMPT_SHORTCUT} always returns to the editor; the composer keeps native Vim commands`,
+      `${DESKTOP_FOCUS_PROMPT_SHORTCUT} returns to the editor without changing its Vim mode or caret`,
   },
   { keys: [DESKTOP_SHORTCUTS.cycleRegion], title: "Cycle visible workspace regions" },
   {
@@ -53,10 +52,6 @@ const NAVIGATION: ShortcutRow[] = [
       "Enter Resize mode without moving the bar. H/L then resizes, Shift+H/L uses a larger step, Tab selects the next visible bar, and Esc or Enter finishes",
   },
   { keys: ["J/K"], title: "Move through items in list regions" },
-  {
-    keys: [DESKTOP_SESSION_SLOTS_LABEL],
-    title: "Switch directly to a visible session from anywhere",
-  },
   { keys: ["Shift+J/K"], title: "Reorder the focused item when supported" },
   { keys: ["O"], title: "Toggle continuous Order mode for list reordering" },
   { keys: ["G", "G"], title: "First item" },
@@ -73,18 +68,23 @@ const NAVIGATION: ShortcutRow[] = [
   },
   { keys: ["Enter"], title: "Open or activate the focused item" },
   { keys: ["I"], title: "Edit the focused item" },
-  { keys: ["Esc"], title: "Leave edit mode or close the active layer" },
-  {
-    keys: ["Esc", "Esc", "workspace key"],
-    title: "Jump from the editor to a workspace surface",
-    description:
-      "The first Escape reaches Vim Normal; the second arms S/E/P/C/T/Y/D/N/W, colon, question mark, comma, backslash, or a session digit",
-  },
+  { keys: ["Esc"], title: "Leave the current Vim mode or close the active layer" },
 ];
 
 const DISCOVERY: ShortcutRow[] = [
   { keys: [DESKTOP_SHORTCUTS.shortcuts], title: "Open this shortcut guide" },
   { keys: [DESKTOP_SHORTCUTS.commands], title: "Open Command Palette" },
+];
+
+const DIRECT_ACTIONS: ShortcutRow[] = [
+  { keys: ["Mod+Enter"], title: "Send or queue the current prompt" },
+  { keys: [DESKTOP_SHORTCUTS.saveDraft], title: "Save the current prompt as a draft" },
+  { keys: ["Alt+Enter"], title: "Force push the current prompt" },
+  { keys: [DESKTOP_SHORTCUTS.stop], title: "Stop the current turn" },
+  {
+    keys: [DESKTOP_SESSION_SLOTS_LABEL],
+    title: "Switch directly to one of the first ten visible sessions",
+  },
 ];
 
 const CONVERSATION: ShortcutRow[] = [
@@ -241,6 +241,7 @@ export function DesktopShortcutsDialog({
       >
         <ShortcutSection title="Workspace navigation" rows={NAVIGATION} active />
         <ShortcutSection title="Discovery and commands" rows={DISCOVERY} />
+        <ShortcutSection title="Direct actions" rows={DIRECT_ACTIONS} />
         {workspace.focusedRegion === "conversation.transcript" && (
           <ShortcutSection title="Conversation reading" rows={CONVERSATION} active />
         )}

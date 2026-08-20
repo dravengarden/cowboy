@@ -7,6 +7,7 @@ import { useVimSetting } from "../vimSetting";
 import { useDesktopWorkspace } from "./DesktopWorkspaceController";
 import { DesktopKeycap, DesktopShortcut } from "./commands/DesktopKeycap";
 import { useDesktopCommands } from "./commands/DesktopCommandProvider";
+import type { ShortcutAvailability } from "./commands/shortcutAvailability";
 import { useImeStatus } from "./vim/imeStatusStore";
 import { useVimMacroRecording } from "./vim/macroStatusStore";
 import {
@@ -56,6 +57,7 @@ function Segment({
 interface RegionHint {
   keys: string;
   label: string;
+  availability?: ShortcutAvailability;
 }
 
 const HISTORY_HINTS: RegionHint[] = [
@@ -97,7 +99,6 @@ function regionHints(
         { keys: "L", label: "Reload" },
         { keys: "C", label: "Compact" },
         { keys: "X", label: "Clear" },
-        ...(status === "busy" ? [{ keys: "S", label: "Stop" }] : []),
       ];
     case "sessions.list":
       return [
@@ -127,7 +128,7 @@ function regionHints(
     case "prompt.composer":
       return [
         { keys: "Esc", label: "Normal" },
-        { keys: "Cmd+Enter", label: status === "busy" ? "Queue" : "Send" },
+        { keys: "Mod+Enter", label: status === "busy" ? "Queue" : "Send" },
       ];
     default:
       return [];
@@ -150,7 +151,12 @@ export function DesktopStatusLine({
   const macro = useVimMacroRecording();
   const projection = useExploreSessionState(sessionId).projection;
   const connected = useStoreSelector((snapshot) => snapshot.connected);
-  const promptEditorContext = focusedRegion?.startsWith("prompt.") === true;
+  const activeElement = document.activeElement instanceof Element
+    ? document.activeElement
+    : null;
+  const promptEditorContext = focusedRegion === "prompt.composer" ||
+    (focusedRegion?.startsWith("prompt.") === true &&
+      Boolean(activeElement?.closest(".cm-editor, [data-vim-command-sink]")));
   const resizingLayout = workspace.selectedSplitter !== null;
   const workspaceCommandMode = mode === "command";
   const effectiveMode = resizingLayout
@@ -189,7 +195,7 @@ export function DesktopStatusLine({
       { keys: DESKTOP_FOCUS_PROMPT_SHORTCUT, label: "Editor" },
     ]
     : [];
-  const ordinaryHints = [
+  const ordinaryHints: RegionHint[] = [
     ...promptRegions,
     ...regionHints(focusedRegion, status, projection),
     ...(focusedRegion === "sessions.list" && itemCount > 0
@@ -211,9 +217,12 @@ export function DesktopStatusLine({
         document.querySelector("[data-desktop-permission-action='reject']")
       ? [{ keys: "R", label: "Reject" }]
       : []),
+    ...(status === "busy"
+      ? [{ keys: DESKTOP_SHORTCUTS.stop, label: "Stop" }]
+      : []),
     { keys: DESKTOP_RESIZE_HINT, label: "Resize" },
   ];
-  const hints = resizingLayout
+  const hints: RegionHint[] = resizingLayout
     ? [
       { keys: "H/L", label: "Resize" },
       { keys: "Shift+H/L", label: "Large step" },
@@ -222,13 +231,13 @@ export function DesktopStatusLine({
     ]
     : workspaceCommandMode
     ? [
-      { keys: "S/E/P/C/T", label: "Focus" },
-      { keys: "Y/D", label: "Queue/drafts" },
-      { keys: "1…0", label: "Session" },
-      { keys: "N", label: "New" },
-      { keys: "W", label: "Next region" },
-      { keys: ":/?", label: "Commands/help" },
-      { keys: "Esc", label: "Cancel" },
+      { keys: "S/P/T/C", label: "Workspace", availability: "available" },
+      { keys: "L/Q/D", label: "Plan/queue/drafts", availability: "available" },
+      { keys: "N", label: "New", availability: "available" },
+      { keys: "W", label: "Next region", availability: "available" },
+      { keys: "R", label: "Resize", availability: "available" },
+      { keys: ",", label: "Settings", availability: "available" },
+      { keys: "Esc", label: "Cancel", availability: "available" },
     ]
     : ordinaryHints;
   const paneLabel = resizingLayout
@@ -333,7 +342,11 @@ export function DesktopStatusLine({
               spacing={0.5}
               alignItems="center"
             >
-              <DesktopShortcut shortcut={hint.keys} quiet />
+              <DesktopShortcut
+                shortcut={hint.keys}
+                quiet
+                availability={hint.availability ?? "available"}
+              />
               <Box component="span" sx={{ fontSize: "0.625rem", whiteSpace: "nowrap" }}>
                 {hint.label}
               </Box>

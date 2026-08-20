@@ -210,7 +210,7 @@ export function createImeAutoInsertVim(): {
       };
     }
 
-    private normalizeVimState(): void {
+    private normalizeVimState(preserveMode = false): void {
       if (composing || this.view.composing) {
         this.pendingFocusExit = true;
         return;
@@ -220,10 +220,9 @@ export function createImeAutoInsertVim(): {
       clearVimMacroRecording();
       if (!this.cm?.state?.vim) return;
       const state = this.cm.state.vim;
-      if (
-        state.insertMode || state.visualMode || state.inputState?.operator ||
-        (state.inputState?.keyBuffer?.length ?? 0) > 0
-      ) {
+      const partialCommand = state.inputState?.operator ||
+        (state.inputState?.keyBuffer?.length ?? 0) > 0;
+      if (partialCommand || (!preserveMode && (state.insertMode || state.visualMode))) {
         Vim.handleKey(this.cm, "<Esc>", "user");
       }
     }
@@ -410,6 +409,17 @@ export function createImeAutoInsertVim(): {
           return;
         }
         clearImeStatus();
+        // Workspace-prefix navigation is focus movement, not an implicit Vim
+        // Escape. Preserve Insert/Visual mode, selection, and caret while
+        // another Cowboy region owns focus. Partial operators and macro
+        // recording still end here so they cannot leak into another region.
+        if (
+          document.activeElement instanceof Element &&
+          document.activeElement.closest("[data-desktop-region]") !== null
+        ) {
+          this.normalizeVimState(true);
+          return;
+        }
         this.normalizeVimState();
       });
     };
@@ -425,6 +435,13 @@ export function createImeAutoInsertVim(): {
           !this.view.dom.isConnected || this.view.dom.contains(document.activeElement)
         ) return;
         clearImeStatus();
+        if (
+          document.activeElement instanceof Element &&
+          document.activeElement.closest("[data-desktop-region]") !== null
+        ) {
+          this.normalizeVimState(true);
+          return;
+        }
         this.normalizeVimState();
       });
     };

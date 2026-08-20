@@ -30,7 +30,7 @@ export function DesktopRegionShortcut({
         data-desktop-region-shortcut
         sx={{ display: "inline-flex", alignItems: "center", flexShrink: 0, ...sx }}
       >
-        {singleKeycap
+        {singleKeycap && !shortcut.includes(" → ")
           ? <ShortcutKeycap keyLabel={singleKeycap} variant="global" accent />
           : <DesktopShortcut shortcut={shortcut} quiet />}
       </Box>
