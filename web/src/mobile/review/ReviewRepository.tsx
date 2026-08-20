@@ -296,25 +296,38 @@ export function ReviewRepository({
             ["changes", "Changes", <DescriptionOutlined key="changes" />],
             ["history", "History", <History key="history" />],
             ["worktrees", "Worktrees", <AccountTreeOutlined key="worktrees" />],
-          ] as const).map(([value, label, icon]) => (
-            <Button
-              key={value}
-              role="tab"
-              aria-selected={section === value}
-              size="small"
-              startIcon={icon}
-              onClick={() => setSection(value)}
-              sx={{
-                flex: 1,
-                minWidth: 0,
-                borderRadius: 2,
-                bgcolor: section === value ? "action.selected" : "transparent",
-                textTransform: "none",
-              }}
-            >
-              {label}
-            </Button>
-          ))}
+          ] as const).map(([value, label, icon]) => {
+            const selected = section === value;
+            return (
+              <Button
+                key={value}
+                role="tab"
+                aria-selected={selected}
+                size="small"
+                color={selected ? "primary" : "inherit"}
+                startIcon={icon}
+                onClick={() => setSection(value)}
+                sx={{
+                  flex: 1,
+                  minWidth: 0,
+                  borderRadius: 2,
+                  color: selected ? undefined : "text.secondary",
+                  fontWeight: selected ? 700 : 500,
+                  bgcolor: selected ? "action.selected" : "transparent",
+                  textTransform: "none",
+                  // iOS synthesizes :hover after a tap. Don't leave a sticky
+                  // primary wash on the tab you just left.
+                  "@media (hover: none), (pointer: coarse)": {
+                    "&:hover": {
+                      bgcolor: selected ? "action.selected" : "transparent",
+                    },
+                  },
+                }}
+              >
+                {label}
+              </Button>
+            );
+          })}
         </Stack>
       </Box>
       <Box sx={{ flex: 1, minHeight: 0, overflow: "hidden" }}>

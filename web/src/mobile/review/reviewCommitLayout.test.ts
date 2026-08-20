@@ -41,6 +41,22 @@ Deno.test("repository history opens commit content on the main review surface", 
   assertStringIncludes(appSource, 'mode === "git" && commitTarget');
 });
 
+Deno.test("repository tabs mute idle labels instead of painting every tab primary", () => {
+  assertStringIncludes(
+    repositorySource,
+    'color={selected ? "primary" : "inherit"}',
+  );
+  assertStringIncludes(
+    repositorySource,
+    'color: selected ? undefined : "text.secondary"',
+  );
+  assertStringIncludes(repositorySource, "fontWeight: selected ? 700 : 500");
+  assertStringIncludes(
+    repositorySource,
+    '"@media (hover: none), (pointer: coarse)"',
+  );
+});
+
 Deno.test("repository footer keeps Settings and close in one capsule", () => {
   assertStringIncludes(repositorySource, 'key: "settings"');
   assertStringIncludes(repositorySource, 'key: "close"');
