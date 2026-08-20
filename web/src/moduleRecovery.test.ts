@@ -1,5 +1,6 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
+  forcedBundleRecoveryUrl,
   isModuleLoadError,
   latestBundleRecoveryUrl,
 } from "./moduleRecovery.ts";
@@ -77,11 +78,24 @@ Deno.test("mobile recovery stays put when the deployed entry is unavailable", as
   assertEquals(recoveryUrl, undefined);
 });
 
+Deno.test("manual recovery always cache-busts the current top-level URL", () => {
+  assertEquals(
+    forcedBundleRecoveryUrl(
+      "https://cowboy.example/?session=one&cowboy-recover=old#drafts",
+      () => 9012,
+    ),
+    "https://cowboy.example/?session=one&cowboy-recover=9012#drafts",
+  );
+});
+
 Deno.test("mobile error recovery replaces the URL instead of reloading stale WKWebView HTML", async () => {
   const boundary = await Deno.readTextFile(
     new URL("./AppErrorBoundary.tsx", import.meta.url),
   );
   assertEquals(boundary.includes("latestBundleRecoveryUrl("), true);
+  assertEquals(boundary.includes("if (force)"), true);
+  assertEquals(boundary.includes("forcedBundleRecoveryUrl("), true);
+  assertEquals(boundary.includes('markClientReloadIntent("module_error_manual_retry")'), true);
   assertEquals(boundary.includes("globalThis.location.replace(target)"), true);
   assertEquals(boundary.includes("globalThis.location.reload()"), false);
   assertEquals(boundary.includes("Checking update…"), true);

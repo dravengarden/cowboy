@@ -7,6 +7,15 @@ export function isModuleLoadError(error: Error): boolean {
   return MODULE_LOAD_PATTERNS.test(`${error.name} ${error.message}`);
 }
 
+export function forcedBundleRecoveryUrl(
+  currentUrl: string,
+  now: () => number = Date.now,
+): string {
+  const target = new URL(currentUrl);
+  target.searchParams.set("cowboy-recover", String(now()));
+  return target.toString();
+}
+
 export async function latestBundleRecoveryUrl(
   currentUrl: string,
   origin: string,
@@ -36,9 +45,7 @@ export async function latestBundleRecoveryUrl(
       !/(?:javascript|ecmascript)/i.test(entry.headers.get("content-type") ?? "")
     ) return undefined;
 
-    const target = new URL(currentUrl);
-    target.searchParams.set("cowboy-recover", token);
-    return target.toString();
+    return forcedBundleRecoveryUrl(currentUrl, () => Number(token));
   } catch {
     return undefined;
   }

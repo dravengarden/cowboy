@@ -16,8 +16,17 @@
 
 import { Box, Button, Typography } from "@mui/material";
 import { Component, type ErrorInfo, type ReactNode } from "react";
-import { isModuleLoadError, latestBundleRecoveryUrl } from "./moduleRecovery";
-import { CRASH_INCIDENT_SEVERITY, reportClientIncident, reportClientLog } from "./observability";
+import {
+  forcedBundleRecoveryUrl,
+  isModuleLoadError,
+  latestBundleRecoveryUrl,
+} from "./moduleRecovery";
+import {
+  CRASH_INCIDENT_SEVERITY,
+  markClientReloadIntent,
+  reportClientIncident,
+  reportClientLog,
+} from "./observability";
 
 interface State {
   readonly error: Error | undefined;
@@ -42,6 +51,18 @@ async function boundedRecoveryFetch(
 }
 
 async function recoverLatestBundle(force = false): Promise<boolean> {
+  const now = Date.now();
+  // A user-requested retry must actually navigate. The readiness probe below
+  // is deliberately conservative for automatic recovery, but it can time out
+  // in a stale/backgrounded WKWebView even when a fresh top-level load works.
+  // Re-running that probe made the Retry button a no-op while killing and
+  // reopening the app recovered immediately.
+  if (force) {
+    const target = forcedBundleRecoveryUrl(globalThis.location.href, () => now);
+    markClientReloadIntent("module_error_manual_retry");
+    globalThis.location.replace(target);
+    return true;
+  }
   const desktopRecovery = (globalThis as typeof globalThis & {
     __cowboyRecoverLatestBundle?: (force?: boolean) => Promise<void>;
   }).__cowboyRecoverLatestBundle;
@@ -49,7 +70,6 @@ async function recoverLatestBundle(force = false): Promise<boolean> {
     await desktopRecovery(force);
     return true;
   }
-  const now = Date.now();
   let previous = 0;
   try {
     previous = Number(globalThis.sessionStorage.getItem(MODULE_RECOVERY_KEY) ?? 0);
@@ -78,7 +98,15 @@ async function recoverLatestBundle(force = false): Promise<boolean> {
     boundedRecoveryFetch,
     () => now,
   );
-  if (!target) return false;
+  if (!target) {
+    reportClientLog(
+      "warn",
+      "module_recovery_probe_failed",
+      "Automatic module recovery did not find a ready bundle",
+    );
+    return false;
+  }
+  markClientReloadIntent("module_error_automatic_recovery");
   globalThis.location.replace(target);
   return true;
 }
