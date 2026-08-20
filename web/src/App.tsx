@@ -1,4 +1,5 @@
 import {
+    Fragment,
     forwardRef,
     lazy,
     memo,
@@ -90,6 +91,11 @@ import { DelayedNetworkProgress, NetworkIconButton } from "./NetworkActionFeedba
 import { setObservabilityContext } from "./observability";
 import { Transcript } from "./Transcript";
 import { sessionDisplayDirectory, sessionProjectLabel } from "./sessionProject";
+import {
+    mergeSessionOverview,
+    type SessionInfoPayload,
+    sessionOverviewSections,
+} from "./sessionOverview";
 import {
     joinProviderInstallations,
     useProviderCatalog,
@@ -6253,21 +6259,28 @@ function InfoRow({ k, v }: { k: string; v: string }): React.JSX.Element {
     );
 }
 
-interface SessionInfoData {
-    id: string;
-    provider: string;
-    cwd: string;
-    title: string;
-    status: string;
-    event_count: number;
-    queue_count: number;
-    drafts_count: number;
+function SessionOverviewRows(
+    { info, live }: { info: SessionInfoPayload; live?: SessionMeta | null },
+): React.JSX.Element {
+    const sections = sessionOverviewSections(mergeSessionOverview(info, live));
+    return (
+        <Stack spacing={1.15} sx={{ mt: 1 }}>
+            {sections.map((section, index) => (
+                <Fragment key={section.key}>
+                    {index > 0 && <Divider />}
+                    {section.rows.map((row) => (
+                        <InfoRow key={row.label} k={row.label} v={row.value} />
+                    ))}
+                </Fragment>
+            ))}
+        </Stack>
+    );
 }
 
 function DesktopSessionInfoPanel(
     { session }: { session: SessionMeta | null },
 ): React.JSX.Element {
-    const [info, setInfo] = useState<SessionInfoData | null>(null);
+    const [info, setInfo] = useState<SessionInfoPayload | null>(null);
     const [error, setError] = useState(false);
     useEffect(() => {
         if (!session) {
@@ -6282,7 +6295,7 @@ function DesktopSessionInfoPanel(
         })
             .then((response) =>
                 response.ok
-                    ? response.json() as Promise<SessionInfoData>
+                    ? response.json() as Promise<SessionInfoPayload>
                     : Promise.reject(new Error("not found"))
             )
             .then(setInfo)
@@ -6309,20 +6322,7 @@ function DesktopSessionInfoPanel(
                 ? <Typography color="error" variant="body2" sx={{ mt: 1 }}>Couldn't load session info.</Typography>
                 : !info
                 ? <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>Loading…</Typography>
-                : (
-                    <Stack spacing={1.15} sx={{ mt: 1 }}>
-                        <InfoRow k="Title" v={info.title} />
-                        <InfoRow k="Status" v={info.status} />
-                        <InfoRow k="Provider" v={info.provider} />
-                        <InfoRow k="Directory" v={info.cwd} />
-                        <Divider />
-                        <InfoRow k="Events" v={info.event_count.toLocaleString()} />
-                        <InfoRow k="Queued" v={String(info.queue_count)} />
-                        <InfoRow k="Drafts" v={String(info.drafts_count)} />
-                        <Divider />
-                        <InfoRow k="Session ID" v={info.id} />
-                    </Stack>
-                )}
+                : <SessionOverviewRows info={info} live={session} />}
         </Box>
     );
 }
@@ -6331,7 +6331,7 @@ function SessionInfoShell(
     { session, onClose }: { session: SessionMeta | null; onClose: () => void },
 ): React.JSX.Element | null {
     const navbarAtBottom = useNavbarAtBottom();
-    const [info, setInfo] = useState<SessionInfoData | null>(null);
+    const [info, setInfo] = useState<SessionInfoPayload | null>(null);
     const [error, setError] = useState(false);
     useEffect(() => {
         if (!session) return undefined;
@@ -6339,7 +6339,7 @@ function SessionInfoShell(
         setError(false);
         const ctrl = new AbortController();
         void fetch(`/api/sessions/${encodeURIComponent(session.id)}/info`, { signal: ctrl.signal })
-            .then((r) => (r.ok ? (r.json() as Promise<SessionInfoData>) : Promise.reject(new Error("not found"))))
+            .then((r) => (r.ok ? (r.json() as Promise<SessionInfoPayload>) : Promise.reject(new Error("not found"))))
             .then(setInfo)
             .catch(() => {
                 if (!ctrl.signal.aborted) setError(true);
@@ -6355,18 +6355,7 @@ function SessionInfoShell(
     } else if (!info) {
         body = <Typography variant="body2" sx={{ p: 1, color: "text.secondary" }}>Loading…</Typography>;
     } else {
-        body = (
-            <Stack spacing={1} sx={{ mt: 1 }}>
-                <InfoRow k="Title" v={info.title} />
-                <InfoRow k="Status" v={info.status} />
-                <InfoRow k="Provider" v={info.provider} />
-                <InfoRow k="Directory" v={info.cwd} />
-                <InfoRow k="Events" v={info.event_count.toLocaleString()} />
-                <InfoRow k="Queued" v={String(info.queue_count)} />
-                <InfoRow k="Drafts" v={String(info.drafts_count)} />
-                <InfoRow k="ID" v={info.id} />
-            </Stack>
-        );
+        body = <SessionOverviewRows info={info} live={session} />;
     }
     return (
         <Sheet
