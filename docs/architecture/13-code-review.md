@@ -18,13 +18,11 @@ turn.
 - The browser consumes a stable Cowboy protocol. It must not consume Zed's
   internal protocol directly.
 
-Zed's remote protocol has the right internal concepts: a versioned worktree
-snapshot, stable entry identities, incremental updates, lazy directory
-expansion, buffers, Git state, diagnostics, and semantic tokens. It is also a
-large private protocol tied to the exact Zed server build. A future
-`ZedWorktreeProvider` may adapt those messages behind Cowboy's data-plane
-contract. That adapter and the isolated Cowboy Zed server must be pinned and
-upgraded together.
+Cowboy exposes two Machine-side adapters behind that stable product API. The
+versioned `cowboy-code-adapter` serves filesystem and Git operations on remote
+Machines; the GPL-isolated Zed adapter serves leased buffers and language
+intelligence. Zed's private protocol never reaches the controller or browser,
+and the Zed adapter/server pair is pinned and upgraded together.
 
 Cowboy's Zed instance uses isolated user data, cache, runtime, and server
 settings. It may read the repository's `.zed/settings.json` because project
@@ -52,8 +50,8 @@ last active file. It must not depend on a complete recursive scan.
    files within a byte and concurrency budget. Disable speculative content
    preloading on constrained networks.
 
-Tree responses use stable relative paths until the Zed provider supplies entry
-IDs. Directory pages and saved files form a lazy, partial Merkle graph under
+Tree responses use stable relative paths. Directory pages and saved files form
+a lazy, partial Merkle graph under
 `data_dir/code-cache`: opening the drawer materializes only requested directory
 nodes, while opening a saved file below 32 MiB materializes its SHA-256 leaf and
 content-addressed blob. Large files remain bounded page reads so navigation
@@ -65,8 +63,8 @@ folders. Explicit refresh uses cache reload.
 
 The Hawk-local store uses SQLite WAL for node/leaf metadata and atomic-renamed
 CAS blobs. Metadata is a fast invalidation key; a cache miss reads the file once
-and hashes those same bytes. Unsaved Zed buffers remain an in-memory Zed overlay
-and never enter the persistent graph. The default 2 GiB quota starts eviction
+and hashes those same bytes. Zed buffer leases remain adapter memory and never
+enter the persistent graph. The default 2 GiB quota starts eviction
 at 85%, drains to 70%, evicts single-hit/cold blobs first, and removes entries
 idle for 30 days on startup. Missing, corrupt, or orphaned blobs are discarded
 and rebuilt rather than becoming file-load failures.
@@ -123,13 +121,11 @@ to the isolated worktree. History is a newest-first page of 128 commits;
 `GET /repository?after=<oid>` appends the next older page. The Code History
 tab loads that page when the list approaches the bottom, with commit-shaped
 skeletons instead of a hard cap banner. Git porcelain and Zed RPC values never cross this
-boundary. Server handlers depend on the product-level
-`CodeProvider` interface for manifests, directory pages, changes, diffs, file
-windows, and previewable media bytes. The first implementation reads the local
-worktree; a future
-version-pinned Zed adapter can replace it without changing browser contracts.
-The legacy session file-tree route remains an alias temporarily, but the Code
-frontend uses only the stable namespace.
+boundary. Server handlers depend on the product-level `CodeProvider` interface
+for manifests, directory pages, changes, diffs, file windows, and previewable
+media bytes. Colocated sessions use `LocalCodeProvider`; remote sessions invoke
+the Machine's versioned `cowboy-code-adapter`. Both return the same stable
+browser contract.
 
 Diff pages carry a content revision and opaque cursor. The browser appends only
 pages with the same revision, so a worktree mutation can never splice two

@@ -1857,7 +1857,7 @@ function qAdd(
   } = {},
 ): Promise<void> {
   const mode = opts.mode ?? "back";
-  const origin = opts.origin ?? (target === "drafts" ? "composer" : "composer");
+  const origin = opts.origin ?? "composer";
   const cmid = newCmid();
   const row: QueuedMessage = { id: `opt-${cmid}`, text, attachments, cmid, origin };
   const store = qClient(sessionId);

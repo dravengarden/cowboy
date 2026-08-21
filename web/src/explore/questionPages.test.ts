@@ -126,7 +126,6 @@ function user(key: string, text: string, autoResumed = false): RenderItem {
     origin: autoResumed
       ? { actor: "cowboy", source: "auto-resume" }
       : { actor: "human", source: "composer" },
-    autoResumed,
   };
 }
 
@@ -137,7 +136,6 @@ function agentRuntime(key: string, text: string): RenderItem {
     role: "user",
     chunks: [{ type: "text", text }],
     origin: { actor: "agent", source: "runtime", provider: "grok" },
-    autoResumed: true,
   };
 }
 

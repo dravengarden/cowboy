@@ -1,100 +1,92 @@
-# cowboy — Architecture Overview
+# Cowboy architecture overview
 
-cowboy lets you drive coding-agent CLIs — **Claude Code, Codex, Gemini** — over
-the **Agent Client Protocol (ACP)** from anywhere: a phone browser, a PC
-browser, a Zed agent panel, or another machine. A Rust (axum) control plane
-serves the JSON/WebSocket API, while a stable broker routes to **one detached
-ACP worker per session** and a separately deployed React SPA serves the UI. It
-is deployed through NixOS systemd units on hawk (`:3333`).
+Cowboy is a remote Agent IDE for directing coding agents across multiple
+machines. Phone and desktop clients connect to one Rust control plane; the
+control plane places each session on an enrolled Machine, and that Machine owns
+a detached ACP worker for the session. The agent keeps running when every UI is
+closed or the controller is restarted.
 
-Operational growth and migration constraints are documented in
-[`11-operations.md`](11-operations.md).
-
-The normative Provider-platform contract is
-[Cowboy core requirements](../requirements.md). It defines Provider package,
-typed UI, per-Machine installation, Service-owned authentication, and uninstall
-ownership. This chapter describes its running implementation.
-
-This document set is the **source of truth for the implementation as it stands**
-— it describes the code, not the original design draft (`design.md`, which
-predates the code and reads as a pre-flight plan).
+This document set describes the implementation as it stands. The normative
+Provider package, authentication, installation, and ownership contract is
+[Cowboy core requirements](../requirements.md). Operational growth and migration
+constraints are in [Operations](11-operations.md).
 
 ## The one idea
 
-cowboy is a **server-authoritative fan-out hub**. The daemon owns all state; every
-client — phone, PC, Zed — is an equal subscriber to the same event stream. There
-is no client-vs-client asymmetry, and **agent lifetime is decoupled from any
-client connection**: close the phone, the agent keeps running under the
-supervisor.
+Cowboy is a **server-authoritative fan-out hub** with Machine-owned execution:
 
-Three hard constraints shape everything:
+1. The Hub assigns the durable session sequence and broadcasts one shared view
+   of progress to every connected UI.
+2. A selected `cowboy-machine` prepares an isolated workspace and owns the
+   detached worker that speaks ACP to the Provider runtime.
+3. Client and controller lifetimes are not agent lifetimes. Closing a tab,
+   changing devices, or restarting the controller does not terminate a live
+   worker.
 
-1. **Don't constrain the agent CLI** more than the transport requires. cowboy is
-   a conduit + control plane, not a reduced-feature reimplementation. Anything
-   ACP can't model rides through as an opaque `Update` payload.
-2. **One shared progress** across all clients, with a single global ordering.
-3. **Agent lifetime is owned by a detached worker**, not by a client socket or
-   the HTTP daemon.
+ACP remains the agent boundary, not the public product model. Provider-specific
+updates can pass through as typed or opaque ACP payloads without reducing the
+underlying CLI to a lowest-common-denominator chat API.
 
 ## Topology
 
 ```mermaid
 flowchart TB
-    PH["phone"] --> WS
-    PC["PC"] --> WS
-    ZED["Zed (ACP)"] --> ACPF["serve-acp"]
-    WS["WebSocket"] --> HUB
-    ACPF --> HUB
-    HUB["Hub<br/>seq · fan-out"] --> SUP["Remote Supervisor"]
-    HUB --> PG[("Postgres")]
-    SUP --> MH["cowboy-machine<br/>host + broker"]
-    MH --> AG["detached worker + agent<br/>per session"]
+    PHONE["Phone IDE"] --> HTTP["HTTP + WebSocket"]
+    DESKTOP["Desktop IDE"] --> HTTP
+    HTTP --> HUB["Cowboy Hub<br/>seq · state · fan-out"]
+    HUB --> STORE[("PostgreSQL / SQLite")]
+    HUB <-->|"local UDS or outbound WSS"| MACHINE["cowboy-machine"]
+    MACHINE --> WORKER["detached ACP worker<br/>one per session"]
+    WORKER --> PROVIDER["Claude Code / Codex /<br/>Gemini / Grok"]
 
     style HUB fill:#eef2ff,stroke:#6366f1
-    style SUP fill:#dcfce7,stroke:#16a34a
-    style PG fill:#fef9c3,stroke:#ca8a04
+    style MACHINE fill:#fef9c3,stroke:#ca8a04
+    style WORKER fill:#dcfce7,stroke:#16a34a
 ```
 
-The **Hub** is the single source of truth. Every surface (WebSocket clients, the
-ACP server face) is a subscriber to the Hub's broadcast channel, so "new session
-shows everywhere" and "an approval reflects everywhere" are just internal
-broadcasts. The **Supervisor** talks to the selected Machine runtime. Per-session
-worker units own ACP threads and subprocesses, survive daemon/broker restarts,
-and replay unacked events when the control plane reconnects.
+Remote Machines initiate outbound authenticated WebSocket connections; the
+Hawk-local fast path uses a Unix-domain socket. The controller never opens a
+public listener on each development host. Machine fencing, command
+deduplication, worker snapshots, and event replay preserve ownership across
+reconnects and rolling updates.
 
 ## Component map
 
-| Layer | Module | Role |
+| Layer | Modules | Role |
 |---|---|---|
-| Entry / CLI | `src/main.rs`, `src/cli.rs` | clap dispatch: `serve`, `serve-acp`, `try-agent` |
-| Core / bus | `src/core.rs` | `Hub`, `Event`/`Inbound`/`Outbound`, `seq`, fan-out |
-| Transport | `src/acp.rs` | the **only** module touching `agent-client-protocol` |
-| Lifetime | `src/supervisor.rs`, `src/machine_broker.rs`, `src/worker.rs` | route / detach / drain / resume / rollback |
-| Runtime IPC | `src/runtime_wire.rs`, `src/remote_runtime.rs` | version negotiation, fencing, replay, idempotency |
-| Providers | `src/provider/*` | launch specs + Provider runtime contracts |
-| Server | `src/server.rs` | axum REST + WS + runtime static-file root |
-| Storage | `src/store.rs`, `migrations/*` | Postgres write-behind, restore |
-| Files | `src/files.rs` | gitignore-aware `@` file picker |
-| Frontend | `web/src/*` | independently built React SPA |
+| CLI / controller | `src/main.rs`, `src/cli.rs`, `src/server.rs` | Commands, REST, WebSocket, and runtime-served SPA |
+| Hub | `src/core.rs`, `src/persistence.rs` | Session state, `seq`, fan-out, queueing, and write-behind intents |
+| Runtime routing | `src/supervisor.rs`, `src/remote_runtime.rs`, `src/runtime_router.rs` | Machine selection, fencing, replay, and idempotent commands |
+| Machine host | `src/machine_*.rs`, `src/bin/cowboy-machine.rs` | Enrollment, workspace preparation, component lifecycle, and detached-worker supervision |
+| ACP worker | `src/acp.rs`, `src/worker.rs`, `src/bin/cowboy-acp-worker.rs` | Provider handshake, prompts, permissions, streaming updates, and resume |
+| Providers | `src/provider/*`, `providers/*` | Signed package contracts, launch generations, Service auth, and usage adapters |
+| Storage | `src/store.rs`, `src/store/sqlite.rs`, `migrations/*` | PostgreSQL/SQLite durability, restore, pagination, and retention |
+| Code plane | `src/code_review.rs`, `src/code_adapter.rs`, `src/code_cache.rs` | Worktree tree/diff/file/LSP data behind a stable Cowboy API |
+| Frontend | `web/src/*` | Desktop, mobile, transcript, composer, Machine, Provider, and code-review surfaces |
+
+The axum process serves both APIs and the files under `--web-root`. Web releases
+can therefore atomically switch `/run/cowboy-web` without rebuilding or
+restarting the controller.
 
 ## End-to-end request flow
 
 ```mermaid
 flowchart TB
-    A["client sends Submit"] --> B["Hub: assign seq,<br/>enqueue or dispatch"]
-    B --> C["Supervisor.send(Prompt)"]
-    C --> D["agent thread →<br/>ACP prompt"]
-    D --> E["agent streams<br/>session/update"]
-    E --> F["Hub.push(Event)<br/>broadcast to all"]
-    F --> G["clients render;<br/>writer persists"]
-    E --> H["TurnEnd →<br/>drain next queued prompt"]
-    H --> B
+    A["UI submits prompt"] --> B["Hub assigns state + command id"]
+    B --> C["Supervisor routes to selected Machine"]
+    C --> D["detached worker sends ACP prompt"]
+    D --> E["Provider streams updates"]
+    E --> F["worker replay buffer"]
+    F --> G["Hub stamps seq + persists + broadcasts"]
+    G --> H["all connected UIs render"]
+    E --> I["TurnEnd drains queued work"]
+    I --> B
 
     style B fill:#eef2ff,stroke:#6366f1
-    style F fill:#dcfce7,stroke:#16a34a
+    style G fill:#dcfce7,stroke:#16a34a
 ```
 
-Read the chapters in order; each one zooms into a box above:
+## Read next
 
 1. [Transport — ACP](01-acp-transport.md)
 2. [Core — the Hub](02-core-hub.md)
@@ -102,12 +94,16 @@ Read the chapters in order; each one zooms into a box above:
 4. [Providers](04-providers.md)
 5. [Storage](05-storage.md)
 6. [Server & wire API](06-server-api.md)
-7. [Codex-owned memory boundary](08-memory.md)
+7. [Agent-owned memory boundary](08-memory.md)
 8. [Frontend](09-frontend.md)
 9. [Build & deploy](10-deploy-build.md)
 10. [Operations](11-operations.md)
 11. [Zero-interruption rolling updates](12-rolling-updates.md)
-12. [Multi-machine runtime](15-multi-machine.md)
+12. [Mobile code review](13-code-review.md)
+13. [Multi-machine runtime](15-multi-machine.md)
 
-Zed setup and the ACP bridge's current compatibility boundary are documented in
-[Zed ACP integration](../integrations/zed.md).
+The stdio ACP bridge and isolated Zed code adapter remain optional compatibility
+integrations. They are documented separately in
+[Zed ACP integration](../integrations/zed.md) and
+[Isolated Zed Code Provider](14-zed-code-provider.md); neither is part of the
+primary phone/desktop control-plane topology.

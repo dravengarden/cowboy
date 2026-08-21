@@ -56,7 +56,8 @@ doesn't pay the spawn + handshake cost.
 When systemd restarts `cowboy.service`, detached worker units remain alive.
 Recovery rests on four facts:
 
-1. **Transcripts are on disk** (Postgres) → history is never lost.
+1. **Transcripts are durable** (PostgreSQL or SQLite) → history survives a
+   controller restart.
 2. **Worker snapshots are authoritative** for whether a persisted Busy turn
    survived; restore does not falsely mark that turn Interrupted.
 3. **Unacked runtime events replay** after the new controller takes its fenced
@@ -67,7 +68,7 @@ Recovery rests on four facts:
 
 ```mermaid
 flowchart TB
-    BOOT["daemon boots"] --> RESTORE["Hub restore<br/>from Postgres"]
+    BOOT["daemon boots"] --> RESTORE["Hub restore<br/>from durable Store"]
     RESTORE --> META["sessions + event logs +<br/>queue/drafts"]
     META --> WAIT["bounded Machine runtime<br/>reconciliation"]
     WAIT -->|"connected owner"| ADOPT["adopt detached turn<br/>without interruption"]

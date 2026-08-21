@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 780" role="img" aria-labelledby="title desc">
   <title id="title">Cowboy remote Agent IDE architecture</title>
-  <desc id="desc">Phone, desktop, and ACP clients connect to one Cowboy Hub, which coordinates multiple remote Machines, detached ACP workers, and agent Providers.</desc>
+  <desc id="desc">Phone and desktop clients connect to one Cowboy Hub, which coordinates multiple remote Machines, detached agent workers, and Providers.</desc>
   <defs>
     <linearGradient id="canvas" x1="0" x2="1" y1="0" y2="1">
       <stop offset="0" stop-color="#fbfaff"/>
@@ -31,9 +31,8 @@
   <rect width="1200" height="780" rx="28" fill="url(#canvas)"/>
   <text x="52" y="42" class="eyebrow">ONE REMOTE IDE · MANY MACHINES</text>
 
-  <path class="line" d="M210 132 420 180"/>
-  <path class="line" d="M600 132v48"/>
-  <path class="line" d="M990 132 780 180"/>
+  <path class="line" d="M350 132 470 180"/>
+  <path class="line" d="M850 132 730 180"/>
   <path class="line" d="M600 268v44"/>
   <path class="line" d="M488 268 260 440"/>
   <path class="line" d="M712 268 940 440"/>
@@ -43,19 +42,14 @@
   <path class="line" d="M940 628v44"/>
 
   <g>
-    <rect class="box" x="40" y="56" width="340" height="76" rx="18"/>
-    <text x="72" y="88" class="label">Phone Agent IDE</text>
-    <text x="72" y="113" class="sub">touch-first remote control</text>
+    <rect class="box" x="170" y="56" width="360" height="76" rx="18"/>
+    <text x="202" y="88" class="label">Phone Agent IDE</text>
+    <text x="202" y="113" class="sub">touch-first remote control</text>
   </g>
   <g>
-    <rect class="box" x="430" y="56" width="340" height="76" rx="18"/>
-    <text x="462" y="88" class="label">Desktop Agent IDE</text>
-    <text x="462" y="113" class="sub">keyboard-first workspace</text>
-  </g>
-  <g>
-    <rect class="box" x="820" y="56" width="340" height="76" rx="18"/>
-    <text x="852" y="88" class="label">Zed / ACP clients</text>
-    <text x="852" y="113" class="sub">the same live sessions</text>
+    <rect class="box" x="670" y="56" width="360" height="76" rx="18"/>
+    <text x="702" y="88" class="label">Desktop Agent IDE</text>
+    <text x="702" y="113" class="sub">keyboard-first workspace</text>
   </g>
 
   <g>

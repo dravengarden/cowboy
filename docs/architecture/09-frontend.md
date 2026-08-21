@@ -1,9 +1,10 @@
 # Frontend
 
-The frontend is a **React + MUI + CodeMirror 6** PWA, built with **Deno + Vite**,
-then embedded into the Rust binary via `rust-embed`. "PC" and "phone" are the
-**same app at different widths**, not separate builds. A Tauri native shell wraps
-the same bundle for the desktop/iOS app where the PWA's platform limits bite.
+The frontend is a **React + MUI + CodeMirror 6** PWA, built with **Deno + Vite**
+as an independently replaceable web release. Axum reads it from `--web-root` at
+request time. "Desktop" and "phone" are the **same app at different widths**,
+not separate builds. A Tauri native shell wraps the same bundle for desktop/iOS
+where the PWA's platform limits bite.
 
 The lives-or-dies fact: **one process serves frontend + backend**, so a
 daemon-down state is a white screen. The robustness layers (service-worker shell
@@ -89,7 +90,7 @@ tail recycles older **mounted** rows into a measured spacer; do not
 JS-virtualize this scroller. It must handle three chat-log realities: variable
 row heights (dynamic measurement), stick-to-bottom during live streaming
 (releasing when the user scrolls up), and scroll anchoring on prepend so
-loading older history (via `GET /api/history/:id/:page`) never jumps the view.
+loading older history (via `GET /api/history/:id?before_seq=…`) never jumps the view.
 
 **Jank-free horizontal swipe is a core Mobile requirement.** Sessions and
 Review drawers, and the Agent↔Review pager, must track the finger on the

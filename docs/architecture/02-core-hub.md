@@ -71,7 +71,7 @@ The send path has two doors. **`Prompt`** is the direct/API path (send now).
 | Outbound | When |
 |---|---|
 | `Sessions` | session list, on connect + on change |
-| `Snapshot` | last ~200 events of a session on connect, with `reached_start` |
+| `Snapshot` | byte- and event-bounded recent tail for compatibility clients, with `reached_start` |
 | `Event` | a single live envelope |
 | `ConfigOptions` | the agent's advertised per-session config (mode / model / effort) |
 | `SyncPatch` | generic sync state (queue / drafts / order) |
@@ -86,7 +86,7 @@ flowchart TB
     SEQ --> BC["broadcast"]
     SEQ --> WB["write-behind"]
     BC --> C1["WS clients"]
-    BC --> ACP["serve-acp"]
+    BC -.-> ACP["optional stdio ACP bridge"]
 
     style EV fill:#eef2ff,stroke:#6366f1
     style WB fill:#fef9c3,stroke:#ca8a04
@@ -94,7 +94,7 @@ flowchart TB
 
 Fan-out is a `tokio::sync::broadcast` channel. A client that **lags** is dropped
 from the channel; it simply reconnects and gets a fresh `Snapshot` (the last
-~200 events) plus a live tail. The snapshot tail bounds reconnect cost while
+recent events) plus a live tail. The snapshot tail bounds reconnect cost while
 older history is paged on demand (see [Server & wire API](06-server-api.md)).
 
 ## Persistence intent

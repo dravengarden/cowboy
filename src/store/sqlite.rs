@@ -88,8 +88,6 @@ struct SqliteSessionRow {
     config_options: Option<serde_json::Value>,
     config_preferences: serde_json::Value,
     mobile_review_state: serde_json::Value,
-    #[allow(dead_code)]
-    created_at_ms: i64,
 }
 
 const PROVIDER_USAGE_COLUMNS: &str = "machine_id, producer_id, sequence, occurred_at_ms, \
@@ -1901,7 +1899,7 @@ impl SqliteStorage {
              provider_auth_generation, provider_behavior, machine_id, workspace_id, workspace_name, workspace_source_path, \
              cwd, title, origin, status, agent_session_id, \
              system, next_seq, queue, drafts, \
-             config_options, config_preferences, mobile_review_state, created_at_ms \
+             config_options, config_preferences, mobile_review_state \
              FROM sessions WHERE deleted_at_ms IS NULL \
              ORDER BY position IS NULL, position ASC, created_at_ms ASC",
         )

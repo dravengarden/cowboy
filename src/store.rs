@@ -28,7 +28,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use base64::Engine as _;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use futures::TryStreamExt as _;
 use sha2::Digest as _;
 use sqlx::Row as _;
@@ -1618,7 +1618,7 @@ impl PostgresStorage {
              provider_auth_generation, provider_behavior, machine_id, workspace_id, workspace_name, workspace_source_path, \
              cwd, title, origin, status, agent_session_id, \
              system, next_seq, queue, drafts, \
-             config_options, config_preferences, mobile_review_state, created_at \
+             config_options, config_preferences, mobile_review_state \
              FROM sessions WHERE deleted_at IS NULL ORDER BY position ASC NULLS LAST, created_at ASC",
         )
         .fetch_all(&self.pool)
@@ -5026,8 +5026,6 @@ struct SessionRow {
     config_options: Option<serde_json::Value>,
     config_preferences: serde_json::Value,
     mobile_review_state: serde_json::Value,
-    #[allow(dead_code)]
-    created_at: DateTime<Utc>,
 }
 
 impl SessionRow {

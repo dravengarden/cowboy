@@ -73,8 +73,9 @@ PostgreSQL is built incrementally by the immutable `migrations/*.sql` history
 The writer UPSERTs consecutive message/thought chunks into their first sequence
 row, folds tool updates into the initial call, and stores only the sequence
 watermark for usage/session-info telemetry. Live WS clients still see every
-frame. On restore, only the latest 1,000 durable rows per session enter the Hub;
-older rows stay in Postgres and are loaded through immutable 200-event pages.
+frame. On restore, only the latest 1,000 rows within the serialized-byte cap per
+session enter the Hub; older rows stay in the durable Store and are loaded
+through cursor-addressed pages of at most 64 events.
 Native Postgres fits this better than a Timescale hypertable: reads and
 uniqueness are keyed by `(session_id, seq)`, while the actual cost was redundant
 large JSON payloads rather than time-range scans.

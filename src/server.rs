@@ -1694,7 +1694,6 @@ async fn serve_axum(
             post(api_reconcile_project_sessions),
         )
         .route("/api/sessions/{id}/files", get(api_search_files))
-        .route("/api/sessions/{id}/file-tree", get(api_file_tree))
         .route("/api/code/sessions/{id}/tree", get(api_file_tree))
         .route("/api/code/sessions/{id}/search", get(api_code_search))
         .route("/api/code/sessions/{id}/manifest", get(api_code_manifest))

@@ -7,7 +7,7 @@ or frontend rollout does not terminate an in-flight agent turn.
 
 ```mermaid
 flowchart LR
-    WEB["cowboy-web\nimmutable files"] --> CORE["cowboy\nHTTP · WS · Hub · Postgres"]
+    WEB["cowboy-web\nimmutable files"] --> CORE["cowboy\nHTTP · WS · Hub · Store"]
     CORE <-->|"Machine WebSocket + runtime tunnel"| MACHINE["cowboy-machine\nhost + stable broker"]
     MACHINE <-->|"commands · replay · heartbeats"| W1["worker session A\nACP adapter"]
     MACHINE <-->|"commands · replay · heartbeats"| W2["worker session B\nACP adapter"]
@@ -19,7 +19,8 @@ flowchart LR
 ```
 
 - `cowboy.service` owns the API, WebSocket connections, Hub, scheduler,
-  and Postgres write-behind. It does not parent ACP workers in production.
+  and backend-neutral Store write-behind. It does not parent ACP workers in
+  production.
 - `cowboy-machine.service` is owned by the user's systemd manager and reconnects
   outbound to the Cowboy controller.
 - `cowboy-machine` is a narrow, separately built host. Its broker owns routing and a
@@ -74,7 +75,7 @@ a stale worker rollout after the release receipt is written.
    still reach the old worker so the current turn can reach a safe boundary.
 8. Worker state transitions are sent before command acceptance is ACKed. During
    graceful shutdown Cowboy drains dispatcher/runtime commands first and closes
-   the Postgres writer last, eliminating the normal send-vs-deploy race.
+   the Store writer last, eliminating the normal send-vs-deploy race.
 9. On every broker reconnect Cowboy re-declares launch metadata with an
    additive `adopt_only` flag. Machine rebuilds its registry but never interprets
    a worker that is merely late to reconnect as permission to spawn a second
@@ -124,7 +125,7 @@ before fallback so late frames cannot corrupt the replacement session.
 | HTTP/Hub/control plane | `cowboy.service` | worker continues; events replay; clients reconnect |
 | ACP/worker generation | idle workers roll immediately; busy workers drain | current turn and permission responders finish on old generation |
 | Machine host code | Machine restarts after readiness-gated activation | workers and core reconnect to the new broker |
-| Postgres | independent existing service policy | Cowboy health degrades; no runtime ownership change |
+| Durable database | independent service/file policy | Cowboy health degrades; no runtime ownership change |
 | host reboot / user-manager loss | all processes stop | existing persisted Interrupted/Crashed recovery applies |
 
 ## Failure handling
@@ -148,7 +149,7 @@ before fallback so late frames cannot corrupt the replacement session.
 | Core shuts down while a prompt is being handed off | drain to worker ACK, or retain broker-owned prompts; only demonstrably unsent prompts return to the durable queue |
 | Unknown/extreme inconsistency | kill the affected worker and use the prior Interrupted/Crashed recovery path |
 
-Normal deployment relies on Cowboy's graceful shutdown to drain the Postgres
+Normal deployment relies on Cowboy's graceful shutdown to drain the Store
 writer before the core exits. The worker outbox survives core and broker
 restarts, not worker process death or host reboot. A hard kill in the narrow
 window between applying an event and durably recording its receipt can retain

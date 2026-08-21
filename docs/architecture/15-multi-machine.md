@@ -11,14 +11,14 @@
 > separate Cowboy Service-level contract: Machines receive automatic credential
 > replicas and never own an independent Provider login.
 
-Cowboy evolves from one Hawk-local runtime into a control plane that can route
-sessions and code-intelligence work to independently operated macOS and Linux
-machines. The durable boundary is a small `cowboy-machine` host agent. Agent
+Cowboy routes sessions and code-intelligence work to independently operated
+macOS and Linux machines. The durable boundary is a small `cowboy-machine` host
+agent. Agent
 CLIs, ACP adapters/workers, and Zed are payloads supervised by that host; they
 are not linked into the Cowboy HTTP daemon and do not share an update
 generation.
 
-This design extends the existing `runtime_wire` fencing, command idempotency,
+The implementation extends `runtime_wire` fencing, command idempotency,
 worker snapshots, event replay, and safe drain rules. It does not introduce a
 second session protocol or proxy ACP itself over the public network.
 

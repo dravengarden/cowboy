@@ -204,7 +204,7 @@ export type Outbound =
   | { type: "ping" }
   // The RECENT log tail (last SNAPSHOT_TAIL events). `reached_start` = these are
   // the whole log (nothing older to page to). Older history is fetched on demand
-  // over HTTP — see loadOlder + GET /api/history/:id/:page.
+  // over HTTP — see loadOlder + GET /api/history/:id?before_seq=….
   | { type: "snapshot"; session_id: string; events: Envelope[]; reached_start: boolean }
   | { type: "event"; envelope: Envelope }
   | { type: "config_options"; session_id: string; options: ConfigOption[] }

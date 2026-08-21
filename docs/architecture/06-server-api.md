@@ -1,9 +1,9 @@
 # Server & wire API
 
-`src/server.rs` stands up a single **axum** server that does three jobs at once:
-serve the embedded SPA, expose the REST endpoints, and host the WebSocket that
-carries the real-time event/command stream. One process, one port (`:3333`) →
-the same binary is both frontend and backend.
+`src/server.rs` stands up one **axum** server that exposes REST, hosts the
+real-time WebSocket, accepts authenticated Machine connections, and serves the
+SPA files under `--web-root`. One process and one port (`:3333`) form the
+control plane, while the web files remain an independently replaceable release.
 
 ## REST endpoints
 
@@ -12,20 +12,30 @@ the same binary is both frontend and backend.
 | `GET /healthz` | readiness → `"ok"`, or 503 after persistence loss / exhausted retries |
 | `GET /version` | `{ version }` = SHA-256 of `index.html`, for build-id / stale-bundle detection |
 | `GET /api/metrics` | storage/session/RSS plus persistence pending, dropped, and failed-batch counters |
+| `GET /metrics` | Prometheus controller and runtime metrics |
 | `GET /api/usage` | Cached Codex account limits, Claude Agent SDK plan-limit events, and the latest live ACP session usage. Gemini account quota remains absent until its official ACP mode exposes it; Cowboy never reuses provider OAuth credentials against private endpoints. |
 | `POST /api/usage` | manually refresh official provider account usage, coalesced and timeout-bounded |
 | `GET /api/workspaces` | selectable session roots plus matching central Columbus work items |
+| `GET /api/providers` | Provider catalog, Service auth state, and installability |
+| `POST /api/providers/{id}/auth/start` | start a Service-owned Provider authentication flow |
+| `GET /api/machines` | enrolled Machine health, inventory, components, and Provider state |
+| `POST /api/machines/enrollment` | create a short-lived Machine enrollment credential |
+| `ANY /api/machine/connect` | authenticated outbound Machine WebSocket |
+| `POST /api/sessions` | create a Machine-placed session and return its exact Provider generation |
 | `GET /api/sessions/{id}/files?q&limit` | the composer `@` picker (gitignore-aware fuzzy search) |
 | `GET /api/sessions/{id}/info` | metadata + event / queue / draft counts |
 | `POST /api/sessions/{id}/reload` | atomically rebuild the worker while preserving the Cowboy/native session, transcript, pending state, and saved config |
-| `POST /api/sessions` | create a session; returns authoritative `session_id`, exact `provider_version`, `provider_generation_digest`, and optional `provider_auth_generation` selected transactionally by the Controller |
 | `POST /api/sessions/{id}/prompt` | machine-driven session wake |
-| `GET /api/history/{id}/{page}` | fixed-size, seq-aligned history page (`immutable` once the next page exists) |
+| `GET /api/history/{id}?before_seq=…` | cursor-addressed, event- and byte-bounded history page |
+| `GET /api/code/sessions/{id}/*` | worktree tree/search/manifest/diff/file/LSP data plane |
+| `GET /api/artifacts/{name}` | externalized large transcript artifacts |
 | `ANY /ws` | WebSocket upgrade |
-| `*` (fallback) | the embedded SPA (`index.html` for client routes) |
+| `*` (fallback) | files from `--web-root`, with `index.html` fallback for client routes |
 
-The SPA is embedded at compile time via `rust-embed` (`#[folder = "web/dist"]`),
-so a release binary is fully self-contained — no static-file directory to deploy.
+Static assets are read at request time. Content-addressed Vite assets receive
+immutable caching; shell files revalidate with content ETags. An atomic Web
+release can therefore retarget `/run/cowboy-web` without restarting the daemon
+or its WebSocket connections.
 
 ## The `/api/workspaces` picker
 
@@ -42,10 +52,10 @@ caller-owned local workspace. `/etc/nixos` is deliberately not selectable.
 
 ## History pagination
 
-The WebSocket `Snapshot` only carries the last ~200 events. Older history is
-pulled lazily over REST: `GET /api/history/{id}/{page}` returns a fixed-size,
-seq-aligned page, marked `immutable` once a later page exists (so the client can
-cache it forever). The frontend requests older pages as the user scrolls up. It
+The WebSocket `Snapshot` carries a byte- and event-bounded hot tail. Older
+history is pulled lazily with `GET /api/history/{id}?before_seq=…`; complete
+past pages are immutable, while the live tail remains on WebSocket. The
+frontend requests older pages as the user scrolls up. It
 uses canonical message/tool rows plus CSS off-screen containment; retaining the
 browser's `column-reverse` anchor avoids iOS jumps from unmounting
 variable-height rows in a JavaScript virtualizer.
@@ -54,7 +64,7 @@ variable-height rows in a JavaScript virtualizer.
 
 ```mermaid
 flowchart TB
-    CONN["client connects /ws"] --> HELLO["Hub sends Sessions +<br/>Snapshot + Settings +<br/>ConfigOptions + Skills"]
+    CONN["client connects /ws"] --> HELLO["Hub sends Sessions +<br/>Snapshot + Settings +<br/>ConfigOptions"]
     HELLO --> TAIL["live tail<br/>(broadcast subscribe)"]
     CIN["client → Inbound cmd"] --> HUB["Hub handles,<br/>stamps seq"]
     HUB --> TAIL
@@ -64,8 +74,8 @@ flowchart TB
     style HUB fill:#dcfce7,stroke:#16a34a
 ```
 
-On connect the Hub pushes the full bootstrap (`Sessions`, per-session
-`Snapshot`, `Settings`, `ConfigOptions`, `Skills`). After that it's symmetric:
+On connect the Hub pushes the compatibility bootstrap (`Sessions`, per-session
+`Snapshot`, `Settings`, and `ConfigOptions`). After that it's symmetric:
 the client sends `Inbound` commands, the Hub fans `Outbound` messages back. The
 wire types are mirrored in `web/src/protocol.ts`. `protocol_contract` parses the
 Rust enums and fails tests when their serialized discriminants differ from the
@@ -81,11 +91,16 @@ TypeScript checks. See [Core — the Hub](02-core-hub.md) for the full catalogs.
 - **dispatcher** — drains the Hub→supervisor hand-off and forwards prompts
 - **usage collector** — refreshes provider account limits every five minutes;
   failures remain provider-local and preserve explicit unavailable/stale state
+- **Machine broker/control** — authenticates outbound Machine connections,
+  reconciles inventory, and routes fenced runtime commands
+- **Provider Service** — owns authentication flows, signed catalog state, and
+  credential-replica convergence
 
 ## Auth
 
-There is **no auth in v0** — a deliberate LAN-only choice. The deployed service
-binds localhost and is reached over Tailscale / a reverse proxy (which also
-resolves browser mixed-content for `wss://`). Token-based device pairing and
-`wss` are a v1 follow-up; the design treats remote exposure as the largest
-attack surface, so this is a known gap, not an oversight.
+Browser/API access has no Cowboy login boundary; the deployed service therefore
+binds localhost and is reached through a trusted Tailscale or reverse-proxy
+boundary. Machine access is different: enrollment uses a short-lived,
+single-use token, then public-key identity authenticates outbound WSS
+connections and supports explicit revocation. Do not expose the controller's
+browser/API surface directly to the public Internet.

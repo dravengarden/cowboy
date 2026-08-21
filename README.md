@@ -93,7 +93,7 @@ SQLite is the zero-ops local store. PostgreSQL speaks the same `Store` API (`--d
 ## Architecture
 
 <p align="center">
-  <img src="docs/architecture/multi-machine.svg" alt="Phone, desktop, and ACP clients connect to the Cowboy Hub, which coordinates multiple remote Machines and detached agent workers" width="920">
+  <img src="docs/architecture/multi-machine.svg" alt="Phone and desktop clients connect to the Cowboy Hub, which coordinates multiple remote Machines and detached agent workers" width="920">
 </p>
 
 <p align="center"><sub>One remote IDE surface, one Hub, and as many Machine-hosted agent workspaces as you need.</sub></p>

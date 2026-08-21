@@ -39,8 +39,6 @@ export type RenderItem = { key: string } & (
     role: "assistant" | "user";
     chunks: ContentChunk[];
     origin?: PromptOrigin | undefined;
-    /** @deprecated Prefer `origin`. Kept for older call sites. */
-    autoResumed?: boolean;
   }
   | { kind: "thought"; sections: string[] }
   | {
@@ -117,7 +115,6 @@ function sameRenderItem(a: RenderItem, b: RenderItem): boolean {
   switch (a.kind) {
     case "message":
       return b.kind === "message" && a.role === b.role &&
-        a.autoResumed === b.autoResumed &&
         samePromptOrigin(a.origin, b.origin) && sameChunks(a.chunks, b.chunks);
     case "thought":
       return b.kind === "thought" && sameStrings(a.sections, b.sections);
@@ -347,7 +344,6 @@ export function derive(timeline: Envelope[]): RenderItem[] {
                 chunks: [chunk],
                 key: String(env.seq),
                 origin,
-                autoResumed: origin !== undefined && !isHumanPrompt(origin),
               });
               cursor = { kind: "message", role };
             }
