@@ -27,10 +27,11 @@ export function ProductPasskeysPanel({
   }, []);
 
   useEffect(() => {
+    if (me.auth_enabled === false) return;
     void load().catch((err: unknown) => {
       setError(err instanceof AuthApiError ? err.message : "Could not load passkeys");
     });
-  }, [load]);
+  }, [load, me.auth_enabled]);
 
   const add = (): void => {
     if (busy || !passkeysSupported() || nickname.trim() === "") return;
@@ -78,6 +79,8 @@ export function ProductPasskeysPanel({
       })
       .finally(() => setBusy(false));
   };
+
+  if (me.auth_enabled === false) return <></>;
 
   return (
     <Stack spacing={1.5}>

@@ -140,6 +140,13 @@ Admin routes are listed in [Admin](14-admin.md). Settings redaction is
 
 ## PWA gate
 
+Product login is guarded by the controller feature flag
+`--product-auth-enabled <true|false>` / `COWBOY_PRODUCT_AUTH_ENABLED`. It
+defaults to `false`: the controller exposes a synthetic local owner, keeps the
+PWA and product APIs available without a cookie, and leaves the separate admin
+authentication plane intact. Set it to `true` only when the complete login
+stack is ready and deploy Web plus controller together.
+
 `ProductAuthGate` wraps Desktop/Mobile in `web/src/main.tsx`.
 `web/src/auth/*` must not import `web/src/store.ts` (`subscribe()` opens
 `/ws`). HTTP 200 + `me == null` → login. 404/501 → "controller too old /

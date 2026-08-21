@@ -16,6 +16,14 @@ import { installDesktopNativeEscapeGuard } from "./desktopNativeEscapeGuard";
 
 function DesktopAccountCommands(): React.JSX.Element {
   const { me, signOut } = useProductAuth();
+  if (me.auth_enabled === false) return <></>;
+  return <EnabledDesktopAccountCommands me={me} signOut={signOut} />;
+}
+
+function EnabledDesktopAccountCommands({
+  me,
+  signOut,
+}: Pick<ReturnType<typeof useProductAuth>, "me" | "signOut">): React.JSX.Element {
   const [tokensOpen, setTokensOpen] = useState(false);
   const [passkeysOpen, setPasskeysOpen] = useState(false);
   const signOutCommand = useMemo<DesktopCommand>(() => ({

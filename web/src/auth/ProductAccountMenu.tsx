@@ -7,6 +7,7 @@ import { useProductAuth } from "./ProductAuthGate";
 export function ProductAccountMenu(): React.JSX.Element {
   const { me, signOut } = useProductAuth();
   const [busy, setBusy] = useState(false);
+  if (me.auth_enabled === false) return <></>;
   return (
     <Button
       color="error"

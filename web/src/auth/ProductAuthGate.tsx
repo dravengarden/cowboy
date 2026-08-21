@@ -247,7 +247,9 @@ export function ProductAuthGate({
     return (
       <ProductAuthContext.Provider value={{ me, updateMe, signOut }}>
         {children}
-        <PasskeyReauthLock me={me} onUnlocked={updateMe} />
+        {me.auth_enabled !== false && (
+          <PasskeyReauthLock me={me} onUnlocked={updateMe} />
+        )}
       </ProductAuthContext.Provider>
     );
   }

@@ -241,13 +241,13 @@ Deno.test("auth status JSON requires the public registration shape", () => {
   assertEquals(
     authStatusFromJson({
       registration: { enabled: true, mode: "token", accepts_registration: true },
-      me: { account: "draven", role: "operator" },
+      me: { account: "draven", role: "operator", auth_enabled: false },
     }),
     {
       registration: { enabled: true, mode: "token", accepts_registration: true },
       setup_required: false,
       setup_pending: false,
-      me: { account: "draven", role: "operator" },
+      me: { account: "draven", role: "operator", auth_enabled: false },
     },
   );
 });

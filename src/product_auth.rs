@@ -268,6 +268,18 @@ impl ProductPrincipal {
     }
 }
 
+/// Owner-equivalent principal used only while the product-auth feature flag is
+/// disabled. This preserves Cowboy's original single-user behavior without
+/// weakening the separate admin-console authentication plane.
+#[must_use]
+pub fn local_product_principal() -> ProductPrincipal {
+    ProductPrincipal {
+        user_id: "local".to_owned(),
+        username: "local".to_owned(),
+        role: AdminRole::Owner,
+    }
+}
+
 /// `Authorization: Bearer cow_...` secret, if the header is well-formed.
 #[must_use]
 pub fn bearer_token(headers: &HeaderMap) -> Option<String> {

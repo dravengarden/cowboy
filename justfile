@@ -14,7 +14,7 @@ install:
 
 # Run the daemon in the foreground (dev). Pair with `just dev-web` for HMR.
 # Default SQLite so /admin can create a product user; override with
-# COWBOY_DATABASE_URL. Login is still required (no anonymous in-memory mode).
+# COWBOY_DATABASE_URL. Product login stays off unless explicitly enabled.
 dev *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail

@@ -191,6 +191,7 @@ struct AppState {
     observability: Observability,
     web_push: Arc<WebPushService>,
     public_origins: Arc<Vec<String>>,
+    product_auth_enabled: bool,
 }
 
 const STORE_QUEUE_CAPACITY: usize = 8_192;
@@ -727,6 +728,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             observability,
             web_push,
             public_origins: Arc::new(crate::product_auth::load_public_origins()),
+            product_auth_enabled: args.product_auth_enabled,
         },
         shutdown_tx,
     )
@@ -1623,6 +1625,7 @@ struct ProductAuthState {
     passkeys: Arc<crate::passkey::PasskeyCeremonies>,
     setup: Arc<crate::admin::AdminSetupState>,
     setup_lock: Arc<tokio::sync::Mutex<()>>,
+    product_auth_enabled: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2838,10 +2841,14 @@ fn session_id_from_sync_state(state: &str) -> Option<&str> {
 }
 
 async fn resolve_product_principal(
+    product_auth_enabled: bool,
     store: Option<&Store>,
     hub: &Hub,
     headers: &HeaderMap,
 ) -> Option<ProductPrincipal> {
+    if !product_auth_enabled {
+        return Some(crate::product_auth::local_product_principal());
+    }
     let store = store?;
     if let Some(token) = crate::product_auth::bearer_token(headers) {
         return product_from_bearer(store, hub, &token).await;
@@ -3013,12 +3020,18 @@ async fn enforce_product_api(
         }
         _ => {}
     }
-    let Some(principal) =
-        resolve_product_principal(state.store.as_ref(), &state.hub, request.headers()).await
+    let Some(principal) = resolve_product_principal(
+        state.product_auth_enabled,
+        state.store.as_ref(),
+        &state.hub,
+        request.headers(),
+    )
+    .await
     else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    let via_cookie = crate::product_auth::user_cookie_token(request.headers()).is_some()
+    let via_cookie = state.product_auth_enabled
+        && crate::product_auth::user_cookie_token(request.headers()).is_some()
         && crate::product_auth::bearer_token(request.headers()).is_none();
     if via_cookie
         && (path == "/ws" || matches!(method, Method::POST | Method::PUT | Method::DELETE))
@@ -3133,6 +3146,22 @@ async fn api_auth_status(
     State(state): State<ProductAuthState>,
     headers: HeaderMap,
 ) -> Json<serde_json::Value> {
+    if !state.product_auth_enabled {
+        return Json(serde_json::json!({
+            "registration": crate::admin::RegistrationPublicStatus {
+                enabled: false,
+                mode: crate::admin::RegistrationMode::Disabled,
+                accepts_registration: false,
+            },
+            "setup_required": false,
+            "setup_pending": false,
+            "me": {
+                "account": "local",
+                "role": "owner",
+                "auth_enabled": false,
+            },
+        }));
+    }
     let setup_required = instance_needs_setup(&state).await;
     let setup_pending = setup_required
         && crate::admin::setup_cookie_token(&headers)
@@ -3406,8 +3435,21 @@ async fn api_auth_logout(
 }
 
 async fn api_auth_me(State(state): State<ProductAuthState>, headers: HeaderMap) -> Response {
-    let Some(principal) =
-        resolve_product_principal(state.store.as_ref(), &state.hub, &headers).await
+    if !state.product_auth_enabled {
+        return Json(serde_json::json!({
+            "account": "local",
+            "role": "owner",
+            "auth_enabled": false,
+        }))
+        .into_response();
+    }
+    let Some(principal) = resolve_product_principal(
+        state.product_auth_enabled,
+        state.store.as_ref(),
+        &state.hub,
+        &headers,
+    )
+    .await
     else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
@@ -3718,8 +3760,13 @@ async fn api_auth_list_tokens(
     State(state): State<ProductAuthState>,
     headers: HeaderMap,
 ) -> Response {
-    let Some(principal) =
-        resolve_product_principal(state.store.as_ref(), &state.hub, &headers).await
+    let Some(principal) = resolve_product_principal(
+        state.product_auth_enabled,
+        state.store.as_ref(),
+        &state.hub,
+        &headers,
+    )
+    .await
     else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
@@ -3750,8 +3797,13 @@ async fn api_auth_create_token(
     {
         return rejected;
     }
-    let Some(principal) =
-        resolve_product_principal(state.store.as_ref(), &state.hub, &headers).await
+    let Some(principal) = resolve_product_principal(
+        state.product_auth_enabled,
+        state.store.as_ref(),
+        &state.hub,
+        &headers,
+    )
+    .await
     else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
@@ -3818,8 +3870,13 @@ async fn api_auth_delete_token(
     {
         return rejected;
     }
-    let Some(principal) =
-        resolve_product_principal(state.store.as_ref(), &state.hub, &headers).await
+    let Some(principal) = resolve_product_principal(
+        state.product_auth_enabled,
+        state.store.as_ref(),
+        &state.hub,
+        &headers,
+    )
+    .await
     else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
@@ -4005,6 +4062,7 @@ async fn serve_axum(
         passkeys: Arc::new(crate::passkey::PasskeyCeremonies::default()),
         setup,
         setup_lock: Arc::new(tokio::sync::Mutex::new(())),
+        product_auth_enabled: state.product_auth_enabled,
     };
 
     let app = Router::new()
@@ -8032,8 +8090,13 @@ async fn api_new_session(
     headers: HeaderMap,
     Json(req): Json<NewSessionRequest>,
 ) -> Response {
-    let Some(principal) =
-        resolve_product_principal(state.store.as_ref(), &state.hub, &headers).await
+    let Some(principal) = resolve_product_principal(
+        state.product_auth_enabled,
+        state.store.as_ref(),
+        &state.hub,
+        &headers,
+    )
+    .await
     else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
@@ -10487,9 +10550,14 @@ async fn api_artifact(
     headers: HeaderMap,
     Path(name): Path<String>,
 ) -> Response {
-    if resolve_product_principal(state.store.as_ref(), &state.hub, &headers)
-        .await
-        .is_none()
+    if resolve_product_principal(
+        state.product_auth_enabled,
+        state.store.as_ref(),
+        &state.hub,
+        &headers,
+    )
+    .await
+    .is_none()
     {
         return StatusCode::UNAUTHORIZED.into_response();
     }
@@ -10782,13 +10850,20 @@ async fn ws_upgrade(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Response {
-    let principal = resolve_product_principal(state.store.as_ref(), &state.hub, &headers).await;
+    let principal = resolve_product_principal(
+        state.product_auth_enabled,
+        state.store.as_ref(),
+        &state.hub,
+        &headers,
+    )
+    .await;
     let principal = match authorize_ws_upgrade(&headers, peer, &state.public_origins, principal) {
         Ok(principal) => principal,
         Err(status) => return status.into_response(),
     };
     let lazy_bootstrap = query.bootstrap.as_deref() == Some("lazy");
-    let via_cookie = crate::product_auth::user_cookie_token(&headers).is_some()
+    let via_cookie = state.product_auth_enabled
+        && crate::product_auth::user_cookie_token(&headers).is_some()
         && crate::product_auth::bearer_token(&headers).is_none();
     let cookie_token = crate::product_auth::user_cookie_token(&headers);
     let bearer = crate::product_auth::bearer_token(&headers);
@@ -10917,6 +10992,9 @@ async fn principal_still_valid(
     bearer: Option<&str>,
     expected: &ProductPrincipal,
 ) -> bool {
+    if !state.product_auth_enabled {
+        return true;
+    }
     let Some(store) = state.store.as_ref() else {
         return false;
     };
@@ -12272,6 +12350,7 @@ mod product_auth_api_tests {
             passkeys: Arc::new(crate::passkey::PasskeyCeremonies::default()),
             setup,
             setup_lock: Arc::new(tokio::sync::Mutex::new(())),
+            product_auth_enabled: true,
         }
     }
 
@@ -12439,7 +12518,13 @@ mod product_auth_api_tests {
         ConnectInfo(peer): ConnectInfo<SocketAddr>,
         headers: HeaderMap,
     ) -> Response {
-        let principal = resolve_product_principal(state.store.as_ref(), &state.hub, &headers).await;
+        let principal = resolve_product_principal(
+            state.product_auth_enabled,
+            state.store.as_ref(),
+            &state.hub,
+            &headers,
+        )
+        .await;
         match authorize_ws_upgrade(&headers, peer, &state.public_origins, principal) {
             Ok(_) => {
                 drop(ws);
@@ -12607,6 +12692,23 @@ mod product_auth_api_tests {
         )
         .unwrap_err();
         assert_eq!(err, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn disabled_product_auth_allows_anonymous_ws_as_local_owner() {
+        let headers = HeaderMap::new();
+        let principal = resolve_product_principal(false, None, &Hub::new(), &headers)
+            .await
+            .expect("disabled product auth should create a local principal");
+        let principal = authorize_ws_upgrade(
+            &headers,
+            SocketAddr::from(([127, 0, 0, 1], 3333)),
+            &[],
+            Some(principal),
+        )
+        .expect("local principal should be accepted");
+        assert_eq!(principal.user_id, "local");
+        assert_eq!(principal.role, crate::admin::AdminRole::Owner);
     }
 
     #[tokio::test]
@@ -13020,6 +13122,30 @@ mod product_auth_api_tests {
         let me_body: serde_json::Value = me.json().await.unwrap();
         assert_eq!(me_body["account"], "draven");
         assert_eq!(me_body["role"], "owner");
+
+        server.abort();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn disabled_product_auth_reports_a_local_owner_without_setup() {
+        let (store, root) = test_store().await;
+        let mut state = auth_state(Hub::new(), Some(store));
+        state.product_auth_enabled = false;
+        let (base, server) = spawn_auth(state).await;
+
+        let status = reqwest::Client::new()
+            .get(format!("{base}/api/auth/status"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(status.status(), StatusCode::OK);
+        let body: serde_json::Value = status.json().await.unwrap();
+        assert_eq!(body["setup_required"], false);
+        assert_eq!(body["setup_pending"], false);
+        assert_eq!(body["me"]["account"], "local");
+        assert_eq!(body["me"]["role"], "owner");
+        assert_eq!(body["me"]["auth_enabled"], false);
 
         server.abort();
         let _ = std::fs::remove_dir_all(root);

@@ -10,6 +10,7 @@ export interface RegistrationPublicStatus {
 export interface ProductMe {
   account: string;
   role: ProductRole;
+  auth_enabled?: boolean;
   passkey_count?: number;
   passkey_reauth_enabled?: boolean;
   passkey_reauth_required?: boolean;
@@ -59,6 +60,7 @@ export function authStatusFromJson(value: unknown): AuthStatus | undefined {
     const role = me.role;
     if (role === "owner" || role === "operator" || role === "viewer") {
       const next: ProductMe = { account: me.account, role };
+      if (typeof me.auth_enabled === "boolean") next.auth_enabled = me.auth_enabled;
       if (typeof me.passkey_count === "number") next.passkey_count = me.passkey_count;
       if (typeof me.passkey_reauth_enabled === "boolean") {
         next.passkey_reauth_enabled = me.passkey_reauth_enabled;

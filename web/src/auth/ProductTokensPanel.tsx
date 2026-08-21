@@ -25,10 +25,11 @@ export function ProductTokensPanel(): React.JSX.Element {
   }, []);
 
   useEffect(() => {
+    if (me.auth_enabled === false) return;
     void load().catch((err: unknown) => {
       setError(err instanceof AuthApiError ? err.message : "Could not load tokens");
     });
-  }, [load]);
+  }, [load, me.auth_enabled]);
 
   const create = (): void => {
     if (busy || !canCreate || name.trim() === "") return;
@@ -62,6 +63,8 @@ export function ProductTokensPanel(): React.JSX.Element {
       })
       .finally(() => setBusy(false));
   };
+
+  if (me.auth_enabled === false) return <></>;
 
   return (
     <Stack spacing={1.5}>

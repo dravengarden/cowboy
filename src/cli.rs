@@ -174,6 +174,16 @@ pub struct ServeArgs {
     #[arg(long, env = "COWBOY_WEB_ROOT", default_value = "web/dist")]
     pub web_root: PathBuf,
 
+    /// Require product-account authentication for the PWA, WebSocket, and
+    /// product APIs. Disabled keeps the legacy single-user local surface open.
+    #[arg(
+        long,
+        env = "COWBOY_PRODUCT_AUTH_ENABLED",
+        default_value_t = false,
+        action = clap::ArgAction::Set
+    )]
+    pub product_auth_enabled: bool,
+
     /// Unix socket of Cowboy's isolated Zed protocol adapter. When omitted,
     /// code review remains available but language intelligence is reported as
     /// unavailable.
@@ -458,6 +468,23 @@ mod tests {
             panic!("expected serve command");
         };
         assert_eq!(args.database_url(), Some("postgresql:///cowboy"));
+    }
+
+    #[test]
+    #[cfg(feature = "full")]
+    fn serve_product_auth_is_an_explicit_toggle_and_defaults_off() {
+        let cli = Cli::try_parse_from(["cowboy", "serve"]).unwrap();
+        let Command::Serve(args) = cli.command else {
+            panic!("expected serve command");
+        };
+        assert!(!args.product_auth_enabled);
+
+        let cli =
+            Cli::try_parse_from(["cowboy", "serve", "--product-auth-enabled", "true"]).unwrap();
+        let Command::Serve(args) = cli.command else {
+            panic!("expected serve command");
+        };
+        assert!(args.product_auth_enabled);
     }
 
     #[test]
