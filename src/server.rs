@@ -2062,7 +2062,7 @@ async fn api_admin_overview(State(state): State<ProductAuthState>, headers: Head
         sessions_live: state.hub.session_list().len(),
         sessions_deleted,
         events_rows,
-        daemon_rss_bytes: daemon_rss_bytes(),
+        daemon_rss_bytes: daemon_memory().rss_bytes,
         runtime_workers,
         runtime_busy_workers,
         registration: registration_policy(&state.hub).public_view(),
@@ -10988,16 +10988,21 @@ async fn handle_ws(
                 }
                 msg = rx.recv() => match msg {
                     Ok(msg) => {
-                        let visible = visible_session_ids(&fanout_state.hub, &fanout_principal);
-                        let Some(msg) = project_outbound(
-                            &fanout_state.hub,
-                            &fanout_principal,
-                            &visible,
-                            msg.outbound().clone(),
-                        ) else {
-                            continue;
+                        let result = if fanout_principal.sees_every_session() {
+                            send_frame(&mut sink, msg.as_ref()).await
+                        } else {
+                            let visible = visible_session_ids(&fanout_state.hub, &fanout_principal);
+                            let Some(projected) = project_outbound(
+                                &fanout_state.hub,
+                                &fanout_principal,
+                                &visible,
+                                msg.outbound().clone(),
+                            ) else {
+                                continue;
+                            };
+                            send_json(&mut sink, &projected).await
                         };
-                        if send_json(&mut sink, &msg).await.is_err() {
+                        if result.is_err() {
                             break;
                         }
                     }

@@ -1340,10 +1340,14 @@ impl StoreSink {
             && pending_bytes > 0
             && pending_bytes.saturating_add(bytes) > STORE_QUEUE_MAX_BYTES;
         self.health.pending.fetch_add(1, Ordering::Relaxed);
-        self.health.pending_bytes.fetch_add(bytes, Ordering::Relaxed);
+        self.health
+            .pending_bytes
+            .fetch_add(bytes, Ordering::Relaxed);
         if over_byte_budget {
             self.health.pending.fetch_sub(1, Ordering::Relaxed);
-            self.health.pending_bytes.fetch_sub(bytes, Ordering::Relaxed);
+            self.health
+                .pending_bytes
+                .fetch_sub(bytes, Ordering::Relaxed);
             self.health
                 .mark_rejected("persistence queue exceeded byte budget");
             tracing::error!(
@@ -1366,14 +1370,14 @@ impl StoreSink {
                 match tokio::runtime::Handle::try_current() {
                     Ok(runtime) => {
                         runtime.spawn(async move {
-                        if let Err(tokio::sync::mpsc::error::SendError(rejected)) =
-                            tx.send(write).await
-                        {
-                            health.consumed_writes(std::iter::once(&rejected));
-                            health.mark_rejected("persistence channel closed");
-                            tracing::error!("critical persistence intent was not accepted");
-                        }
-                    });
+                            if let Err(tokio::sync::mpsc::error::SendError(rejected)) =
+                                tx.send(write).await
+                            {
+                                health.consumed_writes(std::iter::once(&rejected));
+                                health.mark_rejected("persistence channel closed");
+                                tracing::error!("critical persistence intent was not accepted");
+                            }
+                        });
                         true
                     }
                     _ => {
@@ -1387,7 +1391,8 @@ impl StoreSink {
             Err(tokio::sync::mpsc::error::TrySendError::Full(rejected))
             | Err(tokio::sync::mpsc::error::TrySendError::Closed(rejected)) => {
                 self.health.consumed_writes(std::iter::once(&rejected));
-                self.health.mark_rejected("persistence queue rejected an intent");
+                self.health
+                    .mark_rejected("persistence queue rejected an intent");
                 tracing::error!("persistence queue rejected an intent");
                 false
             }
@@ -1409,9 +1414,9 @@ fn estimated_store_write_bytes(write: &StoreWrite) -> usize {
             preferences: options,
             ..
         }
-        | StoreWrite::UpdateMobileReviewState {
-            value: options, ..
-        } => estimated_json_bytes(options).saturating_add(128),
+        | StoreWrite::UpdateMobileReviewState { value: options, .. } => {
+            estimated_json_bytes(options).saturating_add(128)
+        }
         StoreWrite::UpdatePending {
             session_id,
             queue,
@@ -1425,7 +1430,10 @@ fn estimated_store_write_bytes(write: &StoreWrite) -> usize {
         ),
         StoreWrite::UpsertWakeup {
             session_id, prompt, ..
-        } => session_id.len().saturating_add(prompt.len()).saturating_add(32),
+        } => session_id
+            .len()
+            .saturating_add(prompt.len())
+            .saturating_add(32),
         StoreWrite::RecordSessionError { message, .. } => message.len().saturating_add(64),
         StoreWrite::InsertSession(_) => 512,
         _ => 128,
@@ -2477,7 +2485,7 @@ impl Hub {
         }
         // Settings is a compatibility tombstone. Never expose internal auth or
         // admin state to product clients.
-        let _ = self.inner.tx.send(Outbound::Settings {
+        self.fanout(Outbound::Settings {
             settings: HashMap::new(),
         });
     }
@@ -5837,7 +5845,10 @@ mod core_tests {
     fn exports_extreme_do_fixture() {
         let fixture = extreme_do_fixture();
         let sessions = fixture["sessions"].as_array().expect("sessions");
-        assert!(sessions.len() >= 20, "extreme mock needs dozens of sessions");
+        assert!(
+            sessions.len() >= 20,
+            "extreme mock needs dozens of sessions"
+        );
         let live = fixture["liveFrames"].as_array().expect("live frames");
         assert!(live.len() >= 5);
         assert!(live.iter().all(|frame| frame == &live[0]));

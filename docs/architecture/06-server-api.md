@@ -116,13 +116,10 @@ Rust enums and fails tests when their serialized discriminants differ from the
 TypeScript unions; representative field shapes remain covered by Rust serde and
 TypeScript checks. See [Core — the Hub](02-core-hub.md) for the full catalogs.
 
-Product `Outbound::Settings` is built only by `Hub::settings_for_product_clients`
-(connect bootstrap **and** the live `set_setting` broadcast). The map is an
-allow-list of `session.autoResume.default` and `session.autoResume.template`.
-Admin identities, permissions, session limits, and the registration invite
-table never ride `/ws`. `Inbound::SetSetting` is rejected unless the key is
-one of those two auto-resume keys. Admin writes persist through `Hub::set_setting`
-and still broadcast only the product allow-list.
+Product `Outbound::Settings` is an empty compatibility tombstone. Admin
+identities, permissions, session limits, and the registration invite table
+never ride `/ws`. The retired `Inbound::SetSetting` command is accepted and
+ignored so a stale installed PWA cannot restore removed auto-resume behavior.
 
 ## Background tasks
 

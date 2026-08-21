@@ -9,7 +9,6 @@ export interface AuthGateDecision {
   setup_required?: boolean;
   setup_pending?: boolean;
 }
-
 const AUTH_STATUS_BACKOFF_MAX_MS = 15_000;
 
 export function classifyAuthStatus(probe: AuthStatusProbe): AuthGateDecision {
@@ -108,7 +107,6 @@ export function nextAuthStatusBackoffMs(attempts: number): number {
     1000 * 2 ** Math.max(0, attempts - 1),
   );
 }
-
 export function historyCacheName(version: string): string {
   return `${version}-history`;
 }
@@ -124,5 +122,3 @@ export async function deleteProductHistoryCache(
       .map((key) => cachesApi.delete(key)),
   );
 }
-
-

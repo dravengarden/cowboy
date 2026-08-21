@@ -28,7 +28,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use base64::Engine as _;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use futures::TryStreamExt as _;
 use sha2::Digest as _;
 use sqlx::Row as _;
@@ -7026,7 +7026,10 @@ mod storage_contract_tests {
             highwaters.insert(session_id, 1);
             events.push(envelope);
         }
-        store.upsert_event_batch(&events, &highwaters).await.unwrap();
+        store
+            .upsert_event_batch(&events, &highwaters)
+            .await
+            .unwrap();
         let loaded = store.load_all().await.unwrap();
         assert_eq!(loaded.len(), 17);
         let restored_bytes = loaded.iter().fold(0usize, |size, session| {
