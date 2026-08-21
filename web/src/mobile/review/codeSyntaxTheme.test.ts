@@ -21,7 +21,7 @@ function contrast(a: string, b: string): number {
 Deno.test("code syntax palettes stay readable on Cowboy surfaces", () => {
   for (
     const [mode, background] of [
-      ["light", "#f4ecf7"],
+      ["light", "#f6f4fb"],
       ["dark", "#15111d"],
     ] as const
   ) {

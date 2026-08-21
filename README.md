@@ -15,18 +15,38 @@
   <img src="https://img.shields.io/badge/ACP-native-4a90d9?style=flat-square" alt="ACP">
 </p>
 
+## Product tour
+
 <p align="center">
   <img src="docs/screenshots/desktop.webp" alt="Cowboy desktop: session rail, prompt, and a live conversation with tools, tables, and code" width="920">
 </p>
 
-<p align="center">
-  <img src="docs/screenshots/ios-sessions.webp" alt="iPhone session list with a live transcript peeking behind the drawer" width="210">
-  <img src="docs/screenshots/ios-agent.webp" alt="iPhone agent transcript with tool calls, plan, and composer" width="210">
-  <img src="docs/screenshots/ios-code.webp" alt="iPhone Code review opening AGENTS.md in the session worktree" width="210">
-  <img src="docs/screenshots/ios-code-tree.webp" alt="iPhone worktree browser with search" width="210">
-</p>
+<p align="center"><sub>Desktop · the full control plane, with a live transcript, tool states, tables, and code blocks in one view.</sub></p>
 
-<p align="center"><sub>Desktop Chrome and iPhone 17 Simulator against the production PWA — the same app, the same seq.</sub></p>
+<div style="overflow-x:auto; padding: 4px 0 16px;">
+  <table>
+    <tr>
+      <td align="center" valign="top">
+        <img src="docs/screenshots/ios-agent.webp" alt="Mobile Agent view with a live transcript, tool calls, and composer" width="190"><br>
+        <sub><b>Agent</b><br>tool calls + composer</sub>
+      </td>
+      <td align="center" valign="top">
+        <img src="docs/screenshots/ios-code.webp" alt="Mobile Code review showing Rust syntax highlighting and an LSP symbol panel" width="190"><br>
+        <sub><b>Code</b><br>syntax + LSP symbols</sub>
+      </td>
+      <td align="center" valign="top">
+        <img src="docs/screenshots/ios-code-tree.webp" alt="Mobile Code review worktree file tree" width="190"><br>
+        <sub><b>Worktree</b><br>files + Git context</sub>
+      </td>
+      <td align="center" valign="top">
+        <img src="docs/screenshots/ios-sessions.webp" alt="Mobile session switcher with a live session list" width="190"><br>
+        <sub><b>Sessions</b><br>switch agents anywhere</sub>
+      </td>
+    </tr>
+  </table>
+</div>
+
+<p align="center"><sub>Light theme shown. On narrow screens, the feature strip stays one row and can be swiped horizontally; each view also reads well on its own.</sub></p>
 
 ## Why Cowboy exists
 
@@ -43,7 +63,7 @@ Desktop and Mobile are separate products on the same protocol: keyboard-first de
 | Surface | What it is |
 | --- | --- |
 | **Agent** | Live transcript, thinking, tools, plans, permissions, queue, and a CodeMirror composer (including Vim). |
-| **Code** | Mobile-first review: worktree, Git changes, file view, diagnostics. A separate data plane from the transcript, so a tree fetch never blocks a turn. |
+| **Code** | Mobile-first review: worktree, Git changes, file view, syntax highlighting, LSP diagnostics, and symbol navigation. Long source lines remain horizontally scrollable, so a tree fetch never blocks a turn. |
 | **Sessions** | Create, rename, reorder, pause, resume. Codex, Claude Code, Gemini, Grok — side by side. |
 | **Machines** | Agents run on hosts you enroll. The controller is not the worker. |
 

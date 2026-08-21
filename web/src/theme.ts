@@ -2,11 +2,11 @@
 // SDK's useThemeMode — persistence + OS resolution); this file only builds the
 // theme object and the status-bar colour from the resolved mode.
 //
-// Palette: soft lavender / violet. Light mode picks the same dusty-lavender
-// background tone as Chrome's tab bar on macOS (the visual reference the
-// user pointed at), with a slightly deeper violet for primary actions so
-// buttons / user message bubbles read as "purple" but not garish. Dark mode
-// is a deep purple-black that still reads as purple rather than black.
+// Palette: warm paper / violet. Light mode is intentionally the product's
+// default: a quiet lavender canvas, white work surfaces, and a dark violet
+// action colour. The separation matters more than a dramatic tint — the
+// transcript, composer, and tool cards should read as three useful layers.
+// Dark mode remains available as an explicit preference.
 
 import { useEffect, useMemo } from "react";
 import { alpha, createTheme, type Theme } from "@mui/material";
@@ -18,6 +18,9 @@ import {
   syncCoarsePointerRootClass,
 } from "./platform";
 import { browserTooltipListenerPolicy } from "./tooltipPolicy";
+
+const LIGHT_CANVAS = "#f6f4fb";
+const LIGHT_PAPER = "#ffffff";
 
 // cowboy's selection surface (Settings dialog, theme toggle) speaks the same
 // system/light/dark vocabulary as the shared hook.
@@ -39,7 +42,7 @@ export function desktopFocusFill(theme: Theme): string {
 
 // Keep the iOS standalone status bar in lockstep with the navbar surface. The
 // AppBar is pinned to `background.default` (see App.tsx — `#15111d` dark /
-// `#f4ecf7` light), so the theme-color meta uses the SAME values: status bar →
+// `#f6f4fb` light), so the theme-color meta uses the SAME values: status bar →
 // navbar read as one surface (status-bar-style="default" lets iOS tint the bar
 // + auto-contrast its glyphs). Must stay in sync with the palette's
 // background.default below.
@@ -56,7 +59,7 @@ function applyThemeColor(dark: boolean): void {
   for (const m of doc.querySelectorAll('meta[name="theme-color"]')) m.remove();
   const meta = doc.createElement("meta");
   meta.setAttribute("name", "theme-color");
-  const color = dark ? "#15111d" : "#f4ecf7";
+  const color = dark ? "#15111d" : LIGHT_CANVAS;
   meta.setAttribute("content", color);
   doc.head.appendChild(meta);
   // iOS paints the unlaid-out strip under a rising keyboard from the
@@ -64,6 +67,21 @@ function applyThemeColor(dark: boolean): void {
   // not a black/white flash.
   doc.documentElement.style.backgroundColor = color;
   if (doc.body) doc.body.style.backgroundColor = color;
+}
+
+// Keep the first visit calm and readable even when the host OS is in dark
+// mode. Settings can still opt into System or Dark; this only seeds the
+// preference when Cowboy has never stored one before. In particular, do not
+// overwrite an existing choice made by the user on a later visit.
+function seedLightThemeDefault(): void {
+  try {
+    if (globalThis.localStorage.getItem("cowboy-theme-mode") === null) {
+      globalThis.localStorage.setItem("cowboy-theme-mode", "light");
+    }
+  } catch {
+    // Private browsing / disabled storage: the shared hook will fall back to
+    // its normal system behaviour without making theme selection fatal.
+  }
 }
 
 // Native desktop UIs size their system font per-OS: macOS renders SF at ~13px,
@@ -99,6 +117,7 @@ export interface ThemeControls {
 }
 
 export function useThemeMode(): ThemeControls {
+  seedLightThemeDefault();
   const { choice, resolved, setChoice, cycle } = useSharedThemeMode("cowboy");
   const dark = resolved === "dark";
   useEffect(() => {
@@ -305,23 +324,22 @@ export function useThemeMode(): ThemeControls {
               },
               secondary: { main: "#c026d3" }, // fuchsia accent
               background: {
-                // The Chrome-tab-bar lavender the user pointed at: a desaturated
-                // pinkish violet that's calm on the eyes for long sessions.
-                default: "#f4ecf7",
-                // Paper is the ELEVATED surface (cards, dialogs, the DetentSheet):
-                // lighter than `default` so it reads as raised, but a lavender-
-                // tinted white rather than near-pure-white — a stark #fdfbff read
-                // as a harsh white box over the soft lavender page.
-                paper: "#faf6fd",
+                // A desaturated lavender canvas that's calm on the eyes for long
+                // sessions, with white paper surfaces for readable separation.
+                default: LIGHT_CANVAS,
+                // Paper is a clean elevated surface. A real white/paper step
+                // gives the prompt, tool cards, and dialogs a readable edge
+                // without adding a border to every transcript row.
+                paper: LIGHT_PAPER,
               },
-              divider: "rgba(110, 86, 207, 0.18)",
+              divider: "rgba(47, 37, 76, 0.16)",
               text: {
-                primary: "#1c1428",
-                secondary: "#6b5e80",
+                primary: "#252131",
+                secondary: "#665f74",
               },
               action: {
                 hover: "rgba(110, 86, 207, 0.06)",
-                selected: "rgba(110, 86, 207, 0.12)",
+                selected: "rgba(110, 86, 207, 0.11)",
               },
             },
         shape: { borderRadius: 10 },
