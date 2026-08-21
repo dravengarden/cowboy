@@ -58,6 +58,8 @@ pub mod machine_protocol;
 #[cfg(feature = "machine-host")]
 mod machine_providers;
 #[cfg(feature = "full")]
+mod memory_observability;
+#[cfg(feature = "full")]
 mod observability;
 #[cfg(feature = "full")]
 mod persistence;

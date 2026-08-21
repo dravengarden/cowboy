@@ -17,6 +17,7 @@
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use serde::{Deserialize, Serialize};
@@ -46,6 +47,13 @@ const HOT_TAIL_TRIM_BATCH: usize = 200;
 /// limit alone is ineffective for screenshots and multi-megabyte tool results.
 /// Keep at least the newest event so the cursor always advances.
 pub(crate) const HOT_TAIL_MAX_BYTES: usize = 1024 * 1024;
+/// Idle sessions keep a smaller replay tail. Opening one pages older rows
+/// through `/api/history`; a busy turn keeps the full 1 MiB so the focused
+/// transcript does not stall mid-stream.
+pub(crate) const HOT_TAIL_IDLE_MAX_BYTES: usize = 512 * 1024;
+/// Persistence queue byte ceiling. Count-only bounds let a few multi-megabyte
+/// raw events fill tens of MiB while the writer is stalled on Postgres.
+const STORE_QUEUE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const BROADCAST_CAPACITY: usize = 1_024;
 /// Event-count ceiling for the cursor-based HTTP history route. The byte budget
 /// above is the primary bound; this limits render work for many tiny events.
@@ -88,7 +96,19 @@ pub(crate) fn estimated_envelope_bytes(envelope: &Envelope) -> usize {
     }
 }
 
-fn trim_hot_log(log: &mut Vec<Envelope>, log_bytes: &mut usize, trim_count_batch: bool) -> bool {
+pub(crate) fn hot_tail_budget_bytes(status: Status) -> usize {
+    match status {
+        Status::Busy => HOT_TAIL_MAX_BYTES,
+        _ => HOT_TAIL_IDLE_MAX_BYTES,
+    }
+}
+
+fn trim_hot_log(
+    log: &mut Vec<Envelope>,
+    log_bytes: &mut usize,
+    trim_count_batch: bool,
+    max_bytes: usize,
+) -> bool {
     let mut drop_count = if trim_count_batch && log.len() > HOT_TAIL + HOT_TAIL_TRIM_BATCH {
         HOT_TAIL_TRIM_BATCH.min(log.len().saturating_sub(1))
     } else {
@@ -98,7 +118,7 @@ fn trim_hot_log(log: &mut Vec<Envelope>, log_bytes: &mut usize, trim_count_batch
     for envelope in &log[..drop_count] {
         retained_bytes = retained_bytes.saturating_sub(estimated_envelope_bytes(envelope));
     }
-    while retained_bytes > HOT_TAIL_MAX_BYTES && drop_count + 1 < log.len() {
+    while retained_bytes > max_bytes && drop_count + 1 < log.len() {
         retained_bytes = retained_bytes.saturating_sub(estimated_envelope_bytes(&log[drop_count]));
         drop_count += 1;
     }
@@ -115,10 +135,16 @@ fn trim_hot_log(log: &mut Vec<Envelope>, log_bytes: &mut usize, trim_count_batch
 /// cross the process boundary; this exact model-side pass accounts for decoded
 /// strings and keeps the newest event when it alone exceeds the budget.
 pub(crate) fn bound_restored_hot_log(log: &mut Vec<Envelope>) -> bool {
+    // Older rows may predate canonical raw-output compaction. Normalize them
+    // before computing the in-process budget so a duplicated image/command
+    // result does not become the one oversized event retained after restart.
+    for envelope in log.iter_mut() {
+        crate::persistence::compact_canonical_tool_output(envelope);
+    }
     let mut log_bytes = log.iter().fold(0usize, |size, envelope| {
         size.saturating_add(estimated_envelope_bytes(envelope))
     });
-    trim_hot_log(log, &mut log_bytes, false)
+    trim_hot_log(log, &mut log_bytes, false, HOT_TAIL_MAX_BYTES)
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -1076,6 +1102,54 @@ pub enum Outbound {
     },
 }
 
+/// One immutable live frame shared by every WebSocket and the Web Push observer.
+/// Structured `Outbound` stays available for observers; JSON is serialized at
+/// most once and reused for every socket write.
+#[derive(Debug)]
+pub struct FanoutFrame {
+    outbound: Outbound,
+    json: OnceLock<String>,
+}
+
+impl FanoutFrame {
+    fn new(outbound: Outbound) -> Arc<Self> {
+        Arc::new(Self {
+            outbound,
+            json: OnceLock::new(),
+        })
+    }
+
+    #[must_use]
+    pub fn outbound(&self) -> &Outbound {
+        &self.outbound
+    }
+
+    /// Cached JSON for this frame. Concurrent first writers may serialize twice;
+    /// `OnceLock` keeps one buffer for the ring's lifetime.
+    pub fn json(&self) -> Result<&str, serde_json::Error> {
+        if let Some(json) = self.json.get() {
+            return Ok(json);
+        }
+        let encoded = serde_json::to_string(&self.outbound)?;
+        Ok(self.json.get_or_init(|| encoded))
+    }
+}
+
+impl std::ops::Deref for FanoutFrame {
+    type Target = Outbound;
+
+    fn deref(&self) -> &Self::Target {
+        &self.outbound
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HubMemoryStats {
+    pub session_count: usize,
+    pub hot_log_bytes: usize,
+    pub broadcast_last_bytes: usize,
+}
+
 /// Persistence intent sent on the write-behind channel from `Hub` to the
 /// background DB writer task in `crate::server`. Each variant maps 1:1 to a
 /// [`crate::store::Store`] call.
@@ -1159,6 +1233,7 @@ pub enum StoreWrite {
 #[derive(Debug, Default)]
 pub struct PersistenceHealth {
     pending: AtomicUsize,
+    pending_bytes: AtomicUsize,
     dropped: AtomicU64,
     failed_batches: AtomicU64,
     degraded: AtomicBool,
@@ -1169,6 +1244,11 @@ impl PersistenceHealth {
     #[must_use]
     pub fn pending(&self) -> usize {
         self.pending.load(Ordering::Relaxed)
+    }
+
+    #[must_use]
+    pub fn pending_bytes(&self) -> usize {
+        self.pending_bytes.load(Ordering::Relaxed)
     }
 
     #[must_use]
@@ -1191,8 +1271,23 @@ impl PersistenceHealth {
         self.last_error.lock().clone()
     }
 
+    #[cfg(test)]
     pub(crate) fn consumed(&self, count: usize) {
-        self.pending.fetch_sub(count, Ordering::Relaxed);
+        saturating_fetch_sub(&self.pending, count);
+    }
+
+    pub(crate) fn consumed_writes<'a, I>(&self, writes: I)
+    where
+        I: IntoIterator<Item = &'a StoreWrite>,
+    {
+        let mut count = 0usize;
+        let mut bytes = 0usize;
+        for write in writes {
+            count = count.saturating_add(1);
+            bytes = bytes.saturating_add(estimated_store_write_bytes(write));
+        }
+        saturating_fetch_sub(&self.pending, count);
+        saturating_fetch_sub(&self.pending_bytes, bytes);
     }
 
     pub(crate) fn mark_failed_batch(&self) {
@@ -1224,7 +1319,25 @@ impl StoreSink {
     }
 
     pub fn send(&self, write: StoreWrite) -> bool {
+        let bytes = estimated_store_write_bytes(&write);
+        let pending_bytes = self.health.pending_bytes.load(Ordering::Relaxed);
+        let over_byte_budget = matches!(write, StoreWrite::AppendEvent(_))
+            && pending_bytes > 0
+            && pending_bytes.saturating_add(bytes) > STORE_QUEUE_MAX_BYTES;
         self.health.pending.fetch_add(1, Ordering::Relaxed);
+        self.health.pending_bytes.fetch_add(bytes, Ordering::Relaxed);
+        if over_byte_budget {
+            self.health.pending.fetch_sub(1, Ordering::Relaxed);
+            self.health.pending_bytes.fetch_sub(bytes, Ordering::Relaxed);
+            self.health
+                .mark_rejected("persistence queue exceeded byte budget");
+            tracing::error!(
+                bytes,
+                pending_bytes = self.health.pending_bytes(),
+                "persistence queue rejected a large event"
+            );
+            return false;
+        }
         match self.tx.try_send(write) {
             Ok(()) => true,
             Err(mpsc::error::TrySendError::Full(write))
@@ -1238,29 +1351,69 @@ impl StoreSink {
                 match tokio::runtime::Handle::try_current() {
                     Ok(runtime) => {
                         runtime.spawn(async move {
-                        if let Err(error) = tx.send(write).await {
-                            health.consumed(1);
-                            health.mark_rejected(&error.to_string());
-                            tracing::error!(%error, "critical persistence intent was not accepted");
+                        if let Err(tokio::sync::mpsc::error::SendError(rejected)) =
+                            tx.send(write).await
+                        {
+                            health.consumed_writes(std::iter::once(&rejected));
+                            health.mark_rejected("persistence channel closed");
+                            tracing::error!("critical persistence intent was not accepted");
                         }
                     });
                         true
                     }
                     _ => {
-                        self.health.consumed(1);
+                        self.health.consumed_writes(std::iter::once(&write));
                         self.health
                             .mark_rejected("persistence queue full outside Tokio runtime");
                         false
                     }
                 }
             }
-            Err(error) => {
-                self.health.pending.fetch_sub(1, Ordering::Relaxed);
-                self.health.mark_rejected(&error.to_string());
-                tracing::error!(%error, "persistence queue rejected an intent");
+            Err(tokio::sync::mpsc::error::TrySendError::Full(rejected))
+            | Err(tokio::sync::mpsc::error::TrySendError::Closed(rejected)) => {
+                self.health.consumed_writes(std::iter::once(&rejected));
+                self.health.mark_rejected("persistence queue rejected an intent");
+                tracing::error!("persistence queue rejected an intent");
                 false
             }
         }
+    }
+}
+
+fn saturating_fetch_sub(value: &AtomicUsize, amount: usize) {
+    let _ = value.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        Some(current.saturating_sub(amount))
+    });
+}
+
+fn estimated_store_write_bytes(write: &StoreWrite) -> usize {
+    match write {
+        StoreWrite::AppendEvent(envelope) => estimated_envelope_bytes(envelope),
+        StoreWrite::UpdateConfigOptions { options, .. }
+        | StoreWrite::UpdateConfigPreferences {
+            preferences: options,
+            ..
+        }
+        | StoreWrite::UpdateMobileReviewState {
+            value: options, ..
+        } => estimated_json_bytes(options).saturating_add(128),
+        StoreWrite::UpdatePending {
+            session_id,
+            queue,
+            drafts,
+        } => queue.iter().chain(drafts.iter()).fold(
+            session_id.len().saturating_add(64),
+            |size, message| {
+                size.saturating_add(message.id.len())
+                    .saturating_add(message.text.len())
+            },
+        ),
+        StoreWrite::UpsertWakeup {
+            session_id, prompt, ..
+        } => session_id.len().saturating_add(prompt.len()).saturating_add(32),
+        StoreWrite::RecordSessionError { message, .. } => message.len().saturating_add(64),
+        StoreWrite::InsertSession(_) => 512,
+        _ => 128,
     }
 }
 
@@ -1304,14 +1457,22 @@ struct HubInner {
     /// remainder as genuine interruptions.
     runtime_reconciliation: Mutex<HashSet<String>>,
     /// Canonicalizes the raw ACP stream for the in-memory replay tail. The DB
-    /// writer owns a separate reducer because it consumes the same raw stream
-    /// asynchronously; live WebSocket subscribers continue to receive raw frames.
+    /// writer still reduces compact deltas so streaming text coalesces without
+    /// enqueueing the accumulated string on every token.
     history_reducer: Mutex<EventReducer>,
+    /// Optional content-addressed image store. When present, inline ACP images
+    /// are replaced with `/api/artifacts/…` URLs before the Hub clones the
+    /// envelope into history, the persistence queue, and live fan-out.
+    artifacts: Mutex<Option<crate::artifacts::ArtifactStore>>,
     /// Insertion order of session ids, so the list view is stable.
     order: Mutex<Vec<String>>,
     /// Live fan-out to all connected clients. Lagging receivers are dropped by
     /// `broadcast` and simply miss events until their next reconnect snapshot.
-    tx: broadcast::Sender<Outbound>,
+    /// One immutable frame is shared by the Web Push observer and every socket:
+    /// cloning an `Outbound` per receiver would otherwise duplicate a
+    /// multi-megabyte tool result once per connected device.
+    tx: broadcast::Sender<Arc<FanoutFrame>>,
+    broadcast_last_bytes: AtomicUsize,
     /// Optional write-behind channel to the DB writer. `None` ⇒ in-memory
     /// only (no `--database-url` configured).
     store_tx: Option<StoreSink>,
@@ -1389,8 +1550,10 @@ impl Hub {
                 sessions: Mutex::new(HashMap::new()),
                 runtime_reconciliation: Mutex::new(HashSet::new()),
                 history_reducer: Mutex::new(EventReducer::default()),
+                artifacts: Mutex::new(None),
                 order: Mutex::new(Vec::new()),
                 tx,
+                broadcast_last_bytes: AtomicUsize::new(0),
                 store_tx,
                 dispatch_tx: Mutex::new(None),
                 scheduler_tx: Mutex::new(None),
@@ -1412,6 +1575,33 @@ impl Hub {
     /// [`Self::set_dispatch_tx`]). Until set, [`Self::schedule_wakeup`] is a no-op.
     pub fn set_scheduler_tx(&self, tx: mpsc::Sender<crate::scheduler::ScheduleCmd>) {
         *self.inner.scheduler_tx.lock() = Some(tx);
+    }
+
+    pub fn set_artifacts(&self, artifacts: crate::artifacts::ArtifactStore) {
+        *self.inner.artifacts.lock() = Some(artifacts);
+    }
+
+    #[must_use]
+    pub fn memory_stats(&self) -> HubMemoryStats {
+        let sessions = self.inner.sessions.lock();
+        HubMemoryStats {
+            session_count: sessions.len(),
+            hot_log_bytes: sessions.values().map(|session| session.log_bytes).sum(),
+            broadcast_last_bytes: self.inner.broadcast_last_bytes.load(Ordering::Relaxed),
+        }
+    }
+
+    fn fanout(&self, outbound: Outbound) {
+        // A send error just means no clients or internal observers are
+        // connected. The canonical hot tail remains authoritative.
+        let bytes = match &outbound {
+            Outbound::Event { envelope } => estimated_envelope_bytes(envelope),
+            _ => 256,
+        };
+        self.inner
+            .broadcast_last_bytes
+            .store(bytes, Ordering::Relaxed);
+        let _ = self.inner.tx.send(FanoutFrame::new(outbound));
     }
 
     /// Arm (replace) a session's pending `ScheduleWakeup` — `acp.rs` calls this
@@ -1681,10 +1871,20 @@ impl Hub {
                 if healed || removed_legacy_continuation {
                     pending_dirty.push(id.clone());
                 }
+                for envelope in &mut log {
+                    crate::persistence::compact_canonical_tool_output(envelope);
+                }
                 let mut log_bytes = log.iter().fold(0usize, |size, envelope| {
                     size.saturating_add(estimated_envelope_bytes(envelope))
                 });
-                if self.inner.store_tx.is_some() && trim_hot_log(&mut log, &mut log_bytes, false) {
+                if self.inner.store_tx.is_some()
+                    && trim_hot_log(
+                        &mut log,
+                        &mut log_bytes,
+                        false,
+                        hot_tail_budget_bytes(meta.status),
+                    )
+                {
                     reached_start = false;
                 }
                 for envelope in &log {
@@ -1786,7 +1986,7 @@ impl Hub {
 
     /// Subscribe to the live event stream.
     #[must_use]
-    pub fn subscribe(&self) -> broadcast::Receiver<Outbound> {
+    pub fn subscribe(&self) -> broadcast::Receiver<Arc<FanoutFrame>> {
         self.inner.tx.subscribe()
     }
 
@@ -2480,7 +2680,7 @@ impl Hub {
         // → VictoriaLogs. Lets you (or an AI) replay "how state X reached version
         // N" via LogsQL. Low volume (user-paced changes, not per-agent-event).
         tracing::info!(target: "cowboy::oplog", op = "change", %state, version, confirmed = ?confirmed);
-        let _ = self.inner.tx.send(Outbound::SyncPatch {
+        self.fanout(Outbound::SyncPatch {
             state: state.to_owned(),
             version,
             value,
@@ -2894,6 +3094,14 @@ impl Hub {
     /// used to tag a dispatched prompt's user-message echo so the originating
     /// client reconciles its optimistic bubble (see Envelope::cmid).
     pub fn push_tagged(&self, session_id: &str, event: Event, cmid: Option<String>) {
+        let mut event = event;
+        crate::persistence::compact_inbound_event(&mut event);
+        if let Some(artifacts) = self.inner.artifacts.lock().clone()
+            && let Event::Update { update } = &mut event
+            && let Err(error) = artifacts.externalize_images(update)
+        {
+            tracing::warn!(%error, session_id, "live image externalize failed");
+        }
         let (envelope, durable_agent_session_id) = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -2932,7 +3140,14 @@ impl Hub {
                     Err(_) => {}
                 }
             }
-            if self.inner.store_tx.is_some() && trim_hot_log(&mut s.log, &mut s.log_bytes, true) {
+            if self.inner.store_tx.is_some()
+                && trim_hot_log(
+                    &mut s.log,
+                    &mut s.log_bytes,
+                    true,
+                    hot_tail_budget_bytes(s.meta.status),
+                )
+            {
                 s.reached_start = false;
             }
             let durable_agent_session_id = is_user_message_chunk(&envelope)
@@ -2949,12 +3164,11 @@ impl Hub {
                 });
             }
         }
-        // A send error just means no clients are connected — fine.
-        let _ = self.inner.tx.send(Outbound::Event { envelope });
+        self.fanout(Outbound::Event { envelope });
     }
 
     fn broadcast_sessions(&self) {
-        let _ = self.inner.tx.send(Outbound::Sessions {
+        self.fanout(Outbound::Sessions {
             sessions: self.session_list(),
         });
     }
@@ -3046,7 +3260,7 @@ impl Hub {
                     options: options.clone(),
                 });
             }
-            let _ = self.inner.tx.send(Outbound::ConfigOptions {
+            self.fanout(Outbound::ConfigOptions {
                 session_id: session_id.to_owned(),
                 options,
             });
@@ -3081,7 +3295,7 @@ impl Hub {
                 options: options.clone(),
             });
         }
-        let _ = self.inner.tx.send(Outbound::ConfigOptions {
+        self.fanout(Outbound::ConfigOptions {
             session_id: session_id.to_owned(),
             options,
         });
@@ -3119,7 +3333,7 @@ impl Hub {
         if let Some(session_id) = session_id.as_ref() {
             self.record_session_error(session_id, &message);
         }
-        let _ = self.inner.tx.send(Outbound::Error {
+        self.fanout(Outbound::Error {
             session_id,
             message,
         });
@@ -4438,6 +4652,7 @@ mod runtime_reconciliation_tests {
 #[cfg(test)]
 mod core_tests {
     use super::*;
+    use base64::Engine as _;
 
     #[test]
     fn watchdog_revision_does_not_claim_the_replacement_turn() {
@@ -4790,7 +5005,8 @@ mod core_tests {
                     }),
                 },
             );
-            let Outbound::Event { envelope } = live.try_recv().expect("raw live frame") else {
+            let frame = live.try_recv().expect("raw live frame");
+            let Outbound::Event { envelope } = &**frame else {
                 panic!("expected event");
             };
             assert_eq!(envelope.seq, u64::try_from(seq).unwrap());
@@ -4810,6 +5026,532 @@ mod core_tests {
             Some("hello world")
         );
         assert_eq!(hub.event_total(), 1);
+    }
+
+    #[test]
+    fn fanout_shares_compact_live_frame_while_hot_history_is_compact() {
+        let hub = hub_with_session("shared-fanout");
+        let mut first = hub.subscribe();
+        let mut second = hub.subscribe();
+        hub.push(
+            "shared-fanout",
+            Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": "image",
+                    "status": "completed",
+                    "content": [{"type": "content", "content": {"type": "text", "text": "saved"}}],
+                    "rawOutput": {"result": "x".repeat(128 * 1024)},
+                }),
+            },
+        );
+
+        let first = first.try_recv().expect("first compact frame");
+        let second = second.try_recv().expect("second compact frame");
+        assert!(Arc::ptr_eq(&first, &second));
+        let Outbound::Event { envelope } = &**first else {
+            panic!("expected event");
+        };
+        let Event::Update { update } = &envelope.event else {
+            panic!("expected compact update");
+        };
+        assert!(update.get("rawOutput").is_none());
+        assert_eq!(
+            first.json().expect("shared json").len(),
+            second.json().expect("shared json").len()
+        );
+
+        let (snapshot, _) = hub.snapshot("shared-fanout").expect("snapshot");
+        let Event::Update { update } = &snapshot[0].event else {
+            panic!("expected canonical update");
+        };
+        assert!(update.get("rawOutput").is_none());
+    }
+
+    #[test]
+    fn persist_queue_receives_compact_tool_events() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let health = Arc::new(PersistenceHealth::default());
+        let hub = Hub::with_store(Some(StoreSink::new(tx, Arc::clone(&health))));
+        hub.create_local_session(
+            "queued-compact".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "queued-compact".to_owned(),
+            SessionOrigin::Api,
+            false,
+        );
+        while rx.try_recv().is_ok() {}
+        hub.push(
+            "queued-compact",
+            Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": "image",
+                    "status": "completed",
+                    "content": [{"type": "content", "content": {"type": "text", "text": "saved"}}],
+                    "rawOutput": {"result": "x".repeat(128 * 1024)},
+                }),
+            },
+        );
+        let write = rx.try_recv().expect("compact persist intent");
+        let StoreWrite::AppendEvent(envelope) = &write else {
+            panic!("expected compact persist intent");
+        };
+        let Event::Update { update } = &envelope.event else {
+            panic!("expected update");
+        };
+        assert!(update.get("rawOutput").is_none());
+        assert!(health.pending_bytes() > 0);
+        health.consumed_writes(std::iter::once(&write));
+    }
+
+    #[test]
+    fn ingest_externalizes_live_images_before_fanout() {
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-live-artifacts-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let hub = hub_with_session("live-image");
+        hub.set_artifacts(crate::artifacts::ArtifactStore::new(root.clone()).unwrap());
+        let mut live = hub.subscribe();
+        let data = base64::engine::general_purpose::STANDARD.encode(vec![7_u8; 40_000]);
+        hub.push(
+            "live-image",
+            Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "user_message_chunk",
+                    "content": {
+                        "type": "image",
+                        "mimeType": "image/png",
+                        "data": data,
+                    }
+                }),
+            },
+        );
+        let frame = live.try_recv().expect("live image");
+        let Outbound::Event { envelope } = &**frame else {
+            panic!("expected event");
+        };
+        let Event::Update { update } = &envelope.event else {
+            panic!("expected update");
+        };
+        assert!(update.pointer("/content/data").is_none());
+        let url = update
+            .pointer("/content/url")
+            .and_then(serde_json::Value::as_str)
+            .expect("artifact url");
+        assert!(url.starts_with("/api/artifacts/"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn idle_hot_tail_is_tighter_than_a_busy_turn() {
+        let (tx, _rx) = mpsc::channel(32);
+        let health = Arc::new(PersistenceHealth::default());
+        let hub = Hub::with_store(Some(StoreSink::new(tx, health)));
+        hub.create_local_session(
+            "idle-tail".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "idle-tail".to_owned(),
+            SessionOrigin::Api,
+            false,
+        );
+        let payload = "x".repeat(200 * 1024);
+        for n in 0..8 {
+            hub.push(
+                "idle-tail",
+                Event::Update {
+                    update: serde_json::json!({
+                        "sessionUpdate": "plan",
+                        "n": n,
+                        "payload": payload,
+                    }),
+                },
+            );
+        }
+        let sessions = hub.inner.sessions.lock();
+        let session = sessions.get("idle-tail").expect("session");
+        assert!(session.log_bytes <= HOT_TAIL_IDLE_MAX_BYTES);
+        assert!(session.log.len() < 8);
+    }
+
+    #[test]
+    fn do_shaped_working_set_keeps_shared_compact_frames() {
+        let hub = Hub::new();
+        for index in 0..17 {
+            hub.create_local_session(
+                format!("session-{index}"),
+                "codex".to_owned(),
+                "/tmp".to_owned(),
+                format!("session-{index}"),
+                SessionOrigin::Api,
+                false,
+            );
+        }
+        hub.set_status("session-0", Status::Busy, None);
+        let mut terminals: Vec<_> = (0..3).map(|_| hub.subscribe()).collect();
+        hub.push(
+            "session-0",
+            Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": "read",
+                    "status": "completed",
+                    "content": [{"type": "raw_output", "text": "ok"}],
+                    "rawOutput": {"result": "x".repeat(2_580_000)},
+                }),
+            },
+        );
+        let first = terminals[0].try_recv().expect("terminal 0");
+        let second = terminals[1].try_recv().expect("terminal 1");
+        let third = terminals[2].try_recv().expect("terminal 2");
+        assert!(Arc::ptr_eq(&first, &second) && Arc::ptr_eq(&second, &third));
+        let json = first.json().expect("shared json");
+        assert!(json.len() < 64 * 1024, "compact live JSON {}", json.len());
+        assert!(!json.contains("rawOutput"));
+        let stats = hub.memory_stats();
+        assert_eq!(stats.session_count, 17);
+        assert!(stats.hot_log_bytes < HOT_TAIL_MAX_BYTES);
+        assert!(stats.broadcast_last_bytes < 64 * 1024);
+    }
+
+    fn production_shaped_do_fixture() -> serde_json::Value {
+        let artifact_root = std::env::temp_dir().join(format!(
+            "cowboy-do-fixture-artifacts-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = std::fs::remove_dir_all(&artifact_root);
+        let hub = Hub::new();
+        hub.set_artifacts(crate::artifacts::ArtifactStore::new(artifact_root.clone()).unwrap());
+        for index in 0..17 {
+            hub.create_local_session(
+                format!("session-{index}"),
+                "codex".to_owned(),
+                "/tmp".to_owned(),
+                format!("session-{index}"),
+                SessionOrigin::Api,
+                false,
+            );
+        }
+        for index in 1..17 {
+            for n in 0..4 {
+                hub.push(
+                    &format!("session-{index}"),
+                    Event::Update {
+                        update: serde_json::json!({
+                            "sessionUpdate": "plan",
+                            "n": n,
+                            "title": format!("idle-{index}-{n}"),
+                        }),
+                    },
+                );
+            }
+        }
+        hub.set_status("session-0", Status::Busy, None);
+        for text in ["The ", "quick ", "brown ", "fox "] {
+            for _ in 0..20 {
+                hub.push(
+                    "session-0",
+                    Event::Update {
+                        update: serde_json::json!({
+                            "sessionUpdate": "agent_message_chunk",
+                            "messageId": "turn",
+                            "content": {"type": "text", "text": text},
+                        }),
+                    },
+                );
+            }
+        }
+        let mut terminals: Vec<_> = (0..3).map(|_| hub.subscribe()).collect();
+        hub.push(
+            "session-0",
+            Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": "read",
+                    "status": "completed",
+                    "content": [{"type": "raw_output", "text": "ok"}],
+                    "rawOutput": {"result": "x".repeat(2_580_000)},
+                }),
+            },
+        );
+        let image = base64::engine::general_purpose::STANDARD.encode(vec![7_u8; 40_000]);
+        hub.push(
+            "session-0",
+            Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "user_message_chunk",
+                    "content": {
+                        "type": "image",
+                        "mimeType": "image/png",
+                        "data": image,
+                    }
+                }),
+            },
+        );
+        let live_frames: Vec<String> = terminals
+            .iter_mut()
+            .map(|rx| {
+                let mut last = String::new();
+                while let Ok(frame) = rx.try_recv() {
+                    last = frame.json().expect("live json").to_owned();
+                }
+                last
+            })
+            .collect();
+        let sessions = (0..17)
+            .map(|index| {
+                let id = format!("session-{index}");
+                let (hot_tail, _) = hub.snapshot(&id).expect("snapshot");
+                serde_json::json!({
+                    "id": id,
+                    "status": format!("{:?}", hub.status(&id).expect("status")).to_lowercase(),
+                    "hotTail": hot_tail,
+                    "hotTailBytes": hot_tail.iter().fold(0usize, |size, envelope| {
+                        size.saturating_add(estimated_envelope_bytes(envelope))
+                    }),
+                })
+            })
+            .collect::<Vec<_>>();
+        let stats = hub.memory_stats();
+        let _ = std::fs::remove_dir_all(artifact_root);
+        serde_json::json!({
+            "generatedBy": "cowboy Hub compact ingest",
+            "terminals": 3,
+            "rawFanoutWouldHaveBeen": 2_580_000 * 3
+                + base64::engine::general_purpose::STANDARD.encode(vec![7_u8; 40_000]).len() * 3,
+            "hubHotLogBytes": stats.hot_log_bytes,
+            "hubBroadcastLastBytes": stats.broadcast_last_bytes,
+            "liveFrames": live_frames,
+            "sessions": sessions,
+        })
+    }
+
+    #[test]
+    fn exports_production_shaped_do_fixture() {
+        let fixture = production_shaped_do_fixture();
+        let live = fixture["liveFrames"].as_array().expect("live frames");
+        assert_eq!(live.len(), 3);
+        assert!(live.iter().all(|frame| frame == &live[0]));
+        let live_json = live[0].as_str().expect("live json");
+        assert!(!live_json.contains("rawOutput"));
+        assert!(
+            live_json.contains("/api/artifacts/") || live_json.contains("\"type\":\"image\""),
+            "live image should be externalized or still an image block: {live_json}"
+        );
+        let sessions = fixture["sessions"].as_array().expect("sessions");
+        assert_eq!(sessions.len(), 17);
+        let hot_log_bytes = sessions.iter().fold(0usize, |size, session| {
+            size.saturating_add(session["hotTailBytes"].as_u64().unwrap_or(0) as usize)
+        });
+        assert!(hot_log_bytes < HOT_TAIL_MAX_BYTES + HOT_TAIL_IDLE_MAX_BYTES * 16);
+        assert!(
+            fixture["hubHotLogBytes"].as_u64().unwrap() < 64 * 1024,
+            "compact hub tails should stay tiny, got {}",
+            fixture["hubHotLogBytes"]
+        );
+        if let Ok(path) = std::env::var("COWBOY_DO_FIXTURE_OUT") {
+            std::fs::write(&path, serde_json::to_vec_pretty(&fixture).unwrap())
+                .unwrap_or_else(|error| panic!("write {path}: {error}"));
+        }
+    }
+
+    fn env_usize(name: &str, default: usize) -> usize {
+        std::env::var(name)
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(default)
+    }
+
+    /// Extreme DO fixture: dozens of sessions, filled compact tails, many
+    /// terminals, fat raw payloads stripped at ingest, plus a count of
+    /// SQLite-only archive rows for the worker to synthesize. The Hub still
+    /// trims idle/busy tails so the exported `hotTail` is what a focused
+    /// isolate should load — not the full durable log.
+    fn extreme_do_fixture() -> serde_json::Value {
+        let sessions = env_usize("COWBOY_DO_SESSIONS", 50);
+        let focused = env_usize("COWBOY_DO_FOCUSED", 4).min(sessions);
+        let terminals = env_usize("COWBOY_DO_TERMINALS", 8);
+        let idle_chunk_bytes = env_usize("COWBOY_DO_IDLE_CHUNK_BYTES", 8 * 1024);
+        let idle_chunks = env_usize("COWBOY_DO_IDLE_CHUNKS", 8);
+        let busy_chunks = env_usize("COWBOY_DO_BUSY_CHUNKS", 24);
+        let tools = env_usize("COWBOY_DO_TOOLS", 200);
+        let fat_events = env_usize("COWBOY_DO_FAT_EVENTS", 1);
+        let archive_rows = env_usize("COWBOY_DO_ARCHIVE_ROWS", 8_000);
+        let archive_bytes = env_usize("COWBOY_DO_ARCHIVE_BYTES", 512);
+
+        let artifact_root = std::env::temp_dir().join(format!(
+            "cowboy-do-extreme-artifacts-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = std::fs::remove_dir_all(&artifact_root);
+        let (tx, _rx) = mpsc::channel(64_000);
+        let health = Arc::new(PersistenceHealth::default());
+        let hub = Hub::with_store(Some(StoreSink::new(tx, health)));
+        hub.set_artifacts(crate::artifacts::ArtifactStore::new(artifact_root.clone()).unwrap());
+
+        for index in 0..sessions {
+            hub.create_local_session(
+                format!("session-{index}"),
+                "codex".to_owned(),
+                "/tmp".to_owned(),
+                format!("session-{index}"),
+                SessionOrigin::Api,
+                false,
+            );
+        }
+        let pad = "x".repeat(idle_chunk_bytes);
+        for index in focused..sessions {
+            let id = format!("session-{index}");
+            for n in 0..idle_chunks {
+                hub.push(
+                    &id,
+                    Event::Update {
+                        update: serde_json::json!({
+                            "sessionUpdate": "plan",
+                            "n": n,
+                            "payload": pad,
+                        }),
+                    },
+                );
+            }
+        }
+        for index in 0..focused {
+            let id = format!("session-{index}");
+            hub.set_status(&id, Status::Busy, None);
+            for n in 0..busy_chunks {
+                hub.push(
+                    &id,
+                    Event::Update {
+                        update: serde_json::json!({
+                            "sessionUpdate": "plan",
+                            "n": n,
+                            "payload": pad,
+                        }),
+                    },
+                );
+            }
+        }
+        for n in 0..tools {
+            hub.push(
+                "session-0",
+                Event::Update {
+                    update: serde_json::json!({
+                        "sessionUpdate": "tool_call",
+                        "toolCallId": format!("tool-{n}"),
+                        "status": "completed",
+                        "content": [{"type": "raw_output", "text": format!("done-{n}")}],
+                    }),
+                },
+            );
+        }
+        let mut live_rx: Vec<_> = (0..terminals).map(|_| hub.subscribe()).collect();
+        let mut raw_fanout = 0usize;
+        for n in 0..fat_events {
+            raw_fanout = raw_fanout.saturating_add(2_580_000 * terminals);
+            hub.push(
+                "session-0",
+                Event::Update {
+                    update: serde_json::json!({
+                        "sessionUpdate": "tool_call",
+                        "toolCallId": format!("fat-{n}"),
+                        "status": "completed",
+                        "content": [{"type": "raw_output", "text": "ok"}],
+                        "rawOutput": {"result": "x".repeat(2_580_000)},
+                    }),
+                },
+            );
+        }
+        let image = base64::engine::general_purpose::STANDARD.encode(vec![7_u8; 40_000]);
+        raw_fanout = raw_fanout.saturating_add(image.len() * terminals);
+        hub.push(
+            "session-0",
+            Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "user_message_chunk",
+                    "content": {
+                        "type": "image",
+                        "mimeType": "image/png",
+                        "data": image,
+                    }
+                }),
+            },
+        );
+        let live_frames: Vec<String> = live_rx
+            .iter_mut()
+            .map(|rx| {
+                let mut last = String::new();
+                while let Ok(frame) = rx.try_recv() {
+                    last = frame.json().expect("live json").to_owned();
+                }
+                last
+            })
+            .collect();
+
+        let session_rows = {
+            let locked = hub.inner.sessions.lock();
+            (0..sessions)
+                .map(|index| {
+                    let id = format!("session-{index}");
+                    let session = locked.get(&id).expect("session");
+                    serde_json::json!({
+                        "id": id,
+                        "status": format!("{:?}", session.meta.status).to_lowercase(),
+                        "focused": index < focused,
+                        "hotTail": session.log,
+                        "hotTailBytes": session.log_bytes,
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        let stats = hub.memory_stats();
+        let _ = std::fs::remove_dir_all(artifact_root);
+        serde_json::json!({
+            "generatedBy": "cowboy Hub extreme compact ingest",
+            "profile": "extreme",
+            "terminals": terminals,
+            "focusedSessionIds": (0..focused).map(|index| format!("session-{index}")).collect::<Vec<_>>(),
+            "rawFanoutWouldHaveBeen": raw_fanout,
+            "hubHotLogBytes": stats.hot_log_bytes,
+            "hubBroadcastLastBytes": stats.broadcast_last_bytes,
+            "archiveRows": archive_rows,
+            "archivePayloadBytes": archive_bytes,
+            "liveFrames": live_frames,
+            "sessions": session_rows,
+        })
+    }
+
+    #[test]
+    fn exports_extreme_do_fixture() {
+        let fixture = extreme_do_fixture();
+        let sessions = fixture["sessions"].as_array().expect("sessions");
+        assert!(sessions.len() >= 20, "extreme mock needs dozens of sessions");
+        let live = fixture["liveFrames"].as_array().expect("live frames");
+        assert!(live.len() >= 5);
+        assert!(live.iter().all(|frame| frame == &live[0]));
+        let live_json = live[0].as_str().expect("live json");
+        assert!(!live_json.contains("rawOutput"));
+        assert!(live_json.contains("/api/artifacts/"));
+        let focused = sessions
+            .iter()
+            .filter(|session| session["focused"].as_bool() == Some(true))
+            .count();
+        assert!(focused >= 2);
+        let hub_bytes = fixture["hubHotLogBytes"].as_u64().unwrap();
+        assert!(
+            hub_bytes < 80 * 1024 * 1024,
+            "even extreme compact tails must stay under the DO isolate, got {hub_bytes}"
+        );
+        if let Ok(path) = std::env::var("COWBOY_DO_FIXTURE_OUT") {
+            std::fs::write(&path, serde_json::to_vec(&fixture).unwrap())
+                .unwrap_or_else(|error| panic!("write {path}: {error}"));
+        }
     }
 
     #[test]
@@ -5366,12 +6108,13 @@ mod core_tests {
         assert!(id.starts_with("session-error:session-1:"));
         assert_eq!(session_id, "session-1");
         assert_eq!(message, "runtime rejected command");
+        let frame = live.recv().await.expect("error frame");
         assert!(matches!(
-            live.recv().await,
-            Ok(Outbound::Error {
+            &**frame,
+            Outbound::Error {
                 session_id: Some(session_id),
                 message,
-            }) if session_id == "session-1" && message == "runtime rejected command"
+            } if session_id == "session-1" && message == "runtime rejected command"
         ));
         assert!(hub.snapshot("session-1").is_none());
 

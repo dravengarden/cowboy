@@ -7,8 +7,10 @@
 #![warn(clippy::pedantic)]
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result, bail};
@@ -36,6 +38,34 @@ pub struct ProviderUsage {
     pub activity: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CachedUsageSnapshot {
+    refreshed_at_ms: i64,
+    next_refresh_at_ms: i64,
+    refresh_interval_ms: i64,
+    providers: Vec<CachedProviderUsage>,
+    #[serde(default)]
+    codex_reset_schedule: Option<ResetSchedule>,
+    #[serde(default)]
+    xai_reset_schedule: Option<ResetSchedule>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CachedProviderUsage {
+    provider: String,
+    status: String,
+    source: String,
+    observed_at_ms: i64,
+    #[serde(default)]
+    account: Option<Value>,
+    #[serde(default)]
+    rate_limits: Option<Value>,
+    #[serde(default)]
+    activity: Option<Value>,
+    #[serde(default)]
+    error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -88,10 +118,16 @@ pub struct UsageService {
     refresh_lock: Arc<Mutex<()>>,
     reset_lock: Arc<Mutex<()>>,
     reset_schedules: Arc<Mutex<BTreeMap<String, ResetSchedule>>>,
+    cache_path: Option<PathBuf>,
+    warming: Arc<AtomicBool>,
 }
 
 impl UsageService {
-    pub fn new(codex_command: String, store: Option<crate::store::Store>) -> Self {
+    pub fn new(
+        codex_command: String,
+        store: Option<crate::store::Store>,
+        cache_path: Option<PathBuf>,
+    ) -> Self {
         // Never let an account-card refresh cold-install a provider through
         // npx. Production Machine configuration supplies the managed command;
         // local development simply reports Grok billing as unavailable.
@@ -99,11 +135,10 @@ impl UsageService {
             .ok()
             .filter(|command| !command.trim().is_empty())
             .and_then(|_| crate::provider::lookup("grok"));
-        Self {
-            codex_command,
-            grok_spec,
-            store,
-            snapshot: Arc::new(Mutex::new(UsageSnapshot {
+        let snapshot = cache_path
+            .as_deref()
+            .and_then(load_cached_snapshot)
+            .unwrap_or_else(|| UsageSnapshot {
                 refreshed_at_ms: 0,
                 next_refresh_at_ms: 0,
                 refresh_interval_ms: i64::try_from(AUTO_REFRESH_INTERVAL.as_millis())
@@ -111,10 +146,17 @@ impl UsageService {
                 providers: unavailable_providers(),
                 codex_reset_schedule: None,
                 xai_reset_schedule: None,
-            })),
+            });
+        Self {
+            codex_command,
+            grok_spec,
+            store,
+            snapshot: Arc::new(Mutex::new(snapshot)),
             refresh_lock: Arc::new(Mutex::new(())),
             reset_lock: Arc::new(Mutex::new(())),
             reset_schedules: Arc::new(Mutex::new(BTreeMap::new())),
+            cache_path,
+            warming: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -122,12 +164,26 @@ impl UsageService {
         let reset_schedules = self.reset_schedules.lock().await.clone();
         let mut snapshot = self.snapshot.lock().await.clone();
         apply_reset_schedules(&mut snapshot, &reset_schedules);
+        self.maybe_warm(&snapshot);
         snapshot
     }
 
     /// Coalesces concurrent manual/automatic refreshes. A failed provider keeps
     /// an explicit error row; it never makes the whole endpoint fail.
     pub async fn refresh(&self) -> UsageSnapshot {
+        self.refresh_with_policy(false).await
+    }
+
+    /// Automatic refreshes favor a flat memory profile over minimum wall time.
+    /// Codex and Grok collectors are separate, short-lived but comparatively
+    /// heavy processes; running them one after another prevents their RSS peaks
+    /// from stacking inside the controller service cgroup. Explicit user
+    /// refreshes keep the concurrent path above.
+    pub(crate) async fn refresh_background(&self) -> UsageSnapshot {
+        self.refresh_with_policy(true).await
+    }
+
+    async fn refresh_with_policy(&self, low_peak: bool) -> UsageSnapshot {
         let _guard = self.refresh_lock.lock().await;
         let mut current = self.snapshot.lock().await.clone();
         if current.refreshed_at_ms > 0 && now_ms().saturating_sub(current.refreshed_at_ms) < 3_000 {
@@ -135,51 +191,19 @@ impl UsageService {
             apply_reset_schedules(&mut current, &reset_schedules);
             return current;
         }
-        let grok_spec = self.grok_spec.clone();
-        let xai = async move {
-            let Some(spec) = grok_spec else {
-                return crate::provider_info::unavailable(
-                    "xai",
-                    crate::provider_info::XAI_SOURCE,
-                    "Managed Grok Build CLI is not configured",
-                );
-            };
-            collect_xai_usage(&spec).await
-        };
-        let (openai, deepseek, xai) = tokio::join!(
-            tokio::time::timeout(
-                std::time::Duration::from_secs(12),
-                crate::provider_info::collect_openai(&self.codex_command),
-            ),
-            tokio::time::timeout(
-                std::time::Duration::from_secs(12),
-                crate::provider_info::collect_deepseek(self.store.as_ref()),
-            ),
-            xai,
-        );
-        let openai = match openai {
-            Ok(Ok(value)) => value,
-            Ok(Err(error)) => {
-                crate::provider_info::error("openai", "OpenAI Codex app-server", error.to_string())
-            }
-            Err(_) => crate::provider_info::error(
-                "openai",
-                "OpenAI Codex app-server",
-                "refresh timed out".into(),
-            ),
-        };
-        let deepseek = match deepseek {
-            Ok(Ok(value)) => value,
-            Ok(Err(error)) => crate::provider_info::error(
-                "deepseek",
-                "DeepSeek provider adapter",
-                error.to_string(),
-            ),
-            Err(_) => crate::provider_info::error(
-                "deepseek",
-                "DeepSeek provider adapter",
-                "refresh timed out".into(),
-            ),
+        let (openai, deepseek, xai) = if low_peak {
+            // The in-process database collector is cheap. Finish it first, then
+            // ensure the two provider subprocess lifetimes never overlap.
+            let deepseek = collect_deepseek_usage(self.store.as_ref()).await;
+            let openai = collect_openai_usage(&self.codex_command).await;
+            let xai = collect_configured_xai_usage(self.grok_spec.as_ref()).await;
+            (openai, deepseek, xai)
+        } else {
+            tokio::join!(
+                collect_openai_usage(&self.codex_command),
+                collect_deepseek_usage(self.store.as_ref()),
+                collect_configured_xai_usage(self.grok_spec.as_ref()),
+            )
         };
         let refreshed_at_ms = now_ms();
         let reset_schedules = self.reset_schedules.lock().await.clone();
@@ -210,7 +234,39 @@ impl UsageService {
         };
         apply_reset_schedules(&mut next, &reset_schedules);
         *self.snapshot.lock().await = next.clone();
+        self.persist_snapshot(&next);
         next
+    }
+
+    fn maybe_warm(&self, snapshot: &UsageSnapshot) {
+        if self.cache_path.is_none() || tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        let interval_ms = i64::try_from(AUTO_REFRESH_INTERVAL.as_millis()).unwrap_or(i64::MAX);
+        if snapshot.refreshed_at_ms > 0
+            && now_ms().saturating_sub(snapshot.refreshed_at_ms) < interval_ms
+        {
+            return;
+        }
+        if self
+            .warming
+            .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+            .is_err()
+        {
+            return;
+        }
+        let this = self.clone();
+        tokio::spawn(async move {
+            this.refresh_background().await;
+            this.warming.store(false, Ordering::Relaxed);
+        });
+    }
+
+    fn persist_snapshot(&self, snapshot: &UsageSnapshot) {
+        let Some(path) = self.cache_path.as_ref() else {
+            return;
+        };
+        save_cached_snapshot(path, snapshot);
     }
 
     /// Refresh one provider adapter without making unrelated cards wait on a
@@ -255,7 +311,9 @@ impl UsageService {
         snapshot.next_refresh_at_ms = snapshot
             .refreshed_at_ms
             .saturating_add(i64::try_from(AUTO_REFRESH_INTERVAL.as_millis()).unwrap_or(i64::MAX));
+        let cached = snapshot.clone();
         drop(snapshot);
+        self.persist_snapshot(&cached);
         Ok(self.snapshot().await)
     }
 
@@ -472,12 +530,111 @@ pub(crate) fn now_ms() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
+fn intern_usage_str(value: String) -> &'static str {
+    match value.as_str() {
+        "deepseek" => "deepseek",
+        "openai" => "openai",
+        "anthropic" => "anthropic",
+        "gemini" => "gemini",
+        "xai" => "xai",
+        "available" => "available",
+        "unavailable" => "unavailable",
+        "error" => "error",
+        _ => Box::leak(value.into_boxed_str()),
+    }
+}
+
+fn load_cached_snapshot(path: &Path) -> Option<UsageSnapshot> {
+    let bytes = std::fs::read(path).ok()?;
+    let cached: CachedUsageSnapshot = serde_json::from_slice(&bytes).ok()?;
+    Some(UsageSnapshot {
+        refreshed_at_ms: cached.refreshed_at_ms,
+        next_refresh_at_ms: cached.next_refresh_at_ms,
+        refresh_interval_ms: cached.refresh_interval_ms,
+        providers: cached
+            .providers
+            .into_iter()
+            .map(|provider| ProviderUsage {
+                provider: intern_usage_str(provider.provider),
+                status: intern_usage_str(provider.status),
+                source: intern_usage_str(provider.source),
+                observed_at_ms: provider.observed_at_ms,
+                account: provider.account,
+                rate_limits: provider.rate_limits,
+                activity: provider.activity,
+                error: provider.error,
+            })
+            .collect(),
+        codex_reset_schedule: cached.codex_reset_schedule,
+        xai_reset_schedule: cached.xai_reset_schedule,
+    })
+}
+
+fn save_cached_snapshot(path: &Path, snapshot: &UsageSnapshot) {
+    let Ok(bytes) = serde_json::to_vec(snapshot) else {
+        return;
+    };
+    let tmp = path.with_extension("json.tmp");
+    if std::fs::write(&tmp, bytes).is_ok() {
+        let _ = std::fs::rename(tmp, path);
+    }
+}
+
 fn unavailable_providers() -> Vec<ProviderUsage> {
     crate::provider_info::PROVIDERS
         .map(|provider| {
             crate::provider_info::unavailable(provider, "Provider adapter", "Not refreshed yet")
         })
         .to_vec()
+}
+
+async fn collect_openai_usage(command: &str) -> ProviderUsage {
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(12),
+        crate::provider_info::collect_openai(command),
+    )
+    .await
+    {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => {
+            crate::provider_info::error("openai", "OpenAI Codex app-server", error.to_string())
+        }
+        Err(_) => crate::provider_info::error(
+            "openai",
+            "OpenAI Codex app-server",
+            "refresh timed out".to_owned(),
+        ),
+    }
+}
+
+async fn collect_deepseek_usage(store: Option<&crate::store::Store>) -> ProviderUsage {
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(12),
+        crate::provider_info::collect_deepseek(store),
+    )
+    .await
+    {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => {
+            crate::provider_info::error("deepseek", "DeepSeek provider adapter", error.to_string())
+        }
+        Err(_) => crate::provider_info::error(
+            "deepseek",
+            "DeepSeek provider adapter",
+            "refresh timed out".to_owned(),
+        ),
+    }
+}
+
+async fn collect_configured_xai_usage(spec: Option<&crate::provider::LaunchSpec>) -> ProviderUsage {
+    let Some(spec) = spec else {
+        return crate::provider_info::unavailable(
+            "xai",
+            crate::provider_info::XAI_SOURCE,
+            "Managed Grok Build CLI is not configured",
+        );
+    };
+    collect_xai_usage(spec).await
 }
 
 async fn collect_xai_usage(spec: &crate::provider::LaunchSpec) -> ProviderUsage {
@@ -660,9 +817,31 @@ mod tests {
         );
     }
 
+    #[test]
+    fn usage_snapshot_cache_round_trips_without_a_collector() {
+        let path = std::env::temp_dir().join(format!(
+            "cowboy-usage-cache-{}-{}.json",
+            std::process::id(),
+            now_ms()
+        ));
+        let snapshot = UsageSnapshot {
+            refreshed_at_ms: 42,
+            next_refresh_at_ms: 99,
+            refresh_interval_ms: 1_000,
+            providers: unavailable_providers(),
+            codex_reset_schedule: None,
+            xai_reset_schedule: None,
+        };
+        save_cached_snapshot(&path, &snapshot);
+        let loaded = load_cached_snapshot(&path).expect("cached snapshot");
+        assert_eq!(loaded.refreshed_at_ms, 42);
+        assert_eq!(loaded.providers.len(), snapshot.providers.len());
+        let _ = std::fs::remove_file(path);
+    }
+
     #[tokio::test]
     async fn reset_schedules_are_isolated_by_provider() {
-        let service = UsageService::new("codex".to_owned(), None);
+        let service = UsageService::new("codex".to_owned(), None, None);
         service
             .set_reset_schedule("codex", Some(ResetSchedule { fire_at_ms: 100 }))
             .await;

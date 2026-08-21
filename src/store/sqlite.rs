@@ -16,7 +16,7 @@ const SQLITE_MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/
 #[derive(Clone)]
 pub(super) struct SqliteStorage {
     pool: SqlitePool,
-    artifacts: crate::artifacts::ArtifactStore,
+    pub(super) artifacts: crate::artifacts::ArtifactStore,
     database_path: Option<std::path::PathBuf>,
 }
 

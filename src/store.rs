@@ -557,6 +557,13 @@ impl Store {
         Ok(Self { backend })
     }
 
+    pub(crate) fn artifacts(&self) -> crate::artifacts::ArtifactStore {
+        match &self.backend {
+            StorageBackend::Postgres(storage) => storage.artifacts.clone(),
+            StorageBackend::Sqlite(storage) => storage.artifacts.clone(),
+        }
+    }
+
     pub async fn migrate(&self) -> Result<()> {
         dispatch_storage!(self, migrate())
     }
@@ -5751,6 +5758,57 @@ mod storage_contract_tests {
         assert_restore_hot_tail_is_byte_bounded(&store, "sess-900000013")
             .await
             .unwrap();
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn sqlite_do_shaped_restore_keeps_compact_working_set() {
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-sqlite-do-mock-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let store = Store::connect("sqlite::memory:", root.join("artifacts"))
+            .await
+            .unwrap();
+        store.migrate().await.unwrap();
+        let mut highwaters = HashMap::new();
+        let mut events = Vec::new();
+        for index in 0..17 {
+            let session_id = format!("sess-do-{index:02}");
+            store.insert_session(&session(&session_id)).await.unwrap();
+            let mut envelope = Envelope {
+                session_id: session_id.clone(),
+                seq: 0,
+                event: Event::Update {
+                    update: serde_json::json!({
+                        "sessionUpdate": "tool_call",
+                        "toolCallId": "read",
+                        "status": "completed",
+                        "content": [{"type": "raw_output", "text": "ok"}],
+                        "rawOutput": {"result": "x".repeat(2_580_000)},
+                    }),
+                },
+                cmid: None,
+            };
+            crate::persistence::compact_canonical_tool_output(&mut envelope);
+            highwaters.insert(session_id, 1);
+            events.push(envelope);
+        }
+        store.upsert_event_batch(&events, &highwaters).await.unwrap();
+        let loaded = store.load_all().await.unwrap();
+        assert_eq!(loaded.len(), 17);
+        let restored_bytes = loaded.iter().fold(0usize, |size, session| {
+            session.events.iter().fold(size, |size, event| {
+                size.saturating_add(crate::core::estimated_envelope_bytes(event))
+            })
+        });
+        assert!(
+            restored_bytes < 64 * 1024,
+            "compact DO-shaped restore was {restored_bytes} bytes"
+        );
         drop(store);
         std::fs::remove_dir_all(root).unwrap();
     }

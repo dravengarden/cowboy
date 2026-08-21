@@ -21,18 +21,21 @@ impl EventReducer {
     pub(crate) fn clear_session(&mut self, session_id: &str) {
         self.text.remove(session_id);
         self.tools.retain(|(session, _), _| session != session_id);
+        self.shrink_tools_if_sparse();
     }
 
     /// Convert the high-frequency ACP event stream into stable history rows.
-    /// Live WS clients still receive every raw event; durable history and the
-    /// Hub's hot replay tail both use this canonical form. A returned envelope
-    /// may reuse an earlier seq, causing an UPSERT or in-memory replacement.
+    /// Live WS clients receive compact deltas (duplicate `rawOutput` already
+    /// stripped at ingest). Durable history and the Hub hot tail use this
+    /// canonical form. A returned envelope may reuse an earlier seq, causing an
+    /// UPSERT or in-memory replacement.
     pub(crate) fn reduce(&mut self, env: Envelope) -> Option<Envelope> {
         let sid = env.session_id.clone();
         let Event::Update { update } = &env.event else {
             self.text.remove(&sid);
             if matches!(env.event, Event::TurnEnd { .. } | Event::Lifecycle { .. }) {
                 self.tools.retain(|(session, _), _| session != &sid);
+                self.shrink_tools_if_sparse();
             }
             return Some(env);
         };
@@ -100,6 +103,8 @@ impl EventReducer {
             if !tool_id.is_empty() {
                 let key = (sid, tool_id);
                 if kind == Some("tool_call_update") {
+                    let mut terminal = false;
+                    let mut canonical = None;
                     if let Some(tool_env) = self.tools.get_mut(&key) {
                         let mut merged = false;
                         if let (
@@ -111,10 +116,31 @@ impl EventReducer {
                             && let (Some(base_object), Some(delta)) =
                                 (base_update.as_object_mut(), delta.as_object())
                         {
+                            let formatted_fallback = if !base_object.contains_key("content")
+                                && !delta.contains_key("content")
+                            {
+                                delta
+                                    .get("rawOutput")
+                                    .and_then(serde_json::Value::as_object)
+                                    .and_then(|raw| raw.get("formatted_output"))
+                                    .and_then(serde_json::Value::as_str)
+                                    .map(str::to_owned)
+                            } else {
+                                None
+                            };
                             for (name, value) in delta {
-                                if name != "sessionUpdate" {
+                                if name != "sessionUpdate" && name != "rawOutput" {
                                     base_object.insert(name.clone(), value.clone());
                                 }
+                            }
+                            if let Some(formatted) = formatted_fallback {
+                                base_object.insert(
+                                    "content".to_owned(),
+                                    serde_json::json!([{
+                                        "type": "raw_output",
+                                        "text": formatted,
+                                    }]),
+                                );
                             }
                             base_object.insert(
                                 "sessionUpdate".to_owned(),
@@ -123,15 +149,103 @@ impl EventReducer {
                             merged = true;
                         }
                         if merged {
-                            return Some(tool_env.clone());
+                            compact_canonical_tool_output(tool_env);
+                            terminal = envelope_tool_is_terminal(tool_env);
+                            canonical = Some(tool_env.clone());
                         }
                     }
+                    if terminal {
+                        self.tools.remove(&key);
+                    }
+                    if canonical.is_some() {
+                        return canonical;
+                    }
                 } else {
-                    self.tools.insert(key, env.clone());
+                    let mut canonical = env;
+                    compact_canonical_tool_output(&mut canonical);
+                    if !envelope_tool_is_terminal(&canonical) {
+                        self.tools.insert(key, canonical.clone());
+                    }
+                    return Some(canonical);
                 }
             }
+            let mut canonical = env;
+            compact_canonical_tool_output(&mut canonical);
+            return Some(canonical);
         }
         Some(env)
+    }
+
+    /// A long autonomous turn can finish thousands of tools. Their payloads are
+    /// removed at the terminal update above; release an unusually large hash
+    /// table at the next lifecycle boundary as well instead of pinning its peak
+    /// bucket allocation for the rest of the daemon lifetime.
+    fn shrink_tools_if_sparse(&mut self) {
+        const LARGE_TOOL_TABLE: usize = 256;
+        if self.tools.capacity() > LARGE_TOOL_TABLE
+            && self.tools.len().saturating_mul(4) < self.tools.capacity()
+        {
+            self.tools.shrink_to(LARGE_TOOL_TABLE);
+        }
+    }
+}
+
+fn envelope_tool_is_terminal(envelope: &Envelope) -> bool {
+    let Event::Update { update } = &envelope.event else {
+        return false;
+    };
+    matches!(
+        update.get("status").and_then(serde_json::Value::as_str),
+        Some("completed" | "failed")
+    )
+}
+
+/// Compact a raw ACP event before the Hub clones it into history, the
+/// persistence queue, and live fan-out. Token chunks stay deltas; only the
+/// duplicated multi-megabyte `rawOutput` object is removed.
+pub(crate) fn compact_inbound_event(event: &mut Event) {
+    match event {
+        Event::Update { update } => compact_tool_update(update),
+        Event::PermissionRequest { tool_call, .. } => compact_tool_update(tool_call),
+        _ => {}
+    }
+}
+
+/// Durable history and the Hub hot tail only need the fields the Cowboy client
+/// can render. ACP adapters commonly duplicate multi-megabyte command/image
+/// results in `rawOutput` even when `content` already carries the presentation.
+/// Codex MCP reads are the one supported fallback: when they only expose
+/// `rawOutput.formatted_output`, project it into the same `content` shape the
+/// frontend already derives for a live frame before dropping it. Live
+/// subscribers now receive this compact form too — `derive.ts` already prefers
+/// `content` and only reads `formatted_output` as a fallback.
+pub(crate) fn compact_canonical_tool_output(envelope: &mut Envelope) {
+    compact_inbound_event(&mut envelope.event);
+}
+
+pub(crate) fn compact_tool_update(update: &mut serde_json::Value) {
+    let Some(update) = update.as_object_mut() else {
+        return;
+    };
+    if !matches!(
+        update
+            .get("sessionUpdate")
+            .and_then(serde_json::Value::as_str),
+        Some("tool_call" | "tool_call_update")
+    ) {
+        return;
+    }
+    let raw_output = update.remove("rawOutput");
+    if !update.contains_key("content")
+        && let Some(serde_json::Value::String(formatted)) = raw_output.and_then(|raw| match raw {
+            serde_json::Value::Object(mut raw) => raw.remove("formatted_output"),
+            _ => None,
+        })
+    {
+        update.insert(
+            "content".to_owned(),
+            serde_json::json!([{ "type": "raw_output", "text": formatted }]),
+        );
     }
 }
 
@@ -240,6 +354,75 @@ mod tests {
             },
             cmid: None,
         };
-        assert!(reducer.reduce(completed).is_some());
+        let canonical = reducer.reduce(completed).expect("canonical completion");
+        assert!(
+            reducer.tools.is_empty(),
+            "completed payload must not stay live"
+        );
+        let Event::Update { update } = canonical.event else {
+            panic!("expected update");
+        };
+        assert_eq!(update["status"], "completed");
+    }
+
+    #[test]
+    fn canonical_tool_output_drops_duplicate_raw_output() {
+        let mut reducer = EventReducer::default();
+        let canonical = reducer
+            .reduce(Envelope {
+                session_id: "session".to_owned(),
+                seq: 1,
+                event: Event::Update {
+                    update: serde_json::json!({
+                        "sessionUpdate": "tool_call",
+                        "toolCallId": "image",
+                        "status": "completed",
+                        "content": [{"type": "content", "content": {"type": "text", "text": "saved"}}],
+                        "rawOutput": {"result": "x".repeat(2 * 1024 * 1024)},
+                    }),
+                },
+                cmid: None,
+            })
+            .expect("canonical tool");
+        let Event::Update { update } = canonical.event else {
+            panic!("expected update");
+        };
+        assert!(update.get("rawOutput").is_none());
+        assert_eq!(
+            update
+                .pointer("/content/0/content/text")
+                .and_then(serde_json::Value::as_str),
+            Some("saved")
+        );
+    }
+
+    #[test]
+    fn canonical_tool_output_preserves_formatted_output_fallback() {
+        let mut reducer = EventReducer::default();
+        let canonical = reducer
+            .reduce(Envelope {
+                session_id: "session".to_owned(),
+                seq: 1,
+                event: Event::Update {
+                    update: serde_json::json!({
+                        "sessionUpdate": "tool_call",
+                        "toolCallId": "read",
+                        "status": "completed",
+                        "rawOutput": {"exit_code": 0, "formatted_output": "file bytes"},
+                    }),
+                },
+                cmid: None,
+            })
+            .expect("canonical tool");
+        let Event::Update { update } = canonical.event else {
+            panic!("expected update");
+        };
+        assert!(update.get("rawOutput").is_none());
+        assert_eq!(
+            update
+                .pointer("/content/0/text")
+                .and_then(serde_json::Value::as_str),
+            Some("file bytes")
+        );
     }
 }

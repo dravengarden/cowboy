@@ -38,8 +38,8 @@ use crate::acp::AgentCommand;
 use crate::cli::ServeArgs;
 use crate::code_review::CodeProvider as _;
 use crate::core::{
-    DispatchReq, Envelope, Event, Hub, Inbound, Outbound, PersistenceHealth, RestoredSession,
-    SessionOrigin, Status, StoreSink, StoreWrite,
+    DispatchReq, Envelope, Event, FanoutFrame, Hub, Inbound, Outbound, PersistenceHealth,
+    RestoredSession, SessionOrigin, Status, StoreSink, StoreWrite,
 };
 use crate::diff_snapshot::{DiffSnapshotCache, DiffSnapshotKey};
 use crate::machine_control::MachineControl;
@@ -193,6 +193,8 @@ const FORCE_CANCEL_GRACE: std::time::Duration = std::time::Duration::from_secs(5
 const MACHINE_RECONNECT_GRACE_SECONDS: i32 = 15;
 const RUNTIME_RECONCILIATION_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
 const MACHINE_RECONNECT_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+/// Let restore, listener binding, and Machine reconnection settle before the
+/// optional account collectors start their short-lived provider processes.
 const PROVIDER_UNINSTALL_RETENTION_MS: i64 = 3 * 24 * 60 * 60 * 1_000;
 const PROVIDER_UNINSTALL_PLAN_TTL_MS: i64 = 10 * 60 * 1_000;
 
@@ -229,6 +231,21 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         Vec::new()
     };
     init_tracing();
+    tracing::info!(
+        compiled =
+            crate::memory_observability::compiled_malloc_conf().unwrap_or("jemalloc defaults"),
+        runtime_override = crate::memory_observability::runtime_malloc_conf_override()
+            .as_deref()
+            .unwrap_or("none"),
+        "jemalloc configuration"
+    );
+    tracing::info!(
+        tokio_workers = std::env::var("COWBOY_TOKIO_WORKERS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(4),
+        "controller tokio runtime"
+    );
     let code_cache =
         crate::code_cache::CodeCache::open(args.data_dir.join("code-cache"), args.code_cache_bytes)
             .map_err(anyhow::Error::msg)
@@ -291,6 +308,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             // one bounded reconnect window to prove ownership; only then may a
             // missing worker become Interrupted.
             hub.restore_reconciling_runtime(restored);
+            hub.set_artifacts(store.artifacts());
             tracing::info!(restored = restored_count, "persistence wired",);
             // Background DB writer: dequeues StoreWrite intents and applies them.
             // Errors are logged but don't bring the daemon down — the in-memory
@@ -327,20 +345,11 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             tracing::info!("no --database-url: running in-memory only");
             (Hub::new(), None, None, None, None, 1)
         };
-    let usage = UsageService::new(args.codex_command.clone(), store.clone());
-    let initial_usage = usage.clone();
-    let mut usage_shutdown = shutdown_rx.clone();
-    tokio::spawn(async move {
-        loop {
-            initial_usage.refresh().await;
-            tokio::select! {
-                _ = tokio::time::sleep(crate::usage::AUTO_REFRESH_INTERVAL) => {}
-                changed = usage_shutdown.changed() => {
-                    if changed.is_err() || *usage_shutdown.borrow() { break; }
-                }
-            }
-        }
-    });
+    let usage = UsageService::new(
+        args.codex_command.clone(),
+        store.clone(),
+        Some(args.data_dir.join("usage-snapshot.json")),
+    );
     let machine_presence_task = store.as_ref().map(|store| {
         let store = store.clone();
         let shutdown = shutdown_rx.clone();
@@ -777,16 +786,19 @@ async fn run_web_push_notifications(
                 continue;
             }
         };
-        let notification = match outbound {
+        let notification = match outbound.outbound() {
             Outbound::Event { envelope }
                 if matches!(envelope.event, Event::PermissionRequest { .. }) =>
             {
-                Some((NotificationCategory::Permission, envelope.session_id))
+                Some((
+                    NotificationCategory::Permission,
+                    envelope.session_id.clone(),
+                ))
             }
             Outbound::Error {
                 session_id: Some(session_id),
                 ..
-            } => Some((NotificationCategory::Error, session_id)),
+            } => Some((NotificationCategory::Error, session_id.clone())),
             _ => None,
         };
         let Some((category, session_id)) = notification else {
@@ -833,11 +845,10 @@ async fn run_store_writer(
                 Ok(None) | Err(_) => break,
             }
         }
-        let count = batch.len();
+        health.consumed_writes(&batch);
         if !apply_store_batch(&store, &mut reducer, batch).await {
             health.mark_failed_batch();
         }
-        health.consumed(count);
     }
     tracing::info!("store writer shutting down (channel closed)");
 }
@@ -1899,7 +1910,14 @@ struct Metrics {
     sessions_deleted: i64,
     /// daemon resident memory (bytes), excluding agent subprocesses.
     daemon_rss_bytes: u64,
+    /// lifetime high-water RSS for the daemon process (bytes).
+    daemon_rss_peak_bytes: u64,
+    /// Current memory charged to the complete Cowboy service cgroup (bytes).
+    cgroup_memory_bytes: u64,
+    /// Lifetime high-water memory for the complete service cgroup (bytes).
+    cgroup_memory_peak_bytes: u64,
     persistence_pending: usize,
+    persistence_pending_bytes: usize,
     persistence_dropped: u64,
     persistence_failed_batches: u64,
     persistence_last_error: Option<String>,
@@ -1918,19 +1936,61 @@ struct Metrics {
     observability_dropped_batches: u64,
     observability_failed_log_batches: u64,
     observability_failed_metric_batches: u64,
+    hub_session_count: usize,
+    hub_hot_log_bytes: usize,
+    hub_broadcast_last_bytes: usize,
 }
 
-/// Resident set size of THIS process (the daemon, not its agent children) from
-/// `/proc/self/statm` — field 2 is resident pages. 0 if unreadable.
-fn daemon_rss_bytes() -> u64 {
-    std::fs::read_to_string("/proc/self/statm")
+#[derive(Debug, Clone, Copy, Default)]
+struct DaemonMemory {
+    rss_bytes: u64,
+    rss_peak_bytes: u64,
+}
+
+/// Current and lifetime-high resident set of THIS process (not its agent or
+/// usage-collector children). `/proc/self/status` reports KiB directly, avoiding
+/// the incorrect 4 KiB page-size assumption `statm` would make on some hosts.
+fn daemon_memory() -> DaemonMemory {
+    std::fs::read_to_string("/proc/self/status")
         .ok()
-        .and_then(|s| {
-            s.split_whitespace()
-                .nth(1)
-                .and_then(|f| f.parse::<u64>().ok())
+        .map_or_else(DaemonMemory::default, |status| {
+            parse_proc_status_memory(&status)
         })
-        .map_or(0, |pages| pages.saturating_mul(4096))
+}
+
+fn parse_proc_status_memory(status: &str) -> DaemonMemory {
+    fn kib_value(line: &str, key: &str) -> Option<u64> {
+        line.strip_prefix(key)?
+            .split_whitespace()
+            .next()?
+            .parse::<u64>()
+            .ok()
+            .map(|kib| kib.saturating_mul(1024))
+    }
+
+    let mut memory = DaemonMemory::default();
+    for line in status.lines() {
+        if let Some(bytes) = kib_value(line, "VmRSS:") {
+            memory.rss_bytes = bytes;
+        } else if let Some(bytes) = kib_value(line, "VmHWM:") {
+            memory.rss_peak_bytes = bytes;
+        }
+    }
+    memory
+}
+
+#[cfg(test)]
+mod daemon_memory_tests {
+    use super::parse_proc_status_memory;
+
+    #[test]
+    fn proc_status_reports_current_and_peak_bytes() {
+        let memory = parse_proc_status_memory(
+            "Name:\tcowboy\nVmPeak:\t 999999 kB\nVmHWM:\t 258180 kB\nVmRSS:\t  72372 kB\n",
+        );
+        assert_eq!(memory.rss_bytes, 72_372 * 1024);
+        assert_eq!(memory.rss_peak_bytes, 258_180 * 1024);
+    }
 }
 
 async fn api_metrics(State(state): State<Arc<AppState>>) -> Response {
@@ -1941,13 +2001,23 @@ async fn api_metrics(State(state): State<Arc<AppState>>) -> Response {
     };
     let runtime = state.runtime_router.stats();
     let code_cache = state.code_cache.metrics();
+    let daemon_memory = daemon_memory();
+    let cgroup_memory = crate::memory_observability::own_cgroup_memory().unwrap_or_default();
+    let hub_memory = state.hub.memory_stats();
     Json(Metrics {
         db_bytes,
         events_rows,
         sessions_live,
         sessions_deleted,
-        daemon_rss_bytes: daemon_rss_bytes(),
+        daemon_rss_bytes: daemon_memory.rss_bytes,
+        daemon_rss_peak_bytes: daemon_memory.rss_peak_bytes,
+        cgroup_memory_bytes: cgroup_memory.current_bytes,
+        cgroup_memory_peak_bytes: cgroup_memory.peak_bytes,
         persistence_pending: state.persistence_health.as_ref().map_or(0, |h| h.pending()),
+        persistence_pending_bytes: state
+            .persistence_health
+            .as_ref()
+            .map_or(0, |h| h.pending_bytes()),
         persistence_dropped: state.persistence_health.as_ref().map_or(0, |h| h.dropped()),
         persistence_failed_batches: state
             .persistence_health
@@ -1972,6 +2042,9 @@ async fn api_metrics(State(state): State<Arc<AppState>>) -> Response {
         observability_dropped_batches: state.observability.health().dropped_batches(),
         observability_failed_log_batches: state.observability.health().failed_log_batches(),
         observability_failed_metric_batches: state.observability.health().failed_metric_batches(),
+        hub_session_count: hub_memory.session_count,
+        hub_hot_log_bytes: hub_memory.hot_log_bytes,
+        hub_broadcast_last_bytes: hub_memory.broadcast_last_bytes,
     })
     .into_response()
 }
@@ -2763,11 +2836,20 @@ async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> Response {
     let health = state.persistence_health.as_ref();
     let runtime = state.runtime_router.stats();
     let runtime_connected = state.runtime_router.has_connected_runtime();
+    let daemon_memory = daemon_memory();
+    let cgroup_memory = crate::memory_observability::own_cgroup_memory().unwrap_or_default();
+    let hub_memory = state.hub.memory_stats();
     let body = format!(
-        "# TYPE cowboy_up gauge\ncowboy_up {}\n# TYPE cowboy_database_bytes gauge\ncowboy_database_bytes {db_bytes}\n# TYPE cowboy_events_rows gauge\ncowboy_events_rows {events_rows}\n# TYPE cowboy_sessions gauge\ncowboy_sessions{{state=\"live\"}} {sessions_live}\ncowboy_sessions{{state=\"deleted\"}} {sessions_deleted}\n# TYPE cowboy_daemon_rss_bytes gauge\ncowboy_daemon_rss_bytes {}\n# TYPE cowboy_persistence_pending gauge\ncowboy_persistence_pending {}\n# TYPE cowboy_persistence_dropped_total counter\ncowboy_persistence_dropped_total {}\n# TYPE cowboy_persistence_failed_batches_total counter\ncowboy_persistence_failed_batches_total {}\n# TYPE cowboy_persistence_healthy gauge\ncowboy_persistence_healthy {}\n# TYPE cowboy_runtime_connected gauge\ncowboy_runtime_connected {}\n# TYPE cowboy_runtime_workers gauge\ncowboy_runtime_workers {}\n# TYPE cowboy_runtime_busy_workers gauge\ncowboy_runtime_busy_workers {}\n# TYPE cowboy_runtime_draining_workers gauge\ncowboy_runtime_draining_workers {}\n# TYPE cowboy_runtime_handoff_workers gauge\ncowboy_runtime_handoff_workers {}\n# TYPE cowboy_runtime_pending_commands gauge\ncowboy_runtime_pending_commands {}\n# TYPE cowboy_observability_pending gauge\ncowboy_observability_pending {}\n# TYPE cowboy_observability_accepted_batches_total counter\ncowboy_observability_accepted_batches_total {}\n# TYPE cowboy_observability_dropped_batches_total counter\ncowboy_observability_dropped_batches_total {}\n# TYPE cowboy_observability_failed_log_batches_total counter\ncowboy_observability_failed_log_batches_total {}\n# TYPE cowboy_observability_failed_metric_batches_total counter\ncowboy_observability_failed_metric_batches_total {}\n",
+        "# TYPE cowboy_up gauge\ncowboy_up {}\n# TYPE cowboy_database_bytes gauge\ncowboy_database_bytes {db_bytes}\n# TYPE cowboy_events_rows gauge\ncowboy_events_rows {events_rows}\n# TYPE cowboy_sessions gauge\ncowboy_sessions{{state=\"live\"}} {sessions_live}\ncowboy_sessions{{state=\"deleted\"}} {sessions_deleted}\n# TYPE cowboy_daemon_rss_bytes gauge\ncowboy_daemon_rss_bytes {}\n# TYPE cowboy_daemon_rss_peak_bytes gauge\ncowboy_daemon_rss_peak_bytes {}\n# TYPE cowboy_cgroup_memory_bytes gauge\ncowboy_cgroup_memory_bytes {}\n# TYPE cowboy_cgroup_memory_peak_bytes gauge\ncowboy_cgroup_memory_peak_bytes {}\n# TYPE cowboy_persistence_pending gauge\ncowboy_persistence_pending {}\n# TYPE cowboy_persistence_pending_bytes gauge\ncowboy_persistence_pending_bytes {}\n# TYPE cowboy_hub_hot_log_bytes gauge\ncowboy_hub_hot_log_bytes {}\n# TYPE cowboy_hub_broadcast_last_bytes gauge\ncowboy_hub_broadcast_last_bytes {}\n# TYPE cowboy_persistence_dropped_total counter\ncowboy_persistence_dropped_total {}\n# TYPE cowboy_persistence_failed_batches_total counter\ncowboy_persistence_failed_batches_total {}\n# TYPE cowboy_persistence_healthy gauge\ncowboy_persistence_healthy {}\n# TYPE cowboy_runtime_connected gauge\ncowboy_runtime_connected {}\n# TYPE cowboy_runtime_workers gauge\ncowboy_runtime_workers {}\n# TYPE cowboy_runtime_busy_workers gauge\ncowboy_runtime_busy_workers {}\n# TYPE cowboy_runtime_draining_workers gauge\ncowboy_runtime_draining_workers {}\n# TYPE cowboy_runtime_handoff_workers gauge\ncowboy_runtime_handoff_workers {}\n# TYPE cowboy_runtime_pending_commands gauge\ncowboy_runtime_pending_commands {}\n# TYPE cowboy_observability_pending gauge\ncowboy_observability_pending {}\n# TYPE cowboy_observability_accepted_batches_total counter\ncowboy_observability_accepted_batches_total {}\n# TYPE cowboy_observability_dropped_batches_total counter\ncowboy_observability_dropped_batches_total {}\n# TYPE cowboy_observability_failed_log_batches_total counter\ncowboy_observability_failed_log_batches_total {}\n# TYPE cowboy_observability_failed_metric_batches_total counter\ncowboy_observability_failed_metric_batches_total {}\n",
         u8::from(state.runtime_health.is_healthy(state.store.is_some()) && runtime_connected),
-        daemon_rss_bytes(),
+        daemon_memory.rss_bytes,
+        daemon_memory.rss_peak_bytes,
+        cgroup_memory.current_bytes,
+        cgroup_memory.peak_bytes,
         health.map_or(0, |h| h.pending()),
+        health.map_or(0, |h| h.pending_bytes()),
+        hub_memory.hot_log_bytes,
+        hub_memory.broadcast_last_bytes,
         health.map_or(0, |h| h.dropped()),
         health.map_or(0, |h| h.failed_batches()),
         u8::from(health.is_none_or(|h| h.is_healthy())),
@@ -8133,7 +8215,7 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>, lazy_bootstrap: bool
                 }
                 msg = rx.recv() => match msg {
                     Ok(msg) => {
-                        if send_json(&mut sink, &msg).await.is_err() {
+                        if send_frame(&mut sink, msg.as_ref()).await.is_err() {
                             break;
                         }
                     }
@@ -8732,6 +8814,20 @@ where
     T: Serialize,
 {
     send_json_with_timeout(sink, msg, WEBSOCKET_FRAME_SEND_TIMEOUT).await
+}
+
+async fn send_frame<S>(sink: &mut S, frame: &FanoutFrame) -> Result<(), ()>
+where
+    S: SinkExt<Message> + Unpin,
+{
+    let text = frame.json().map_err(|_| ())?;
+    tokio::time::timeout(
+        WEBSOCKET_FRAME_SEND_TIMEOUT,
+        sink.send(Message::Text(text.to_owned().into())),
+    )
+    .await
+    .map_err(|_| ())?
+    .map_err(|_| ())
 }
 
 async fn send_json_with_timeout<S, T>(

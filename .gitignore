@@ -4,6 +4,7 @@
 
 # Frontend
 web/node_modules/
+tools/do-memory-mock/node_modules/
 web/dist/
 dist/providers/
 dist/provider-runtime-cache/
@@ -18,6 +19,8 @@ dist/provider-runtime-cache/
 .env.*
 *.log
 .DS_Store
+.wrangler/
+**/.wrangler/
 
 # sccache local cache (if ever placed in-tree)
 .sccache/

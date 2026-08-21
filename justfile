@@ -149,6 +149,19 @@ check-compact:
 test-fast:
     cargo nextest run --all-features --locked
 
+# Compact-control-plane memory fixture against a local SQLite Durable Object.
+do-memory-mock:
+    deno run --allow-read tools/do-memory-mock/mock.ts
+    bash tools/do-memory-mock/run.sh deploy --dry-run --outdir /tmp/cowboy-do-memory-mock
+
+# Generate a real Hub compact fixture and POST it into local wrangler SQLite.
+do-memory-mock-seed:
+    bash tools/do-memory-mock/seed-from-hub.sh
+
+# Dozens of sessions, filled tails, 1000 tools, fat payloads, SQLite archive.
+do-memory-mock-extreme:
+    bash tools/do-memory-mock/extreme-from-hub.sh
+
 # Opt into the shared compiler cache for clean or batch builds. Interactive
 # Cargo commands intentionally keep rustc incremental state for the edit loop.
 build-cached:
