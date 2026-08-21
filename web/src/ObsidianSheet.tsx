@@ -30,6 +30,7 @@ import {
   obsidianSheetSettleMs,
   obsidianSheetTransform,
 } from "./obsidianSheetMotion";
+import { useBackdropDismiss } from "./useBackdropDismiss";
 
 const Z = 1250;
 const PROJECTION_MS = 110;
@@ -208,6 +209,7 @@ export function ObsidianSheet({
       obsidianSheetSettleMs(prefersReducedMotion()),
     );
   }, [paint]);
+  const dismissBackdrop = useBackdropDismiss<HTMLDivElement>(dismiss);
 
   const onPointerDown = useCallback((e: ReactPointerEvent<HTMLDivElement>): void => {
     e.preventDefault();
@@ -299,25 +301,11 @@ export function ObsidianSheet({
         ref={scrimRef}
         aria-hidden
         data-obsidian-sheet-scrim="true"
-        onPointerDown={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          event.currentTarget.setPointerCapture(event.pointerId);
-        }}
-        onPointerUp={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          dismiss();
-        }}
-        onPointerCancel={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-        }}
-        onClick={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          dismiss();
-        }}
+        onPointerDown={dismissBackdrop.onPointerDown}
+        onPointerMove={dismissBackdrop.onPointerMove}
+        onPointerUp={dismissBackdrop.onPointerUp}
+        onPointerCancel={dismissBackdrop.onPointerCancel}
+        onClick={dismissBackdrop.onClick}
         sx={{
           position: "fixed",
           inset: 0,

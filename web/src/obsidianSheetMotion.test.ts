@@ -59,10 +59,8 @@ Deno.test("closing scrim remains hit-testable until the sheet unmounts", () => {
   assertEquals(obsidianSheetScrimPointerEvents(0, false), "none");
   assertEquals(obsidianSheetScrimPointerEvents(0, true), "auto");
   assert(modalSource.includes('data-obsidian-sheet-scrim="true"'));
-  assert(modalSource.includes("event.currentTarget.setPointerCapture"));
-  assert(modalSource.includes("onPointerUp={(event) =>"));
-  assert(modalSource.includes("event.preventDefault()"));
-  assert(modalSource.includes("event.stopPropagation()"));
+  assert(modalSource.includes("useBackdropDismiss<HTMLDivElement>(dismiss)"));
+  assert(modalSource.includes("onPointerUp={dismissBackdrop.onPointerUp}"));
 });
 
 Deno.test("phone sheets use the compact Obsidian card, not a floating footer pad", () => {

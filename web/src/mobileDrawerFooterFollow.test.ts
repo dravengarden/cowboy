@@ -6,6 +6,9 @@ const appSource = await Deno.readTextFile(
 const reviewDrawerSource = await Deno.readTextFile(
   new URL("./mobile/review/ReviewDrawerShell.tsx", import.meta.url),
 );
+const backdropDismissSource = await Deno.readTextFile(
+  new URL("./useBackdropDismiss.ts", import.meta.url),
+);
 
 Deno.test("mobile drawer translates an in-flow page that owns the footer", () => {
   assert(appSource.includes("mobilePageRef.current ?? mobileLayerRef.current"));
@@ -28,7 +31,14 @@ Deno.test("mobile drawer translates an in-flow page that owns the footer", () =>
   assert(reviewDrawerSource.includes('data-mobile-drawer-dim="right"'));
   assert(reviewDrawerSource.includes('data-mobile-drawer-close="right"'));
   assert(reviewDrawerSource.includes('role="button"'));
-  assert(reviewDrawerSource.includes("useReliableTouchTap"));
+  assert(reviewDrawerSource.includes("useBackdropDismiss"));
+  assert(appSource.includes("useBackdropDismiss<HTMLDivElement>"));
+  assert(
+    backdropDismissSource.includes(
+      'document.addEventListener("click", consume, true)',
+    ),
+  );
+  assert(backdropDismissSource.includes("event.stopImmediatePropagation()"));
   assert(reviewDrawerSource.includes("Screen-space peek hit target"));
   assert(reviewDrawerSource.includes("width: \"calc(100% - var(--mobile-drawer-width"));
   assert(reviewDrawerSource.includes('pointerEvents: "none"'));

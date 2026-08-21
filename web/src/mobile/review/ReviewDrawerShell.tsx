@@ -8,7 +8,7 @@ import {
   mobilePresentationMovingRootSx,
 } from "../../mobilePresentationMotion";
 import { holdStorePresentation } from "../../store";
-import { useReliableTouchTap } from "../../useReliableTouchTap";
+import { useBackdropDismiss } from "../../useBackdropDismiss";
 
 export function ReviewDrawerShell({
   drawer,
@@ -32,7 +32,7 @@ export function ReviewDrawerShell({
   const toggleRef = useRef<() => void>(() => undefined);
   const openRef = useRef(false);
   const [open, setOpen] = useState(false);
-  const closePeek = useReliableTouchTap<HTMLDivElement>(() => {
+  const closePeek = useBackdropDismiss<HTMLDivElement>(() => {
     if (openRef.current) closeRef.current();
   });
 

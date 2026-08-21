@@ -121,6 +121,7 @@ import {
 } from "./store";
 import { useSortable } from "./useSortable";
 import { useReliableTouchTap } from "./useReliableTouchTap";
+import { useBackdropDismiss } from "./useBackdropDismiss";
 import { bindMobileSpatialDrawer } from "./mobileSpatialDrawer";
 import { mobileSpatialDrawerShadow } from "./mobileDrawerDepth";
 import { sessionDrawerTargetScroll } from "./mobileDrawerMotion";
@@ -2081,7 +2082,7 @@ export function App({
             cachedWidth?: number,
         ) => void
     ) | null>(null);
-    const closeSessionsPeek = useReliableTouchTap<HTMLDivElement>((): void => {
+    const closeSessionsPeek = useBackdropDismiss<HTMLDivElement>((): void => {
         if (drawerOpen) settleMobileDrawerRef.current?.(false);
     });
     const [dialogOpen, setDialogOpen] = useState(false);
