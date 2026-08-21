@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 780" role="img" aria-labelledby="title desc">
+  <title id="title">Cowboy remote Agent IDE architecture</title>
+  <desc id="desc">Phone, desktop, and ACP clients connect to one Cowboy Hub, which coordinates multiple remote Machines, detached ACP workers, and agent Providers.</desc>
+  <defs>
+    <linearGradient id="canvas" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#fbfaff"/>
+      <stop offset="1" stop-color="#f1eff9"/>
+    </linearGradient>
+    <linearGradient id="hub" x1="0" x2="1">
+      <stop offset="0" stop-color="#6e56cf"/>
+      <stop offset="1" stop-color="#8b79e0"/>
+    </linearGradient>
+    <marker id="arrow" markerHeight="8" markerWidth="8" orient="auto-start-reverse" refX="7" refY="4" viewBox="0 0 8 8">
+      <path d="M0 0 8 4 0 8Z" fill="#8b84a1"/>
+    </marker>
+    <style>
+      .eyebrow { fill: #6e56cf; font: 700 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: 2px; }
+      .label { fill: #252131; font: 700 22px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .sub { fill: #665f74; font: 400 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .box { fill: #fff; stroke: #d9d4e7; stroke-width: 2; }
+      .machine { fill: #f8f6fe; stroke: #c9c1ee; stroke-width: 2; }
+      .worker { fill: #fff; stroke: #b9d9c2; stroke-width: 2; }
+      .provider { fill: #fff; stroke: #e8c9a5; stroke-width: 2; }
+      .small-label { font-size: 17px; }
+      .on-hub { fill: #fff; }
+      .on-hub-sub { fill: #eeeaff; }
+      .line { fill: none; stroke: #8b84a1; stroke-width: 3; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect width="1200" height="780" rx="28" fill="url(#canvas)"/>
+  <text x="52" y="42" class="eyebrow">ONE REMOTE IDE · MANY MACHINES</text>
+
+  <path class="line" d="M210 132 420 180"/>
+  <path class="line" d="M600 132v48"/>
+  <path class="line" d="M990 132 780 180"/>
+  <path class="line" d="M600 268v44"/>
+  <path class="line" d="M488 268 260 440"/>
+  <path class="line" d="M712 268 940 440"/>
+  <path class="line" d="M260 512v44"/>
+  <path class="line" d="M940 512v44"/>
+  <path class="line" d="M260 628v44"/>
+  <path class="line" d="M940 628v44"/>
+
+  <g>
+    <rect class="box" x="40" y="56" width="340" height="76" rx="18"/>
+    <text x="72" y="88" class="label">Phone Agent IDE</text>
+    <text x="72" y="113" class="sub">touch-first remote control</text>
+  </g>
+  <g>
+    <rect class="box" x="430" y="56" width="340" height="76" rx="18"/>
+    <text x="462" y="88" class="label">Desktop Agent IDE</text>
+    <text x="462" y="113" class="sub">keyboard-first workspace</text>
+  </g>
+  <g>
+    <rect class="box" x="820" y="56" width="340" height="76" rx="18"/>
+    <text x="852" y="88" class="label">Zed / ACP clients</text>
+    <text x="852" y="113" class="sub">the same live sessions</text>
+  </g>
+
+  <g>
+    <rect x="330" y="180" width="540" height="88" rx="22" fill="url(#hub)"/>
+    <text x="600" y="218" text-anchor="middle" class="label on-hub">Cowboy Hub</text>
+    <text x="600" y="245" text-anchor="middle" class="sub on-hub-sub">sequence · persistence · fan-out · permissions</text>
+  </g>
+
+  <g>
+    <rect class="box" x="470" y="312" width="260" height="64" rx="16"/>
+    <text x="600" y="340" text-anchor="middle" class="label small-label">SQLite / Postgres</text>
+    <text x="600" y="362" text-anchor="middle" class="sub">durable session history</text>
+  </g>
+
+  <g>
+    <rect class="machine" x="100" y="440" width="320" height="72" rx="18"/>
+    <text x="132" y="472" class="label">Machine · Hawk</text>
+    <text x="132" y="496" class="sub">remote workspace host</text>
+  </g>
+  <g>
+    <rect class="machine" x="780" y="440" width="320" height="72" rx="18"/>
+    <text x="812" y="472" class="label">Machine · Falcon</text>
+    <text x="812" y="496" class="sub">remote workspace host</text>
+  </g>
+
+  <g>
+    <rect class="worker" x="100" y="556" width="320" height="72" rx="18"/>
+    <text x="260" y="588" text-anchor="middle" class="label">Detached ACP workers</text>
+    <text x="260" y="612" text-anchor="middle" class="sub">survive browser disconnects</text>
+  </g>
+  <g>
+    <rect class="worker" x="780" y="556" width="320" height="72" rx="18"/>
+    <text x="940" y="588" text-anchor="middle" class="label">Detached ACP workers</text>
+    <text x="940" y="612" text-anchor="middle" class="sub">survive browser disconnects</text>
+  </g>
+
+  <g>
+    <rect class="provider" x="100" y="672" width="320" height="64" rx="16"/>
+    <text x="260" y="710" text-anchor="middle" class="label small-label">Claude · Codex · Gemini · Grok</text>
+  </g>
+  <g>
+    <rect class="provider" x="780" y="672" width="320" height="64" rx="16"/>
+    <text x="940" y="710" text-anchor="middle" class="label small-label">Claude · Codex · Gemini · Grok</text>
+  </g>
+</svg>

@@ -69,9 +69,11 @@ Desktop and Mobile are two focused shells for the same remote IDE: keyboard-firs
 | **Code** | Review each machine's worktree and Git changes with syntax highlighting, LSP diagnostics, and symbol navigation. Long source lines remain horizontally scrollable. |
 | **Sessions** | Create, rename, reorder, pause, resume, and reconnect to agent sessions across machines. |
 
-Providers are independently versioned packages (`providers/*/provider.json`), not hardcoded adapters in the UI.
-
 ## Quick start
+
+Cowboy is developed and built in the pinned Nix shell. The local daemon can
+start immediately with an in-memory store; use SQLite or PostgreSQL when you
+want sessions to survive restarts.
 
 ```sh
 nix develop          # pinned Rust 1.97 + Deno + just
@@ -80,7 +82,7 @@ just build           # web bundle + release binaries
   --database-url sqlite:///tmp/cowboy.sqlite3
 ```
 
-Open `http://127.0.0.1:3333`, enroll one or more Machines, and start directing agents from the IDE — see [machine operations](docs/machine-operations.md).
+Open `http://127.0.0.1:3333`, enroll one or more Machines, and start directing agents from the IDE. See [machine operations](docs/machine-operations.md) for remote hosts.
 
 ```sh
 just check           # fmt, clippy, tsc, tests, release build
@@ -88,30 +90,28 @@ just check           # fmt, clippy, tsc, tests, release build
 
 SQLite is the zero-ops local store. PostgreSQL speaks the same `Store` API (`--database-url postgresql://…`). Omit the URL and the daemon runs in-memory.
 
-## How it is put together
+## Architecture
 
-```mermaid
-flowchart LR
-  phone[Phone Agent IDE] --> ws[WebSocket]
-  desktop[Desktop Agent IDE] --> ws
-  zed[Zed / ACP] --> hub
-  ws --> hub[Hub · seq · fan-out]
-  hub --> store[(SQLite / Postgres)]
-  hub --> hawk[Machine · Hawk]
-  hub --> falcon[Machine · Falcon]
-  hawk --> workerA[Detached ACP workers]
-  falcon --> workerB[Detached ACP workers]
-  workerA --> agentA[Claude / Codex / Gemini / Grok]
-  workerB --> agentB[Claude / Codex / Gemini / Grok]
-```
+<p align="center">
+  <img src="docs/architecture/multi-machine.svg" alt="Phone, desktop, and ACP clients connect to the Cowboy Hub, which coordinates multiple remote Machines and detached agent workers" width="920">
+</p>
+
+<p align="center"><sub>One remote IDE surface, one Hub, and as many Machine-hosted agent workspaces as you need.</sub></p>
 
 The **Hub** (`src/core.rs`) is the only writer of `seq`. Live clients receive compact deltas; durable history is canonicalized and large images become `/api/artifacts/…` before they clone across the persist queue and WebSocket fan-out.
 
 Rolling updates keep workers alive across controller restarts: [architecture/12-rolling-updates.md](docs/architecture/12-rolling-updates.md).
 
+## Provider architecture
+
+Providers are independently versioned packages (`providers/*/provider.json`),
+not hardcoded adapters in the UI. The UI consumes typed Provider capabilities
+through [ACP](https://agentclientprotocol.com), so adding a Provider does not
+require rebuilding the product around another vendor-specific surface.
+
 ## Documentation
 
-| Start here | |
+| Guide | Covers |
 | --- | --- |
 | [Architecture overview](docs/architecture/00-overview.md) | Topology, Hub, workers |
 | [Requirements](docs/requirements.md) | Provider packages, auth, uninstall |
@@ -119,6 +119,20 @@ Rolling updates keep workers alive across controller restarts: [architecture/12-
 | [Multi-machine](docs/architecture/15-multi-machine.md) | Enrollment and placement |
 | [Operations](docs/architecture/11-operations.md) | Runbooks |
 | [Index](docs/INDEX.md) | Everything else |
+
+## Contributing
+
+Use the pinned development shell and run the complete web checks before
+opening a change:
+
+```sh
+nix develop
+just check
+```
+
+Keep deployed SQL migrations immutable; add a new migration instead of editing
+one that has already shipped. Frontend-only changes should use the independent
+Web release lane described in [build and deploy](docs/architecture/10-deploy-build.md).
 
 ## Status
 
