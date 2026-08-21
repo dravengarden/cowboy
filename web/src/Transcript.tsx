@@ -35,7 +35,7 @@ import {
   Typography,
   useTheme,
 } from "@mui/material";
-import { alpha } from "@mui/material/styles";
+import { alpha, type Theme } from "@mui/material/styles";
 import { DESKTOP_INSET_RADIUS } from "./desktop/DesktopEmbeddedControl";
 import { desktopScrollbarSx } from "./desktop/desktopScrollbar";
 import { desktopImeOwnsKey } from "./desktop/commands/imeShortcut";
@@ -1080,6 +1080,16 @@ function toolIcon(kind: string): React.ReactElement {
   }
 }
 
+function toolStatusTone(
+  status: string,
+  theme: Theme,
+): string {
+  if (status === "completed") return theme.palette.success.main;
+  if (status === "failed") return theme.palette.error.main;
+  if (status === "in_progress") return theme.palette.warning.main;
+  return theme.palette.text.disabled;
+}
+
 // A transcript image: a bounded, tappable thumbnail that opens the shared
 // zoom/pan lightbox. The chunk's src is already a downscaled (~1568px) data URL
 // (see attachments.ts), so it's light enough to inline here and sharp enough to
@@ -1561,7 +1571,7 @@ function ToolCard({
   return (
     <Paper
       elevation={0}
-      sx={{
+      sx={(theme) => ({
         alignSelf: "stretch",
         overflow: "hidden",
         // Borderless: a filled `background.paper` surface (a touch lighter than
@@ -1570,11 +1580,22 @@ function ToolCard({
         // on every collapsed card, and a tool-heavy transcript stacked them into
         // a "ruled paper" look. The icon + status chip already mark it as a tool.
         bgcolor: "background.paper",
+        // Keep the card borderless, but give the execution state a quiet wash
+        // that reads in a long tool run. It preserves the existing fill-based
+        // selection language and avoids a stack of purple leading rails.
+        backgroundImage: `linear-gradient(105deg, ${alpha(
+          toolStatusTone(item.status, theme),
+          theme.palette.mode === "dark" ? 0.1 : 0.055,
+        )}, transparent 48%)`,
+        boxShadow: `0 1px 3px ${alpha(
+          theme.palette.common.black,
+          theme.palette.mode === "dark" ? 0.16 : 0.06,
+        )}`,
         borderRadius: desktop ? `${DESKTOP_INSET_RADIUS}px` : 1,
         // Subtle breathing while a tool is mid-flight; nothing while
         // completed/failed (those are static states).
         animation: running ? `${pulse} 1.6s ease-in-out infinite` : undefined,
-      }}
+      })}
     >
       <Stack
         {...(hasDetail

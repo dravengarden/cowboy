@@ -33,7 +33,7 @@ export function codeSyntaxPalette(mode: "light" | "dark"): CodeSyntaxPalette {
       invalid: "#fb7185",
     }
     : {
-      foreground: "#1c1428",
+      foreground: "#252131",
       muted: "#596579",
       keyword: "#5b21b6",
       string: "#166534",
