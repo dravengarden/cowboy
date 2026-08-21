@@ -978,20 +978,23 @@ export function DesktopTopBarControls({
     (snapshot) => desktopTopBarTimelineSlice(snapshot.timelines.get(sessionId)),
     sameDesktopTopBarTimelineSlice,
   );
-  const [configAnchor, setConfigAnchor] = useState<HTMLElement | null>(null);
-  const [usageAnchor, setUsageAnchor] = useState<HTMLElement | null>(null);
+  const [openSurface, setOpenSurface] = useState<
+    "config" | "usage" | "reload" | "compact" | "clear" | null
+  >(null);
+  const configOpen = openSurface === "config";
+  const usageOpen = openSurface === "usage";
   const [usagePanel, setUsagePanel] = useState<"usage" | "logs">("usage");
   const configPanelRef = useRef<HTMLDivElement>(null);
   const usagePanelRef = useRef<HTMLDivElement>(null);
   const [snapshot, setSnapshot] = useState<UsageSnapshot | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [clock, setClock] = useState(() => Date.now());
-  const [reloadTargetId, setReloadTargetId] = useState<string | null>(null);
-  const reloadTarget = reloadTargetId === session?.id ? session : null;
-  const [compactConfirm, setCompactConfirm] = useState(false);
-  const [clearConfirm, setClearConfirm] = useState(false);
+  const reloadTarget = openSurface === "reload" ? session ?? null : null;
+  const compactConfirm = openSurface === "compact";
+  const clearConfirm = openSurface === "clear";
   const dead = status === "exited" || status === "crashed" ||
     status === "interrupted";
+  useEffect(() => setOpenSurface(null), [sessionId]);
   const optionPresentations = useMemo(
     () =>
       providerConfigOptionPresentations(
@@ -1061,7 +1064,7 @@ export function DesktopTopBarControls({
     return (): void => window.clearInterval(timer);
   }, []);
   useEffect(() => {
-    if (configAnchor === null) return undefined;
+    if (!configOpen) return undefined;
     const focusFirst = requestAnimationFrame(() => {
       const firstRow = configPanelRef.current?.querySelector<HTMLElement>(
         "[data-config-row]",
@@ -1203,9 +1206,9 @@ export function DesktopTopBarControls({
       cancelAnimationFrame(focusFirst);
       globalThis.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [configAnchor]);
+  }, [configOpen]);
   useEffect(() => {
-    if (usageAnchor === null) return undefined;
+    if (!usageOpen) return undefined;
     const onKeyDown = (event: KeyboardEvent): void => {
       if (desktopImeOwnsKey(event)) return;
       if (event.metaKey || event.ctrlKey || event.altKey) {
@@ -1260,7 +1263,7 @@ export function DesktopTopBarControls({
     globalThis.addEventListener("keydown", onKeyDown, true);
     return (): void =>
       globalThis.removeEventListener("keydown", onKeyDown, true);
-  }, [loadUsage, refreshing, usageAnchor, usagePanel]);
+  }, [loadUsage, refreshing, usageOpen, usagePanel]);
   const widgetProviders = useMemo(() => usageWidgetProviders(snapshot), [
     snapshot,
   ]);
@@ -1315,7 +1318,7 @@ export function DesktopTopBarControls({
   const contextSize = compactContext.size;
   const contextRefreshing = compactContext.refreshing;
   const confirmCompact = useCallback((): void => {
-    setCompactConfirm(false);
+    setOpenSurface(null);
     if (compactAction?.command) {
       compactContext.beginRefresh();
       submitPrompt(sessionId, compactAction.command, []);
@@ -1327,7 +1330,7 @@ export function DesktopTopBarControls({
   ]);
   useConfirmEnter(compactConfirm, confirmCompact);
   const confirmClear = useCallback(async (): Promise<void> => {
-    setClearConfirm(false);
+    setOpenSurface(null);
     await resetSession(sessionId);
   }, [sessionId]);
   useConfirmEnter(clearConfirm, () => {
@@ -1486,11 +1489,10 @@ export function DesktopTopBarControls({
               }
               endIcon={<ExpandMore fontSize="small" />}
               disabled={configDisabled}
-              onClick={(event): void => setConfigAnchor(event.currentTarget)}
+              onClick={(): void => setOpenSurface("config")}
               sx={{
                 ...desktopEmbeddedControlSx({
-                  active: shortcutsActive,
-                  open: configAnchor !== null,
+                  open: configOpen,
                 }),
                 width: "clamp(190px, 18vw, 260px)",
                 height: DESKTOP_TOPBAR_CONTROL_HEIGHT,
@@ -1515,10 +1517,10 @@ export function DesktopTopBarControls({
               <ShortcutKeycap
                 keyLabel="R"
                 variant="global"
-                accent={shortcutsActive || configAnchor !== null}
+                accent={shortcutsActive || configOpen}
                 availability={shortcutAvailability(
                   shortcutsActive && !configDisabled,
-                  configAnchor !== null,
+                  configOpen,
                 )}
                 sx={{ flexShrink: 0, ml: 0.75 }}
               />
@@ -1527,8 +1529,8 @@ export function DesktopTopBarControls({
         )}
 
       <DesktopModal
-        open={configAnchor !== null}
-        onClose={(): void => setConfigAnchor(null)}
+        open={configOpen}
+        onClose={(): void => setOpenSurface(null)}
         title="Run configuration"
         description="Changes apply immediately to this session."
         icon={<Tune sx={{ color: "primary.main" }} />}
@@ -1592,11 +1594,10 @@ export function DesktopTopBarControls({
           data-desktop-item="topbar-usage"
           data-desktop-topbar-action="usage"
           data-desktop-quota
-          onClick={(event): void => setUsageAnchor(event.currentTarget)}
+          onClick={(): void => setOpenSurface("usage")}
           sx={{
             ...desktopEmbeddedControlSx({
-              active: shortcutsActive,
-              open: usageAnchor !== null,
+              open: usageOpen,
             }),
             height: DESKTOP_TOPBAR_CONTROL_HEIGHT,
             px: 0.75,
@@ -1623,10 +1624,10 @@ export function DesktopTopBarControls({
           <ShortcutKeycap
             keyLabel="U"
             variant="global"
-            accent={shortcutsActive || usageAnchor !== null}
+            accent={shortcutsActive || usageOpen}
             availability={shortcutAvailability(
               shortcutsActive,
-              usageAnchor !== null,
+              usageOpen,
             )}
             sx={{ flexShrink: 0 }}
           />
@@ -1634,8 +1635,8 @@ export function DesktopTopBarControls({
       )}
 
       <DesktopModal
-        open={usageAnchor !== null}
-        onClose={(): void => setUsageAnchor(null)}
+        open={usageOpen}
+        onClose={(): void => setOpenSurface(null)}
         title="Usage and activity"
         description={`Supported account providers · Updated ${updatedAgo}`}
         width={760}
@@ -1760,10 +1761,9 @@ export function DesktopTopBarControls({
               }
               disabled={session === undefined}
               onClick={(): void => {
-                if (session) setReloadTargetId(session.id);
+                if (session) setOpenSurface("reload");
               }}
               sx={desktopSessionActionSx({
-                active: shortcutsActive,
                 open: reloadTarget !== null,
                 minWidth: 90,
               })}
@@ -1819,9 +1819,8 @@ export function DesktopTopBarControls({
                   ? "Compact conversation, context usage updating"
                   : compactTooltip(contextUsed, contextSize)}
                 disabled={dead || compacting}
-                onClick={(): void => setCompactConfirm(true)}
+                onClick={(): void => setOpenSurface("compact")}
                 sx={desktopSessionActionSx({
-                  active: shortcutsActive,
                   open: compactConfirm,
                   minWidth: 96,
                 })}
@@ -1870,10 +1869,9 @@ export function DesktopTopBarControls({
                   />
                 }
                 disabled={dead}
-                onClick={(): void => setClearConfirm(true)}
+                onClick={(): void => setOpenSurface("clear")}
                 sx={{
                   ...desktopSessionActionSx({
-                    active: shortcutsActive,
                     open: clearConfirm,
                     minWidth: 80,
                   }),
@@ -1912,18 +1910,17 @@ export function DesktopTopBarControls({
           sessionId={sessionId}
           status={status}
           presentation="desktop-toolbar"
-          desktopShortcutActive={shortcutsActive}
         />
       </Stack>
 
       <SessionReloadDialog
         session={reloadTarget}
-        onClose={(): void => setReloadTargetId(null)}
+        onClose={(): void => setOpenSurface(null)}
       />
 
       <Dialog
         open={compactConfirm}
-        onClose={(): void => setCompactConfirm(false)}
+        onClose={(): void => setOpenSurface(null)}
         maxWidth="xs"
         fullWidth
       >
@@ -1954,7 +1951,7 @@ export function DesktopTopBarControls({
         <DialogActions>
           <Button
             color="inherit"
-            onClick={(): void => setCompactConfirm(false)}
+            onClick={(): void => setOpenSurface(null)}
             sx={{ textTransform: "none" }}
           >
             Cancel
@@ -1973,7 +1970,7 @@ export function DesktopTopBarControls({
 
       <Dialog
         open={clearConfirm}
-        onClose={(): void => setClearConfirm(false)}
+        onClose={(): void => setOpenSurface(null)}
         maxWidth="xs"
         fullWidth
       >
@@ -1990,7 +1987,7 @@ export function DesktopTopBarControls({
         <DialogActions>
           <Button
             color="inherit"
-            onClick={(): void => setClearConfirm(false)}
+            onClick={(): void => setOpenSurface(null)}
             sx={{ textTransform: "none" }}
           >
             Cancel

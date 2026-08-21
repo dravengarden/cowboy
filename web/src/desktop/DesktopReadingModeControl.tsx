@@ -30,7 +30,10 @@ export function DesktopReadingModeControl({
         }
         onClick={onEnter}
         sx={{
-          ...desktopEmbeddedControlSx({ active: shortcutActive }),
+          // `shortcutActive` only means Z is available in this pane. Reading
+          // is an action from Agent mode, not another simultaneously selected
+          // top-bar item.
+          ...desktopEmbeddedControlSx(),
           height: 34,
           minWidth: 0,
           px: 0.9,

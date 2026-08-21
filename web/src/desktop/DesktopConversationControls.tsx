@@ -48,13 +48,16 @@ export function DesktopConversationControls(
     >
       <Button
         data-desktop-conversation-follow
+        aria-pressed={followingCurrentView}
         size="small"
         color={followingCurrentView ? "primary" : "inherit"}
         variant="outlined"
         startIcon={<South sx={desktopEmbeddedControlIconSx()} />}
         onClick={toggle}
         sx={{
-          ...desktopEmbeddedControlSx({ active: shortcutActive }),
+          // Conversation focus exposes F but does not select this control.
+          // Following's real state below is the only source of active paint.
+          ...desktopEmbeddedControlSx(),
           height: "2.125rem",
           minWidth: 0,
           px: "0.45rem",

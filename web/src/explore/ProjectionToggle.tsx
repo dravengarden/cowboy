@@ -51,7 +51,10 @@ export function DesktopProjectionToggle({
     <Box
       data-desktop-conversation-projection
       sx={{
-        ...desktopEmbeddedControlSx({ active: shortcutActive }),
+        // Pane focus makes the shortcut available, but it must not make every
+        // action in the Conversation rail look selected. The exclusive
+        // ToggleButtonGroup below owns the History/Explore selection.
+        ...desktopEmbeddedControlSx(),
         mr: 0.75,
         height: 34,
         p: "3px",

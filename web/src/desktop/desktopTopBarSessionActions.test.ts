@@ -62,6 +62,26 @@ Deno.test("desktop top-bar controls share height and spacing vocabulary", () => 
   assert(topBarSource.includes("spacing={DESKTOP_TOPBAR_CONTROL_GAP}"));
 });
 
+Deno.test("desktop top-bar surfaces have one mutually exclusive owner", () => {
+  assert(
+    topBarSource.includes(
+      '"config" | "usage" | "reload" | "compact" | "clear" | null',
+    ),
+  );
+  assert(topBarSource.includes("const configOpen = openSurface === \"config\""));
+  assert(topBarSource.includes("const usageOpen = openSurface === \"usage\""));
+  assert(topBarSource.includes("const compactConfirm = openSurface === \"compact\""));
+  assert(topBarSource.includes("const clearConfirm = openSurface === \"clear\""));
+  assertEquals(topBarSource.includes("useState<HTMLElement | null>(null)"), false);
+  assertEquals(topBarSource.includes("setCompactConfirm"), false);
+  assertEquals(topBarSource.includes("setClearConfirm"), false);
+});
+
+Deno.test("top-bar shortcut availability does not select every control", () => {
+  assertEquals(topBarSource.includes("active: shortcutsActive"), false);
+  assertEquals(composerSource.includes("desktopShortcutActive"), false);
+});
+
 Deno.test("desktop Stop remains mounted and becomes disabled while idle", () => {
   const start = composerSource.indexOf(
     'if (presentation === "desktop-toolbar")',

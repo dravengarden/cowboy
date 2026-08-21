@@ -6244,14 +6244,12 @@ export function AutoScrollAndStop({
   projection = "history",
   dense = false,
   presentation = "icons",
-  desktopShortcutActive = false,
 }: {
   sessionId: string;
   status: Status;
   projection?: TranscriptProjection | undefined;
   dense?: boolean;
   presentation?: "icons" | "desktop-toolbar";
-  desktopShortcutActive?: boolean;
 }): React.JSX.Element {
   const sticky = useSticky(sessionId);
   const exploreAtTail = useExploreAtTail(sessionId);
@@ -6276,7 +6274,6 @@ export function AutoScrollAndStop({
               disabled={!busy}
               onClick={(): void => setCancelOpen(true)}
               sx={desktopSessionActionSx({
-                active: desktopShortcutActive,
                 open: cancelOpen,
                 minWidth: 80,
               })}
