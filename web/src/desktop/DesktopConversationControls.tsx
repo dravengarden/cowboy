@@ -50,7 +50,7 @@ export function DesktopConversationControls(
         data-desktop-conversation-follow
         aria-pressed={followingCurrentView}
         size="small"
-        color={followingCurrentView ? "primary" : "inherit"}
+        color="inherit"
         variant="outlined"
         startIcon={<South sx={desktopEmbeddedControlIconSx()} />}
         onClick={toggle}
@@ -66,19 +66,13 @@ export function DesktopConversationControls(
           textTransform: "none",
           whiteSpace: "nowrap",
           "& .MuiButton-startIcon": { mr: 0 },
-          ...(followingCurrentView && {
-            // Following is orthogonal scroll state, not a competing view tab.
-            // Keep it legible without giving it the same selected fill as the
-            // exclusive History/Explore group.
-            color: "primary.main",
-          }),
         }}
       >
         {followingCurrentView ? "Following" : "Follow"}
         <ShortcutKeycap
           keyLabel="F"
           variant="global"
-          accent={followingCurrentView}
+          accent={false}
           availability={shortcutActive ? "available" : "inactive"}
           sx={{ ml: "0.1rem", flexShrink: 0 }}
         />

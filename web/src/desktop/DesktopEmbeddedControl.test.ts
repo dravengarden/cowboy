@@ -52,8 +52,13 @@ Deno.test("Conversation top-bar selection is not derived from shared shortcut av
   }
   assertEquals(projectionToggleSource.includes("<ToggleButtonGroup\n        exclusive"), true);
   assertEquals(conversationControlsSource.includes("aria-pressed={followingCurrentView}"), true);
+  assertEquals(conversationControlsSource.includes('color="inherit"'), true);
+  assertEquals(
+    conversationControlsSource.includes('color={followingCurrentView ? "primary" : "inherit"}'),
+    false,
+  );
   assertEquals(conversationControlsSource.includes('bgcolor: "action.selected"'), false);
-  assertEquals(conversationControlsSource.includes("accent={followingCurrentView}"), true);
+  assertEquals(conversationControlsSource.includes("accent={false}"), true);
 });
 
 Deno.test("idle Desktop controls use a neutral boundary", () => {
