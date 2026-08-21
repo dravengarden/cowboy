@@ -1785,7 +1785,7 @@ function NewSessionDialog({
                 ariaLabel="New session"
                 surfaceColor={theme.palette.background.default}
                 footer={
-                    <Box data-new-session-footer-actions>
+                    <Box data-new-session-footer-actions sx={{ width: "100%" }}>
                         <MobileDecisionActions
                             shelf
                             onCancel={creating ? (): void => {} : onClose}

@@ -35,6 +35,10 @@ Deno.test("mobile new session uses labeled Cancel and Create actions", () => {
   );
   assertEquals(dialog.includes("footerOverlay"), false);
   assertEquals(dialog.includes("data-new-session-footer-actions"), true);
+  assertEquals(
+    dialog.includes('data-new-session-footer-actions sx={{ width: "100%" }}'),
+    true,
+  );
   assertEquals(dialog.includes("0 -8px 18px"), false);
   assertEquals(
     mobileProductShellSource.includes(
