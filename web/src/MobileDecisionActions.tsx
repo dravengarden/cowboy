@@ -5,9 +5,9 @@ import type { ButtonProps } from "@mui/material";
 /**
  * Canonical mobile Cancel / confirm footer.
  *
- * Decisions use explicit text, not ambiguous corner glyphs. The parent sheet
- * owns keyboard-safe positioning; this component only owns the two actions and
- * can retain an input's native focus until the chosen click runs.
+ * Decisions use explicit text, not ambiguous corner glyphs. `shelf` paints the
+ * New-session hairline strip so a reserved DetentSheet footer does not float
+ * over the form. The parent still owns overlay-vs-reserved positioning.
  */
 export function MobileDecisionActions({
   cancelLabel = "Cancel",
@@ -19,6 +19,7 @@ export function MobileDecisionActions({
   confirmBusy = false,
   confirmColor = "primary",
   preserveFocus = false,
+  shelf = false,
 }: {
   readonly cancelLabel?: string | undefined;
   readonly onCancel: () => void;
@@ -30,11 +31,13 @@ export function MobileDecisionActions({
   readonly confirmColor?: ButtonProps["color"];
   /** Keep the current input focused until the selected action click runs. */
   readonly preserveFocus?: boolean | undefined;
+  /** Bleed a solid Cancel/confirm strip to the sheet edges. */
+  readonly shelf?: boolean | undefined;
 }): React.JSX.Element {
   const preserveInput = preserveFocus
     ? (event: ReactPointerEvent): void => event.preventDefault()
     : undefined;
-  return (
+  const actions = (
     <Box
       data-mobile-decision-actions
       sx={{
@@ -67,6 +70,25 @@ export function MobileDecisionActions({
       >
         {confirmLabel}
       </Button>
+    </Box>
+  );
+  if (!shelf) return actions;
+  return (
+    <Box
+      data-mobile-decision-footer-shelf
+      sx={{
+        // DetentSheet owns a 16px footer gutter. Bleed this strip back to the
+        // sheet edges so it reads as bottom chrome, not a card in the form.
+        width: "calc(100% + 32px)",
+        mx: -2,
+        px: 2,
+        pt: 0.75,
+        bgcolor: "background.default",
+        borderTop: 1,
+        borderColor: "divider",
+      }}
+    >
+      {actions}
     </Box>
   );
 }

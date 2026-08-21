@@ -3,7 +3,6 @@ import { useEffect, useRef, useState } from "react";
 import { mobileSpatialDrawerShadow } from "../../mobileDrawerDepth";
 import { bindMobileSpatialDrawer } from "../../mobileSpatialDrawer";
 import {
-  mobileCompositorFlattenSx,
   mobileDrawerRailHitSx,
   mobilePeekRestLayerSx,
   mobilePresentationMovingRootSx,
@@ -92,8 +91,6 @@ export function ReviewDrawerShell({
         ...mobilePeekRestLayerSx,
         ...mobilePresentationMovingRootSx("data-mobile-drawer-moving"),
         ...mobileDrawerRailHitSx,
-        "&[data-mobile-drawer-open='true']": mobileCompositorFlattenSx,
-        "&[data-mobile-drawer-presented='true']": mobileCompositorFlattenSx,
       }}
     >
       <Box

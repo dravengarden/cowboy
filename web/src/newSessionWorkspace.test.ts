@@ -19,6 +19,7 @@ Deno.test("mobile new session actions stay in the non-overlay sheet footer", () 
     appSource.indexOf("const EMPTY_TRANSCRIPT_TIMELINE"),
   );
   assertEquals(dialog.includes("<MobileDecisionActions"), true);
+  assertEquals(dialog.includes("shelf"), true);
   assertEquals(dialog.includes("footerOverlay"), false);
   assertEquals(dialog.includes("data-new-session-footer-actions"), true);
   assertEquals(dialog.includes("data-new-session-sticky-actions"), false);

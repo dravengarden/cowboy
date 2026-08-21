@@ -13,8 +13,11 @@ const mobileProductShellSource = await Deno.readTextFile(
 Deno.test("mobile decisions use a shared labeled action footer", () => {
   assertEquals(source.includes("export function MobileDecisionActions("), true);
   assertEquals(source.includes("data-mobile-decision-actions"), true);
+  assertEquals(source.includes("data-mobile-decision-footer-shelf"), true);
   assertEquals(source.includes('variant="contained"'), true);
   assertEquals(source.includes('justifyContent: "space-between"'), true);
+  assertEquals(source.includes('width: "calc(100% + 32px)"'), true);
+  assertEquals(source.includes("mx: -2"), true);
   assertEquals(source.includes("MobileSheetActionGroup"), false);
   assertEquals(source.includes("createPortal"), false);
 });
@@ -25,16 +28,13 @@ Deno.test("mobile new session uses labeled Cancel and Create actions", () => {
     appSource.indexOf("const EMPTY_TRANSCRIPT_TIMELINE"),
   );
   assertEquals(dialog.includes("<MobileDecisionActions"), true);
+  assertEquals(dialog.includes("shelf"), true);
   assertEquals(
     dialog.includes('confirmLabel={creating ? "Creating…" : "Create"}'),
     true,
   );
   assertEquals(dialog.includes("footerOverlay"), false);
   assertEquals(dialog.includes("data-new-session-footer-actions"), true);
-  assertEquals(dialog.includes('width: "calc(100% + 32px)"'), true);
-  assertEquals(dialog.includes("mx: -2"), true);
-  assertEquals(dialog.includes("borderTop: 1"), true);
-  assertEquals(dialog.includes('bgcolor: "background.default"'), true);
   assertEquals(dialog.includes("0 -8px 18px"), false);
   assertEquals(
     mobileProductShellSource.includes(
@@ -59,6 +59,11 @@ Deno.test("session title editing uses labeled Cancel and Save actions", async ()
     composerSource.indexOf("function SessionInfoSection("),
   );
   assertEquals(settings.includes("<MobileDecisionActions"), true);
+  assertEquals(settings.includes("shelf"), true);
+  assertEquals(
+    settings.includes("floatingActions={useSheetSurface ? !editingTitle : true}"),
+    true,
+  );
   assertEquals(settings.includes('confirmLabel="Save"'), true);
   assertEquals(settings.includes("onCancel={cancelTitle}"), true);
   assertEquals(settings.includes("preserveFocus"), true);

@@ -99,6 +99,25 @@ Deno.test("Agent drawer publishes pager ownership synchronously", () => {
   assert(appSource.includes("settleMobileDrawerRef.current(false);"));
 });
 
+Deno.test("interrupted drawer settle restores rest state instead of leaking open", () => {
+  assert(drawerSource.includes("restoreInterruptedSettle"));
+  assert(drawerSource.includes("pendingSettle"));
+  assert(drawerSource.includes("currentOffset > width / 2"));
+  assert(drawerSource.includes("restoreInterruptedSettle();"));
+  const abandonAt = drawerSource.indexOf("obsidianDrawerAbandonsToScroll");
+  const abandonRestore = drawerSource.indexOf(
+    "restoreInterruptedSettle();",
+    abandonAt,
+  );
+  const unlockedEnd = drawerSource.indexOf("if (!gesture.locked) {");
+  const unlockedRestore = drawerSource.indexOf(
+    "restoreInterruptedSettle();",
+    unlockedEnd,
+  );
+  assert(abandonAt >= 0 && abandonRestore > abandonAt);
+  assert(unlockedEnd >= 0 && unlockedRestore > unlockedEnd);
+});
+
 Deno.test("settled drawers retain declarative depth and pager ownership", () => {
   assert(appSource.includes(
     'data-mobile-drawer-presented={mobile && drawerOpen ? "true" : undefined}',

@@ -134,6 +134,13 @@ follower promotion, overflow flatten. AppBar/nav CSS must not include
 `transform` in a standing transition; that interpolates the follower and
 the bottom trails the peek by a half-beat.
 
+Do not keep `overflow: hidden` / `pointer-events: none` on the transcript
+for the whole time a drawer is open or `presented`. Freeze overflow only
+while `data-mobile-drawer-moving` is set. If a close settle is cancelled
+by a later touch that never locks (a vertical pan), restore the rest
+state from the current offset so `data-mobile-drawer-open` cannot leak
+and freeze scrolling until reload.
+
 Do not `setState` on transcript `touchstart` or swipe-claim. A following
 reader unfollows when scroll actually leaves the live edge, not on
 finger-down. `holdStorePresentation` plus a pause ref freeze the tree;

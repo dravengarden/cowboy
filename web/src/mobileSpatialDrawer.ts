@@ -94,6 +94,7 @@ export function bindMobileSpatialDrawer({
   } | null = null;
   let settleTimer = 0;
   let settleGen = 0;
+  let pendingSettle = false;
   let pendingThresholdHaptic = false;
   let currentOffset = 0;
   let commit = false;
@@ -239,6 +240,32 @@ export function bindMobileSpatialDrawer({
     for (const layer of animatedLayers()) layer.style.removeProperty("transition");
     if (dim) dim.style.removeProperty("transition");
   };
+  const applyRestOpen = (open: boolean): void => {
+    if (open) {
+      setOpen(true);
+      gestureTarget.setAttribute("data-mobile-drawer-open", "true");
+      applyOpenDepth();
+      return;
+    }
+    setOpen(false);
+    gestureTarget.removeAttribute("data-mobile-drawer-open");
+    clearOpenDepth();
+  };
+  // `settle()` bumps `settleGen` so an in-flight close/open finish is skipped
+  // when a new drag starts. A later touch that never locks (vertical scroll)
+  // must still land the interrupted rest state, or `data-mobile-drawer-open`
+  // and React `drawerOpen` stay true with the peek visually closed — and
+  // `pointer-events: none` on the transcript freezes vertical scrolling.
+  const restoreInterruptedSettle = (): void => {
+    if (!pendingSettle) return;
+    pendingSettle = false;
+    const width = presentationWidth > 1 ? presentationWidth : drawerWidth();
+    presentationWidth = width;
+    const open = currentOffset > width / 2;
+    render(open ? width : 0);
+    clearTransitions();
+    applyRestOpen(open);
+  };
   const releaseDirectManipulation = (): void => {
     const finish = (): void => {
       releaseIdle = undefined;
@@ -289,6 +316,7 @@ export function bindMobileSpatialDrawer({
       requestAnimationFrame(() => navigationHaptic());
     }
     if (open) setOpen(true);
+    pendingSettle = true;
     globalThis.clearTimeout(settleTimer);
     const generation = settleGen += 1;
     const remaining = Math.min(
@@ -308,16 +336,15 @@ export function bindMobileSpatialDrawer({
     }
     const finish = (): void => {
       if (generation !== settleGen) return;
+      pendingSettle = false;
       globalThis.clearTimeout(settleTimer);
       render(targetOffset);
       clearTransitions();
       if (!open) {
-        setOpen(false);
-        gestureTarget.removeAttribute("data-mobile-drawer-open");
         // A closed surface is the native full-screen viewport. Let UIKit and
         // WKWebView clip it to the real device corners instead of leaving a
         // guessed phone/tablet radius that cuts a visible wedge from iPad.
-        clearOpenDepth();
+        applyRestOpen(false);
       }
       onSettled?.();
     };
@@ -394,6 +421,7 @@ export function bindMobileSpatialDrawer({
     if (!gesture.locked && obsidianDrawerAbandonsToScroll(deltaX, deltaY)) {
       if (gesture.prepared) releaseDirectManipulation();
       else disarmPresentation();
+      restoreInterruptedSettle();
       gesture = null;
       // Preserve the transcript's native vertical scroll while preventing a
       // parent horizontal recognizer from seeing the same touch stream.
@@ -467,6 +495,7 @@ export function bindMobileSpatialDrawer({
     if (!gesture.locked) {
       if (gesture.prepared) releaseDirectManipulation();
       else disarmPresentation();
+      restoreInterruptedSettle();
       gesture = null;
       commit = false;
       return;
@@ -490,8 +519,11 @@ export function bindMobileSpatialDrawer({
     gesture = null;
     commit = false;
     if (wasLocked) settle(startOpen, 0, releaseDirectManipulation, width);
-    else if (wasPrepared) releaseDirectManipulation();
-    else disarmPresentation();
+    else {
+      if (wasPrepared) releaseDirectManipulation();
+      else disarmPresentation();
+      restoreInterruptedSettle();
+    }
   };
   const onResize = (): void => {
     presentationWidth = drawerWidth();
@@ -534,6 +566,7 @@ export function bindMobileSpatialDrawer({
       gestureTarget.removeEventListener("touchcancel", onTouchCancel);
       globalThis.removeEventListener("resize", onResize);
       globalThis.clearTimeout(settleTimer);
+      pendingSettle = false;
       gestureTarget.removeAttribute("data-mobile-drawer-moving");
       gestureTarget.style.removeProperty("--mobile-drawer-width");
       drawer.style.removeProperty("transform");

@@ -6861,11 +6861,13 @@ function ComposerSheet({
       cover={useSheetSurface}
       wide
       mobileDismiss={useSheetSurface ? "none" : "header"}
+      floatingActions={useSheetSurface ? !editingTitle : true}
       actions={useSheetSurface
         ? (
           editingTitle
             ? (
               <MobileDecisionActions
+                shelf
                 onCancel={cancelTitle}
                 confirmLabel="Save"
                 onConfirm={saveTitle}

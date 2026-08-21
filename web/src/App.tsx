@@ -124,7 +124,6 @@ import { bindMobileSpatialDrawer } from "./mobileSpatialDrawer";
 import { mobileSpatialDrawerShadow } from "./mobileDrawerDepth";
 import { sessionDrawerTargetScroll } from "./mobileDrawerMotion";
 import {
-    mobileCompositorFlattenSx,
     mobileDrawerRailHitSx,
     mobilePeekRestLayerSx,
     mobilePresentationMovingRootSx,
@@ -1733,25 +1732,9 @@ function NewSessionDialog({
                 ariaLabel="New session"
                 surfaceColor={theme.palette.background.default}
                 footer={
-                    <Box
-                        data-new-session-footer-actions
-                        sx={{
-                            // DetentSheet owns a 16px footer gutter. Bleed this
-                            // shelf back to the sheet edges so it reads as
-                            // bottom chrome, not as a tinted card floating in
-                            // the form. A single hairline is enough separation;
-                            // the old wide shadow was composited by iOS as a
-                            // large purple rectangle over the frosted cover.
-                            width: "calc(100% + 32px)",
-                            mx: -2,
-                            px: 2,
-                            pt: 0.75,
-                            bgcolor: "background.default",
-                            borderTop: 1,
-                            borderColor: "divider",
-                        }}
-                    >
+                    <Box data-new-session-footer-actions>
                         <MobileDecisionActions
+                            shelf
                             onCancel={creating ? (): void => {} : onClose}
                             cancelDisabled={creating}
                             confirmLabel={creating ? "Creating…" : "Create"}
@@ -2662,16 +2645,14 @@ export function App({
                     // Store notifications are already held during a drawer
                     // gesture. Collapse per-row paint tiles at rest so the
                     // first tracking frame only writes transform. Overflow
-                    // freeze stays on the claimed-swipe / open selectors.
+                    // freeze stays on the claimed-swipe selector — a settled
+                    // open/presented flatten leaks `overflow:hidden` onto the
+                    // transcript if close settle is cancelled by a later touch.
                     ...mobilePeekRestLayerSx,
                     ...mobilePresentationMovingRootSx(
                         "data-mobile-drawer-moving",
                     ),
                     ...mobileDrawerRailHitSx,
-                    "&[data-mobile-drawer-open='true']":
-                        mobileCompositorFlattenSx,
-                    "&[data-mobile-drawer-presented='true']":
-                        mobileCompositorFlattenSx,
                 }}
             >
             {surface === "desktop" && (
