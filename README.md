@@ -1,93 +1,104 @@
-# cowboy
+<p align="center">
+  <img src="web/public/favicon.svg" width="88" height="88" alt="Cowboy">
+</p>
 
-Drive coding-agent CLIs — **Claude Code, Codex, Gemini, Grok Build**, and more — from
-anywhere (remote machine, phone browser, PC browser), with **all clients
-sharing one live progress**. Agents run on a remote box under systemd; cowboy
-owns their lifetime; humans drive them from thin web clients.
+<h1 align="center">Cowboy</h1>
 
-The core constraint: **don't constrain the agent CLI's functionality**. cowboy
-is a conduit and control plane, not a reduced reimplementation.
+<p align="center">
+  <strong>Drive Claude Code, Codex, Gemini, and Grok from your phone or desktop.</strong><br>
+  One control plane. One live session. Close the tab — the agent keeps working.
+</p>
 
-## Status
+<p align="center">
+  <img src="https://img.shields.io/badge/license-MIT-7c5cbf?style=flat-square" alt="MIT">
+  <img src="https://img.shields.io/badge/rust-1.97-dea584?style=flat-square" alt="Rust 1.97">
+  <img src="https://img.shields.io/badge/ACP-native-4a90d9?style=flat-square" alt="ACP">
+</p>
 
-**v1 — working multi-agent panel.** A Rust control plane coordinates detached
-per-session Claude Code / Codex / Gemini / Grok Build workers over ACP, normalizes their streams (messages, thinking, tool calls,
-plan, permissions), and fans them out over one WebSocket to all clients
-equally; the separately deployed React/MUI web UI (responsive for
-iPad/iPhone) lists sessions, shows a live transcript, sends prompts, and
-answers permission requests. See **[docs/architecture/](docs/architecture/)**
-for the implementation architecture; [design.md](design.md) records the
-original design direction.
+<p align="center">
+  <img src="docs/screenshots/desktop.webp" alt="Cowboy desktop: session rail, prompt, and a live conversation with tools, tables, and code" width="920">
+</p>
 
-The normative contract for independently built Provider packages, typed
-Provider UI, dynamic per-Machine installation, Service-scoped login, and
-bounded uninstall cleanup is [Cowboy core requirements](docs/requirements.md).
-The numbered architecture chapters describe the running implementation and
-its remaining legacy-component compatibility boundaries.
+<p align="center">
+  <img src="docs/screenshots/ios-sessions.webp" alt="iPhone session list with a live transcript peeking behind the drawer" width="210">
+  <img src="docs/screenshots/ios-agent.webp" alt="iPhone agent transcript with tool calls, plan, and composer" width="210">
+  <img src="docs/screenshots/ios-code.webp" alt="iPhone Code review opening AGENTS.md in the session worktree" width="210">
+  <img src="docs/screenshots/ios-code-tree.webp" alt="iPhone worktree browser with search" width="210">
+</p>
 
-End-user access pairing for the Cowboy application remains deliberately out of
-process (the deployment VPN is the boundary); this is separate from the
-Service-owned Provider authentication contract. PostgreSQL/SQLite persistence,
-restart resume, history pagination, queue /
-draft sync, and the CodeMirror composer are implemented. Code-editor / file-tree
-/ git views remain intentionally out of scope — cowboy is the agent panel only.
+<p align="center"><sub>Desktop Chrome and iPhone 17 Simulator against the production PWA — the same app, the same seq.</sub></p>
 
-## Shape (one-paragraph summary)
+## Why Cowboy exists
 
-A Rust HTTP control plane plus a stable local broker and one detached systemd
-worker per session. Workers are the **ACP clients** (via the official
-`agent-client-protocol` crate — no Zed fork). They spawn each agent over
-ACP/stdio, normalize the stream into a provider-agnostic
-event/command model, persist it through a backend-neutral storage API, and fan it out over
-WebSocket to all connected web clients equally. The web UI (React/MUI/Vite,
-served from an independently switched immutable output) is one responsive app:
-incrementally paged transcript, and a CodeMirror 6 composer with vim support.
+Coding agents are powerful CLIs. They are not a UI. Cowboy is the missing control plane:
 
-## Stack
+- **Don't shrink the agent.** [ACP](https://agentclientprotocol.com) is the transport. Anything the protocol cannot model still rides through as an opaque update. Cowboy is a conduit, not a reduced reimplementation.
+- **One shared timeline.** Phone, laptop, and ACP clients subscribe to the same Hub. Approving a permission on one device clears it everywhere.
+- **Detached workers.** Each session is a Machine-hosted ACP worker. Close the browser. The turn continues.
 
-- **Backend**: Rust — axum + tokio (WS/HTTP), `agent-client-protocol` (pinned),
-  sqlx/PostgreSQL/SQLite, clap, and a versioned local runtime protocol.
-- **Frontend**: React 19, MUI 7, Vite 7,
-  TypeScript (strictest); built by Deno, linted by oxlint.
-- **Providers**: pluggable (trait + registry), all over ACP; Claude Code and
-  Codex use maintained ACP adapters, while Gemini uses its native ACP mode.
-- **Storage**: PostgreSQL or SQLite behind one stable API (sessions, canonical
-  events, settings, machines, incidents, and provider usage). Hawk uses its
-  service-private PostgreSQL database.
-- **Deploy**: NixOS systemd units: system `cowboy`, user `cowboy-machine`, and
-  transient per-session workers. See
-  [zero-interruption rolling updates](docs/architecture/12-rolling-updates.md).
+Desktop and Mobile are separate products on the same protocol: keyboard-first density on a large screen, touch-first focus on a phone. They are not a squeezed layout of each other.
 
-## Two subcommands, one source of truth (design §13a)
+## What you get
 
-cowboy is **one** long-running daemon. `cowboy serve` on `:3333` owns the
-`Hub`, supervisor, and database write-behind — that's the source of truth. Every
-other surface is a *client* of it:
-
-| Subcommand | Transport | Run by | When to use |
-| --- | --- | --- | --- |
-| `cowboy serve` | HTTP + WebSocket on `:3333` | systemd (always) | the daemon — start once, leave it |
-
-### Session sync semantics (v0)
-
-| Action | Visible to other clients? |
+| Surface | What it is |
 | --- | --- |
-| Web UI / phone creates a session | ✅ — daemon assigns id, broadcasts; every WS client sees it appear |
-| Either client deletes a session | ✅ to WS clients (badge disappears) |
+| **Agent** | Live transcript, thinking, tools, plans, permissions, queue, and a CodeMirror composer (including Vim). |
+| **Code** | Mobile-first review: worktree, Git changes, file view, diagnostics. A separate data plane from the transcript, so a tree fetch never blocks a turn. |
+| **Sessions** | Create, rename, reorder, pause, resume. Codex, Claude Code, Gemini, Grok — side by side. |
+| **Machines** | Agents run on hosts you enroll. The controller is not the worker. |
 
-Each session in the UI carries a source chip (`Cowboy` / `External`) so you can
-distinguish sessions opened in Cowboy's own UI from sessions opened by an ACP
-client or another external caller. Per-session **delete** button is in the
-sidebar.
+Providers are independently versioned packages (`providers/*/provider.json`), not hardcoded adapters in the UI.
 
 ## Quick start
 
 ```sh
-just build               # deno + cargo
-./target/release/cowboy serve            # the daemon on :3333 (systemd in prod)
+nix develop          # pinned Rust 1.97 + Deno + just
+just build           # web bundle + release binaries
 ./target/release/cowboy serve \
-  --database-url sqlite:///tmp/cowboy.sqlite3  # durable single-node setup
-
-# Run cowboy's quality gates
-just check               # fmt + clippy + tsc + cargo build
+  --database-url sqlite:///tmp/cowboy.sqlite3
 ```
+
+Open `http://127.0.0.1:3333`. Point a Machine at the controller so sessions can actually spawn agents — see [machine operations](docs/machine-operations.md).
+
+```sh
+just check           # fmt, clippy, tsc, tests, release build
+```
+
+SQLite is the zero-ops local store. PostgreSQL speaks the same `Store` API (`--database-url postgresql://…`). Omit the URL and the daemon runs in-memory.
+
+## How it is put together
+
+```mermaid
+flowchart LR
+  phone[Phone PWA] --> ws[WebSocket]
+  desktop[Desktop PWA] --> ws
+  zed[Zed / ACP] --> hub
+  ws --> hub[Hub · seq · fan-out]
+  hub --> store[(SQLite / Postgres)]
+  hub --> machine[cowboy-machine]
+  machine --> worker[Detached ACP worker]
+  worker --> agent[Claude / Codex / Gemini / Grok]
+```
+
+The **Hub** (`src/core.rs`) is the only writer of `seq`. Live clients receive compact deltas; durable history is canonicalized and large images become `/api/artifacts/…` before they clone across the persist queue and WebSocket fan-out.
+
+Rolling updates keep workers alive across controller restarts: [architecture/12-rolling-updates.md](docs/architecture/12-rolling-updates.md).
+
+## Documentation
+
+| Start here | |
+| --- | --- |
+| [Architecture overview](docs/architecture/00-overview.md) | Topology, Hub, workers |
+| [Requirements](docs/requirements.md) | Provider packages, auth, uninstall |
+| [Code review](docs/architecture/13-code-review.md) | Worktree / Git data plane |
+| [Multi-machine](docs/architecture/15-multi-machine.md) | Enrollment and placement |
+| [Operations](docs/architecture/11-operations.md) | Runbooks |
+| [Index](docs/INDEX.md) | Everything else |
+
+## Status
+
+Working multi-agent panel. Persistence, resume, history pagination, queue/draft sync, Code review, and Machine enrollment are in tree. The web UI is a separately switched immutable bundle, so a frontend-only rollout does not recycle agents.
+
+## License
+
+[MIT](LICENSE)
