@@ -913,6 +913,20 @@ function SessionList({
                         // inset on the notch side in landscape — ui.md §7).
                         sx={{
                             ...(desktop && desktopListItemSx()),
+                            ...(desktop && s.id === activeId && {
+                                // Bind current-session material to the row itself.
+                                // This survives both the in-flow rail and the
+                                // compact Desktop DetentSheet, whose DOM has no
+                                // sessions.list region ancestor.
+                                borderColor: (t) => alpha(t.palette.primary.main, 0.38),
+                                bgcolor: (t) => alpha(t.palette.primary.main, 0.13),
+                                boxShadow: (t) =>
+                                    `inset 0 0 0 1px ${alpha(t.palette.primary.main, 0.08)}`,
+                                "&.Mui-selected:hover": {
+                                    borderColor: (t) => alpha(t.palette.primary.main, 0.48),
+                                    bgcolor: (t) => alpha(t.palette.primary.main, 0.16),
+                                },
+                            }),
                             pl: "max(env(safe-area-inset-left), 12px)",
                             pr: "max(env(safe-area-inset-right), 12px)",
                             mx: 0.75,
@@ -2646,15 +2660,6 @@ export function App({
                             opacity: "1 !important",
                         },
                     },
-                    // The open session is durable product selection, independent
-                    // of which keyboard region currently owns focus. Keep its
-                    // fill visible while the separate :focus treatment above
-                    // remains the Sessions list's navigation cursor.
-                    "& [data-desktop-region='sessions.list'] [data-desktop-item][data-desktop-current='true']": {
-                        borderColor: (t) => alpha(t.palette.primary.main, 0.28),
-                        bgcolor: (t) => alpha(t.palette.primary.main, 0.09),
-                        boxShadow: "none",
-                    },
                     "& [data-desktop-region='sessions.list'][data-desktop-focused='true'] [data-desktop-item][data-desktop-current='true']:focus": {
                         borderColor: (t) => alpha(t.palette.primary.main, 0.68),
                         bgcolor: (t) => alpha(t.palette.primary.main, 0.11),
@@ -3330,6 +3335,9 @@ export function App({
                             // daemon stores and shows just the cwd (or the
                             // user's custom rename). Full string in the tooltip.
                             <Stack
+                                data-desktop-active-session={
+                                    surface === "desktop" ? "true" : undefined
+                                }
                                 direction="row"
                                 alignItems="center"
                                 spacing={0.75}
@@ -3341,6 +3349,20 @@ export function App({
                                     // short title while squeezing the controls.
                                     flex: surface === "desktop" ? "0 1 auto" : 1,
                                     maxWidth: surface === "desktop" ? 320 : "none",
+                                    ...(surface === "desktop" && sessionsInDrawer && !drawerOpen && {
+                                        // When the Sessions rail is collapsed,
+                                        // this is the only visible session tab.
+                                        // Transfer the selected material here;
+                                        // the drawer row owns it again when open.
+                                        minHeight: 34,
+                                        px: 0.75,
+                                        border: 1,
+                                        borderColor: (t) => alpha(t.palette.primary.main, 0.38),
+                                        borderRadius: 1.5,
+                                        bgcolor: (t) => alpha(t.palette.primary.main, 0.13),
+                                        boxShadow: (t) =>
+                                            `inset 0 0 0 1px ${alpha(t.palette.primary.main, 0.08)}`,
+                                    }),
                                 }}
                             >
                                 <StatusDot status={active.status} />

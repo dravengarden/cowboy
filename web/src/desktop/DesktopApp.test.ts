@@ -15,17 +15,24 @@ Deno.test("desktop never mounts a page-wide keyboard target overlay", () => {
   assertEquals(workspaceControllerSource.includes('"hint"'), false);
 });
 
-Deno.test("the open session stays highlighted outside the Sessions keyboard region", () => {
+Deno.test("the open session owns selected material in rail and collapsed layouts", () => {
   assertEquals(
     appSource.includes(
-      `"& [data-desktop-region='sessions.list'] [data-desktop-item][data-desktop-current='true']"`,
+      `...(desktop && s.id === activeId && {`,
     ),
     true,
   );
   assertEquals(
     appSource.includes(
-      `sessions.list']:not([data-desktop-focused='true']) [data-desktop-item].Mui-selected`,
+      `"& [data-desktop-region='sessions.list'] [data-desktop-item][data-desktop-current='true']"`,
     ),
     false,
+  );
+  assertEquals(appSource.includes("data-desktop-active-session"), true);
+  assertEquals(
+    appSource.includes(
+      'surface === "desktop" && sessionsInDrawer && !drawerOpen && {',
+    ),
+    true,
   );
 });
