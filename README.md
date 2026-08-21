@@ -5,8 +5,8 @@
 <h1 align="center">Cowboy</h1>
 
 <p align="center">
-  <strong>Drive Claude Code, Codex, Gemini, and Grok from your phone or desktop.</strong><br>
-  One control plane. One live session. Close the tab — the agent keeps working.
+  <strong>A remote Agent IDE for controlling multiple machines.</strong><br>
+  Run Claude Code, Codex, Gemini, and Grok across your machines from one live workspace.
 </p>
 
 <p align="center">
@@ -21,7 +21,7 @@
   <img src="docs/screenshots/desktop.webp" alt="Cowboy desktop: session rail, prompt, and a live conversation with tools, tables, and code" width="920">
 </p>
 
-<p align="center"><sub>Desktop · the full control plane, with a live transcript, tool states, tables, and code blocks in one view.</sub></p>
+<p align="center"><sub>Desktop · the remote IDE for switching machines, directing agents, and watching tools, tables, and code in one view.</sub></p>
 
 <div style="overflow-x:auto; padding: 4px 0 16px;">
   <table>
@@ -48,24 +48,26 @@
 
 <p align="center"><sub>Light theme shown. On narrow screens, the feature strip stays one row and can be swiped horizontally; each view also reads well on its own.</sub></p>
 
-## Why Cowboy exists
+## The remote Agent IDE
 
-Coding agents are powerful CLIs. They are not a UI. Cowboy is the missing control plane:
+Cowboy gives you one IDE for the agents running across your machines. Connect to a
+machine, open its workspace, and keep directing the work from wherever you are:
 
-- **Don't shrink the agent.** [ACP](https://agentclientprotocol.com) is the transport. Anything the protocol cannot model still rides through as an opaque update. Cowboy is a conduit, not a reduced reimplementation.
-- **One shared timeline.** Phone, laptop, and ACP clients subscribe to the same Hub. Approving a permission on one device clears it everywhere.
-- **Detached workers.** Each session is a Machine-hosted ACP worker. Close the browser. The turn continues.
+- **Control many machines.** Enroll remote hosts and switch between their workspaces without changing IDEs or SSH tabs.
+- **Keep the whole agent visible.** Follow plans, thinking, tool calls, permissions, code, and diffs in one timeline instead of a terminal stream.
+- **Stay connected to the work.** Machine-hosted workers keep running when your browser closes; reconnect later to the same session and state.
+- **Use the protocol, not a replica.** [ACP](https://agentclientprotocol.com) carries the agent surface, so Cowboy remains a conduit for Claude Code, Codex, Gemini, Grok, and future Providers.
 
-Desktop and Mobile are separate products on the same protocol: keyboard-first density on a large screen, touch-first focus on a phone. They are not a squeezed layout of each other.
+Desktop and Mobile are two focused shells for the same remote IDE: keyboard-first on a large screen, touch-first on a phone.
 
 ## What you get
 
 | Surface | What it is |
 | --- | --- |
+| **Machines** | Enroll hosts, see their health and capacity, and place work on the right remote machine. |
 | **Agent** | Live transcript, thinking, tools, plans, permissions, queue, and a CodeMirror composer (including Vim). |
-| **Code** | Mobile-first review: worktree, Git changes, file view, syntax highlighting, LSP diagnostics, and symbol navigation. Long source lines remain horizontally scrollable, so a tree fetch never blocks a turn. |
-| **Sessions** | Create, rename, reorder, pause, resume. Codex, Claude Code, Gemini, Grok — side by side. |
-| **Machines** | Agents run on hosts you enroll. The controller is not the worker. |
+| **Code** | Review each machine's worktree and Git changes with syntax highlighting, LSP diagnostics, and symbol navigation. Long source lines remain horizontally scrollable. |
+| **Sessions** | Create, rename, reorder, pause, resume, and reconnect to agent sessions across machines. |
 
 Providers are independently versioned packages (`providers/*/provider.json`), not hardcoded adapters in the UI.
 
@@ -78,7 +80,7 @@ just build           # web bundle + release binaries
   --database-url sqlite:///tmp/cowboy.sqlite3
 ```
 
-Open `http://127.0.0.1:3333`. Point a Machine at the controller so sessions can actually spawn agents — see [machine operations](docs/machine-operations.md).
+Open `http://127.0.0.1:3333`, enroll one or more Machines, and start directing agents from the IDE — see [machine operations](docs/machine-operations.md).
 
 ```sh
 just check           # fmt, clippy, tsc, tests, release build
@@ -90,14 +92,17 @@ SQLite is the zero-ops local store. PostgreSQL speaks the same `Store` API (`--d
 
 ```mermaid
 flowchart LR
-  phone[Phone PWA] --> ws[WebSocket]
-  desktop[Desktop PWA] --> ws
+  phone[Phone Agent IDE] --> ws[WebSocket]
+  desktop[Desktop Agent IDE] --> ws
   zed[Zed / ACP] --> hub
   ws --> hub[Hub · seq · fan-out]
   hub --> store[(SQLite / Postgres)]
-  hub --> machine[cowboy-machine]
-  machine --> worker[Detached ACP worker]
-  worker --> agent[Claude / Codex / Gemini / Grok]
+  hub --> hawk[Machine · Hawk]
+  hub --> falcon[Machine · Falcon]
+  hawk --> workerA[Detached ACP workers]
+  falcon --> workerB[Detached ACP workers]
+  workerA --> agentA[Claude / Codex / Gemini / Grok]
+  workerB --> agentB[Claude / Codex / Gemini / Grok]
 ```
 
 The **Hub** (`src/core.rs`) is the only writer of `seq`. Live clients receive compact deltas; durable history is canonicalized and large images become `/api/artifacts/…` before they clone across the persist queue and WebSocket fan-out.
@@ -117,7 +122,7 @@ Rolling updates keep workers alive across controller restarts: [architecture/12-
 
 ## Status
 
-Working multi-agent panel. Persistence, resume, history pagination, queue/draft sync, Code review, and Machine enrollment are in tree. The web UI is a separately switched immutable bundle, so a frontend-only rollout does not recycle agents.
+Remote Agent IDE in active development. Persistence, resume, history pagination, queue/draft sync, Code review, multi-machine enrollment, and detached workers are in tree. The web UI is a separately switched immutable bundle, so a frontend-only rollout does not recycle agents.
 
 ## License
 
