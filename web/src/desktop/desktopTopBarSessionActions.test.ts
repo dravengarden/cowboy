@@ -79,6 +79,7 @@ Deno.test("desktop top-bar surfaces have one mutually exclusive owner", () => {
 
 Deno.test("top-bar shortcut availability does not select every control", () => {
   assertEquals(topBarSource.includes("active: shortcutsActive"), false);
+  assertEquals(topBarSource.includes("accent={shortcutsActive ||"), false);
   assertEquals(composerSource.includes("desktopShortcutActive"), false);
 });
 

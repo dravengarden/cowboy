@@ -97,7 +97,7 @@ export function DesktopProjectionToggle({
       <ShortcutKeycap
         keyLabel="V"
         variant="global"
-        accent={shortcutActive}
+        accent={false}
         availability={shortcutActive ? "available" : "inactive"}
         sx={{ mx: 0.4, flexShrink: 0 }}
       />

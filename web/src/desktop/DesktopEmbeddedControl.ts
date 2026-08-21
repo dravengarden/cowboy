@@ -31,8 +31,16 @@ export function desktopSurfaceSx({
   return {
     border: 1,
     borderStyle: "solid",
+    // An idle control is geometry, not selection. Keeping a primary-tinted
+    // border here made every control in a focused toolbar look active at once.
+    // Primary belongs only to an explicitly active/open control; keyboard
+    // focus is painted independently by `.Mui-focusVisible` below.
     borderColor: (theme: Theme) =>
-      alpha(theme.palette.primary.main, open ? 0.68 : active ? 0.5 : 0.3),
+      open
+        ? alpha(theme.palette.primary.main, 0.68)
+        : active
+        ? alpha(theme.palette.primary.main, 0.5)
+        : theme.palette.divider,
     borderRadius: `${DESKTOP_SURFACE_RADIUS}px`,
     bgcolor: (theme: Theme) =>
       alpha(

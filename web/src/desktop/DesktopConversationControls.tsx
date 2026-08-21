@@ -67,9 +67,10 @@ export function DesktopConversationControls(
           whiteSpace: "nowrap",
           "& .MuiButton-startIcon": { mr: 0 },
           ...(followingCurrentView && {
-            bgcolor: "action.selected",
+            // Following is orthogonal scroll state, not a competing view tab.
+            // Keep it legible without giving it the same selected fill as the
+            // exclusive History/Explore group.
             color: "primary.main",
-            "&:hover": { bgcolor: "action.selected", boxShadow: "none" },
           }),
         }}
       >
@@ -77,7 +78,7 @@ export function DesktopConversationControls(
         <ShortcutKeycap
           keyLabel="F"
           variant="global"
-          accent={shortcutActive}
+          accent={followingCurrentView}
           availability={shortcutActive ? "available" : "inactive"}
           sx={{ ml: "0.1rem", flexShrink: 0 }}
         />

@@ -24,7 +24,7 @@ export function DesktopReadingModeControl({
           <MenuBookOutlined
             sx={{
               ...desktopEmbeddedControlIconSx(),
-              color: shortcutActive ? "primary.main" : "text.disabled",
+              color: "text.secondary",
             }}
           />
         }
@@ -48,7 +48,7 @@ export function DesktopReadingModeControl({
         <ShortcutKeycap
           keyLabel="Z"
           variant="global"
-          accent={shortcutActive}
+          accent={false}
           availability={shortcutActive ? "available" : "inactive"}
           sx={{ ml: 0.15, flexShrink: 0 }}
         />

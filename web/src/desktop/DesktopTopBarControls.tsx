@@ -1517,7 +1517,7 @@ export function DesktopTopBarControls({
               <ShortcutKeycap
                 keyLabel="R"
                 variant="global"
-                accent={shortcutsActive || configOpen}
+                accent={configOpen}
                 availability={shortcutAvailability(
                   shortcutsActive && !configDisabled,
                   configOpen,
@@ -1624,7 +1624,7 @@ export function DesktopTopBarControls({
           <ShortcutKeycap
             keyLabel="U"
             variant="global"
-            accent={shortcutsActive || usageOpen}
+            accent={usageOpen}
             availability={shortcutAvailability(
               shortcutsActive,
               usageOpen,
@@ -1780,7 +1780,7 @@ export function DesktopTopBarControls({
                 <ShortcutKeycap
                   keyLabel="L"
                   variant="global"
-                  accent={shortcutsActive || reloadTarget !== null}
+                  accent={reloadTarget !== null}
                   availability={shortcutAvailability(
                     shortcutsActive && session !== undefined,
                     reloadTarget !== null,
@@ -1837,7 +1837,7 @@ export function DesktopTopBarControls({
                   <ShortcutKeycap
                     keyLabel="C"
                     variant="global"
-                    accent={shortcutsActive || compactConfirm}
+                    accent={compactConfirm}
                     availability={shortcutAvailability(
                       shortcutsActive && !dead && !compacting,
                       compactConfirm,
@@ -1893,7 +1893,7 @@ export function DesktopTopBarControls({
                   <ShortcutKeycap
                     keyLabel="X"
                     variant="global"
-                    accent={shortcutsActive || clearConfirm}
+                    accent={clearConfirm}
                     availability={shortcutAvailability(
                       shortcutsActive && !dead,
                       clearConfirm,

@@ -10,6 +10,9 @@ const readingModeSource = await Deno.readTextFile(
 const projectionToggleSource = await Deno.readTextFile(
   new URL("../explore/ProjectionToggle.tsx", import.meta.url),
 );
+const embeddedControlSource = await Deno.readTextFile(
+  new URL("./DesktopEmbeddedControl.ts", import.meta.url),
+);
 const shortcutKeycapSource = await Deno.readTextFile(
   new URL("../ShortcutKeycap.tsx", import.meta.url),
 );
@@ -49,7 +52,16 @@ Deno.test("Conversation top-bar selection is not derived from shared shortcut av
   }
   assertEquals(projectionToggleSource.includes("<ToggleButtonGroup\n        exclusive"), true);
   assertEquals(conversationControlsSource.includes("aria-pressed={followingCurrentView}"), true);
-  assertEquals(conversationControlsSource.includes("...(followingCurrentView &&"), true);
+  assertEquals(conversationControlsSource.includes('bgcolor: "action.selected"'), false);
+  assertEquals(conversationControlsSource.includes("accent={followingCurrentView}"), true);
+});
+
+Deno.test("idle Desktop controls use a neutral boundary", () => {
+  assertEquals(embeddedControlSource.includes(": theme.palette.divider"), true);
+  assertEquals(
+    embeddedControlSource.includes("open ? 0.68 : active ? 0.5 : 0.3"),
+    false,
+  );
 });
 
 Deno.test("desktop shortcut keycap geometry follows root font size", () => {
