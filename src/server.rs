@@ -5476,7 +5476,9 @@ async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
             Ok(machines) => Json(
                 machines
                     .into_iter()
-                    .filter(product_machine_is_visible)
+                    .filter(|machine| {
+                        product_machine_is_visible(machine, state.product_auth_enabled)
+                    })
                     .map(|machine| {
                         let workspaces: Vec<crate::machine_protocol::MachineWorkspace> = machine
                             .inventory
@@ -5852,8 +5854,13 @@ async fn api_machine_revoke(
     }
 }
 
-fn product_machine_is_visible(machine: &crate::store::MachineRecord) -> bool {
-    !machine.revoked && machine.connection_mode == "outbound_wss" && machine.fingerprint.is_some()
+fn product_machine_is_visible(
+    machine: &crate::store::MachineRecord,
+    product_auth_enabled: bool,
+) -> bool {
+    !machine.revoked
+        && (!product_auth_enabled
+            || machine.connection_mode == "outbound_wss" && machine.fingerprint.is_some())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -12663,22 +12670,30 @@ mod product_auth_api_tests {
                 fingerprint: fingerprint.map(str::to_owned),
             }
         };
-        assert!(product_machine_is_visible(&machine(
-            "outbound_wss",
-            Some("SHA256:key"),
-            false,
-        )));
-        assert!(!product_machine_is_visible(&machine("local", None, false,)));
-        assert!(!product_machine_is_visible(&machine(
-            "outbound_wss",
-            None,
-            false,
-        )));
-        assert!(!product_machine_is_visible(&machine(
-            "outbound_wss",
-            Some("SHA256:key"),
+        assert!(product_machine_is_visible(
+            &machine("outbound_wss", Some("SHA256:key"), false),
             true,
-        )));
+        ));
+        assert!(!product_machine_is_visible(
+            &machine("local", None, false),
+            true,
+        ));
+        assert!(!product_machine_is_visible(
+            &machine("outbound_wss", None, false,),
+            true
+        ));
+        assert!(!product_machine_is_visible(
+            &machine("outbound_wss", Some("SHA256:key"), true),
+            true,
+        ));
+        assert!(product_machine_is_visible(
+            &machine("local", None, false),
+            false,
+        ));
+        assert!(!product_machine_is_visible(
+            &machine("local", None, true),
+            false,
+        ));
     }
 
     #[test]
