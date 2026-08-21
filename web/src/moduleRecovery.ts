@@ -7,6 +7,10 @@ export function isModuleLoadError(error: Error): boolean {
   return MODULE_LOAD_PATTERNS.test(`${error.name} ${error.message}`);
 }
 
+export function isBundleRecoveryUrl(currentUrl: string): boolean {
+  return new URL(currentUrl).searchParams.has("cowboy-recover");
+}
+
 export function forcedBundleRecoveryUrl(
   currentUrl: string,
   now: () => number = Date.now,

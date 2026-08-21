@@ -2176,15 +2176,14 @@ Desktop Vim + IME checks:
     and focus-visible paint with the same authoritative selected/unselected
     material; preserve ordinary mouse hover and keyboard focus behavior.
 
-91. **Mobile module recovery must prove the new bundle before navigation.**
-    Native WKWebView exposes no Service Worker API, and a bare
-    `location.reload()` may reuse stale HTML or the failed module graph. On a
-    module-load crash, fetch the network index with `cache: no-store`, parse its
-    module entry, and verify that entry is available with a JavaScript content
-    type. Only then navigate with a cache-busting `location.replace()` URL.
-    Keep the error surface mounted with explicit checking/retry feedback when
-    the deploy hand-off or network is not ready; never reload the same stale
-    document in a loop.
+91. **Mobile module recovery must change the failed module identity.**
+    iOS WebKit can retain a rejected dynamic-import record across same-window
+    navigations, so cache-busting only `index.html` reloads the same failed
+    `MobileApp` chunk until the installed PWA is killed. First prove the network
+    index and entry are ready. Then navigate with `cowboy-recover` and make that
+    URL select a separately emitted Vite recovery chunk. Keep explicit
+    checking/retry feedback while the deploy hand-off or network is not ready;
+    never reload the same failed module URL in a loop.
 
 92. **A newly queued or drafted message is an item navigation target, not a
     nearest-edge hint.** `block: nearest` and a single early geometry sample can

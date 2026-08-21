@@ -1,6 +1,7 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
   forcedBundleRecoveryUrl,
+  isBundleRecoveryUrl,
   isModuleLoadError,
   latestBundleRecoveryUrl,
 } from "./moduleRecovery.ts";
@@ -88,6 +89,11 @@ Deno.test("manual recovery always cache-busts the current top-level URL", () => 
   );
 });
 
+Deno.test("recovery navigation is visible to the module loader", () => {
+  assertEquals(isBundleRecoveryUrl("https://cowboy.example/?cowboy-recover=9012"), true);
+  assertEquals(isBundleRecoveryUrl("https://cowboy.example/?session=one"), false);
+});
+
 Deno.test("mobile error recovery replaces the URL instead of reloading stale WKWebView HTML", async () => {
   const boundary = await Deno.readTextFile(
     new URL("./AppErrorBoundary.tsx", import.meta.url),
@@ -100,6 +106,12 @@ Deno.test("mobile error recovery replaces the URL instead of reloading stale WKW
   assertEquals(boundary.includes("globalThis.location.reload()"), false);
   assertEquals(boundary.includes("Checking update…"), true);
   assertEquals(boundary.includes("Retry update"), true);
+});
+
+Deno.test("mobile recovery uses a distinct Vite module identity", async () => {
+  const entry = await Deno.readTextFile(new URL("./main.tsx", import.meta.url));
+  assertEquals(entry.includes('import("./mobile/MobileApp?bundle-recovery")'), true);
+  assertEquals(entry.includes("isBundleRecoveryUrl(globalThis.location.href)"), true);
 });
 
 Deno.test("desktop pre-module recovery remains automatic after its first probe window", () => {

@@ -18,13 +18,21 @@ import {
   checkForDeployedUpdate,
   createServiceWorkerUpdateCheck,
 } from "./serviceWorkerUpdates";
+import { isBundleRecoveryUrl } from "./moduleRecovery";
 
 const DesktopApp = lazy(async () => {
   const module = await import("./desktop/DesktopApp");
   return { default: module.DesktopApp };
 });
 const MobileApp = lazy(async () => {
-  const module = await import("./mobile/MobileApp");
+  // WebKit can retain a failed module record across same-window navigations.
+  // The recovery URL must therefore select a distinct Vite chunk, not merely
+  // cache-bust index.html; closing the installed PWA used to be the only way to
+  // clear that failed MobileApp import.
+  const module: typeof import("./mobile/MobileApp") = isBundleRecoveryUrl(globalThis.location.href)
+    // @ts-expect-error Vite owns query-qualified module identities at build time.
+    ? await import("./mobile/MobileApp?bundle-recovery")
+    : await import("./mobile/MobileApp");
   return { default: module.MobileApp };
 });
 
