@@ -2,6 +2,7 @@ import { assertEquals } from "jsr:@std/assert";
 import {
   DESKTOP_WORKSPACE_COMMANDS,
   desktopWorkspaceContinuationKey,
+  desktopWorkspaceSequenceOwnsKey,
   matchesDesktopWorkspacePrefix,
 } from "./workspaceShortcuts.ts";
 
@@ -59,6 +60,46 @@ Deno.test("continuations use physical keys with or without the held prefix modif
       false,
     ),
     null,
+  );
+});
+
+Deno.test("workspace sequence preempts idle IME markers but not real composition", () => {
+  const idleImePrefix = keyEvent({
+    key: "Process",
+    code: "KeyK",
+    keyCode: 229,
+    metaKey: true,
+  });
+  assertEquals(
+    desktopWorkspaceSequenceOwnsKey(idleImePrefix, false, false, true),
+    true,
+  );
+  assertEquals(
+    desktopWorkspaceSequenceOwnsKey(
+      keyEvent({ metaKey: true, isComposing: true }),
+      false,
+      false,
+      true,
+    ),
+    false,
+  );
+  assertEquals(
+    desktopWorkspaceSequenceOwnsKey(idleImePrefix, false, true, true),
+    false,
+  );
+
+  const idleImeContinuation = keyEvent({
+    key: "Process",
+    code: "KeyP",
+    keyCode: 229,
+  });
+  assertEquals(
+    desktopWorkspaceSequenceOwnsKey(idleImeContinuation, true, false, true),
+    true,
+  );
+  assertEquals(
+    desktopWorkspaceSequenceOwnsKey(idleImeContinuation, true, true, true),
+    false,
   );
 });
 

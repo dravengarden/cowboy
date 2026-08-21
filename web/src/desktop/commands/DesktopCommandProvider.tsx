@@ -35,10 +35,12 @@ import {
 import type { DesktopSplitterId } from "../DesktopWorkspaceController";
 import {
   desktopWorkspaceContinuationKey,
+  desktopWorkspaceSequenceOwnsKey,
   DESKTOP_WORKSPACE_COMMANDS,
   matchesDesktopWorkspacePrefix,
 } from "./workspaceShortcuts";
 import { assertShortcutRegistrationAllowed } from "./shortcutRegistrationPolicy";
+import { isImeComposing } from "../vim/imeStatusStore";
 
 export interface DesktopCommand {
   id: string;
@@ -249,6 +251,11 @@ export function DesktopCommandProvider(
           targetIsVimSink: normalCommandSink,
           targetRegionFocused: vimSinkRegionFocused,
         }));
+      const workspaceSequenceOwnsKey = desktopWorkspaceSequenceOwnsKey(
+        event,
+        workspaceCommandTimer.current !== null,
+        isImeComposing(),
+      );
       // Composition is an exclusive native-input transaction. `isComposing`
       // is not reliable for every macOS keydown (the first and final events can
       // straddle compositionstart/end), so consult the shared lifecycle and
@@ -258,7 +265,7 @@ export function DesktopCommandProvider(
       // exception is the non-editable Vim Normal sink when no real shared
       // composition exists; it deliberately receives physical Vim commands.
       if (
-        desktopImeOwnsKey(event)
+        desktopImeOwnsKey(event) && !workspaceSequenceOwnsKey
       ) {
         if (
           desktopShouldBlockStaleVimSink({
@@ -288,7 +295,9 @@ export function DesktopCommandProvider(
       // and exclusive overlays already had first refusal above.
       if (matchesDesktopWorkspacePrefix(event)) {
         event.preventDefault();
-        event.stopPropagation();
+        // This listener lives on Window capture. Stop other listeners on the
+        // same node as well as downstream CodeMirror/Vim handlers.
+        event.stopImmediatePropagation();
         clearPendingJumpChord();
         if (!event.repeat) armWorkspaceCommand();
         return;
@@ -302,7 +311,7 @@ export function DesktopCommandProvider(
           clearWorkspaceCommand();
         } else {
           event.preventDefault();
-          event.stopPropagation();
+          event.stopImmediatePropagation();
           if (event.repeat) return;
           clearWorkspaceCommand();
           if (key === "Escape") return;

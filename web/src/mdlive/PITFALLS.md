@@ -2235,3 +2235,17 @@ Desktop Vim + IME checks:
     click, write a selection, focus again, or add a pointerdown handler: UIKit
     must keep ownership of long-press Paste/Select and IME. Native textarea
     selection reveal remains browser-owned and unchanged.
+
+96. **An idle macOS input source must not make Vim steal the Desktop workspace
+    sequence.** A CJK input source can label physical `Cmd+K` and its following
+    key as `Process` / keyCode 229 even when no marked-text transaction exists.
+    Treating every such marker as active composition returns early from the
+    Window capture owner and lets CodeMirror/Vim Insert consume the shortcut.
+    Resolve the exact physical workspace prefix and armed continuation before
+    that generic marker guard. They may preempt idle markers only while both the
+    browser event and shared IME lifecycle say composition is inactive; a real
+    `compositionstart` still cancels the armed sequence and owns every key.
+    Once Cowboy claims a stroke, use `stopImmediatePropagation` on the Window
+    capture listener so another listener on that same node cannot also hand it
+    to Vim. Do not weaken the generic IME guard, capture bare editor input, or
+    infer composition from the selected keyboard layout.

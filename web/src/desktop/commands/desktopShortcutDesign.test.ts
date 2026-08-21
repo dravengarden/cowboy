@@ -26,6 +26,7 @@ const vimRuntime = await Deno.readTextFile(
 );
 
 Deno.test("workspace prefix has priority after IME and exclusive overlays", () => {
+  const arbitration = provider.indexOf("desktopWorkspaceSequenceOwnsKey(");
   const ime = provider.indexOf("desktopImeOwnsKey(event)");
   const overlay = provider.indexOf("desktopOverlayOwnsShortcuts(document)");
   const prefix = provider.indexOf("matchesDesktopWorkspacePrefix(event)");
@@ -33,10 +34,31 @@ Deno.test("workspace prefix has priority after IME and exclusive overlays", () =
   const direct = provider.indexOf(
     "for (const command of commands.current.values())",
   );
-  assert(ime >= 0 && ime < overlay);
+  assert(arbitration >= 0 && arbitration < ime);
+  assert(ime < overlay);
   assert(overlay < prefix);
   assert(prefix < reading);
   assert(reading < direct);
+});
+
+Deno.test("claimed workspace strokes stop same-node Vim listeners immediately", () => {
+  const prefix = provider.indexOf("if (matchesDesktopWorkspacePrefix(event))");
+  const continuation = provider.indexOf(
+    "if (workspaceCommandTimer.current !== null)",
+    prefix,
+  );
+  assert(prefix >= 0);
+  assert(continuation > prefix);
+  assert(
+    provider.slice(prefix, prefix + 600).includes(
+      "event.stopImmediatePropagation()",
+    ),
+  );
+  assert(
+    provider.slice(continuation, continuation + 1600).includes(
+      "event.stopImmediatePropagation()",
+    ),
+  );
 });
 
 Deno.test("workspace destinations are sequences rather than direct bare keys", () => {

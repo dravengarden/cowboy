@@ -75,7 +75,13 @@ export const DESKTOP_WORKSPACE_COMMANDS: Readonly<Record<string, string>> = {
 
 type WorkspaceKeyEvent = Pick<
   KeyboardEvent,
-  "key" | "code" | "metaKey" | "ctrlKey" | "shiftKey" | "altKey"
+  | "key"
+  | "code"
+  | "metaKey"
+  | "ctrlKey"
+  | "shiftKey"
+  | "altKey"
+  | "isComposing"
 >;
 
 export function matchesDesktopWorkspacePrefix(
@@ -104,4 +110,19 @@ export function desktopWorkspaceContinuationKey(
     : event.altKey && !event.metaKey && !event.ctrlKey;
   if (!noPrefixModifier && !prefixModifierHeld) return null;
   return workspaceCommandKey(event);
+}
+
+/** Resolve ownership before the generic IME-marker guard. A selected macOS
+ * input source can label an otherwise ordinary physical shortcut key as
+ * Process/229 while no marked-text transaction exists. The workspace sequence
+ * may preempt those idle markers, but never a real browser/shared composition. */
+export function desktopWorkspaceSequenceOwnsKey(
+  event: WorkspaceKeyEvent,
+  armed: boolean,
+  sharedComposition: boolean,
+  mac = isMac,
+): boolean {
+  if (sharedComposition || event.isComposing) return false;
+  if (matchesDesktopWorkspacePrefix(event, mac)) return true;
+  return armed && desktopWorkspaceContinuationKey(event, mac) !== null;
 }
