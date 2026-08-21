@@ -15,23 +15,17 @@ Deno.test("desktop never mounts a page-wide keyboard target overlay", () => {
   assertEquals(workspaceControllerSource.includes('"hint"'), false);
 });
 
-Deno.test("the open session un-highlights after Conversation tabs own focus", () => {
-  assertEquals(
-    appSource.includes(
-      `"& [data-desktop-region='sessions.list'][data-desktop-focused='true'] [data-desktop-item][data-desktop-current='true']"`,
-    ),
-    true,
-  );
+Deno.test("the open session stays highlighted outside the Sessions keyboard region", () => {
   assertEquals(
     appSource.includes(
       `"& [data-desktop-region='sessions.list'] [data-desktop-item][data-desktop-current='true']"`,
     ),
-    false,
+    true,
   );
   assertEquals(
     appSource.includes(
       `sessions.list']:not([data-desktop-focused='true']) [data-desktop-item].Mui-selected`,
     ),
-    true,
+    false,
   );
 });
