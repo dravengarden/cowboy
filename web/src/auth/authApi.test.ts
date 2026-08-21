@@ -64,6 +64,20 @@ Deno.test("auth login and register POST JSON with credentials", async () => {
   const calls: FetchArgs[] = [];
   const restore = withFetch((args) => {
     calls.push(args);
+    if (args.input === "/api/auth/setup") {
+      return new Response(
+        JSON.stringify({
+          registration: {
+            enabled: false,
+            mode: "disabled",
+            accepts_registration: false,
+          },
+          setup_required: true,
+          setup_pending: true,
+        }),
+        { status: 200 },
+      );
+    }
     return new Response(
       JSON.stringify({ account: "draven", role: "operator" }),
       { status: 200 },
@@ -74,7 +88,16 @@ Deno.test("auth login and register POST JSON with credentials", async () => {
       account: "draven",
       role: "operator",
     });
-    assertEquals(await authApi.register("draven", "supersecret1", "invite"), {
+    assertEquals(await authApi.setup("cow_setup_test"), {
+      registration: {
+        enabled: false,
+        mode: "disabled",
+        accepts_registration: false,
+      },
+      setup_required: true,
+      setup_pending: true,
+    });
+    assertEquals(await authApi.register("draven", "supersecret1"), {
       account: "draven",
       role: "operator",
     });
@@ -89,11 +112,14 @@ Deno.test("auth login and register POST JSON with credentials", async () => {
       account: "draven",
       password: "supersecret1",
     }));
-    assertEquals(calls[1]?.input, "/api/auth/register");
+    assertEquals(calls[1]?.input, "/api/auth/setup");
     assertEquals(calls[1]?.init?.body, JSON.stringify({
+      token: "cow_setup_test",
+    }));
+    assertEquals(calls[2]?.input, "/api/auth/register");
+    assertEquals(calls[2]?.init?.body, JSON.stringify({
       account: "draven",
       password: "supersecret1",
-      token: "invite",
     }));
   } finally {
     restore();
@@ -219,6 +245,8 @@ Deno.test("auth status JSON requires the public registration shape", () => {
     }),
     {
       registration: { enabled: true, mode: "token", accepts_registration: true },
+      setup_required: false,
+      setup_pending: false,
       me: { account: "draven", role: "operator" },
     },
   );

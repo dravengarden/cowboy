@@ -115,6 +115,10 @@ impl MachineEncryptionIdentity {
             "sealed credential bundle is too large"
         );
         let shared = self.secret.diffie_hellman(&PublicKey::from(ephemeral));
+        ensure!(
+            shared.as_bytes().iter().any(|byte| *byte != 0),
+            "Service ephemeral encryption key is non-contributory"
+        );
         let key = derive_seal_key(shared.as_bytes());
         XChaCha20Poly1305::new(Key::from_slice(&key))
             .decrypt(
@@ -2215,6 +2219,26 @@ mod tests {
                 .mode()
                 & 0o777,
             0o600
+        );
+        let non_contributory = SealedProviderAuth {
+            envelope_schema: 1,
+            provider_id: "gemini".to_owned(),
+            auth_generation: 1,
+            auth_contract_fingerprint: format!("sha256:{}", "ab".repeat(32)),
+            projection_schema: "gemini-auth-v1".to_owned(),
+            action: ProviderAuthAction::Apply,
+            ephemeral_public_key: base64::engine::general_purpose::STANDARD.encode([0_u8; 32]),
+            nonce: base64::engine::general_purpose::STANDARD.encode([0_u8; 24]),
+            ciphertext: base64::engine::general_purpose::STANDARD.encode([0_u8; 16]),
+            service_public_key: String::new(),
+            signature: String::new(),
+        };
+        assert!(
+            first
+                .open(&non_contributory)
+                .unwrap_err()
+                .to_string()
+                .contains("non-contributory")
         );
         fs::remove_dir_all(root).unwrap();
     }

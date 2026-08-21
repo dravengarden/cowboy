@@ -17,6 +17,8 @@ export interface ProductMe {
 
 export interface AuthStatus {
   registration: RegistrationPublicStatus;
+  setup_required?: boolean;
+  setup_pending?: boolean;
   me?: ProductMe;
 }
 
@@ -28,6 +30,8 @@ export function authStatusFromJson(value: unknown): AuthStatus | undefined {
   if (value == null || typeof value !== "object") return undefined;
   const record = value as {
     registration?: Partial<RegistrationPublicStatus>;
+    setup_required?: boolean;
+    setup_pending?: boolean;
     me?: Partial<ProductMe>;
   };
   const registration = record.registration;
@@ -47,6 +51,8 @@ export function authStatusFromJson(value: unknown): AuthStatus | undefined {
       mode: registration.mode,
       accepts_registration: registration.accepts_registration,
     },
+    setup_required: record.setup_required === true,
+    setup_pending: record.setup_pending === true,
   };
   const me = record.me;
   if (me && typeof me.account === "string" && me.account.length > 0) {
@@ -146,13 +152,17 @@ export const authApi = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ account, password }),
     }),
-  register: (account: string, password: string, token?: string) =>
+  setup: (token: string) =>
+    readJson<AuthStatus>("/api/auth/setup", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token }),
+    }),
+  register: (account: string, password: string) =>
     readJson<ProductMe>("/api/auth/register", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(
-        token === undefined ? { account, password } : { account, password, token },
-      ),
+      body: JSON.stringify({ account, password }),
     }),
   logout: () =>
     readJson<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),

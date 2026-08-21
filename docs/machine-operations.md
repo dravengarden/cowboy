@@ -39,14 +39,63 @@ controller's signed desired-component manifest and the Machine's configured
 artifact public key. Provider and Zed payloads are not resolved through the
 interactive shell, Homebrew, npm global state, `~/.zed_server`, or a Nix profile.
 
-Build or download `cowboy-machine` and `cowboy-machine-install`, then run the
-installer once. It installs a user service/LaunchAgent, a stable launcher, a
+The platform bootstrap bundle contains `cowboy`, `cowboy-machine`, and
+`cowboy-machine-install`. Build all three from the repository root with
+`just build-machine-bootstrap`; release packaging must keep them together.
+The `cowboy` bootstrap binary exposes only `register` and `identity`, while the
+other two commands install the user service/LaunchAgent, a stable launcher, a
 mode-0600 one-time enrollment-token file, and the bootstrap host. The host
-deletes the token file immediately after successful enrollment:
+deletes the token file immediately after successful enrollment.
+
+On the device, prefer `cowboy register`. Create a one-time code in the UI
+first, copy the command, then paste the token when the CLI asks. Cowboy
+assigns the machine id. Interactive input is TTY-masked; after entry the CLI
+confirms only the final four characters. The token stays off the command line
+and out of shell history:
+
+```sh
+cowboy register https://cowboy.example
+```
+
+`cowboy register` requires `https://` except loopback HTTP. Workspace
+defaults to `home=$HOME`. It creates an Ed25519 identity under
+`~/.local/state/cowboy-machine/services/<service-id>/identity_ed25519`
+(directory `0700`, key
+`0600`), prepares `cowboy-machine`, and consumes the token over HTTPS. By
+default the Machine stays attached to the current terminal; closing it or
+pressing Ctrl-C takes the computer offline. Keep the Machine online across
+logins by choosing background mode during enrollment:
+
+```sh
+cowboy register https://cowboy.example --background
+```
+
+Background mode installs and starts a Service-scoped per-user systemd unit on
+Linux or LaunchAgent on macOS. Foreground mode does not write either background
+service definition.
+Cowboy Service stores only the public key and the token digest. The
+private key never leaves the device. `cowboy identity` reprints the
+OpenSSH `SHA256:…` fingerprint for later comparison. Scripts may pass
+`--token-file` instead of the TTY prompt.
+
+Machine identity deliberately uses OpenSSH SSHSIG rather than accepting
+interchangeable key utilities. Cowboy checks the standard macOS, Linux,
+Homebrew, and current `PATH` locations for `ssh-keygen`, canonicalizes each
+candidate, rejects non-files, non-executables, and group/world-writable tools,
+and probes `-Y sign` support before generating or signing. macOS normally
+provides `/usr/bin/ssh-keygen`; Linux packages it as the OpenSSH client. Cowboy
+does not fall back to OpenSSL, GPG, age, or an unrelated signature format.
+
+Enrollment codes contain 256 bits of OS randomness, are stored by SHA-256
+digest only, expire after 15 minutes, and are atomically consumed once. The UI
+shows a live countdown and requires a fresh code after expiration.
+
+The lower-level installer remains:
 
 ```sh
 cowboy-machine-install \
   --controller-url https://cowboy.example \
+  --service-id svc-0123456789abcdef0123456789abcdef \
   --machine-id macbook-air \
   --display-name 'MacBook Air' \
   --workspace cowboy=/path/to/cowboy \
@@ -56,7 +105,16 @@ cowboy-machine-install \
   --artifact-public-key /path/to/component-publisher.pub
 ```
 
-The equivalent host options are:
+The equivalent host options are Service-scoped. Each Cowboy Service has an
+independent Machine identity, component and Plugin generations, authentication
+replicas, worktrees, sockets, caches, launcher, and background unit. Registering
+the same computer with another Service must never reuse or overwrite them.
+
+```text
+COWBOY_MACHINE_SERVICE_ID=svc-0123456789abcdef0123456789abcdef
+```
+
+The remaining host options are:
 
 ```text
 COWBOY_MACHINE_CONTROLLER_URL=https://cowboy.example
@@ -108,18 +166,20 @@ producers are evaluated independently.
 
 ## Linux user service
 
-The installer writes `~/.config/systemd/user/cowboy-machine.service`. The
+The installer writes
+`~/.config/systemd/user/cowboy-machine-<service-id>.service`. The
 launcher prefers the active signed Machine-host generation and falls back to
 the bootstrap binary. To manage it manually:
 
 ```sh
 systemctl --user daemon-reload
-systemctl --user enable --now cowboy-machine.service
+systemctl --user enable --now cowboy-machine-<service-id>.service
 ```
 
 ## macOS LaunchAgent
 
-The installer writes `~/Library/LaunchAgents/xyz.stormbird.cowboy-machine.plist`
+The installer writes
+`~/Library/LaunchAgents/xyz.stormbird.cowboy-machine.<service-id>.plist`
 and bootstraps it in the current GUI domain. Enrollment secrets are kept only
 in the one-time mode-0600 file and never enter the plist.
 

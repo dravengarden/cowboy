@@ -117,9 +117,15 @@ out of `src/App.tsx`. `src/auth/*` must not import `src/store.ts` —
 `subscribe()` opens `/ws` on the first listener, and the logged-out branch must
 never construct a WebSocket.
 
+After login, `MachineSetupGate` holds the session apps until a computer is
+enrolled. Setup settings are a subset: theme, Passkeys, and sign out.
+
 `GET /api/auth/status` decides the surface: HTTP 200 + `me` mounts the apps;
-HTTP 200 + missing `me` is login (register only when
-`registration.accepts_registration`; invite field when `mode === "token"`);
+HTTP 200 + missing `me` is login. If `setup_required` and not
+`setup_pending`, the login page asks for the host setup code. After a
+valid code, `setup_pending` is true and the page creates the only user.
+This instance is single-user: there is no invite, open registration, or
+second product account;
 HTTP 404/501, 200 HTML, or a body without the registration shape is
 “controller too old / activating”, never login-forever;
 network / 5xx retries with banner backoff and must not clear the cookie.

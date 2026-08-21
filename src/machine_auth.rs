@@ -26,6 +26,7 @@ static TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
 pub struct MachineIdentity {
     private_key: PathBuf,
     public_key: String,
+    ssh_keygen: PathBuf,
 }
 
 impl MachineIdentity {
@@ -36,6 +37,7 @@ impl MachineIdentity {
     /// Returns when the state directory is unsafe/incomplete or `ssh-keygen`
     /// cannot create or read an Ed25519 identity.
     pub fn load_or_create(state_dir: &Path) -> Result<Self> {
+        let ssh_keygen = resolve_ssh_keygen()?;
         fs::create_dir_all(state_dir)
             .with_context(|| format!("creating Machine state dir {}", state_dir.display()))?;
         fs::set_permissions(state_dir, fs::Permissions::from_mode(0o700))
@@ -46,7 +48,7 @@ impl MachineIdentity {
             if private_key.exists() || public_path.exists() {
                 bail!("incomplete Machine identity in {}", state_dir.display());
             }
-            let status = Command::new("ssh-keygen")
+            let status = Command::new(&ssh_keygen)
                 .args([
                     "-q",
                     "-t",
@@ -73,12 +75,18 @@ impl MachineIdentity {
         Ok(Self {
             private_key,
             public_key,
+            ssh_keygen,
         })
     }
 
     #[must_use]
     pub fn public_key(&self) -> &str {
         &self.public_key
+    }
+
+    #[must_use]
+    pub fn private_key_path(&self) -> &Path {
+        &self.private_key
     }
 
     /// Sign a controller challenge. OpenSSH emits an armored SSH signature,
@@ -95,7 +103,7 @@ impl MachineIdentity {
     /// as a Provider release or credential-distribution authorization.
     pub(crate) fn sign_namespaced(&self, namespace: &str, proof: &[u8]) -> Result<String> {
         validate_namespace(namespace)?;
-        let mut child = Command::new("ssh-keygen")
+        let mut child = Command::new(&self.ssh_keygen)
             .args(["-Y", "sign", "-f"])
             .arg(&self.private_key)
             .args(["-n", namespace])
@@ -150,13 +158,14 @@ pub(crate) fn verify_namespaced(
     proof: &[u8],
     signature: &str,
 ) -> Result<bool> {
+    let ssh_keygen = resolve_ssh_keygen()?;
     validate_namespace(namespace)?;
     let public_key = normalize_public_key(public_key)?;
     let temp = VerificationTemp::new()?;
     fs::write(&temp.allowed_signers, format!("machine {public_key}\n"))
         .context("writing temporary allowed signers")?;
     fs::write(&temp.signature, signature).context("writing temporary SSH signature")?;
-    let mut child = Command::new("ssh-keygen")
+    let mut child = Command::new(ssh_keygen)
         .args(["-Y", "verify", "-f"])
         .arg(&temp.allowed_signers)
         .args(["-I", "machine", "-n", namespace, "-s"])
@@ -176,6 +185,84 @@ pub(crate) fn verify_namespaced(
         .wait()
         .context("waiting for ssh-keygen verification")?
         .success())
+}
+
+fn resolve_ssh_keygen() -> Result<PathBuf> {
+    let mut candidates = trusted_ssh_keygen_paths();
+    if let Some(path) = std::env::var_os("PATH") {
+        for candidate in std::env::split_paths(&path).map(|directory| directory.join("ssh-keygen"))
+        {
+            if !candidates.contains(&candidate) {
+                candidates.push(candidate);
+            }
+        }
+    }
+
+    let mut rejected = Vec::new();
+    for candidate in candidates {
+        match validate_ssh_keygen_candidate(&candidate) {
+            Ok(executable) => match supports_ssh_signatures(&executable) {
+                Ok(true) => return Ok(executable),
+                Ok(false) => rejected.push(format!("{} (no SSHSIG support)", executable.display())),
+                Err(error) => rejected.push(format!("{} ({error})", executable.display())),
+            },
+            Err(error) if candidate.exists() => {
+                rejected.push(format!("{} ({error})", candidate.display()));
+            }
+            Err(_) => {}
+        }
+    }
+
+    let detail = if rejected.is_empty() {
+        "no candidate was installed".to_owned()
+    } else {
+        rejected.join(", ")
+    };
+    bail!(
+        "Cowboy needs a trusted OpenSSH ssh-keygen with SSH signature support (-Y), but {detail}. macOS normally provides /usr/bin/ssh-keygen; on Linux install the OpenSSH client package. Cowboy will not fall back to an incompatible key or signature format."
+    )
+}
+
+fn trusted_ssh_keygen_paths() -> Vec<PathBuf> {
+    [
+        "/usr/bin/ssh-keygen",
+        "/bin/ssh-keygen",
+        "/opt/homebrew/bin/ssh-keygen",
+        "/usr/local/bin/ssh-keygen",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .collect()
+}
+
+fn validate_ssh_keygen_candidate(candidate: &Path) -> Result<PathBuf> {
+    let executable = candidate
+        .canonicalize()
+        .with_context(|| format!("resolving {}", candidate.display()))?;
+    let metadata = executable
+        .metadata()
+        .with_context(|| format!("inspecting {}", executable.display()))?;
+    anyhow::ensure!(metadata.is_file(), "not a regular file");
+    let mode = metadata.permissions().mode();
+    anyhow::ensure!(mode & 0o111 != 0, "not executable");
+    anyhow::ensure!(mode & 0o022 == 0, "group- or world-writable");
+    Ok(executable)
+}
+
+fn supports_ssh_signatures(executable: &Path) -> Result<bool> {
+    let output = Command::new(executable)
+        .args(["-Y", "sign"])
+        .env("LC_ALL", "C")
+        .env("LANG", "C")
+        .output()
+        .with_context(|| format!("probing {}", executable.display()))?;
+    let diagnostic = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+    .to_ascii_lowercase();
+    Ok(diagnostic.contains("too few arguments") && diagnostic.contains("namespace"))
 }
 
 fn validate_namespace(namespace: &str) -> Result<()> {
@@ -308,5 +395,27 @@ mod tests {
             fingerprint("ssh-ed25519 QUJD comment").expect("fingerprint"),
             "SHA256:tdQEXD9Gb6kf4sxqvnkjKhpXzfEE96JucW4KHieJ33g"
         );
+    }
+
+    #[test]
+    fn ssh_keygen_resolver_requires_a_secure_sshsig_capable_executable() {
+        let executable = resolve_ssh_keygen().expect("resolve OpenSSH ssh-keygen");
+        assert!(validate_ssh_keygen_candidate(&executable).is_ok());
+        assert!(supports_ssh_signatures(&executable).expect("probe SSHSIG support"));
+
+        let directory = std::env::temp_dir().join(format!(
+            "cowboy-insecure-ssh-keygen-test-{}-{}",
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&directory).expect("create test directory");
+        let insecure = directory.join("ssh-keygen");
+        fs::write(&insecure, "#!/bin/sh\nexit 1\n").expect("write fake ssh-keygen");
+        fs::set_permissions(&insecure, fs::Permissions::from_mode(0o777))
+            .expect("make fake ssh-keygen insecure");
+        let error = validate_ssh_keygen_candidate(&insecure).expect_err("reject writable tool");
+        assert!(error.to_string().contains("group- or world-writable"));
+        fs::remove_file(insecure).expect("remove fake ssh-keygen");
+        fs::remove_dir(directory).expect("remove test directory");
     }
 }

@@ -9,7 +9,7 @@ export function ProductAccountMenu(): React.JSX.Element {
   const [busy, setBusy] = useState(false);
   return (
     <Button
-      color="inherit"
+      color="error"
       disabled={busy}
       onClick={() => {
         if (busy) return;

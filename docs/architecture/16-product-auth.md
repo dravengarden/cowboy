@@ -9,11 +9,12 @@ stores plaintext transcripts.
 Accounts are required on `/` and product APIs. There is no anonymous product
 path. The published HTTPS origin in the URL bar is the Web trust source. The
 packaged app will store that origin on a Source page (not shipped in this
-chapter). `/admin` stays a separate identity plane and is how the first
-product user is created.
+chapter). `/admin` stays a separate identity plane and cookie. This stage
+is **single-user**: first-run on `/` proves the host setup code, then
+creates the only user (and the matching admin owner). Extra users, invites,
+and open registration fail closed.
 
-Registration is Synapse-shaped and **closed by default**. See
-[Admin](14-admin.md) for the policy table and consume protocol.
+See [Admin](14-admin.md) for the setup-code protocol.
 
 ## Why the Service is not E2EE
 
@@ -42,7 +43,8 @@ A same handle on admin and product is coincidence, not a link.
 
 Admin login is the break-glass plane: argon2id (legacy SHA-256 upgraded on
 login), dummy verify, 12-hour `SameSite=Strict` cookie, HTTPS via the
-loopback proxy only, and rate-limited bootstrap/login. See
+loopback proxy only, a one-time host setup token, and rate-limited
+setup/bootstrap/login. See
 [Admin](14-admin.md).
 
 ## Passkeys (optional step-up)
@@ -71,10 +73,10 @@ column. Admin roles live on `cowboy.admin.identities`.
 | Provider Service login (PWA) | no | yes | yes | no | no | no |
 | Catalog refresh | no | no | no | no | yes | yes |
 | Machine enroll / revoke | no | no | no | no | yes | yes |
-| Registration + invites | no | no | no | no | yes | yes |
-| `cowboy.permissions` | no | no | no | no | no | yes |
-| Create admin operators | no | no | no | no | no | yes |
-| Create / disable product users | no | no | no | no | yes (`operator`/`viewer`) | yes (any role) |
+| Registration + invites | no | no | no | no | no | no |
+| `cowboy.permissions` | no | no | no | no | no | read |
+| Create admin operators | no | no | no | no | no | no |
+| Create extra product users | no | no | no | no | no | no |
 
 Unowned `sessions.owner_user_id IS NULL` rows are a shared household pool.
 There is no adopt / reassign API.
@@ -104,8 +106,9 @@ visible id is never dropped (`[A,B,C]` + `[C,A]` → `[C,B,A]`).
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| `GET` | `/api/auth/status` | public | `{ registration, me? }` — no invite table |
-| `POST` | `/api/auth/register` | public; policy-gated | create user + `cowboy_user` |
+| `GET` | `/api/auth/status` | public | `{ registration, setup_required, setup_pending, me? }` — no invite table |
+| `POST` | `/api/auth/setup` | public; HTTPS | prove host setup code; 10-minute setup cookie |
+| `POST` | `/api/auth/register` | public; setup cookie | create the only user + `cowboy_user` |
 | `POST` | `/api/auth/login` | public | cookie + `me` |
 | `POST` | `/api/auth/logout` | cookie optional | clear cookie |
 | `GET` | `/api/auth/me` | product | current principal |
@@ -117,7 +120,8 @@ visible id is never dropped (`[A,B,C]` + `[C,A]` → `[C,B,A]`).
 | `GET` | `/api/sessions/{id}/*` | product + `can_see` | session REST |
 | `POST`/`PUT`/`DELETE` | session families | product + `can_mutate` | mutate |
 | `GET` | `/api/artifacts/{name}` | product | hash capability |
-| `POST` | `/api/machines/enrollment` | admin operator+ | mint enrollment |
+| `POST` | `/api/machines/enrollment` | product operator+ or admin operator+ | mint one-time machine enrollment; `machine_id` is optional and auto-assigned |
+| `DELETE` | `/api/machines/enrollment` | product operator+ or admin operator+ | atomically discard an unconsumed enrollment token before returning to setup details |
 | `GET` | `/metrics` | scrape-only | loopback peer, no forwarded headers, else 404 |
 
 Cookie POST/PUT/DELETE and cookie `/ws` upgrades run the Origin allow-list
@@ -165,22 +169,23 @@ Do **not** switch `cowboy.service` until this stack is the intended
 activate and the operator has read this list. The first login-required
 controller activate is a **planned outage** of `/` and Zed.
 
-1. Keep `/admin` signed in as owner. Write down the first product password.
+1. Read the one-time `cow_setup_…` token from the journal (`admin_setup_token`)
+   or `$COWBOY_DATA_DIR/admin-setup.token`. Open `/`, enter the code, then
+   create the only user. Prefer a Chrome or Apple generated password
+   (15+ characters). Write it down. `/admin` login uses the same account.
 2. Activate **web + controller together** so `GET /api/auth/status` is 200
    and the PWA serves `ProductAuthGate`. Do not pair a new gate with an old
    controller, or a new controller with old `store.ts`.
-3. On `/admin` → Accounts, create the first product user (or
-   `POST /api/admin/users`). Sign in on `/`.
+3. Sign in on `/`. `/admin` is login-only after first-run.
 4. Mint a `cow_…` token. Set `COWBOY_USER_TOKEN` on every
    `agent_servers.cowboy-*` `serve-acp`.
 5. Hard-reload the PWA (`sw.js` VERSION + `/version`). A WS reconnect keeps
    stale JS.
-6. Leave registration closed unless you deliberately open it.
+6. This instance stays single-user. Extra-user APIs return 403.
 7. Prefer `COWBOY_PUBLIC_ORIGIN=https://<instance>` on the same activate.
 
-`/admin` remains the break-glass. Forgotten first-user create is not an
-admin lockout. Rollback is a previous controller generation, not a mode
-flag.
+`/admin` remains the break-glass after first-run. Rollback is a previous
+controller generation, not a mode flag.
 
 Hygiene-only settings redaction (allow-list `Outbound::Settings`) is the
 only controller activate that is both safe and useful by itself.

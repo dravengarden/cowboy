@@ -133,6 +133,14 @@ const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "0031_product_users.sql",
         "256c9812e0c2a002d80ab1b7c109775a6335968610faf81fee27471a154e590e",
     ),
+    (
+        "0032_user_passkeys.sql",
+        "887e075ecc10454ec726d6f5750fee67f83cb08e27aee20b6e3415a2fea9e7cc",
+    ),
+    (
+        "0033_admin_passkeys.sql",
+        "a2783a1d0f4670712a9f1520dd004e37aa1b0603d5259c222a870295396a1575",
+    ),
 ];
 
 const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
@@ -155,6 +163,14 @@ const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "0005_product_users.sql",
         "5468265d5488423b27a0bad4121a38af64759580534d133e934818ddb5ffd4ce",
+    ),
+    (
+        "0006_user_passkeys.sql",
+        "89ed511b9d650fad91d734bcb37273c810f37201e8cfb0a5db9f53deb346b900",
+    ),
+    (
+        "0007_admin_passkeys.sql",
+        "8bf08ec2d84e3c336fc192ec3ed2b70d576832a320a75694e0b06383c183c18f",
     ),
 ];
 

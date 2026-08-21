@@ -52,6 +52,7 @@ import type { SxProps, Theme } from "@mui/material";
 import {
     Add,
     ArrowBackIosNew,
+    ChatBubbleOutline,
     Check as CheckIcon,
     ChevronRight,
     Circle,
@@ -198,7 +199,6 @@ import { DESKTOP_SHORTCUTS } from "./desktop/commands/workspaceShortcuts";
 import { DesktopShortcut } from "./desktop/commands/DesktopKeycap";
 import { InfoContent } from "./InfoSheet";
 import { UsageLogs } from "./UsageLogs";
-import { SegmentedPill } from "./SegmentedPill";
 import { fireLabel, fireRel } from "./scheduleTime";
 import { ResourceLightbox } from "./ResourceLightbox";
 import { desktopFocusBoundary, desktopFocusFill, type Mode as ThemeMode } from "./theme";
@@ -230,6 +230,7 @@ import {
 import { ProductAccountMenu } from "./auth/ProductAccountMenu";
 import { ProductPasskeysPanel } from "./auth/ProductPasskeysPanel";
 import { ProductTokensPanel } from "./auth/ProductTokensPanel";
+import { MACHINE_SETUP_REFRESH_EVENT } from "./setup/machineReady";
 import {
     sessionNotificationsMuted,
     setSessionNotificationsMuted,
@@ -545,6 +546,7 @@ function SessionList({
     mobileDrawer = false,
     mobileDrawerOpen = false,
     phone = false,
+    allowNewSession = true,
 }: {
     sessions: SessionMeta[];
     activeId: string | null;
@@ -565,6 +567,7 @@ function SessionList({
     mobileDrawer?: boolean;
     mobileDrawerOpen?: boolean;
     phone?: boolean;
+    allowNewSession?: boolean;
 }): React.JSX.Element {
     // Desktop-only modal list state. Normal mode navigates with j/k; Pin turns
     // the same keys into spatial reorder commands until O/Esc (or opening a
@@ -805,7 +808,7 @@ function SessionList({
                 minHeight: 0,
             }}
         >
-            {!mobileDrawer && <Box sx={{ p: 1 }}>
+            {!mobileDrawer && allowNewSession && <Box sx={{ p: 1 }}>
                 <Button
                     data-desktop-new-session={desktop ? "true" : undefined}
                     fullWidth
@@ -1075,14 +1078,14 @@ function SessionList({
                     }}
                 >
                     <MobileSheetActionGroup
-                        actions={[
-                            {
+                        actions={allowNewSession
+                            ? [{
                                 key: "new",
                                 label: "New session",
                                 onPress: onNew,
                                 icon: <Add aria-hidden sx={{ fontSize: "1.35em" }} />,
-                            },
-                        ]}
+                            }]
+                            : []}
                     />
                     <MobileSheetActionGroup
                         actions={[
@@ -1347,6 +1350,53 @@ type MachineChoice = {
         update?: MachineComponentUpdate;
     }[];
 };
+
+function useProductMachines(): {
+    machines: MachineChoice[] | null;
+    canStartSession: boolean;
+    reload: () => void;
+} {
+    const [machines, setMachines] = useState<MachineChoice[] | null>(null);
+    const reload = useCallback((): void => {
+        void fetch("/api/machines", { cache: "no-store", credentials: "same-origin" })
+            .then((response) => (response.ok ? response.json() : []))
+            .then((data: unknown) => {
+                setMachines(Array.isArray(data) ? data as MachineChoice[] : []);
+            })
+            .catch(() => setMachines([]));
+    }, []);
+    useEffect(() => {
+        reload();
+        const timer = globalThis.setInterval(reload, 4000);
+        return () => globalThis.clearInterval(timer);
+    }, [reload]);
+    return {
+        machines,
+        canStartSession: (machines ?? []).some((machine) => machine.schedulable),
+        reload,
+    };
+}
+
+function EmptyWorkspaceState({
+    onNewSession,
+}: {
+    onNewSession: () => void;
+}): React.JSX.Element {
+    const desktop = useSurfaceProfile().kind === "desktop";
+    return (
+        <>
+            <Typography color="text.secondary">No session selected.</Typography>
+            <Button
+                variant="contained"
+                startIcon={<Add />}
+                onClick={onNewSession}
+            >
+                New session
+                {desktop && <DesktopShortcut shortcut={DESKTOP_SHORTCUTS.newSession} quiet />}
+            </Button>
+        </>
+    );
+}
 
 function NewSessionDialog({
     open,
@@ -2021,7 +2071,9 @@ export function App({
         if (drawerOpen) settleMobileDrawerRef.current?.(false);
     });
     const [dialogOpen, setDialogOpen] = useState(false);
+    const { canStartSession } = useProductMachines();
     const openNewSession = (): void => {
+        if (!canStartSession) return;
         // iOS only raises the software keyboard for an in-gesture focus. The
         // New Session title field mounts after the sheet opens, so claim here
         // and transfer once the field exists — same contract as rename.
@@ -2416,6 +2468,7 @@ export function App({
             activeId={active?.id ?? null}
             onPick={pick}
             onNew={openNewSession}
+            allowNewSession={canStartSession}
             onClose={mobile
                 ? (): void => settleMobileDrawerRef.current?.(false)
                 : undefined}
@@ -3320,22 +3373,17 @@ export function App({
                                     </Typography>
                                 </Tooltip>
                             </Stack>
-                        ) : (
-                            // No session: the content pane already says "No
-                            // session selected", so the bar shows nothing — no
-                            // redundant brand/emoji.
-                            <Box sx={{ flex: 1, minWidth: 0 }} />
-                        )}
+                        ) : null}
                         {surface === "desktop" ? (
-                            // The complete trailing toolbar owns horizontal
-                            // overflow. Its children retain their calculated
-                            // minimum width; narrow split panes scroll this one
-                            // strip instead of crushing quota/config buttons.
+                            // Session controls may fill leftover width. With no
+                            // session the settings icon stays a trailing cluster
+                            // and must not stretch across the empty pane.
                             <Box
                                 sx={{
-                                    flex: 1,
+                                    flex: active ? 1 : "0 0 auto",
+                                    ml: "auto",
                                     minWidth: 0,
-                                    overflowX: "auto",
+                                    overflowX: active ? "auto" : "visible",
                                     overflowY: "hidden",
                                     scrollbarWidth: "thin",
                                     "&::-webkit-scrollbar": { height: 4 },
@@ -3348,7 +3396,10 @@ export function App({
                                 <Stack
                                     direction="row"
                                     alignItems="center"
-                                    sx={{ width: "max-content", minWidth: "100%" }}
+                                    sx={{
+                                        width: "max-content",
+                                        minWidth: active ? "100%" : "auto",
+                                    }}
                                 >
                                     {active && (
                                         <Suspense fallback={null}>
@@ -3358,15 +3409,19 @@ export function App({
                                             />
                                         </Suspense>
                                     )}
-                                    <Suspense fallback={null}>
-                                        <DesktopRegionShortcut
-                                            shortcut={DESKTOP_SHORTCUTS.focusTopbar}
-                                            title="Focus Top Bar"
-                                            singleKeycap={DESKTOP_SHORTCUTS.focusTopbar}
-                                            sx={{ mx: 0.5 }}
-                                        />
-                                    </Suspense>
-                                    <Divider orientation="vertical" flexItem sx={{ mx: 0.75, my: 0.75 }} />
+                                    {active && (
+                                        <Suspense fallback={null}>
+                                            <DesktopRegionShortcut
+                                                shortcut={DESKTOP_SHORTCUTS.focusTopbar}
+                                                title="Focus Top Bar"
+                                                singleKeycap={DESKTOP_SHORTCUTS.focusTopbar}
+                                                sx={{ mx: 0.5 }}
+                                            />
+                                        </Suspense>
+                                    )}
+                                    {active && (
+                                        <Divider orientation="vertical" flexItem sx={{ mx: 0.75, my: 0.75 }} />
+                                    )}
                                     <Suspense fallback={null}>
                                         <DesktopContextShortcut
                                             badge={DESKTOP_SHORTCUTS.settings}
@@ -3719,23 +3774,7 @@ export function App({
                             }}
                         >
                             {sessionsLoaded
-                                ? (
-                                    <>
-                                        <Typography color="text.secondary">
-                                            No session selected.
-                                        </Typography>
-                                        <Button
-                                            variant="contained"
-                                            startIcon={<Add />}
-                                            onClick={openNewSession}
-                                        >
-                                            New session
-                                            {surface === "desktop" && (
-                                                <DesktopShortcut shortcut={DESKTOP_SHORTCUTS.newSession} quiet />
-                                            )}
-                                        </Button>
-                                    </>
-                                )
+                                ? <EmptyWorkspaceState onNewSession={openNewSession} />
                                 : (
                                     // Until the WS snapshot lands, the list is unknown — show the
                                     // spinner, NOT the empty "No session selected." CTA, so a reload
@@ -4236,6 +4275,83 @@ function DesktopSettingsContent({
     );
 }
 
+function DesktopSettingsSectionTabs({
+    value,
+    onChange,
+}: {
+    value: SettingsProductFocus;
+    onChange: (value: SettingsProductFocus) => void;
+}): React.JSX.Element {
+    return (
+        <Tabs
+            value={value}
+            onChange={(_event, next): void => onChange(next as SettingsProductFocus)}
+            selectionFollowsFocus
+            aria-label="Settings workspace"
+            data-desktop-settings-section-tabs
+            sx={{
+                width: "fit-content",
+                minHeight: 40,
+                "& .MuiTabs-flexContainer": { gap: 0.5 },
+                "& .MuiTabs-indicator": {
+                    height: 2,
+                    borderRadius: 2,
+                },
+                "& .MuiTab-root": {
+                    minWidth: 112,
+                    minHeight: 40,
+                    px: 1.5,
+                    py: 0.75,
+                    borderRadius: 1.5,
+                    textTransform: "none",
+                    justifyContent: "flex-start",
+                    transition: "background-color 120ms ease, color 120ms ease",
+                },
+                "& .MuiTab-root.Mui-selected": {
+                    bgcolor: "action.selected",
+                },
+            }}
+        >
+            <Tab
+                value="agent"
+                icon={<ChatBubbleOutline fontSize="small" />}
+                iconPosition="start"
+                label="Agent"
+            />
+            <Tab
+                value="code"
+                icon={<CodeIcon fontSize="small" />}
+                iconPosition="start"
+                label="Code & diff"
+            />
+        </Tabs>
+    );
+}
+
+function DesktopAccountSettingsBlock(): React.JSX.Element {
+    return (
+        <DesktopModalBlock label="Account">
+            <Stack
+                direction="row"
+                alignItems="center"
+                justifyContent="space-between"
+                spacing={2}
+                sx={{ px: 1.5, py: 1 }}
+            >
+                <Box sx={{ minWidth: 0 }}>
+                    <Typography variant="body2" fontWeight={700}>
+                        Product account
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                        Sign out of this Cowboy Service on this device
+                    </Typography>
+                </Box>
+                <ProductAccountMenu />
+            </Stack>
+        </DesktopModalBlock>
+    );
+}
+
 type MachineEventView =
     | { event: "login_challenge"; request_id: string; provider: string; verification_url: string; user_code?: string; input_required?: boolean; input_label?: string; secret_input?: boolean; expires_at_ms: number }
     | { event: "login_state"; request_id: string; provider: string; state: string; account_label?: string; detail?: string }
@@ -4306,6 +4422,11 @@ function MachinesContent({ embedded = false }: { embedded?: boolean } = {}): Rea
     const [expanded, setExpanded] = useState<Record<string, boolean>>({});
     const [busy, setBusy] = useState<Record<string, boolean>>({});
     const [componentErrors, setComponentErrors] = useState<Record<string, string>>({});
+    const [deleteTarget, setDeleteTarget] = useState<MachineChoice | null>(null);
+    const [deleteError, setDeleteError] = useState("");
+    const [deleting, setDeleting] = useState(false);
+    const deletingLastMachine = deleteTarget !== null &&
+        machines.length === 1 && machines[0]?.id === deleteTarget.id;
     const [updateConfirmation, setUpdateConfirmation] = useState<{
         machineId: string;
         components: readonly MachineChoice["components"][number][];
@@ -4435,6 +4556,23 @@ function MachinesContent({ embedded = false }: { embedded?: boolean } = {}): Rea
         if (pending.action === "npm" && component) updateNpm(pending.machineId, component);
         else if (pending.action === "reconcile-one" && component) updateOne(pending.machineId, component);
     };
+    const deleteMachine = (): void => {
+        if (!deleteTarget || deleting) return;
+        const machineId = deleteTarget.id;
+        setDeleting(true);
+        setDeleteError("");
+        void fetch(`/api/machines/${encodeURIComponent(machineId)}/revoke`, {
+            method: "POST",
+            credentials: "same-origin",
+        }).then(async (response) => {
+            if (!response.ok) throw new Error(await response.text() || "Could not delete Machine");
+            setMachines((current) => current.filter((machine) => machine.id !== machineId));
+            setDeleteTarget(null);
+            globalThis.dispatchEvent(new Event(MACHINE_SETUP_REFRESH_EVENT));
+        }).catch((error: unknown) => {
+            setDeleteError(error instanceof Error ? error.message : "Could not delete Machine");
+        }).finally(() => setDeleting(false));
+    };
     useConfirmEnter(updateConfirmation !== null, confirmMachineUpdate);
     return (
         <Stack spacing={2}>
@@ -4513,6 +4651,18 @@ function MachinesContent({ embedded = false }: { embedded?: boolean } = {}): Rea
                                         {` · ${machine.capacity.max_sessions} max`}
                                     </Typography>
                                 </Box>
+                                <Tooltip title="Delete from this Cowboy Service">
+                                    <IconButton
+                                        size="small"
+                                        aria-label={`Delete ${machine.display_name}`}
+                                        onClick={() => {
+                                            setDeleteError("");
+                                            setDeleteTarget(machine);
+                                        }}
+                                    >
+                                        <DeleteOutline fontSize="small" />
+                                    </IconButton>
+                                </Tooltip>
                                 <Chip
                                     size="small"
                                     label={machine.schedulable
@@ -4694,6 +4844,36 @@ function MachinesContent({ embedded = false }: { embedded?: boolean } = {}): Rea
                     </Paper>
                 );
             })}
+            <ConfirmSheet
+                open={deleteTarget !== null}
+                onClose={() => !deleting && setDeleteTarget(null)}
+                title={deletingLastMachine ? "Delete the last Machine?" : "Delete this Machine?"}
+                actions={
+                    <>
+                        <Button color="inherit" disabled={deleting} onClick={() => setDeleteTarget(null)}>
+                            Cancel
+                        </Button>
+                        <Button variant="contained" color="error" disabled={deleting} onClick={deleteMachine}>
+                            {deleting ? "Deleting" : "Delete Machine"}
+                        </Button>
+                    </>
+                }
+            >
+                <Stack spacing={1.5} sx={{ pt: 0.5 }}>
+                    <Typography variant="body2">
+                        {deleteTarget?.display_name} will be disconnected and removed from this Cowboy Service.
+                    </Typography>
+                    {deletingLastMachine && (
+                        <Alert severity="warning">
+                            This is the last registered computer. Running sessions will disconnect, New session will be unavailable, and Cowboy will return to Connect a computer.
+                        </Alert>
+                    )}
+                    <Typography variant="caption" color="text.secondary">
+                        Other Cowboy Services and this computer&apos;s local files are not affected. Reconnecting here requires a new one-time code.
+                    </Typography>
+                    {deleteError && <Alert severity="error">{deleteError}</Alert>}
+                </Stack>
+            </ConfirmSheet>
             <ConfirmSheet
                 open={updateConfirmation !== null}
                 onClose={() => setUpdateConfirmation(null)}
@@ -5323,13 +5503,9 @@ function SettingsShell({
                     >
                         {renderedTab === "settings" ? (
                             <Stack spacing={2}>
-                                <SegmentedPill
+                                <DesktopSettingsSectionTabs
                                     value={section}
                                     onChange={setSection}
-                                    options={[
-                                        { value: "agent", label: "Agent" },
-                                        { value: "code", label: "Code" },
-                                    ]}
                                 />
                                 {section === "code"
                                     ? <ReviewSettingsContent />
@@ -5340,6 +5516,7 @@ function SettingsShell({
                                             shortcutsAvailable={settingsShortcutsAvailable}
                                         />
                                     )}
+                                <DesktopAccountSettingsBlock />
                             </Stack>
                         ) : renderedTab === "notifications" ? <NotificationSettingsContent /> : renderedTab === "providers" ? <ProvidersContent /> : renderedTab === "machines" ? <MachinesContent /> : renderedTab === "info" ? (
                             <InfoContent desktop />

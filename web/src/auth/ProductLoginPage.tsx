@@ -1,37 +1,59 @@
-import { Alert, Box, Button, Stack, TextField, Typography } from "@mui/material";
-import { useState } from "react";
-import { AuthApiError, authApi, type ProductMe, type RegistrationPublicStatus } from "./authApi";
-import { showRegistration, showRegistrationToken } from "./authStatus";
+import { Visibility, VisibilityOff } from "@mui/icons-material";
+import {
+  Alert,
+  Box,
+  Button,
+  IconButton,
+  InputAdornment,
+  Stack,
+  TextField,
+  Typography,
+} from "@mui/material";
+import { useEffect, useState } from "react";
+import { PasswordStrength } from "../admin/PasswordStrength";
+import { assessAdminPassword } from "../admin/passwordStrength";
+import { AuthApiError, authApi, type AuthStatus, type ProductMe } from "./authApi";
 
 export function ProductLoginPage({
-  registration,
+  setupRequired,
+  setupPending,
   onAuthed,
+  onStatus,
 }: {
-  registration: RegistrationPublicStatus;
+  setupRequired: boolean;
+  setupPending: boolean;
   onAuthed: (me: ProductMe) => void;
+  onStatus?: (status: AuthStatus) => void;
 }): React.JSX.Element {
-  const canRegister = showRegistration(registration);
-  const needsToken = showRegistrationToken(registration);
-  const [mode, setMode] = useState<"login" | "register">("login");
-  const registering = canRegister && mode === "register";
+  const creating = setupRequired && setupPending;
+  const needsCode = setupRequired && !setupPending;
   const [account, setAccount] = useState("");
   const [password, setPassword] = useState("");
-  const [token, setToken] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [setupToken, setSetupToken] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-
-  const canSubmit = account.trim() !== "" && password !== "" &&
-    !(registering && needsToken && token.trim() === "");
+  const [passwordVisible, setPasswordVisible] = useState(false);
+  useEffect(() => {
+    if (creating) setPasswordVisible(true);
+  }, [creating]);
+  const passwordScore = assessAdminPassword(password, account);
+  const canCreate = account.trim() !== "" && passwordScore.acceptable && password === confirm;
+  const confirmMismatch = confirm.length > 0 && password !== confirm;
+  const canLogin = account.trim() !== "" && password !== "";
 
   const submit = (): void => {
-    if (busy || !canSubmit) return;
+    if (busy) return;
     setBusy(true);
     setError(null);
-    const request = registering
-      ? authApi.register(account, password, needsToken ? token : undefined)
-      : authApi.login(account, password);
+    const request = needsCode
+      ? authApi.setup(setupToken.trim()).then((status) => {
+        onStatus?.(status);
+      })
+      : creating
+      ? authApi.register(account, password).then(onAuthed)
+      : authApi.login(account, password).then(onAuthed);
     void request
-      .then(onAuthed)
       .catch((err: unknown) => {
         setError(err instanceof AuthApiError ? err.message : "Could not reach Cowboy");
       })
@@ -41,8 +63,14 @@ export function ProductLoginPage({
   return (
     <Box
       component="form"
+      method="post"
+      action="#"
+      autoComplete="on"
       onSubmit={(event) => {
         event.preventDefault();
+        if (needsCode && setupToken.trim() === "") return;
+        if (creating && !canCreate) return;
+        if (!needsCode && !creating && !canLogin) return;
         submit();
       }}
       sx={{
@@ -61,11 +89,7 @@ export function ProductLoginPage({
         <Box>
           <Typography
             component="p"
-            sx={{
-              fontSize: 14,
-              letterSpacing: "0.06em",
-              opacity: 0.75,
-            }}
+            sx={{ fontSize: 14, letterSpacing: "0.06em", opacity: 0.75 }}
           >
             cowboy
           </Typography>
@@ -74,64 +98,116 @@ export function ProductLoginPage({
             variant="h5"
             sx={{ fontWeight: 700, mt: 1, letterSpacing: -0.4 }}
           >
-            {registering ? "Create account" : "Sign in"}
+            {needsCode ? "Enter setup code" : creating ? "Create account" : "Sign in"}
           </Typography>
           <Typography color="text.secondary" sx={{ mt: 0.75 }}>
-            {registering
-              ? needsToken
-                ? "This instance accepts invite tokens."
-                : "Create a product account on this Cowboy instance."
+            {needsCode
+              ? "This instance has no user yet. Enter the setup code from the host journal or data directory."
+              : creating
+              ? "Create the only user on this Cowboy instance."
               : "This instance requires a product account."}
           </Typography>
         </Box>
+        {creating && (
+          <>
+            <Alert
+              severity={passwordScore.acceptable ? "success" : "warning"}
+              aria-live="polite"
+            >
+              {passwordScore.acceptable
+                ? "Good. This password is strong enough to protect this public agent control plane."
+                : "This password protects a public agent control plane. A weak password lets anyone who reaches this origin run agents on enrolled machines."}
+            </Alert>
+            {!passwordScore.acceptable && (
+              <Alert severity="info">
+                Prefer a password generated by Google Chrome or the macOS Passwords app.
+                Those random secrets are accepted. Hand-chosen passwords need 15+
+                characters with uppercase, lowercase, and a digit.
+              </Alert>
+            )}
+          </>
+        )}
         {error && <Alert severity="error">{error}</Alert>}
-        <TextField
-          label="Account"
-          value={account}
-          onChange={(event) => setAccount(event.target.value)}
-          autoComplete="username"
-          autoCapitalize="none"
-          autoCorrect="off"
-          spellCheck={false}
-          fullWidth
-        />
-        <TextField
-          label="Password"
-          type="password"
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-          autoComplete={registering ? "new-password" : "current-password"}
-          fullWidth
-        />
-        {registering && needsToken && (
+        {needsCode ? (
           <TextField
-            label="Invite token"
-            value={token}
-            onChange={(event) => setToken(event.target.value)}
+            label="Setup code"
+            value={setupToken}
+            onChange={(event) => setSetupToken(event.target.value)}
             autoComplete="one-time-code"
             fullWidth
           />
+        ) : (
+          <>
+            <TextField
+              label="Account"
+              name="username"
+              value={account}
+              onChange={(event) => setAccount(event.target.value)}
+              autoComplete="username"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              fullWidth
+            />
+            <TextField
+              label="Password"
+              name={creating ? "new-password" : "password"}
+              type={passwordVisible ? "text" : "password"}
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              autoComplete={creating ? "new-password" : "current-password"}
+              error={creating && password.length > 0 && !passwordScore.acceptable}
+              fullWidth
+              slotProps={{
+                input: {
+                  endAdornment: creating
+                    ? (
+                      <InputAdornment position="end">
+                        <IconButton
+                          aria-label={passwordVisible ? "Hide password" : "Show password"}
+                          edge="end"
+                          onClick={() => setPasswordVisible((visible) => !visible)}
+                        >
+                          {passwordVisible ? <VisibilityOff /> : <Visibility />}
+                        </IconButton>
+                      </InputAdornment>
+                    )
+                    : undefined,
+                },
+                ...(creating
+                  ? {
+                    htmlInput: {
+                      passwordrules:
+                        "minlength: 15; maxlength: 128; required: lower, upper, digit; allowed: [-];",
+                    },
+                  }
+                  : {}),
+              }}
+            />
+            {creating && <PasswordStrength password={password} account={account} />}
+            {creating && (
+              <TextField
+                label="Confirm password"
+                type={passwordVisible ? "text" : "password"}
+                value={confirm}
+                onChange={(event) => setConfirm(event.target.value)}
+                autoComplete="new-password"
+                error={confirmMismatch}
+                helperText={confirmMismatch ? "Passwords do not match" : undefined}
+                fullWidth
+              />
+            )}
+          </>
         )}
         <Button
           type="submit"
           variant="contained"
           size="large"
-          disabled={busy || !canSubmit}
+          disabled={busy ||
+            (needsCode ? setupToken.trim() === "" : creating ? !canCreate : !canLogin)}
         >
-          {registering ? "Create account" : "Sign in"}
+          {needsCode ? "Continue" : creating ? "Create account" : "Sign in"}
         </Button>
-        {canRegister && (
-          <Button
-            type="button"
-            color="inherit"
-            onClick={() => {
-              setMode(registering ? "login" : "register");
-              setError(null);
-            }}
-          >
-            {registering ? "Already have an account? Sign in" : "Create an account"}
-          </Button>
-        )}
       </Stack>
     </Box>
   );

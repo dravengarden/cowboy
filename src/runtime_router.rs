@@ -67,6 +67,15 @@ impl RuntimeRouter {
         }
     }
 
+    /// Fence and remove whichever runtime currently owns this Machine id.
+    /// Administrative identity revocation uses this form because it is not
+    /// tied to one connection epoch.
+    pub fn remove(&self, machine_id: &str) {
+        if let Some(runtime) = self.runtimes.write().remove(machine_id) {
+            runtime.disconnect();
+        }
+    }
+
     pub fn remove_if_current(&self, machine_id: &str, runtime: &Arc<RemoteRuntime>) {
         let mut runtimes = self.runtimes.write();
         if runtimes
@@ -119,5 +128,17 @@ mod tests {
         ));
         router.remove_if_current("falcon", &second);
         assert!(router.runtime("falcon").is_none());
+    }
+
+    #[tokio::test]
+    async fn explicit_remove_fences_the_current_runtime() {
+        let router = RuntimeRouter::new();
+        let runtime = RemoteRuntime::for_test(Hub::new(), Vec::new());
+        router.install("macbook-air".to_owned(), Arc::clone(&runtime));
+
+        router.remove("macbook-air");
+
+        assert!(router.runtime("macbook-air").is_none());
+        assert!(!runtime.connected());
     }
 }

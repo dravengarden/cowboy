@@ -63,6 +63,7 @@ export interface SessionLimits {
 export interface AdminAuthStatus {
   authenticated: boolean;
   bootstrap_required: boolean;
+  setup_pending?: boolean;
   account?: string;
   role?: AdminRole;
   passkey_count?: number;
@@ -116,6 +117,12 @@ async function readJson<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const adminApi = {
   auth: () => readJson<AdminAuthStatus>("/api/admin/auth"),
+  setup: (token: string) =>
+    readJson<AdminAuthStatus>("/api/admin/auth/setup", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token }),
+    }),
   bootstrap: (account: string, password: string) =>
     readJson<AdminAuthStatus>("/api/admin/auth/bootstrap", {
       method: "POST",

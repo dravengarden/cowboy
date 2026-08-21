@@ -37,6 +37,7 @@ Deno.test("ProductAuthGate wraps DesktopApp and MobileApp in main.tsx", async ()
   const app = await Deno.readTextFile(new URL("App.tsx", webSrc));
   assert(main.includes("ProductAuthGate"));
   assert(main.includes("<ProductAuthGate>"));
+  assert(main.includes("MachineSetupGate"));
   assert(main.includes("<DesktopApp"));
   assert(main.includes("<MobileApp"));
   assertEquals(app.includes("ProductAuthGate"), false);
@@ -49,9 +50,11 @@ Deno.test("login page is product chrome and hides register unless accepted", asy
   assert(login.includes("cowboy"));
   assertEquals(login.includes("Cowboy Admin"), false);
   assertEquals(login.includes("<Paper"), false);
-  assert(login.includes("showRegistration"));
-  assert(login.includes("showRegistrationToken"));
-  assert(login.includes("Invite token"));
+  assert(login.includes("Setup code"));
+  assert(login.includes("Create the only user"));
+  assert(login.includes('severity={passwordScore.acceptable ? "success" : "warning"}'));
+  assert(login.includes("Good. This password is strong enough"));
+  assertEquals(login.includes("Invite token"), false);
   assert(gate.includes("Controller too old or activating"));
   assert(gate.includes("/admin remains the break-glass"));
   assert(gate.includes("this is not a sign-in problem"));
@@ -59,7 +62,7 @@ Deno.test("login page is product chrome and hides register unless accepted", asy
   assert(gate.includes("nextReadyStatusAction"));
   assert(gate.includes("deleteProductHistoryCache"));
   assert(login.includes('component="form"'));
-  assert(login.includes("token.trim()"));
+  assert(login.includes("setupToken.trim()"));
 });
 
 Deno.test("logged-out gate never mounts product children or /ws", async () => {
@@ -102,7 +105,7 @@ Deno.test("desktop can sign out through authApi without importing store", async 
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
   const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
-  assert(sw.includes('const VERSION = "cowboy-v1418"'));
+  assert(sw.includes('const VERSION = "cowboy-v1552"'));
   const authStart = sw.indexOf('url.pathname.startsWith("/api/auth/")');
   const authBranch = sw.slice(authStart, sw.indexOf("return;", authStart) + "return;".length);
   assert(authBranch.includes("event.respondWith(fetch(request))"));

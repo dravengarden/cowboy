@@ -1237,6 +1237,11 @@ pub enum StoreWrite {
     DeleteWakeup {
         session_id: String,
     },
+    /// Persist one internal auth/admin setting. Never projected to product clients.
+    PutSetting {
+        key: String,
+        value: serde_json::Value,
+    },
 }
 
 /// Shared operational state for the bounded write-behind queue.
@@ -1461,6 +1466,8 @@ pub struct Hub {
 
 struct HubInner {
     sessions: Mutex<HashMap<String, Session>>,
+    /// Internal auth/admin state restored from the durable settings table.
+    settings: Mutex<HashMap<String, serde_json::Value>>,
     /// Persisted Busy sessions awaiting an authoritative, connected worker
     /// snapshot after the control plane restarts. Broker registry placeholders
     /// do not settle this set; a bounded server-side grace timer finalizes the
@@ -1558,6 +1565,7 @@ impl Hub {
         Self {
             inner: std::sync::Arc::new(HubInner {
                 sessions: Mutex::new(HashMap::new()),
+                settings: Mutex::new(HashMap::new()),
                 runtime_reconciliation: Mutex::new(HashSet::new()),
                 history_reducer: Mutex::new(EventReducer::default()),
                 artifacts: Mutex::new(None),
@@ -2434,6 +2442,17 @@ impl Hub {
     ) -> R {
         let mut settings = self.inner.settings.lock();
         f(&mut settings)
+    }
+
+    /// Snapshot internal settings for authenticated admin reads.
+    #[must_use]
+    pub fn settings_snapshot(&self) -> HashMap<String, serde_json::Value> {
+        self.inner.settings.lock().clone()
+    }
+
+    /// Restore internal auth/admin state before the HTTP server starts.
+    pub fn load_settings(&self, entries: Vec<(String, serde_json::Value)>) {
+        self.inner.settings.lock().extend(entries);
     }
 
     /// Insert one setting while the caller holds the settings mutex.

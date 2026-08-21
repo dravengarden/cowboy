@@ -26,11 +26,24 @@ Deno.test("Code settings open on the Code section and Agent settings stay on Age
     appSettingsFromEvent(new CustomEvent(OPEN_APP_SETTINGS_EVENT)).section,
     undefined,
   );
-  assert(appSource.includes('label: "Agent"'));
-  assert(appSource.includes('label: "Code"'));
+  assert(appSource.includes('label="Agent"'));
+  assert(appSource.includes('label="Code & diff"'));
   assert(appSource.includes("<ReviewSettingsContent"));
   assert(appSource.includes('openAppSettings({ section: "agent" })'));
   assert(appSource.includes("portal"));
+});
+
+Deno.test("desktop settings use compact section tabs and expose product sign out", () => {
+  const settings = appSource.slice(
+    appSource.indexOf("function DesktopSettingsContent("),
+    appSource.indexOf("type MachineEventView"),
+  );
+  assert(settings.includes("data-desktop-settings-section-tabs"));
+  assert(settings.includes('width: "fit-content"'));
+  assert(settings.includes('label="Code & diff"'));
+  assert(settings.includes('label="Account"'));
+  assert(settings.includes("<ProductAccountMenu />"));
+  assertEquals(settings.includes("<SegmentedPill"), false);
 });
 
 Deno.test("Code chrome uses Agent instead of a local settings sheet", () => {

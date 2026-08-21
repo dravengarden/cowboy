@@ -11,34 +11,37 @@ control plane, while the web files remain an independently replaceable release.
 |---|---|
 | `GET /healthz` | readiness → `"ok"`, or 503 after persistence loss / exhausted retries |
 | `GET /version` | `{ version }` = SHA-256 of `index.html`, for build-id / stale-bundle detection |
-| `GET /api/auth/status` | public `{ registration: { enabled, mode, accepts_registration }, me? }` — no lan/exposure enum |
-| `POST /api/auth/register` | policy-gated signup; `Set-Cookie: cowboy_user`; 403 when closed |
+| `GET /api/auth/status` | public `{ registration, setup_required, setup_pending, me? }` — no lan/exposure enum |
+| `POST /api/auth/setup` | prove host setup code; 10-minute setup cookie; 403 once a user exists |
+| `POST /api/auth/register` | setup-cookie first-run; creates the only user; 403 afterward |
 | `POST /api/auth/login` | product login; dummy-verifies unknown users; `cowboy_user` cookie |
 | `POST /api/auth/logout` | best-effort clear cookie + delete `user_sessions` row |
 | `GET /api/auth/me` | current product principal (cookie or Bearer) |
 | `POST /api/auth/tokens` | product operator+; create a `cow_…` token (secret shown once) |
 | `GET /api/auth/tokens` | list own token prefixes, names, timestamps |
 | `DELETE /api/auth/tokens/{id}` | revoke own token; other users' ids are 404 |
-| `GET /api/admin/auth` | public admin login status / bootstrap required |
-| `POST /api/admin/auth/bootstrap` | first owner only; `cowboy_admin` cookie |
+| `GET /api/admin/auth` | public admin login status / bootstrap required / setup pending |
+| `POST /api/admin/auth/setup` | `403` complete setup on `/` |
+| `POST /api/admin/auth/bootstrap` | `403` complete setup on `/` |
 | `POST /api/admin/auth/login` | admin login; `cowboy_admin` cookie |
 | `POST /api/admin/auth/logout` | clear admin cookie |
 | `GET /api/admin/overview` | admin viewer+ health, persistence, registration |
 | `GET /api/admin/sessions` | admin viewer+ live sessions |
 | `GET /api/admin/machines` | admin viewer+ enrolled machines |
 | `GET /api/admin/accounts` | admin viewer+ admin operators (no hashes) |
-| `POST /api/admin/accounts` | admin owner create admin operator |
-| `GET /api/admin/registration` | admin viewer+ policy + invite table |
-| `PUT /api/admin/registration` | admin operator+ enable / mode |
-| `POST /api/admin/registration/tokens` | admin operator+ issue invite |
-| `DELETE /api/admin/registration/tokens/{id}` | admin operator+ disable invite |
+| `POST /api/admin/accounts` | `403` single-user |
+| `GET /api/admin/registration` | admin viewer+ policy + invite table (always closed) |
+| `PUT /api/admin/registration` | `403` single-user |
+| `POST /api/admin/registration/tokens` | `403` single-user |
+| `DELETE /api/admin/registration/tokens/{id}` | `403` single-user |
 | `GET /api/admin/permissions` | admin viewer+ grants |
-| `PUT /api/admin/permissions` | admin owner replace grants |
+| `PUT /api/admin/permissions` | `403` single-user |
 | `GET /api/admin/session-limits` | admin viewer+ controller limits |
 | `PUT /api/admin/session-limits` | admin operator+ replace limits |
 | `GET /api/admin/providers` | admin viewer+ catalog |
 | `POST /api/admin/providers/refresh` | admin operator+ rescan external releases |
-| `GET/POST /api/admin/users` | admin operator+ list/create product users (default grant `operator`) |
+| `GET /api/admin/users` | admin operator+ list the only product user |
+| `POST /api/admin/users` | `403` single-user |
 | `POST /api/admin/users/{id}/disable` | admin operator+ disable + revoke sessions/tokens |
 | `POST /api/admin/users/{id}/password` | admin owner set password |
 | `GET /api/metrics` | admin operator+ diagnostic JSON (not the scrape path) |
@@ -160,7 +163,15 @@ visible ids. Reorder merges: submitted ids only permute names they include,
 and an omitted visible id is never dropped (`[A,B,C]` + `[C,A]` → `[C,B,A]`).
 
 `GET /api/artifacts/{name}` requires a product principal; the hash is the
-capability. `POST /api/machines/enrollment` is admin operator+. `GET
+capability. `GET /api/machine/service` is public and returns the stable,
+non-secret Service id used to isolate one computer's local Machine resources.
+Enrollment repeats that id so the Machine can reject a Service switch during
+registration. `POST` and `DELETE /api/machines/enrollment` require a product or
+admin operator; `DELETE` discards an unconsumed one-time token. Product Machine
+lists expose only enrolled outbound Machines; controller-local compatibility
+rows remain admin-only. `POST /api/machines/{id}/revoke` accepts a product or
+admin operator, then disconnects the Machine and fences its runtime from this
+Service without touching another Service or deleting files on the computer. `GET
 /metrics` is scrape-only: loopback peer and no `X-Forwarded-*` /
 `X-Real-IP`, otherwise 404. `GET /api/metrics` is admin operator+. Unlisted
 `/api/*` routes fail closed as admin operator+. Admin writes use

@@ -707,7 +707,7 @@ impl Broker {
         if self.args.spawn_mode != SpawnMode::SystemdUser {
             anyhow::bail!("direct mode has no process-exit proof");
         }
-        prepare_transient_unit(&worker_unit_name(session_id)).await
+        prepare_transient_unit(&worker_unit_name(&self.args.socket, session_id)).await
     }
 
     fn cleanup_deleted_session(self: &Arc<Self>, session_id: &str, command_id: &str) {
@@ -966,7 +966,11 @@ impl Broker {
                 "declared worker never reconnected; applying session-level extreme recovery"
             );
             let stop = Command::new("systemctl")
-                .args(["--user", "stop", &worker_unit_name(&session_id)])
+                .args([
+                    "--user",
+                    "stop",
+                    &worker_unit_name(&broker.args.socket, &session_id),
+                ])
                 .status();
             match tokio::time::timeout(Duration::from_secs(10), stop).await {
                 Ok(Ok(status)) if status.success() => {}
@@ -1135,7 +1139,11 @@ impl Broker {
         );
         if self.args.spawn_mode == SpawnMode::SystemdUser {
             let _ = Command::new("systemctl")
-                .args(["--user", "stop", &worker_unit_name(session_id)])
+                .args([
+                    "--user",
+                    "stop",
+                    &worker_unit_name(&self.args.socket, session_id),
+                ])
                 .status()
                 .await;
         }
@@ -1533,7 +1541,7 @@ impl Broker {
             }
             SpawnMode::SystemdUser => {
                 let mut command = Command::new("systemd-run");
-                let unit = worker_unit_name(&session.session_id);
+                let unit = worker_unit_name(&self.args.socket, &session.session_id);
                 prepare_transient_unit(&unit).await?;
                 command.args([
                     "--user",
@@ -1781,7 +1789,13 @@ fn systemd_show_value(output: &str, key: &str) -> Option<String> {
         .map(|(_, value)| value.trim().to_owned())
 }
 
-fn worker_unit_name(session_id: &str) -> String {
+fn worker_unit_name(socket: &Path, session_id: &str) -> String {
+    use sha2::Digest as _;
+
+    let namespace = format!(
+        "{:x}",
+        sha2::Sha256::digest(socket.as_os_str().as_encoded_bytes())
+    );
     let safe: String = session_id
         .chars()
         .map(|ch| {
@@ -1792,7 +1806,7 @@ fn worker_unit_name(session_id: &str) -> String {
             }
         })
         .collect();
-    format!("cowboy-worker-{safe}")
+    format!("cowboy-worker-{}-{safe}", &namespace[..12])
 }
 
 fn worker_command_id(command: &WorkerCommand) -> Option<&str> {
@@ -1899,7 +1913,11 @@ async fn monitor_workers(broker: Arc<Broker>) {
             });
             if broker.args.spawn_mode == SpawnMode::SystemdUser {
                 let stop = Command::new("systemctl")
-                    .args(["--user", "stop", &worker_unit_name(&session_id)])
+                    .args([
+                        "--user",
+                        "stop",
+                        &worker_unit_name(&broker.args.socket, &session_id),
+                    ])
                     .status();
                 match tokio::time::timeout(Duration::from_secs(10), stop).await {
                     Ok(Ok(status)) if status.success() => {}
@@ -2485,8 +2503,14 @@ mod tests {
 
     #[test]
     fn unit_names_are_safe_and_stable() {
-        assert_eq!(worker_unit_name("sess-123"), "cowboy-worker-sess-123");
-        assert_eq!(worker_unit_name("weird/id"), "cowboy-worker-weird_id");
+        let first = worker_unit_name(Path::new("/service-a/run.sock"), "sess-123");
+        let second = worker_unit_name(Path::new("/service-b/run.sock"), "sess-123");
+        assert!(first.starts_with("cowboy-worker-"));
+        assert!(first.ends_with("-sess-123"));
+        assert_ne!(first, second);
+        assert!(
+            worker_unit_name(Path::new("/service-a/run.sock"), "weird/id").ends_with("-weird_id")
+        );
     }
 
     #[tokio::test]

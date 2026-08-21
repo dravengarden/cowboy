@@ -21,7 +21,7 @@ mod artifacts;
 mod cgroup;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod claude_shell;
-#[cfg(feature = "full")]
+#[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod cli;
 #[cfg(any(feature = "full", feature = "code-adapter"))]
 pub mod code_adapter;
@@ -53,7 +53,7 @@ pub mod machine_cli;
 mod machine_components;
 #[cfg(feature = "full")]
 mod machine_control;
-#[cfg(feature = "machine-host")]
+#[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod machine_install;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod machine_protocol;
@@ -95,6 +95,8 @@ pub mod runtime_wire;
 mod scheduler;
 #[cfg(feature = "full")]
 mod server;
+#[cfg(any(feature = "full", feature = "machine-host"))]
+mod service_identity;
 #[cfg(feature = "machine-host")]
 mod session_workspace;
 #[cfg(feature = "full")]

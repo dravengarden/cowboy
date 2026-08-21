@@ -29,10 +29,14 @@ export const PADDING_PRESETS: number[] = [8, 12, 16, 20, 24, 32, 48];
 // their own fixed leading; this drives the body text's line spacing.
 export const LINE_HEIGHT_PRESETS: number[] = [1.3, 1.4, 1.5, 1.6, 1.8, 2];
 
-export const FONT_SCALE_DEFAULT = 0.55;
-// Default reading comfort: 8px side gutter, 1.6 line-height, 0.55 scale — the
+export const FONT_SCALE_DEFAULT = 1;
+const LEGACY_FONT_SCALE_DEFAULT = 0.55;
+const FONT_SCALE_MIGRATION_KEY = "cowboy:font-scale-migrated-v2";
+// Default reading comfort: 8px side gutter, 1.6 line-height, 100% scale — the
 // product-chosen defaults for an unset/garbage value (a user's own picks still
 // win). The system stack is the default face (see fonts.ts DEFAULT_FONT_ID).
+// A one-shot migration rewrites the previous 0.55 default to 1 so first-run
+// browsers that stored the old product default are not stuck at 55%.
 export const PADDING_DEFAULT = 8;
 export const LINE_HEIGHT_DEFAULT = 1.6;
 
@@ -73,6 +77,20 @@ function numPref(key: string, min: number, max: number, def: number) {
   });
 }
 
+function migrateLegacyDefaultFontScale(): void {
+  try {
+    const storage = globalThis.localStorage;
+    if (!storage || storage.getItem(FONT_SCALE_MIGRATION_KEY) === "1") return;
+    if (storage.getItem(FONT_KEY) === String(LEGACY_FONT_SCALE_DEFAULT)) {
+      storage.setItem(FONT_KEY, String(FONT_SCALE_DEFAULT));
+    }
+    storage.setItem(FONT_SCALE_MIGRATION_KEY, "1");
+  } catch {
+    // Private mode / quota: keep the in-memory default.
+  }
+}
+
+migrateLegacyDefaultFontScale();
 const fontScaleStore = numPref(FONT_KEY, 0.5, 2, FONT_SCALE_DEFAULT);
 const paddingStore = numPref(PAD_KEY, 0, 96, PADDING_DEFAULT);
 const lineHeightStore = numPref(LINE_KEY, 1, 2.5, LINE_HEIGHT_DEFAULT);

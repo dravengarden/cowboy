@@ -147,6 +147,9 @@ pub struct Args {
         required_unless_present = "provider_usage_status"
     )]
     controller_url: Option<String>,
+    /// Stable identity of the Cowboy Service that owns this local namespace.
+    #[arg(long, env = "COWBOY_MACHINE_SERVICE_ID")]
+    service_id: Option<String>,
     #[arg(long, env = "COWBOY_MACHINE_ID", default_value = "local")]
     machine_id: String,
     #[arg(long, env = "COWBOY_MACHINE_DISPLAY_NAME")]
@@ -222,6 +225,7 @@ struct EnrollmentRequest<'a> {
 
 #[derive(Deserialize)]
 struct EnrollmentResponse {
+    service_id: String,
     machine_id: String,
     fingerprint: String,
 }
@@ -297,6 +301,12 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
         .controller_url
         .context("--controller-url is required unless --provider-usage-status is used")?;
     validate_controller_url(&controller_url)?;
+    if let Some(service_id) = args.service_id.as_deref() {
+        anyhow::ensure!(
+            crate::service_identity::valid_service_id(service_id),
+            "invalid Cowboy Service id"
+        );
+    }
     let identity = MachineIdentity::load_or_create(&args.state_dir)?;
     let display_name = args.display_name.unwrap_or_else(default_display_name);
     let workspaces = Arc::new(WorkspaceConfig::new(
@@ -310,22 +320,32 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
         .map(std::fs::read_to_string)
         .transpose()
         .context("reading Machine enrollment token file")?;
-    if let Some(token) = args
+    let enrolled_machine_id = if let Some(token) = args
         .enrollment_token
         .as_deref()
         .or(file_token.as_deref().map(str::trim))
     {
-        enroll(
+        let machine_id = enroll(
             &controller_url,
             token,
             identity.public_key(),
             providers.encryption_public_key(),
+            args.service_id.as_deref(),
         )
         .await?;
+        persist_enrolled_machine_id(&args.state_dir, &machine_id)?;
         if let Some(path) = args.enrollment_token_file.as_ref() {
             std::fs::remove_file(path).context("removing consumed enrollment token file")?;
         }
-    }
+        Some(machine_id)
+    } else {
+        None
+    };
+    let machine_id = resolve_runtime_machine_id(
+        &args.machine_id,
+        &args.state_dir,
+        enrolled_machine_id.as_deref(),
+    );
     let code_adapter_socket = args.code_adapter_socket.clone();
     let zed_adapter_socket = args.zed_adapter_socket.clone();
     let provider_usage = crate::provider_usage_spool::ProviderUsageSpool::open(
@@ -333,7 +353,7 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
     )?;
     let controller = controller_loop(ControllerConfig {
         controller_url,
-        machine_id: args.machine_id,
+        machine_id,
         display_name,
         identity,
         runtime_socket,
@@ -693,7 +713,8 @@ async fn enroll(
     token: &str,
     public_key: &str,
     encryption_public_key: &str,
-) -> anyhow::Result<()> {
+    expected_service_id: Option<&str>,
+) -> anyhow::Result<String> {
     let endpoint = format!(
         "{}/api/machine/enroll",
         controller_url.trim_end_matches('/')
@@ -713,12 +734,49 @@ async fn enroll(
         .json::<EnrollmentResponse>()
         .await
         .context("decoding Machine enrollment response")?;
+    if let Some(expected) = expected_service_id {
+        anyhow::ensure!(
+            response.service_id == expected,
+            "Cowboy Service identity changed during enrollment"
+        );
+    }
     tracing::info!(
         machine = %response.machine_id,
         fingerprint = %response.fingerprint,
         "Machine identity enrolled"
     );
+    Ok(response.machine_id)
+}
+
+fn persist_enrolled_machine_id(state_dir: &Path, machine_id: &str) -> anyhow::Result<()> {
+    let path = state_dir.join("machine-id");
+    std::fs::write(&path, machine_id)
+        .with_context(|| format!("writing enrolled Machine id {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("locking enrolled Machine id {}", path.display()))?;
+    }
     Ok(())
+}
+
+fn load_enrolled_machine_id(state_dir: &Path) -> Option<String> {
+    std::fs::read_to_string(state_dir.join("machine-id"))
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+fn resolve_runtime_machine_id(
+    cli_machine_id: &str,
+    state_dir: &Path,
+    enrolled: Option<&str>,
+) -> String {
+    if let Some(machine_id) = enrolled.filter(|id| !id.is_empty()) {
+        return machine_id.to_owned();
+    }
+    load_enrolled_machine_id(state_dir).unwrap_or_else(|| cli_machine_id.to_owned())
 }
 
 async fn controller_loop(config: ControllerConfig) -> anyhow::Result<()> {
@@ -2849,10 +2907,11 @@ mod tests {
     use super::{
         Args, WorkspaceConfig, bootstrap_acp_inventory, claude_runtime_enabled,
         disabled_provider_slots_from, gemini_auth_from_metadata, gemini_env_value_from,
-        grok_auth_from_json, inherit_nonempty_environment, load_workspace_snapshot,
-        login_challenge_tokens, managed_provider_environment, npm_package_for_component,
-        npm_script_shell_with, npm_update_is_confirmed_by_inventory, parse_workspaces,
-        pin_grok_runtime_args, provider_for_component, reject_untrusted_workspace,
+        grok_auth_from_json, inherit_nonempty_environment, load_enrolled_machine_id,
+        load_workspace_snapshot, login_challenge_tokens, managed_provider_environment,
+        npm_package_for_component, npm_script_shell_with, npm_update_is_confirmed_by_inventory,
+        parse_workspaces, persist_enrolled_machine_id, pin_grok_runtime_args,
+        provider_for_component, reject_untrusted_workspace, resolve_runtime_machine_id,
         selected_zed_pair, send_frame_with_timeout, validate_controller_url,
         workspace_path_allowed,
     };
@@ -2867,6 +2926,37 @@ mod tests {
     fn remote_controller_requires_https() {
         assert!(validate_controller_url("https://cowboy.example").is_ok());
         assert!(validate_controller_url("http://cowboy.example").is_err());
+    }
+
+    #[test]
+    fn enrolled_machine_id_wins_over_cli_default() {
+        let dir = std::env::temp_dir().join(format!(
+            "cowboy-enrolled-id-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("tempdir");
+        assert_eq!(
+            resolve_runtime_machine_id("local", &dir, Some("m-aabbccddeeff0011")),
+            "m-aabbccddeeff0011"
+        );
+        persist_enrolled_machine_id(&dir, "m-aabbccddeeff0011").expect("persist");
+        assert_eq!(
+            load_enrolled_machine_id(&dir).as_deref(),
+            Some("m-aabbccddeeff0011")
+        );
+        assert_eq!(
+            resolve_runtime_machine_id("local", &dir, None),
+            "m-aabbccddeeff0011"
+        );
+        assert_eq!(
+            resolve_runtime_machine_id("local", &dir.join("missing"), None),
+            "local"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

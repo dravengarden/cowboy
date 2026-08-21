@@ -1600,6 +1600,19 @@ impl SqliteStorage {
         })
     }
 
+    pub(super) async fn cancel_machine_enrollment(&self, token: &str) -> Result<()> {
+        anyhow::ensure!(!token.trim().is_empty(), "enrollment token is required");
+        sqlx::query(
+            "DELETE FROM machine_enrollment_tokens \
+             WHERE token_hash = ?1 AND used_at_ms IS NULL",
+        )
+        .bind(hex_sha256(token.trim().as_bytes()))
+        .execute(&self.pool)
+        .await
+        .context("cancelling Machine enrollment")?;
+        Ok(())
+    }
+
     pub(super) async fn machine_public_key(&self, machine_id: &str) -> Result<Option<String>> {
         let value: Option<Option<String>> = sqlx::query_scalar(
             "SELECT public_key FROM machines WHERE id = ?1 AND revoked_at_ms IS NULL",
@@ -2868,6 +2881,39 @@ impl SqliteStorage {
 }
 
 impl SqliteStorage {
+    pub(super) async fn load_settings(&self) -> Result<Vec<(String, serde_json::Value)>> {
+        let rows: Vec<(String, serde_json::Value)> =
+            sqlx::query_as("SELECT key, value FROM settings")
+                .fetch_all(&self.pool)
+                .await
+                .context("SELECT SQLite auth settings")?;
+        Ok(rows
+            .into_iter()
+            .filter(|(key, _)| crate::admin::is_admin_setting_key(key))
+            .collect())
+    }
+
+    pub(super) async fn put_setting(&self, key: &str, value: &serde_json::Value) -> Result<()> {
+        anyhow::ensure!(
+            crate::admin::is_admin_setting_key(key),
+            "unsupported internal auth setting"
+        );
+        let mut value = value.clone();
+        strip_nul(&mut value);
+        sqlx::query(
+            "INSERT INTO settings(key, value, updated_at_ms) VALUES (?1, ?2, ?3) \
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value, \
+             updated_at_ms = excluded.updated_at_ms",
+        )
+        .bind(key)
+        .bind(&value)
+        .bind(now_ms())
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPSERT SQLite auth setting {key}"))?;
+        Ok(())
+    }
+
     pub(super) async fn update_status(&self, session_id: &str, status: Status) -> Result<()> {
         sqlx::query("UPDATE sessions SET status = ?1, updated_at_ms = ?2 WHERE id = ?3")
             .bind(status_to_str(status))

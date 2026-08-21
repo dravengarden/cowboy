@@ -20,7 +20,7 @@ function base64UrlToBuffer(value: string): ArrayBuffer {
 function reviveCreateOptions(
   options: Record<string, unknown>,
 ): CredentialCreationOptions {
-  const publicKey = { ...options } as PublicKeyCredentialCreationOptions & {
+  const publicKey = { ...options } as unknown as PublicKeyCredentialCreationOptions & {
     challenge: BufferSource;
     user: PublicKeyCredentialUserEntity;
   };
@@ -41,7 +41,7 @@ function reviveCreateOptions(
 function reviveRequestOptions(
   options: Record<string, unknown>,
 ): CredentialRequestOptions {
-  const publicKey = { ...options } as PublicKeyCredentialRequestOptions;
+  const publicKey = { ...options } as unknown as PublicKeyCredentialRequestOptions;
   publicKey.challenge = base64UrlToBuffer(String(options.challenge));
   if (Array.isArray(options.allowCredentials)) {
     publicKey.allowCredentials = options.allowCredentials.map((item) => {

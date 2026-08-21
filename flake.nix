@@ -78,6 +78,8 @@
           ./Cargo.toml
           ./Cargo.lock
           ./src/lib.rs
+          ./src/main.rs
+          ./src/cli.rs
           ./src/claude_shell.rs
           ./src/grok.rs
           ./src/machine_broker.rs
@@ -169,7 +171,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-kwX4KOx/GTXO5i3cX677lg6ItifKhFMwAAEs7T7Y5N0=";
+        hash = "sha256-h+EJdOeJqjKerzWBzTmoD3KT7az0RvWrzpRuoF6WNIE=";
         preBuild = ''
           vendor_util="$(command -v fetch-cargo-vendor-util-v2 || command -v fetch-cargo-vendor-util)"
           if grep -q "https://crates.io/api/v1/crates/" "$vendor_util"; then
@@ -212,6 +214,8 @@
           "--bin"
           "cowboy-codex-app-server"
         ];
+        nativeBuildInputs = [ pkgs.pkg-config ];
+        buildInputs = [ pkgs.openssl ];
         nativeCheckInputs = [ pkgs.cacert pkgs.gitMinimal pkgs.openssh ];
         preCheck = ''
           export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
@@ -233,12 +237,17 @@
           "--features"
           "machine-host"
           "--bin"
+          "cowboy"
+          "--bin"
           "cowboy-machine"
           "--bin"
           "cowboy-machine-install"
         ];
-        nativeBuildInputs = [ pkgs.makeWrapper ];
+        nativeBuildInputs = [ pkgs.makeWrapper pkgs.pkg-config ];
+        buildInputs = [ pkgs.openssl ];
         postInstall = ''
+          wrapProgram $out/bin/cowboy \
+            --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.openssh ]}
           wrapProgram $out/bin/cowboy-machine \
             --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.openssh ]}
         '';
@@ -261,6 +270,8 @@
           "--bin"
           "cowboy-code-adapter"
         ];
+        nativeBuildInputs = [ pkgs.pkg-config ];
+        buildInputs = [ pkgs.openssl ];
         doCheck = false;
         meta = {
           description = "Filesystem and Git adapter for Cowboy Machine";
@@ -357,6 +368,8 @@
         }
         ln -s ${cowboy-machine}/bin/cowboy-machine-install \
           "$out/bin/cowboy-machine-install"
+        ln -s ${cowboy-machine}/bin/cowboy \
+          "$out/bin/cowboy"
         ln -s ${cowboy}/bin/cowboy-acp-worker "$out/bin/cowboy-acp-worker"
         ln -s ${cowboy}/bin/cowboy-codex-app-server \
           "$out/bin/cowboy-codex-app-server"
@@ -408,6 +421,7 @@
         test -x ${cowboy}/bin/cowboy-codex-app-server
         test -x ${cowboy-machine}/bin/cowboy-machine
         test -x ${cowboy-machine}/bin/cowboy-machine-install
+        test -x ${cowboy-machine}/bin/cowboy
         test -x ${cowboy-code-adapter}/bin/cowboy-code-adapter
         touch "$out"
       '';

@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { CssBaseline, ThemeProvider } from "@mui/material";
 import { AppErrorBoundary } from "./AppErrorBoundary";
 import { ProductAuthGate } from "./auth/ProductAuthGate";
+import { MachineSetupGate } from "./setup/MachineSetupGate";
 import { SurfaceProvider, useSurfaceProfile } from "./surface/SurfaceProfile";
 import { useThemeMode } from "./theme";
 import { useGlobalFontScale, useReadingFontFaces } from "./readingSettings";
@@ -52,7 +53,9 @@ function Root(): React.JSX.Element {
           error card with a reload instead of a blank white screen. */}
       <AppErrorBoundary>
         <ProductAuthGate>
-          <Suspense fallback={null}>{app}</Suspense>
+          <MachineSetupGate>
+            <Suspense fallback={null}>{app}</Suspense>
+          </MachineSetupGate>
         </ProductAuthGate>
       </AppErrorBoundary>
     </ThemeProvider>

@@ -513,6 +513,10 @@ impl ProviderAuthService {
         let ephemeral = StaticSecret::from(random_bytes::<32>()?);
         let ephemeral_public = PublicKey::from(&ephemeral);
         let shared = ephemeral.diffie_hellman(&PublicKey::from(recipient));
+        ensure!(
+            shared.as_bytes().iter().any(|byte| *byte != 0),
+            "Machine encryption public key is non-contributory"
+        );
         let key = derive_seal_key(shared.as_bytes());
         let nonce = random_bytes::<24>()?;
         let mut envelope = SealedProviderAuth {
@@ -1025,6 +1029,15 @@ mod tests {
         assert_eq!(first_envelope.action, ProviderAuthAction::Apply);
         assert_ne!(first_envelope.ciphertext, second_envelope.ciphertext);
         assert!(!first_envelope.ciphertext.contains("settings_json"));
+
+        let non_contributory = base64::engine::general_purpose::STANDARD.encode([0_u8; 32]);
+        assert!(
+            service
+                .seal_for_machine("gemini", &non_contributory)
+                .unwrap_err()
+                .to_string()
+                .contains("non-contributory")
+        );
 
         let logged_out = service.logout("gemini").unwrap();
         assert_eq!(logged_out.auth_generation, 2);

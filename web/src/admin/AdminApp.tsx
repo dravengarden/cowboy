@@ -11,19 +11,13 @@ import {
   AppBar,
   Box,
   Button,
-  Checkbox,
   Container,
   Drawer,
-  FormControl,
-  FormControlLabel,
-  InputLabel,
   List,
   ListItemButton,
   ListItemIcon,
   ListItemText,
-  MenuItem,
   Paper,
-  Select,
   Stack,
   Table,
   TableBody,
@@ -40,14 +34,11 @@ import {
   type AdminAuthStatus,
   type AdminMachine,
   type AdminOverview,
-  type AdminRole,
   type AdminSession,
   type AdminUser,
   type PermissionPolicy,
   type ProductUser,
   type ProviderRelease,
-  type RegistrationMode,
-  type RegistrationPolicy,
   type SessionLimits,
 } from "./adminApi";
 import { AdminPasskeyLock, AdminPasskeysCard } from "./AdminPasskeys";
@@ -112,34 +103,75 @@ function AdminLoginPage({
   const [account, setAccount] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  if (bootstrap) {
+    return (
+      <Box sx={{ minHeight: "100vh", display: "grid", placeItems: "center", p: 3 }}>
+        <Paper sx={{ p: 4, width: "100%", maxWidth: 420 }}>
+          <Stack spacing={2}>
+            <Typography variant="h5">Cowboy Admin</Typography>
+            <Typography color="text.secondary">
+              This instance has no user yet. Open / to enter the setup code and create
+              the only account. Admin login uses that same account afterward.
+            </Typography>
+            <Button variant="contained" href="/">Open Cowboy</Button>
+          </Stack>
+        </Paper>
+      </Box>
+    );
+  }
   return (
-    <Box sx={{ minHeight: "100vh", display: "grid", placeItems: "center", p: 3 }}>
+    <Box
+      component="form"
+      method="post"
+      action="#"
+      autoComplete="on"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void adminApi.login(account, password).then(onAuthed).catch((err: Error) => setError(err.message));
+      }}
+      sx={{ minHeight: "100vh", display: "grid", placeItems: "center", p: 3 }}
+    >
       <Paper sx={{ p: 4, width: "100%", maxWidth: 420 }}>
         <Stack spacing={2}>
           <Typography variant="h5">Cowboy Admin</Typography>
           <Typography color="text.secondary">
-            {bootstrap
-              ? "Create the first owner account (12+ character password). This page is a separate admin site and is not the session UI."
-              : "Sign in to the admin console. Admin sessions last 12 hours."}
+            Sign in to the admin console. Admin sessions last 12 hours.
           </Typography>
           {error && <Alert severity="error">{error}</Alert>}
-          <TextField label="Account" value={account} onChange={(event) => setAccount(event.target.value)} autoComplete="username" />
+          <TextField
+            label="Account"
+            name="username"
+            value={account}
+            onChange={(event) => setAccount(event.target.value)}
+            autoComplete="username"
+            slotProps={{
+              htmlInput: {
+                id: "admin-username",
+                name: "username",
+                autoCapitalize: "none",
+                autoCorrect: "off",
+                spellCheck: false,
+              },
+            }}
+          />
           <TextField
             label="Password"
+            name="password"
             type="password"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
-            autoComplete={bootstrap ? "new-password" : "current-password"}
-          />
-          <Button
-            variant="contained"
-            onClick={() => {
-              const submit = bootstrap ? adminApi.bootstrap : adminApi.login;
-              void submit(account, password).then(onAuthed).catch((err: Error) => setError(err.message));
+            autoComplete="current-password"
+            slotProps={{
+              htmlInput: {
+                id: "admin-password",
+                name: "password",
+                autoCapitalize: "off",
+                autoCorrect: "off",
+                spellCheck: false,
+              },
             }}
-          >
-            {bootstrap ? "Create owner" : "Sign in"}
-          </Button>
+          />
+          <Button type="submit" variant="contained">Sign in</Button>
         </Stack>
       </Paper>
     </Box>
@@ -213,7 +245,7 @@ function OverviewPage(): React.JSX.Element {
         <Stat title="Health" value={data.healthy ? "ok" : "degraded"} />
         <Stat title="Persistence" value={data.persistence} />
         <Stat title="Sessions" value={String(data.sessions_live)} />
-        <Stat title="Registration" value={data.registration.accepts_registration ? data.registration.mode : "closed"} />
+        <Stat title="Accounts" value="single-user" />
       </Stack>
       <Paper sx={{ p: 2 }}>
         <Typography variant="subtitle2" color="text.secondary">Runtime</Typography>
@@ -241,273 +273,48 @@ function AccountsPage({
   auth: AdminAuthStatus;
   onAuth: (auth: AdminAuthStatus) => void;
 }): React.JSX.Element {
-  const [policy, setPolicy] = useState<RegistrationPolicy | null>(null);
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [productUsers, setProductUsers] = useState<ProductUser[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [productError, setProductError] = useState<string | null>(null);
-  const [issued, setIssued] = useState<string | null>(null);
-  const [enabled, setEnabled] = useState(false);
-  const [mode, setMode] = useState<RegistrationMode>("disabled");
-  const [name, setName] = useState("");
-  const [newAccount, setNewAccount] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [productAccount, setProductAccount] = useState("");
-  const [productPassword, setProductPassword] = useState("");
-  const [productRole, setProductRole] = useState<AdminRole>("operator");
-  const [passwordDrafts, setPasswordDrafts] = useState<Record<string, string>>({});
-  const canGrantOwner = auth.role === "owner";
-  const canSetPassword = auth.role === "owner";
-  const reload = useCallback(async () => {
-    const [next, accountData] = await Promise.all([
-      adminApi.registration(),
-      adminApi.accounts(),
-    ]);
-    setPolicy(next);
-    setEnabled(next.enabled);
-    setMode(next.mode);
-    setUsers(accountData.accounts);
-  }, []);
-  const reloadProductUsers = useCallback(async () => {
-    try {
-      const productData = await adminApi.productUsers();
-      setProductUsers(productData.users);
-      setProductError(null);
-    } catch (err) {
-      setProductUsers([]);
-      setProductError(err instanceof Error ? err.message : String(err));
-    }
-  }, []);
   useEffect(() => {
-    void reload().catch((err: Error) => setError(err.message));
-    void reloadProductUsers();
-  }, [reload, reloadProductUsers]);
+    void Promise.all([adminApi.accounts(), adminApi.productUsers()])
+      .then(([accountData, productData]) => {
+        setUsers(accountData.accounts);
+        setProductUsers(productData.users);
+      })
+      .catch((err: Error) => setError(err.message));
+  }, []);
   if (error) return <Alert severity="error">{error}</Alert>;
-  if (!policy) return <Typography>Loading…</Typography>;
   return (
     <Stack spacing={2}>
       <Typography variant="h4">Accounts</Typography>
       <Typography color="text.secondary">
-        This admin site has its own login and is not the session PWA login. Create admin
-        operators here. / is login-only until a product user exists. Public signup is a
-        separate Matrix-style switch below.
+        This instance is single-user. The owner is created on / during first-run.
+        Admin login uses the same account. Extra users, invites, and open
+        registration are not available.
       </Typography>
       <AdminPasskeysCard auth={auth} onAuth={onAuth} />
       <Paper sx={{ p: 2 }}>
-        <Typography variant="h6" gutterBottom>Admin users</Typography>
-        <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ mb: 2 }}>
-          <TextField label="Account" value={newAccount} onChange={(event) => setNewAccount(event.target.value)} size="small" />
-          <TextField label="Password" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} size="small" />
-          <Button
-            variant="outlined"
-            onClick={() => {
-              void adminApi.createAccount(newAccount, newPassword).then(() => {
-                setNewAccount("");
-                setNewPassword("");
-                return reload();
-              }).catch((err: Error) => setError(err.message));
-            }}
-          >
-            Add operator
-          </Button>
-        </Stack>
+        <Typography variant="h6" gutterBottom>Owner</Typography>
         <Table size="small">
           <TableHead>
             <TableRow>
               <TableCell>Account</TableCell>
-              <TableCell>Role</TableCell>
+              <TableCell>Admin role</TableCell>
+              <TableCell>Product role</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
-            {users.map((user) => (
-              <TableRow key={user.account}>
-                <TableCell>{user.account}</TableCell>
-                <TableCell>{user.role}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </Paper>
-      <Paper sx={{ p: 2 }}>
-        <Typography variant="h6" gutterBottom>Product users</Typography>
-        <Typography color="text.secondary" sx={{ mb: 2 }}>
-          This is not the session PWA login. Product users sign in on /. / is login-only
-          until a product user exists.
-        </Typography>
-        {productError && <Alert severity="error" sx={{ mb: 2 }}>{productError}</Alert>}
-        <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ mb: 2 }}>
-          <TextField
-            label="Account"
-            value={productAccount}
-            onChange={(event) => setProductAccount(event.target.value)}
-            size="small"
-          />
-          <TextField
-            label="Password"
-            type="password"
-            value={productPassword}
-            onChange={(event) => setProductPassword(event.target.value)}
-            size="small"
-          />
-          <FormControl size="small" sx={{ minWidth: 140 }}>
-            <InputLabel>Role</InputLabel>
-            <Select
-              label="Role"
-              value={productRole}
-              onChange={(event) => setProductRole(event.target.value as AdminRole)}
-            >
-              <MenuItem value="operator">Operator</MenuItem>
-              <MenuItem value="viewer">Viewer</MenuItem>
-              {canGrantOwner && <MenuItem value="owner">Owner</MenuItem>}
-            </Select>
-          </FormControl>
-          <Button
-            variant="outlined"
-            onClick={() => {
-              void adminApi.createProductUser(productAccount, productPassword, productRole).then(() => {
-                setProductAccount("");
-                setProductPassword("");
-                setProductRole("operator");
-                return reloadProductUsers();
-              }).catch((err: Error) => setProductError(err.message));
-            }}
-          >
-            Create user
-          </Button>
-        </Stack>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Account</TableCell>
-              <TableCell>Role</TableCell>
-              <TableCell>Status</TableCell>
-              {canSetPassword && <TableCell>Password</TableCell>}
-              <TableCell />
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {productUsers.map((user) => (
-              <TableRow key={user.id}>
-                <TableCell>{user.username}</TableCell>
-                <TableCell>{user.role}</TableCell>
-                <TableCell>{user.disabled_at_ms == null ? "active" : "disabled"}</TableCell>
-                {canSetPassword && (
-                  <TableCell>
-                    <Stack direction="row" spacing={1}>
-                      <TextField
-                        label="New password"
-                        type="password"
-                        size="small"
-                        value={passwordDrafts[user.id] ?? ""}
-                        onChange={(event) =>
-                          setPasswordDrafts((drafts) => ({
-                            ...drafts,
-                            [user.id]: event.target.value,
-                          }))}
-                      />
-                      <Button
-                        onClick={() => {
-                          void adminApi.setProductUserPassword(
-                            user.id,
-                            passwordDrafts[user.id] ?? "",
-                          ).then(() => {
-                            setPasswordDrafts((drafts) => ({ ...drafts, [user.id]: "" }));
-                            setProductError(null);
-                          }).catch((err: Error) => setProductError(err.message));
-                        }}
-                      >
-                        Set password
-                      </Button>
-                    </Stack>
-                  </TableCell>
-                )}
-                <TableCell>
-                  <Button
-                    disabled={user.disabled_at_ms != null}
-                    onClick={() =>
-                      void adminApi.disableProductUser(user.id).then(() => reloadProductUsers()).catch(
-                        (err: Error) => setProductError(err.message),
-                      )}
-                  >
-                    Disable
-                  </Button>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </Paper>
-      <Typography variant="h5">End-user registration</Typography>
-      <Typography color="text.secondary">
-        Matrix-style service switch. The controller decides whether public registration is closed, token-gated, or open.
-      </Typography>
-      <Paper sx={{ p: 2 }}>
-        <Stack direction={{ xs: "column", sm: "row" }} spacing={2} alignItems="center">
-          <FormControlLabel
-            control={<Checkbox checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />}
-            label="Enable registration"
-          />
-          <FormControl sx={{ minWidth: 180 }}>
-            <InputLabel>Mode</InputLabel>
-            <Select label="Mode" value={mode} onChange={(event) => setMode(event.target.value as RegistrationMode)}>
-              <MenuItem value="disabled">Disabled</MenuItem>
-              <MenuItem value="token">Registration token</MenuItem>
-              <MenuItem value="open">Open</MenuItem>
-            </Select>
-          </FormControl>
-          <Button
-            variant="contained"
-            onClick={() => void adminApi.saveRegistration(enabled, mode).then(reload).catch((err: Error) => setError(err.message))}
-          >
-            Save
-          </Button>
-        </Stack>
-      </Paper>
-      <Paper sx={{ p: 2 }}>
-        <Typography variant="h6" gutterBottom>Invite tokens</Typography>
-        <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ mb: 2 }}>
-          <TextField label="Name" value={name} onChange={(event) => setName(event.target.value)} size="small" />
-          <Button
-            variant="outlined"
-            onClick={() => {
-              void adminApi.issueToken(name, 3, 86_400).then((created) => {
-                setIssued(created.token);
-                setName("");
-                return reload();
-              }).catch((err: Error) => setError(err.message));
-            }}
-          >
-            Issue token
-          </Button>
-        </Stack>
-        {issued && <Alert severity="info">Copy now; it is not shown again: {issued}</Alert>}
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Name</TableCell>
-              <TableCell>Prefix</TableCell>
-              <TableCell>Uses</TableCell>
-              <TableCell>State</TableCell>
-              <TableCell />
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {policy.tokens.map((token) => (
-              <TableRow key={token.id}>
-                <TableCell>{token.name}</TableCell>
-                <TableCell>{token.token_prefix}</TableCell>
-                <TableCell>{token.uses_count}/{token.uses_allowed ?? "∞"}</TableCell>
-                <TableCell>{token.disabled ? "disabled" : "active"}</TableCell>
-                <TableCell>
-                  <Button
-                    disabled={token.disabled}
-                    onClick={() => void adminApi.disableToken(token.id).then(reload).catch((err: Error) => setError(err.message))}
-                  >
-                    Disable
-                  </Button>
-                </TableCell>
-              </TableRow>
-            ))}
+            {users.map((user) => {
+              const product = productUsers.find((item) => item.username === user.account);
+              return (
+                <TableRow key={user.account}>
+                  <TableCell>{user.account}</TableCell>
+                  <TableCell>{user.role}</TableCell>
+                  <TableCell>{product?.role ?? "—"}</TableCell>
+                </TableRow>
+              );
+            })}
           </TableBody>
         </Table>
       </Paper>
@@ -517,71 +324,25 @@ function AccountsPage({
 
 function PermissionsPage(): React.JSX.Element {
   const [policy, setPolicy] = useState<PermissionPolicy | null>(null);
-  const [account, setAccount] = useState("");
-  const [role, setRole] = useState<AdminRole>("operator");
   const [error, setError] = useState<string | null>(null);
-  const reload = useCallback(async () => {
-    setPolicy(await adminApi.permissions());
-  }, []);
   useEffect(() => {
-    void reload().catch((err: Error) => setError(err.message));
-  }, [reload]);
+    void adminApi.permissions().then(setPolicy).catch((err: Error) => setError(err.message));
+  }, []);
   if (error) return <Alert severity="error">{error}</Alert>;
   if (!policy) return <Typography>Loading…</Typography>;
-  const save = (next: PermissionPolicy): void => {
-    void adminApi.savePermissions(next).then(setPolicy).catch((err: Error) => setError(err.message));
-  };
   return (
     <Stack spacing={2}>
       <Typography variant="h4">Permissions</Typography>
       <Typography color="text.secondary">
-        Service-owned roles. Future accounts inherit the default role unless a grant overrides it.
+        This instance is single-user. The account created on / is the owner.
+        Extra grants are not available.
       </Typography>
       <Paper sx={{ p: 2 }}>
-        <FormControl sx={{ minWidth: 200 }}>
-          <InputLabel>Default role</InputLabel>
-          <Select
-            label="Default role"
-            value={policy.default_role}
-            onChange={(event) => save({ ...policy, default_role: event.target.value as AdminRole })}
-          >
-            <MenuItem value="owner">Owner</MenuItem>
-            <MenuItem value="operator">Operator</MenuItem>
-            <MenuItem value="viewer">Viewer</MenuItem>
-          </Select>
-        </FormControl>
-      </Paper>
-      <Paper sx={{ p: 2 }}>
-        <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ mb: 2 }}>
-          <TextField label="Account" value={account} onChange={(event) => setAccount(event.target.value)} size="small" />
-          <Select size="small" value={role} onChange={(event) => setRole(event.target.value as AdminRole)}>
-            <MenuItem value="owner">Owner</MenuItem>
-            <MenuItem value="operator">Operator</MenuItem>
-            <MenuItem value="viewer">Viewer</MenuItem>
-          </Select>
-          <Button
-            variant="contained"
-            onClick={() => {
-              if (!account.trim()) return;
-              save({
-                ...policy,
-                grants: [...policy.grants.filter((grant) => grant.account !== account.trim()), {
-                  account: account.trim(),
-                  role,
-                }],
-              });
-              setAccount("");
-            }}
-          >
-            Grant
-          </Button>
-        </Stack>
         <Table size="small">
           <TableHead>
             <TableRow>
               <TableCell>Account</TableCell>
               <TableCell>Role</TableCell>
-              <TableCell />
             </TableRow>
           </TableHead>
           <TableBody>
@@ -589,14 +350,6 @@ function PermissionsPage(): React.JSX.Element {
               <TableRow key={grant.account}>
                 <TableCell>{grant.account}</TableCell>
                 <TableCell>{grant.role}</TableCell>
-                <TableCell>
-                  <Button onClick={() => save({
-                    ...policy,
-                    grants: policy.grants.filter((item) => item.account !== grant.account),
-                  })}>
-                    Remove
-                  </Button>
-                </TableCell>
               </TableRow>
             ))}
           </TableBody>

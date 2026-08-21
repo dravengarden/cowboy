@@ -1,7 +1,9 @@
 #![warn(clippy::pedantic)]
 
+use std::io::{self, IsTerminal as _};
+#[cfg(feature = "full")]
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
 use clap::{Args, Parser, Subcommand};
@@ -10,7 +12,8 @@ use clap::{Args, Parser, Subcommand};
 #[command(
     name = "cowboy",
     version,
-    about = "Drive coding-agent CLIs from anywhere over ACP"
+    about = "Drive coding-agent CLIs from anywhere over ACP",
+    after_help = "On a new computer:\n  1. In the Cowboy UI, create a one-time code\n  2. cowboy register https://<origin>\n  3. Paste the one-time token when asked\n\nThe default register command runs Cowboy Machine in the current terminal. Add --background to install and start a user background service.\nCowboy assigns the machine id. Each Service gets isolated Machine state under ~/.local/state/cowboy-machine/services/.\nCowboy Service stores only the public key."
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -22,19 +25,35 @@ enum Command {
     /// Run the cowboy daemon (HTTP + WebSocket). The long-running systemd
     /// service that owns the Hub + supervisor; every surface (Web UI, phone,
     /// native shell) connects to it as a client.
+    #[cfg(feature = "full")]
     Serve(ServeArgs),
     /// Expose the running cowboy daemon as a stdio ACP agent for Zed or any
     /// other ACP client. This is a thin bridge; it never starts a second Hub.
+    #[cfg(feature = "full")]
     ServeAcp(ServeAcpArgs),
     /// Debug: drive one provider end-to-end (spawn, initialize, prompt, stream).
+    #[cfg(feature = "full")]
     TryAgent(TryAgentArgs),
     /// Create a short-lived, single-use token for enrolling a remote Machine.
+    #[cfg(feature = "full")]
     MachineEnroll(MachineEnrollArgs),
     /// Revoke a remote Machine identity. Re-enrollment requires a new token
     /// and creates an explicit key-rotation boundary.
+    #[cfg(feature = "full")]
     MachineRevoke(MachineRevokeArgs),
+    /// Register this computer with a Cowboy instance.
+    ///
+    /// Create a one-time code in the web UI first, then run:
+    ///   `cowboy register https://cowboy.example`
+    /// and paste the token. Cowboy assigns the machine id and generates an
+    /// Ed25519 key on this computer (mode 0600). The private key never leaves
+    /// this machine.
+    Register(RegisterArgs),
+    /// Show this computer's Machine fingerprint and private-key path.
+    Identity(IdentityArgs),
 }
 
+#[cfg(feature = "full")]
 #[derive(Args)]
 pub struct MachineEnrollArgs {
     #[arg(long, env = "COWBOY_DATABASE_URL")]
@@ -53,6 +72,7 @@ pub struct MachineEnrollArgs {
     ttl_seconds: i64,
 }
 
+#[cfg(feature = "full")]
 #[derive(Args)]
 pub struct MachineRevokeArgs {
     #[arg(long, env = "COWBOY_DATABASE_URL")]
@@ -67,6 +87,37 @@ pub struct MachineRevokeArgs {
     machine_id: String,
 }
 
+#[derive(Args)]
+pub struct RegisterArgs {
+    /// Published HTTPS origin of the Cowboy instance.
+    origin: String,
+    /// Optional override. When omitted, Cowboy assigns the id from the
+    /// enrollment token when this computer first connects.
+    machine_id: Option<String>,
+    #[arg(long)]
+    display_name: Option<String>,
+    /// `id=/absolute/path` workspace the Machine may use. Defaults to `home=$HOME`.
+    #[arg(long = "workspace")]
+    workspaces: Vec<String>,
+    /// Read the one-time token from a mode-0600 file instead of the TTY.
+    #[arg(long)]
+    token_file: Option<PathBuf>,
+    /// Install and keep Cowboy Machine running as a background service.
+    #[arg(long, default_value_t = false)]
+    background: bool,
+    /// Override the Service-scoped Machine state directory.
+    #[arg(long)]
+    state_dir: Option<PathBuf>,
+}
+
+#[derive(Args)]
+pub struct IdentityArgs {
+    /// Override the Machine state directory (default ~/.local/state/cowboy-machine).
+    #[arg(long)]
+    state_dir: Option<PathBuf>,
+}
+
+#[cfg(feature = "full")]
 #[derive(Args)]
 pub struct ServeAcpArgs {
     /// Only expose sessions for this provider. Register one Zed External Agent
@@ -88,6 +139,7 @@ pub struct ServeAcpArgs {
     pub token: Option<String>,
 }
 
+#[cfg(feature = "full")]
 #[derive(Args)]
 pub struct TryAgentArgs {
     /// Provider id from the active Cowboy Provider Catalog.
@@ -100,6 +152,7 @@ pub struct TryAgentArgs {
     prompt: String,
 }
 
+#[cfg(feature = "full")]
 #[derive(Args)]
 pub struct ServeArgs {
     /// Address to bind the HTTP/WebSocket server to.
@@ -190,17 +243,21 @@ impl Cli {
     ///
     /// Returns an error when command validation, startup, or the selected
     /// long-running service fails.
+    #[cfg_attr(not(feature = "full"), allow(clippy::unused_async))]
     pub async fn run(self) -> anyhow::Result<()> {
         // Reqwest is deliberately provider-neutral. Install the one selected
         // rustls provider before any command can construct an HTTPS client;
         // background startup order must not decide whether TLS panics.
         let _ = rustls::crypto::ring::default_provider().install_default();
         match self.command {
+            #[cfg(feature = "full")]
             Command::Serve(args) => crate::server::serve(args).await,
+            #[cfg(feature = "full")]
             Command::ServeAcp(args) => {
                 crate::server::init_tracing();
                 crate::acp_bridge::serve(args).await
             }
+            #[cfg(feature = "full")]
             Command::TryAgent(args) => {
                 crate::server::init_tracing();
                 let spec = crate::provider::lookup(&args.provider)
@@ -210,6 +267,7 @@ impl Cli {
                     .run_until(crate::acp::run_oneshot(&spec, args.cwd, args.prompt))
                     .await
             }
+            #[cfg(feature = "full")]
             Command::MachineEnroll(args) => {
                 let database_url = args
                     .database_url
@@ -230,6 +288,7 @@ impl Cli {
                 println!("{token}");
                 Ok(())
             }
+            #[cfg(feature = "full")]
             Command::MachineRevoke(args) => {
                 let database_url = args
                     .database_url
@@ -242,10 +301,127 @@ impl Cli {
                 store.migrate().await?;
                 store.revoke_machine(&args.machine_id).await
             }
+            Command::Register(args) => register_computer(args).await,
+            Command::Identity(args) => {
+                let state_dirs = crate::machine_install::identity_state_dirs(args.state_dir)?;
+                anyhow::ensure!(
+                    !state_dirs.is_empty(),
+                    "this computer has no Machine key yet; run cowboy register first"
+                );
+                for (index, state_dir) in state_dirs.iter().enumerate() {
+                    let identity = crate::machine_auth::MachineIdentity::load_or_create(state_dir)?;
+                    let fingerprint = crate::machine_auth::fingerprint(identity.public_key())?;
+                    if index > 0 {
+                        println!();
+                    }
+                    if let Some(service_id) = state_dir.file_name().and_then(|name| name.to_str())
+                        && crate::service_identity::valid_service_id(service_id)
+                    {
+                        println!("Service id:      {service_id}");
+                    }
+                    let origin = std::fs::read_to_string(state_dir.join("service-origin"))
+                        .ok()
+                        .map(|value| value.trim().to_owned())
+                        .filter(|value| !value.is_empty());
+                    if let Some(origin) = origin {
+                        println!("Service origin:  {origin}");
+                    }
+                    println!("Fingerprint:     {fingerprint}");
+                    println!("Private key:     {}", identity.private_key_path().display());
+                    println!("State:           {}", state_dir.display());
+                }
+                println!(
+                    "Keep the private key on this computer. Cowboy Service stores only the public key."
+                );
+                Ok(())
+            }
         }
     }
 }
 
+async fn register_computer(args: RegisterArgs) -> anyhow::Result<()> {
+    let token = read_enrollment_token(args.token_file.as_deref())?;
+    let workspaces = if args.workspaces.is_empty() {
+        default_home_workspace()?
+    } else {
+        args.workspaces
+    };
+    let report = crate::machine_install::register(
+        &args.origin,
+        args.machine_id.as_deref(),
+        args.display_name.as_deref(),
+        &workspaces,
+        &token,
+        args.background,
+        args.state_dir,
+    )
+    .await?;
+    print_register_report(&report);
+    if args.background {
+        println!("Cowboy Machine is starting in the background.");
+        return Ok(());
+    }
+    println!();
+    println!("Cowboy Machine is running in this terminal.");
+    println!("Keep this terminal open; press Ctrl-C to take this computer offline.");
+    println!("For a future background registration, add --background to the register command.");
+    crate::machine_install::run_foreground(&report).await
+}
+
+fn print_register_report(report: &crate::machine_install::RegisterReport) {
+    println!("Registration prepared for {}", report.origin);
+    println!("Service id:      {}", report.service_id);
+    match report.machine_id.as_deref() {
+        Some(machine_id) => println!("Machine id:     {machine_id}"),
+        None => println!("Machine id:     assigned when this computer enrolls"),
+    }
+    println!("Fingerprint:    {}", report.fingerprint);
+    println!("Private key:    {}", report.private_key.display());
+    println!("State:          {}", report.state_dir.display());
+    println!("Keep the private key on this computer. Cowboy Service stores only the public key.");
+}
+
+fn default_home_workspace() -> anyhow::Result<Vec<String>> {
+    let home = std::env::var("HOME").context("HOME is not set")?;
+    Ok(vec![format!("home={home}")])
+}
+
+fn read_enrollment_token(token_file: Option<&Path>) -> anyhow::Result<String> {
+    if let Some(path) = token_file {
+        let token = std::fs::read_to_string(path)
+            .with_context(|| format!("reading enrollment token {}", path.display()))?;
+        anyhow::ensure!(!token.trim().is_empty(), "enrollment token file is empty");
+        return Ok(token);
+    }
+    anyhow::ensure!(
+        io::stdin().is_terminal(),
+        "pass --token-file; refusing to read a token from a non-TTY stdin"
+    );
+    let config = rpassword::ConfigBuilder::new()
+        .password_feedback_mask('*')
+        .build();
+    let token = rpassword::prompt_password_with_config(
+        "Paste the enrollment token from Cowboy, then press Enter: ",
+        config,
+    )
+    .context("reading enrollment token from the terminal")?;
+    let token = token.trim().to_owned();
+    anyhow::ensure!(!token.is_empty(), "enrollment token is required");
+    eprintln!("Token received: {}", mask_secret(&token));
+    Ok(token)
+}
+
+fn mask_secret(value: &str) -> String {
+    let length = value.chars().count();
+    let hidden = length.saturating_sub(4);
+    format!(
+        "{}{}",
+        "*".repeat(hidden),
+        value.chars().skip(hidden).collect::<String>()
+    )
+}
+
+#[cfg(feature = "full")]
 impl ServeArgs {
     #[must_use]
     pub fn database_url(&self) -> Option<&str> {
@@ -259,9 +435,10 @@ impl ServeArgs {
 mod tests {
     use clap::Parser as _;
 
-    use super::{Cli, Command};
+    use super::{Cli, Command, mask_secret};
 
     #[test]
+    #[cfg(feature = "full")]
     fn serve_accepts_backend_neutral_database_url() {
         let cli =
             Cli::try_parse_from(["cowboy", "serve", "--database-url", "sqlite::memory:"]).unwrap();
@@ -272,6 +449,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "full")]
     fn serve_keeps_legacy_postgres_url_compatible() {
         let cli =
             Cli::try_parse_from(["cowboy", "serve", "--postgres-url", "postgresql:///cowboy"])
@@ -283,6 +461,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "full")]
     fn serve_acp_accepts_token_flag() {
         let cli = Cli::try_parse_from([
             "cowboy",
@@ -297,5 +476,72 @@ mod tests {
             panic!("expected serve-acp command");
         };
         assert_eq!(args.token.as_deref(), Some("cow_testtoken"));
+    }
+
+    #[test]
+    fn register_is_origin_and_optional_machine_id() {
+        let cli = Cli::try_parse_from([
+            "cowboy",
+            "register",
+            "https://cowboy.example",
+            "--token-file",
+            "/tmp/cowboy-enroll.token",
+        ])
+        .unwrap();
+        let Command::Register(args) = cli.command else {
+            panic!("expected register command");
+        };
+        assert_eq!(args.origin, "https://cowboy.example");
+        assert_eq!(args.machine_id, None);
+        assert!(args.workspaces.is_empty());
+        assert!(!args.background);
+        assert_eq!(
+            args.token_file.as_deref(),
+            Some(std::path::Path::new("/tmp/cowboy-enroll.token"))
+        );
+
+        let cli = Cli::try_parse_from([
+            "cowboy",
+            "register",
+            "https://cowboy.example",
+            "macbook-air",
+        ])
+        .unwrap();
+        let Command::Register(args) = cli.command else {
+            panic!("expected register command");
+        };
+        assert_eq!(args.machine_id.as_deref(), Some("macbook-air"));
+
+        let cli = Cli::try_parse_from([
+            "cowboy",
+            "register",
+            "https://cowboy.example",
+            "--background",
+        ])
+        .unwrap();
+        let Command::Register(args) = cli.command else {
+            panic!("expected register command");
+        };
+        assert!(args.background);
+    }
+
+    #[test]
+    fn identity_is_a_top_level_command() {
+        let cli = Cli::try_parse_from(["cowboy", "identity"]).unwrap();
+        assert!(matches!(cli.command, Command::Identity(_)));
+    }
+
+    #[test]
+    fn enrollment_token_mask_reveals_only_the_last_four_characters() {
+        let token = "7XSdk_AvMYumg66vkgC6ZkVZ_Ak572CgSC_A9jc6zKA";
+        let masked = mask_secret(token);
+        assert_eq!(masked.chars().count(), token.chars().count());
+        assert!(masked.ends_with("6zKA"));
+        assert!(
+            masked[..masked.len() - 4]
+                .chars()
+                .all(|character| character == '*')
+        );
+        assert_eq!(mask_secret("abc"), "abc");
     }
 }

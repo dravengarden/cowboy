@@ -19,7 +19,7 @@ dev *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
     export COWBOY_DATABASE_URL="${COWBOY_DATABASE_URL:-sqlite:///${PWD}/.cowboy-dev.sqlite}"
-    cargo run --locked -- serve {{ARGS}}
+    cargo run --locked --bin cowboy -- serve {{ARGS}}
 
 # Frontend dev server (Vite), proxying /ws + /healthz to a running daemon.
 dev-web:
@@ -42,6 +42,10 @@ shellfmt-wasm:
 build: build-web
     cargo build --release --locked
     cd zed-adapter && cargo build --release --locked
+
+# Build the three user-scoped Machine bootstrap commands on macOS or Linux.
+build-machine-bootstrap:
+    cargo build --release --locked --no-default-features --features machine-host --bin cowboy --bin cowboy-machine --bin cowboy-machine-install
 
 # Build one independently installable Provider artifact. The Provider id is
 # resolved only beneath providers/; shell metacharacters and path traversal are

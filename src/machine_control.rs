@@ -82,6 +82,13 @@ impl MachineControl {
         }
     }
 
+    /// Drop the active command channel for a revoked Machine regardless of
+    /// connection epoch. The WebSocket task observes the closed receiver and
+    /// exits; subsequent reconnects fail durable identity validation.
+    pub fn disconnect(&self, machine_id: &str) {
+        self.connections.write().remove(machine_id);
+    }
+
     pub fn send(&self, machine_id: &str, command: MachineCommand) -> Result<(), String> {
         let connections = self.connections.read();
         let connection = connections
@@ -240,6 +247,26 @@ mod tests {
         assert_eq!(
             adapter_timeout("deepseek-cache-status"),
             std::time::Duration::from_secs(3)
+        );
+    }
+
+    #[test]
+    fn explicit_disconnect_removes_the_active_command_channel() {
+        let control = MachineControl::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        control.install("macbook-air".to_owned(), "epoch".to_owned(), false, 3, tx);
+
+        control.disconnect("macbook-air");
+
+        assert!(
+            control
+                .send(
+                    "macbook-air",
+                    MachineCommand::RefreshInventory {
+                        request_id: "refresh".to_owned(),
+                    },
+                )
+                .is_err()
         );
     }
 

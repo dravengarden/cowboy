@@ -6,6 +6,8 @@ export interface AuthGateDecision {
   view: Exclude<AuthGateView, "loading">;
   me?: ProductMe;
   registration?: RegistrationPublicStatus;
+  setup_required?: boolean;
+  setup_pending?: boolean;
 }
 
 const AUTH_STATUS_BACKOFF_MAX_MS = 15_000;
@@ -14,9 +16,20 @@ export function classifyAuthStatus(probe: AuthStatusProbe): AuthGateDecision {
   if (probe.kind === "ok") {
     const registration = probe.body.registration;
     if (probe.body.me) {
-      return { view: "ready", me: probe.body.me, registration };
+      return {
+        view: "ready",
+        me: probe.body.me,
+        registration,
+        setup_required: probe.body.setup_required === true,
+        setup_pending: probe.body.setup_pending === true,
+      };
     }
-    return { view: "login", registration };
+    return {
+      view: "login",
+      registration,
+      setup_required: probe.body.setup_required === true,
+      setup_pending: probe.body.setup_pending === true,
+    };
   }
   if (probe.kind === "unsupported") {
     return { view: "activating" };

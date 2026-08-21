@@ -51,6 +51,20 @@ fn valid_machine_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
+/// Allocate a new Machine id. Callers that omit `machine_id` from enrollment
+/// mint one of these instead of asking a person to invent a slug.
+pub(crate) fn generate_machine_id() -> Result<String> {
+    let mut random = [0_u8; 8];
+    std::fs::File::open("/dev/urandom")
+        .context("opening OS randomness")?
+        .read_exact(&mut random)
+        .context("reading OS randomness")?;
+    Ok(format!(
+        "m-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        random[0], random[1], random[2], random[3], random[4], random[5], random[6], random[7]
+    ))
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 fn valid_product_user_id(value: &str) -> bool {
     value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -97,6 +111,18 @@ fn validate_encryption_public_key(value: &str) -> Result<()> {
     anyhow::ensure!(
         bytes.len() == 32,
         "Machine encryption public key must be 32 bytes"
+    );
+    anyhow::ensure!(
+        base64::engine::general_purpose::STANDARD.encode(&bytes) == value,
+        "Machine encryption public key must use canonical base64"
+    );
+    let mut public_key = [0_u8; 32];
+    public_key.copy_from_slice(&bytes);
+    let probe = x25519_dalek::StaticSecret::from([0x42_u8; 32]);
+    let shared = probe.diffie_hellman(&x25519_dalek::PublicKey::from(public_key));
+    anyhow::ensure!(
+        shared.as_bytes().iter().any(|byte| *byte != 0),
+        "Machine encryption public key is non-contributory"
     );
     Ok(())
 }
@@ -795,6 +821,10 @@ impl Store {
         )
     }
 
+    pub async fn cancel_machine_enrollment(&self, token: &str) -> Result<()> {
+        dispatch_storage!(self, cancel_machine_enrollment(token))
+    }
+
     pub async fn machine_public_key(&self, machine_id: &str) -> Result<Option<String>> {
         dispatch_storage!(self, machine_public_key(machine_id))
     }
@@ -1010,6 +1040,14 @@ impl Store {
 
     pub async fn insert_session(&self, meta: &SessionMeta) -> Result<()> {
         dispatch_storage!(self, insert_session(meta))
+    }
+
+    pub async fn load_settings(&self) -> Result<Vec<(String, serde_json::Value)>> {
+        dispatch_storage!(self, load_settings())
+    }
+
+    pub async fn put_setting(&self, key: &str, value: &serde_json::Value) -> Result<()> {
+        dispatch_storage!(self, put_setting(key, value))
     }
 
     pub async fn update_status(&self, session_id: &str, status: Status) -> Result<()> {
@@ -1555,6 +1593,19 @@ impl PostgresStorage {
         })
     }
 
+    pub async fn cancel_machine_enrollment(&self, token: &str) -> Result<()> {
+        anyhow::ensure!(!token.trim().is_empty(), "enrollment token is required");
+        sqlx::query(
+            "DELETE FROM machine_enrollment_tokens \
+             WHERE token_hash = $1 AND used_at IS NULL",
+        )
+        .bind(hex_sha256(token.trim().as_bytes()))
+        .execute(&self.pool)
+        .await
+        .context("cancelling Machine enrollment")?;
+        Ok(())
+    }
+
     /// Load the active public key for a Machine.
     ///
     /// # Errors
@@ -2047,6 +2098,7 @@ impl PostgresStorage {
     ///
     /// # Errors
     /// If a query fails or a payload is unparseable.
+    #[allow(clippy::too_many_lines)] // one bounded session restore transaction
     pub async fn load_all(&self) -> Result<Vec<LoadedSession>> {
         let session_rows: Vec<SessionRow> = sqlx::query_as::<_, SessionRow>(
             "SELECT id, provider, provider_version, provider_generation_digest, \
@@ -2977,6 +3029,37 @@ impl PostgresStorage {
 }
 
 impl PostgresStorage {
+    pub async fn load_settings(&self) -> Result<Vec<(String, serde_json::Value)>> {
+        let rows: Vec<(String, serde_json::Value)> =
+            sqlx::query_as("SELECT key, value FROM settings")
+                .fetch_all(&self.pool)
+                .await
+                .context("SELECT auth settings")?;
+        Ok(rows
+            .into_iter()
+            .filter(|(key, _)| crate::admin::is_admin_setting_key(key))
+            .collect())
+    }
+
+    pub async fn put_setting(&self, key: &str, value: &serde_json::Value) -> Result<()> {
+        anyhow::ensure!(
+            crate::admin::is_admin_setting_key(key),
+            "unsupported internal auth setting"
+        );
+        let mut value = value.clone();
+        strip_nul(&mut value);
+        sqlx::query(
+            "INSERT INTO settings(key, value, updated_at) VALUES ($1, $2, now()) \
+             ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = now()",
+        )
+        .bind(key)
+        .bind(&value)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPSERT auth setting {key}"))?;
+        Ok(())
+    }
+
     /// Update only `status` and bump `updated_at`. Used when `Hub::set_status`
     /// fires; the event itself goes through `append_event` separately.
     ///
@@ -6018,17 +6101,57 @@ mod storage_contract_tests {
         }
     }
 
+    #[test]
+    fn generated_machine_id_matches_wire_rules() {
+        let id = generate_machine_id().expect("random Machine id");
+        assert!(valid_machine_id(&id), "{id}");
+        assert!(id.starts_with("m-"), "{id}");
+        assert_eq!(id.len(), 18, "{id}");
+    }
+
+    #[test]
+    fn machine_encryption_key_must_be_canonical_and_contributory() {
+        let secret = x25519_dalek::StaticSecret::from([0x24_u8; 32]);
+        let public = x25519_dalek::PublicKey::from(&secret);
+        let encoded = base64::engine::general_purpose::STANDARD.encode(public.as_bytes());
+        assert!(validate_encryption_public_key(&encoded).is_ok());
+        assert!(
+            validate_encryption_public_key(
+                &base64::engine::general_purpose::STANDARD.encode([0_u8; 32])
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("non-contributory")
+        );
+        assert!(validate_encryption_public_key(encoded.trim_end_matches('=')).is_err());
+    }
+
     async fn assert_machine_contract(store: &Store) -> Result<()> {
         assert!(store.machine_is_local("hawk").await?);
+        let encryption_secret = x25519_dalek::StaticSecret::from([0x24_u8; 32]);
+        let encryption_public = base64::engine::general_purpose::STANDARD
+            .encode(x25519_dalek::PublicKey::from(&encryption_secret).as_bytes());
+        let cancelled_token = store
+            .create_machine_enrollment("cancelled-machine", "Cancelled Machine", 60)
+            .await?;
+        store.cancel_machine_enrollment(&cancelled_token).await?;
+        assert!(
+            store
+                .consume_machine_enrollment(
+                    &cancelled_token,
+                    "ssh-ed25519 QUJD",
+                    &encryption_public,
+                )
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("invalid, expired, or already used")
+        );
         let token = store
             .create_machine_enrollment("contract-machine", "Contract Machine", 60)
             .await?;
         let enrolled = store
-            .consume_machine_enrollment(
-                &token,
-                "ssh-ed25519 QUJD",
-                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-            )
+            .consume_machine_enrollment(&token, "ssh-ed25519 QUJD", &encryption_public)
             .await?;
         assert_eq!(enrolled.id, "contract-machine");
         assert_eq!(enrolled.display_name, "Contract Machine");
@@ -6045,7 +6168,7 @@ mod storage_contract_tests {
                 .machine_encryption_public_key("contract-machine")
                 .await?
                 .as_deref(),
-            Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+            Some(encryption_public.as_str())
         );
 
         store

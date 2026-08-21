@@ -8,7 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { authApi, type ProductMe, type RegistrationPublicStatus } from "./authApi";
+import { authApi, type ProductMe } from "./authApi";
 import {
   announceProductSessionEnd,
   classifyAuthStatus,
@@ -142,17 +142,15 @@ export function ProductAuthGate({
 }): React.JSX.Element {
   const [view, setView] = useState<AuthGateView>("loading");
   const [me, setMe] = useState<ProductMe | null>(null);
-  const [registration, setRegistration] = useState<RegistrationPublicStatus>({
-    enabled: false,
-    mode: "disabled",
-    accepts_registration: false,
-  });
+  const [setupRequired, setSetupRequired] = useState(false);
+  const [setupPending, setSetupPending] = useState(false);
   const attemptsRef = useRef(0);
   const meRef = useRef<ProductMe | null>(null);
   const generationRef = useRef(0);
 
   const applyDecision = useCallback(async (decision: AuthGateDecision): Promise<void> => {
-    if (decision.registration) setRegistration(decision.registration);
+    if (decision.setup_required !== undefined) setSetupRequired(decision.setup_required);
+    if (decision.setup_pending !== undefined) setSetupPending(decision.setup_pending);
     if (meRef.current) {
       const action = nextReadyStatusAction(meRef.current, decision);
       if (action === "stay") return;
@@ -254,7 +252,17 @@ export function ProductAuthGate({
     );
   }
   if (view === "login") {
-    return <ProductLoginPage registration={registration} onAuthed={handleAuthed} />;
+    return (
+      <ProductLoginPage
+        setupRequired={setupRequired}
+        setupPending={setupPending}
+        onAuthed={handleAuthed}
+        onStatus={(status) => {
+          setSetupRequired(status.setup_required === true);
+          setSetupPending(status.setup_pending === true);
+        }}
+      />
+    );
   }
   if (view === "activating") {
     return <ProductControllerUnavailablePage onRetry={() => void loadStatus()} />;

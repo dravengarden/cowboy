@@ -6,7 +6,10 @@
 #![warn(clippy::pedantic)]
 #![cfg_attr(not(test), allow(dead_code))]
 
+use std::collections::HashMap;
 use std::io::Read as _;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
@@ -30,9 +33,20 @@ pub fn is_admin_setting_key(key: &str) -> bool {
 }
 
 pub const ADMIN_SESSION_COOKIE: &str = "cowboy_admin";
+/// One-time Portainer-style proof that the caller can read the host data dir.
+pub const ADMIN_SETUP_COOKIE: &str = "cowboy_admin_setup";
+pub const ADMIN_SETUP_TOKEN_FILE: &str = "admin-setup.token";
+pub const ADMIN_SETUP_TOKEN_PREFIX: &str = "cow_setup_";
 /// Absolute admin session lifetime. Shorter than the product cookie.
 pub const ADMIN_SESSION_TTL_SECS: i64 = 12 * 3_600;
 const ADMIN_SESSION_TTL_MS: i64 = ADMIN_SESSION_TTL_SECS * 1_000;
+/// Setup cookie only covers the create-admin step after the host token.
+pub const ADMIN_SETUP_TTL_SECS: i64 = 10 * 60;
+const ADMIN_SETUP_TOKEN_SECRET_BYTES: usize = 32;
+/// Single-factor admin create/change floor. Product passwords stay separate.
+/// 15 matches Chrome's default generator length.
+pub const ADMIN_PASSWORD_MIN_LEN: usize = 15;
+pub const ADMIN_PASSWORD_MAX_LEN: usize = 128;
 
 /// Synapse-shaped registration switch. The service, not the client, decides.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -430,6 +444,10 @@ pub struct AdminIdentities {
     pub accounts: Vec<AdminAccount>,
     #[serde(default)]
     pub sessions: Vec<AdminSessionRecord>,
+    /// SHA-256 hex of the host setup token. Never the secret. Cleared after
+    /// the first owner is created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup_token_hash: Option<String>,
 }
 
 #[allow(dead_code, clippy::struct_excessive_bools)]
@@ -437,6 +455,9 @@ pub struct AdminIdentities {
 pub struct AdminAuthStatus {
     pub authenticated: bool,
     pub bootstrap_required: bool,
+    /// Host setup token was proven in this browser; create-admin is next.
+    #[serde(default)]
+    pub setup_pending: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -453,6 +474,11 @@ pub struct AdminAuthStatus {
 pub struct AdminCredentials {
     pub account: String,
     pub password: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdminSetupRequest {
+    pub token: String,
 }
 
 #[derive(Debug, Clone)]
@@ -485,6 +511,7 @@ impl AdminIdentities {
                 AdminAuthStatus {
                     authenticated: true,
                     bootstrap_required: false,
+                    setup_pending: false,
                     account: Some(principal.account),
                     role: Some(principal.role),
                     passkey_count: 0,
@@ -496,6 +523,7 @@ impl AdminIdentities {
             None => AdminAuthStatus {
                 authenticated: false,
                 bootstrap_required: self.bootstrap_required(),
+                setup_pending: false,
                 account: None,
                 role: None,
                 passkey_count: 0,
@@ -525,7 +553,23 @@ impl AdminIdentities {
     pub fn bootstrap(&mut self, request: &AdminCredentials, now_ms: i64) -> Result<String> {
         anyhow::ensure!(self.bootstrap_required(), "admin owner already exists");
         self.create_account(request, AdminRole::Owner, now_ms)?;
+        self.setup_token_hash = None;
         self.login(request, now_ms)
+    }
+
+    #[must_use]
+    pub fn setup_token_matches(&self, token: &str) -> bool {
+        let candidate = hex_sha256(token.trim().as_bytes());
+        if let Some(stored) = self.setup_token_hash.as_deref() {
+            hashes_equal(stored, &candidate)
+        } else {
+            let _ = hashes_equal(dummy_setup_token_hash(), &candidate);
+            false
+        }
+    }
+
+    pub fn install_setup_token(&mut self, token: &str) {
+        self.setup_token_hash = Some(hex_sha256(token.as_bytes()));
     }
 
     pub fn create_account(
@@ -659,13 +703,45 @@ fn normalize_admin_account(account: &str) -> Result<String> {
     Ok(account)
 }
 
-fn ensure_admin_password(password: &str, account: &str) -> Result<()> {
+pub(crate) fn ensure_admin_password(password: &str, account: &str) -> Result<()> {
+    let chars = password.chars().count();
     anyhow::ensure!(
-        (12..=128).contains(&password.len()),
-        "admin password must be 12-128 characters"
+        (ADMIN_PASSWORD_MIN_LEN..=ADMIN_PASSWORD_MAX_LEN).contains(&chars),
+        "admin password must be 15-128 characters"
     );
     anyhow::ensure!(password != account, "admin password cannot be the account");
+    anyhow::ensure!(
+        admin_password_has_required_classes(password)
+            || looks_like_password_manager_secret(password),
+        "admin password needs uppercase, lowercase, and a digit — or use a Chrome / Apple generated password"
+    );
     Ok(())
+}
+
+fn admin_password_has_required_classes(password: &str) -> bool {
+    let mut lower = false;
+    let mut upper = false;
+    let mut digit = false;
+    for char in password.chars() {
+        lower |= char.is_ascii_lowercase();
+        upper |= char.is_ascii_uppercase();
+        digit |= char.is_ascii_digit();
+        if lower && upper && digit {
+            return true;
+        }
+    }
+    false
+}
+
+/// Chrome (`xxxx-xxxx-xxxx`) and Apple Keychain (`xxxxxx-xxxxxx-xxxxxx`)
+/// generated secrets. Apple's default is lowercase-only, so class rules
+/// would reject it.
+fn looks_like_password_manager_secret(password: &str) -> bool {
+    let groups: Vec<&str> = password.split('-').collect();
+    groups.len() >= 3
+        && groups.iter().all(|group| {
+            (3..=8).contains(&group.len()) && group.chars().all(|char| char.is_ascii_alphanumeric())
+        })
 }
 
 fn is_argon2id_phc(password_hash: &str) -> bool {
@@ -747,6 +823,178 @@ pub fn clear_session_cookie(secure: bool) -> String {
         cookie.push_str("; Secure");
     }
     cookie
+}
+
+#[must_use]
+pub fn setup_cookie_token(headers: &axum::http::HeaderMap) -> Option<String> {
+    crate::product_auth::cookie_value(headers, ADMIN_SETUP_COOKIE)
+}
+
+#[must_use]
+pub fn setup_session_cookie(token: &str, secure: bool) -> String {
+    let mut cookie = format!(
+        "{ADMIN_SETUP_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={ADMIN_SETUP_TTL_SECS}"
+    );
+    if secure {
+        cookie.push_str("; Secure");
+    }
+    cookie
+}
+
+#[must_use]
+pub fn clear_setup_cookie(secure: bool) -> String {
+    let mut cookie = format!("{ADMIN_SETUP_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0");
+    if secure {
+        cookie.push_str("; Secure");
+    }
+    cookie
+}
+
+/// In-memory tickets issued after a valid host setup token.
+#[derive(Debug, Default)]
+pub struct AdminSetupTickets {
+    tickets: parking_lot::Mutex<HashMap<String, Instant>>,
+}
+
+impl AdminSetupTickets {
+    pub fn issue(&self) -> Result<String> {
+        let token = new_setup_ticket()?;
+        self.tickets.lock().insert(
+            hex_sha256(token.as_bytes()),
+            Instant::now() + Duration::from_secs(ADMIN_SETUP_TTL_SECS as u64),
+        );
+        Ok(token)
+    }
+
+    #[must_use]
+    pub fn is_valid(&self, token: &str) -> bool {
+        let hash = hex_sha256(token.as_bytes());
+        let mut tickets = self.tickets.lock();
+        tickets.retain(|_, expires| Instant::now() < *expires);
+        tickets.contains_key(&hash)
+    }
+
+    pub fn clear(&self) {
+        self.tickets.lock().clear();
+    }
+}
+
+/// Host-side setup token file plus in-memory create-admin tickets.
+#[derive(Debug)]
+pub struct AdminSetupState {
+    pub data_dir: PathBuf,
+    pub tickets: AdminSetupTickets,
+}
+
+impl AdminSetupState {
+    #[must_use]
+    pub fn new(data_dir: PathBuf) -> Self {
+        Self {
+            data_dir,
+            tickets: AdminSetupTickets::default(),
+        }
+    }
+
+    #[must_use]
+    pub fn token_path(&self) -> PathBuf {
+        self.data_dir.join(ADMIN_SETUP_TOKEN_FILE)
+    }
+}
+
+/// Create or keep the one-time setup token while no admin owner exists.
+///
+/// Returns the plaintext only when a **new** token is written. Restarts that
+/// still have a matching file do not print it again.
+///
+/// # Errors
+/// Returns when randomness or the data-dir file cannot be written.
+pub fn ensure_admin_setup_token(
+    data_dir: &Path,
+    identities: &mut AdminIdentities,
+    needed: bool,
+) -> Result<Option<String>> {
+    let path = data_dir.join(ADMIN_SETUP_TOKEN_FILE);
+    if !needed {
+        identities.setup_token_hash = None;
+        if path.exists() {
+            std::fs::remove_file(&path).context("removing consumed admin setup token")?;
+        }
+        return Ok(None);
+    }
+    if let Some(existing) = read_setup_token_file(&path)?
+        && identities.setup_token_matches(&existing)
+    {
+        return Ok(None);
+    }
+    std::fs::create_dir_all(data_dir).context("creating admin setup token directory")?;
+    let token = new_setup_token()?;
+    write_setup_token_file(&path, &token)?;
+    identities.install_setup_token(&token);
+    Ok(Some(token))
+}
+
+/// Delete the host setup file after the first owner exists.
+///
+/// # Errors
+/// Returns when the file exists and cannot be removed.
+pub fn consume_admin_setup_token_file(data_dir: &Path) -> Result<()> {
+    let path = data_dir.join(ADMIN_SETUP_TOKEN_FILE);
+    if path.exists() {
+        std::fs::remove_file(&path).context("removing consumed admin setup token")?;
+    }
+    Ok(())
+}
+
+fn new_setup_token() -> Result<String> {
+    Ok(format!(
+        "{ADMIN_SETUP_TOKEN_PREFIX}{}",
+        random_hex(ADMIN_SETUP_TOKEN_SECRET_BYTES)?
+    ))
+}
+
+fn new_setup_ticket() -> Result<String> {
+    random_hex(ADMIN_SETUP_TOKEN_SECRET_BYTES)
+}
+
+fn random_hex(byte_len: usize) -> Result<String> {
+    let mut bytes = vec![0_u8; byte_len];
+    std::fs::File::open("/dev/urandom")
+        .context("opening OS randomness")?
+        .read_exact(&mut bytes)
+        .context("reading OS randomness")?;
+    Ok(hex_bytes(&bytes))
+}
+
+fn write_setup_token_file(path: &Path, token: &str) -> Result<()> {
+    let tmp = path.with_extension("token.tmp");
+    std::fs::write(&tmp, format!("{token}\n")).context("writing admin setup token")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))
+            .context("restricting admin setup token permissions")?;
+    }
+    std::fs::rename(&tmp, path).context("publishing admin setup token")?;
+    Ok(())
+}
+
+fn read_setup_token_file(path: &Path) -> Result<Option<String>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw = std::fs::read_to_string(path).context("reading admin setup token")?;
+    let token = raw.trim();
+    if token.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(token.to_owned()))
+}
+
+const DUMMY_SETUP_TOKEN_HASH: &str =
+    "0000000000000000000000000000000000000000000000000000000000000000";
+
+fn dummy_setup_token_hash() -> &'static str {
+    DUMMY_SETUP_TOKEN_HASH
 }
 
 /// Event/session retention. `last_n` and `last_time_hours` are an OR:
@@ -973,7 +1221,7 @@ mod tests {
         assert!(identities.bootstrap_required());
         let credentials = AdminCredentials {
             account: "Owner".to_owned(),
-            password: "correct-horse".to_owned(),
+            password: "Correct-horse-bat1".to_owned(),
         };
         let token = identities
             .bootstrap(&credentials, 1_900_000_000_000)
@@ -1002,10 +1250,49 @@ mod tests {
     }
 
     #[test]
-    fn admin_password_rejects_short_and_account_name() {
+    fn setup_token_is_required_before_first_owner_and_never_serialized() {
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-admin-setup-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut identities = AdminIdentities::default();
+        let first = ensure_admin_setup_token(&root, &mut identities, true)
+            .unwrap()
+            .expect("new setup token");
+        assert!(first.starts_with(ADMIN_SETUP_TOKEN_PREFIX));
+        assert!(identities.setup_token_matches(&first));
+        assert!(!identities.setup_token_matches("cow_setup_wrong"));
+        let json = serde_json::to_value(&identities).unwrap();
+        assert!(json.get("setup_token_hash").is_some());
+        assert!(!json.to_string().contains(&first));
+        assert_eq!(
+            ensure_admin_setup_token(&root, &mut identities, true).unwrap(),
+            None
+        );
+        let credentials = AdminCredentials {
+            account: "owner".to_owned(),
+            password: "Correct-horse-bat1".to_owned(),
+        };
+        identities.bootstrap(&credentials, 1).unwrap();
+        ensure_admin_setup_token(&root, &mut identities, false).unwrap();
+        assert!(identities.setup_token_hash.is_none());
+        assert!(!root.join(ADMIN_SETUP_TOKEN_FILE).exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn admin_password_accepts_chrome_and_apple_generated_secrets() {
         assert!(ensure_admin_password("short-pass", "owner").is_err());
-        assert!(ensure_admin_password("ownerrrrrrrr", "ownerrrrrrrr").is_err());
-        assert!(ensure_admin_password("correct-horse", "owner").is_ok());
+        assert!(ensure_admin_password("ownerrrrrrrrrrr", "ownerrrrrrrrrrr").is_err());
+        assert!(ensure_admin_password("alllowercaseword", "owner").is_err());
+        assert!(ensure_admin_password("ALLUPPERCASEWORD", "owner").is_err());
+        assert!(ensure_admin_password("NoDigitsInHere!!", "owner").is_err());
+        assert!(ensure_admin_password("Correct-horse-bat1", "owner").is_ok());
+        assert!(ensure_admin_password("kL9mNp2qRs4tUv7", "owner").is_ok());
+        assert!(ensure_admin_password("Wq3p-Lm8n-Ks2xY", "owner").is_ok());
+        assert!(ensure_admin_password("xidneh-bintun-zygfew", "owner").is_ok());
     }
 
     #[test]
@@ -1027,6 +1314,7 @@ mod tests {
                 account: "owner".to_owned(),
                 expires_at_ms: 1_900_000_100_000,
             }],
+            setup_token_hash: None,
         };
         assert!(!is_argon2id_phc(&identities.accounts[0].password_hash));
         let token = identities

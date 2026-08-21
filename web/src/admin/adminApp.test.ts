@@ -4,6 +4,18 @@ const appUrl = new URL("./AdminApp.tsx", import.meta.url);
 const apiUrl = new URL("./adminApi.ts", import.meta.url);
 const swUrl = new URL("../../public/sw.js", import.meta.url);
 
+Deno.test("first-run admin sends the operator to product setup on /", async () => {
+  const source = await Deno.readTextFile(appUrl);
+  assertStringIncludes(source, "Open Cowboy");
+  assertStringIncludes(source, "Open / to enter the setup code");
+  assertStringIncludes(source, "the only account");
+  assertEquals(source.includes("Create admin"), false);
+  assertEquals(source.includes("adminApi.setup"), false);
+  assertEquals(source.includes("adminApi.bootstrap"), false);
+  assertEquals(source.includes("Setup token"), false);
+  assertEquals(source.includes("Create owner"), false);
+});
+
 Deno.test("admin app exposes the operator surfaces", async () => {
   const source = await Deno.readTextFile(appUrl);
   for (const path of [
@@ -19,18 +31,16 @@ Deno.test("admin app exposes the operator surfaces", async () => {
   }
 });
 
-Deno.test("accounts page grows a product users card with operator default", async () => {
+Deno.test("accounts page is single-user and has no invite or extra-user chrome", async () => {
   const source = await Deno.readTextFile(appUrl);
-  assertStringIncludes(source, "Product users");
-  assertStringIncludes(source, "createProductUser");
-  assertStringIncludes(source, "disableProductUser");
-  assertStringIncludes(source, "setProductUserPassword");
-  assertStringIncludes(source, 'useState<AdminRole>("operator")');
-  assertStringIncludes(source, "Create user");
-  assertStringIncludes(source, "Set password");
-  assertStringIncludes(source, "not the session PWA login");
-  assertStringIncludes(source, "/ is login-only until a product user exists");
-  assertStringIncludes(source, "{token.uses_count}/{token.uses_allowed ?? \"∞\"}");
+  assertStringIncludes(source, "This instance is single-user");
+  assertStringIncludes(source, "created on / during first-run");
+  assertEquals(source.includes("createProductUser"), false);
+  assertEquals(source.includes("issueToken"), false);
+  assertEquals(source.includes("Create user"), false);
+  assertEquals(source.includes("Add operator"), false);
+  assertEquals(source.includes("Enable registration"), false);
+  assertEquals(source.includes("Invite tokens"), false);
   assertEquals(source.includes("auth-mode"), false);
   assertEquals(source.includes("cowboy.auth.mode"), false);
   assertEquals(source.includes("loopback_trust"), false);
@@ -38,29 +48,12 @@ Deno.test("accounts page grows a product users card with operator default", asyn
   assertEquals(/\bmode\s*=\s*["']lan["']/.test(source), false);
 });
 
-Deno.test("product users failures stay on the card and do not hide Accounts", async () => {
-  const source = await Deno.readTextFile(appUrl);
-  assertStringIncludes(source, "reloadProductUsers");
-  assertStringIncludes(source, "setProductError");
-  assertStringIncludes(source, "canSetPassword");
-  assertStringIncludes(source, "canGrantOwner");
-  assertStringIncludes(source, 'auth.role === "owner"');
-  assertStringIncludes(
-    source,
-    "const [next, accountData] = await Promise.all([\n      adminApi.registration(),\n      adminApi.accounts(),\n    ]);",
-  );
-  assertStringIncludes(source, "const productData = await adminApi.productUsers();");
-});
-
-Deno.test("adminApi lists creates disables and sets product user passwords", async () => {
+Deno.test("adminApi still lists the fail-closed extra-user routes", async () => {
   const source = await Deno.readTextFile(apiUrl);
   assertStringIncludes(source, "productUsers");
-  assertStringIncludes(source, "createProductUser");
-  assertStringIncludes(source, 'role: AdminRole = "operator"');
   assertStringIncludes(source, '"/api/admin/users"');
+  assertStringIncludes(source, "/api/admin/auth/setup");
   assertStringIncludes(source, "/api/admin/passkeys");
-  assertStringIncludes(source, "/api/admin/users/${id}/disable");
-  assertStringIncludes(source, "/api/admin/users/${id}/password");
   assertEquals(source.includes("/api/admin/auth-mode"), false);
   assertEquals(source.includes("cowboy.auth.mode"), false);
   assertEquals(source.includes("loopback_trust"), false);
