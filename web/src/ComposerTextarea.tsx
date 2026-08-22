@@ -285,9 +285,25 @@ export const ComposerTextarea = forwardRef<
   useEffect(() => {
     const ta = inputRef.current;
     if (!ta || typeof ResizeObserver === "undefined") return undefined;
-    const observer = new ResizeObserver(measureNativeOverflow);
+    let measurementFrame = 0;
+    const observer = new ResizeObserver(() => {
+      // Never mutate the observed textarea during ResizeObserver delivery.
+      // WebKit reports an undelivered-notification loop when height fitting
+      // changes the same border box synchronously. The next frame preserves the
+      // existing caret/IME guards and coalesces a keyboard resize burst.
+      if (measurementFrame !== 0) return;
+      measurementFrame = globalThis.requestAnimationFrame(() => {
+        measurementFrame = 0;
+        measureNativeOverflow();
+      });
+    });
     observer.observe(ta);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (measurementFrame !== 0) {
+        globalThis.cancelAnimationFrame(measurementFrame);
+      }
+    };
   }, []);
 
   useEffect(() => {

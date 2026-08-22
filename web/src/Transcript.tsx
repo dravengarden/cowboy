@@ -70,6 +70,7 @@ import { providerPresentation } from "./providerPresentation";
 import { providerVisual } from "./providerVisual";
 import { ProviderRuntimeSurface } from "./ProviderSurface";
 import { ProviderThoughtSteps } from "./ProviderTranscript";
+import { waitingActivityLabel } from "./turnWaiting";
 import {
   conversationClearEnterMs,
   conversationClearExitMs,
@@ -859,31 +860,47 @@ function ThinkingIndicator({
   provider,
   providerVersion,
   providerDigest,
+  activityKey,
 }: {
   provider: string;
   providerVersion?: string | undefined;
   providerDigest?: string | undefined;
+  activityKey: string;
 }): React.JSX.Element {
+  const startedAtRef = useRef(Date.now());
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  useEffect(() => {
+    startedAtRef.current = Date.now();
+    setElapsedSeconds(0);
+    const timer = globalThis.setInterval(() => {
+      setElapsedSeconds(
+        Math.max(0, Math.floor((Date.now() - startedAtRef.current) / 1_000)),
+      );
+    }, 1_000);
+    return () => globalThis.clearInterval(timer);
+  }, [activityKey]);
+  const agentName = providerPresentation(
+    provider,
+    providerVersion,
+    providerDigest,
+  ).agent;
   return (
-    <ProviderRuntimeSurface
-      provider={provider}
-      providerVersion={providerVersion}
-      providerDigest={providerDigest}
-      slot="loading"
-      fallback={
-        <Stack
-          direction="row"
-          spacing={0.5}
-          alignItems="center"
-          sx={{ py: 0, alignSelf: "flex-start" }}
-        >
-          <CircularProgress size={13} thickness={5} />
-          <Typography variant="caption" color="text.secondary">
-            Thinking…
-          </Typography>
-        </Stack>
-      }
-    />
+    <Stack spacing={0.25} sx={{ alignSelf: "flex-start" }}>
+      <ProviderRuntimeSurface
+        provider={provider}
+        providerVersion={providerVersion}
+        providerDigest={providerDigest}
+        slot="loading"
+        fallback={<CircularProgress size={13} thickness={5} />}
+      />
+      <Typography
+        data-agent-waiting-label
+        variant="caption"
+        color="text.secondary"
+      >
+        {waitingActivityLabel(agentName, elapsedSeconds)}
+      </Typography>
+    </Stack>
   );
 }
 
@@ -5235,6 +5252,7 @@ export function Transcript({
                     provider={provider}
                     providerVersion={providerVersion}
                     providerDigest={providerDigest}
+                    activityKey={lastSig}
                   />
                 </Box>
               )}

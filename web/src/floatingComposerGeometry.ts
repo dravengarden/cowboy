@@ -77,20 +77,22 @@ export function useFloatingComposerGeometry({
     settleTimersRef.current = [];
   }, []);
 
-  const scheduleSettledMeasurement = useCallback((): void => {
-    measure();
-    if (measurementFrameRef.current !== 0) {
-      globalThis.cancelAnimationFrame(measurementFrameRef.current);
-    }
+  const queueMeasurementFrame = useCallback((): void => {
+    if (measurementFrameRef.current !== 0) return;
     measurementFrameRef.current = globalThis.requestAnimationFrame((): void => {
       measurementFrameRef.current = 0;
       measure();
     });
+  }, [measure]);
+
+  const scheduleSettledMeasurement = useCallback((): void => {
+    measure();
+    queueMeasurementFrame();
     clearSettledMeasurements();
     settleTimersRef.current = GEOMETRY_SETTLE_DELAYS_MS.map((delay) =>
       globalThis.setTimeout(measure, delay)
     );
-  }, [clearSettledMeasurements, measure]);
+  }, [clearSettledMeasurements, measure, queueMeasurementFrame]);
 
   const disclosureTransition = useCallback((event: TransitionEvent): void => {
     const target = event.target;
@@ -126,7 +128,11 @@ export function useFloatingComposerGeometry({
 
   const observe = useCallback(
     (slot: "appbar" | "composer", element: HTMLElement | null): void => {
-      observerRef.current ??= new ResizeObserver(measure);
+      // ResizeObserver delivery is a read-only notification boundary. Writing
+      // the measured CSS variables from inside its callback can make iOS WebKit
+      // defer a descendant notification and report an observer loop. Publish on
+      // the next animation frame, coalescing AppBar + Composer changes.
+      observerRef.current ??= new ResizeObserver(queueMeasurementFrame);
       const observer = observerRef.current;
       const previous = slot === "appbar"
         ? appBarElementRef.current
@@ -160,7 +166,11 @@ export function useFloatingComposerGeometry({
       }
       scheduleSettledMeasurement();
     },
-    [disclosureTransition, measure, scheduleSettledMeasurement],
+    [
+      disclosureTransition,
+      queueMeasurementFrame,
+      scheduleSettledMeasurement,
+    ],
   );
 
   const appBarRef = useCallback<RefCallback<HTMLElement>>(

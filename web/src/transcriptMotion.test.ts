@@ -17,6 +17,9 @@ Deno.test("thinking activity renders the exact Provider loading surface", () => 
   assert(component.includes("providerVersion={providerVersion}"));
   assert(component.includes("providerDigest={providerDigest}"));
   assert(component.includes('slot="loading"'));
+  assert(component.includes("activityKey"));
+  assert(component.includes("waitingActivityLabel"));
+  assert(component.includes("data-agent-waiting-label"));
   assert(transcriptSource.includes('data-transcript-tail-row="activity"'));
   assert(
     /data-transcript-tail-row="activity"\s+sx=\{\{\s*py: 0\.25/.test(

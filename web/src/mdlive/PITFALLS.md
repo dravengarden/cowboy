@@ -2248,3 +2248,16 @@ Desktop Vim + IME checks:
     capture listener so another listener on that same node cannot also hand it
     to Vim. Do not weaken the generic IME guard, capture bare editor input, or
     infer composition from the selected keyboard layout.
+
+97. **ResizeObserver callbacks are measurement notifications, not layout-write
+    transactions.** On iOS, focusing the compact native composer while the
+    keyboard begins to resize can make the textarea height fitter and the
+    floating stack geometry owner synchronously write dimensions from inside
+    ResizeObserver delivery. WebKit then reports `ResizeObserver loop completed
+    with undelivered notifications`; in a quiet provider turn this looks like
+    the send froze even though ACP accepted it. Keep the existing single
+    border-box owner and native textarea fitter, but coalesce their observer
+    callbacks onto the next animation frame before writing height or CSS
+    variables. Preserve the textarea's IME ownership check and monotonic focused
+    growth. Do not add another observer, per-frame React geometry state, editor
+    remount, focus write, or selection repair.
