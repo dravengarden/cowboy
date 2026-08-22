@@ -66,12 +66,12 @@
 
   <g>
     <rect class="machine" x="100" y="440" width="320" height="72" rx="18"/>
-    <text x="132" y="472" class="label">Machine · Hawk</text>
+    <text x="132" y="472" class="label">Registered Machine A</text>
     <text x="132" y="496" class="sub">remote workspace host</text>
   </g>
   <g>
     <rect class="machine" x="780" y="440" width="320" height="72" rx="18"/>
-    <text x="812" y="472" class="label">Machine · Falcon</text>
+    <text x="812" y="472" class="label">Registered Machine B</text>
     <text x="812" y="496" class="sub">remote workspace host</text>
   </g>
 
