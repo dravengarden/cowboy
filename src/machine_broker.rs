@@ -49,7 +49,7 @@ pub struct MachineBrokerArgs {
     pub worker_environment: BTreeMap<String, String>,
     /// Content-addressed Provider generations and Service-auth projections used
     /// to build each session's process environment.
-    pub provider_store: Arc<crate::machine_providers::MachineProviderStore>,
+    pub provider_store: Arc<crate::machine_plugins::MachinePluginStore>,
     /// Root containing Machine-owned session worktrees. Permanent session
     /// deletion may reclaim marked Cargo targets below this exact boundary.
     pub worktree_root: PathBuf,
@@ -2339,12 +2339,12 @@ async fn handle_worker(
 mod tests {
     use super::*;
 
-    fn test_provider_store() -> Arc<crate::machine_providers::MachineProviderStore> {
-        static STORE: std::sync::OnceLock<Arc<crate::machine_providers::MachineProviderStore>> =
+    fn test_provider_store() -> Arc<crate::machine_plugins::MachinePluginStore> {
+        static STORE: std::sync::OnceLock<Arc<crate::machine_plugins::MachinePluginStore>> =
             std::sync::OnceLock::new();
         Arc::clone(STORE.get_or_init(|| {
             Arc::new(
-                crate::machine_providers::MachineProviderStore::new(
+                crate::machine_plugins::MachinePluginStore::new(
                     &std::env::temp_dir().join(format!(
                         "cowboy-machine-broker-provider-test-{}",
                         std::process::id()

@@ -4,7 +4,7 @@ Provider login belongs to Cowboy Service scope. One encrypted credential
 generation is reconciled automatically to every enrolled Machine; Machine
 surfaces expose only replica and materialization health. See
 [Cowboy core requirements](requirements.md) and
-[Service-scoped authentication](provider-packages.md#service-scoped-authentication).
+[Service-scoped authentication](plugin-packages.md#service-scoped-authentication).
 
 `cowboy-machine` is an outbound-only macOS/Linux host agent. It owns machine
 identity, the detached ACP broker, signed component activation, transitional

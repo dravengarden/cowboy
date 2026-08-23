@@ -1,4 +1,4 @@
-import { persisted, useStore } from "./_store/mod.ts";
+import { persisted, useStore } from "./components/state/store/mod.ts";
 import {
   DEFAULT_SYSTEM_NOTIFICATION_PREFERENCES,
   isSafeSessionId,

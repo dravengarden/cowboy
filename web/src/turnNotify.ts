@@ -1,10 +1,10 @@
-import { persisted, useStore } from "./_store/mod.ts";
+import { persisted, useStore } from "./components/state/store/mod.ts";
 
 // Attention alert: a short chime (+ a vibration on devices that support it)
 // when an agent needs the user — a finished turn (done) or a permission request
 // (confirm). NOT fired for any other event. Toggleable in Settings, DEFAULT ON.
 // The setting is persisted + reactive across the app (the Settings switch writes
-// it; the store reads it before firing) via @shared-utils/store.
+// it; the store reads it before firing) via Cowboy's state-store component.
 //
 // iOS note: the Vibration API is Android-only; iOS Safari/WKWebView has no web
 // vibration, so the buzz is a silent no-op there while the chime still plays.

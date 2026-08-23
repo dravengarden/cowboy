@@ -5,7 +5,7 @@ import {
   type LocalPersistence,
   type Mutation,
   replicatedStore,
-} from "./_sync/mod.ts";
+} from "./components/state/sync/mod.ts";
 import { durableDeliveryAttempt } from "./durableDelivery.ts";
 
 interface QueueState {

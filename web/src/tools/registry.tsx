@@ -3,7 +3,7 @@ import { Box, Skeleton, Stack, Typography } from "@mui/material";
 import CheckCircleRounded from "@mui/icons-material/CheckCircleRounded";
 import RadioButtonUncheckedRounded from "@mui/icons-material/RadioButtonUncheckedRounded";
 import AutorenewRounded from "@mui/icons-material/AutorenewRounded";
-import type { ProviderUiManifest } from "../../../packages/provider-ui-sdk/src/index.ts";
+import type { ProviderUiManifest } from "../../../components/provider-ui/src/index.ts";
 import { currentProviderEntry } from "../providerCatalogRegistry";
 import {
   CodeView,

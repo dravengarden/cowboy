@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert";
-import type { ProviderUiManifest } from "../../packages/provider-ui-sdk/src/index.ts";
+import type { ProviderUiManifest } from "../../components/provider-ui/src/index.ts";
 import type { ConfigOption } from "./protocol";
 import {
   activeRunConfigPreset,

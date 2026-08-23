@@ -1,4 +1,4 @@
-import { persisted, type Store } from "./_store/store.ts";
+import { persisted, type Store } from "./components/state/store/store.ts";
 
 export type ComposerStackPanel = "plan" | "queued" | "draft";
 

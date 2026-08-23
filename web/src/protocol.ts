@@ -214,7 +214,7 @@ export type Outbound =
   | { type: "snapshot"; session_id: string; events: Envelope[]; reached_start: boolean }
   | { type: "event"; envelope: Envelope }
   | { type: "config_options"; session_id: string; options: ConfigOption[] }
-  // Generic optimistic-sync snapshot patch (@shared-utils/sync): the absolute
+  // Generic optimistic-sync snapshot patch (state-sync): the absolute
   // `value` of one `state` ("title" map / "order" array / "queue:<sid>" object)
   // at `version`, plus the mutation ids newly confirmed. `resync` = a
   // connect/reconnect snapshot the client adopts as ground truth regardless of
@@ -252,7 +252,7 @@ export type Inbound =
     }
   | { type: "delete_session"; session_id: string }
   | { type: "rename_session"; session_id: string; title: string }
-  // Generic optimistic-sync mutation (@shared-utils/sync): `state` selects the
+  // Generic optimistic-sync mutation (state-sync): `state` selects the
   // synced value ("title"/"order"/…), `name`+`args` are the mutator + args, `id`
   // is the client-minted mutation id (idempotent retry). The daemon arbiter
   // echoes a `sync_patch`. Supersedes rename_session/reorder_sessions for the web.

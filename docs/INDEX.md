@@ -44,12 +44,13 @@ primary phone/desktop product path.
 ### Core documents
 
 - [`requirements.md`](requirements.md) — Cowboy core requirements and state-ownership contract
+- [`plugin-components.md`](plugin-components.md) — Plugin manifests, shared component ownership, and coordinated versioning
 - [`desktop-efficiency-redesign.md`](desktop-efficiency-redesign.md) — Desktop information density and interaction contract
 - [`explore-transcript-design.md`](explore-transcript-design.md) — Explore's read-only transcript projection
 - [`mobile-spatial-presentation.md`](mobile-spatial-presentation.md) — Jank-free drawers, pager, transcript, CodeMirror, and iOS compositor contract
 - [`ios-simulator.md`](ios-simulator.md) — Local iOS Simulator bridge and verification workflow
 - [`machine-operations.md`](machine-operations.md) — Machine operations, including Provider installation and Service-auth replica convergence
-- [`provider-packages.md`](provider-packages.md) — Package, typed UI, authentication/Transcript presentation, and release contract for independently released, Machine-scoped Provider packages
+- [`plugin-packages.md`](plugin-packages.md) — Package, typed UI, authentication/Transcript presentation, and release contract for independently released, Machine-scoped Provider packages
 
 ### Integrations
 

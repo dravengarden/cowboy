@@ -8,7 +8,7 @@ import { SurfaceProvider, useSurfaceProfile } from "./surface/SurfaceProfile";
 import { useThemeMode } from "./theme";
 import { useGlobalFontScale, useReadingFontFaces } from "./readingSettings";
 import { useKeyboardInset } from "./keyboardInset";
-import { installHaptics } from "./_shell";
+import { installHaptics } from "./components/app-shell";
 import {
   installObservability,
   markClientReloadIntent,
@@ -80,7 +80,7 @@ function Root(): React.JSX.Element {
 // viewport). Matches the atlantis portal, which uses the same dvh approach.
 
 // Global MUI haptic delegation: one listener set buzzes every button / switch /
-// popup app-wide (see _shell/haptic-delegation). Composes with the explicit
+// popup app-wide (see components/app-shell/haptic-delegation). Composes with the explicit
 // haptic() calls (queue/send, turn-end notifications, long-press, drag) via the
 // primitive's coalesce window — no double-buzz. Installed once, never torn down.
 installHaptics();

@@ -1,4 +1,4 @@
-import { persisted, useStore } from "./_store/mod.ts";
+import { persisted, useStore } from "./components/state/store/mod.ts";
 
 const composerDebug = persisted("cowboy:debug", false, {
   serialize: (on) => (on ? "1" : "0"),

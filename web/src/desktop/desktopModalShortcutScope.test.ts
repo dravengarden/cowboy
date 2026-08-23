@@ -32,8 +32,8 @@ Deno.test("desktop Session actions use the modal-wide shortcut scope", () => {
   assert(end > start);
   assert(sessionModal.includes("onShortcutKeyDown={(event): void =>"));
   assert(
-    sessionModal.includes(
-      "event.currentTarget.querySelector<HTMLButtonElement>",
+    /event\.currentTarget\.querySelector<\s*HTMLButtonElement\s*>/u.test(
+      sessionModal,
     ),
   );
 });

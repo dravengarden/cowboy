@@ -83,14 +83,14 @@ interface NpmLock {
   }>;
 }
 
-const runtimeLock = await readJson<RuntimeLock>("providers/runtime-lock.json");
+const runtimeLock = await readJson<RuntimeLock>("components/provider-runtime-lock.json");
 assert(runtimeLock.schema_version === 1, "unsupported runtime lock schema");
 assert(exactVersion(runtimeLock.node.version), "Node.js version is not exact");
 
 const providerIds: string[] = [];
-for await (const entry of Deno.readDir("providers")) {
+for await (const entry of Deno.readDir("plugins")) {
   if (!entry.isDirectory) continue;
-  if (await exists(`providers/${entry.name}/provider.json`)) {
+  if (await exists(`plugins/${entry.name}/provider.json`)) {
     providerIds.push(entry.name);
   }
 }
@@ -100,7 +100,7 @@ assert(providerIds.length > 0, "no Provider manifests found");
 const validatedNpmRecipes = new Set<string>();
 for (const providerId of providerIds) {
   const source = await readJson<ProviderSource>(
-    `providers/${providerId}/provider.json`,
+    `plugins/${providerId}/provider.json`,
   );
   assert(
     source.id === providerId,

@@ -1,4 +1,3 @@
-import { realpathSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
@@ -9,20 +8,6 @@ const webRoot = dirname(fileURLToPath(import.meta.url));
 // In dev, proxy the WebSocket + health endpoints to a locally running daemon
 // (`cowboy serve`). Override the target with COWBOY_DEV_BACKEND.
 const devBackend = process.env.COWBOY_DEV_BACKEND ?? "http://127.0.0.1:3333";
-
-// The shared front-end SDK lives in the public shared-utils monorepo and is
-// referenced (not vendored): `web/src/_shell` is a symlink to
-// `shared-utils/packages/ui` for local dev (the Nix build stages real copies
-// from the pinned `shared-utils` flake input instead). `_shell` is the stable
-// staging-seam name shared across the atlantis apps. Resolve the symlink target
-// so the dev server is allowed to serve it (it lives outside this project
-// root). Best-effort: absent symlink (e.g. fresh checkout) → skip.
-let shellRealRoot: string | undefined;
-try {
-  shellRealRoot = dirname(realpathSync("src/_shell"));
-} catch {
-  shellRealRoot = undefined;
-}
 
 export default defineConfig({
   build: {
@@ -103,12 +88,9 @@ export default defineConfig({
     },
     chunkSizeWarningLimit: 800,
   },
-  // The shared SDK is imported through the `_shell` symlink into the sibling
-  // shared-utils monorepo. Without deduping, vite/rollup resolves those files'
-  // `react` / `@mui` / `@emotion` imports relative to the symlink TARGET (the
-  // shared-utils tree, which has no resolvable copy) and the build fails. Dedupe
-  // forces the shared singletons to resolve from this app's own node_modules —
-  // which is also what we want at runtime (one React, one MUI, one Emotion).
+  // App-shell components share the application's React/MUI/Emotion singletons.
+  // Keep the dedupe contract explicit so future plugin-facing component entry
+  // points cannot introduce a second renderer instance.
   resolve: {
     dedupe: [
       "react",
@@ -135,9 +117,7 @@ export default defineConfig({
     },
   ],
   server: {
-    // Allow the dev server to serve the symlinked shared-utils SDK source (it
-    // lives outside this project root). Only relevant to `dev-web`.
-    fs: { allow: [".", "..", ...(shellRealRoot ? [shellRealRoot] : [])] },
+    fs: { allow: [".", ".."] },
     proxy: {
       "/ws": { target: devBackend, ws: true },
       "/healthz": devBackend,

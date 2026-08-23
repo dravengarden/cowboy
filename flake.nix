@@ -13,14 +13,7 @@
     inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  # Shared front-end SDK + the shared Nix builders (buildDenoViteApp, the pinned
-  # deno) from the public shared-utils monorepo. The SPA is built via that shared
-  # builder — NOT a hand-rolled FOD here — so source changes always rebuild and
-  # the deno pin / _shell staging are not copy-pasted into this flake.
-  inputs.shared-utils.url =
-    "git+ssh://git@github.com/dravengarden/shared-utils.git?ref=refs/heads/main";
-  inputs.shared-utils.inputs.nixpkgs.follows = "nixpkgs";
-  outputs = { self, nixpkgs, shared-utils, rust-overlay }:
+  outputs = { self, nixpkgs, rust-overlay }:
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs {
@@ -32,26 +25,45 @@
         cargo = rustToolchain;
         rustc = rustToolchain;
       };
-      shared = shared-utils.lib.${system};
+      deno = import ./nix/deno.nix { inherit pkgs; };
+      buildDenoViteApp = import ./nix/deno-vite-app.nix {
+        inherit pkgs deno;
+        lib = pkgs.lib;
+      };
 
-      # Every Rust release source must carry the local Provider SDK path
-      # dependency. The Controller and Machine also compile the first-party
-      # manifests into their typed fallback Catalog, so keep those exact inputs
+      # Every Rust release source carries the generic Plugin SDK plus the Agent
+      # Provider capability SDK. The Controller and Machine also compile the
+      # first-party manifests into their typed fallback Catalog, so keep those exact inputs
       # in the narrow Rust closure without pulling release tooling or npm locks
       # into component identities.
       provider-sdk-files = [
-        ./crates/cowboy-provider-sdk/Cargo.toml
-        ./crates/cowboy-provider-sdk/src
+        ./components/provider-sdk/Cargo.toml
+        ./components/provider-sdk/src
+      ];
+      plugin-sdk-files = [
+        ./components/plugin-sdk/Cargo.toml
+        ./components/plugin-sdk/src
       ];
       provider-manifest-files = [
-        ./providers/claude-code/provider.json
-        ./providers/claude-deepseek/provider.json
-        ./providers/codex/provider.json
-        ./providers/codex-deepseek/provider.json
-        ./providers/gemini/provider.json
-        ./providers/grok/provider.json
+        ./plugins/claude-code/provider.json
+        ./plugins/claude-code/plugin.json
+        ./plugins/claude-deepseek/provider.json
+        ./plugins/claude-deepseek/plugin.json
+        ./plugins/codex/provider.json
+        ./plugins/codex/plugin.json
+        ./plugins/codex-deepseek/provider.json
+        ./plugins/codex-deepseek/plugin.json
+        ./plugins/gemini/provider.json
+        ./plugins/gemini/plugin.json
+        ./plugins/grok/provider.json
+        ./plugins/grok/plugin.json
+        ./plugins/zed/plugin.json
+        ./plugins/zed/contract.json
+        ./components/registry.json
+        ./components/plugin-contract/schema.json
+        ./components/code-intelligence/contract.json
       ];
-      provider-contract-files = provider-sdk-files ++ provider-manifest-files;
+      plugin-contract-files = plugin-sdk-files ++ provider-sdk-files ++ provider-manifest-files;
 
       # Backend and frontend are independent deployment artifacts. Keep this
       # closure explicit: docs, Web, native-shell, and operational edits must
@@ -66,7 +78,7 @@
           ./src
           ./migrations
           ./web/src/protocol.ts
-        ] ++ provider-contract-files);
+        ] ++ plugin-contract-files);
       };
 
       # Machine has a deliberately tiny source closure and is packaged
@@ -88,7 +100,7 @@
           ./src/machine_components.rs
           ./src/machine_install.rs
           ./src/machine_protocol.rs
-          ./src/machine_providers.rs
+          ./src/machine_plugins.rs
           ./src/provider/deepseek_cache.rs
           ./src/provider/deepseek_context.rs
           ./src/provider_behavior.rs
@@ -99,7 +111,7 @@
           ./src/workspace_roots.rs
           ./src/bin/cowboy-machine-install.rs
           ./src/bin/cowboy-machine.rs
-        ] ++ provider-contract-files);
+        ] ++ plugin-contract-files);
       };
 
       code-adapter-src = pkgs.lib.fileset.toSource {
@@ -113,10 +125,10 @@
           ./src/files.rs
           ./src/workspace_roots.rs
           ./src/bin/cowboy-code-adapter.rs
-        ] ++ provider-sdk-files);
+        ] ++ plugin-sdk-files ++ provider-sdk-files);
       };
 
-      zed-adapter-src = pkgs.lib.cleanSource ./zed-adapter;
+      zed-adapter-src = pkgs.lib.cleanSource ./plugins/zed/adapter;
 
       # Only behavior that runs inside a detached session contributes to the
       # pool generation. A control-plane-only change updates Cowboy without
@@ -148,13 +160,13 @@
         )
       );
 
-      # The SPA, built through the shared, footgun-free builder: a deps-only FOD
+      # The SPA uses Cowboy's local two-layer builder: a deps-only FOD
       # (vendored npm cache, keyed by the lockfiles → depsHash below) + a normal
       # content-addressed offline build. Any source edit rebuilds automatically;
       # only refresh depsHash when web/deno.lock or web/package.json change
-      # (lib.fakeHash → build → copy "got"). The builder also stages the
-      # @shared-utils/ui SDK into web/src/_shell.
-      cowboy-web = shared.buildDenoViteApp {
+      # (lib.fakeHash → build → copy "got"). App-shell components are ordinary
+      # committed Cowboy sources, so no external SDK is staged during a build.
+      cowboy-web = buildDenoViteApp {
         pname = "cowboy";
         version = "0.1.0";
         src = pkgs.lib.cleanSource ./.;
@@ -281,10 +293,10 @@
 
       cowboy-zed-adapter = rustPlatform.buildRustPackage {
         pname = "cowboy-zed-adapter";
-        version = "0.1.0";
+        version = "1.0.0";
         src = zed-adapter-src;
         cargoLock = {
-          lockFile = ./zed-adapter/Cargo.lock;
+          lockFile = ./plugins/zed/adapter/Cargo.lock;
           outputHashes = {
             "proto-0.1.0" =
               "sha256-sAjiYGwmQB+Zzb/b7PGm4Nfv36Vb0myqKIBfpuHGTik=";
@@ -400,18 +412,21 @@
         test ! -e ${cowboy-src}/docs
         test ! -e ${cowboy-src}/web/public
         test -e ${cowboy-src}/web/src/protocol.ts
-        test -e ${cowboy-src}/crates/cowboy-provider-sdk/Cargo.toml
-        test -e ${cowboy-src}/providers/codex/provider.json
-        test ! -e ${cowboy-src}/providers/runtime-lock.json
-        test -e ${machine-src}/crates/cowboy-provider-sdk/Cargo.toml
-        test -e ${machine-src}/providers/gemini/provider.json
-        test ! -e ${machine-src}/providers/runtime-lock.json
-        test -e ${code-adapter-src}/crates/cowboy-provider-sdk/Cargo.toml
+        test -e ${cowboy-src}/components/provider-sdk/Cargo.toml
+        test -e ${cowboy-src}/components/plugin-sdk/Cargo.toml
+        test -e ${cowboy-src}/plugins/codex/provider.json
+        test ! -e ${cowboy-src}/components/provider-runtime-lock.json
+        test -e ${machine-src}/components/provider-sdk/Cargo.toml
+        test -e ${machine-src}/components/plugin-sdk/Cargo.toml
+        test -e ${machine-src}/plugins/gemini/provider.json
+        test ! -e ${machine-src}/components/provider-runtime-lock.json
+        test -e ${code-adapter-src}/components/provider-sdk/Cargo.toml
+        test -e ${code-adapter-src}/components/plugin-sdk/Cargo.toml
         test ! -e ${code-adapter-src}/providers
         test -e ${machine-src}/src/provider/deepseek_cache.rs
         test -e ${machine-src}/src/grok.rs
         test -e ${machine-src}/src/provider/deepseek_context.rs
-        test -e ${machine-src}/src/machine_providers.rs
+        test -e ${machine-src}/src/machine_plugins.rs
         test -e ${machine-src}/src/provider_behavior.rs
         test -e ${machine-src}/src/provider_catalog.rs
         test -e ${machine-src}/src/provider_usage_spool.rs
@@ -498,7 +513,7 @@
         # scripts; rustc keeps the profile selected by Cargo.
         CFLAGS = "-O1";
         # Rust toolchain plus opt-in sccache, and the frontend toolchain
-        # (the shared pinned deno 2.8.1 + node 24 for any node-shaped tool that
+        # (Cowboy's pinned deno 2.8.1 + node 24 for any node-shaped tool that
         # deno's npm interop can't shim).
         nativeBuildInputs = with pkgs; [
           rustToolchain
@@ -515,7 +530,7 @@
           jq
           go
           nodejs_24
-        ] ++ [ shared.deno ];
+        ] ++ [ deno ];
 
         shellHook = ''
           echo "cowboy dev shell — rust + optional sccache + deno"

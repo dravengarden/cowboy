@@ -7,7 +7,7 @@ const providerConfigSource = await Deno.readTextFile(
   new URL("./providerConfigOptions.ts", import.meta.url),
 );
 const claudeDeepSeekSource = await Deno.readTextFile(
-  new URL("../../providers/claude-deepseek/provider.json", import.meta.url),
+  new URL("../../plugins/claude-deepseek/provider.json", import.meta.url),
 );
 
 Deno.test("large DeepSeek sessions expose bounded cache-protection status", () => {

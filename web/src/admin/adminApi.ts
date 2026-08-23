@@ -93,9 +93,10 @@ export interface ProductUser {
   role: AdminRole;
 }
 
-export interface ProviderRelease {
-  provider_id: string;
-  provider_version: string;
+export interface PluginRelease {
+  plugin_id: string;
+  plugin_version: string;
+  plugin_kind: "agent_provider" | "code_intelligence";
   package_digest: string;
   artifact_digest: string | null;
   release_state: string;
@@ -204,12 +205,12 @@ export const adminApi = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(limits),
     }),
-  providers: () =>
-    readJson<{ providers: ProviderRelease[]; catalog_root: string | null }>(
-      "/api/admin/providers",
+  plugins: () =>
+    readJson<{ plugins: PluginRelease[]; catalog_root: string | null }>(
+      "/api/admin/plugins",
     ),
   refreshCatalog: () =>
-    readJson<{ external_releases: number }>("/api/admin/providers/refresh", {
+    readJson<{ external_releases: number }>("/api/admin/plugins/refresh", {
       method: "POST",
     }),
   listPasskeys: () =>

@@ -3,6 +3,7 @@ import {
   compareProviderVersions,
   evaluateExpression,
   initialProviderState,
+  projectAgentPluginInventory,
   type ProviderCatalogEntry,
   providerCompatibilityProblem,
   type ProviderContractInventory,
@@ -15,7 +16,7 @@ import {
   validateProviderContractInventory,
   validateProviderManifest,
   validateProviderUiManifest,
-} from "../../packages/provider-ui-sdk/src/index.ts";
+} from "../../components/provider-ui/src/index.ts";
 import {
   exactProviderEntry,
   joinProviderInstallations,
@@ -35,7 +36,7 @@ function manifest(): ProviderManifest {
     id: "example",
     version: "1.0.0",
     publisher: "test",
-    sdk_version: "2.1.0",
+    sdk_version: "3.0.0",
     display: {
       name: "Example",
       vendor: "Test",
@@ -203,6 +204,36 @@ Deno.test("Provider SDK validates and executes linked typed logic", () => {
   assertEquals(result.effect?.capability, "install_on_machine");
 });
 
+Deno.test("Machine Plugin inventory projects only Agent capability entries", () => {
+  const shared = {
+    generation_digest: `sha256:${"4".repeat(64)}`,
+    contract_fingerprint: `sha256:${"5".repeat(64)}`,
+    state: "active",
+    active_session_leases: 0,
+    replica_state: "absent",
+    materialization_state: "not_installed",
+  } as const;
+  const inventory = [
+    {
+      ...shared,
+      plugin_id: "codex",
+      plugin_version: "3.0.0",
+      plugin_kind: "agent_provider",
+    },
+    {
+      ...shared,
+      plugin_id: "zed",
+      plugin_version: "1.0.0",
+      plugin_kind: "code_intelligence",
+    },
+  ];
+  assertEquals(projectAgentPluginInventory(inventory), [{
+    ...shared,
+    provider_id: "codex",
+    provider_version: "3.0.0",
+  }]);
+});
+
 Deno.test("Provider UI accepts only closed Service authentication presentations", () => {
   const account = uiManifest();
   account.authentication.presentation = "account";
@@ -237,7 +268,7 @@ Deno.test("Provider UI accepts only closed Service authentication presentations"
 
 Deno.test("Provider UI schema 2 accepts bounded gradient and activity IR", () => {
   const fixture = manifest();
-  fixture.sdk_version = "2.3.0";
+  fixture.sdk_version = "3.0.0";
   fixture.ui.schema_version = 2;
   const icon = fixture.ui.assets.find((asset) => asset.id === "icon")!;
   if (icon.content.kind !== "vector_path") throw new Error("missing vector");
@@ -291,7 +322,7 @@ Deno.test("Provider UI rejects v2 nodes in v1 and unknown future interfaces", ()
   );
 
   const unknown = manifest();
-  unknown.sdk_version = "2.3.0";
+  unknown.sdk_version = "3.0.0";
   unknown.ui.schema_version = 2;
   unknown.ui.surfaces.loading = {
     component: "activity",
@@ -315,7 +346,7 @@ Deno.test("Provider UI rejects v2 nodes in v1 and unknown future interfaces", ()
 
 Deno.test("Provider UI rejects unbounded activity motion before rendering", () => {
   const fixture = manifest();
-  fixture.sdk_version = "2.3.0";
+  fixture.sdk_version = "3.0.0";
   fixture.ui.schema_version = 2;
   fixture.ui.surfaces.loading = {
     component: "activity",
@@ -339,7 +370,7 @@ Deno.test("Provider host schema 2 accepts only bounded Transcript variants", () 
     const variant of ["timeline", "workcell", "signal", "terminal"] as const
   ) {
     const fixture = manifest();
-    fixture.sdk_version = "2.3.0";
+    fixture.sdk_version = "3.0.0";
     fixture.host = {
       ...fixture.host,
       schema_version: 2,
@@ -381,7 +412,7 @@ Deno.test("Provider host schema 2 accepts only bounded Transcript variants", () 
   );
 
   const unknown = manifest() as unknown as Record<string, unknown>;
-  unknown.sdk_version = "2.3.0";
+  unknown.sdk_version = "3.0.0";
   const unknownHost = unknown.host as Record<string, unknown>;
   unknownHost.schema_version = 2;
   unknownHost.transcript = {
@@ -805,11 +836,11 @@ Deno.test("Machine Provider capabilities select the newest compatible release", 
     manifest: currentManifest,
   };
   const legacyMachine: ProviderContractInventory = {
-    provider_sdk_version: "2.4.0",
+    provider_sdk_version: "3.0.0",
     min_package_schema: 1,
     max_package_schema: 2,
-    min_release_schema: 1,
-    max_release_schema: 2,
+    min_runtime_binding_schema: 1,
+    max_runtime_binding_schema: 2,
     min_ui_schema: 1,
     max_ui_schema: 2,
     min_host_schema: 1,
@@ -865,11 +896,11 @@ Deno.test("Machine Provider capability inventories reject unknown fields", () =>
   assertThrows(
     () =>
       validateProviderContractInventory({
-        provider_sdk_version: "2.4.0",
+        provider_sdk_version: "3.0.0",
         min_package_schema: 1,
         max_package_schema: 2,
-        min_release_schema: 1,
-        max_release_schema: 2,
+        min_runtime_binding_schema: 1,
+        max_runtime_binding_schema: 2,
         min_ui_schema: 1,
         max_ui_schema: 2,
         min_host_schema: 1,
@@ -953,15 +984,15 @@ Deno.test("Provider SDK enforces semantic release identity and precedence", () =
 
 Deno.test("Provider SDK rejects incompatible authoring SDK versions before rendering", () => {
   const newer = manifest();
-  newer.sdk_version = "2.4.1";
+  newer.sdk_version = "3.0.1";
   assertThrows(() => validateProviderManifest(newer), Error, "is incompatible");
 
-  const olderMinor = manifest();
-  olderMinor.sdk_version = "2.0.1";
-  validateProviderManifest(olderMinor);
+  const current = manifest();
+  current.sdk_version = "3.0.0";
+  validateProviderManifest(current);
 
   const oldMajor = manifest();
-  oldMajor.sdk_version = "1.99.0";
+  oldMajor.sdk_version = "2.99.0";
   assertThrows(
     () => validateProviderManifest(oldMajor),
     Error,

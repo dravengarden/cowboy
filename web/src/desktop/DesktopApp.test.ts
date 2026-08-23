@@ -30,8 +30,8 @@ Deno.test("the open session owns selected material in rail and collapsed layouts
   );
   assertEquals(appSource.includes("data-desktop-active-session"), true);
   assertEquals(
-    appSource.includes(
-      'surface === "desktop" && sessionsInDrawer && !drawerOpen && {',
+    /surface === "desktop" && sessionsInDrawer &&\s*!drawerOpen &&/u.test(
+      appSource,
     ),
     true,
   );

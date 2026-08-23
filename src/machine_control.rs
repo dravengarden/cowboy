@@ -336,25 +336,25 @@ mod tests {
     }
 
     #[test]
-    fn provider_uninstall_and_compensation_require_machine_protocol_four() {
+    fn plugin_uninstall_and_compensation_require_machine_protocol_five() {
         let control = MachineControl::default();
         let (tx, mut rx) = mpsc::unbounded_channel();
         control.install("old".to_owned(), "epoch".to_owned(), false, 3, tx);
         let digest = format!("sha256:{}", "ab".repeat(32));
         for command in [
-            MachineCommand::UninstallProvider {
+            MachineCommand::UninstallPlugin {
                 request_id: "uninstall".to_owned(),
-                provider_id: "gemini".to_owned(),
+                plugin_id: "gemini".to_owned(),
                 generation_digest: digest.clone(),
             },
-            MachineCommand::ReactivateProvider {
+            MachineCommand::ReactivatePlugin {
                 request_id: "reactivate".to_owned(),
-                provider_id: "gemini".to_owned(),
+                plugin_id: "gemini".to_owned(),
                 generation_digest: digest.clone(),
             },
         ] {
             let error = control.send("old", command).unwrap_err();
-            assert!(error.contains("requires 4"));
+            assert!(error.contains("requires 5"));
         }
         assert!(rx.try_recv().is_err());
     }

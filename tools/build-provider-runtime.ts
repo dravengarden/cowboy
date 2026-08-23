@@ -88,7 +88,7 @@ interface ReleasedComponent {
 
 const providerId = Deno.args[0] ?? "";
 const baseUrl =
-  (Deno.args[1] ?? "https://cowboy.stormbird.xyz/provider-artifacts")
+  (Deno.args[1] ?? "https://cowboy.stormbird.xyz/plugin-artifacts")
     .replace(/\/+$/, "");
 if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(providerId)) {
   throw new Error("Provider id must use lowercase kebab-case");
@@ -98,17 +98,17 @@ if (!baseUrl.startsWith("https://") || baseUrl.includes("latest")) {
 }
 
 const source = await readJson<ProviderSource>(
-  `providers/${providerId}/provider.json`,
+  `plugins/${providerId}/provider.json`,
 );
 if (source.id !== providerId) {
   throw new Error("Provider directory identity mismatch");
 }
-const runtimeLock = await readJson<RuntimeLock>("providers/runtime-lock.json");
+const runtimeLock = await readJson<RuntimeLock>("components/provider-runtime-lock.json");
 if (runtimeLock.schema_version !== 1) {
   throw new Error("unsupported runtime lock schema");
 }
 
-const outputRoot = `dist/providers/${providerId}/runtime`;
+const outputRoot = `dist/plugins/${providerId}/runtime`;
 const cacheRoot = "dist/provider-runtime-cache";
 await Deno.mkdir(cacheRoot, { recursive: true });
 await Deno.remove(outputRoot, { recursive: true }).catch((error) => {
@@ -153,7 +153,7 @@ try {
       const digest = await sha256(built.path);
       const name = built.path.slice(built.path.lastIndexOf("/") + 1);
       const released: ReleasedComponent = {
-        kind: requirement.kind,
+        kind: pluginComponentKind(requirement.kind),
         slot: requirement.slot,
         dependency: dependency.id,
         version: dependency.version,
@@ -193,6 +193,18 @@ try {
   }));
 } finally {
   await Deno.remove(temporary, { recursive: true }).catch(() => undefined);
+}
+
+function pluginComponentKind(kind: string): string {
+  const mapped: Record<string, string> = {
+    provider_cli: "agent_cli",
+    provider_adapter: "agent_adapter",
+    provider_gateway: "agent_gateway",
+    acp_runtime: "acp_runtime",
+  };
+  const value = mapped[kind];
+  if (!value) throw new Error(`unsupported Agent Plugin component kind ${kind}`);
+  return value;
 }
 
 async function buildComponent(

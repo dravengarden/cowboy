@@ -59,7 +59,8 @@ reconnects and rolling updates.
 | Runtime routing | `src/supervisor.rs`, `src/remote_runtime.rs`, `src/runtime_router.rs` | Machine selection, fencing, replay, and idempotent commands |
 | Machine host | `src/machine_*.rs`, `src/bin/cowboy-machine.rs` | Enrollment, workspace preparation, component lifecycle, and detached-worker supervision |
 | ACP worker | `src/acp.rs`, `src/worker.rs`, `src/bin/cowboy-acp-worker.rs` | Provider handshake, prompts, permissions, streaming updates, and resume |
-| Providers | `src/provider/*`, `providers/*` | Signed package contracts, launch generations, Service auth, and usage adapters |
+| Plugins and components | `src/plugin.rs`, `plugins/*`, `components/*` | Versioned integration manifests, shared contracts, and coordinated release validation |
+| Agent Providers | `src/provider/*`, `plugins/*/provider.json` | Signed package contracts, launch generations, Service auth, and usage adapters |
 | Storage | `src/store.rs`, `src/store/sqlite.rs`, `migrations/*` | PostgreSQL/SQLite durability, restore, pagination, and retention |
 | Code plane | `src/code_review.rs`, `src/code_adapter.rs`, `src/code_cache.rs` | Worktree tree/diff/file/LSP data behind a stable Cowboy API |
 | Frontend | `web/src/*` | Desktop, mobile, transcript, composer, Machine, Provider, and code-review surfaces |
@@ -103,6 +104,7 @@ flowchart TB
 13. [Multi-machine runtime](15-multi-machine.md)
 14. [Admin console](14-admin.md)
 15. [Product login](16-product-auth.md)
+16. [Plugins and shared components](../plugin-components.md)
 
 The stdio ACP bridge and isolated Zed code adapter remain optional compatibility
 integrations. They are documented separately in

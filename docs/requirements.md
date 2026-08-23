@@ -1,7 +1,9 @@
 # Cowboy core requirements
 
-Status: normative Provider platform contract. Package schema 2, release schema
-2, UI schemas 1-2, host integration schemas 1-2, Provider SDK 2.4,
+Status: normative plugin and Provider platform contract. Plugin manifest schema
+1, component registry schema 1, Plugin package/release schema 1, Provider
+payload schema 2, Agent runtime-binding schema 2, UI schemas 1-2, host
+integration schemas 1-2, Provider SDK 3.0, Machine protocol 5,
 Machine-scoped installation, exact session generations, Service-scoped
 authentication, and bounded uninstall retention implement this boundary. The
 in-tree `LaunchSpec` registry remains only as a drain-compatible fallback for
@@ -15,15 +17,15 @@ system until a tested migration exists, then move toward this contract. Do not
 silently redefine the contract to match the transition.
 
 The detailed package and type-system design lives in
-[Installable Provider packages](provider-packages.md). Runtime details live in
+[Installable Provider packages](plugin-packages.md). Runtime details live in
 the numbered [architecture chapters](architecture/00-overview.md).
 
 ## State ownership
 
 | State | Owner and identity |
 |---|---|
-| Provider release | Catalog: `(provider_id, provider_version, artifact_digest)` |
-| Provider installation | Machine: `(machine_id, provider_id)` |
+| Plugin release | Catalog: `(plugin_id, plugin_version, artifact_digest)` |
+| Plugin installation | Machine: `(machine_id, plugin_id)` |
 | Provider authentication | Cowboy Service: `(cowboy_service_id, provider_id)` |
 | Authentication replica | Derived Machine copy: `(machine_id, provider_id, auth_generation)` |
 | Session runtime | `(session_id, machine_id, provider_id, provider_generation_digest)` |
@@ -32,6 +34,28 @@ An authentication replica is not a Machine login. It is a versioned projection
 of the Cowboy Service's authoritative Provider authentication state.
 
 ## Product requirements
+
+### CR-0: Integrations are versioned plugins over versioned components
+
+Every first-party integration has a generic `plugin.json` manifest with an
+exact ID, SemVer version, kind, entry point, and exact Cowboy component
+dependencies. Agent integrations use the `agent_provider` kind; their Provider
+contract is a typed payload, not a second release or installation unit. Zed
+uses the `code_intelligence` kind and retains its isolated process and license
+boundary.
+
+Reusable implementation belongs to an owned component, not a plugin copy or an
+external source-tree link. Component releases bind exact versions, source
+paths, and source digests. A component source change requires a new component
+release and a strictly higher version for every plugin in the preceding
+release, even when a plugin does not directly consume that component. This
+coordinated bump is enforced mechanically by `just plugin-check`.
+
+The generic Plugin layer exclusively owns signing, publication, Catalog
+selection, Machine generations, activation, rollback, and uninstall. Narrower
+capability contracts may validate payloads and provide behavior but cannot own
+a second lifecycle. Code-intelligence Plugins remain outside the Agent
+execution and authentication model.
 
 ### CR-1: Cowboy is Provider-agnostic
 
@@ -44,30 +68,32 @@ ACP, an adapter, gateway, agent CLI, model protocol, and their versions are
 Provider-private implementation details. Ordinary UI presents the Provider;
 only explicitly scoped developer diagnostics may name those internals.
 
-### CR-2: Provider is the product and installation unit
+### CR-2: Plugin is the product and installation unit
 
 `claude-code`, `codex`, `gemini`, `grok`, `claude-deepseek`, and
-`codex-deepseek` are independent Providers. Each builds, versions, signs,
-publishes, installs, upgrades, rolls back, and uninstalls independently.
+`codex-deepseek` are independent Agent Provider Plugins; `zed` is an independent
+code-intelligence Plugin. Each builds, versions, signs, publishes, installs,
+upgrades, rolls back, and uninstalls through the same Plugin lifecycle.
 
-A user installs a Provider version on a selected Machine. Cowboy never asks the
+A user installs a Plugin version on a selected Machine. Cowboy never asks the
 user to install an ACP runtime, adapter, gateway, managed Node, or CLI as a
 separate product component. Internal content-addressed blobs may be deduplicated
 and leased without changing this UI or lifecycle boundary.
 
 ### CR-3: Every release is immutable and independently buildable
 
-A Provider builds independently against the published Cowboy Provider SDK and
-contract bundle. First-party sources may be co-located in this repository, but
+A Plugin builds independently against the generic Plugin SDK and its exact
+component release. Agent payloads additionally build against the Provider SDK
+and contract bundle. First-party sources may be co-located in this repository, but
 each has its own source manifest, version, build invocation, artifact, release
 envelope, signature, and install transaction. Its data-only package includes
 all universal UI and contract layers; its signed release binds exactly one
-runtime-artifact set for every declared platform. Its identity binds Provider
-ID, Provider version, package digest, composite artifact digest, contract
-fingerprint, runtime-artifact matrix, and publisher.
+runtime-artifact set for every declared platform. Its identity binds Plugin ID,
+kind, Plugin version, component release, package digest, composite artifact
+digest, contract fingerprint, runtime-artifact matrix, and publisher.
 
 Every internal executable and protocol dependency is pinned to an exact version
-and digest inside the Provider. Moving tags, version ranges, `latest`, runtime
+and digest inside the Plugin. Moving tags, version ranges, `latest`, runtime
 package installation, and dependency-owned auto-updaters are forbidden. Any
 dependency change creates a new Provider version and new artifact bytes.
 
@@ -77,7 +103,7 @@ endpoint, launches the exact generation-local component, waits for its declared
 health path, and resolves signed `sidecar_url` bindings only after readiness.
 Component executable bindings are resolved from the same installed generation.
 No fixed Machine-global gateway, host profile path, shell template, or ambient
-runtime download may complete an installable Provider release.
+runtime download may complete an installable Plugin release.
 
 ### CR-4: Cowboy supplies the typed component library
 
@@ -204,7 +230,7 @@ on its own dynamic loopback endpoint. Old and new Provider or authentication
 generations may therefore drain concurrently without sharing a fixed port or
 silently adopting replacement runtime bytes.
 
-Publishing a Provider release does not install it. Installing it on one Machine
+Publishing a Plugin release does not install it. Installing it on one Machine
 does not install it on another Machine.
 
 Install and uninstall serialize per `(machine_id, provider_id)`. Installation
@@ -313,12 +339,12 @@ the Machine/session state committed.
 
 The canonical Provider dependency-audit and release procedure is the repository
 skill at
-[`../.agents/skills/release-cowboy-provider/SKILL.md`](../.agents/skills/release-cowboy-provider/SKILL.md).
+[`../.agents/skills/release-cowboy-plugin/SKILL.md`](../.agents/skills/release-cowboy-plugin/SKILL.md).
 It is versioned, reviewed, and released with Cowboy's Provider contracts. Do not
 fork or hand-maintain it as a user-home skill.
 
 The skill audits internal dependency updates, updates exact pins, runs Provider
-and Cowboy conformance gates, builds and signs one immutable Provider release,
+and Cowboy conformance gates, builds and signs one immutable Plugin release,
 publishes it, and verifies Catalog availability. It stops before Machine
 installation and never performs Service login as a release side effect.
 
@@ -357,12 +383,13 @@ The Provider platform is not complete until automated acceptance proves:
 
 ## Implemented migration boundary
 
-Provider package schema 2, release schema 2, UI schemas 1-2, host integration
-schemas 1-2, Controller contract 2, Machine contract 4, and Cowboy Provider SDK
-2.4 in both Rust and TypeScript are the active contract.
-The Catalog embeds the six independently compiled first-party manifests as
+Plugin package/release schema 1, Provider payload schema 2, Agent runtime-binding
+schema 2, UI schemas 1-2, host integration schemas 1-2, Controller contract 2,
+Provider Machine contract 4, Machine protocol 5, and Cowboy Provider SDK 3.0 in
+both Rust and TypeScript are the active contract. The Plugin Catalog embeds all
+seven independently compiled first-party manifests as
 typed `unbound` entries and accepts installable releases only after an external
-`.cowboy-provider` package is paired with a complete, signed runtime envelope.
+`.cowboy-plugin` package is paired with a complete, signed runtime envelope.
 Target Machines repeat package, composite digest, publisher, contract,
 platform, private dependency, archive, and staged-probe checks before
 atomically changing their active generation.
@@ -375,9 +402,10 @@ their typed readiness probes, and keeps their process handles for the complete
 worker lifetime. This makes the Provider, rather than a Machine-global adapter,
 CLI, gateway, or resource path, the executable installation unit.
 
-Web discovers Providers from `/api/providers`, renders their closed UI IR and
-assets, and exposes only Provider-level install, upgrade, authentication, and
-uninstall actions. ACP, adapters, gateways, and managed CLI components remain
+Web discovers all installable extensions from `/api/plugins`. The Agent
+capability projection renders Provider UI IR and assets while install, upgrade,
+rollback, and uninstall remain Plugin lifecycle actions. ACP, adapters,
+gateways, and managed CLI components remain
 available only to developer diagnostics. The Service authentication surface is
 rendered once outside Machine cards; its lifecycle details and each Machine's
 Provider lifecycle details are collapsed behind compact summaries by default.
@@ -393,13 +421,13 @@ status, and automatically seals durable state to enrolled Machines; offline
 replicas remain pending and converge on reconnect. Uninstall uses an expiring
 exact-impact plan, active
 turn confirmation, an absolute three-day purge deadline, and reference-aware
-attachment cleanup. Machine protocol 3 carries Provider/auth lifecycle
-commands; protocol 4 adds exact retained-generation reactivation for uninstall
-compensation. Provider lifecycle fences serialize install/uninstall, auth
+attachment cleanup. Machine protocol 5 carries the generic Plugin lifecycle and
+exact retained-generation reactivation; Agent auth commands remain
+capability-specific. Plugin lifecycle fences serialize install/uninstall, auth
 generations reject stale or conflicting replicas, and session launch resolves
 the exact recorded auth projection.
 
 The legacy in-tree launch registry is retained only to drain old sessions that
 lack an exact package generation. New Machine-backed sessions must resolve an
-active signed Provider package. Remove that fallback after the last legacy
+an active signed Agent Plugin generation. Remove that fallback after the last legacy
 session generation is no longer restorable.

@@ -7,7 +7,7 @@
 > Ordinary UI installs, upgrades, and uninstalls that Provider unit and does not
 > expose ACP or adapter slots. See
 > [Cowboy core requirements](../requirements.md) and
-> [Installable Provider packages](../provider-packages.md). Authentication is a
+> [Installable Provider packages](../plugin-packages.md). Authentication is a
 > separate Cowboy Service-level contract: Machines receive automatic credential
 > replicas and never own an independent Provider login.
 
@@ -74,7 +74,7 @@ versioned internal payloads:
 |---|---|---|
 | `acp-runtime` | ACP SDK, worker, provider launch policy | ACP SDK/worker change |
 | `provider-adapter:<id>` | `codex-acp`, `claude-agent-acp`, or a native CLI ACP entry | adapter release |
-| `provider-cli:<id>` | Codex, Claude Code, Gemini CLI, or Grok Build | provider release |
+| `provider-cli:<id>` | Codex, Claude Code, Gemini CLI, or Grok Build | Agent Plugin release |
 | `zed-adapter:<abi>` | Cowboy's GPL-isolated stable product adapter | adapter contract change |
 | `zed-server:<zed-version>` | official server matching one Zed revision | matching Zed client/update |
 
@@ -167,7 +167,7 @@ inside the Service and issues bounded projections or submits a sealed candidate
 through compare-and-swap; Cowboy commits one next generation and redistributes
 it. A Provider whose upstream credential cannot be safely exported, brokered,
 or exchanged is incompatible rather than allowed to fall back to Machine login.
-See [Service-scoped authentication](../provider-packages.md#service-scoped-authentication).
+See [Service-scoped authentication](../plugin-packages.md#service-scoped-authentication).
 
 ### Provider usage ledger
 

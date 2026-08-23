@@ -10,7 +10,7 @@ const transcriptPresentationSource = await Deno.readTextFile(
   new URL("./ProviderTranscript.tsx", import.meta.url),
 );
 const grokProviderSource = await Deno.readTextFile(
-  new URL("../../providers/grok/provider.json", import.meta.url),
+  new URL("../../plugins/grok/provider.json", import.meta.url),
 );
 
 Deno.test("dedicated Provider pages list cards without a Hide summary", () => {

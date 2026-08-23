@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "id": "cowboy.code-intelligence",
+  "version": "1.0.0",
+  "transport": "unix_socket_json_v1",
+  "operations": [
+    "worktree_ensure",
+    "worktree_open",
+    "worktree_close",
+    "buffer_open",
+    "buffer_close",
+    "hover",
+    "definition",
+    "references",
+    "document_symbols"
+  ],
+  "states": ["restricted", "warming", "ready", "failed"],
+  "supported_platforms": [
+    { "os": "linux", "architecture": "x86_64" }
+  ]
+}

@@ -342,7 +342,7 @@ fn last_turn_texts(log: &[Envelope]) -> (String, String) {
 pub struct SessionMeta {
     pub id: String,
     pub provider: String,
-    /// Immutable Provider release selected when the session was created.
+    /// Immutable Agent Plugin release selected when the session was created.
     #[serde(default)]
     pub provider_version: String,
     #[serde(default)]
@@ -857,7 +857,7 @@ pub enum Inbound {
         key: String,
         value: serde_json::Value,
     },
-    /// Generic optimistic-sync mutation (@shared-utils/sync). The client applies
+    /// Generic optimistic-sync mutation (Cowboy state-sync). The client applies
     /// it locally for an INSTANT update, then sends it here; the daemon (the
     /// arbiter) linearizes it per `state`, version-stamps, and broadcasts an
     /// [`Outbound::SyncPatch`] every terminal folds. `id` is the client-minted
@@ -1074,7 +1074,7 @@ pub enum Outbound {
     },
     // (Queue + drafts now flow on the generic SyncPatch channel as state
     // "queue:<session_id>", not a dedicated variant — see Hub::emit_pending.)
-    /// A generic snapshot patch for one synced `state` (@shared-utils/sync): the
+    /// A generic snapshot patch for one synced `state` (Cowboy state-sync): the
     /// ABSOLUTE `value` at `version`, plus the mutation ids newly confirmed. Sent
     /// on connect as a resync (`confirmed` = every applied id, to seed/heal a
     /// client) and after each accepted [`Inbound::Sync`] (`confirmed` = just that
@@ -1440,7 +1440,7 @@ fn estimated_store_write_bytes(write: &StoreWrite) -> usize {
     }
 }
 
-/// Live arbiter state for the title-sync channel (the @shared-utils/sync
+/// Live arbiter state for the title-sync channel (the Cowboy state-sync
 /// reference arbiter, in Rust). Coordinates optimistic cross-terminal renames:
 /// each accepted mutation bumps `version` and yields a snapshot patch (the whole
 /// `titles` override map + the confirmed id). EPHEMERAL by design — durability
@@ -1451,7 +1451,7 @@ fn estimated_store_write_bytes(write: &StoreWrite) -> usize {
 /// patches (the arbiter's idempotency half; the client's confirmed-drop is the
 /// other half).
 /// Per-state bookkeeping for the generic optimistic-sync channel (the
-/// @shared-utils/sync reference arbiter, in Rust). One entry per synced state
+/// Cowboy state-sync reference arbiter, in Rust). One entry per synced state
 /// (`"title"`, `"order"`, `"queue:<session>"`, …). `version` is the state's
 /// monotonic clock; `seen` dedupes a retried mutation so it never double-patches
 /// (the arbiter's idempotency half; the client's confirmed-drop is the other).
@@ -2548,7 +2548,7 @@ impl Hub {
         }
     }
 
-    // --- Generic optimistic-sync channel (@shared-utils/sync arbiter) --------
+    // --- Generic optimistic-sync channel (Cowboy state-sync arbiter) --------
     // The daemon is the arbiter for each synced `state`. A mutation is applied to
     // the TYPED source of truth (SessionMeta / order list); the patch carries the
     // state's DERIVED json value. No bespoke per-state wire — one Sync/SyncPatch.
@@ -2911,7 +2911,7 @@ impl Hub {
     /// Resync `SyncPatch`es for the GLOBAL states on connect, `resync: true` so the
     /// client adopts them as ground truth. `title` and `order` are ALWAYS emitted
     /// (even if never mutated this lifetime), because a client may carry a locally
-    /// persisted (`@shared-utils/sync-idb`) cache of these states across reloads:
+    /// persisted (`state/sync-idb`) cache of these states across reloads:
     /// without an unconditional authoritative seed, a stale cached override would
     /// overlay the fresh `Sessions` titles with nothing to correct it. Any other
     /// state mutated this lifetime is included too. Per-session queue states resync

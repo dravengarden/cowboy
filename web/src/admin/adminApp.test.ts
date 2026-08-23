@@ -18,23 +18,26 @@ Deno.test("first-run admin sends the operator to product setup on /", async () =
 
 Deno.test("admin app exposes the operator surfaces", async () => {
   const source = await Deno.readTextFile(appUrl);
-  for (const path of [
-    "/admin",
-    "/admin/login",
-    "/admin/accounts",
-    "/admin/permissions",
-    "/admin/releases",
-    "/admin/sessions",
-    "/admin/limits",
-  ]) {
+  for (
+    const path of [
+      "/admin",
+      "/admin/login",
+      "/admin/accounts",
+      "/admin/permissions",
+      "/admin/releases",
+      "/admin/sessions",
+      "/admin/limits",
+    ]
+  ) {
     assertStringIncludes(source, path);
   }
 });
 
 Deno.test("accounts page is single-user and has no invite or extra-user chrome", async () => {
   const source = await Deno.readTextFile(appUrl);
+  const normalized = source.replaceAll(/\s+/g, " ");
   assertStringIncludes(source, "This instance is single-user");
-  assertStringIncludes(source, "created on / during first-run");
+  assertStringIncludes(normalized, "created on / during first-run");
   assertEquals(source.includes("createProductUser"), false);
   assertEquals(source.includes("issueToken"), false);
   assertEquals(source.includes("Create user"), false);

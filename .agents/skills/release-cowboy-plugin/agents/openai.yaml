@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release Cowboy Plugin"
+  short_description: "Build, sign, and publish one Plugin"
+  default_prompt: "Use $release-cowboy-plugin to audit, test, sign, and publish a Cowboy Plugin."

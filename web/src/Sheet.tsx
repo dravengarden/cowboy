@@ -1,7 +1,7 @@
 import { Dialog, DialogContent, useMediaQuery, useTheme } from "@mui/material";
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { BottomSheet, type BottomSheetProps } from "./_shell";
+import { BottomSheet, type BottomSheetProps } from "./components/app-shell";
 import { ObsidianSheet } from "./ObsidianSheet";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 

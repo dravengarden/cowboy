@@ -31,7 +31,7 @@ pub struct SessionPlacement<'a> {
     pub workspace: Option<&'a crate::machine_protocol::MachineWorkspace>,
 }
 
-/// Exact immutable Provider release and Service-auth projection selected by
+/// Exact immutable Agent Plugin release and Service-auth projection selected by
 /// the Controller before a session is registered.
 #[derive(Clone, Copy)]
 pub struct ProviderGeneration<'a> {

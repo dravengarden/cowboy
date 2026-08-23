@@ -3,7 +3,7 @@
 // Obsidian "Manage toolbar options" model). Per device (localStorage), same
 // pattern as desktopLayout.ts / readingSettings.ts. The phase-2 settings sheet
 // edits this list (add / remove / drag-reorder); until then it's the default.
-import { persisted, useStore } from "./_store/mod.ts";
+import { persisted, useStore } from "./components/state/store/mod.ts";
 import { COMPOSER_COMMANDS_BY_ID } from "./composerCommands";
 import {
   DEFAULT_COMPOSER_TOOLBAR,

@@ -15,7 +15,7 @@
 //     the client's job. So clear is NOT a slash-command: it's a cowboy session
 //     RESET (kind: "reset") that respawns the agent with a fresh session/new.
 //     It works for every agent, so it's always available.
-import type { ProviderUiManifest } from "../../packages/provider-ui-sdk/src/index.ts";
+import type { ProviderUiManifest } from "../../components/provider-ui/src/index.ts";
 import type { AcpUpdate, AvailableCommand, Envelope } from "./protocol";
 import { currentProviderEntry } from "./providerCatalogRegistry";
 

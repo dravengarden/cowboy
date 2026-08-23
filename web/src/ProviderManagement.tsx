@@ -27,8 +27,8 @@ import {
   type ProviderHostContext,
   type ProviderUiManifest,
   resolveProviderAuthenticationPresentation,
-  validateMachineProviderInventory,
-} from "../../packages/provider-ui-sdk/src/index.ts";
+  projectAgentPluginInventory,
+} from "../../components/provider-ui/src/index.ts";
 import {
   joinProviderInstallations,
   latestProviderEntries,
@@ -70,8 +70,8 @@ interface AffectedSession {
 interface UninstallPlan {
   plan_id: string;
   machine_id: string;
-  provider_id: string;
-  provider_version: string;
+  plugin_id: string;
+  plugin_version: string;
   generation_digest: string;
   affected_sessions: AffectedSession[];
   active_session_ids: string[];
@@ -489,14 +489,14 @@ function ProviderManagement(
       return;
     }
     const response = await fetch(
-      `/api/machines/${encodeURIComponent(machineId)}/providers`,
+      `/api/machines/${encodeURIComponent(machineId)}/plugins`,
     );
     if (!response.ok) {
       throw new Error(
         (await response.text()).trim() || "Could not load installed Providers",
       );
     }
-    setInventory(validateMachineProviderInventory(await response.json()));
+    setInventory(projectAgentPluginInventory(await response.json()));
   }, [machineId]);
   useEffect(() => {
     if (scope !== "machine") return undefined;
@@ -513,7 +513,7 @@ function ProviderManagement(
     const poll = async (): Promise<void> => {
       try {
         const response = await fetch(
-          `/api/providers/${
+          `/api/plugins/${
             encodeURIComponent(flow.provider.provider_id)
           }/auth/${encodeURIComponent(flow.requestId ?? "")}`,
         );
@@ -578,7 +578,7 @@ function ProviderManagement(
       );
     }
     const response = await fetch(
-      `/api/machines/${encodeURIComponent(machine.id)}/providers/${
+      `/api/machines/${encodeURIComponent(machine.id)}/plugins/${
         encodeURIComponent(providerId)
       }/uninstall-plan`,
       { method: "POST" },
@@ -609,7 +609,7 @@ function ProviderManagement(
             );
           }
           const response = await fetch(
-            `/api/machines/${encodeURIComponent(machine.id)}/providers/${
+            `/api/machines/${encodeURIComponent(machine.id)}/plugins/${
               encodeURIComponent(entry.provider_id)
             }`,
             {
@@ -658,7 +658,7 @@ function ProviderManagement(
             ),
           );
           const response = await fetch(
-            `/api/providers/${encodeURIComponent(entry.provider_id)}/auth`,
+            `/api/plugins/${encodeURIComponent(entry.provider_id)}/auth`,
             {
               method: "DELETE",
             },
@@ -709,7 +709,7 @@ function ProviderManagement(
         );
       }
       const response = await fetch(
-        `/api/providers/${
+        `/api/plugins/${
           encodeURIComponent(flow.provider.provider_id)
         }/auth/start`,
         {
@@ -752,7 +752,7 @@ function ProviderManagement(
     if (!current?.requestId) return;
     try {
       await fetch(
-        `/api/providers/${
+        `/api/plugins/${
           encodeURIComponent(current.provider.provider_id)
         }/auth/${encodeURIComponent(current.requestId)}`,
         { method: "DELETE" },
@@ -780,7 +780,7 @@ function ProviderManagement(
     try {
       if (flow?.requestId) {
         await fetch(
-          `/api/providers/${
+          `/api/plugins/${
             encodeURIComponent(flow.provider.provider_id)
           }/auth/${encodeURIComponent(flow.requestId)}`,
           { method: "DELETE" },
@@ -805,7 +805,7 @@ function ProviderManagement(
       ),
     );
     const response = await fetch(
-      `/api/providers/${encodeURIComponent(flow.provider.provider_id)}/auth/${
+      `/api/plugins/${encodeURIComponent(flow.provider.provider_id)}/auth/${
         encodeURIComponent(flow.requestId)
       }`,
       {
@@ -823,7 +823,7 @@ function ProviderManagement(
     const response = await fetch(
       `/api/machines/${
         encodeURIComponent(uninstallPlan.machine_id)
-      }/providers/${encodeURIComponent(uninstallPlan.provider_id)}/uninstall`,
+      }/plugins/${encodeURIComponent(uninstallPlan.plugin_id)}/uninstall`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -1495,7 +1495,7 @@ function ProviderManagement(
         wide
         title={`Uninstall ${
           latestEntries.find((entry) =>
-            entry.provider_id === uninstallPlan?.provider_id
+            entry.provider_id === uninstallPlan?.plugin_id
           )?.manifest.display.name ?? "Provider"
         } from ${machine?.display_name ?? "Machine"}?`}
         actions={
@@ -1516,7 +1516,7 @@ function ProviderManagement(
                   if (uninstallPlan) {
                     setErrors((current) => ({
                       ...current,
-                      [uninstallPlan.provider_id]: detail,
+                      [uninstallPlan.plugin_id]: detail,
                     }));
                   }
                 })}

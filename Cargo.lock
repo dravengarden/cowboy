@@ -767,6 +767,7 @@ dependencies = [
  "chacha20poly1305",
  "chrono",
  "clap",
+ "cowboy-plugin-sdk",
  "cowboy-provider-sdk",
  "flate2",
  "futures",
@@ -804,8 +805,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "cowboy-plugin-sdk"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "cowboy-provider-sdk",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+]
+
+[[package]]
 name = "cowboy-provider-sdk"
-version = "2.4.0"
+version = "3.0.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -813,7 +828,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "tempfile",
 ]
 
 [[package]]

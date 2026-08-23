@@ -40,7 +40,7 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
 ## Architecture gotchas
 - The normative Provider-platform contract is `docs/requirements.md`. The
   canonical dependency-audit and release workflow is the repository-owned
-  `.agents/skills/release-cowboy-provider/`; keep it versioned with Cowboy and
+  `.agents/skills/release-cowboy-plugin/`; keep it versioned with Cowboy and
   do not fork it into a user-home skill.
 - **One process serves frontend + backend** → daemon-down = white screen. The
   robustness layers (SW shell cache, AppErrorBoundary, ConnectionBanner, store
@@ -49,9 +49,9 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
 - **`web/src/App.tsx` is a 4-space-indent outlier** — never run `deno fmt` on it
   (it would reformat 3700 lines). Match 4-space when editing it.
   (memory: cowboy-web-app-tsx-4space)
-- A **fresh worktree is missing `web/src/_shell`** (`harness shell link` no
-  longer covers cowboy) — symlink it manually before building.
-  (memory: cowboy-shell-symlink-fresh-worktree)
+- Web app-shell primitives and the Deno/Vite builder are owned by Cowboy under
+  `web/src/components/app-shell` and `nix/`; fresh worktrees must build without
+  links to another repository.
 - SQLx migration files are immutable after deployment, including comments and
   whitespace because their exact bytes are checksummed. Add a new migration;
   never edit an applied file or alter stored checksum records. If startup

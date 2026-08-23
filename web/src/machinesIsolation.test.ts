@@ -1,13 +1,15 @@
 import { assert } from "jsr:@std/assert";
 
-const appSource = await Deno.readTextFile(new URL("./App.tsx", import.meta.url));
+const appSource = await Deno.readTextFile(
+  new URL("./App.tsx", import.meta.url),
+);
 
 Deno.test("Machines can be deleted only through the current Service API", () => {
   assert(appSource.includes("function MachinesContent"));
   assert(appSource.includes("/revoke`"));
   assert(appSource.includes("Delete from this Cowboy Service"));
   assert(appSource.includes("Other Cowboy Services"));
-  assert(appSource.includes("setMachines((current) => current.filter"));
+  assert(/setMachines\(\(current\) =>\s*current\.filter/u.test(appSource));
 });
 
 Deno.test("deleting the last Machine warns and refreshes the setup gate immediately", async () => {

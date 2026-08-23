@@ -113,7 +113,7 @@ import {
 } from "./providerCatalog";
 import { providerName } from "./providerPresentation";
 import { SessionProviderAccess } from "./ProviderManagement";
-import { resolveProviderAuthenticationPresentation } from "../../packages/provider-ui-sdk/src/index.ts";
+import { resolveProviderAuthenticationPresentation } from "../../components/provider-ui/src/index.ts";
 import {
   sessionProviderFacts,
   sessionProviderManageLabel,
@@ -294,13 +294,13 @@ import type {
 } from "./protocol";
 import { sessionProjectLabel } from "./sessionProject";
 import { ConfirmSheet, Sheet } from "./Sheet";
-import { MobileSheetDismiss } from "./_shell";
+import { MobileSheetDismiss } from "./components/app-shell";
 import {
   OPEN_SESSION_SETTINGS_EVENT,
   type SessionSettingsFocus,
   sessionSettingsFocusFromEvent,
 } from "./sessionSettingsOpen";
-import { useStore as usePrefStore } from "./_store/mod.ts";
+import { useStore as usePrefStore } from "./components/state/store/mod.ts";
 import {
   PENDING_ARRIVAL_FLASH_MS,
   type PendingArrival,

@@ -8,7 +8,7 @@
 > details retained later in this chapter document only the old-session fallback
 > that can be removed after its final generation drains. See
 > [Cowboy core requirements](../requirements.md) and
-> [Installable Provider packages](../provider-packages.md).
+> [Installable Provider packages](../plugin-packages.md).
 
 A **Provider** is a signed package containing typed UI/logic contracts,
 content-addressed assets, an exact private runtime dependency graph, platform
@@ -18,7 +18,9 @@ transport is not part of the user-facing installation model.
 
 ## First-party packages
 
-The first-party Catalog compiles these independent sources under `providers/`.
+The first-party Catalog compiles the `agent_provider` plugins under `plugins/`.
+Each plugin manifest pins the shared Provider components exactly; its signed
+Provider payload remains the Machine installation unit.
 They remain visible but non-installable as `unbound` until their complete
 multi-platform runtime release is externally published and trusted:
 
@@ -31,7 +33,7 @@ multi-platform runtime release is externally published and trusted:
 | `gemini` | Gemini CLI `0.55.1` | Gemini's native ACP mode |
 | `grok` | Grok Build CLI `0.2.117` | Grok Build's native ACP stdio agent |
 
-Each source compiles to canonical `.cowboy-provider` bytes; a complete
+Each source compiles to canonical `.cowboy-plugin` bytes; a complete
 platform-runtime matrix is bound before the adjacent release envelope can be
 signed. Its runtime section contains the exact command, arguments, static
 non-secret environment, inherited-environment denylist, dependency versions,
@@ -66,7 +68,7 @@ chrome only; its executable and authentication generations remain exact.
 
 ### Service authentication presentation
 
-Provider SDK 2.4 adds a closed UI projection over the existing authentication
+Provider SDK 3.0 adds a closed UI projection over the existing authentication
 method graph. An all-`secret_input` Provider renders the `api_key` presentation;
 other current method graphs render `account`. The shared Cowboy card shell owns
 the logo/title region and one footer containing status, version, and only the
@@ -100,7 +102,7 @@ idempotent with an upstream adapter that starts sending the option itself.
 
 `codex-deepseek` and `claude-deepseek` are runtime variants, not second agent
 implementations. Codex and Claude Code still own planning, tools, approvals,
-memory, and execution. Their signed Provider releases additionally contain the
+memory, and execution. Their signed Plugin releases additionally contain the
 matching DeepSeek gateway as a private `provider_gateway` component.
 
 An exact package worker never connects to a fixed Machine-global gateway. It
@@ -131,7 +133,7 @@ closed model, routing, and isolation environment.
 
 The old in-tree launch path still describes host-managed fixed-port gateways,
 generated homes, and shared adapters so pre-package sessions can drain. Those
-services are not dependencies of an installable Provider release and must not
+services are not dependencies of an installable Plugin release and must not
 be used as substitutes when an exact package, component binding, sidecar, auth
 projection, or readiness check fails. Once no legacy generation is restorable,
 that fallback and its fixed 61137/61138 assumptions can be deleted.
@@ -332,7 +334,7 @@ shell template.
 ## Verifying a provider
 
 `cowboy try-agent --provider <id>` remains a local/legacy adapter diagnostic.
-Release verification uses `provider-bind-runtime`, `provider-sign`,
-`provider-verify`, Catalog ingestion, and the target Machine's staged probes;
+Release verification uses `plugin-bind-runtime`, `plugin-sign`,
+`plugin-verify`, Catalog ingestion, and the target Machine's staged probes;
 the local command is not evidence that the signed release contains the same
 runtime bytes.

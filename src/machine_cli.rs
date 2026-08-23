@@ -16,12 +16,12 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::machine_auth::MachineIdentity;
 use crate::machine_broker::{MachineBrokerArgs, SpawnMode};
 use crate::machine_components::ComponentStore;
+use crate::machine_plugins::MachinePluginStore;
 use crate::machine_protocol::{
     AuthState, ComponentId, ComponentInventory, ComponentKind, ComponentState, ComponentUpdate,
     ConnectionMode, MACHINE_PROTOCOL_VERSION, MIN_MACHINE_PROTOCOL_VERSION, MachineCapacity,
     MachineCommand, MachineEvent, MachineFrame, MachineHello, MachineWorkspace, Platform,
 };
-use crate::machine_providers::MachineProviderStore;
 
 struct LoginSession {
     cancel: tokio::sync::watch::Sender<bool>,
@@ -44,7 +44,7 @@ struct ControllerConfig {
     runtime_socket: PathBuf,
     workspaces: Arc<WorkspaceConfig>,
     components: Arc<ComponentStore>,
-    providers: Arc<MachineProviderStore>,
+    providers: Arc<MachinePluginStore>,
     zed_adapter_socket: Option<PathBuf>,
     code_adapter_socket: Option<PathBuf>,
     worktree_root: PathBuf,
@@ -267,7 +267,7 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
         args.artifact_public_key.as_deref(),
         bootstrap_acp_generation.clone(),
     )?);
-    let providers = Arc::new(MachineProviderStore::new(
+    let providers = Arc::new(MachinePluginStore::new(
         &args.state_dir,
         current_platform(),
         std::env::consts::ARCH.to_owned(),
@@ -840,7 +840,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
         encryption_public_key: Some(config.providers.encryption_public_key().to_owned()),
         components: collect_inventory(&config.components, config.zed_adapter_socket.as_deref())
             .await,
-        providers: config.providers.inventory()?,
+        plugins: config.providers.inventory()?,
         provider_contracts: Some(cowboy_provider_sdk::ProviderContractInventory::current_machine()),
         workspaces: workspace_snapshot.workspaces,
         workspace_revision: workspace_snapshot.revision,
@@ -1717,7 +1717,7 @@ fn gemini_auth_from_metadata(
 struct MachineCommandContext {
     events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
     components: Arc<ComponentStore>,
-    providers: Arc<MachineProviderStore>,
+    providers: Arc<MachinePluginStore>,
     zed_adapter_socket: Option<PathBuf>,
     code_adapter_socket: Option<PathBuf>,
     worktree_root: PathBuf,
@@ -1751,8 +1751,8 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
                         workspace_revision: snapshot.revision.clone(),
                         observed_at_ms: unix_ms(),
                     });
-                    let _ = events.send(MachineEvent::ProviderInventory {
-                        providers: providers.inventory().unwrap_or_default(),
+                    let _ = events.send(MachineEvent::PluginInventory {
+                        plugins: providers.inventory().unwrap_or_default(),
                         observed_at_ms: unix_ms(),
                     });
                 }
@@ -1765,16 +1765,13 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
                 });
             });
         }
-        MachineCommand::InstallProvider {
-            request_id,
-            provider,
-        } => {
+        MachineCommand::InstallPlugin { request_id, plugin } => {
             tokio::spawn(async move {
-                let result = providers.install(&provider).await;
+                let result = providers.install(&plugin).await;
                 let accepted = result.is_ok();
                 let detail = result.as_ref().err().map(|error| format!("{error:#}"));
-                let _ = events.send(MachineEvent::ProviderInventory {
-                    providers: providers.inventory().unwrap_or_default(),
+                let _ = events.send(MachineEvent::PluginInventory {
+                    plugins: providers.inventory().unwrap_or_default(),
                     observed_at_ms: unix_ms(),
                 });
                 let _ = events.send(MachineEvent::CommandResult {
@@ -1784,17 +1781,17 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
                 });
             });
         }
-        MachineCommand::UninstallProvider {
+        MachineCommand::UninstallPlugin {
             request_id,
-            provider_id,
+            plugin_id,
             generation_digest,
         } => {
             tokio::spawn(async move {
-                let result = providers.uninstall(&provider_id, &generation_digest).await;
+                let result = providers.uninstall(&plugin_id, &generation_digest).await;
                 let accepted = result.is_ok();
                 let detail = result.err().map(|error| format!("{error:#}"));
-                let _ = events.send(MachineEvent::ProviderInventory {
-                    providers: providers.inventory().unwrap_or_default(),
+                let _ = events.send(MachineEvent::PluginInventory {
+                    plugins: providers.inventory().unwrap_or_default(),
                     observed_at_ms: unix_ms(),
                 });
                 let _ = events.send(MachineEvent::CommandResult {
@@ -1804,17 +1801,17 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
                 });
             });
         }
-        MachineCommand::ReactivateProvider {
+        MachineCommand::ReactivatePlugin {
             request_id,
-            provider_id,
+            plugin_id,
             generation_digest,
         } => {
             tokio::spawn(async move {
-                let result = providers.reactivate(&provider_id, &generation_digest).await;
+                let result = providers.reactivate(&plugin_id, &generation_digest).await;
                 let accepted = result.is_ok();
                 let detail = result.err().map(|error| format!("{error:#}"));
-                let _ = events.send(MachineEvent::ProviderInventory {
-                    providers: providers.inventory().unwrap_or_default(),
+                let _ = events.send(MachineEvent::PluginInventory {
+                    plugins: providers.inventory().unwrap_or_default(),
                     observed_at_ms: unix_ms(),
                 });
                 let _ = events.send(MachineEvent::CommandResult {
@@ -1839,8 +1836,8 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
                             materialization_state: receipt.materialization_state,
                             detail: None,
                         });
-                        let _ = events.send(MachineEvent::ProviderInventory {
-                            providers: providers.inventory().unwrap_or_default(),
+                        let _ = events.send(MachineEvent::PluginInventory {
+                            plugins: providers.inventory().unwrap_or_default(),
                             observed_at_ms: unix_ms(),
                         });
                         let _ = events.send(MachineEvent::CommandResult {
@@ -2397,7 +2394,7 @@ async fn run_login(
     auth_method: Option<String>,
     events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
     components: Arc<ComponentStore>,
-    providers: Arc<MachineProviderStore>,
+    providers: Arc<MachinePluginStore>,
     zed_adapter_socket: Option<PathBuf>,
     mut login: LoginIo,
 ) {
@@ -2661,7 +2658,7 @@ async fn run_secret_input_login(
     verification_url: String,
     events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
     components: Arc<ComponentStore>,
-    providers: Arc<MachineProviderStore>,
+    providers: Arc<MachinePluginStore>,
     zed_adapter_socket: Option<PathBuf>,
     mut login: LoginIo,
 ) {

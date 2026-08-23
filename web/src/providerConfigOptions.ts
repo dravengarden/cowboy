@@ -1,4 +1,4 @@
-import type { ProviderUiManifest } from "../../packages/provider-ui-sdk/src/index.ts";
+import type { ProviderUiManifest } from "../../components/provider-ui/src/index.ts";
 import type { ConfigOption, Status } from "./protocol";
 import { currentProviderEntry } from "./providerCatalogRegistry";
 

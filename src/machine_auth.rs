@@ -18,7 +18,6 @@ use base64::Engine as _;
 use sha2::Digest as _;
 
 pub(crate) const MACHINE_SIGNATURE_NAMESPACE: &str = "cowboy-machine-v1";
-pub(crate) const PROVIDER_RELEASE_SIGNATURE_NAMESPACE: &str = "cowboy-provider-release-v1";
 pub(crate) const PROVIDER_AUTH_SIGNATURE_NAMESPACE: &str = "cowboy-provider-auth-v1";
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -100,7 +99,7 @@ impl MachineIdentity {
 
     /// Sign an application-owned proof in an explicit OpenSSH namespace.
     /// Namespaces keep a valid Machine challenge signature from being replayed
-    /// as a Provider release or credential-distribution authorization.
+    /// as a Plugin release or credential-distribution authorization.
     pub(crate) fn sign_namespaced(&self, namespace: &str, proof: &[u8]) -> Result<String> {
         validate_namespace(namespace)?;
         let mut child = Command::new(&self.ssh_keygen)
@@ -269,8 +268,8 @@ fn validate_namespace(namespace: &str) -> Result<()> {
     if matches!(
         namespace,
         MACHINE_SIGNATURE_NAMESPACE
-            | PROVIDER_RELEASE_SIGNATURE_NAMESPACE
             | PROVIDER_AUTH_SIGNATURE_NAMESPACE
+            | cowboy_plugin_sdk::PLUGIN_RELEASE_SIGNATURE_NAMESPACE
     ) {
         Ok(())
     } else {

@@ -23,7 +23,7 @@ import {
   Typography,
 } from "@mui/material";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { MobileSheetDismiss } from "../../_shell";
+import { MobileSheetDismiss } from "../../components/app-shell";
 import { NetworkIconButton } from "../../NetworkActionFeedback";
 import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
 import { type CodeChangeStatus, fetchCodeChanges } from "./codeApi";

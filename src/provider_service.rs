@@ -881,9 +881,9 @@ mod tests {
 
     fn package(id: &str) -> ProviderPackage {
         let source: cowboy_provider_sdk::StandardProviderSource = serde_json::from_str(match id {
-            "gemini" => include_str!("../providers/gemini/provider.json"),
-            "claude-deepseek" => include_str!("../providers/claude-deepseek/provider.json"),
-            "codex-deepseek" => include_str!("../providers/codex-deepseek/provider.json"),
+            "gemini" => include_str!("../plugins/gemini/provider.json"),
+            "claude-deepseek" => include_str!("../plugins/claude-deepseek/provider.json"),
+            "codex-deepseek" => include_str!("../plugins/codex-deepseek/provider.json"),
             _ => panic!("unsupported fixture"),
         })
         .unwrap();

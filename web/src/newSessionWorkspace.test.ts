@@ -59,9 +59,8 @@ Deno.test("new session navigation precedes Machine preparation completion", () =
     true,
   );
   assertEquals(
-    appSource.includes(
-      "titleRef.current?.focus({ preventScroll: true });\n            titleRef.current?.select();\n        }, 120);",
-    ),
+    /titleRef\.current\?\.focus\(\{ preventScroll: true \}\);\s*titleRef\.current\?\.select\(\);\s*\}, 120\);/u
+      .test(appSource),
     true,
   );
   assertEquals(appSource.includes("initial_prompt: selectedWorkItem"), true);

@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "node": {
+    "version": "24.19.0",
+    "targets": {
+      "linux-x86_64": {
+        "url": "https://nodejs.org/dist/v24.19.0/node-v24.19.0-linux-x64.tar.gz",
+        "sha256": "f625d97cd707df4ff96254916fbc5ff014f09c09effe5a1e0ca8f6d41a8789d4",
+        "entrypoint": "node-v24.19.0-linux-x64/bin/node"
+      },
+      "linux-aarch64": {
+        "url": "https://nodejs.org/dist/v24.19.0/node-v24.19.0-linux-arm64.tar.gz",
+        "sha256": "d28c8a5bf0a808f0ed434a1dce8c54ae98f0371c0bd86ac58abc613f73e6643f",
+        "entrypoint": "node-v24.19.0-linux-arm64/bin/node"
+      },
+      "macos-aarch64": {
+        "url": "https://nodejs.org/dist/v24.19.0/node-v24.19.0-darwin-arm64.tar.gz",
+        "sha256": "8294b7aa9b03997481c06babf1e8b270c859358f27da57a11509afe537ac381d",
+        "entrypoint": "node-v24.19.0-darwin-arm64/bin/node"
+      }
+    }
+  },
+  "components": {
+    "anthropic-claude-code": {
+      "kind": "npm_archive",
+      "version": "2.1.231",
+      "probe": ["--version"],
+      "targets": {
+        "linux-x86_64": {
+          "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.231.tgz",
+          "integrity": "sha512-ou1X+6JWOgbY5pUerfdOmeyPwKwEN515sx9it2sxsYEqKRTvOOHkiN94enRxge9/Z1J2Iqhd4VdkQIl6UoUvYw==",
+          "entrypoint": "package/claude"
+        },
+        "linux-aarch64": {
+          "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-arm64/-/claude-code-linux-arm64-2.1.231.tgz",
+          "integrity": "sha512-a0YGXTjk6N5yRWE30dkbtS0tTZ5hOEXFCjTTX2slSa7XULMlJJLQ1X8oFJwpXmlvZu9FHx1YRLKJnni05uNIQQ==",
+          "entrypoint": "package/claude"
+        },
+        "macos-aarch64": {
+          "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-darwin-arm64/-/claude-code-darwin-arm64-2.1.231.tgz",
+          "integrity": "sha512-tpqiF9bw8jHYc85mpF0S+JxzDY4ErGF9L9/tBflHJgIqgBXL/UpkLuI53MMYCPeoaCtE88skbf/P9r8C3OUrYA==",
+          "entrypoint": "package/claude"
+        }
+      }
+    },
+    "openai-codex": {
+      "kind": "npm_archive",
+      "version": "0.147.0",
+      "probe": ["--version"],
+      "targets": {
+        "linux-x86_64": {
+          "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.147.0-linux-x64.tgz",
+          "integrity": "sha512-0W9MBxPpWW0cSkNqrTDN2jR7rzzT7oNMhQY5446lT2Lw5cz5yhDTck4Va9rjkQEm+HlFzP/dmEMSZbXfJsINmw==",
+          "entrypoint": "package/vendor/x86_64-unknown-linux-musl/bin/codex"
+        },
+        "linux-aarch64": {
+          "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.147.0-linux-arm64.tgz",
+          "integrity": "sha512-SLC1JXw2TYfr/c3HhrJubyyLelq7vTOLWVmiThFA+z0+WgzCPmaseJ/kzDD3Gge/TO7fCnnj7UcPmC0d2c8XAg==",
+          "entrypoint": "package/vendor/aarch64-unknown-linux-musl/bin/codex"
+        },
+        "macos-aarch64": {
+          "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.147.0-darwin-arm64.tgz",
+          "integrity": "sha512-BEUVkiOW7kLcRyrMLfAr/h9wF8sRVJyZDy6OHtVn6QGDXiv3BvAZVTY1Pu9xF7KdIdkYXbp4uayN0aDQQaAUJw==",
+          "entrypoint": "package/vendor/aarch64-apple-darwin/bin/codex"
+        }
+      }
+    },
+    "xai-grok": {
+      "kind": "npm_brotli",
+      "version": "0.2.117",
+      "probe": ["--version"],
+      "targets": {
+        "linux-x86_64": {
+          "url": "https://registry.npmjs.org/@xai-official/grok-linux-x64/-/grok-linux-x64-0.2.117.tgz",
+          "integrity": "sha512-t/kjK4sr5BncrW0pTXq1YBCwZThJ8CE0h24ZXM9l0aDAHgEcGBCPO1hdL6BDiyLdRna+FCQOTE46ONLBX+If3g==",
+          "entrypoint": "package/bin/grok.br"
+        },
+        "linux-aarch64": {
+          "url": "https://registry.npmjs.org/@xai-official/grok-linux-arm64/-/grok-linux-arm64-0.2.117.tgz",
+          "integrity": "sha512-eC2N23tNZl9Y9JHdbU9RMsBSkKpeYjpRrQ3VFEspHonfpg87C+Sk9p42fxXwbmeCHN3VQA7bj04heXS3EGqAeQ==",
+          "entrypoint": "package/bin/grok.br"
+        },
+        "macos-aarch64": {
+          "url": "https://registry.npmjs.org/@xai-official/grok-darwin-arm64/-/grok-darwin-arm64-0.2.117.tgz",
+          "integrity": "sha512-PhAcE6G3BMat2nZ3BNonZRNaatH+48ssKilrjZ7HsTd4wU4YuZEx4VcTl/XrkjKqYanMPIxJg6RQHwE6RDnjmw==",
+          "entrypoint": "package/bin/grok.br"
+        }
+      }
+    },
+    "claude-agent-acp": {
+      "kind": "node_npm",
+      "version": "0.63.0",
+      "package_dir": "components/provider-runtime-packages/claude-agent-acp",
+      "script": "node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js",
+      "probe": ["--version"]
+    },
+    "codex-acp": {
+      "kind": "node_npm",
+      "version": "1.1.7",
+      "package_dir": "components/provider-runtime-packages/codex-acp",
+      "script": "node_modules/@agentclientprotocol/codex-acp/dist/index.js",
+      "probe": ["--version"]
+    },
+    "google-gemini-cli": {
+      "kind": "node_npm",
+      "version": "0.55.1",
+      "package_dir": "components/provider-runtime-packages/gemini",
+      "script": "node_modules/@google/gemini-cli/bundle/gemini.js",
+      "probe": ["--version"]
+    },
+    "claude-deepseek-gateway": {
+      "kind": "git_go_static",
+      "version": "0.1.0",
+      "repository": "git@github.com:dravengarden/columbus.git",
+      "revision": "6a83e9a9b2b4ac3239cf2c66c0821b1d3e43f781",
+      "subdir": "projects/claude-deepseek",
+      "source_archive_sha256": "e7eff8a3bd6de2231056f879c4a0fc568e6f6eaa96f8cdac2171f4da2b4aaa14",
+      "binary": "claude-deepseek",
+      "probe": ["--help"]
+    },
+    "codex-deepseek-gateway": {
+      "kind": "git_go_static",
+      "version": "0.2.0",
+      "repository": "git@github.com:dravengarden/columbus.git",
+      "revision": "6a83e9a9b2b4ac3239cf2c66c0821b1d3e43f781",
+      "subdir": "projects/codex-deepseek",
+      "source_archive_sha256": "8fbdbab1e77a504dfea9ebc55628f60ce7d037b51a06dd1d5a56d12d4dd46cdd",
+      "binary": "codex-deepseek",
+      "probe": ["--help"]
+    }
+  }
+}

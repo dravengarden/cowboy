@@ -17,11 +17,19 @@ Deno.test("mobile drawer translates an in-flow page that owns the footer", () =>
       'data-mobile-drawer-surface={mobile ? "true" : undefined}',
     ),
   );
-  assert(appSource.includes('data-mobile-session-footer={mobile ? "true" : undefined}'));
-  assert(appSource.includes('data-mobile-drawer-follow={mobile ? "true" : undefined}'));
+  assert(
+    appSource.includes(
+      'data-mobile-session-footer={mobile ? "true" : undefined}',
+    ),
+  );
+  assert(
+    appSource.includes(
+      'data-mobile-drawer-follow={mobile ? "true" : undefined}',
+    ),
+  );
   assert(appSource.includes("getFollowers: () => ["));
   assert(appSource.includes("getSurface: () =>"));
-  assert(appSource.includes("would swallow\n                    // Sessions-row taps"));
+  assert(/would swallow\s+\/\/ Sessions-row taps/u.test(appSource));
   assert(appSource.includes('pointerEvents: mobile ? "none" : undefined'));
   assert(appSource.includes('data-mobile-drawer-dim="left"'));
   assert(appSource.includes('data-mobile-drawer-close="left"'));
@@ -40,7 +48,11 @@ Deno.test("mobile drawer translates an in-flow page that owns the footer", () =>
   );
   assert(backdropDismissSource.includes("event.stopImmediatePropagation()"));
   assert(reviewDrawerSource.includes("Screen-space peek hit target"));
-  assert(reviewDrawerSource.includes("width: \"calc(100% - var(--mobile-drawer-width"));
+  assert(
+    reviewDrawerSource.includes(
+      'width: "calc(100% - var(--mobile-drawer-width',
+    ),
+  );
   assert(reviewDrawerSource.includes('pointerEvents: "none"'));
   assert(reviewDrawerSource.includes('"& > *": { pointerEvents: "auto" }'));
   assert(reviewDrawerSource.includes("{children}"));
@@ -71,10 +83,18 @@ Deno.test("mobile drawer translates an in-flow page that owns the footer", () =>
       "opacity 110ms ease 70ms, padding ${mobileComposerFocusMotion.duration}",
     ),
   );
-  assert(appSource.includes('bgcolor: mobile ? "transparent" : "background.default"'));
-  assert(appSource.includes('bottomInset={mobile'));
-  assert(appSource.includes('{!mobile && ('));
-  assert(reviewDrawerSource.includes("In-flow fill. A transformed position:absolute;inset:0"));
+  assert(
+    appSource.includes(
+      'bgcolor: mobile ? "transparent" : "background.default"',
+    ),
+  );
+  assert(appSource.includes("bottomInset={mobile"));
+  assert(appSource.includes("{!mobile && ("));
+  assert(
+    reviewDrawerSource.includes(
+      "In-flow fill. A transformed position:absolute;inset:0",
+    ),
+  );
   assertEquals(
     /data-mobile-drawer-surface="true"[\s\S]{0,220}inset: 0/.test(
       reviewDrawerSource,
@@ -89,9 +109,8 @@ Deno.test("mobile Settings lives on the Sessions island and Code takes the old s
   assert(appSource.includes("onOpenSettings={mobile"));
   assert(appSource.includes('justifyContent: "space-between"'));
   assert(
-    appSource.includes(
-      '"& > [data-mobile-sheet-footer-shield]": {\n                            width: "auto",',
-    ),
+    /"& > \[data-mobile-sheet-footer-shield\]":\s*\{\s*width: "auto",/u
+      .test(appSource),
   );
   const newSessionAt = appSource.indexOf('key: "new"');
   const closeAt = appSource.indexOf('key: "close"');
@@ -105,10 +124,10 @@ Deno.test("mobile Settings lives on the Sessions island and Code takes the old s
   assert(appSource.includes('openAppSettings({ tab: "info" })'));
   assert(appSource.includes('data-mobile-open-code="true"'));
   assert(appSource.includes('aria-label="Open code"'));
-  assert(appSource.includes("openMobileProduct(\"review\")"));
+  assert(appSource.includes('openMobileProduct("review")'));
   const mobileCode = appSource.indexOf('data-mobile-open-code="true"');
   const mobileSettingsGear = appSource.indexOf(
-    "aria-label=\"settings\"",
+    'aria-label="settings"',
     mobileCode,
   );
   assert(mobileCode >= 0);

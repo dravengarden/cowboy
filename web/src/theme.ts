@@ -11,7 +11,10 @@
 import { useEffect, useMemo } from "react";
 import { alpha, createTheme, type Theme } from "@mui/material";
 
-import { type ThemeChoice, useThemeMode as useSharedThemeMode } from "./_shell";
+import {
+  type ThemeChoice,
+  useThemeMode as useSharedThemeMode,
+} from "./components/app-shell";
 import {
   COARSE_POINTER_ROOT_CLASS,
   prefersCoarsePointer,

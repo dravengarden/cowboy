@@ -1,4 +1,4 @@
-import { persisted, useStore } from "../../_store/mod.ts";
+import { persisted, useStore } from "../../components/state/store/mod.ts";
 import {
   DEFAULT_REVIEW_SETTINGS,
   loadReviewSettings,
@@ -63,4 +63,3 @@ export function useReviewLanguageCapabilities():
   | undefined {
   return useStore(reviewLanguageStore);
 }
-

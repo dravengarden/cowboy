@@ -15,8 +15,8 @@ exist to catch exactly that — they are load-bearing, not decoration.
 
 ```mermaid
 flowchart TB
-    WS["WebSocket"] --> SYNC["_sync<br/>(optimistic)"]
-    WS --> STORE["_store<br/>(reactive)"]
+    WS["WebSocket"] --> SYNC["components/state/sync<br/>(optimistic)"]
+    WS --> STORE["components/state/store<br/>(reactive)"]
     SYNC --> APP["App.tsx"]
     STORE --> APP
     APP --> TR["Transcript"]
@@ -63,12 +63,12 @@ scales.
 
 ## State: store + sync
 
-Two vendored copies of the shared `@shared-utils` engines back all state:
+Cowboy-owned state components back all frontend state:
 
-- **`_store`** (`persisted()` + `useStore()`) — per-device reactive state that
+- **`components/state/store`** (`persisted()` + `useStore()`) — per-device reactive state that
   reads/writes `localStorage`. Sticky viewport state such as transcript scroll
   and Mobile drawer/navigation details live here.
-- **`_sync`** — a client-local optimistic-mutation engine (a Replicache-shaped
+- **`components/state/sync`** — a client-local optimistic-mutation engine (a Replicache-shaped
   model): apply a mutation locally for instant UI, send it to the daemon arbiter,
   then rebase on the broadcast `SyncPatch`. The **arbiter lives in Rust** (the
   Hub's per-state sync arbiter), so the client never resolves conflicts itself —
@@ -76,6 +76,10 @@ Two vendored copies of the shared `@shared-utils` engines back all state:
   this as sync states (e.g. `queue:<sid>`). Mobile Code Review additionally uses
   `mobile-review:<sid>` for its tabs, active source, mode, and review progress;
   Desktop deliberately does not consume that state.
+
+Reusable shell primitives live in `components/app-shell`. They and the state
+components are local, versioned Cowboy components covered by the component
+release gate; no source symlink or external `shared-utils` checkout is needed.
 
 `web/src/protocol.ts` mirrors the Rust `Inbound`/`Outbound`/`Envelope`/`SessionMeta`
 types so the wire contract is checked at both ends.
@@ -247,7 +251,5 @@ contract and requires a SideStore release plus physical-device acceptance.
 ## A house rule worth knowing
 
 `web/src/App.tsx` is a **4-space-indent outlier** (the rest of `src/` is 2-space)
-and must never be run through `deno fmt` — it would reflow ~3700 lines. A fresh
-worktree also lacks `src/_shell` (the shared UI package); it is symlinked in
-manually and gitignored. The web quality gate is `deno check` + `oxlint`, never a
-repo-wide format.
+and must never be run through `deno fmt` — it would reflow ~3700 lines. The web
+quality gate is `deno check` + `oxlint`, never a repo-wide format.

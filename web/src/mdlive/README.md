@@ -8,7 +8,7 @@ cursor's line(s) reveal the raw markers. Vendored from the MIT
 [`LICENSE`](./LICENSE) for the MIT notice.
 
 This is an **app-agnostic** CM6 extension package. It lives in cowboy's tree for
-now but has no cowboy dependencies, so it can graduate to `@shared-utils/ui`
+now but has no Cowboy dependencies, so it can graduate to the `app-shell`
 unchanged.
 
 > ⚠️ **Before touching the composer editor, read [`PITFALLS.md`](./PITFALLS.md).**

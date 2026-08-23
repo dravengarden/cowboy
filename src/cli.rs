@@ -142,7 +142,7 @@ pub struct ServeAcpArgs {
 #[cfg(feature = "full")]
 #[derive(Args)]
 pub struct TryAgentArgs {
-    /// Provider id from the active Cowboy Provider Catalog.
+    /// Agent Plugin id from the active Cowboy Plugin Catalog.
     #[arg(long)]
     provider: String,
     /// Working directory for the session.
@@ -204,12 +204,12 @@ pub struct ServeArgs {
     #[arg(long, env = "COWBOY_MACHINE_COMPONENTS_MANIFEST")]
     pub machine_components_manifest: Option<PathBuf>,
 
-    /// Optional directory of externally published `.cowboy-provider` artifacts.
+    /// Optional directory of externally published `.cowboy-plugin` artifacts.
     /// Each release is accepted only with a trusted publisher key and signed
     /// release envelope. The six first-party UI/package contracts are embedded,
     /// but become installable only when a signed runtime release is published.
-    #[arg(long, env = "COWBOY_PROVIDER_CATALOG_DIR")]
-    pub provider_catalog_dir: Option<PathBuf>,
+    #[arg(long, env = "COWBOY_PLUGIN_CATALOG_DIR")]
+    pub plugin_catalog_dir: Option<PathBuf>,
 
     /// `PostgreSQL` or `SQLite` URL for durable Cowboy state. When absent the
     /// daemon runs in pure in-memory mode without restart recovery.

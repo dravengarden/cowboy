@@ -1,0 +1,332 @@
+{
+  "authoring_schema": 2,
+  "id": "claude-deepseek",
+  "version": "3.0.0",
+  "publisher": "cowboy-first-party",
+  "sdk_version": "3.0.0",
+  "display": {
+    "name": "Claude Code · DeepSeek",
+    "vendor": "DeepSeek",
+    "summary": "Claude Code in an isolated DeepSeek runtime with a one-million-token lane",
+    "accent": "#4D6BFE",
+    "secondary_accent": "#805AD5",
+    "mark_view_box": "0 0 24 24",
+    "mark_path": "M4.7 15.95 9.43 13.3l.08-.23-.08-.12H9.2l-6.87-.3L0 11.78l.05-.35.48-.32 8.59.67h.39l.05-.16-7.21-4.94-.36-.46-.16-1.01.65-.72.88.06 6.25 4.36h.16L5.96 1.91l-.17-.62L6.28.13 6.7 0l1 .13.42.37 3.87 8.4h.16l.36-6.4.08-.75.38-.91.75-.49.58.28.48.69-1.21 7.69h.21l4.95-5.34.55-.43h1.03l.76 1.13-.34 1.16-4.68 6.01.07.11 6.43-1.2.83.39.09.39-.33.81-8.16 1.76.05.06 6.85.42.79.52.47.64-.08.49-1.21.62-7.42-1.78h-.18v.11l7.11 6.86.13.58-.32.45-.34-.05-6.42-5.02h-.13v.17l3.03 4.49.12 1.08-.17.35-.61.22-.67-.12-3.93-6.04-.14.08-.67 7.25-.32.37-.73.28-.61-.46-.32-.75 1.49-7.46-.01-.04-.14.02-5.34 6.76-.42.16-.72-.37.07-.66.4-.59 4.76-6.01-.01-.16h-.05l-5.3 3.21-1.13.15-.49-.46.06-.75.23-.24Z",
+    "mark_gradient": {
+      "x1_percent": 0,
+      "y1_percent": 0,
+      "x2_percent": 100,
+      "y2_percent": 100,
+      "stops": [
+        { "offset_percent": 0, "color": "#4D6BFE" },
+        { "offset_percent": 100, "color": "#805AD5" }
+      ]
+    }
+  },
+  "card_layout": "mark_above",
+  "activity": {
+    "indicator": {
+      "kind": "glyph_cycle",
+      "frames": ["·", "✢", "*", "✶", "✻", "✽"],
+      "interval_ms": 200
+    },
+    "label": {
+      "kind": "phrase_cycle",
+      "phrases": [
+        "Analyzing",
+        "Thinking",
+        "Exploring",
+        "Reasoning",
+        "Planning",
+        "Reading",
+        "Writing",
+        "Reviewing",
+        "Refining",
+        "Verifying",
+        "Synthesizing",
+        "Working"
+      ],
+      "interval_ms": 3500,
+      "suffix": "…",
+      "effect": "shimmer"
+    },
+    "accessible_label": "Claude Code DeepSeek is working"
+  },
+  "configuration_presets": [
+    {
+      "id": "deepseek-flash-max",
+      "name": "Flash · Max",
+      "detail": "DeepSeek-V4-Flash · Max reasoning",
+      "is_default": true,
+      "values": { "model": "deepseek-v4-flash[1m]", "effort": "max" }
+    }
+  ],
+  "configuration_options": [
+    {
+      "id": "deepseek_context",
+      "order": 3,
+      "layout": "full_width",
+      "availability": "idle_or_stopped"
+    },
+    {
+      "id": "deepseek_cache_protection",
+      "order": 4,
+      "layout": "full_width",
+      "availability": "idle_or_stopped"
+    }
+  ],
+  "host": {
+    "schema_version": 2,
+    "conversation_compaction": {
+      "aliases": ["compact", "summarise", "summarize"],
+      "fallback_command": "compact"
+    },
+    "account_usage": { "provider": "deepseek" },
+    "transcript": {
+      "schema_version": 1,
+      "thought": {
+        "variant": "timeline",
+        "density": "compact",
+        "active_label": "Thinking",
+        "current_surface": "soft"
+      }
+    },
+    "features": ["cache_protection_v1"],
+    "tool_presentations": [
+      { "tool_name": "TodoWrite", "renderer": "todo_list_v1" }
+    ]
+  },
+  "runtime": {
+    "driver_schema": 1,
+    "protocol": "agent-client-protocol-1.3",
+    "entrypoint": "claude-agent-acp",
+    "behavior": {
+      "schema_version": 1,
+      "permission": "acp_session_mode_bypass_permissions_v1",
+      "session": "stable_preset_system_prompt_v1",
+      "turn_end": "portable_v1",
+      "configuration": "anthropic_gateway_v1",
+      "default_preferences": {
+        "model": "deepseek-v4-flash[1m]",
+        "deepseek_context": "830k",
+        "deepseek_cache_protection": true,
+        "effort": "max",
+        "agent": "default"
+      },
+      "error_rules": [
+        {
+          "when": { "op": "contains", "value": "maximum context length" },
+          "classification": "provider-context-limit",
+          "keep_worker_alive": true
+        },
+        {
+          "when": { "op": "contains", "value": "prompt is too long" },
+          "classification": "provider-context-limit",
+          "keep_worker_alive": true
+        },
+        {
+          "when": {
+            "op": "all",
+            "values": [
+              { "op": "contains", "value": "context window" },
+              {
+                "op": "any",
+                "values": [
+                  { "op": "contains", "value": "exceed" },
+                  { "op": "contains", "value": "full" },
+                  { "op": "contains", "value": "limit reached" }
+                ]
+              }
+            ]
+          },
+          "classification": "provider-context-limit",
+          "keep_worker_alive": true
+        },
+        {
+          "when": {
+            "op": "contains",
+            "value": "stream ended without receiving any events"
+          },
+          "classification": "provider-empty-stream",
+          "keep_worker_alive": true,
+          "retry_once_without_visible_update": true
+        }
+      ]
+    },
+    "arguments": [],
+    "environment": {
+      "ANTHROPIC_BASE_URL": {
+        "source": "sidecar_url",
+        "sidecar": "deepseek-gateway"
+      },
+      "ANTHROPIC_AUTH_TOKEN": "cowboy-local-credential-boundary",
+      "ANTHROPIC_MODEL": "deepseek-v4-flash[1m]",
+      "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro[1m]",
+      "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4-flash[1m]",
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4-flash",
+      "CLAUDE_CODE_SUBAGENT_MODEL": "deepseek-v4-flash",
+      "CLAUDE_CODE_EXECUTABLE": {
+        "source": "component_command",
+        "component": { "kind": "provider_cli", "slot": "claude" }
+      },
+      "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "819200",
+      "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "128000",
+      "CLAUDE_CODE_EFFORT_LEVEL": "max",
+      "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST": "cowboy-claude-deepseek",
+      "CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING": "1",
+      "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+      "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL": "1",
+      "CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL": "1",
+      "DISABLE_LOGIN_COMMAND": "1",
+      "DISABLE_LOGOUT_COMMAND": "1",
+      "DISABLE_UPGRADE_COMMAND": "1",
+      "ENABLE_CLAUDEAI_MCP_SERVERS": "false"
+    },
+    "sidecars": [
+      {
+        "id": "deepseek-gateway",
+        "component": {
+          "kind": "provider_gateway",
+          "slot": "claude-deepseek"
+        },
+        "arguments": [],
+        "environment": {},
+        "auth_environment": [],
+        "transport": {
+          "kind": "loopback_http_v1",
+          "listen_argument": "--listen",
+          "health_path": "/healthz",
+          "timeout_ms": 8000
+        }
+      }
+    ],
+    "remove_environment": [
+      "API_TIMEOUT_MS",
+      "DISABLE_AUTO_COMPACT",
+      "DISABLE_COMPACT",
+      "DISABLE_PROMPT_CACHING",
+      "DISABLE_PROMPT_CACHING_HAIKU",
+      "DISABLE_PROMPT_CACHING_OPUS",
+      "DISABLE_PROMPT_CACHING_SONNET",
+      "ENABLE_TOOL_SEARCH",
+      "MAX_THINKING_TOKENS",
+      "MCP_TIMEOUT",
+      "MCP_TOOL_TIMEOUT"
+    ],
+    "remove_environment_prefixes": ["ANTHROPIC_", "CLAUDE_", "DEEPSEEK_"],
+    "dependencies": [
+      {
+        "id": "claude-agent-acp",
+        "version": "0.63.0",
+        "source": "https://registry.npmjs.org/@agentclientprotocol/claude-agent-acp/-/claude-agent-acp-0.63.0.tgz",
+        "integrity": "sha512-/Ylytz6KPGkih1sZd2sJAmWIGMh59T+FCJhlsfW9zpB1Lrg0/Njgk/7TplRfX2f7dELx0FeN+SBG+Uju12XwlA==",
+        "private": true
+      },
+      {
+        "id": "anthropic-claude-code",
+        "version": "2.1.231",
+        "source": "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.231.tgz",
+        "integrity": "sha512-1VG6CYH/x3M58L0wNYV2yLI3IPTCic+SXFrIw9IV2OrXA4EsMFAdXArWG87GpLZMkCCLculmrtDuJlwKLsysxg==",
+        "private": true
+      },
+      {
+        "id": "claude-deepseek-gateway",
+        "version": "0.1.0",
+        "source": "git+ssh://git@github.com/dravengarden/columbus.git#6a83e9a9b2b4ac3239cf2c66c0821b1d3e43f781:projects/claude-deepseek",
+        "integrity": "sha256:e7eff8a3bd6de2231056f879c4a0fc568e6f6eaa96f8cdac2171f4da2b4aaa14",
+        "private": true
+      }
+    ],
+    "platforms": [
+      {
+        "os": "linux",
+        "architecture": "x86_64",
+        "payload_digest": "",
+        "launch_command": "claude-agent-acp",
+        "private_components": [
+          {
+            "kind": "provider_cli",
+            "slot": "claude",
+            "dependency": "anthropic-claude-code",
+            "command": "claude"
+          },
+          {
+            "kind": "provider_adapter",
+            "slot": "claude",
+            "dependency": "claude-agent-acp",
+            "command": "claude-agent-acp"
+          },
+          {
+            "kind": "provider_gateway",
+            "slot": "claude-deepseek",
+            "dependency": "claude-deepseek-gateway",
+            "command": "claude-deepseek-gateway"
+          }
+        ]
+      },
+      {
+        "os": "macos",
+        "architecture": "aarch64",
+        "payload_digest": "",
+        "launch_command": "claude-agent-acp",
+        "private_components": [
+          {
+            "kind": "provider_cli",
+            "slot": "claude",
+            "dependency": "anthropic-claude-code",
+            "command": "claude"
+          },
+          {
+            "kind": "provider_adapter",
+            "slot": "claude",
+            "dependency": "claude-agent-acp",
+            "command": "claude-agent-acp"
+          },
+          {
+            "kind": "provider_gateway",
+            "slot": "claude-deepseek",
+            "dependency": "claude-deepseek-gateway",
+            "command": "claude-deepseek-gateway"
+          }
+        ]
+      }
+    ],
+    "required_capabilities": ["provider.runtime.v1", "provider.gateway.v1"]
+  },
+  "authentication": {
+    "schema_version": 1,
+    "required": true,
+    "portable_schema": "deepseek-api-key-v1",
+    "projection_schema": "claude-deepseek-gateway-v1",
+    "refresh": "service",
+    "methods": [
+      {
+        "id": "api-key",
+        "label": "DeepSeek API key",
+        "flow": "secret_input",
+        "executor": {
+          "kind": "secret_input_v1",
+          "bundle_key": "api_key",
+          "verification_url": "https://platform.deepseek.com/api_keys"
+        },
+        "required_bundle_keys": ["api_key"]
+      }
+    ],
+    "credential_files": [
+      {
+        "bundle_key": "api_key",
+        "relative_path": ".config/credentials/deepseek-claude-api-key",
+        "required": true
+      }
+    ],
+    "environment_projection": {}
+  },
+  "compatibility": {
+    "min_controller_contract": 2,
+    "max_controller_contract": 2,
+    "min_machine_contract": 4,
+    "max_machine_contract": 4,
+    "ui_component_fingerprint": "",
+    "auth_contract_fingerprint": ""
+  }
+}

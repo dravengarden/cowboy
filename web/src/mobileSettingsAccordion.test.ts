@@ -8,23 +8,36 @@ Deno.test("mobile Settings uses an index and one lightweight detail route", () =
   assert(appSource.includes("initialMobileSettingsSection"));
   assert(appSource.includes('return focus === "code" ? "code" : null'));
   assert(appSource.includes("activeSection: MobileSettingsSection | null"));
-  assert(appSource.includes('data-mobile-settings-route={id}'));
+  assert(appSource.includes("data-mobile-settings-route={id}"));
   assert(appSource.includes("data-mobile-settings-detail-header"));
   assert(appSource.includes('variant="overline"'));
   assert(appSource.includes('letterSpacing: "0.12em"'));
   assert(appSource.includes('<Typography variant="h6" fontWeight={780}'));
-  assert(appSource.includes('data-mobile-settings-level={mobileSettingsSection === null ? "index" : "detail"}'));
+  assert(
+    /data-mobile-settings-level=\{\s*mobileSettingsSection === null\s*\? "index"\s*: "detail"\s*\}/u
+      .test(appSource),
+  );
   assert(appSource.includes("changeMobileSettingsSection"));
   assert(appSource.includes("MOBILE_SETTINGS_HEAVY_CONTENT_DELAY_MS = 180"));
   assert(appSource.includes('id === "machines" || id === "providers"'));
   assert(appSource.includes("contentReady"));
   assert(appSource.includes("mobile-settings-content-enter 100ms"));
-  assert(appSource.includes("settingsListScrollRef.current = surface.scrollTop"));
+  assert(
+    appSource.includes("settingsListScrollRef.current = surface.scrollTop"),
+  );
   assert(appSource.includes("mobile-settings-route-enter 140ms"));
   assert(appSource.includes('willChange: "transform, opacity"'));
   assert(appSource.includes("prefers-reduced-motion: reduce"));
-  assert(appSource.includes('key: mobileSettingsSection === null ? "close" : "back"'));
-  assert(appSource.includes('label: mobileSettingsSection === null ? "Close" : "Back"'));
+  assert(
+    appSource.includes(
+      'key: mobileSettingsSection === null ? "close" : "back"',
+    ),
+  );
+  assert(
+    appSource.includes(
+      'label: mobileSettingsSection === null ? "Close" : "Back"',
+    ),
+  );
   assert(appSource.includes("<MobileSheetActionGroup"));
   assert(appSource.includes("<ArrowBackIosNew"));
   assert(appSource.includes("changeMobileSettingsSection(null)"));

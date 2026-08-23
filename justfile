@@ -41,98 +41,87 @@ shellfmt-wasm:
 # Build both release artifacts for local use.
 build: build-web
     cargo build --release --locked
-    cd zed-adapter && cargo build --release --locked
+    cd plugins/zed/adapter && cargo build --release --locked
 
 # Build the three user-scoped Machine bootstrap commands on macOS or Linux.
 build-machine-bootstrap:
     cargo build --release --locked --no-default-features --features machine-host --bin cowboy --bin cowboy-machine --bin cowboy-machine-install
 
-# Build one independently installable Provider artifact. The Provider id is
-# resolved only beneath providers/; shell metacharacters and path traversal are
-# rejected before any output path is created.
-provider-build PROVIDER:
-    case "{{PROVIDER}}" in (*[!a-z0-9-]*|"") echo "invalid Provider id" >&2; exit 2;; esac
-    test -f "providers/{{PROVIDER}}/provider.json"
-    mkdir -p "dist/providers/{{PROVIDER}}"
-    cargo run --locked -p cowboy-provider-sdk --bin cowboy-provider-pack -- build "providers/{{PROVIDER}}/provider.json" "dist/providers/{{PROVIDER}}/{{PROVIDER}}.cowboy-provider" "cowboy-provider://{{PROVIDER}}"
+# Generic Cowboy Plugin lifecycle. Agent Provider and code-intelligence are
+# payload kinds; neither owns a separate release or installation format.
+plugin-check:
+    deno check tools/check-plugin-components.ts
+    deno test --allow-read tools/check-plugin-components_test.ts
+    deno run --allow-read tools/check-plugin-components.ts
 
-provider-build-all:
-    just provider-build claude-code
-    just provider-build codex
-    just provider-build gemini
-    just provider-build grok
-    just provider-build claude-deepseek
-    just provider-build codex-deepseek
+plugin-build PLUGIN:
+    case "{{PLUGIN}}" in (*[!a-z0-9-]*|"") echo "invalid plugin id" >&2; exit 2;; esac
+    deno run --allow-read tools/check-plugin-components.ts
+    test -f "plugins/{{PLUGIN}}/plugin.json"
+    mkdir -p "dist/plugins/{{PLUGIN}}"
+    cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- build "plugins/{{PLUGIN}}" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" "cowboy-plugin://{{PLUGIN}}"
 
-provider-set-artifact-url PROVIDER URL:
-    case "{{PROVIDER}}" in (*[!a-z0-9-]*|"") echo "invalid Provider id" >&2; exit 2;; esac
-    cargo run --locked -p cowboy-provider-sdk --bin cowboy-provider-pack -- set-artifact-url "dist/providers/{{PROVIDER}}/{{PROVIDER}}.cowboy-provider" "dist/providers/{{PROVIDER}}/{{PROVIDER}}.release.json" "{{URL}}"
+plugin-build-all:
+    for plugin in claude-code claude-deepseek codex codex-deepseek gemini grok zed; do just plugin-build "$plugin"; done
 
-provider-runtime-build PROVIDER BASE_URL="https://cowboy.stormbird.xyz/provider-artifacts":
-    case "{{PROVIDER}}" in (*[!a-z0-9-]*|"") echo "invalid Provider id" >&2; exit 2;; esac
-    deno run --allow-read --allow-write=dist --allow-net --allow-run --allow-env=COLUMBUS_ROOT tools/build-provider-runtime.ts "{{PROVIDER}}" "{{BASE_URL}}"
+# Agent Plugin payload helper. Its output is the generic runtime manifest
+# consumed by plugin-bind-runtime; it is not an independent release lifecycle.
+agent-plugin-runtime-build PLUGIN BASE_URL="https://cowboy.stormbird.xyz/plugin-artifacts":
+    case "{{PLUGIN}}" in (*[!a-z0-9-]*|"") echo "invalid plugin id" >&2; exit 2;; esac
+    test "$(jq -r .kind "plugins/{{PLUGIN}}/plugin.json")" = agent_provider
+    deno run --allow-read --allow-write=dist --allow-net --allow-run --allow-env=COLUMBUS_ROOT tools/build-provider-runtime.ts "{{PLUGIN}}" "{{BASE_URL}}"
 
-provider-release-build PROVIDER BASE_URL="https://cowboy.stormbird.xyz/provider-artifacts":
-    just provider-build "{{PROVIDER}}"
-    just provider-runtime-build "{{PROVIDER}}" "{{BASE_URL}}"
-    package_digest=$(jq -r .package_digest "dist/providers/{{PROVIDER}}/{{PROVIDER}}.release.json"); package_hex=${package_digest#sha256:}; just provider-set-artifact-url "{{PROVIDER}}" "{{BASE_URL}}/$package_hex/{{PROVIDER}}.cowboy-provider"
-    just provider-bind-runtime "{{PROVIDER}}" "dist/providers/{{PROVIDER}}/runtime/runtime-artifacts.json"
+plugin-set-artifact-url PLUGIN URL:
+    cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- set-artifact-url "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.release.json" "{{URL}}"
 
-provider-publish PROVIDER CATALOG PUBLIC_KEY:
-    case "{{PROVIDER}}" in (*[!a-z0-9-]*|"") echo "invalid Provider id" >&2; exit 2;; esac
-    just provider-verify "{{PROVIDER}}" "{{PUBLIC_KEY}}"
-    deno run --allow-read --allow-write="{{CATALOG}}" --allow-run=sha256sum tools/publish-provider-release.ts "{{PROVIDER}}" "{{CATALOG}}" "{{PUBLIC_KEY}}"
-
-# Bind the independently built package to one immutable runtime component set
-# per declared OS/architecture. The resulting composite digest is the Catalog,
-# Machine-generation, and session identity.
-provider-bind-runtime PROVIDER RUNTIME_ARTIFACTS:
-    case "{{PROVIDER}}" in (*[!a-z0-9-]*|"") echo "invalid Provider id" >&2; exit 2;; esac
-    test -f "dist/providers/{{PROVIDER}}/{{PROVIDER}}.cowboy-provider"
+plugin-bind-runtime PLUGIN RUNTIME_ARTIFACTS:
     test -f "{{RUNTIME_ARTIFACTS}}"
-    cargo run --locked -p cowboy-provider-sdk --bin cowboy-provider-pack -- bind-runtime "dist/providers/{{PROVIDER}}/{{PROVIDER}}.cowboy-provider" "dist/providers/{{PROVIDER}}/{{PROVIDER}}.release.json" "{{RUNTIME_ARTIFACTS}}"
+    cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- bind-runtime "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.release.json" "{{RUNTIME_ARTIFACTS}}"
 
-provider-sign PROVIDER PRIVATE_KEY:
-    case "{{PROVIDER}}" in (*[!a-z0-9-]*|"") echo "invalid Provider id" >&2; exit 2;; esac
-    cargo run --locked -p cowboy-provider-sdk --bin cowboy-provider-pack -- sign "dist/providers/{{PROVIDER}}/{{PROVIDER}}.cowboy-provider" "dist/providers/{{PROVIDER}}/{{PROVIDER}}.release.json" "{{PRIVATE_KEY}}"
+plugin-sign PLUGIN PRIVATE_KEY:
+    cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- sign "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.release.json" "{{PRIVATE_KEY}}"
 
-provider-verify PROVIDER PUBLIC_KEY:
-    case "{{PROVIDER}}" in (*[!a-z0-9-]*|"") echo "invalid Provider id" >&2; exit 2;; esac
-    cargo run --locked -p cowboy-provider-sdk --bin cowboy-provider-pack -- verify "dist/providers/{{PROVIDER}}/{{PROVIDER}}.cowboy-provider" "dist/providers/{{PROVIDER}}/{{PROVIDER}}.release.json" "{{PUBLIC_KEY}}"
+plugin-verify PLUGIN PUBLIC_KEY:
+    cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- verify "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.release.json" "{{PUBLIC_KEY}}"
 
-# Cross-language package/linker conformance. This is also the Provider release
-# skill's deterministic pre-publish gate.
-provider-check:
-    deno check tools/build-provider-runtime.ts tools/check-provider-runtime-lock.ts tools/provider-publication-receipt.ts tools/publish-provider-release.ts
+plugin-publish PLUGIN CATALOG PUBLIC_KEY:
+    just plugin-verify "{{PLUGIN}}" "{{PUBLIC_KEY}}"
+    deno run --allow-read --allow-write="{{CATALOG}}" --allow-run=sha256sum tools/publish-plugin-release.ts "{{PLUGIN}}" "{{CATALOG}}" "{{PUBLIC_KEY}}"
+
+# Cross-language package/linker conformance. This is also the Agent Plugin
+# payload gate used by the generic Plugin release workflow.
+provider-check: plugin-check
+    deno check tools/build-provider-runtime.ts tools/check-provider-runtime-lock.ts tools/plugin-publication-receipt.ts tools/publish-plugin-release.ts
     deno test --allow-read tools/provider-runtime-platforms_test.ts
-    deno test --allow-read --allow-write .agents/skills/release-cowboy-provider/scripts/audit-dependencies_test.ts
-    deno test tools/provider-publication-receipt_test.ts
+    deno test --allow-read --allow-write .agents/skills/release-cowboy-plugin/scripts/audit-dependencies_test.ts
+    deno test tools/plugin-publication-receipt_test.ts
     deno run --allow-read tools/check-provider-runtime-lock.ts
     cargo test --locked -p cowboy-provider-sdk --all-targets
-    just provider-build-all
+    cargo test --locked -p cowboy-plugin-sdk --all-targets
+    just plugin-build-all
     cd web && deno task typecheck
-    deno run --allow-read packages/provider-ui-sdk/validate-packages.ts dist/providers/*/*.cowboy-provider
+    deno run --allow-read components/provider-ui/validate-packages.ts dist/plugins/*/*.cowboy-plugin
     cd web && deno test --allow-read src/providerSdk.test.ts
 
 # Quality gates.
 fmt:
     cargo fmt --check
-    cd zed-adapter && cargo fmt --check
+    cd plugins/zed/adapter && cargo fmt --check
 
 fmt-write:
     cargo fmt
-    cd zed-adapter && cargo fmt
+    cd plugins/zed/adapter && cargo fmt
 
 lint:
     cargo clippy --all-targets --all-features --locked -- -D warnings
-    cd zed-adapter && cargo clippy --all-targets --locked -- -D warnings
+    cd plugins/zed/adapter && cargo clippy --all-targets --locked -- -D warnings
     cd web && deno task lint
 
 dependencies:
     cargo deny check
     cargo machete --with-metadata
-    cd zed-adapter && cargo deny check
-    cd zed-adapter && cargo machete --with-metadata
+    cd plugins/zed/adapter && cargo deny check
+    cd plugins/zed/adapter && cargo machete --with-metadata
 
 typecheck:
     cd web && deno task typecheck
@@ -145,10 +134,10 @@ feature-check:
 
 test:
     cargo test --all-targets --all-features --locked
-    cd zed-adapter && cargo test --all-targets --locked
+    cd plugins/zed/adapter && cargo test --all-targets --locked
     cd web && deno task test
 
-check: toolchain-check fmt lint dependencies typecheck feature-check test build
+check: toolchain-check plugin-check fmt lint dependencies typecheck feature-check test build
 
 # Run the complete quality gate without growing workspace incremental caches.
 # sccache stays opt-in until cross-worktree Rust cache hits are proven locally.
@@ -175,7 +164,7 @@ do-memory-mock-extreme:
 # Cargo commands intentionally keep rustc incremental state for the edit loop.
 build-cached:
     RUSTC_WRAPPER=sccache CARGO_INCREMENTAL=0 cargo build --all-targets --all-features --locked
-    cd zed-adapter && RUSTC_WRAPPER=sccache CARGO_INCREMENTAL=0 cargo build --all-targets --locked
+    cd plugins/zed/adapter && RUSTC_WRAPPER=sccache CARGO_INCREMENTAL=0 cargo build --all-targets --locked
 
 # Show sccache cache stats.
 cache-stats:
@@ -185,12 +174,12 @@ cache-stats:
 # Zed adapter workspace is always inspected and cleaned explicitly.
 cache-usage:
     @if test -d target; then du -sh target; else echo "target: absent"; fi
-    @if test -d zed-adapter/target; then du -sh zed-adapter/target; else echo "zed-adapter/target: absent"; fi
+    @if test -d plugins/zed/adapter/target; then du -sh plugins/zed/adapter/target; else echo "plugins/zed/adapter/target: absent"; fi
 
 cache-clean-dry:
     cargo clean --dry-run
-    cargo clean --dry-run --manifest-path zed-adapter/Cargo.toml
+    cargo clean --dry-run --manifest-path plugins/zed/adapter/Cargo.toml
 
 cache-clean:
     cargo clean
-    cargo clean --manifest-path zed-adapter/Cargo.toml
+    cargo clean --manifest-path plugins/zed/adapter/Cargo.toml

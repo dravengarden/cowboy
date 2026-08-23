@@ -189,7 +189,7 @@ import {
   getTranscriptViewport,
   saveTranscriptViewport,
 } from "./transcriptViewportStore";
-import { FloatingActionIsland, ImageLightbox } from "./_shell";
+import { FloatingActionIsland, ImageLightbox } from "./components/app-shell";
 import { Sheet } from "./Sheet";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 import { openSessionSettings } from "./sessionSettingsOpen";

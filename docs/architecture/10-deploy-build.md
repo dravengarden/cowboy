@@ -19,11 +19,11 @@ flowchart TB
     style MH fill:#fef9c3,stroke:#ca8a04
 ```
 
-- **`cowboy-web`** uses the shared `buildDenoViteApp` builder from the
-  `shared-utils` flake — a deps-only FOD (vendored npm cache, keyed by
-  `depsHash`) plus a normal offline build. The builder also stages the
-  `@shared-utils/ui` SDK into `web/src/_shell`. Refresh `depsHash` only when
-  `web/deno.lock` or `web/package.json` change.
+- **`cowboy-web`** uses Cowboy's local `nix/deno-vite-app.nix` builder — a
+  deps-only FOD (vendored npm cache, keyed by `depsHash`) plus a normal offline
+  build. UI and state components are ordinary sources under
+  `web/src/components`. Refresh `depsHash` only when `web/deno.lock` or
+  `web/package.json` change.
 - **`cowboy`** is a `buildRustPackage` whose source filter excludes frontend
   files except the TypeScript protocol fixture used by Rust contract tests.
   It pins crates via **`cargoHash` / `fetchCargoVendor`** (not

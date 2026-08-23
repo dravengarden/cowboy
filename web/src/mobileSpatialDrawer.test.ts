@@ -15,7 +15,9 @@ const reviewDrawerSource = await Deno.readTextFile(
 );
 
 Deno.test("dispose keeps seam shadow while a drawer is still translated", () => {
-  assert(drawerSource.includes("shouldKeepDrawerDepth(getOpen(), currentOffset)"));
+  assert(
+    drawerSource.includes("shouldKeepDrawerDepth(getOpen(), currentOffset)"),
+  );
   assert(drawerSource.includes("data-mobile-drawer-progress"));
 });
 
@@ -28,7 +30,9 @@ Deno.test("mobile drawer keeps clipping and shadows off the heavy surface", () =
   assert(drawerSource.includes('layer.style.willChange = "transform"'));
   assert(drawerSource.includes("getFollowers"));
   assert(drawerSource.includes("getSurface"));
-  assert(drawerSource.includes("gestureTarget.clientWidth || surface.clientWidth"));
+  assert(
+    drawerSource.includes("gestureTarget.clientWidth || surface.clientWidth"),
+  );
   assert(drawerSource.includes("mobileDrawerRailOffset"));
   assert(drawerSource.includes("--mobile-drawer-width"));
   assertEquals(drawerSource.includes("scheduleRender"), false);
@@ -49,7 +53,9 @@ Deno.test("mobile drawer keeps clipping and shadows off the heavy surface", () =
   assert(drawerSource.includes("gesture.prepared = true"));
   assert(drawerSource.includes("armPresentation"));
   assert(drawerSource.includes("disarmPresentation"));
-  assert(drawerSource.includes("applySlide = (offset: number, instant = false)"));
+  assert(
+    drawerSource.includes("applySlide = (offset: number, instant = false)"),
+  );
   assert(drawerSource.includes('if (instant) layer.style.transition = "none"'));
   assert(drawerSource.includes("render(offset, true)"));
   assert(drawerSource.includes("promoteLayer(layer)"));
@@ -68,7 +74,10 @@ Deno.test("finger swipe fires a navigation haptic at the commit threshold", () =
   assertEquals(drawerSource.includes("navigationHaptic()"), true);
   assertEquals(drawerSource.includes("thresholdHaptic"), true);
   assertEquals(productShellSource.includes("prepareNavigationHaptic()"), true);
-  assertEquals(productShellSource.includes("if (changed) navigationHaptic()"), true);
+  assertEquals(
+    productShellSource.includes("if (changed) navigationHaptic()"),
+    true,
+  );
 });
 
 Deno.test("drawer join is a hard paper|page edge", () => {
@@ -77,8 +86,13 @@ Deno.test("drawer join is a hard paper|page edge", () => {
 });
 
 Deno.test("Agent drawer publishes pager ownership synchronously", () => {
-  const bindingStart = appSource.indexOf("const binding = bindMobileSpatialDrawer({");
-  const bindingEnd = appSource.indexOf("holdPresentation: holdStorePresentation", bindingStart);
+  const bindingStart = appSource.indexOf(
+    "const binding = bindMobileSpatialDrawer({",
+  );
+  const bindingEnd = appSource.indexOf(
+    "holdPresentation: holdStorePresentation",
+    bindingStart,
+  );
   assert(bindingStart >= 0 && bindingEnd > bindingStart);
   const binding = appSource.slice(bindingStart, bindingEnd);
   const refUpdate = binding.indexOf("drawerOpenRef.current = open");
@@ -92,7 +106,9 @@ Deno.test("Agent drawer publishes pager ownership synchronously", () => {
     false,
   );
   assertEquals(
-    appSource.includes("}, [activeId, mobile, onMobileDrawerOpenChange, phone]);"),
+    appSource.includes(
+      "}, [activeId, mobile, onMobileDrawerOpenChange, phone]);",
+    ),
     false,
   );
   assert(appSource.includes("drawerOpenRef.current = false;"));
@@ -122,9 +138,11 @@ Deno.test("settled drawers retain declarative depth and pager ownership", () => 
   assert(appSource.includes(
     'data-mobile-drawer-presented={mobile && drawerOpen ? "true" : undefined}',
   ));
-  assert(appSource.includes(
-    'boxShadow: drawerOpen\n                            ? mobileSpatialDrawerShadow("left")',
-  ));
+  assert(
+    /boxShadow: drawerOpen\s*\? mobileSpatialDrawerShadow\("left"\)/u.test(
+      appSource,
+    ),
+  );
   assert(reviewDrawerSource.includes(
     'data-mobile-drawer-presented={open ? "true" : undefined}',
   ));
@@ -132,11 +150,15 @@ Deno.test("settled drawers retain declarative depth and pager ownership", () => 
     'boxShadow: open ? mobileSpatialDrawerShadow("right") : "none"',
   ));
   assert(productShellSource.includes(
-    '"[data-mobile-drawer-presented=\'true\']',
+    "\"[data-mobile-drawer-presented='true']",
   ));
   assert(productShellSource.includes("translatedSurfaceOwnsPagerGesture"));
   assert(productShellSource.includes("drawerProgressOwnsPagerGesture"));
-  assert(appSource.includes("data-mobile-drawer-surface={mobile ? \"true\" : undefined}"));
+  assert(
+    appSource.includes(
+      'data-mobile-drawer-surface={mobile ? "true" : undefined}',
+    ),
+  );
   assert(appSource.includes("mobileLayerRef.current ?? columnRef.current"));
   assert(reviewDrawerSource.includes('data-mobile-drawer-surface="true"'));
   assert(appSource.includes("width: 28"));
@@ -149,5 +171,9 @@ Deno.test("settled drawers retain declarative depth and pager ownership", () => 
   ));
   assert(appSource.includes('bgcolor: "background.default"'));
   assert(reviewDrawerSource.includes('bgcolor: "background.default"'));
-  assert(appSource.includes('data-mobile-session-footer={mobile ? "true" : undefined}'));
+  assert(
+    appSource.includes(
+      'data-mobile-session-footer={mobile ? "true" : undefined}',
+    ),
+  );
 });

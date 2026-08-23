@@ -1,4 +1,0 @@
-interface:
-  display_name: "Release Cowboy Provider"
-  short_description: "Upgrade, test, and publish one Provider"
-  default_prompt: "Use $release-cowboy-provider to audit, test, and publish a new version of a Cowboy Provider."

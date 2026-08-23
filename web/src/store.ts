@@ -7,7 +7,7 @@
 // over HTTP. We dedup by (session_id, seq), so HTTP/live overlap is harmless.
 
 import { useCallback, useRef, useSyncExternalStore } from "react";
-import { createConnectionStore } from "./_shell";
+import { createConnectionStore } from "./components/app-shell";
 import {
   type ArgsOf,
   type ClientSnapshot,
@@ -15,8 +15,8 @@ import {
   replicatedStore,
   type ReplicatedStore,
   snapshotPatch,
-} from "./_sync/mod.ts";
-import { idbListKeys, idbPersistence } from "./_sync-idb/mod.ts";
+} from "./components/state/sync/mod.ts";
+import { idbListKeys, idbPersistence } from "./components/state/sync-idb/mod.ts";
 import { type Attachment, blocksToAttachments, buildContentBlocks } from "./attachments";
 import {
   isAppleTouchWebView,
@@ -83,8 +83,8 @@ export interface ErrorNotice {
   severity?: "error" | "warning";
 }
 
-/// Top-of-app connection / version banner — now the shared @shared-utils/ui
-/// instance (see ./_shell connection-banner.tsx). cowboy adopts liveview's
+/// Top-of-app connection / version banner — the app-shell component instance
+/// (see components/app-shell/connection-banner.tsx). Cowboy keeps its
 /// canonical behavior: red "down" past the threshold, green "reconnected" flash,
 /// blue "update" that counts 3→0 and clears caches + reloads on its own. The
 /// store reports socket open/close into `conn` and reads back the backoff delay;
@@ -156,7 +156,7 @@ export interface State {
   // lives in the per-session queue sync clients (see `qClient`), not here.
   optimisticMessages: Map<string, QueuedMessage[]>;
   lastError?: ErrorNotice;
-  // session_id → title from the "title" sync state (@shared-utils/sync). Source
+  // session_id → title from the "title" state-sync channel. Source
   // of title truth on the client: overlaid onto SessionMeta.title by
   // `deriveSessions`, so an optimistic rename shows instantly and every terminal
   // converges on the arbiter's `sync_patch`. Ids absent here fall back to the
@@ -258,7 +258,7 @@ function retainTranscriptSessions(valid: ReadonlySet<string>): void {
 
 // --- Reconnect bookkeeping --------------------------------------------------
 // The banner + version-probe + outage/reconnect-flash policy now live in `conn`
-// (the shared @shared-utils/ui connection store). The store just reports socket
+// (the shared app-shell connection store). The store just reports socket
 // open/close into it and reads back the backoff delay. The only reconnect state
 // kept here is the single pending-attempt timer.
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1420,7 +1420,7 @@ function newCmid(): string {
   return `c-${newUuid()}`;
 }
 
-// --- Optimistic sync (state-sync engine: @shared-utils/sync) -----------------
+// --- Optimistic sync (Cowboy state-sync component) --------------------------
 // The daemon is the arbiter for each synced `state`. Each client applies a
 // mutation LOCALLY for an instant change, sends a generic `sync` command, and
 // folds the arbiter's `sync_patch` back (drops confirmed pending, converges on

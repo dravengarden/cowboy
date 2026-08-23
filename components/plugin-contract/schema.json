@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cowboy.stormbird.xyz/schemas/plugin-manifest-v1.json",
+  "title": "Cowboy plugin manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "version", "publisher", "kind", "entrypoint", "components"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+    "version": { "type": "string", "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)$" },
+    "publisher": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "kind": { "enum": ["agent_provider", "code_intelligence"] },
+    "entrypoint": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$" },
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "version"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^cowboy\\.[a-z0-9-]+$" },
+          "version": { "type": "string", "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)$" }
+        }
+      }
+    }
+  }
+}

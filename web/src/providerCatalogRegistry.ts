@@ -7,7 +7,7 @@ import {
   providerCompatibilityProblem,
   type ProviderCompatibilityTarget,
   validateProviderCatalog,
-} from "../../packages/provider-ui-sdk/src/index.ts";
+} from "../../components/provider-ui/src/index.ts";
 
 let cached: ProviderCatalogResponse | null = null;
 let pending: Promise<ProviderCatalogResponse> | null = null;
@@ -18,7 +18,7 @@ export async function loadProviderCatalog(
 ): Promise<ProviderCatalogResponse> {
   if (!force && cached) return cached;
   if (!force && pending) return await pending;
-  pending = fetch("/api/providers", { headers: { accept: "application/json" } })
+  pending = fetch("/api/plugins", { headers: { accept: "application/json" } })
     .then(async (response) => {
       if (!response.ok) {
         throw new Error(

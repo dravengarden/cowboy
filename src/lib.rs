@@ -55,10 +55,10 @@ mod machine_components;
 mod machine_control;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod machine_install;
+#[cfg(feature = "machine-host")]
+mod machine_plugins;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod machine_protocol;
-#[cfg(feature = "machine-host")]
-mod machine_providers;
 #[cfg(feature = "full")]
 mod memory_observability;
 #[cfg(feature = "full")]
@@ -67,6 +67,10 @@ mod observability;
 mod passkey;
 #[cfg(feature = "full")]
 mod persistence;
+#[cfg(feature = "full")]
+mod plugin;
+#[cfg(feature = "full")]
+mod plugin_catalog;
 #[cfg(feature = "full")]
 mod product_auth;
 #[cfg(feature = "full")]

@@ -1,12 +1,12 @@
 # Rust
 /target
-/zed-adapter/target
+/plugins/zed/adapter/target
 
 # Frontend
 web/node_modules/
 tools/do-memory-mock/node_modules/
 web/dist/
-dist/providers/
+dist/plugins/
 dist/provider-runtime-cache/
 *.tsbuildinfo
 
@@ -27,8 +27,5 @@ dist/provider-runtime-cache/
 # sccache local cache (if ever placed in-tree)
 .sccache/
 
-# Materialized at build from the atlantis components package.
-web/src/_shell
-
-# web/src/_sync is VENDORED (a committed copy of @shared-utils/sync), not
-# materialized — so it's tracked, not ignored. See web/src/_sync/mod.ts.
+# The state engines remain committed Cowboy components; they are never staged
+# from another checkout during development or release builds.

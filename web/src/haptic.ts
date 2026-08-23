@@ -1,5 +1,5 @@
-// Haptic feedback for cowboy — a thin adapter over the shared primitive in
-// @shared-utils/ui (./_shell). The shared `haptic()` is native-first: it calls the
+// Haptic feedback for cowboy — a thin adapter over the app-shell component.
+// The shared `haptic()` is native-first: it calls the
 // Tauri haptics plugin (real UIImpactFeedbackGenerator on iOS, the ONLY reliable
 // iOS haptic) via the injected IPC bridge, and degrades to navigator.vibrate /
 // the iOS switch-trick on the plain web/PWA.
@@ -16,7 +16,7 @@ import {
   type HapticStyle,
   notificationHaptic,
   selectionHaptic,
-} from "./_shell";
+} from "./components/app-shell";
 import { hapticStyleForIntent } from "./hapticIntent";
 export {
   type CowboyHapticIntent,

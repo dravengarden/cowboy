@@ -100,7 +100,9 @@ Deno.test("multi-image mobile composers scroll the focused caret above the keybo
     true,
   );
   assertEquals(
-    composerSource.includes("never starts. Do not use -webkit-overflow-scrolling:touch"),
+    composerSource.includes(
+      "never starts. Do not use -webkit-overflow-scrolling:touch",
+    ),
     true,
   );
   assertEquals(
@@ -108,7 +110,9 @@ Deno.test("multi-image mobile composers scroll the focused caret above the keybo
     true,
   );
   assertEquals(
-    composerSource.includes("const timer = globalThis.setTimeout(reveal, 260);"),
+    composerSource.includes(
+      "const timer = globalThis.setTimeout(reveal, 260);",
+    ),
     true,
   );
   assertEquals(editorSource.includes("revealSelection: (): void =>"), true);
@@ -287,7 +291,7 @@ Deno.test("mobile column and pending ownership cannot fill the viewport without 
   );
   assertEquals(
     composerSource.includes(
-      "...(!desktop && !mobileFloatingEdit && {\n              maxHeight: \"30vh\",\n              overflowY: visuallyCollapsed ? \"hidden\" : \"auto\",",
+      '...(!desktop && !mobileFloatingEdit && {\n              maxHeight: "30vh",\n              overflowY: visuallyCollapsed ? "hidden" : "auto",',
     ),
     true,
   );
@@ -365,8 +369,14 @@ Deno.test("mobile pending edit stays mounted when the keyboard never reports an 
     true,
   );
   assertEquals(composerSource.includes("if (keyboardBoundEditing) {"), true);
-  assertEquals(composerSource.includes("onClick={hideMobileEditKeyboard}"), true);
-  assertEquals(composerSource.includes("const finishMobileEdit = (): void =>"), true);
+  assertEquals(
+    composerSource.includes("onClick={hideMobileEditKeyboard}"),
+    true,
+  );
+  assertEquals(
+    composerSource.includes("const finishMobileEdit = (): void =>"),
+    true,
+  );
 });
 
 Deno.test("mobile pending editor survives the native long-press keyboard settle window", () => {
@@ -378,7 +388,9 @@ Deno.test("mobile pending editor survives the native long-press keyboard settle 
     true,
   );
   assertEquals(
-    composerSource.includes("const finishMobileEditRef = useRef(finishMobileEdit);"),
+    composerSource.includes(
+      "const finishMobileEditRef = useRef(finishMobileEdit);",
+    ),
     true,
   );
 });
@@ -633,7 +645,10 @@ Deno.test("move-draft destination list matches the Obsidian sheet title inset", 
   );
   assertEquals(sheet.includes("portal"), true);
   assertEquals(sheet.includes('mobileDismiss="footer"'), true);
-  assertEquals(sheet.includes("<List disablePadding sx={{ mx: -2.25, pb: 1 }}>"), true);
+  assertEquals(
+    sheet.includes("<List disablePadding sx={{ mx: -2.25, pb: 1 }}>"),
+    true,
+  );
   assertEquals(sheet.includes('width: "100%"'), true);
   assertEquals(sheet.includes('flex: "1 1 0px"'), true);
   assertEquals(sheet.includes('textOverflow: "ellipsis"'), true);
@@ -641,17 +656,46 @@ Deno.test("move-draft destination list matches the Obsidian sheet title inset", 
 });
 
 Deno.test("fullscreen hide keyboard stays expanded and resumes at the document end", () => {
-  assertEquals(fullscreenComposerSource.includes("if (showCollapse) onCollapse()"), false);
-  assertEquals(fullscreenComposerSource.includes("sawKeyboardRef.current && !keyboardOpen"), true);
-  assertEquals(fullscreenComposerSource.includes('title={resumeEditing ? "Edit" : "Hide keyboard"}'), true);
-  assertEquals(fullscreenComposerSource.includes("{resumeEditing ? <Edit /> : <KeyboardHide />}"), true);
-  assertEquals(fullscreenComposerSource.includes("editorRef.current?.focusEnd()"), true);
-  assertEquals(fullscreenComposerSource.includes("dismissMobileSoftwareKeyboard()"), true);
-  assertEquals(fullscreenComposerSource.includes("noteMobileKeyboardDismissed()"), true);
+  assertEquals(
+    fullscreenComposerSource.includes("if (showCollapse) onCollapse()"),
+    false,
+  );
+  assertEquals(
+    fullscreenComposerSource.includes(
+      "sawKeyboardRef.current && !keyboardOpen",
+    ),
+    true,
+  );
+  assertEquals(
+    fullscreenComposerSource.includes(
+      'title={resumeEditing ? "Edit" : "Hide keyboard"}',
+    ),
+    true,
+  );
+  assertEquals(
+    fullscreenComposerSource.includes(
+      "{resumeEditing ? <Edit /> : <KeyboardHide />}",
+    ),
+    true,
+  );
+  assertEquals(
+    fullscreenComposerSource.includes("editorRef.current?.focusEnd()"),
+    true,
+  );
+  assertEquals(
+    fullscreenComposerSource.includes("dismissMobileSoftwareKeyboard()"),
+    true,
+  );
+  assertEquals(
+    fullscreenComposerSource.includes("noteMobileKeyboardDismissed()"),
+    true,
+  );
   const hideClick = fullscreenComposerSource.slice(
-    fullscreenComposerSource.indexOf('title={resumeEditing ? "Edit" : "Hide keyboard"}'),
     fullscreenComposerSource.indexOf(
-      "primaryLabel={showCollapse ? \"Collapse editor\" : submitLabel}",
+      'title={resumeEditing ? "Edit" : "Hide keyboard"}',
+    ),
+    fullscreenComposerSource.indexOf(
+      'primaryLabel={showCollapse ? "Collapse editor" : submitLabel}',
     ),
   );
   assertEquals(hideClick.includes("onCollapse()"), false);
@@ -800,8 +844,8 @@ Deno.test("long touch prompts scroll inside the editor without hiding chrome", (
   );
 
   assertEquals(
-    appSource.includes(
-      'maxHeight: "100%",\n                                    display: "flex",\n                                    flexDirection: "column"',
+    /maxHeight: "100%",\s+display: "flex",\s+flexDirection: "column"/u.test(
+      appSource,
     ),
     true,
   );
@@ -915,9 +959,8 @@ Deno.test("mobile keyboard focus presents one floating composer surface", () => 
     true,
   );
   assertEquals(
-    appSource.includes(
-      '[data-mobile-composer-shell-material=\'true\']": {\n                        opacity: "0 !important"',
-    ),
+    /\[data-mobile-composer-shell-material='true'\]":\s*\{\s*opacity: "0 !important"/u
+      .test(appSource),
     true,
   );
   assertEquals(
@@ -953,16 +996,21 @@ Deno.test("mobile pending editing keeps expansion and context delivery actions i
     true,
   );
   assertEquals(
-    pending.includes('primaryLabel={kind === "draft" ? "Send draft" : "Expand editor"}'),
+    pending.includes(
+      'primaryLabel={kind === "draft" ? "Send draft" : "Expand editor"}',
+    ),
     true,
   );
   assertEquals(
     pending.includes(
-      "onPrimary={kind === \"draft\" ? sendDraftFromEdit : expandMobileEdit}",
+      'onPrimary={kind === "draft" ? sendDraftFromEdit : expandMobileEdit}',
     ),
     true,
   );
-  assertEquals(pending.includes('primaryIcon={kind === "draft" ? <Send />'), true);
+  assertEquals(
+    pending.includes('primaryIcon={kind === "draft" ? <Send />'),
+    true,
+  );
   assertEquals(
     /title=\{message\.schedule\s*\?\s*"Reschedule send"\s*:\s*"Schedule send"\}/
       .test(pending),
@@ -1228,7 +1276,9 @@ Deno.test("queue and draft edit taps reopen the keyboard-up two-track chrome", (
     pendingStart,
   );
   const pending = composerSource.slice(pendingStart, pendingEnd);
-  const beginEditStart = composerSource.indexOf("const beginEdit = (): void => {");
+  const beginEditStart = composerSource.indexOf(
+    "const beginEdit = (): void => {",
+  );
   const beginEdit = composerSource.slice(
     beginEditStart,
     composerSource.indexOf("const pendingEditTap", beginEditStart),
@@ -1281,7 +1331,10 @@ Deno.test("queue and draft edit taps reopen the keyboard-up two-track chrome", (
 });
 
 Deno.test("pending kebab menus pin to the tap instead of a live button node", () => {
-  assertEquals(composerSource.includes('anchorReference="anchorPosition"'), true);
+  assertEquals(
+    composerSource.includes('anchorReference="anchorPosition"'),
+    true,
+  );
   assertEquals(composerSource.includes("disableScrollLock"), true);
   assertEquals(
     composerSource.includes("rect.height > 0 ? rect.bottom : e.clientY"),

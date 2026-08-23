@@ -1,0 +1,238 @@
+{
+  "authoring_schema": 2,
+  "id": "claude-code",
+  "version": "3.0.0",
+  "publisher": "cowboy-first-party",
+  "sdk_version": "3.0.0",
+  "display": {
+    "name": "Claude Code",
+    "vendor": "Anthropic",
+    "summary": "Claude Code with its standard Anthropic account and configuration",
+    "accent": "#D97757",
+    "secondary_accent": "#B95F43",
+    "mark_view_box": "0 0 24 24",
+    "mark_path": "M4.7 15.95 9.43 13.3l.08-.23-.08-.12H9.2l-6.87-.3L0 11.78l.05-.35.48-.32 8.59.67h.39l.05-.16-7.21-4.94-.36-.46-.16-1.01.65-.72.88.06 6.25 4.36h.16L5.96 1.91l-.17-.62L6.28.13 6.7 0l1 .13.42.37 3.87 8.4h.16l.36-6.4.08-.75.38-.91.75-.49.58.28.48.69-1.21 7.69h.21l4.95-5.34.55-.43h1.03l.76 1.13-.34 1.16-4.68 6.01.07.11 6.43-1.2.83.39.09.39-.33.81-8.16 1.76.05.06 6.85.42.79.52.47.64-.08.49-1.21.62-7.42-1.78h-.18v.11l7.11 6.86.13.58-.32.45-.34-.05-6.42-5.02h-.13v.17l3.03 4.49.12 1.08-.17.35-.61.22-.67-.12-3.93-6.04-.14.08-.67 7.25-.32.37-.73.28-.61-.46-.32-.75 1.49-7.46-.01-.04-.14.02-5.34 6.76-.42.16-.72-.37.07-.66.4-.59 4.76-6.01-.01-.16h-.05l-5.3 3.21-1.13.15-.49-.46.06-.75.23-.24Z",
+    "mark_fill": "#D97757"
+  },
+  "card_layout": "mark_above",
+  "activity": {
+    "indicator": {
+      "kind": "glyph_cycle",
+      "frames": ["·", "✢", "*", "✶", "✻", "✽"],
+      "interval_ms": 200
+    },
+    "label": {
+      "kind": "phrase_cycle",
+      "phrases": [
+        "Analyzing",
+        "Thinking",
+        "Exploring",
+        "Reasoning",
+        "Planning",
+        "Reading",
+        "Writing",
+        "Reviewing",
+        "Refining",
+        "Verifying",
+        "Synthesizing",
+        "Working"
+      ],
+      "interval_ms": 3500,
+      "suffix": "…",
+      "effect": "shimmer"
+    },
+    "accessible_label": "Claude Code is working"
+  },
+  "host": {
+    "schema_version": 2,
+    "conversation_compaction": {
+      "aliases": ["compact", "summarise", "summarize"],
+      "fallback_command": "compact"
+    },
+    "account_usage": { "provider": "anthropic" },
+    "transcript": {
+      "schema_version": 1,
+      "thought": {
+        "variant": "timeline",
+        "density": "comfortable",
+        "active_label": "Thinking",
+        "current_surface": "plain"
+      }
+    },
+    "features": [],
+    "tool_presentations": [
+      { "tool_name": "TodoWrite", "renderer": "todo_list_v1" }
+    ]
+  },
+  "runtime": {
+    "driver_schema": 1,
+    "protocol": "agent-client-protocol-1.3",
+    "entrypoint": "claude-agent-acp",
+    "behavior": {
+      "schema_version": 1,
+      "permission": "acp_session_mode_bypass_permissions_v1",
+      "session": "stable_preset_system_prompt_v1",
+      "turn_end": "portable_v1",
+      "configuration": "portable_v1",
+      "default_preferences": {},
+      "error_rules": [
+        {
+          "when": { "op": "contains", "value": "maximum context length" },
+          "classification": "provider-context-limit",
+          "keep_worker_alive": true
+        },
+        {
+          "when": { "op": "contains", "value": "prompt is too long" },
+          "classification": "provider-context-limit",
+          "keep_worker_alive": true
+        },
+        {
+          "when": {
+            "op": "all",
+            "values": [
+              { "op": "contains", "value": "context window" },
+              {
+                "op": "any",
+                "values": [
+                  { "op": "contains", "value": "exceed" },
+                  { "op": "contains", "value": "full" },
+                  { "op": "contains", "value": "limit reached" }
+                ]
+              }
+            ]
+          },
+          "classification": "provider-context-limit",
+          "keep_worker_alive": true
+        },
+        {
+          "when": {
+            "op": "contains",
+            "value": "stream ended without receiving any events"
+          },
+          "classification": "provider-empty-stream",
+          "keep_worker_alive": true,
+          "retry_once_without_visible_update": true
+        }
+      ]
+    },
+    "arguments": [],
+    "environment": {
+      "CLAUDE_CODE_EXECUTABLE": {
+        "source": "component_command",
+        "component": { "kind": "provider_cli", "slot": "claude" }
+      }
+    },
+    "remove_environment": [],
+    "remove_environment_prefixes": ["ANTHROPIC_", "CLAUDE_"],
+    "dependencies": [
+      {
+        "id": "claude-agent-acp",
+        "version": "0.63.0",
+        "source": "https://registry.npmjs.org/@agentclientprotocol/claude-agent-acp/-/claude-agent-acp-0.63.0.tgz",
+        "integrity": "sha512-/Ylytz6KPGkih1sZd2sJAmWIGMh59T+FCJhlsfW9zpB1Lrg0/Njgk/7TplRfX2f7dELx0FeN+SBG+Uju12XwlA==",
+        "private": true
+      },
+      {
+        "id": "anthropic-claude-code",
+        "version": "2.1.231",
+        "source": "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.231.tgz",
+        "integrity": "sha512-1VG6CYH/x3M58L0wNYV2yLI3IPTCic+SXFrIw9IV2OrXA4EsMFAdXArWG87GpLZMkCCLculmrtDuJlwKLsysxg==",
+        "private": true
+      }
+    ],
+    "platforms": [
+      {
+        "os": "linux",
+        "architecture": "x86_64",
+        "payload_digest": "",
+        "launch_command": "claude-agent-acp",
+        "private_components": [
+          {
+            "kind": "provider_cli",
+            "slot": "claude",
+            "dependency": "anthropic-claude-code",
+            "command": "claude"
+          },
+          {
+            "kind": "provider_adapter",
+            "slot": "claude",
+            "dependency": "claude-agent-acp",
+            "command": "claude-agent-acp"
+          }
+        ]
+      },
+      {
+        "os": "macos",
+        "architecture": "aarch64",
+        "payload_digest": "",
+        "launch_command": "claude-agent-acp",
+        "private_components": [
+          {
+            "kind": "provider_cli",
+            "slot": "claude",
+            "dependency": "anthropic-claude-code",
+            "command": "claude"
+          },
+          {
+            "kind": "provider_adapter",
+            "slot": "claude",
+            "dependency": "claude-agent-acp",
+            "command": "claude-agent-acp"
+          }
+        ]
+      }
+    ],
+    "required_capabilities": ["provider.runtime.v1"]
+  },
+  "authentication": {
+    "schema_version": 1,
+    "required": true,
+    "portable_schema": "claude-code-auth-v1",
+    "projection_schema": "claude-config-v1",
+    "refresh": "compare_and_swap",
+    "methods": [
+      {
+        "id": "claude-account",
+        "label": "Claude subscription",
+        "flow": "browser_code",
+        "executor": {
+          "kind": "command_v1",
+          "component": { "kind": "provider_cli", "slot": "claude" },
+          "arguments": ["auth", "login"],
+          "terminal": "pipes",
+          "challenge": "browser_code",
+          "environment": {},
+          "preflight": []
+        },
+        "required_bundle_keys": ["credentials_json"]
+      },
+      {
+        "id": "api-key",
+        "label": "Anthropic API key",
+        "flow": "secret_input",
+        "executor": {
+          "kind": "secret_input_v1",
+          "bundle_key": "api_key",
+          "verification_url": "https://console.anthropic.com/settings/keys"
+        },
+        "required_bundle_keys": ["api_key"]
+      }
+    ],
+    "credential_files": [
+      {
+        "bundle_key": "credentials_json",
+        "relative_path": ".claude/.credentials.json",
+        "required": false
+      }
+    ],
+    "environment_projection": { "ANTHROPIC_API_KEY": "api_key" }
+  },
+  "compatibility": {
+    "min_controller_contract": 2,
+    "max_controller_contract": 2,
+    "min_machine_contract": 4,
+    "max_machine_contract": 4,
+    "ui_component_fingerprint": "",
+    "auth_contract_fingerprint": ""
+  }
+}

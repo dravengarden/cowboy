@@ -11,7 +11,7 @@ for (const provider of ["claude-deepseek", "codex-deepseek"]) {
   Deno.test(`${provider} publishes Linux x86_64 and macOS arm64 runtimes`, async () => {
     const manifest = JSON.parse(
       await Deno.readTextFile(
-        new URL(`../providers/${provider}/provider.json`, import.meta.url),
+        new URL(`../plugins/${provider}/provider.json`, import.meta.url),
       ),
     ) as {
       runtime: {

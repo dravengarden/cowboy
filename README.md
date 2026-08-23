@@ -104,8 +104,11 @@ Rolling updates keep workers alive across controller restarts: [architecture/12-
 
 ## Provider architecture
 
-Providers are independently versioned packages (`providers/*/provider.json`),
-not hardcoded adapters in the UI. The UI consumes typed Provider capabilities
+Agent Providers are independently versioned plugins
+(`plugins/*/plugin.json`) whose signed payload is `provider.json`, not
+hardcoded adapters in the UI. Zed is a process-isolated code-intelligence
+plugin. Plugins pin versioned Cowboy components as described in
+[Plugins and shared components](docs/plugin-components.md). The UI consumes typed Provider capabilities
 through [ACP](https://agentclientprotocol.com), so adding a Provider does not
 require rebuilding the product around another vendor-specific surface.
 

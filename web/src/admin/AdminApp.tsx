@@ -38,7 +38,7 @@ import {
   type AdminUser,
   type PermissionPolicy,
   type ProductUser,
-  type ProviderRelease,
+  type PluginRelease,
   type SessionLimits,
 } from "./adminApi";
 import { AdminPasskeyLock, AdminPasskeysCard } from "./AdminPasskeys";
@@ -360,13 +360,13 @@ function PermissionsPage(): React.JSX.Element {
 }
 
 function ReleasesPage(): React.JSX.Element {
-  const [providers, setProviders] = useState<ProviderRelease[]>([]);
+  const [plugins, setPlugins] = useState<PluginRelease[]>([]);
   const [root, setRoot] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const reload = useCallback(async () => {
-    const data = await adminApi.providers();
-    setProviders(data.providers);
+    const data = await adminApi.plugins();
+    setPlugins(data.plugins);
     setRoot(data.catalog_root);
   }, []);
   useEffect(() => {
@@ -375,9 +375,9 @@ function ReleasesPage(): React.JSX.Element {
   if (error) return <Alert severity="error">{error}</Alert>;
   return (
     <Stack spacing={2}>
-      <Typography variant="h4">Provider releases</Typography>
+      <Typography variant="h4">Plugin releases</Typography>
       <Typography color="text.secondary">
-        Signed Catalog versions are installable. Unbound entries need `just provider-sign` then `just provider-publish` into the catalog directory, then refresh.
+        Signed Plugin Catalog versions are installable. Unbound entries need `just plugin-sign` then `just plugin-publish` into the catalog directory, then refresh.
       </Typography>
       {root && <Alert severity="info">Catalog: {root}</Alert>}
       <Button
@@ -396,19 +396,21 @@ function ReleasesPage(): React.JSX.Element {
         <Table size="small">
           <TableHead>
             <TableRow>
-              <TableCell>Provider</TableCell>
+              <TableCell>Plugin</TableCell>
+              <TableCell>Kind</TableCell>
               <TableCell>Version</TableCell>
               <TableCell>State</TableCell>
               <TableCell>Publisher</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
-            {providers.map((provider) => (
-              <TableRow key={`${provider.provider_id}:${provider.provider_version}:${provider.artifact_digest ?? "embedded"}`}>
-                <TableCell>{provider.provider_id}</TableCell>
-                <TableCell>{provider.provider_version}</TableCell>
-                <TableCell>{provider.release_state}</TableCell>
-                <TableCell>{provider.publisher}</TableCell>
+            {plugins.map((plugin) => (
+              <TableRow key={`${plugin.plugin_id}:${plugin.plugin_version}:${plugin.artifact_digest ?? "embedded"}`}>
+                <TableCell>{plugin.plugin_id}</TableCell>
+                <TableCell>{plugin.plugin_kind}</TableCell>
+                <TableCell>{plugin.plugin_version}</TableCell>
+                <TableCell>{plugin.release_state}</TableCell>
+                <TableCell>{plugin.publisher}</TableCell>
               </TableRow>
             ))}
           </TableBody>

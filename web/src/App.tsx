@@ -165,8 +165,8 @@ import {
 import {
     type MachineProviderInventory,
     type ProviderContractInventory,
-    validateMachineProviderInventory,
-} from "../../packages/provider-ui-sdk/src/index.ts";
+    projectAgentPluginInventory,
+} from "../../components/provider-ui/src/index.ts";
 import {
     type MachinePresence,
     machinePresencePresentation,
@@ -190,7 +190,7 @@ import {
     MobileSheetActionGroup,
     MobileSheetDismiss,
     NativeReleaseUpdatePrompt,
-} from "./_shell";
+} from "./components/app-shell";
 import { ConfirmSheet, Sheet } from "./Sheet";
 import { MobileDecisionActions } from "./MobileDecisionActions";
 import { Kbd, useConfirmEnter } from "./Kbd";
@@ -203,7 +203,7 @@ import { UsageLogs } from "./UsageLogs";
 import { fireLabel, fireRel } from "./scheduleTime";
 import { ResourceLightbox } from "./ResourceLightbox";
 import { desktopFocusBoundary, desktopFocusFill, type Mode as ThemeMode } from "./theme";
-import { persisted } from "./_store/mod.ts";
+import { persisted } from "./components/state/store/mod.ts";
 import { desktopImeOwnsKey } from "./desktop/commands/imeShortcut";
 import { workspaceCommandKey } from "./desktop/commands/workspaceCommandKey";
 import { sequentialShortcutAvailability } from "./desktop/commands/shortcutAvailability";
@@ -1541,10 +1541,10 @@ function NewSessionDialog({
             return;
         }
         let active = true;
-        void fetch(`/api/machines/${encodeURIComponent(machineId)}/providers`)
+        void fetch(`/api/machines/${encodeURIComponent(machineId)}/plugins`)
             .then(async (response) => {
                 if (!response.ok) throw new Error(await response.text());
-                return validateMachineProviderInventory(await response.json());
+                return projectAgentPluginInventory(await response.json());
             })
             .then((value) => {
                 if (active) setMachineProviders(value);

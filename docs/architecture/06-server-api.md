@@ -38,8 +38,8 @@ control plane, while the web files remain an independently replaceable release.
 | `PUT /api/admin/permissions` | `403` single-user |
 | `GET /api/admin/session-limits` | admin viewer+ controller limits |
 | `PUT /api/admin/session-limits` | admin operator+ replace limits |
-| `GET /api/admin/providers` | admin viewer+ catalog |
-| `POST /api/admin/providers/refresh` | admin operator+ rescan external releases |
+| `GET /api/admin/plugins` | admin viewer+ Plugin Catalog |
+| `POST /api/admin/plugins/refresh` | admin operator+ rescan external Plugin releases |
 | `GET /api/admin/users` | admin operator+ list the only product user |
 | `POST /api/admin/users` | `403` single-user |
 | `POST /api/admin/users/{id}/disable` | admin operator+ disable + revoke sessions/tokens |
@@ -49,9 +49,10 @@ control plane, while the web files remain an independently replaceable release.
 | `GET /api/usage` | Cached Codex account limits, Claude Agent SDK plan-limit events, and the latest live ACP session usage. Gemini account quota remains absent until its official ACP mode exposes it; Cowboy never reuses provider OAuth credentials against private endpoints. |
 | `POST /api/usage` | manually refresh official provider account usage, coalesced and timeout-bounded |
 | `GET /api/workspaces` | selectable session roots plus matching central Columbus work items |
-| `GET /api/providers` | Provider catalog, Service auth state, and installability |
+| `GET /api/plugins` | Plugin Catalog plus the Agent Provider/auth capability projection |
 | `POST /api/providers/{id}/auth/start` | start a Service-owned Provider authentication flow |
-| `GET /api/machines` | enrolled Machine health, inventory, components, and Provider state |
+| `GET /api/machines` | enrolled Machine health, inventory, components, and Plugin state |
+| `GET /api/machines/{id}/plugins` | exact generic Plugin installation inventory |
 | `POST /api/machines/enrollment` | create a short-lived Machine enrollment credential |
 | `ANY /api/machine/connect` | authenticated outbound Machine WebSocket |
 | `POST /api/sessions` | create a Machine-placed session and return its exact Provider generation |

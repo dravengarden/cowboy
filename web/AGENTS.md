@@ -41,8 +41,9 @@ routinely breaks another.
 - **NEVER `deno fmt` `src/App.tsx`** — it is a pre-existing 4-space outlier
   (rest of `src/` is 2-space); a format would wholesale-reflow ~3700 lines.
   Match 4-space when editing it.
-- A fresh worktree lacks `src/_shell` — symlink it to the shared UI package:
-  `ln -s /home/draven/projects/shared-utils/packages/ui src/_shell` (gitignored).
+- App-shell primitives are Cowboy-owned under `src/components/app-shell`.
+  Keep product-specific behavior in consumers and reusable interaction,
+  accessibility, motion, and shell geometry inside that component boundary.
 - Quality gate before commit: `deno check` + `oxlint` (the cowboy web gate). Do
   not run repo-wide `deno fmt`.
 

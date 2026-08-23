@@ -18,9 +18,7 @@ Deno.test("session rename focuses its real input inside the initiating tap", () 
   assert(
     appSource.includes("flushSync(() => setPendingRename(s));"),
   );
-  assert(
-    appSource.includes("{pendingRename && (\n                <RenameSessionShell"),
-  );
+  assert(/\{pendingRename && \(\s*<RenameSessionShell/u.test(appSource));
 
   const renameShell = appSource.indexOf("function RenameSessionShell(");
   const layoutFocus = appSource.indexOf("useLayoutEffect(() => {", renameShell);

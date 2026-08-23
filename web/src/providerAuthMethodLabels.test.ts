@@ -10,7 +10,7 @@ for (
   Deno.test(`${provider} account auth names the subscription product`, async () => {
     const manifest = JSON.parse(
       await Deno.readTextFile(
-        new URL(`../../providers/${provider}/provider.json`, import.meta.url),
+        new URL(`../../plugins/${provider}/provider.json`, import.meta.url),
       ),
     ) as { authentication: { methods: Array<{ flow: string; label: string }> } };
     const account = manifest.authentication.methods.find((method) =>

@@ -1,4 +1,4 @@
-import { subscribeAnyDetentSheetOpen } from "./_shell/detent-sheet-open";
+import { subscribeAnyDetentSheetOpen } from "./components/app-shell/detent-sheet-open";
 import {
   mobileCodeRestLayerSx,
   mobileCodeSwipeFlattenSx,
@@ -162,5 +162,4 @@ export function bindMobileSheetPresentationHold(
     apply(false);
   };
 }
-
 

@@ -4,7 +4,9 @@ Cowboy Code may use Zed's headless project, worktree, buffer, and LSP logic,
 but it must not link that implementation into the MIT-licensed Cowboy daemon.
 The Zed crates and wire schema used by remote development are
 GPL-3.0-or-later. They therefore live in a separately built and distributed
-`cowboy-zed-adapter` process.
+`cowboy-zed-adapter` process. Its source is the `zed` plugin under
+`plugins/zed`; `plugin.json` pins the shared code-intelligence contract and the
+adapter remains its isolated entry point.
 
 ## Version boundary
 
@@ -14,8 +16,9 @@ The initial compatibility target is:
 - remote server version: `1.13.0`;
 - Zed revision: `aaf5f57dd36c41cf2ed49b13bcb091d52d5aef45`.
 
-An upgrade changes both values together and must pass the adapter protocol
-fixtures before deployment. Cowboy never discovers or executes the mutable
+An upgrade changes both values together, bumps the Zed plugin version, and must
+pass the adapter protocol fixtures plus `just plugin-check` before deployment.
+Cowboy never discovers or executes the mutable
 server under `~/.zed_server`; Nix supplies the exact adapter/server pair.
 
 The browser's read-only Code syntax fallback carries a snapshot of the pinned

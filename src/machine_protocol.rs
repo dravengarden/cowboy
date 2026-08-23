@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 4;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 5;
 pub const MIN_MACHINE_PROTOCOL_VERSION: u16 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,12 +129,12 @@ pub struct MachineHello {
     pub encryption_public_key: Option<String>,
     #[serde(default)]
     pub components: Vec<ComponentInventory>,
-    /// Product-level Provider installations. Internal components remain a
-    /// developer diagnostic and never define ordinary scheduling on protocol 3+.
-    #[serde(default)]
-    pub providers: Vec<ProviderInventory>,
+    /// Product-level Plugin installations. Internal components remain a
+    /// developer diagnostic and never define ordinary scheduling.
+    #[serde(default, alias = "providers")]
+    pub plugins: Vec<PluginInventory>,
     /// Signed capability inventory used by the Controller to select only
-    /// Provider releases this exact Machine can decode and activate. An absent
+    /// Agent Plugin bindings this exact Machine can decode and activate. An absent
     /// inventory is a legacy Machine and fails closed for install/upgrade.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_contracts: Option<cowboy_provider_sdk::ProviderContractInventory>,
@@ -253,8 +253,8 @@ pub fn challenge_proof_v2(
         for value in [
             provider_contracts.min_package_schema,
             provider_contracts.max_package_schema,
-            provider_contracts.min_release_schema,
-            provider_contracts.max_release_schema,
+            provider_contracts.min_runtime_binding_schema,
+            provider_contracts.max_runtime_binding_schema,
             provider_contracts.min_ui_schema,
             provider_contracts.max_ui_schema,
             provider_contracts.min_host_schema,
@@ -271,7 +271,7 @@ pub fn challenge_proof_v2(
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ProviderInstallationState {
+pub enum PluginInstallationState {
     Missing,
     Installing,
     Active,
@@ -301,12 +301,16 @@ pub enum ProviderMaterializationState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ProviderInventory {
-    pub provider_id: String,
-    pub provider_version: String,
+pub struct PluginInventory {
+    #[serde(alias = "provider_id")]
+    pub plugin_id: String,
+    #[serde(alias = "provider_version")]
+    pub plugin_version: String,
+    #[serde(default = "default_agent_plugin_kind")]
+    pub plugin_kind: cowboy_plugin_sdk::PluginKind,
     pub generation_digest: String,
     pub contract_fingerprint: String,
-    pub state: ProviderInstallationState,
+    pub state: PluginInstallationState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rollback_generation_digest: Option<String>,
     #[serde(default)]
@@ -321,6 +325,10 @@ pub struct ProviderInventory {
     pub detail: Option<String>,
 }
 
+const fn default_agent_plugin_kind() -> cowboy_plugin_sdk::PluginKind {
+    cowboy_plugin_sdk::PluginKind::AgentProvider
+}
+
 const fn default_provider_replica_state() -> ProviderReplicaState {
     ProviderReplicaState::Absent
 }
@@ -329,11 +337,11 @@ const fn default_provider_materialization_state() -> ProviderMaterializationStat
     ProviderMaterializationState::NotInstalled
 }
 
-/// Immutable Catalog-selected payload. The browser submits only Provider id,
+/// Immutable Catalog-selected payload. The browser submits only Plugin id,
 /// version, and optional digest; the Controller fills this complete envelope.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DesiredProvider {
-    pub release: cowboy_provider_sdk::ProviderRelease,
+pub struct DesiredPlugin {
+    pub release: cowboy_plugin_sdk::PluginRelease,
     pub package_base64: String,
     pub publisher_public_key: String,
 }
@@ -471,21 +479,21 @@ pub enum MachineCommand {
     RefreshInventory {
         request_id: String,
     },
-    InstallProvider {
+    InstallPlugin {
         request_id: String,
-        provider: Box<DesiredProvider>,
+        plugin: Box<DesiredPlugin>,
     },
-    UninstallProvider {
+    UninstallPlugin {
         request_id: String,
-        provider_id: String,
+        plugin_id: String,
         generation_digest: String,
     },
     /// Compensate a Controller uninstall saga whose durable session commit
     /// failed after the Machine removed its active link. Only retained,
     /// previously verified generation bytes may be re-activated.
-    ReactivateProvider {
+    ReactivatePlugin {
         request_id: String,
-        provider_id: String,
+        plugin_id: String,
         generation_digest: String,
     },
     ApplyProviderAuth {
@@ -522,11 +530,12 @@ impl MachineCommand {
             // Uninstall is destructive and its Controller saga relies on
             // exact-generation reactivation for compensation. Never let a
             // protocol-three Machine begin removal that it cannot undo.
-            Self::UninstallProvider { .. } | Self::ReactivateProvider { .. } => 4,
+            Self::InstallPlugin { .. }
+            | Self::UninstallPlugin { .. }
+            | Self::ReactivatePlugin { .. } => 5,
             Self::BeginLogin { .. }
             | Self::CancelLogin { .. }
             | Self::SubmitLoginCode { .. }
-            | Self::InstallProvider { .. }
             | Self::ApplyProviderAuth { .. }
             | Self::FinalizeProviderAuthCandidate { .. } => 3,
             Self::Reconcile { .. }
@@ -676,8 +685,9 @@ pub enum MachineEvent {
         workspace_revision: Option<String>,
         observed_at_ms: i64,
     },
-    ProviderInventory {
-        providers: Vec<ProviderInventory>,
+    PluginInventory {
+        #[serde(alias = "providers")]
+        plugins: Vec<PluginInventory>,
         observed_at_ms: i64,
     },
     ProviderAuthReceipt {
@@ -911,7 +921,7 @@ mod tests {
             challenge_signature: None,
             encryption_public_key: None,
             components: Vec::new(),
-            providers: Vec::new(),
+            plugins: Vec::new(),
             provider_contracts: None,
             workspaces: Vec::new(),
             workspace_revision: None,
@@ -983,7 +993,7 @@ mod tests {
                 challenge_signature: None,
                 encryption_public_key: None,
                 components: Vec::new(),
-                providers: Vec::new(),
+                plugins: Vec::new(),
                 provider_contracts: None,
                 workspaces: Vec::new(),
                 workspace_revision: None,

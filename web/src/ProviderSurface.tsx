@@ -30,7 +30,7 @@ import {
   transitionProvider,
   type UiAsset,
   type UiNode,
-} from "../../packages/provider-ui-sdk/src/index.ts";
+} from "../../components/provider-ui/src/index.ts";
 import {
   providerPresentationEntry,
   useProviderCatalog,

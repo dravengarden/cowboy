@@ -5,7 +5,7 @@
 // "" and stay readable plaintext.
 
 // This is a data snapshot of Zed 1.13.0's built-in `first_line_pattern`
-// matchers. Keep the revision tied to zed-adapter/src/main.rs and update this
+// matchers. Keep the revision tied to plugins/zed/adapter/src/main.rs and update this
 // table whenever the pinned Zed revision changes. The entries are in Zed's
 // built-in registration order; Zed evaluates the registry in reverse order,
 // so languageFromFirstLine does the same below.

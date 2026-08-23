@@ -1,9 +1,9 @@
 import { useSyncExternalStore } from "react";
-import { type GalleryImage, ImageLightbox } from "./_shell";
+import { type GalleryImage, ImageLightbox } from "./components/app-shell";
 import type { Attachment } from "./attachments";
 
 // Fullscreen preview for a staged/queued attachment. Thin wrapper over the SHARED
-// `_shell` ImageLightbox (zoom / pan / swipe-to-dismiss / arrow nav) so the
+// app-shell ImageLightbox (zoom / pan / swipe-to-dismiss / arrow nav) so the
 // composer's attachment preview behaves exactly like a message image — one common
 // image-preview component, not a cowboy-special overlay.
 //

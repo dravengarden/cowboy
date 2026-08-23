@@ -61,9 +61,9 @@ use tokio::sync::{mpsc, watch};
 use tokio_util::io::ReaderStream;
 
 #[derive(Clone)]
-struct ProviderUninstallPlan {
+struct PluginUninstallPlan {
     machine_id: String,
-    provider_id: String,
+    plugin_id: String,
     generation_digest: String,
     session_ids: Vec<String>,
     active_session_ids: Vec<String>,
@@ -72,14 +72,13 @@ struct ProviderUninstallPlan {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ProviderFenceState {
+enum PluginFenceState {
     Installing,
     Uninstalling,
     Uninstalled,
 }
 
-type ProviderSessionFences =
-    Arc<parking_lot::RwLock<HashMap<(String, String), ProviderFenceState>>>;
+type PluginLifecycleFences = Arc<parking_lot::RwLock<HashMap<(String, String), PluginFenceState>>>;
 
 const fn provider_session_has_active_turn(status: crate::agent_model::Status) -> bool {
     matches!(status, crate::agent_model::Status::Busy)
@@ -177,11 +176,12 @@ struct AppState {
     runtime_health: Arc<RuntimeHealth>,
     runtime_router: Arc<RuntimeRouter>,
     machine_control: Arc<MachineControl>,
+    plugin_catalog: Arc<crate::plugin_catalog::PluginCatalog>,
     provider_catalog: Arc<crate::provider_catalog::ProviderCatalog>,
     provider_auth: Arc<crate::provider_service::ProviderAuthService>,
     provider_auth_executors: parking_lot::Mutex<HashMap<String, ProviderAuthExecutor>>,
-    provider_uninstall_plans: parking_lot::Mutex<HashMap<String, ProviderUninstallPlan>>,
-    provider_session_fences: ProviderSessionFences,
+    plugin_uninstall_plans: parking_lot::Mutex<HashMap<String, PluginUninstallPlan>>,
+    plugin_lifecycle_fences: PluginLifecycleFences,
     desired_machine_components: Arc<Vec<crate::machine_protocol::DesiredComponent>>,
     web_root: PathBuf,
     usage: UsageService,
@@ -259,9 +259,13 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             .map_err(anyhow::Error::msg)
             .context("opening code content cache")?;
     let web_push = WebPushService::open(&args.data_dir).context("opening Web Push service")?;
+    let plugin_catalog = Arc::new(crate::plugin_catalog::PluginCatalog::open(
+        &args.data_dir,
+        args.plugin_catalog_dir.clone(),
+    )?);
     let provider_catalog = Arc::new(crate::provider_catalog::ProviderCatalog::open(
         &args.data_dir,
-        args.provider_catalog_dir.clone(),
+        Arc::clone(&plugin_catalog),
     )?);
     let provider_auth = Arc::new(crate::provider_service::ProviderAuthService::open(
         &args.data_dir,
@@ -607,20 +611,20 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // agent here, off the lock. Wired before any client connects.
     let (dispatch_tx, dispatch_rx) = mpsc::channel::<DispatchReq>(1_024);
     hub.set_dispatch_tx(dispatch_tx);
-    let provider_session_fences: ProviderSessionFences =
+    let plugin_lifecycle_fences: PluginLifecycleFences =
         Arc::new(parking_lot::RwLock::new(HashMap::new()));
     runtime_health.set_dispatcher(true);
     let dispatcher_health = Arc::clone(&runtime_health);
     let dispatcher_hub = hub.clone();
     let dispatcher_supervisor = Arc::clone(&supervisor);
-    let dispatcher_provider_fences = Arc::clone(&provider_session_fences);
+    let dispatcher_plugin_fences = Arc::clone(&plugin_lifecycle_fences);
     let dispatcher_shutdown = shutdown_rx.clone();
     let dispatcher_exit_state = dispatcher_shutdown.clone();
     let mut dispatcher_task = tokio::spawn(async move {
         run_dispatcher(
             dispatcher_hub,
             dispatcher_supervisor,
-            dispatcher_provider_fences,
+            dispatcher_plugin_fences,
             dispatch_rx,
             dispatcher_shutdown,
         )
@@ -714,11 +718,12 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             runtime_health,
             runtime_router,
             machine_control: Arc::new(MachineControl::default()),
+            plugin_catalog,
             provider_catalog,
             provider_auth,
             provider_auth_executors: parking_lot::Mutex::new(HashMap::new()),
-            provider_uninstall_plans: parking_lot::Mutex::new(HashMap::new()),
-            provider_session_fences,
+            plugin_uninstall_plans: parking_lot::Mutex::new(HashMap::new()),
+            plugin_lifecycle_fences,
             desired_machine_components: Arc::new(desired_machine_components),
             web_root: args.web_root,
             usage,
@@ -1517,7 +1522,7 @@ fn force_cancel_with_watchdog(state: &AppState, session_id: &str) -> Result<(), 
 async fn run_dispatcher(
     hub: Hub,
     supervisor: Arc<Supervisor>,
-    provider_session_fences: ProviderSessionFences,
+    plugin_lifecycle_fences: PluginLifecycleFences,
     mut rx: mpsc::Receiver<DispatchReq>,
     mut shutdown: watch::Receiver<bool>,
 ) {
@@ -1539,8 +1544,8 @@ async fn run_dispatcher(
             content,
             cmid,
         } = req;
-        if provider_fence_state_for_session(&hub, &provider_session_fences, &session_id)
-            .is_some_and(|state| state != ProviderFenceState::Installing)
+        if plugin_fence_state_for_session(&hub, &plugin_lifecycle_fences, &session_id)
+            .is_some_and(|state| state != PluginFenceState::Installing)
         {
             hub.requeue_prompt(&session_id, text, content, cmid);
             continue;
@@ -1567,11 +1572,11 @@ async fn run_dispatcher(
     tracing::info!("dispatcher shutting down (channel closed)");
 }
 
-fn provider_fence_state_for_session(
+fn plugin_fence_state_for_session(
     hub: &Hub,
-    fences: &ProviderSessionFences,
+    fences: &PluginLifecycleFences,
     session_id: &str,
-) -> Option<ProviderFenceState> {
+) -> Option<PluginFenceState> {
     let key = provider_fence_key_for_session(hub, session_id)?;
     fences.read().get(&key).copied()
 }
@@ -1621,6 +1626,7 @@ struct ProductAuthState {
     runtime_health: Option<Arc<RuntimeHealth>>,
     persistence_health: Option<Arc<PersistenceHealth>>,
     runtime_router: Option<Arc<RuntimeRouter>>,
+    plugin_catalog: Option<Arc<crate::plugin_catalog::PluginCatalog>>,
     provider_catalog: Option<Arc<crate::provider_catalog::ProviderCatalog>>,
     passkeys: Arc<crate::passkey::PasskeyCeremonies>,
     setup: Arc<crate::admin::AdminSetupState>,
@@ -1750,6 +1756,7 @@ fn product_auth_router(state: ProductAuthState) -> Router {
             get(api_admin_session_limits).put(api_admin_session_limits_put),
         )
         .route("/api/admin/providers", get(api_admin_providers))
+        .route("/api/admin/plugins", get(api_admin_plugins))
         .route("/api/admin/passkeys", get(api_admin_list_passkeys))
         .route(
             "/api/admin/passkeys/register/options",
@@ -1772,6 +1779,10 @@ fn product_auth_router(state: ProductAuthState) -> Router {
         .route(
             "/api/admin/providers/refresh",
             post(api_admin_providers_refresh),
+        )
+        .route(
+            "/api/admin/plugins/refresh",
+            post(api_admin_plugins_refresh),
         )
         .with_state(state)
 }
@@ -2258,6 +2269,49 @@ async fn api_admin_providers(
     .into_response()
 }
 
+async fn api_admin_plugins(State(state): State<ProductAuthState>, headers: HeaderMap) -> Response {
+    if let Err(status) = require_admin(&state, &headers, crate::admin::AdminRole::Viewer) {
+        return status.into_response();
+    }
+    let Some(catalog) = state.plugin_catalog.as_ref() else {
+        return Json(serde_json::json!({
+            "plugins": [],
+            "catalog_root": serde_json::Value::Null,
+        }))
+        .into_response();
+    };
+    Json(serde_json::json!({
+        "plugins": catalog.entries(),
+        "catalog_root": catalog.catalog_root(),
+    }))
+    .into_response()
+}
+
+async fn api_admin_plugins_refresh(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    let peer = peer_addr(peer);
+    if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
+        return rejected;
+    }
+    if let Err(status) = require_admin(&state, &headers, crate::admin::AdminRole::Operator) {
+        return status.into_response();
+    }
+    let Some(catalog) = state.plugin_catalog.as_ref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "plugin catalog unavailable",
+        )
+            .into_response();
+    };
+    match catalog.refresh_external() {
+        Ok(count) => Json(serde_json::json!({ "external_releases": count })).into_response(),
+        Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    }
+}
+
 async fn api_admin_providers_refresh(
     State(state): State<ProductAuthState>,
     peer: ConnectInfo<SocketAddr>,
@@ -2690,6 +2744,7 @@ enum RouteAuth {
 
 fn classify_route(method: &Method, path: &str) -> RouteAuth {
     if matches!(path, "/healthz" | "/version")
+        || path.starts_with("/plugin-artifacts/")
         || path.starts_with("/provider-artifacts/")
         || !path.starts_with("/api/") && path != "/ws" && path != "/metrics"
     {
@@ -2739,6 +2794,7 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
             | "/api/usage/logs"
             | "/api/usage/deepseek/activity"
             | "/api/workspaces"
+            | "/api/plugins"
             | "/api/providers"
             | "/api/machines"
             | "/api/observability/batches"
@@ -2754,7 +2810,7 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
         return RouteAuth::Product;
     }
     if path.starts_with("/api/machines/")
-        && (path.ends_with("/events") || path.ends_with("/providers"))
+        && (path.ends_with("/events") || path.ends_with("/plugins") || path.ends_with("/providers"))
         && method == Method::GET
     {
         return RouteAuth::Product;
@@ -2775,6 +2831,12 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
     }
     if path.starts_with("/api/machines/") && path.contains("/providers/") {
         return RouteAuth::ProductOrAdminOperator;
+    }
+    if path.starts_with("/api/machines/") && path.contains("/plugins/") {
+        return RouteAuth::ProductOrAdminOperator;
+    }
+    if path == "/api/plugins/catalog/refresh" {
+        return RouteAuth::AdminOperator;
     }
     if path == "/api/providers/catalog/refresh" {
         return RouteAuth::AdminOperator;
@@ -4058,6 +4120,7 @@ async fn serve_axum(
         runtime_health: Some(state.runtime_health.clone()),
         persistence_health: state.persistence_health.clone(),
         runtime_router: Some(state.runtime_router.clone()),
+        plugin_catalog: Some(state.plugin_catalog.clone()),
         provider_catalog: Some(state.provider_catalog.clone()),
         passkeys: Arc::new(crate::passkey::PasskeyCeremonies::default()),
         setup,
@@ -4099,6 +4162,11 @@ async fn serve_axum(
             put(api_web_push_subscribe).delete(api_web_push_unsubscribe),
         )
         .route("/api/providers", get(api_providers))
+        .route("/api/plugins", get(api_plugins))
+        .route(
+            "/api/plugins/catalog/refresh",
+            post(api_plugin_catalog_refresh),
+        )
         .route(
             "/api/providers/catalog/refresh",
             post(api_provider_catalog_refresh),
@@ -4123,18 +4191,36 @@ async fn serve_axum(
             post(api_machine_create_enrollment).delete(api_machine_cancel_enrollment),
         )
         .route("/api/machines/{id}/events", get(api_machine_events))
-        .route("/api/machines/{id}/providers", get(api_machine_providers))
+        // Protocol-v4/web compatibility adapter. Delete after every supported
+        // client consumes protocol-v5 Plugin inventory from `/plugins`.
+        .route(
+            "/api/machines/{id}/providers",
+            get(api_machine_provider_inventory_compat),
+        )
+        .route("/api/machines/{id}/plugins", get(api_machine_plugins))
         .route(
             "/api/machines/{id}/providers/{provider_id}",
-            post(api_machine_provider_install),
+            post(api_machine_plugin_install),
+        )
+        .route(
+            "/api/machines/{id}/plugins/{provider_id}",
+            post(api_machine_plugin_install),
         )
         .route(
             "/api/machines/{id}/providers/{provider_id}/uninstall-plan",
-            post(api_machine_provider_uninstall_plan),
+            post(api_machine_plugin_uninstall_plan),
+        )
+        .route(
+            "/api/machines/{id}/plugins/{provider_id}/uninstall-plan",
+            post(api_machine_plugin_uninstall_plan),
         )
         .route(
             "/api/machines/{id}/providers/{provider_id}/uninstall",
-            post(api_machine_provider_uninstall),
+            post(api_machine_plugin_uninstall),
+        )
+        .route(
+            "/api/machines/{id}/plugins/{provider_id}/uninstall",
+            post(api_machine_plugin_uninstall),
         )
         .route("/api/machines/{id}/refresh", post(api_machine_refresh))
         .route(
@@ -4208,8 +4294,14 @@ async fn serve_axum(
         .route("/api/history/{id}", get(api_history))
         .route("/api/artifacts/{name}", get(api_artifact))
         .route(
+            "/plugin-artifacts/{digest}/{name}",
+            get(plugin_release_artifact),
+        )
+        // Published URL compatibility for releases created before the Plugin
+        // Catalog cutover. Delete after those immutable URLs age out.
+        .route(
             "/provider-artifacts/{digest}/{name}",
-            get(provider_release_artifact),
+            get(plugin_release_artifact),
         )
         .route("/ws", any(ws_upgrade))
         // Everything else: the separately deployed SPA, with index.html
@@ -5885,23 +5977,24 @@ async fn connected_provider_authentication_executors(
         .into_iter()
         .filter(|machine| !machine.revoked && connected.contains(&machine.id))
     {
-        let Ok(providers) = serde_json::from_value::<Vec<crate::machine_protocol::ProviderInventory>>(
+        let Ok(providers) = serde_json::from_value::<Vec<crate::machine_protocol::PluginInventory>>(
             machine
                 .inventory
-                .get("providers")
+                .get("plugins")
+                .or_else(|| machine.inventory.get("providers"))
                 .cloned()
                 .unwrap_or_else(|| serde_json::json!([])),
         ) else {
             continue;
         };
         for installed in providers.into_iter().filter(|provider| {
-            provider.state == crate::machine_protocol::ProviderInstallationState::Active
+            provider.state == crate::machine_protocol::PluginInstallationState::Active
         }) {
             if state
                 .provider_catalog
                 .resolve(
-                    &installed.provider_id,
-                    Some(&installed.provider_version),
+                    &installed.plugin_id,
+                    Some(&installed.plugin_version),
                     Some(&installed.generation_digest),
                 )
                 .is_err()
@@ -5909,8 +6002,8 @@ async fn connected_provider_authentication_executors(
                 continue;
             }
             executors.insert(ProviderAuthenticationExecutorIdentity {
-                provider_id: installed.provider_id,
-                provider_version: installed.provider_version,
+                provider_id: installed.plugin_id,
+                provider_version: installed.plugin_version,
                 generation_digest: installed.generation_digest,
             });
         }
@@ -5929,6 +6022,25 @@ async fn api_providers(State(state): State<Arc<AppState>>) -> Response {
     .into_response()
 }
 
+async fn api_plugins(State(state): State<Arc<AppState>>) -> Response {
+    let authentication_executors = connected_provider_authentication_executors(&state).await;
+    Json(serde_json::json!({
+        "component_release": crate::plugin::active_component_release(),
+        "plugins": state.plugin_catalog.entries(),
+        "providers": state.provider_catalog.entries(),
+        "authentications": state.provider_auth.statuses(),
+        "authentication_executors": authentication_executors,
+    }))
+    .into_response()
+}
+
+async fn api_plugin_catalog_refresh(State(state): State<Arc<AppState>>) -> Response {
+    match state.plugin_catalog.refresh_external() {
+        Ok(count) => Json(serde_json::json!({ "external_releases": count })).into_response(),
+        Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    }
+}
+
 async fn api_provider_catalog_refresh(State(state): State<Arc<AppState>>) -> Response {
     match state.provider_catalog.refresh_external() {
         Ok(count) => Json(serde_json::json!({ "external_releases": count })).into_response(),
@@ -5936,7 +6048,7 @@ async fn api_provider_catalog_refresh(State(state): State<Arc<AppState>>) -> Res
     }
 }
 
-async fn api_machine_providers(
+async fn api_machine_plugins(
     State(state): State<Arc<AppState>>,
     Path(machine_id): Path<String>,
 ) -> Response {
@@ -5957,7 +6069,8 @@ async fn api_machine_providers(
                     Json(
                         machine
                             .inventory
-                            .get("providers")
+                            .get("plugins")
+                            .or_else(|| machine.inventory.get("providers"))
                             .cloned()
                             .unwrap_or_else(|| serde_json::json!([])),
                     )
@@ -5968,18 +6081,71 @@ async fn api_machine_providers(
     }
 }
 
+async fn api_machine_provider_inventory_compat(
+    State(state): State<Arc<AppState>>,
+    Path(machine_id): Path<String>,
+) -> Response {
+    let Some(store) = state.store.as_ref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "machine registry unavailable",
+        )
+            .into_response();
+    };
+    match store.list_machines().await {
+        Ok(machines) => {
+            let Some(machine) = machines
+                .into_iter()
+                .find(|machine| machine.id == machine_id && !machine.revoked)
+            else {
+                return (StatusCode::NOT_FOUND, "unknown or revoked Machine").into_response();
+            };
+            let plugins = machine
+                .inventory
+                .get("plugins")
+                .or_else(|| machine.inventory.get("providers"))
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let providers = plugins
+                .into_iter()
+                .filter_map(|mut plugin| {
+                    let object = plugin.as_object_mut()?;
+                    if object
+                        .get("plugin_kind")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|kind| kind != "agent_provider")
+                    {
+                        return None;
+                    }
+                    if let Some(id) = object.remove("plugin_id") {
+                        object.insert("provider_id".to_owned(), id);
+                    }
+                    if let Some(version) = object.remove("plugin_version") {
+                        object.insert("provider_version".to_owned(), version);
+                    }
+                    object.remove("plugin_kind");
+                    Some(plugin)
+                })
+                .collect::<Vec<_>>();
+            Json(providers).into_response()
+        }
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
 #[derive(Debug, Deserialize)]
-struct ProviderInstallRequest {
+struct PluginInstallRequest {
     #[serde(default)]
     version: Option<String>,
     #[serde(default)]
     digest: Option<String>,
 }
 
-async fn provider_install_compatibility(
+async fn agent_plugin_install_compatibility(
     state: &AppState,
     machine_id: &str,
-    desired: &crate::machine_protocol::DesiredProvider,
+    desired: &crate::machine_protocol::DesiredPlugin,
 ) -> Result<Option<cowboy_provider_sdk::ProviderCompatibilityProblem>, String> {
     let store = state
         .store
@@ -6018,11 +6184,18 @@ async fn provider_install_compatibility(
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(&desired.package_base64)
         .map_err(|error| format!("Catalog Provider package is invalid: {error}"))?;
-    let package = desired
+    let plugin_package = desired
         .release
         .validate_bytes(&bytes)
-        .map_err(|error| format!("Catalog Provider release is invalid: {error}"))?;
-    Ok(contracts.compatibility_problem(&package, &desired.release, &target))
+        .map_err(|error| format!("Catalog Plugin release is invalid: {error}"))?;
+    let package = plugin_package
+        .agent_provider()
+        .ok_or_else(|| "Plugin is not an Agent Provider".to_owned())?;
+    let binding = desired
+        .release
+        .agent_provider_binding(&plugin_package)
+        .map_err(|error| format!("Agent Plugin binding is invalid: {error}"))?;
+    Ok(contracts.compatibility_problem(package, &binding, &target))
 }
 
 fn provider_compatibility_response(
@@ -6039,12 +6212,12 @@ fn provider_compatibility_response(
         .into_response()
 }
 
-async fn api_machine_provider_install(
+async fn api_machine_plugin_install(
     State(state): State<Arc<AppState>>,
     Path((machine_id, provider_id)): Path<(String, String)>,
-    Json(request): Json<ProviderInstallRequest>,
+    Json(request): Json<PluginInstallRequest>,
 ) -> Response {
-    let desired = match state.provider_catalog.resolve(
+    let desired = match state.plugin_catalog.resolve(
         &provider_id,
         request.version.as_deref(),
         request.digest.as_deref(),
@@ -6052,16 +6225,20 @@ async fn api_machine_provider_install(
         Ok(desired) => desired,
         Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
     };
-    match provider_install_compatibility(&state, &machine_id, &desired).await {
-        Ok(None) => {}
-        Ok(Some(problem)) => return provider_compatibility_response(problem),
-        Err(error) => return (StatusCode::CONFLICT, error).into_response(),
+    let is_agent_plugin =
+        desired.release.plugin_kind == cowboy_plugin_sdk::PluginKind::AgentProvider;
+    if is_agent_plugin {
+        match agent_plugin_install_compatibility(&state, &machine_id, &desired).await {
+            Ok(None) => {}
+            Ok(Some(problem)) => return provider_compatibility_response(problem),
+            Err(error) => return (StatusCode::CONFLICT, error).into_response(),
+        }
     }
     let fence = (machine_id.clone(), provider_id.clone());
     let previous_fence = {
-        let mut fences = state.provider_session_fences.write();
+        let mut fences = state.plugin_lifecycle_fences.write();
         match fences.get(&fence).copied() {
-            Some(ProviderFenceState::Installing | ProviderFenceState::Uninstalling) => {
+            Some(PluginFenceState::Installing | PluginFenceState::Uninstalling) => {
                 return (
                     StatusCode::CONFLICT,
                     "another Provider lifecycle operation is already in progress",
@@ -6069,7 +6246,7 @@ async fn api_machine_provider_install(
                     .into_response();
             }
             previous => {
-                fences.insert(fence.clone(), ProviderFenceState::Installing);
+                fences.insert(fence.clone(), PluginFenceState::Installing);
                 previous
             }
         }
@@ -6080,16 +6257,18 @@ async fn api_machine_provider_install(
     // old package cannot materialize the new authentication contract may
     // already hold that exact sealed replica; retrying the pre-sync would
     // deadlock the upgrade before the compatible package can be activated.
-    let authentication = state.provider_auth.status(&provider_id);
-    let installed = current_machine_provider(&state, &machine_id, &provider_id)
+    let authentication = is_agent_plugin
+        .then(|| state.provider_auth.status(&provider_id))
+        .flatten();
+    let installed = current_machine_plugin(&state, &machine_id, &provider_id)
         .await
         .ok();
     if provider_auth_sync_required_before_install(authentication.as_ref(), installed.as_ref())
         && let Err(error) = sync_provider_auth_to_machine(&state, &machine_id, &provider_id).await
     {
-        let mut fences = state.provider_session_fences.write();
-        if previous_fence == Some(ProviderFenceState::Uninstalled) {
-            fences.insert(fence, ProviderFenceState::Uninstalled);
+        let mut fences = state.plugin_lifecycle_fences.write();
+        if previous_fence == Some(PluginFenceState::Uninstalled) {
+            fences.insert(fence, PluginFenceState::Uninstalled);
         } else {
             fences.remove(&fence);
         }
@@ -6100,18 +6279,18 @@ async fn api_machine_provider_install(
             .into_response();
     }
     let request_id = machine_request_id("provider-install");
-    let command = crate::machine_protocol::MachineCommand::InstallProvider {
+    let command = crate::machine_protocol::MachineCommand::InstallPlugin {
         request_id: request_id.clone(),
-        provider: Box::new(desired),
+        plugin: Box::new(desired),
     };
     if let Err(error) = state
         .machine_control
         .command_request(&machine_id, request_id, command)
         .await
     {
-        let mut fences = state.provider_session_fences.write();
-        if previous_fence == Some(ProviderFenceState::Uninstalled) {
-            fences.insert(fence, ProviderFenceState::Uninstalled);
+        let mut fences = state.plugin_lifecycle_fences.write();
+        if previous_fence == Some(PluginFenceState::Uninstalled) {
+            fences.insert(fence, PluginFenceState::Uninstalled);
         } else {
             fences.remove(&fence);
         }
@@ -6120,12 +6299,12 @@ async fn api_machine_provider_install(
     // Re-read after activation to close a concurrent refresh/logout window. A
     // failure leaves a valid installed generation unschedulable until normal
     // reconciliation catches up; it never launches with stale credentials.
-    let auth_sync = if state.provider_auth.status(&provider_id).is_some() {
+    let auth_sync = if is_agent_plugin && state.provider_auth.status(&provider_id).is_some() {
         sync_provider_auth_to_machine(&state, &machine_id, &provider_id).await
     } else {
         Ok(())
     };
-    state.provider_session_fences.write().remove(&fence);
+    state.plugin_lifecycle_fences.write().remove(&fence);
     if let Err(error) = auth_sync {
         return (
             StatusCode::CONFLICT,
@@ -6138,7 +6317,7 @@ async fn api_machine_provider_install(
 
 fn provider_auth_sync_required_before_install(
     authentication: Option<&crate::provider_service::ProviderAuthenticationStatus>,
-    installed: Option<&crate::machine_protocol::ProviderInventory>,
+    installed: Option<&crate::machine_protocol::PluginInventory>,
 ) -> bool {
     let Some(authentication) = authentication else {
         return false;
@@ -6149,11 +6328,11 @@ fn provider_auth_sync_required_before_install(
     })
 }
 
-async fn current_machine_provider(
+async fn current_machine_plugin(
     state: &Arc<AppState>,
     machine_id: &str,
     provider_id: &str,
-) -> Result<crate::machine_protocol::ProviderInventory, String> {
+) -> Result<crate::machine_protocol::PluginInventory, String> {
     let store = state
         .store
         .as_ref()
@@ -6165,28 +6344,29 @@ async fn current_machine_provider(
         .into_iter()
         .find(|machine| machine.id == machine_id && !machine.revoked)
         .ok_or_else(|| format!("unknown or revoked Machine {machine_id:?}"))?;
-    let providers: Vec<crate::machine_protocol::ProviderInventory> = machine
+    let providers: Vec<crate::machine_protocol::PluginInventory> = machine
         .inventory
-        .get("providers")
+        .get("plugins")
+        .or_else(|| machine.inventory.get("providers"))
         .cloned()
         .and_then(|value| serde_json::from_value(value).ok())
         .unwrap_or_default();
     providers
         .into_iter()
         .find(|provider| {
-            provider.provider_id == provider_id
-                && provider.state == crate::machine_protocol::ProviderInstallationState::Active
+            provider.plugin_id == provider_id
+                && provider.state == crate::machine_protocol::PluginInstallationState::Active
         })
         .ok_or_else(|| {
             format!("Provider {provider_id:?} is not installed on Machine {machine_id:?}")
         })
 }
 
-async fn api_machine_provider_uninstall_plan(
+async fn api_machine_plugin_uninstall_plan(
     State(state): State<Arc<AppState>>,
     Path((machine_id, provider_id)): Path<(String, String)>,
 ) -> Response {
-    let installed = match current_machine_provider(&state, &machine_id, &provider_id).await {
+    let installed = match current_machine_plugin(&state, &machine_id, &provider_id).await {
         Ok(installed) => installed,
         Err(error) => return (StatusCode::CONFLICT, error).into_response(),
     };
@@ -6213,14 +6393,14 @@ async fn api_machine_provider_uninstall_plan(
         }
     };
     state
-        .provider_uninstall_plans
+        .plugin_uninstall_plans
         .lock()
         .retain(|_, plan| plan.expires_at_ms >= timestamp);
-    state.provider_uninstall_plans.lock().insert(
+    state.plugin_uninstall_plans.lock().insert(
         plan_id.clone(),
-        ProviderUninstallPlan {
+        PluginUninstallPlan {
             machine_id: machine_id.clone(),
-            provider_id: provider_id.clone(),
+            plugin_id: provider_id.clone(),
             generation_digest: installed.generation_digest.clone(),
             session_ids,
             active_session_ids: active_session_ids.clone(),
@@ -6231,8 +6411,8 @@ async fn api_machine_provider_uninstall_plan(
     Json(serde_json::json!({
         "plan_id": plan_id,
         "machine_id": machine_id,
-        "provider_id": provider_id,
-        "provider_version": installed.provider_version,
+        "plugin_id": provider_id,
+        "plugin_version": installed.plugin_version,
         "generation_digest": installed.generation_digest,
         "affected_sessions": affected,
         "active_session_ids": active_session_ids,
@@ -6244,15 +6424,15 @@ async fn api_machine_provider_uninstall_plan(
 }
 
 #[derive(Debug, Deserialize)]
-struct ProviderUninstallRequest {
+struct PluginUninstallRequest {
     plan_id: String,
     #[serde(default)]
     confirm_active_sessions: bool,
 }
 
-async fn compensate_provider_uninstall(
+async fn compensate_plugin_uninstall(
     state: &Arc<AppState>,
-    plan: &ProviderUninstallPlan,
+    plan: &PluginUninstallPlan,
     stopped_live_sessions: &[String],
     cause: String,
 ) -> String {
@@ -6262,9 +6442,9 @@ async fn compensate_provider_uninstall(
         .command_request(
             &plan.machine_id,
             request_id.clone(),
-            crate::machine_protocol::MachineCommand::ReactivateProvider {
+            crate::machine_protocol::MachineCommand::ReactivatePlugin {
                 request_id,
-                provider_id: plan.provider_id.clone(),
+                plugin_id: plan.plugin_id.clone(),
                 generation_digest: plan.generation_digest.clone(),
             },
         )
@@ -6290,15 +6470,12 @@ async fn compensate_provider_uninstall(
     )
 }
 
-async fn api_machine_provider_uninstall(
+async fn api_machine_plugin_uninstall(
     State(state): State<Arc<AppState>>,
     Path((machine_id, provider_id)): Path<(String, String)>,
-    Json(request): Json<ProviderUninstallRequest>,
+    Json(request): Json<PluginUninstallRequest>,
 ) -> Response {
-    let plan = state
-        .provider_uninstall_plans
-        .lock()
-        .remove(&request.plan_id);
+    let plan = state.plugin_uninstall_plans.lock().remove(&request.plan_id);
     let Some(plan) = plan else {
         return (
             StatusCode::CONFLICT,
@@ -6307,7 +6484,7 @@ async fn api_machine_provider_uninstall(
             .into_response();
     };
     if plan.machine_id != machine_id
-        || plan.provider_id != provider_id
+        || plan.plugin_id != provider_id
         || plan.expires_at_ms < now_ms()
     {
         return (
@@ -6325,11 +6502,11 @@ async fn api_machine_provider_uninstall(
     }
     let fence = (machine_id.clone(), provider_id.clone());
     let acquired = {
-        let mut fences = state.provider_session_fences.write();
+        let mut fences = state.plugin_lifecycle_fences.write();
         if fences.contains_key(&fence) {
             false
         } else {
-            fences.insert(fence.clone(), ProviderFenceState::Uninstalling);
+            fences.insert(fence.clone(), PluginFenceState::Uninstalling);
             true
         }
     };
@@ -6341,7 +6518,7 @@ async fn api_machine_provider_uninstall(
             .into_response();
     }
     let result = async {
-        let current = current_machine_provider(&state, &machine_id, &provider_id).await?;
+        let current = current_machine_plugin(&state, &machine_id, &provider_id).await?;
         if current.generation_digest != plan.generation_digest {
             return Err("Provider generation changed; refresh the uninstall plan".to_owned());
         }
@@ -6379,15 +6556,15 @@ async fn api_machine_provider_uninstall(
             .command_request(
                 &machine_id,
                 request_id.clone(),
-                crate::machine_protocol::MachineCommand::UninstallProvider {
+                crate::machine_protocol::MachineCommand::UninstallPlugin {
                     request_id,
-                    provider_id: provider_id.clone(),
+                    plugin_id: provider_id.clone(),
                     generation_digest: plan.generation_digest.clone(),
                 },
             )
             .await
         {
-            return Err(compensate_provider_uninstall(
+            return Err(compensate_plugin_uninstall(
                 &state,
                 &plan,
                 &stopped_live_sessions,
@@ -6403,7 +6580,7 @@ async fn api_machine_provider_uninstall(
             .soft_delete_sessions_until(&plan.session_ids, plan.purge_after_ms)
             .await
         {
-            return Err(compensate_provider_uninstall(
+            return Err(compensate_plugin_uninstall(
                 &state,
                 &plan,
                 &stopped_live_sessions,
@@ -6420,9 +6597,9 @@ async fn api_machine_provider_uninstall(
     match result {
         Ok(()) => {
             state
-                .provider_session_fences
+                .plugin_lifecycle_fences
                 .write()
-                .insert(fence, ProviderFenceState::Uninstalled);
+                .insert(fence, PluginFenceState::Uninstalled);
             Json(serde_json::json!({
                 "provider_id": provider_id,
                 "machine_id": machine_id,
@@ -6432,7 +6609,7 @@ async fn api_machine_provider_uninstall(
             .into_response()
         }
         Err(error) => {
-            state.provider_session_fences.write().remove(&fence);
+            state.plugin_lifecycle_fences.write().remove(&fence);
             (StatusCode::CONFLICT, error).into_response()
         }
     }
@@ -6461,7 +6638,7 @@ async fn api_provider_auth_commit(
     };
     let package = match state.provider_catalog.package(
         &provider_id,
-        &desired.release.provider_version,
+        &desired.release.plugin_version,
         &desired.release.artifact_digest,
     ) {
         Some(package) => package,
@@ -6613,7 +6790,7 @@ async fn api_provider_auth_start(
     };
     let Some(package) = state.provider_catalog.package(
         &provider_id,
-        &desired.release.provider_version,
+        &desired.release.plugin_version,
         &desired.release.artifact_digest,
     ) else {
         return (StatusCode::CONFLICT, "Catalog package disappeared").into_response();
@@ -6651,10 +6828,10 @@ async fn api_provider_auth_start(
     let candidates = state.machine_control.connected_machine_ids();
     let mut executor = None;
     for machine_id in candidates {
-        if current_machine_provider(&state, &machine_id, &provider_id)
+        if current_machine_plugin(&state, &machine_id, &provider_id)
             .await
             .is_ok_and(|installed| {
-                installed.provider_version == desired.release.provider_version
+                installed.plugin_version == desired.release.plugin_version
                     && installed.generation_digest == desired.release.artifact_digest
             })
         {
@@ -6665,7 +6842,7 @@ async fn api_provider_auth_start(
     let Some(machine_id) = executor else {
         return (
             StatusCode::CONFLICT,
-            "No connected Machine has this exact Provider release installed for temporary authentication",
+            "No connected Machine has this exact Agent Plugin release installed for temporary authentication",
         )
             .into_response();
     };
@@ -6697,7 +6874,7 @@ async fn api_provider_auth_start(
         ProviderAuthExecutor {
             machine_id: machine_id.clone(),
             provider_id: provider_id.clone(),
-            provider_version: desired.release.provider_version,
+            provider_version: desired.release.plugin_version,
             generation_digest: desired.release.artifact_digest,
             auth_contract_fingerprint: package
                 .manifest
@@ -7018,7 +7195,7 @@ async fn accept_service_auth_candidate(
         .provider_catalog
         .package(provider_id, provider_version, generation_digest)
         .ok_or_else(|| {
-            "authentication candidate references an untrusted Provider release".to_owned()
+            "authentication candidate references an untrusted Agent Plugin release".to_owned()
         })?;
     if package.manifest.compatibility.auth_contract_fingerprint != auth_contract_fingerprint {
         return Err("authentication candidate contract fingerprint mismatch".to_owned());
@@ -7305,7 +7482,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     };
     let inventory = serde_json::json!({
         "components": &hello.components,
-        "providers": &hello.providers,
+        "plugins": &hello.plugins,
         "provider_contracts": &hello.provider_contracts,
         "workspaces": &hello.workspaces,
         "workspace_revision": &hello.workspace_revision,
@@ -7371,8 +7548,8 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     );
     state.machine_control.record(
         &hello.machine_id,
-        crate::machine_protocol::MachineEvent::ProviderInventory {
-            providers: hello.providers.clone(),
+        crate::machine_protocol::MachineEvent::PluginInventory {
+            plugins: hello.plugins.clone(),
             observed_at_ms: now_ms(),
         },
     );
@@ -7438,7 +7615,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     let mut current_components = hello.components.clone();
     let mut current_workspaces = hello.workspaces.clone();
     let mut current_workspace_revision = hello.workspace_revision.clone();
-    let mut current_providers = hello.providers.clone();
+    let mut current_providers = hello.plugins.clone();
     let mut revocation_check = tokio::time::interval(std::time::Duration::from_secs(2));
     revocation_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     revocation_check.tick().await;
@@ -7548,22 +7725,22 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
             }
             crate::machine_protocol::MachineFrame::Event {
                 event:
-                    crate::machine_protocol::MachineEvent::ProviderInventory {
-                        providers,
+                    crate::machine_protocol::MachineEvent::PluginInventory {
+                        plugins,
                         observed_at_ms,
                     },
             } => {
-                current_providers = providers;
+                current_providers = plugins;
                 state.machine_control.record(
                     &hello.machine_id,
-                    crate::machine_protocol::MachineEvent::ProviderInventory {
-                        providers: current_providers.clone(),
+                    crate::machine_protocol::MachineEvent::PluginInventory {
+                        plugins: current_providers.clone(),
                         observed_at_ms,
                     },
                 );
                 let inventory = serde_json::json!({
                     "components": &current_components,
-                    "providers": &current_providers,
+                    "plugins": &current_providers,
                     "provider_contracts": &hello.provider_contracts,
                     "workspaces": &current_workspaces,
                     "workspace_revision": &current_workspace_revision,
@@ -7754,8 +7931,8 @@ async fn api_session_reload(
     if state.hub.session_info(&session_id).is_none() {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     }
-    if provider_fence_state_for_session(&state.hub, &state.provider_session_fences, &session_id)
-        .is_some_and(|fence| fence != ProviderFenceState::Installing)
+    if plugin_fence_state_for_session(&state.hub, &state.plugin_lifecycle_fences, &session_id)
+        .is_some_and(|fence| fence != PluginFenceState::Installing)
     {
         return (
             StatusCode::CONFLICT,
@@ -7860,11 +8037,11 @@ async fn api_session_prompt(
     // write guard before it snapshots active turns, so a prompt can never slip
     // between the fence check and the explicit active-turn confirmation.
     let provider_key = provider_fence_key_for_session(&state.hub, &session_id);
-    let provider_prompt_fence = state.provider_session_fences.read();
+    let plugin_prompt_fence = state.plugin_lifecycle_fences.read();
     if provider_key
         .as_ref()
-        .and_then(|key| provider_prompt_fence.get(key))
-        .is_some_and(|fence| *fence != ProviderFenceState::Installing)
+        .and_then(|key| plugin_prompt_fence.get(key))
+        .is_some_and(|fence| *fence != PluginFenceState::Installing)
     {
         return (
             StatusCode::CONFLICT,
@@ -7940,14 +8117,14 @@ struct ResolvedProviderGeneration {
 }
 
 fn resolve_scheduling_auth_generation(
-    installed: &crate::machine_protocol::ProviderInventory,
+    installed: &crate::machine_protocol::PluginInventory,
     authentication_required: bool,
     service_auth: Option<&crate::provider_service::ProviderAuthenticationStatus>,
 ) -> Result<Option<u64>, String> {
     if !authentication_required {
         return Ok(None);
     }
-    let provider_id = &installed.provider_id;
+    let provider_id = &installed.plugin_id;
     let service_auth = service_auth.ok_or_else(|| {
         format!("Provider {provider_id:?} is not authenticated at Cowboy Service scope")
     })?;
@@ -7979,21 +8156,21 @@ fn resolve_scheduling_auth_generation(
 
 fn resolve_provider_generation(
     catalog: &crate::provider_catalog::ProviderCatalog,
-    inventory: &[crate::machine_protocol::ProviderInventory],
+    inventory: &[crate::machine_protocol::PluginInventory],
     provider_id: &str,
     service_auth: Option<&crate::provider_service::ProviderAuthenticationStatus>,
 ) -> Result<ResolvedProviderGeneration, String> {
     let installed = inventory
         .iter()
         .find(|provider| {
-            provider.provider_id == provider_id
-                && provider.state == crate::machine_protocol::ProviderInstallationState::Active
+            provider.plugin_id == provider_id
+                && provider.state == crate::machine_protocol::PluginInstallationState::Active
         })
         .ok_or_else(|| format!("Provider {provider_id:?} is not installed on this Machine"))?;
     let package = catalog
         .package(
             provider_id,
-            &installed.provider_version,
+            &installed.plugin_version,
             &installed.generation_digest,
         )
         .ok_or_else(|| {
@@ -8013,7 +8190,7 @@ fn resolve_provider_generation(
         service_auth,
     )?;
     Ok(ResolvedProviderGeneration {
-        version: installed.provider_version.clone(),
+        version: installed.plugin_version.clone(),
         digest: installed.generation_digest.clone(),
         auth_generation,
         behavior: package.manifest.runtime.behavior,
@@ -8120,7 +8297,7 @@ async fn api_new_session(
             .into_response();
     }
     if state
-        .provider_session_fences
+        .plugin_lifecycle_fences
         .read()
         .contains_key(&(req.machine_id.clone(), req.provider.clone()))
     {
@@ -8181,11 +8358,11 @@ async fn api_new_session(
         }
         let providers = machine
             .inventory
-            .get("providers")
+            .get("plugins")
+            .or_else(|| machine.inventory.get("providers"))
             .cloned()
             .and_then(|value| {
-                serde_json::from_value::<Vec<crate::machine_protocol::ProviderInventory>>(value)
-                    .ok()
+                serde_json::from_value::<Vec<crate::machine_protocol::PluginInventory>>(value).ok()
             })
             .unwrap_or_default();
         let provider_auth = state.provider_auth.status(&req.provider);
@@ -8210,8 +8387,8 @@ async fn api_new_session(
         // lifecycle read guard makes an uninstall snapshot include this new
         // session; the Service auth read guard prevents logout/refresh from
         // changing the generation after readiness was checked.
-        let provider_creation_fence = state.provider_session_fences.read();
-        if provider_creation_fence.contains_key(&(req.machine_id.clone(), req.provider.clone())) {
+        let plugin_creation_fence = state.plugin_lifecycle_fences.read();
+        if plugin_creation_fence.contains_key(&(req.machine_id.clone(), req.provider.clone())) {
             return (
                 StatusCode::CONFLICT,
                 "Provider is changing on the selected Machine",
@@ -8243,7 +8420,7 @@ async fn api_new_session(
                 )
             },
         );
-        drop(provider_creation_fence);
+        drop(plugin_creation_fence);
         match registration {
             Ok(Ok(_)) => {}
             Ok(Err(message)) => return (StatusCode::BAD_REQUEST, message).into_response(),
@@ -8298,16 +8475,16 @@ async fn api_new_session(
                 "prepared Machine workspace for session"
             );
             loop {
-                match provider_fence_state_for_session(
+                match plugin_fence_state_for_session(
                     &prepare_state.hub,
-                    &prepare_state.provider_session_fences,
+                    &prepare_state.plugin_lifecycle_fences,
                     &prepare_session_id,
                 ) {
-                    Some(ProviderFenceState::Uninstalling) => {
+                    Some(PluginFenceState::Uninstalling) => {
                         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                     }
-                    Some(ProviderFenceState::Uninstalled) => return,
-                    Some(ProviderFenceState::Installing) | None => break,
+                    Some(PluginFenceState::Uninstalled) => return,
+                    Some(PluginFenceState::Installing) | None => break,
                 }
             }
             let prepared_session = prepare_state
@@ -8416,13 +8593,14 @@ mod machine_provider_tests {
     };
     use crate::core::SessionOrigin;
 
-    fn installed_auth(generation: u64) -> crate::machine_protocol::ProviderInventory {
-        crate::machine_protocol::ProviderInventory {
-            provider_id: "gemini".to_owned(),
-            provider_version: "1.0.0".to_owned(),
+    fn installed_auth(generation: u64) -> crate::machine_protocol::PluginInventory {
+        crate::machine_protocol::PluginInventory {
+            plugin_id: "gemini".to_owned(),
+            plugin_version: "1.0.0".to_owned(),
+            plugin_kind: cowboy_plugin_sdk::PluginKind::AgentProvider,
             generation_digest: format!("sha256:{}", "1".repeat(64)),
             contract_fingerprint: format!("sha256:{}", "2".repeat(64)),
-            state: crate::machine_protocol::ProviderInstallationState::Active,
+            state: crate::machine_protocol::PluginInstallationState::Active,
             rollback_generation_digest: None,
             active_session_leases: 0,
             auth_generation: Some(generation),
@@ -10599,7 +10777,7 @@ async fn api_artifact(
     }
 }
 
-async fn provider_release_artifact(
+async fn plugin_release_artifact(
     State(state): State<Arc<AppState>>,
     Path((digest, name)): Path<(String, String)>,
 ) -> Response {
@@ -10612,7 +10790,7 @@ async fn provider_release_artifact(
     let file = match tokio::fs::File::open(&path).await {
         Ok(file) => file,
         Err(error) => {
-            tracing::info!(%error, artifact = %path.display(), "Provider artifact is unavailable");
+            tracing::info!(%error, artifact = %path.display(), "Plugin artifact is unavailable");
             return StatusCode::NOT_FOUND.into_response();
         }
     };
@@ -10620,7 +10798,7 @@ async fn provider_release_artifact(
         Ok(metadata) if metadata.is_file() => metadata,
         Ok(_) => return StatusCode::NOT_FOUND.into_response(),
         Err(error) => {
-            tracing::warn!(%error, artifact = %path.display(), "reading Provider artifact metadata failed");
+            tracing::warn!(%error, artifact = %path.display(), "reading Plugin artifact metadata failed");
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
     };
@@ -10637,7 +10815,7 @@ async fn provider_release_artifact(
         .header(header::ETAG, format!("\"sha256:{digest}\""))
         .body(Body::from_stream(ReaderStream::new(file)))
         .unwrap_or_else(|error| {
-            tracing::warn!(%error, "building Provider artifact response failed");
+            tracing::warn!(%error, "building Plugin artifact response failed");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         })
 }
@@ -11285,14 +11463,14 @@ fn handle_command(
         .as_deref()
         .filter(|_| matches!(&cmd, Inbound::Prompt { .. } | Inbound::Submit { .. }))
         .and_then(|sid| provider_fence_key_for_session(&state.hub, sid));
-    let provider_prompt_fence = provider_prompt_key
+    let plugin_prompt_fence = provider_prompt_key
         .as_ref()
-        .map(|_| state.provider_session_fences.read());
+        .map(|_| state.plugin_lifecycle_fences.read());
     if provider_prompt_key
         .as_ref()
-        .zip(provider_prompt_fence.as_ref())
+        .zip(plugin_prompt_fence.as_ref())
         .and_then(|(key, fences)| fences.get(key))
-        .is_some_and(|fence| *fence != ProviderFenceState::Installing)
+        .is_some_and(|fence| *fence != PluginFenceState::Installing)
     {
         state.hub.broadcast_error(
             session_id_for_err,
@@ -12165,7 +12343,7 @@ mod provider_uninstall_tests {
 mod provider_install_tests {
     use super::provider_auth_sync_required_before_install;
     use crate::machine_protocol::{
-        ProviderInstallationState, ProviderInventory, ProviderMaterializationState,
+        PluginInstallationState, PluginInventory, ProviderMaterializationState,
         ProviderReplicaState,
     };
     use crate::provider_service::{
@@ -12190,13 +12368,14 @@ mod provider_install_tests {
     fn installed(
         auth_generation: Option<u64>,
         replica_state: ProviderReplicaState,
-    ) -> ProviderInventory {
-        ProviderInventory {
-            provider_id: "codex".to_owned(),
-            provider_version: "1.1.1".to_owned(),
+    ) -> PluginInventory {
+        PluginInventory {
+            plugin_id: "codex".to_owned(),
+            plugin_version: "1.1.1".to_owned(),
+            plugin_kind: cowboy_plugin_sdk::PluginKind::AgentProvider,
             generation_digest: "sha256:old-provider".to_owned(),
             contract_fingerprint: "sha256:old-contract".to_owned(),
-            state: ProviderInstallationState::Active,
+            state: PluginInstallationState::Active,
             rollback_generation_digest: None,
             active_session_leases: 0,
             auth_generation,
@@ -12353,6 +12532,7 @@ mod product_auth_api_tests {
             runtime_health: None,
             persistence_health: None,
             runtime_router: None,
+            plugin_catalog: None,
             provider_catalog: None,
             passkeys: Arc::new(crate::passkey::PasskeyCeremonies::default()),
             setup,

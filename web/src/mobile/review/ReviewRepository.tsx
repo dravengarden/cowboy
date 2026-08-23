@@ -20,7 +20,7 @@ import {
   Typography,
 } from "@mui/material";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { MobileSheetActionGroup } from "../../_shell";
+import { MobileSheetActionGroup } from "../../components/app-shell";
 import { openAppSettings } from "../../appSettings";
 import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
 import { NetworkIconButton } from "../../NetworkActionFeedback";

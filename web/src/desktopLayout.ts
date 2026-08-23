@@ -1,4 +1,4 @@
-import { persisted, useStore } from "./_store/mod.ts";
+import { persisted, useStore } from "./components/state/store/mod.ts";
 
 // Width (px) of the composer column in split mode — persisted, clamped. Global
 // (like the session sidebar width), not per-session.

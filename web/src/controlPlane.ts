@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { persisted } from "./_store/mod.ts";
+import { persisted } from "./components/state/store/mod.ts";
 import { conn, useStoreSelector } from "./store";
 import {
   resolveWorkspaceBinding,
