@@ -5551,6 +5551,7 @@ struct MachineSummary {
     architecture: String,
     status: String,
     local: bool,
+    connected: bool,
     schedulable: bool,
     fingerprint: Option<String>,
     workspaces: Vec<crate::machine_protocol::MachineWorkspace>,
@@ -5673,12 +5674,14 @@ async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
                             })
                             .map(|desired| desired.id.clone())
                             .collect();
-                        let schedulable = state.runtime_router.connected(&machine.id)
+                        let connected = state.runtime_router.connected(&machine.id);
+                        let schedulable = connected
                             && !workspaces.is_empty()
                             && !capacity.draining
                             && active_sessions < capacity.max_sessions;
                         MachineSummary {
                             local,
+                            connected,
                             schedulable,
                             id: machine.id,
                             display_name: machine.display_name,

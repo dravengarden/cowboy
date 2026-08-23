@@ -136,7 +136,11 @@ pub struct MachineHello {
     /// Signed capability inventory used by the Controller to select only
     /// Agent Plugin bindings this exact Machine can decode and activate. An absent
     /// inventory is a legacy Machine and fails closed for install/upgrade.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_provider_contracts"
+    )]
     pub provider_contracts: Option<cowboy_provider_sdk::ProviderContractInventory>,
     /// Explicit launch roots exported by the Machine. Cowboy never sends an
     /// arbitrary controller-side path to a remote host.
@@ -150,6 +154,35 @@ pub struct MachineHello {
     /// session leases.
     #[serde(default)]
     pub capacity: MachineCapacity,
+}
+
+fn deserialize_provider_contracts<'de, D>(
+    deserializer: D,
+) -> Result<Option<cowboy_provider_sdk::ProviderContractInventory>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let Some(mut value) = Option::<serde_json::Value>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    if let Some(object) = value.as_object_mut() {
+        for (legacy, current) in [
+            ("min_release_schema", "min_runtime_binding_schema"),
+            ("max_release_schema", "max_runtime_binding_schema"),
+        ] {
+            if let Some(legacy_value) = object.remove(legacy) {
+                if object.contains_key(current) {
+                    return Err(serde::de::Error::custom(format!(
+                        "duplicate Provider contract field {current}"
+                    )));
+                }
+                object.insert(current.to_owned(), legacy_value);
+            }
+        }
+    }
+    serde_json::from_value(value)
+        .map(Some)
+        .map_err(serde::de::Error::custom)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -973,6 +1006,46 @@ mod tests {
         let mut omitted = hello;
         omitted.provider_contracts = None;
         assert_ne!(proof, challenge_proof_v2("id", "nonce", 42, &omitted));
+    }
+
+    #[test]
+    fn machine_hello_accepts_legacy_provider_contract_inventory() {
+        let hello: MachineHello = serde_json::from_value(serde_json::json!({
+            "machine_id": "hawk",
+            "display_name": "Hawk",
+            "platform": "linux",
+            "arch": "x86_64",
+            "connection_mode": "local_uds",
+            "min_protocol": 3,
+            "max_protocol": 4,
+            "min_runtime_protocol": 1,
+            "max_runtime_protocol": 3,
+            "host_build": "legacy-machine",
+            "provider_contracts": {
+                "provider_sdk_version": "3.1.0",
+                "min_package_schema": 2,
+                "max_package_schema": 2,
+                "min_release_schema": 2,
+                "max_release_schema": 2,
+                "min_ui_schema": 1,
+                "max_ui_schema": 2,
+                "min_host_schema": 1,
+                "max_host_schema": 2,
+                "machine_contract": 4
+            }
+        }))
+        .unwrap();
+        let contracts = hello.provider_contracts.clone().unwrap();
+        assert_eq!(contracts.min_runtime_binding_schema, 2);
+        assert_eq!(contracts.max_runtime_binding_schema, 2);
+
+        let legacy_proof = challenge_proof_v2("id", "nonce", 42, &hello);
+        let mut current = hello;
+        current.provider_contracts = Some(contracts);
+        assert_eq!(
+            legacy_proof,
+            challenge_proof_v2("id", "nonce", 42, &current)
+        );
     }
 
     #[test]
