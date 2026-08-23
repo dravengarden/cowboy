@@ -107,6 +107,7 @@
           ./src/provider_usage_spool.rs
           ./src/provider_catalog.rs
           ./src/runtime_wire.rs
+          ./src/service_identity.rs
           ./src/session_workspace.rs
           ./src/workspace_roots.rs
           ./src/bin/cowboy-machine-install.rs
