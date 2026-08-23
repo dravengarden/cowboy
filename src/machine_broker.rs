@@ -2004,7 +2004,7 @@ async fn handle_peer(broker: Arc<Broker>, stream: UnixStream) -> Result<()> {
                 let _ = worker.tx.send(Frame::Replay {
                     session_id: worker.snapshot.session_id.clone(),
                     worker_epoch: worker.epoch.clone(),
-                    after_runtime_seq: 0,
+                    after_runtime_seq: worker.snapshot.last_runtime_seq,
                 });
             }
             handle_core(Arc::clone(&broker), lease, &mut reader).await?;
@@ -3708,7 +3708,7 @@ mod tests {
             Frame::Replay {
                 session_id,
                 worker_epoch,
-                after_runtime_seq: 0,
+                after_runtime_seq: 1,
             } if session_id == "sess-1" && worker_epoch == "epoch-1"
         ));
         write_frame(&mut worker_writer, &event)
