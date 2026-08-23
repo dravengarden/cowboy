@@ -191,7 +191,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-h+EJdOeJqjKerzWBzTmoD3KT7az0RvWrzpRuoF6WNIE=";
+        hash = "sha256-in7VzJIftgV3zuWRvkcywsBm62K1cDy+JYntrAgdjmw=";
         preBuild = ''
           vendor_util="$(command -v fetch-cargo-vendor-util-v2 || command -v fetch-cargo-vendor-util)"
           if grep -q "https://crates.io/api/v1/crates/" "$vendor_util"; then
@@ -301,7 +301,7 @@
 
       cowboy-zed-adapter = rustPlatform.buildRustPackage {
         pname = "cowboy-zed-adapter";
-        version = "1.1.0";
+        version = "1.1.1";
         src = zed-adapter-src;
         cargoLock = {
           lockFile = ./plugins/zed/adapter/Cargo.lock;
