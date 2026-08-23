@@ -52,8 +52,9 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
 - Web app-shell primitives and the Deno/Vite builder are owned by Cowboy under
   `web/src/components/app-shell` and `nix/`; fresh worktrees must build without
   links to another repository.
-- SQLx migration files are immutable after deployment, including comments and
-  whitespace because their exact bytes are checksummed. Add a new migration;
+- The consolidated PostgreSQL and SQLite SQLx baselines are immutable after
+  deployment, including comments and whitespace because their exact bytes are
+  checksummed. Add a new migration;
   never edit an applied file or alter stored checksum records. If startup
   reports a modified migration, restore its exact historical bytes before
   diagnosing later service symptoms.

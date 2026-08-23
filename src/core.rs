@@ -1226,7 +1226,7 @@ pub enum StoreWrite {
         session_id: String,
         value: serde_json::Value,
     },
-    /// Upsert a session's pending `ScheduleWakeup` (migration 0011) so an armed
+    /// Upsert a session's pending `ScheduleWakeup` so an armed
     /// wakeup survives a daemon restart and still fires.
     UpsertWakeup {
         session_id: String,
@@ -1633,7 +1633,7 @@ impl Hub {
     /// Arm (replace) a session's pending `ScheduleWakeup` — `acp.rs` calls this
     /// when it intercepts the tool. `delay_seconds` is the agent-requested delay
     /// (clamped by the scheduler); the wakeup fires `prompt` as its own turn.
-    /// Also persisted (migration 0011) so it survives a restart.
+    /// Also persisted in the durable baseline so it survives a restart.
     pub fn schedule_wakeup(&self, session_id: &str, delay_seconds: i64, prompt: String) {
         let fire_at_ms = crate::scheduler::fire_at_from_delay(delay_seconds);
         if let Some(tx) = self.inner.scheduler_tx.lock().as_ref() {

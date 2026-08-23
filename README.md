@@ -133,8 +133,8 @@ nix develop
 just check
 ```
 
-Keep deployed SQL migrations immutable; add a new migration instead of editing
-one that has already shipped. Frontend-only changes should use the independent
+Keep each backend's consolidated SQL baseline immutable; add a new migration
+instead of editing one that has already shipped. Frontend-only changes should use the independent
 Web release lane described in [build and deploy](docs/architecture/10-deploy-build.md).
 
 ## Status

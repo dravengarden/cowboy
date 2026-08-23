@@ -2067,6 +2067,43 @@ impl PostgresStorage {
         // already-applied additive migration from a failed candidate release.
         // Known migration checksums are still verified by SQLx.
         migrator.set_ignore_missing(true);
+        let has_ledger: bool =
+            sqlx::query_scalar("SELECT to_regclass('public._sqlx_migrations') IS NOT NULL")
+                .fetch_one(&self.pool)
+                .await
+                .context("checking PostgreSQL migration ledger")?;
+        if has_ledger {
+            let applied = sqlx::query_as::<_, (i64, bool, Vec<u8>)>(
+                "SELECT version, success, checksum FROM _sqlx_migrations ORDER BY version",
+            )
+            .fetch_all(&self.pool)
+            .await
+            .context("reading PostgreSQL migration ledger")?;
+            if crate::migration_compat::needs_baseline_marker(
+                &applied,
+                crate::migration_compat::POSTGRES_BASELINE_VERSION,
+                crate::migration_compat::LEGACY_POSTGRES_MIGRATIONS,
+            )? {
+                let baseline = migrator
+                    .iter()
+                    .find(|migration| {
+                        migration.version == crate::migration_compat::POSTGRES_BASELINE_VERSION
+                    })
+                    .context("embedded PostgreSQL baseline is missing")?;
+                sqlx::query(
+                    r"INSERT INTO _sqlx_migrations
+                       (version, description, success, checksum, execution_time)
+                       VALUES ($1, $2, TRUE, $3, 0)
+                       ON CONFLICT (version) DO NOTHING",
+                )
+                .bind(baseline.version)
+                .bind(baseline.description.as_ref())
+                .bind(baseline.checksum.as_ref())
+                .execute(&self.pool)
+                .await
+                .context("marking consolidated PostgreSQL baseline")?;
+            }
+        }
         migrator
             .run(&self.pool)
             .await
@@ -3273,7 +3310,7 @@ impl PostgresStorage {
         Ok(())
     }
 
-    /// Upsert a session's pending `ScheduleWakeup` (migration 0011).
+    /// Upsert a session's pending `ScheduleWakeup` from the durable baseline.
     ///
     /// # Errors
     /// If the query fails.
@@ -6044,7 +6081,7 @@ impl SessionRow {
             status: status_from_str(&self.status),
             origin: origin_from_str(&self.origin),
             agent_session_id: self.agent_session_id,
-            // Restored from the DB (migration 0010) — a system session stays
+            // Restored from the durable baseline — a system session stays
             // view-only across a daemon restart.
             system: self.system,
             // Transient — the manual pause is in-memory only (not persisted), so a
@@ -7043,6 +7080,46 @@ mod storage_contract_tests {
         );
         drop(store);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "set COWBOY_TEST_POSTGRES_URL to an isolated empty database"]
+    async fn postgres_complete_legacy_ledger_is_marked_without_reapplying_schema() {
+        let url = std::env::var("COWBOY_TEST_POSTGRES_URL")
+            .expect("COWBOY_TEST_POSTGRES_URL must name an isolated empty database");
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-postgres-baseline-compat-{}",
+            std::process::id()
+        ));
+        let store = Store::connect(&url, root.join("artifacts")).await.unwrap();
+        store.migrate().await.unwrap();
+        let StorageBackend::Postgres(storage) = &store.backend else {
+            panic!("expected PostgreSQL backend");
+        };
+        sqlx::query("DELETE FROM _sqlx_migrations WHERE version = $1")
+            .bind(crate::migration_compat::POSTGRES_BASELINE_VERSION)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+        let machines_before: i64 = sqlx::query_scalar("SELECT count(*) FROM machines")
+            .fetch_one(&storage.pool)
+            .await
+            .unwrap();
+
+        store.migrate().await.unwrap();
+
+        let versions: Vec<i64> =
+            sqlx::query_scalar("SELECT version FROM _sqlx_migrations ORDER BY version")
+                .fetch_all(&storage.pool)
+                .await
+                .unwrap();
+        assert_eq!(versions, (1_i64..=34).collect::<Vec<_>>());
+        let machines_after: i64 = sqlx::query_scalar("SELECT count(*) FROM machines")
+            .fetch_one(&storage.pool)
+            .await
+            .unwrap();
+        assert_eq!(machines_after, machines_before);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]

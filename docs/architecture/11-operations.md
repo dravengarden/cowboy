@@ -12,7 +12,7 @@ PostgreSQL. Every controller therefore ignores already-applied migration
 versions newer than its embedded migration set while still verifying every
 known checksum. Before the first release that introduces a new migration, the
 current rollback target must already contain this compatibility behavior. This
-is a deployment bridge, not permission to delete or rewrite migration files.
+is a deployment bridge, not permission to rewrite a published baseline.
 
 Large transformations use expand/contract:
 
@@ -22,14 +22,13 @@ Large transformations use expand/contract:
 4. verify counts and error metrics;
 5. switch reads, then remove the old representation in a later release.
 
-`0012_compact_event_log.sql` predates this rule and demonstrated the failure
+The legacy event-log compaction predates this rule and demonstrated the failure
 mode by blocking one startup for more than ten minutes. Do not repeat it.
 
-PostgreSQL's published migrations remain byte-for-byte immutable. SQLite has a
-separate migration history under `migrations/sqlite/`; never copy a PostgreSQL
-migration into that directory and assume it is portable. Every new storage
-change must update both histories and pass the shared storage contract against
-both backends.
+PostgreSQL and SQLite each have one byte-for-byte immutable consolidated
+baseline. Their SQL remains backend-specific; never copy one baseline to the
+other and assume it is portable. Every new storage change must update both
+histories and pass the shared storage contract against both backends.
 
 ## Backups
 

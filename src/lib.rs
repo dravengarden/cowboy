@@ -116,6 +116,8 @@ mod workspace;
 #[cfg(any(feature = "full", feature = "machine-host", feature = "code-adapter"))]
 mod workspace_roots;
 
+#[cfg(feature = "full")]
+mod migration_compat;
 #[cfg(all(test, feature = "full"))]
 mod migration_policy;
 #[cfg(all(test, feature = "full"))]

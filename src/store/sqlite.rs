@@ -1471,6 +1471,47 @@ impl SqliteStorage {
         // migration contract while retaining checksum validation for every
         // migration known to this binary.
         migrator.set_ignore_missing(true);
+        let has_ledger: bool = sqlx::query_scalar(
+            r"SELECT EXISTS(
+                   SELECT 1 FROM sqlite_master
+                   WHERE type = 'table' AND name = '_sqlx_migrations'
+               )",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .context("checking SQLite migration ledger")?;
+        if has_ledger {
+            let applied = sqlx::query_as::<_, (i64, bool, Vec<u8>)>(
+                "SELECT version, success, checksum FROM _sqlx_migrations ORDER BY version",
+            )
+            .fetch_all(&self.pool)
+            .await
+            .context("reading SQLite migration ledger")?;
+            if crate::migration_compat::needs_baseline_marker(
+                &applied,
+                crate::migration_compat::SQLITE_BASELINE_VERSION,
+                crate::migration_compat::LEGACY_SQLITE_MIGRATIONS,
+            )? {
+                let baseline = migrator
+                    .iter()
+                    .find(|migration| {
+                        migration.version == crate::migration_compat::SQLITE_BASELINE_VERSION
+                    })
+                    .context("embedded SQLite baseline is missing")?;
+                sqlx::query(
+                    r"INSERT INTO _sqlx_migrations
+                       (version, description, success, checksum, execution_time)
+                       VALUES (?1, ?2, TRUE, ?3, 0)
+                       ON CONFLICT (version) DO NOTHING",
+                )
+                .bind(baseline.version)
+                .bind(baseline.description.as_ref())
+                .bind(baseline.checksum.as_ref())
+                .execute(&self.pool)
+                .await
+                .context("marking consolidated SQLite baseline")?;
+            }
+        }
         migrator
             .run(&self.pool)
             .await
@@ -3981,5 +4022,48 @@ impl SqliteStorage {
             .await
             .context("purge SQLite provider usage ledger")?;
         Ok(result.rows_affected())
+    }
+}
+
+#[cfg(test)]
+mod baseline_compatibility_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn complete_legacy_ledger_is_marked_without_reapplying_schema() {
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-sqlite-baseline-compat-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let storage = SqliteStorage::connect("sqlite::memory:", root.join("artifacts"))
+            .await
+            .unwrap();
+        storage.migrate().await.unwrap();
+
+        sqlx::query("DELETE FROM _sqlx_migrations WHERE version = ?1")
+            .bind(crate::migration_compat::SQLITE_BASELINE_VERSION)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+        let machines_before: i64 = sqlx::query_scalar("SELECT count(*) FROM machines")
+            .fetch_one(&storage.pool)
+            .await
+            .unwrap();
+
+        storage.migrate().await.unwrap();
+
+        let versions: Vec<i64> =
+            sqlx::query_scalar("SELECT version FROM _sqlx_migrations ORDER BY version")
+                .fetch_all(&storage.pool)
+                .await
+                .unwrap();
+        assert_eq!(versions, (1_i64..=8).collect::<Vec<_>>());
+        let machines_after: i64 = sqlx::query_scalar("SELECT count(*) FROM machines")
+            .fetch_one(&storage.pool)
+            .await
+            .unwrap();
+        assert_eq!(machines_after, machines_before);
+        let _ = std::fs::remove_dir_all(root);
     }
 }

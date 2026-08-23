@@ -1,3 +1,12 @@
+-- Consolidated SQLite baseline.
+--
+-- Fresh databases execute the former v1-v7 history in one SQLx transaction.
+-- The compatibility ledger rows keep rollback to the immediately preceding
+-- controller generation safe; existing v7 databases are marked at v8 by
+-- the preflight in SqliteStorage::migrate and do not execute this file.
+
+-- Former migration: 0001_baseline.sql
+
 -- SQLite baseline for the complete Cowboy durable-storage contract.
 --
 -- PostgreSQL keeps its immutable incremental history in ../*.sql. SQLite was
@@ -366,3 +375,205 @@ CREATE TABLE provider_usage_producers (
     last_received_at_ms INTEGER NOT NULL DEFAULT (CAST(strftime('%s', 'now') AS INTEGER) * 1000),
     PRIMARY KEY (machine_id, producer_id)
 ) WITHOUT ROWID;
+
+-- Former migration: 0002_xai_provider_actions.sql
+
+CREATE TABLE scheduled_provider_actions_next (
+    provider TEXT PRIMARY KEY CHECK (provider IN ('codex', 'xai')),
+    action TEXT NOT NULL CHECK (action = 'rate_limit_reset'),
+    fire_at_ms INTEGER NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at_ms INTEGER
+);
+
+INSERT INTO scheduled_provider_actions_next
+SELECT provider, action, fire_at_ms, idempotency_key, attempt_count, next_attempt_at_ms
+FROM scheduled_provider_actions;
+
+DROP TABLE scheduled_provider_actions;
+ALTER TABLE scheduled_provider_actions_next RENAME TO scheduled_provider_actions;
+
+CREATE TABLE provider_action_logs_next (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider TEXT NOT NULL CHECK (provider IN ('codex', 'xai')),
+    action TEXT NOT NULL CHECK (action = 'rate_limit_reset'),
+    trigger TEXT NOT NULL CHECK (trigger IN ('manual', 'scheduled')),
+    status TEXT NOT NULL CHECK (
+        status IN ('scheduled', 'started', 'retrying', 'succeeded', 'failed', 'unknown', 'cancelled')
+    ),
+    phase TEXT NOT NULL,
+    message TEXT NOT NULL,
+    credit_id TEXT,
+    idempotency_suffix TEXT,
+    created_at_ms INTEGER NOT NULL
+);
+
+INSERT INTO provider_action_logs_next
+SELECT id, provider, action, trigger, status, phase, message, credit_id,
+       idempotency_suffix, created_at_ms
+FROM provider_action_logs;
+
+DROP TABLE provider_action_logs;
+ALTER TABLE provider_action_logs_next RENAME TO provider_action_logs;
+
+CREATE INDEX provider_action_logs_created_idx
+    ON provider_action_logs(created_at_ms DESC);
+
+-- Former migration: 0003_provider_platform.sql
+
+ALTER TABLE machines ADD COLUMN encryption_public_key TEXT;
+
+ALTER TABLE sessions ADD COLUMN provider_version TEXT NOT NULL DEFAULT '';
+ALTER TABLE sessions ADD COLUMN provider_generation_digest TEXT NOT NULL DEFAULT '';
+ALTER TABLE sessions ADD COLUMN provider_auth_generation INTEGER;
+ALTER TABLE sessions ADD COLUMN provider_behavior TEXT;
+ALTER TABLE sessions ADD COLUMN purge_after_at_ms INTEGER;
+
+CREATE INDEX sessions_provider_generation_idx
+  ON sessions(machine_id, provider, provider_generation_digest)
+  WHERE deleted_at_ms IS NULL;
+
+CREATE INDEX sessions_purge_after_idx
+  ON sessions(purge_after_at_ms)
+  WHERE deleted_at_ms IS NOT NULL AND purge_after_at_ms IS NOT NULL;
+
+-- Former migration: 0004_crash_incident_severity.sql
+
+-- Keep SQLite diagnostics aligned with the PostgreSQL crash policy.
+UPDATE runtime_incidents
+SET severity = 'critical',
+    classification = CASE
+      WHEN lower(summary) LIKE '%did not become ready%'
+        OR lower(summary) LIKE '%exited before readiness%'
+        OR lower(summary) LIKE '%generation launch failed%'
+      THEN 'worker_startup_failure'
+      ELSE classification
+    END,
+    updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
+WHERE severity <> 'critical'
+  AND (
+    classification IN (
+      'runtime_failure',
+      'process_exit',
+      'resource_exhaustion',
+      'worker_startup_failure',
+      'client_render_failure',
+      'client_window_error',
+      'client_unhandled_rejection'
+    )
+    OR (
+      id LIKE 'lifecycle:%'
+      AND classification IN ('protocol_failure', 'transport_failure')
+    )
+    OR lower(summary) LIKE '%did not become ready%'
+    OR lower(summary) LIKE '%exited before readiness%'
+    OR lower(summary) LIKE '%generation launch failed%'
+  );
+
+-- Former migration: 0005_product_users.sql
+
+-- Product users, login sessions, and unused API-token storage.
+-- sessions.owner_user_id is shipped nullable and unread until the stamp PR.
+
+CREATE TABLE users (
+    id TEXT PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE
+        CHECK (
+            username = lower(trim(username))
+            AND length(username) BETWEEN 1 AND 64
+            AND username NOT GLOB '*[^a-z0-9._-]*'
+        ),
+    password_algo TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    created_at_ms INTEGER NOT NULL DEFAULT (CAST(strftime('%s', 'now') AS INTEGER) * 1000),
+    updated_at_ms INTEGER NOT NULL DEFAULT (CAST(strftime('%s', 'now') AS INTEGER) * 1000),
+    disabled_at_ms INTEGER
+);
+
+CREATE TABLE user_sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at_ms INTEGER NOT NULL DEFAULT (CAST(strftime('%s', 'now') AS INTEGER) * 1000),
+    expires_at_ms INTEGER NOT NULL,
+    last_seen_at_ms INTEGER NOT NULL DEFAULT (CAST(strftime('%s', 'now') AS INTEGER) * 1000),
+    user_agent TEXT
+);
+
+CREATE INDEX user_sessions_user_id_idx ON user_sessions(user_id);
+CREATE INDEX user_sessions_expires_idx ON user_sessions(expires_at_ms);
+
+CREATE TABLE user_api_tokens (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    token_prefix TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    created_at_ms INTEGER NOT NULL DEFAULT (CAST(strftime('%s', 'now') AS INTEGER) * 1000),
+    expires_at_ms INTEGER,
+    last_used_at_ms INTEGER,
+    revoked_at_ms INTEGER
+);
+
+ALTER TABLE sessions ADD COLUMN owner_user_id TEXT REFERENCES users(id) ON DELETE SET NULL;
+
+CREATE INDEX sessions_owner_user_id_idx ON sessions(owner_user_id);
+
+-- Former migration: 0006_user_passkeys.sql
+
+-- Discoverable WebAuthn credentials and the product viewing lock clock.
+
+ALTER TABLE users ADD COLUMN passkey_reauth_enabled INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE users ADD COLUMN last_step_up_at_ms INTEGER;
+
+UPDATE users
+SET last_step_up_at_ms = COALESCE(
+    last_step_up_at_ms,
+    updated_at_ms,
+    CAST(strftime('%s', 'now') AS INTEGER) * 1000
+);
+
+CREATE TABLE user_passkeys (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    credential_id TEXT NOT NULL UNIQUE,
+    nickname TEXT NOT NULL
+        CHECK (length(nickname) BETWEEN 1 AND 64),
+    passkey_json TEXT NOT NULL,
+    created_at_ms INTEGER NOT NULL DEFAULT (CAST(strftime('%s', 'now') AS INTEGER) * 1000),
+    last_used_at_ms INTEGER
+);
+
+CREATE INDEX user_passkeys_user_id_idx ON user_passkeys(user_id);
+
+-- Former migration: 0007_admin_passkeys.sql
+
+-- Admin-plane WebAuthn credentials. Distinct from product user_passkeys.
+
+CREATE TABLE admin_passkeys (
+    id TEXT PRIMARY KEY,
+    account TEXT NOT NULL,
+    credential_id TEXT NOT NULL UNIQUE,
+    nickname TEXT NOT NULL
+        CHECK (length(nickname) BETWEEN 1 AND 64),
+    passkey_json TEXT NOT NULL,
+    created_at_ms INTEGER NOT NULL DEFAULT (CAST(strftime('%s', 'now') AS INTEGER) * 1000),
+    last_used_at_ms INTEGER
+);
+
+CREATE INDEX admin_passkeys_account_idx ON admin_passkeys(account);
+
+
+-- Preserve predecessor rollback compatibility for databases first created
+-- from this consolidated baseline. SQLx validates only version and checksum.
+INSERT INTO _sqlx_migrations
+    (version, description, success, checksum, execution_time)
+VALUES
+    (1, 'legacy compatibility', 1, X'37d5d2723cf03d0a97d735b7077481b798c15c331f6d9619f8a2c5516067de6c2d5210d756395bb8a9b4b6c06585daa3', 0),
+    (2, 'legacy compatibility', 1, X'1998bf4bd51b478454c67b88f49c9898ee912c6b0e10c5c0bfc380039c70e2e93c9bf804f2e21ce6b927564c8e5e81ab', 0),
+    (3, 'legacy compatibility', 1, X'95a4bf0af4e3dd9191833437926b53aac86e1135679bd6861e0becea6ba0bdb908b8741953a24ed88ef1ff2599518c4e', 0),
+    (4, 'legacy compatibility', 1, X'6c3c72e4001e5c1c42cd06957a951f7eca965caaaa48b3bcda350498a8bc07d9f90f75348091884791f4972d99a1166d', 0),
+    (5, 'legacy compatibility', 1, X'e3cbea9ed87d7ac30f6526fccec2fba8213bba0916d504e7a9af4d141ca0b39519aa2f7980ad34a1c44aa8b33e3c8ea7', 0),
+    (6, 'legacy compatibility', 1, X'ea85426677156960acea20dd6b52d6d5a166bc2aa3a7a66bda848fef823c1253831b4f105480df42003ef4b5ce0faf1c', 0),
+    (7, 'legacy compatibility', 1, X'015e64f500138d31ae413fa5855efbef9c592ef27c9e5631ff0059193a1e3f3a2355befbb277088635235f9b7b0bfe75', 0)
+ON CONFLICT (version) DO NOTHING;

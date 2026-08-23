@@ -261,10 +261,10 @@ newer envelope before it can enter the durable spool:
 
 1. Build and deploy the migration-compatible controller bridge by itself. Its
    successful controller receipt must be the active rollback boundary before
-   migration 0025 is applied. The bridge tolerates already-applied additive
+   legacy ledger version 25 is applied. The bridge tolerates already-applied additive
    migrations newer than its embedded set while preserving checksum
    verification for every migration it knows.
-2. Build and deploy the final controller migration/API. Verify migration 0025,
+2. Build and deploy the final controller migration/API. Verify the v3 telemetry schema,
    the provider summary, and the filtered activity endpoint before changing a
    Machine.
 3. Build the final Machine release and use the explicit maintenance activator

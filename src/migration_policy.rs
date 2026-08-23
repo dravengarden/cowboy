@@ -1,236 +1,62 @@
-//! Guard the startup migration contract: unbounded data rewrites are explicit
-//! maintenance work, never daemon-startup work.
+//! Guard the consolidated startup-migration contract.
 
 #![warn(clippy::pedantic)]
 
 use sha2::Digest as _;
 
-/// Every migration that has reached a shared database is immutable. `SQLx`
-/// enforces this at runtime; pinning the source digests here moves the same
-/// failure into `cargo test`, before a Cowboy restart can take the UI down.
-const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
-    (
-        "0001_init.sql",
-        "78a7b726befc410983f29a795ef3e280303022ec61ddb9582da6f7bfe25a9fe9",
-    ),
-    (
-        "0002_agent_session_id.sql",
-        "e1eeade77f4a900801f1d9ed937d3c691ccdbee1773046e2b96638693149c8f8",
-    ),
-    (
-        "0003_pending.sql",
-        "3310c2ba3f641dfe5872b0a1a457dd07426185e7ad37eba14bea2ac9e92d0cac",
-    ),
-    (
-        "0004_session_position.sql",
-        "e618956295fcbad126f5393dd96f6ff67e6d8bcca6f7f888d145a94ca1396009",
-    ),
-    (
-        "0005_session_soft_delete.sql",
-        "1ac9b195672655a9e1ba1c2a5bc46878d46cd767f8cdefa4067a3599d6e925d0",
-    ),
-    (
-        "0006_auto_resume.sql",
-        "9294c757e16de8293b0aec35d6f27eaebe8061062ab5cdf7da1cebceae59a4af",
-    ),
-    (
-        "0007_inference.sql",
-        "d645861f033be2b513882eb2763334248963ce6ee50ca00e68234dad876c33a3",
-    ),
-    (
-        "0008_turn_verdict.sql",
-        "7606eb18ac47b87c5511bd45657933da0d1cdcb5f5be7862d6c9693a5275abc8",
-    ),
-    (
-        "0009_judge_runs.sql",
-        "ab5bb69d9edce0c3b148894b6b3a1261e531cd7251175347f1516714e80129a1",
-    ),
-    (
-        "0010_system_session.sql",
-        "155000a02401c371d3bd02cca1362f7d6de93f92f9a665ba9523ed4d3f9ab9de",
-    ),
-    (
-        "0011_scheduled_wakeups.sql",
-        "a6ef2f7973ce3b69c3435f146c98bf1419fd667d21d81caacfa260d8d8a2b5ce",
-    ),
-    (
-        "0012_compact_event_log.sql",
-        "d8ac844edcc802728809f81fa309ee62317e4509f7c59ecd43b1c73e36cd6f18",
-    ),
-    (
-        "0013_drop_inference.sql",
-        "f0674ab068e55ba6aa5ccf1e7d0ef5f3ecbf28149b16d855fb5f3e8e8f009125",
-    ),
-    (
-        "0014_provider_actions.sql",
-        "b6f32dc1f36c05b9d8461a0ca2bcb08936eb0173540e9ed3343d211d65c1ceea",
-    ),
-    (
-        "0015_provider_action_logs.sql",
-        "47dea213814a7ad695f0dad94189342b3cbbee526cbafc611498144acf3d3780",
-    ),
-    (
-        "0016_mobile_review_state.sql",
-        "9f20a15c4b9a000209e1af070aadc86f7874c753bba86324292670b71ac8c7a8",
-    ),
-    (
-        "0017_machines.sql",
-        "334060e9171db9c5eda5188982ab0777d6dd8ea95d66e1582881ec762904c3d3",
-    ),
-    (
-        "0018_machine_enrollment.sql",
-        "b295ce695b06ef213144691956fd5d5e141a67e107426788f41ef26fcffcf491",
-    ),
-    (
-        "0019_unify_local_machine.sql",
-        "3b9ae1a0569d12b880165c9a8f1b9311be09e43cc8c638a6b9ea1b55c18bc993",
-    ),
-    (
-        "0020_machine_reconnect_grace.sql",
-        "f4993e561935bdd74ef706e84ab81ccbb809b754f6ec0c3f45c9abc8ae93bdc8",
-    ),
-    (
-        "0021_runtime_incidents.sql",
-        "6b80aa0284f9a113ac4ebde0f72e43565677aec5b0d66e2378fe207ff797db58",
-    ),
-    (
-        "0022_provider_usage_ledger.sql",
-        "3f5bc917df416351be2dc46fab91fe4e4e66510ad49c66f71fc88fc720c17d22",
-    ),
-    (
-        "0023_session_workspace_identity.sql",
-        "0ea62043bcb20ee9e994b4213739ad82243ef2fb1661b92dbeb75cac2610b6b2",
-    ),
-    (
-        "0024_provider_usage_telemetry_v2.sql",
-        "ea29fe4759ab4b77534a021eb22447c56be580d63f66822d527f44c5476448df",
-    ),
-    (
-        "0025_provider_usage_telemetry_v3.sql",
-        "d0011492f29a1159fa2dda5e8a052d0c3a4b8516b5e40290be8681b9bf6f426d",
-    ),
-    (
-        "0026_session_config.sql",
-        "64c6080585e93cfaec59156882786149cb85e0a69d30bdd2b4feab103ab78a09",
-    ),
-    (
-        "0027_deepseek_cache_keepalive.sql",
-        "f07d7821ab0c58fef0d97204500a092aef64b910ca67dd4a7236be7603b3dd48",
-    ),
-    (
-        "0028_xai_provider_actions.sql",
-        "7b4660a9044598f9241d08521c2b5837334c74ec806e403243c42b0b8e7fa353",
-    ),
-    (
-        "0029_provider_platform.sql",
-        "dbb69d5fc808a32a7493a83288f446dc6d79f77f23462e0d56e59ea31b5e0a0c",
-    ),
-    (
-        "0030_crash_incident_severity.sql",
-        "914407d1be5223cbabf122ab312f16ca3179303474d36f2a798806406b5e1c01",
-    ),
-    (
-        "0031_product_users.sql",
-        "256c9812e0c2a002d80ab1b7c109775a6335968610faf81fee27471a154e590e",
-    ),
-    (
-        "0032_user_passkeys.sql",
-        "887e075ecc10454ec726d6f5750fee67f83cb08e27aee20b6e3415a2fea9e7cc",
-    ),
-    (
-        "0033_admin_passkeys.sql",
-        "a2783a1d0f4670712a9f1520dd004e37aa1b0603d5259c222a870295396a1575",
-    ),
-];
+const PUBLISHED_POSTGRES_BASELINE: (&str, &str) = (
+    "0034_baseline.sql",
+    "b66deb3964b2bd6ef80c81407caa76463ba2a7173e344b6219986fcc5868c373",
+);
+const PUBLISHED_SQLITE_BASELINE: (&str, &str) = (
+    "0008_baseline.sql",
+    "07b0d27ab6eeb8b8ece01505b387abc4bbb28fc36ee977f92820589cce4f7da9",
+);
 
-const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
-    (
-        "0001_baseline.sql",
-        "1a33eb9164240618f168a34ae6d2d2c27d1604dba099d8b263b2eac00dfc1cb3",
-    ),
-    (
-        "0002_xai_provider_actions.sql",
-        "c6956075b1b91cd9060bfe5d2c4202bdcbeb8972f48a064d429a5eca5b0fddbf",
-    ),
-    (
-        "0003_provider_platform.sql",
-        "c33ea14ebb30f5138b4f57d53cafab3f3e22ce78f30e74d6d43a04bbe00f60e7",
-    ),
-    (
-        "0004_crash_incident_severity.sql",
-        "3eecb6d0a9af9fc6325924d86b9ecf57f9e6258dd72c617fb76cf5ff15467670",
-    ),
-    (
-        "0005_product_users.sql",
-        "5468265d5488423b27a0bad4121a38af64759580534d133e934818ddb5ffd4ce",
-    ),
-    (
-        "0006_user_passkeys.sql",
-        "89ed511b9d650fad91d734bcb37273c810f37201e8cfb0a5db9f53deb346b900",
-    ),
-    (
-        "0007_admin_passkeys.sql",
-        "8bf08ec2d84e3c336fc192ec3ed2b70d576832a320a75694e0b06383c183c18f",
-    ),
-];
-
-fn assert_published_migrations_are_immutable(
-    directory: &std::path::Path,
-    published: &[(&str, &str)],
-) {
-    let mut seen = 0;
-    for entry in std::fs::read_dir(directory).expect("read migrations") {
-        let entry = entry.expect("migration entry");
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if entry.path().extension() != Some(std::ffi::OsStr::new("sql")) {
-            continue;
-        }
-        let expected = published
-            .iter()
-            .find_map(|(candidate, digest)| (*candidate == name).then_some(*digest))
-            .unwrap_or_else(|| {
-                panic!("{name} has no published checksum; register it before deploy")
-            });
-        let bytes = std::fs::read(entry.path()).expect("read migration");
-        let actual = format!("{:x}", sha2::Sha256::digest(bytes));
-        assert_eq!(actual, expected, "published migration {name} was modified");
-        seen += 1;
-    }
-    assert_eq!(seen, published.len());
+fn assert_single_published_baseline(directory: &std::path::Path, published: (&str, &str)) {
+    let migrations = std::fs::read_dir(directory)
+        .expect("read migrations")
+        .map(|entry| entry.expect("migration entry"))
+        .filter(|entry| entry.path().extension() == Some(std::ffi::OsStr::new("sql")))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        migrations.len(),
+        1,
+        "{} must contain one baseline",
+        directory.display()
+    );
+    let migration = &migrations[0];
+    let name = migration.file_name().to_string_lossy().into_owned();
+    assert_eq!(name, published.0);
+    let bytes = std::fs::read(migration.path()).expect("read baseline");
+    let actual = format!("{:x}", sha2::Sha256::digest(bytes));
+    assert_eq!(
+        actual, published.1,
+        "published baseline {name} was modified"
+    );
 }
 
 #[test]
-fn published_postgres_migrations_are_immutable() {
+fn postgres_has_one_immutable_baseline() {
     let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
-    assert_published_migrations_are_immutable(&directory, PUBLISHED_POSTGRES_MIGRATIONS);
+    assert_single_published_baseline(&directory, PUBLISHED_POSTGRES_BASELINE);
 }
 
 #[test]
-fn published_sqlite_migrations_are_immutable() {
+fn sqlite_has_one_immutable_baseline() {
     let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations/sqlite");
-    assert_published_migrations_are_immutable(&directory, PUBLISHED_SQLITE_MIGRATIONS);
+    assert_single_published_baseline(&directory, PUBLISHED_SQLITE_BASELINE);
 }
 
 #[test]
-fn new_migrations_do_not_rewrite_the_event_log() {
-    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
-    for entry in std::fs::read_dir(directory).expect("read migrations") {
-        let entry = entry.expect("migration entry");
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if entry.path().extension() != Some(std::ffi::OsStr::new("sql")) {
-            continue;
-        }
-        if name.as_str() <= "0012_compact_event_log.sql" {
-            continue;
-        }
-        let sql = std::fs::read_to_string(entry.path())
-            .expect("read migration")
-            .to_uppercase();
-        for forbidden in ["UPDATE EVENTS", "DELETE FROM EVENTS", "VACUUM FULL"] {
-            assert!(
-                !sql.contains(forbidden),
-                "{name} contains startup-blocking operation {forbidden}; use expand/contract maintenance"
-            );
-        }
-    }
+fn baselines_preserve_predecessor_rollback_ledgers() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let postgres = std::fs::read_to_string(root.join("migrations/0034_baseline.sql"))
+        .expect("read PostgreSQL baseline");
+    let sqlite = std::fs::read_to_string(root.join("migrations/sqlite/0008_baseline.sql"))
+        .expect("read SQLite baseline");
+    assert!(postgres.contains("Preserve predecessor rollback compatibility"));
+    assert!(sqlite.contains("Preserve predecessor rollback compatibility"));
+    assert_eq!(postgres.matches("'legacy compatibility'").count(), 33);
+    assert_eq!(sqlite.matches("'legacy compatibility'").count(), 7);
 }

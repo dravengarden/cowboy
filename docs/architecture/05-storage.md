@@ -46,29 +46,18 @@ live fan-out latency to storage, so cowboy keeps that window observable and boun
 
 ## Schema
 
-PostgreSQL is built incrementally by the immutable `migrations/*.sql` history
-(SQLx applies it on boot):
+Each backend has one immutable SQLx baseline: PostgreSQL uses
+`migrations/0034_baseline.sql`, while SQLite uses
+`migrations/sqlite/0008_baseline.sql`. Each baseline preserves the former
+incremental statements in their original order, so fresh-database defaults,
+data normalization, constraints, and indexes remain identical.
 
-| Migration | Adds |
-|---|---|
-| `0001_init` | `sessions` (id, provider, cwd, title, origin, status, next_seq, timestamps) + `events` (session_id, seq, payload JSONB, ts; PK `(session_id, seq)`) |
-| `0002_agent_session_id` | `agent_session_id` — the resume bridge |
-| `0003_pending` | `queue` + `drafts` JSONB arrays |
-| `0004_session_position` | `position` for user reordering |
-| `0005_session_soft_delete` | `deleted_at` — soft-delete for the purge window |
-| `0006_auto_resume` | legacy `auto_resume` column, retained for immutable migration history |
-| `0007_inference` | `inference_config` + `inference_secrets` tables |
-| `0008_turn_verdict` | legacy confirm-verdict columns, retained only for immutable migration history |
-| `0009_judge_runs` | legacy judge-run history, retained only for immutable migration history |
-| `0010_system_session` | `system` flag for machine-driven, view-only sessions |
-| `0011_scheduled_wakeups` | persisted agent wakeups |
-| `0012_compact_event_log` | drops the duplicate event index, removes transient telemetry, folds legacy tool updates into their initial row |
-| `0013_drop_inference` | drops obsolete external-provider config and API-secret tables |
-| `0016_mobile_review_state` | Mobile-only tabs, active source, review mode, and reviewed revisions per session |
-| `0017_machines` | Stable machine registry plus immutable per-session machine placement |
-| `0018_machine_enrollment` | Single-use enrollment tokens and per-machine public-key identity |
-| `0025_provider_usage_telemetry_v3` | Provider-neutral model, role, protocol, HMAC lineage, and gateway-build dimensions for DeepSeek cache/cost diagnosis |
-| `0027_deepseek_cache_keepalive` | Schema-v4 request purpose, cache-protection outcomes, adaptive timing, source age, and content-free source fingerprints |
+Before applying the consolidated baseline, Cowboy recognizes only the complete,
+checksum-verified predecessor histories (PostgreSQL 1–33 and SQLite 1–7).
+Those databases receive the new baseline marker without replaying schema or
+data statements. A partial or modified predecessor ledger fails closed.
+Fresh databases also receive compatibility ledger rows for the predecessor,
+allowing the immediately previous controller binary to roll back safely.
 
 The writer UPSERTs consecutive message/thought chunks into their first sequence
 row, folds tool updates into the initial call, and stores only the sequence
@@ -81,7 +70,7 @@ uniqueness are keyed by `(session_id, seq)`, while the actual cost was redundant
 large JSON payloads rather than time-range scans.
 
 SQLite starts from the equivalent current schema in
-`migrations/sqlite/0001_baseline.sql`. Its timestamps are Unix milliseconds and
+`migrations/sqlite/0008_baseline.sql`. Its timestamps are Unix milliseconds and
 JSON is validated TEXT. WAL, foreign keys, a five-second busy timeout, and a
 small connection pool make it suitable for one Cowboy controller. A SQLite file
 must never be shared by multiple controllers or placed on a network filesystem.
@@ -98,8 +87,8 @@ variants: `insert_session`, batched event UPSERT, `update_status`, `update_title
 `update_agent_session_id`, `delete_session`, `update_pending`,
 `update_session_order`, and Mobile review state. `purge_deleted()` hard-deletes
 soft-deleted rows. The legacy `auto_resume`, confirm-verdict, and judge-run
-columns and settings table are deliberately ignored so old migrations stay
-immutable and a rollback can still read its schema.
+columns and settings table remain deliberately ignored so rollback can still
+read the consolidated schema.
 
 ## NUL-byte stripping
 
