@@ -2772,6 +2772,12 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
     if path.starts_with("/api/machine/") {
         return RouteAuth::Public;
     }
+    // Deployment health checks use refresh to ask a connected Machine to
+    // republish its read-only inventory after a declarative workspace update.
+    // It does not install, revoke, reconcile, or otherwise mutate the Machine.
+    if method == Method::POST && path.starts_with("/api/machines/") && path.ends_with("/refresh") {
+        return RouteAuth::Public;
+    }
     if path == "/api/sessions" && method == Method::POST {
         return RouteAuth::ProductOperator;
     }
@@ -12774,6 +12780,10 @@ mod product_auth_api_tests {
         assert_eq!(
             classify_route(&Method::POST, "/api/machines/m-123/revoke"),
             RouteAuth::ProductOrAdminOperator
+        );
+        assert_eq!(
+            classify_route(&Method::POST, "/api/machines/m-123/refresh"),
+            RouteAuth::Public
         );
         assert_eq!(
             classify_route(&Method::GET, "/api/metrics"),
