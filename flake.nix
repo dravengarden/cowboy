@@ -302,7 +302,7 @@
 
       cowboy-zed-adapter = rustPlatform.buildRustPackage {
         pname = "cowboy-zed-adapter";
-        version = "1.1.1";
+        version = "1.1.2";
         src = zed-adapter-src;
         cargoLock = {
           lockFile = ./plugins/zed/adapter/Cargo.lock;

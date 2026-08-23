@@ -110,7 +110,7 @@ impl LegacyProviderRelease {
             !self.signature.trim().is_empty(),
             "legacy Provider release is unsigned"
         );
-        let package = ProviderPackage::from_bytes(bytes)?;
+        let package = ProviderPackage::from_historical_bytes(bytes)?;
         ensure!(
             self.provider_id == package.manifest.id,
             "legacy Provider release id mismatch"

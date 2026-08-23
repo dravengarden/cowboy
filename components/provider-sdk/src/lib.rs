@@ -1393,18 +1393,41 @@ impl ProviderPackage {
         Ok(package)
     }
 
+    /// Parse a package that was already accepted and signed by an older
+    /// Cowboy release. This preserves all structural, linkage, fingerprint,
+    /// and host-contract checks while treating the authoring SDK version as
+    /// historical metadata rather than requiring the current SDK release.
+    ///
+    /// # Errors
+    /// Returns an error when the bytes are not a closed Provider package or
+    /// when any structural contract, digest, or compatibility check fails.
+    pub fn from_historical_bytes(bytes: &[u8]) -> Result<Self> {
+        let package: Self = serde_json::from_slice(bytes).context("decoding Provider package")?;
+        package.validate_historical()?;
+        Ok(package)
+    }
+
     /// Validate structural types, linked UI logic, pins, and compatibility.
     ///
     /// # Errors
     /// Returns an error for a schema, type, link, digest, pin, or host-contract
     /// mismatch.
     pub fn validate(&self) -> Result<()> {
+        self.validate_with_sdk_policy(true)
+    }
+
+    fn validate_historical(&self) -> Result<()> {
+        self.validate_with_sdk_policy(false)
+    }
+
+    fn validate_with_sdk_policy(&self, require_current_sdk: bool) -> Result<()> {
         ensure!(
             self.package_schema == PACKAGE_SCHEMA_VERSION,
             "unsupported Provider package schema {}",
             self.package_schema
         );
-        self.manifest.validate()?;
+        self.manifest
+            .validate_with_sdk_policy(require_current_sdk)?;
         let computed = contract_fingerprint(&self.manifest)?;
         ensure!(
             self.contract_fingerprint == computed,
@@ -1470,10 +1493,18 @@ impl ProviderManifest {
     /// Returns an error when any contract is malformed, internally unlinked,
     /// or incompatible with the current SDK, Controller, or Machine.
     pub fn validate(&self) -> Result<()> {
+        self.validate_with_sdk_policy(true)
+    }
+
+    fn validate_with_sdk_policy(&self, require_current_sdk: bool) -> Result<()> {
         validate_id(&self.id, "Provider id")?;
         validate_semantic_version(&self.version, "Provider version")?;
         validate_id(&self.publisher, "Provider publisher")?;
-        validate_provider_sdk_version(&self.sdk_version)?;
+        if require_current_sdk {
+            validate_provider_sdk_version(&self.sdk_version)?;
+        } else {
+            validate_semantic_version(&self.sdk_version, "Provider SDK version")?;
+        }
         validate_display(&self.display)?;
         self.logic.validate()?;
         self.ui.validate(&self.logic)?;
@@ -3753,7 +3784,32 @@ mod tests {
         assert!(validate_provider_sdk_version("1.99.0").is_err());
         assert!(validate_provider_sdk_version("2.3.1").is_err());
         assert!(validate_provider_sdk_version("2.4.1").is_err());
-        assert!(validate_provider_sdk_version("3.1.2").is_err());
+        assert!(validate_provider_sdk_version("3.1.3").is_err());
+    }
+
+    #[test]
+    fn historical_packages_keep_structural_validation_without_current_authoring_sdk() {
+        let source: StandardProviderSource =
+            serde_json::from_str(include_str!("../../../plugins/codex/provider.json")).unwrap();
+        let mut package = build_package(source.compile().unwrap()).unwrap();
+        package.manifest.sdk_version = "2.4.0".to_owned();
+        package.contract_fingerprint = contract_fingerprint(&package.manifest).unwrap();
+        let bytes = serde_json::to_vec(&package).unwrap();
+
+        assert!(ProviderPackage::from_bytes(&bytes).is_err());
+        assert_eq!(
+            ProviderPackage::from_historical_bytes(&bytes)
+                .unwrap()
+                .manifest
+                .sdk_version,
+            "2.4.0"
+        );
+
+        package.manifest.sdk_version = "not-semver".to_owned();
+        package.contract_fingerprint = contract_fingerprint(&package.manifest).unwrap();
+        assert!(
+            ProviderPackage::from_historical_bytes(&serde_json::to_vec(&package).unwrap()).is_err()
+        );
     }
 
     #[test]
@@ -3871,7 +3927,7 @@ mod tests {
             serde_json::from_str(include_str!("../../../plugins/grok/provider.json")).unwrap();
         let expected_mark_path = source.display.mark_path.clone();
         let package = build_package(source.compile().unwrap()).unwrap();
-        assert_eq!(package.manifest.version, "3.1.1");
+        assert_eq!(package.manifest.version, "3.1.2");
         assert_eq!(
             package.manifest.runtime.arguments,
             ["--no-auto-update", "agent", "stdio"]

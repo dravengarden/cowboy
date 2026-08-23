@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "active_release": "2.0.1",
+  "active_release": "2.0.2",
   "releases": [
     {
       "version": "1.0.0",
@@ -48,6 +48,22 @@
         { "id": "cowboy.code-intelligence", "version": "1.1.0", "publisher": "cowboy", "sources": ["components/code-intelligence"], "digest": "sha256:34be56987c3ede0ad9b319147e73353c8da92e9d92320559bdd2c6e60e2ffaea", "package": { "kind": "npm", "name": "@cowboy/code-intelligence-contract", "manifest": "components/code-intelligence/package.json" } }
       ],
       "plugins": { "claude-code": "3.1.1", "claude-deepseek": "3.1.1", "codex": "3.1.1", "codex-deepseek": "3.1.1", "gemini": "3.1.1", "grok": "3.1.1", "zed": "1.1.1" }
+    },
+    {
+      "version": "2.0.2",
+      "components": [
+        { "id": "cowboy.plugin-contract", "version": "1.1.0", "publisher": "cowboy", "sources": ["components/plugin-contract"], "digest": "sha256:f2884f70172d106b8de0681a0b68cfb36290f948933eb8bebf88dd2dc688c020", "package": { "kind": "npm", "name": "@cowboy/plugin-contract", "manifest": "components/plugin-contract/package.json" } },
+        { "id": "cowboy.plugin-sdk", "version": "1.1.2", "publisher": "cowboy", "sources": ["components/plugin-sdk"], "digest": "sha256:99e940f6331d065661e020b6575a74a02562598ff35337b6ec18068d4b06dbad", "package": { "kind": "cargo", "name": "cowboy-plugin-sdk", "manifest": "components/plugin-sdk/Cargo.toml" } },
+        { "id": "cowboy.app-shell", "version": "1.1.0", "publisher": "cowboy", "sources": ["components/app-shell"], "digest": "sha256:f9a48cd229b3d44c0540d1bf925ead6b0e06dbf2b75a8398b9bd4fcecb2d8a01", "package": { "kind": "npm", "name": "@cowboy/app-shell", "manifest": "components/app-shell/package.json" } },
+        { "id": "cowboy.state-store", "version": "1.1.0", "publisher": "cowboy", "sources": ["components/state-store"], "digest": "sha256:eb5f55aab2d9cdda8e429268eff377c1f5fe497a09c9eb20b741d453d3766e26", "package": { "kind": "npm", "name": "@cowboy/state-store", "manifest": "components/state-store/package.json" } },
+        { "id": "cowboy.state-sync", "version": "1.1.0", "publisher": "cowboy", "sources": ["components/state-sync"], "digest": "sha256:d8a2df2e49f325f09274edab3a0b72c3f4b273ec7ffce7084b8102facce3c032", "package": { "kind": "npm", "name": "@cowboy/state-sync", "manifest": "components/state-sync/package.json" } },
+        { "id": "cowboy.state-sync-idb", "version": "1.1.0", "publisher": "cowboy", "sources": ["components/state-sync-idb"], "digest": "sha256:7d0d782d566e814a6c65eb5fb47a8f7715039d5eff0a03610f2b0d7521e70c2d", "package": { "kind": "npm", "name": "@cowboy/state-sync-idb", "manifest": "components/state-sync-idb/package.json" } },
+        { "id": "cowboy.provider-sdk", "version": "3.1.2", "publisher": "cowboy", "sources": ["components/provider-sdk"], "digest": "sha256:8ba2d761987f320783891ac8febf1bab06cc428679c9ac1d5be401bf8b84ca3f", "package": { "kind": "cargo", "name": "cowboy-provider-sdk", "manifest": "components/provider-sdk/Cargo.toml" } },
+        { "id": "cowboy.provider-ui", "version": "3.1.2", "publisher": "cowboy", "sources": ["components/provider-ui"], "digest": "sha256:3e2fbd12fb5e3ec11f99c1fd554768b957f4001ff4b91905151f56db48469d97", "package": { "kind": "npm", "name": "@cowboy/provider-ui", "manifest": "components/provider-ui/package.json" } },
+        { "id": "cowboy.provider-runtime", "version": "1.1.0", "publisher": "cowboy", "sources": ["components/provider-runtime"], "digest": "sha256:f0277ecbbfb33078fba5a78dc11400d6f00f8064d5f09d94bcd842a4fda6e30c", "package": { "kind": "npm", "name": "@cowboy/provider-runtime", "manifest": "components/provider-runtime/package.json" } },
+        { "id": "cowboy.code-intelligence", "version": "1.1.0", "publisher": "cowboy", "sources": ["components/code-intelligence"], "digest": "sha256:34be56987c3ede0ad9b319147e73353c8da92e9d92320559bdd2c6e60e2ffaea", "package": { "kind": "npm", "name": "@cowboy/code-intelligence-contract", "manifest": "components/code-intelligence/package.json" } }
+      ],
+      "plugins": { "claude-code": "3.1.2", "claude-deepseek": "3.1.2", "codex": "3.1.2", "codex-deepseek": "3.1.2", "gemini": "3.1.2", "grok": "3.1.2", "zed": "1.1.2" }
     }
   ]
 }
