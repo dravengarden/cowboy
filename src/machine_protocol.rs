@@ -718,6 +718,7 @@ pub enum MachineEvent {
         workspace_revision: Option<String>,
         observed_at_ms: i64,
     },
+    #[serde(alias = "provider_inventory")]
     PluginInventory {
         #[serde(alias = "providers")]
         plugins: Vec<PluginInventory>,
@@ -894,6 +895,32 @@ mod tests {
                 workspace_revision: None,
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn old_provider_inventory_event_maps_to_plugin_inventory() {
+        let event: MachineEvent = serde_json::from_value(serde_json::json!({
+            "event": "provider_inventory",
+            "providers": [{
+                "provider_id": "codex",
+                "provider_version": "1.1.2",
+                "generation_digest": "sha256:0123456789abcdef",
+                "contract_fingerprint": "legacy-contract",
+                "state": "active",
+                "active_session_leases": 2,
+                "replica_state": "absent",
+                "materialization_state": "not_installed"
+            }],
+            "observed_at_ms": 1
+        }))
+        .unwrap();
+        assert!(matches!(
+            event,
+            MachineEvent::PluginInventory { plugins, .. }
+                if plugins.len() == 1
+                    && plugins[0].plugin_id == "codex"
+                    && plugins[0].plugin_kind == cowboy_plugin_sdk::PluginKind::AgentProvider
         ));
     }
 
