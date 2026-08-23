@@ -554,8 +554,8 @@ async fn prepare_package_launch(id: &str) -> Result<PreparedLaunch> {
     );
     let bytes = std::fs::read(&package_path)
         .with_context(|| format!("reading Provider package {}", package_path.display()))?;
-    let package = cowboy_provider_sdk::ProviderPackage::from_bytes(&bytes)
-        .context("validating exact Provider process package")?;
+    let package =
+        parse_process_package(&bytes).context("validating exact Provider process package")?;
     ensure!(
         package.manifest.id == id,
         "Provider package identity mismatch: expected {id:?}, got {:?}",
@@ -846,12 +846,19 @@ async fn start_sidecar(
 fn process_package(id: &str) -> Option<cowboy_provider_sdk::ProviderPackage> {
     let path = std::env::var_os("COWBOY_PROVIDER_PACKAGE_PATH")?;
     let bytes = std::fs::read(path).ok()?;
-    let package = cowboy_provider_sdk::ProviderPackage::from_bytes(&bytes).ok()?;
+    let package = parse_process_package(&bytes).ok()?;
     if package.manifest.id != id {
         tracing::warn!(expected = id, actual = %package.manifest.id, "Provider package identity mismatch");
         return None;
     }
     Some(package)
+}
+
+fn parse_process_package(bytes: &[u8]) -> Result<cowboy_provider_sdk::ProviderPackage> {
+    // The Machine already authenticated and pinned this immutable package.
+    // Preserve the package's structural and host-contract validation while
+    // allowing a package authored by an older compatible SDK to keep running.
+    cowboy_provider_sdk::ProviderPackage::from_historical_bytes(bytes)
 }
 
 /// Display identity from the exact signed process package. Package-less legacy
@@ -1227,6 +1234,7 @@ fn render_codex_deepseek_config(catalog: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use crate::deepseek_context;
+    use cowboy_provider_sdk::{StandardProviderSource, build_package, contract_fingerprint};
     use std::collections::{BTreeMap, BTreeSet, HashMap};
 
     fn lookup_with(overrides: &[(&str, &str)], id: &str) -> Option<super::LaunchSpec> {
@@ -1236,6 +1244,25 @@ mod tests {
             Some("/test/bin/bash".to_owned()),
         )
         .remove(id)
+    }
+
+    #[test]
+    fn worker_accepts_machine_validated_historical_provider_package() {
+        let source: StandardProviderSource =
+            serde_json::from_str(include_str!("../../plugins/codex/provider.json")).unwrap();
+        let mut package = build_package(source.compile().unwrap()).unwrap();
+        package.manifest.sdk_version = "2.4.0".to_owned();
+        package.contract_fingerprint = contract_fingerprint(&package.manifest).unwrap();
+        let bytes = serde_json::to_vec(&package).unwrap();
+
+        assert!(cowboy_provider_sdk::ProviderPackage::from_bytes(&bytes).is_err());
+        assert_eq!(
+            super::parse_process_package(&bytes)
+                .unwrap()
+                .manifest
+                .sdk_version,
+            "2.4.0"
+        );
     }
 
     #[test]
