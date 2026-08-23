@@ -545,6 +545,34 @@ Deno.test("Provider Catalog distinguishes typed unbound packages from installabl
   );
 });
 
+Deno.test("Provider Catalog preserves presentation for historical SDK releases", () => {
+  const fixture = uiManifest();
+  fixture.sdk_version = "2.4.0";
+  const catalog = {
+    providers: [{
+      provider_id: fixture.id,
+      provider_version: fixture.version,
+      package_digest: `sha256:${"4".repeat(64)}`,
+      artifact_digest: `sha256:${"5".repeat(64)}`,
+      authentication_scope: "none-v1",
+      release_state: "ready",
+      publisher: fixture.publisher,
+      contract_fingerprint: `sha256:${"6".repeat(64)}`,
+      supported_platforms: [{ os: "linux", architecture: "x86_64" }],
+      manifest: fixture,
+    }],
+    authentications: [],
+    authentication_executors: [],
+  };
+
+  validateProviderCatalog(catalog);
+  assertThrows(
+    () => validateProviderUiManifest(fixture),
+    Error,
+    "is incompatible",
+  );
+});
+
 Deno.test("Provider Catalog accepts a first Service authentication in progress", () => {
   const fixture = manifest();
   const status = {
@@ -984,11 +1012,11 @@ Deno.test("Provider SDK enforces semantic release identity and precedence", () =
 
 Deno.test("Provider SDK rejects incompatible authoring SDK versions before rendering", () => {
   const newer = manifest();
-  newer.sdk_version = "3.1.1";
+  newer.sdk_version = "3.1.2";
   assertThrows(() => validateProviderManifest(newer), Error, "is incompatible");
 
   const current = manifest();
-  current.sdk_version = "3.1.0";
+  current.sdk_version = "3.1.1";
   validateProviderManifest(current);
 
   const oldMajor = manifest();

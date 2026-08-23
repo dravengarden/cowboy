@@ -13,7 +13,7 @@ export const PROVIDER_UI_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_HOST_SCHEMA_MIN_VERSION = 1 as const;
 export const PROVIDER_HOST_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_MACHINE_CONTRACT_VERSION = 4 as const;
-export const PROVIDER_SDK_VERSION = "3.1.0" as const;
+export const PROVIDER_SDK_VERSION = "3.1.1" as const;
 
 export type SurfaceSlot =
   | "card"
@@ -796,7 +796,10 @@ export function validateProviderCatalog(
     ) {
       throw new Error("Provider Catalog exposed a private Provider contract");
     }
-    validateProviderUiManifest(manifest);
+    // Catalog history can contain packages authored by an older SDK major.
+    // Their runtime compatibility is evaluated separately; presentation is
+    // safe as long as the data-only UI and host schemas remain supported.
+    validateProviderUiManifestContract(manifest, false);
     if (
       raw.provider_id !== manifest.id ||
       raw.provider_version !== manifest.version ||
@@ -1393,6 +1396,13 @@ function validateAuthentication(
 export function validateProviderUiManifest(
   input: unknown,
 ): asserts input is ProviderUiManifest {
+  validateProviderUiManifestContract(input, true);
+}
+
+function validateProviderUiManifestContract(
+  input: unknown,
+  enforceSdkCompatibility: boolean,
+): asserts input is ProviderUiManifest {
   if (
     !isRecord(input) || typeof input.id !== "string" ||
     typeof input.version !== "string" ||
@@ -1421,7 +1431,10 @@ export function validateProviderUiManifest(
   ) {
     throw new Error("Invalid Provider manifest envelope");
   }
-  if (!isCompatibleProviderSdkVersion(input.sdk_version)) {
+  if (
+    enforceSdkCompatibility &&
+    !isCompatibleProviderSdkVersion(input.sdk_version)
+  ) {
     throw new Error(
       `Provider SDK ${input.sdk_version} is incompatible with Cowboy Provider SDK ${PROVIDER_SDK_VERSION}`,
     );

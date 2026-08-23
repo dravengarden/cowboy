@@ -3753,7 +3753,7 @@ mod tests {
         assert!(validate_provider_sdk_version("1.99.0").is_err());
         assert!(validate_provider_sdk_version("2.3.1").is_err());
         assert!(validate_provider_sdk_version("2.4.1").is_err());
-        assert!(validate_provider_sdk_version("3.1.1").is_err());
+        assert!(validate_provider_sdk_version("3.1.2").is_err());
     }
 
     #[test]
@@ -3871,7 +3871,7 @@ mod tests {
             serde_json::from_str(include_str!("../../../plugins/grok/provider.json")).unwrap();
         let expected_mark_path = source.display.mark_path.clone();
         let package = build_package(source.compile().unwrap()).unwrap();
-        assert_eq!(package.manifest.version, "3.1.0");
+        assert_eq!(package.manifest.version, "3.1.1");
         assert_eq!(
             package.manifest.runtime.arguments,
             ["--no-auto-update", "agent", "stdio"]
