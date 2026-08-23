@@ -19,6 +19,9 @@ use sha2::Digest as _;
 
 pub(crate) const MACHINE_SIGNATURE_NAMESPACE: &str = "cowboy-machine-v1";
 pub(crate) const PROVIDER_AUTH_SIGNATURE_NAMESPACE: &str = "cowboy-provider-auth-v1";
+/// Verification-only compatibility domain for Provider generations installed
+/// before generic Plugin releases replaced Provider release envelopes.
+pub(crate) const LEGACY_PROVIDER_RELEASE_SIGNATURE_NAMESPACE: &str = "cowboy-provider-release-v1";
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone)]
@@ -269,6 +272,7 @@ fn validate_namespace(namespace: &str) -> Result<()> {
         namespace,
         MACHINE_SIGNATURE_NAMESPACE
             | PROVIDER_AUTH_SIGNATURE_NAMESPACE
+            | LEGACY_PROVIDER_RELEASE_SIGNATURE_NAMESPACE
             | cowboy_plugin_sdk::PLUGIN_RELEASE_SIGNATURE_NAMESPACE
     ) {
         Ok(())
@@ -379,6 +383,21 @@ mod tests {
         let signature = identity.sign(b"challenge-a").expect("sign");
         assert!(verify(identity.public_key(), b"challenge-a", &signature).expect("verify"));
         assert!(!verify(identity.public_key(), b"challenge-b", &signature).expect("reject"));
+        let legacy_signature = identity
+            .sign_namespaced(
+                LEGACY_PROVIDER_RELEASE_SIGNATURE_NAMESPACE,
+                b"legacy-release",
+            )
+            .expect("sign legacy release");
+        assert!(
+            verify_namespaced(
+                identity.public_key(),
+                LEGACY_PROVIDER_RELEASE_SIGNATURE_NAMESPACE,
+                b"legacy-release",
+                &legacy_signature,
+            )
+            .expect("verify legacy release")
+        );
         fs::remove_file(directory.join("identity_ed25519")).expect("private key cleanup");
         fs::remove_file(directory.join("identity_ed25519.pub")).expect("public key cleanup");
         fs::remove_dir(directory).expect("identity directory cleanup");

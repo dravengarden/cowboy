@@ -32,6 +32,7 @@ use futures::StreamExt as _;
 use sha2::{Digest as _, Sha256};
 use x25519_dalek::{PublicKey, StaticSecret};
 
+use crate::machine_auth::LEGACY_PROVIDER_RELEASE_SIGNATURE_NAMESPACE;
 use crate::machine_protocol::{
     DesiredPlugin, Platform, PluginInstallationState, PluginInventory, PortableCredentialBundle,
     ProviderAuthAction, ProviderMaterializationState, ProviderReplicaState, SealedProviderAuth,
@@ -46,7 +47,6 @@ const MAX_CREDENTIAL_BUNDLE_BYTES: usize = 16 * 1024 * 1024;
 const PROVIDER_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 const AUTH_CANDIDATE_MAX_AGE: Duration = Duration::from_mins(30);
 const AUTH_SEAL_DOMAIN: &[u8] = b"cowboy-provider-auth-seal-v1\0";
-const LEGACY_PROVIDER_RELEASE_SIGNATURE_NAMESPACE: &str = "cowboy-provider-release-v1";
 static ATOMIC_WRITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
