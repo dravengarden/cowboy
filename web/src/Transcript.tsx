@@ -170,13 +170,13 @@ import {
   shouldAllowTranscriptViewportBackfill,
   shouldContinueScrollbackFill,
   shouldContinueTranscriptViewportRestore,
-  shouldMagnetizeTranscript,
   shouldMaskRestoringTranscript,
   shouldPrefetchVisibleScrollbackBoundary,
   shouldRecoverUnrenderableHistory,
   shouldShowClearedConversationEmptyState,
   shouldShowFreshSessionEmptyState,
   shouldShowScrollbackLoadingSkeleton,
+  transcriptScrollSettleDecision,
   transcriptViewportRestoreTimedOut,
   visibleTranscriptTopGap,
 } from "./transcriptViewport";
@@ -4324,16 +4324,23 @@ export function Transcript({
       }
       nativeScrollSettleTimer = globalThis.setTimeout(() => {
         const fromBottom = Math.abs(el.scrollTop);
-        if (
-          shouldMagnetizeTranscript({
-            history: managesScrollHistoryRef.current,
-            working: workingRef.current,
-            detached: !stick.current,
-            touching,
-            fromBottom,
-            threshold: magneticThreshold(),
-          })
-        ) {
+        const settleDecision = transcriptScrollSettleDecision({
+          history: managesScrollHistoryRef.current,
+          working: workingRef.current,
+          detached: !stick.current,
+          touching,
+          fromBottom,
+          threshold: magneticThreshold(),
+        });
+        if (settleDecision === "defer") {
+          // A long pull can outlive this inactivity timer while sitting at the
+          // contained live edge, where no further scroll event is available to
+          // restart it. Keep native ownership; touchend below performs the
+          // authoritative post-gesture settle.
+          nativeScrollSettleTimer = undefined;
+          return;
+        }
+        if (settleDecision === "follow") {
           stick.current = true;
           setSticky(sessionIdRef.current, true);
           freezeRef.current.key = null;
@@ -4395,6 +4402,12 @@ export function Transcript({
     };
     const onTouchEnd = (): void => {
       touching = false;
+      // Re-arm even when the gesture ended against an overscroll-contained
+      // boundary and therefore emitted no final scroll event. This is what
+      // turns an upward pull at latest into Follow/refresh after finger-up.
+      if (nativeScrollActiveRef.current && !directManipulationActive) {
+        markNativeScrollActive();
+      }
     };
     const onDirectManipulationStart = (): void => {
       if (directManipulationActive) return;

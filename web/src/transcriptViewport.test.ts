@@ -18,6 +18,7 @@ import {
   shouldShowClearedConversationEmptyState,
   shouldShowFreshSessionEmptyState,
   shouldShowScrollbackLoadingSkeleton,
+  transcriptScrollSettleDecision,
   transcriptViewportRestoreTimedOut,
   visibleTranscriptTopGap,
 } from "./transcriptViewport.ts";
@@ -592,6 +593,32 @@ Deno.test("history magnetizes at the live edge after the gesture settles", () =>
       threshold: 48,
     }),
     false,
+  );
+});
+
+Deno.test("touch settle waits for finger-up before following at the live edge", () => {
+  const atLiveEdge = {
+    history: true,
+    working: false,
+    detached: true,
+    fromBottom: 0,
+    threshold: 48,
+  };
+  assertEquals(
+    transcriptScrollSettleDecision({ ...atLiveEdge, touching: true }),
+    "defer",
+  );
+  assertEquals(
+    transcriptScrollSettleDecision({ ...atLiveEdge, touching: false }),
+    "follow",
+  );
+  assertEquals(
+    transcriptScrollSettleDecision({
+      ...atLiveEdge,
+      touching: false,
+      fromBottom: 96,
+    }),
+    "settle",
   );
 });
 

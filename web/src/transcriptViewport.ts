@@ -274,6 +274,19 @@ export function shouldMagnetizeTranscript(
     input.fromBottom <= input.threshold;
 }
 
+export type TranscriptScrollSettleDecision = "defer" | "follow" | "settle";
+
+/** A native touch must remain authoritative until the finger lifts. The
+ * inactivity timer can expire during a long pull at the live edge without a
+ * final `scroll` event; treating that as settled loses the only opportunity to
+ * re-enter Following after touchend. */
+export function transcriptScrollSettleDecision(
+  input: TranscriptMagnetInput,
+): TranscriptScrollSettleDecision {
+  if (input.touching) return "defer";
+  return shouldMagnetizeTranscript(input) ? "follow" : "settle";
+}
+
 export function magneticHapticTransition(
   armed: boolean,
   fromBottom: number,
