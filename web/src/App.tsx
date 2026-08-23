@@ -1314,12 +1314,6 @@ function SessionList({
     );
 }
 
-// Fallback used only while Machine inventory is unavailable. Machine-backed
-// creation resolves this stable source root and prepares a session worktree.
-const WORKING_DIRS = [
-    { value: "columbus", label: "columbus", help: "/home/draven/columbus", active_work_items: [] },
-] as const;
-
 type WorkspaceWorkItem = {
     id: string;
     title: string;
@@ -1441,16 +1435,12 @@ function NewSessionDialog({
         [providerRows],
     );
     const desktop = useSurfaceProfile().kind === "desktop";
-    const [cwd, setCwd] = useState<string>(WORKING_DIRS[0].value);
+    const [cwd, setCwd] = useState<string>("");
     const [workItemId, setWorkItemId] = useState<string>("");
     const [creating, setCreating] = useState(false);
     const [createError, setCreateError] = useState("");
-    // Working-dir choices: start from the hard-coded fallback, then replace with
-    // the daemon's `/api/workspaces` (stable source roots for Columbus and its
-    // projects) once the dialog opens. Falling back keeps the dialog usable if
-    // the endpoint is unreachable (older daemon / fetch error).
-    const [workspaces, setWorkspaces] =
-        useState<readonly WorkspaceChoice[]>(WORKING_DIRS);
+    // Workspace identity and ordering are owned by the selected Machine.
+    const [workspaces, setWorkspaces] = useState<readonly WorkspaceChoice[]>([]);
     const selectedWorkspace = workspaces.find((workspace) => workspace.value === cwd);
     const selectedMachine = machines.find((machine) => machine.id === machineId);
     const selectedProviderEntry = providerEntries.find((entry) => entry.provider_id === provider);

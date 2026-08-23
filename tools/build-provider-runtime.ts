@@ -87,9 +87,7 @@ interface ReleasedComponent {
 }
 
 const providerId = Deno.args[0] ?? "";
-const baseUrl =
-  (Deno.args[1] ?? "https://cowboy.stormbird.xyz/plugin-artifacts")
-    .replace(/\/+$/, "");
+const baseUrl = (Deno.args[1] ?? "").replace(/\/+$/, "");
 if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(providerId)) {
   throw new Error("Provider id must use lowercase kebab-case");
 }
@@ -362,17 +360,14 @@ async function materializeGitSource(
   recipe: GitGoRecipe,
   stage: string,
 ): Promise<string> {
-  let repository = Deno.env.get("COLUMBUS_ROOT") ?? "/home/draven/columbus";
-  if (!(await exists(`${repository}/.git`))) {
-    repository = `${stage}/repository`;
-    await run("git", [
-      "clone",
-      "--filter=blob:none",
-      "--no-checkout",
-      recipe.repository,
-      repository,
-    ]);
-  }
+  const repository = `${stage}/repository`;
+  await run("git", [
+    "clone",
+    "--filter=blob:none",
+    "--no-checkout",
+    recipe.repository,
+    repository,
+  ]);
   await run("git", ["cat-file", "-e", `${recipe.revision}^{commit}`], {
     cwd: repository,
   });

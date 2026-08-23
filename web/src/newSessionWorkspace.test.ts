@@ -94,7 +94,7 @@ Deno.test("new session stays selected before the sessions broadcast arrives", ()
   );
 });
 
-Deno.test("new sessions prefer Columbus regardless of workspace ordering", () => {
+Deno.test("new sessions respect Machine workspace ordering", () => {
   const choices = [
     {
       value: "cowboy",
@@ -104,7 +104,7 @@ Deno.test("new sessions prefer Columbus regardless of workspace ordering", () =>
     { value: "columbus", label: "columbus", help: "/home/draven/columbus" },
   ];
 
-  assertEquals(defaultNewSessionWorkspace(choices)?.value, "columbus");
+  assertEquals(defaultNewSessionWorkspace(choices)?.value, "cowboy");
 });
 
 Deno.test("new session workspace falls back to the first available choice", () => {

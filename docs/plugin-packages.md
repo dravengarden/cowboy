@@ -282,7 +282,7 @@ executable delivery:
 Such a package may appear in the Catalog as `release_state=unbound` so its UI
 can be reviewed, but Cowboy disables install and upgrade. For a production
 Agent Plugin release, `plugin-build` creates the data-only package,
-`agent-plugin-runtime-build` builds every declared target from
+`agent-plugin-runtime-build <plugin-id> <artifact-base-url>` builds every declared target from
 `components/provider-runtime-lock.json` and assigns content-addressed HTTPS
 URLs, and `plugin-bind-runtime` binds that output. Other Plugin kinds provide
 their own runtime builder but use the same bind/sign/publish commands. Binding requires exactly one
@@ -573,7 +573,7 @@ internal runtime binding; `components/provider-ui` provides the matching strict
 TypeScript component/logic contract and Cowboy renderer. `just plugin-build
 <id>` builds one unbound package; `just provider-check` validates the Agent
 runtime lock, npm lock payloads, payload schemas, and all six Agent manifests.
-`just agent-plugin-runtime-build <id>` builds and probes an Agent Plugin's
+`just agent-plugin-runtime-build <id> <artifact-base-url>` builds and probes an Agent Plugin's
 declared runtime matrix, and `just plugin-bind-runtime` binds it to the generic
 release. A release then requires `plugin-sign` and
 `plugin-publish`; publication independently re-runs `plugin-verify` with

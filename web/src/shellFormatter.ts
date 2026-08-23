@@ -47,21 +47,6 @@ export interface ShellFrame {
 // quiet, and reversible by switching to Source; copy actions always retain the
 // exact ACP bytes.
 
-const NIX32 = "[0123456789abcdfghijklmnpqrsvwxyz]{32}";
-const NIX_STORE_EXECUTABLE = new RegExp(
-  String.raw`/nix/store/${NIX32}-[^\s'"\\]+/(?:bin|sbin|libexec)/(?:[^\s'"\\]+/)*([^/\s'"\\]+)`,
-  "gu",
-);
-
-/** Collapse only executable paths whose store object matches Nix's canonical
- * 32-character Nix32 digest. `Nix bin` is a display namespace rather than a
- * decorative badge: it says where the executable came from while leaving the
- * actual command as the strongest token. Arbitrary store data paths remain
- * untouched. */
-export function compactNixStoreExecutables(source: string): string {
-  return source.replaceAll(NIX_STORE_EXECUTABLE, (_path, executable: string) => `Nix bin › ${executable}`);
-}
-
 /** Add display-only soft opportunities at path separators. The copy action and
  * Source mode retain the original bytes; this merely makes long assignment
  * values and URLs prefer `/` over an arbitrary mid-token phone wrap. */
@@ -230,14 +215,10 @@ export function formatShellForDisplay(source: string, columns = 80): Promise<She
           .map((frame) => formatEmbeddedFrame({ ...frame, text: frame.text.trimEnd() }, columns)),
       );
       return {
-        text: compactNixStoreExecutables(result.text.trimEnd()),
-        flatText: compactNixStoreExecutables((result.flatText ?? result.text).trimEnd()),
+        text: result.text.trimEnd(),
+        flatText: (result.flatText ?? result.text).trimEnd(),
         context: result.context,
-        frames: frames.map((frame) => ({
-          ...frame,
-          launcher: compactNixStoreExecutables(frame.launcher),
-          text: compactNixStoreExecutables(frame.text),
-        })),
+        frames,
         summary: result.summary ?? "",
       };
     })

@@ -78,10 +78,6 @@ function cowboyShell(prism: Parameters<typeof bash>[0]): void {
     greedy: true,
   };
   languages.insertBefore(SHELL_SYNTAX_LANGUAGE, "string", {
-    "nix-bin-origin": {
-      pattern: /\bNix bin(?=\s+›)/g,
-      alias: "shell-origin",
-    },
     "shell-path": {
       // Conservative unquoted paths only. Quoted values remain owned by the
       // Bash string grammar, avoiding false path styling in regexes and URLs.

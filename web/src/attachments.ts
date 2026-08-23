@@ -14,7 +14,7 @@
 //                          ({ uri, blob, mimeType }) — base64, model decides.
 //
 // Why embed rather than upload-to-disk + ResourceLink: the file lives on the
-// *client* (a phone, a laptop), not on hawk where the agent's working dir is.
+// *client* (a phone, a laptop), not on the Machine where the agent's working dir is.
 // A path-based ResourceLink would dangle. Embedding ships the bytes inline, so
 // it works from any device with no server-side upload endpoint or scratch dir.
 

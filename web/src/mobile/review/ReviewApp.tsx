@@ -2499,7 +2499,7 @@ export function ReviewApp({
           <ReviewRepository
             key={`${workspace?.sessionId ?? "none"}:${dataRevision}`}
             sessionId={workspace?.sessionId}
-            machineLabel={currentSession?.machine_id ?? "hawk"}
+            machineLabel={currentSession?.machine_id ?? "Machine"}
             {...(currentProjectPath ? { projectPath: currentProjectPath } : {})}
             onOpenDiff={openDiff}
             onOpenCommit={openCommit}

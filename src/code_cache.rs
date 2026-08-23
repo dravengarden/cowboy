@@ -1,4 +1,4 @@
-//! Hawk-local, rebuildable content cache for saved Code files.
+//! Controller-local, rebuildable content cache for saved Code files.
 //!
 //! Small files become content-addressed leaves when first opened. Metadata is
 //! the fast invalidation key; SHA-256 is computed from bytes already being

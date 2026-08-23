@@ -197,7 +197,8 @@ release authority permits it.
    ```bash
    nix develop -c just plugin-build <plugin-id>
    # Agent Plugin payloads use the capability-specific runtime builder:
-   nix develop -c just agent-plugin-runtime-build <plugin-id>
+   nix develop -c just agent-plugin-runtime-build <plugin-id> \
+     https://artifacts.example.com/plugin-artifacts
    nix develop -c just plugin-bind-runtime <plugin-id> \
      dist/plugins/<plugin-id>/runtime/runtime-artifacts.json
    ```

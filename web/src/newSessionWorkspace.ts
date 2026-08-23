@@ -4,15 +4,9 @@ export type NewSessionWorkspace = {
   help: string;
 };
 
-const COLUMBUS_PATH = "/home/draven/columbus";
-
-/** Prefer the Columbus root for a fresh session, independent of API ordering. */
+/** Use the Machine-owned inventory order; Cowboy has no preferred repository. */
 export function defaultNewSessionWorkspace<T extends NewSessionWorkspace>(
   workspaces: readonly T[],
 ): T | undefined {
-  return workspaces.find((workspace) =>
-    workspace.value.toLocaleLowerCase() === "columbus" ||
-    workspace.label.toLocaleLowerCase() === "columbus" ||
-    workspace.help.replace(/\/+$/, "") === COLUMBUS_PATH
-  ) ?? workspaces[0];
+  return workspaces[0];
 }

@@ -66,10 +66,10 @@ plugin-build-all:
 
 # Agent Plugin payload helper. Its output is the generic runtime manifest
 # consumed by plugin-bind-runtime; it is not an independent release lifecycle.
-agent-plugin-runtime-build PLUGIN BASE_URL="https://cowboy.stormbird.xyz/plugin-artifacts":
+agent-plugin-runtime-build PLUGIN BASE_URL:
     case "{{PLUGIN}}" in (*[!a-z0-9-]*|"") echo "invalid plugin id" >&2; exit 2;; esac
     test "$(jq -r .kind "plugins/{{PLUGIN}}/plugin.json")" = agent_provider
-    deno run --allow-read --allow-write=dist --allow-net --allow-run --allow-env=COLUMBUS_ROOT tools/build-provider-runtime.ts "{{PLUGIN}}" "{{BASE_URL}}"
+    deno run --allow-read --allow-write=dist --allow-net --allow-run tools/build-provider-runtime.ts "{{PLUGIN}}" "{{BASE_URL}}"
 
 plugin-set-artifact-url PLUGIN URL:
     cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- set-artifact-url "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.release.json" "{{URL}}"

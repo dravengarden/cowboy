@@ -401,8 +401,7 @@ fn builtin_with_env_and_shell(
 /// atomic rename (ENOTEMPTY → the adapter exits 217 → the session crashes), an
 /// interrupted install leaves stale staging dirs that poison every later start,
 /// and each start pays a registry round-trip. Pointing this at a PRE-INSTALLED
-/// adapter binary (the hawk `services/cowboy` module, matching the host's
-/// bootstrap-wrapper convention for the CLIs) removes `npx` from the hot path
+/// adapter binary supplied by the host removes `npx` from the hot path
 /// entirely — no install-at-spawn, no race, no poison, no network dependency.
 /// Unset ⇒ the npx default. A provider may still add adapter-specific default
 /// flags that are independent from the npx wrapper itself.
@@ -1089,7 +1088,7 @@ fn write_claude_deepseek_settings(isolated: &Path, ordinary: &Path) -> std::io::
 fn prepare_claude_deepseek_config_dir() -> std::io::Result<PathBuf> {
     let user_home = std::env::var_os("HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/home/draven"));
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "HOME is not set"))?;
     prepare_claude_deepseek_config_dir_at(&user_home)
 }
 
@@ -1145,7 +1144,7 @@ fn prepare_claude_deepseek_config_dir_at(user_home: &Path) -> std::io::Result<Pa
 fn prepare_codex_deepseek_home() -> std::io::Result<PathBuf> {
     let user_home = std::env::var_os("HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/home/draven"));
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "HOME is not set"))?;
     prepare_codex_deepseek_home_at(&user_home)
 }
 

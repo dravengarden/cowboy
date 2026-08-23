@@ -190,7 +190,7 @@ pub struct ServeArgs {
     #[arg(long, env = "COWBOY_ZED_ADAPTER_SOCKET")]
     pub zed_adapter_socket: Option<PathBuf>,
 
-    /// Hawk-local saved-file content cache quota. Set to zero to disable.
+    /// Controller-local saved-file content cache quota. Set to zero to disable.
     #[arg(
         long,
         env = "COWBOY_CODE_CACHE_BYTES",
@@ -236,13 +236,8 @@ pub struct ServeArgs {
     )]
     pub victoria_metrics_url: String,
 
-    /// Codex CLI used to query `OpenAI` account usage. The self-managed `/opt`
-    /// install follows Codex's own update channel on hawk.
-    #[arg(
-        long,
-        env = "COWBOY_CODEX_COMMAND",
-        default_value = "/opt/npm-global/bin/codex"
-    )]
+    /// Codex CLI used to query `OpenAI` account usage.
+    #[arg(long, env = "COWBOY_CODEX_COMMAND", default_value = "codex")]
     pub codex_command: String,
 }
 

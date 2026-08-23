@@ -440,9 +440,6 @@ fn managed_provider_environment(
             environment.insert(key.to_owned(), value);
         }
     }
-    inherit_nonempty_environment(&mut environment, "COLUMBUS_ROOT", &|key| {
-        std::env::var(key).ok()
-    });
     pin_grok_runtime_args(&mut environment, &disabled);
     if !disabled.iter().any(|slot| slot == "claude-deepseek")
         && let Some(shell) = crate::claude_shell::resolve(&|key| std::env::var(key).ok())
@@ -528,16 +525,6 @@ fn pin_grok_runtime_args(environment: &mut BTreeMap<String, String>, disabled: &
             "COWBOY_ACP_GROK_ARGS".to_owned(),
             crate::grok::RUNTIME_ARGS_ENV.to_owned(),
         );
-    }
-}
-
-fn inherit_nonempty_environment(
-    environment: &mut BTreeMap<String, String>,
-    key: &str,
-    get_env: &impl Fn(&str) -> Option<String>,
-) {
-    if let Some(value) = get_env(key).filter(|value| !value.trim().is_empty()) {
-        environment.insert(key.to_owned(), value);
     }
 }
 
@@ -2904,13 +2891,12 @@ mod tests {
     use super::{
         Args, WorkspaceConfig, bootstrap_acp_inventory, claude_runtime_enabled,
         disabled_provider_slots_from, gemini_auth_from_metadata, gemini_env_value_from,
-        grok_auth_from_json, inherit_nonempty_environment, load_enrolled_machine_id,
-        load_workspace_snapshot, login_challenge_tokens, managed_provider_environment,
-        npm_package_for_component, npm_script_shell_with, npm_update_is_confirmed_by_inventory,
-        parse_workspaces, persist_enrolled_machine_id, pin_grok_runtime_args,
-        provider_for_component, reject_untrusted_workspace, resolve_runtime_machine_id,
-        selected_zed_pair, send_frame_with_timeout, validate_controller_url,
-        workspace_path_allowed,
+        grok_auth_from_json, load_enrolled_machine_id, load_workspace_snapshot,
+        login_challenge_tokens, managed_provider_environment, npm_package_for_component,
+        npm_script_shell_with, npm_update_is_confirmed_by_inventory, parse_workspaces,
+        persist_enrolled_machine_id, pin_grok_runtime_args, provider_for_component,
+        reject_untrusted_workspace, resolve_runtime_machine_id, selected_zed_pair,
+        send_frame_with_timeout, validate_controller_url, workspace_path_allowed,
     };
     use crate::machine_components::ComponentStore;
     use crate::machine_protocol::{
@@ -3111,18 +3097,6 @@ mod tests {
 
         pin_grok_runtime_args(&mut environment, &["grok".to_owned()]);
         assert!(!environment.contains_key("COWBOY_ACP_GROK_ARGS"));
-    }
-
-    #[test]
-    fn columbus_root_crosses_the_detached_worker_boundary_when_configured() {
-        let mut environment = BTreeMap::new();
-        inherit_nonempty_environment(&mut environment, "COLUMBUS_ROOT", &|key| {
-            (key == "COLUMBUS_ROOT").then(|| "/srv/columbus".to_owned())
-        });
-        assert_eq!(environment["COLUMBUS_ROOT"], "/srv/columbus");
-
-        inherit_nonempty_environment(&mut environment, "IGNORED", &|_| Some("  ".to_owned()));
-        assert!(!environment.contains_key("IGNORED"));
     }
 
     #[test]

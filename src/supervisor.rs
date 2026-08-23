@@ -117,9 +117,8 @@ impl Supervisor {
         }
     }
 
-    /// The workspace root sessions resolve against (default `/home/draven`).
-    /// Exposed so the server can enumerate selectable workspaces beneath it
-    /// (the columbus project registry lives at `<root>/columbus/project-defs`).
+    /// The configured root against which relative session paths resolve.
+    /// Exposed so the server can enumerate Machine-owned workspaces beneath it.
     #[must_use]
     pub fn workspace_root(&self) -> &std::path::Path {
         &self.workspace_root
@@ -738,7 +737,7 @@ impl Supervisor {
             .ok_or_else(|| format!("unknown session {session_id:?}"))?;
         // Remote paths belong to the selected Machine and are validated by
         // its trusted-workspace boundary. Never reinterpret them against the
-        // controller's Hawk-local Columbus layout during resume.
+        // controller's local workspace layout during resume.
         if meta.machine_id != "local" {
             return Ok(false);
         }
