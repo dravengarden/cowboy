@@ -1,7 +1,7 @@
 # Cowboy Provider UI SDK
 
 The SDK defines Cowboy Provider UI schemas v1-v2, host integration schemas
-v1-v2, and Provider SDK 2.4 as closed
+v1-v2, and Provider SDK 3.1 as closed
 TypeScript unions. It provides runtime validation, typed state transitions,
 text resolution, boolean-expression evaluation, responsive stack wrapping,
 bounded vector gradients, typed activity strategies, component-command links,

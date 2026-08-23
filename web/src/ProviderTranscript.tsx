@@ -11,7 +11,7 @@ import { LightbulbOutlined, TerminalRounded } from "@mui/icons-material";
 import type {
   ProviderUiManifest,
   TranscriptPresentationContract,
-} from "../../components/provider-ui/src/index.ts";
+} from "@cowboy/provider-ui";
 import { Markdown } from "./Markdown";
 import {
   providerPresentationEntry,

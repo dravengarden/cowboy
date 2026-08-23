@@ -16,7 +16,7 @@ import {
   type HapticStyle,
   notificationHaptic,
   selectionHaptic,
-} from "./components/app-shell";
+} from "@cowboy/app-shell";
 import { hapticStyleForIntent } from "./hapticIntent";
 export {
   type CowboyHapticIntent,

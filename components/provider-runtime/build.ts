@@ -86,35 +86,35 @@ interface ReleasedComponent {
   probe: { args: string[]; timeout_ms: number };
 }
 
-const providerId = Deno.args[0] ?? "";
+const runtimeRoot = dirname(fileURLToPath(import.meta.url));
+const pluginRoot = Deno.args[0] ?? "";
 const baseUrl = (Deno.args[1] ?? "").replace(/\/+$/, "");
-if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(providerId)) {
-  throw new Error("Provider id must use lowercase kebab-case");
-}
 if (!baseUrl.startsWith("https://") || baseUrl.includes("latest")) {
   throw new Error("Provider artifact base URL must be immutable HTTPS");
 }
 
 const source = await readJson<ProviderSource>(
-  `plugins/${providerId}/provider.json`,
+  join(pluginRoot, "provider.json"),
 );
-if (source.id !== providerId) {
-  throw new Error("Provider directory identity mismatch");
+const providerId = source.id;
+if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(providerId)) {
+  throw new Error("Provider id must use lowercase kebab-case");
 }
-const runtimeLock = await readJson<RuntimeLock>("components/provider-runtime-lock.json");
+const runtimeLock = await readJson<RuntimeLock>(join(runtimeRoot, "lock.json"));
 if (runtimeLock.schema_version !== 1) {
   throw new Error("unsupported runtime lock schema");
 }
 
-const outputRoot = `dist/plugins/${providerId}/runtime`;
-const cacheRoot = "dist/provider-runtime-cache";
+const outputBase = Deno.args[2] ?? "dist/plugins";
+const outputRoot = join(outputBase, providerId, "runtime");
+const cacheRoot = join(outputBase, ".runtime-cache");
 await Deno.mkdir(cacheRoot, { recursive: true });
 await Deno.remove(outputRoot, { recursive: true }).catch((error) => {
   if (!(error instanceof Deno.errors.NotFound)) throw error;
 });
 await Deno.mkdir(outputRoot, { recursive: true });
 const temporaryDirectory = await Deno.makeTempDir({
-  dir: "dist",
+  dir: outputBase,
   prefix: ".provider-runtime-",
 });
 const temporary = await Deno.realPath(temporaryDirectory);
@@ -274,11 +274,11 @@ async function buildComponent(
       ]);
       await Deno.mkdir(`${stage}/app`, { recursive: true });
       await Deno.copyFile(
-        `${recipe.package_dir}/package.json`,
+        join(runtimeRoot, recipe.package_dir, "package.json"),
         `${stage}/app/package.json`,
       );
       await Deno.copyFile(
-        `${recipe.package_dir}/package-lock.json`,
+        join(runtimeRoot, recipe.package_dir, "package-lock.json"),
         `${stage}/app/package-lock.json`,
       );
       const [npmOs, npmCpu] = target === "macos-aarch64"
@@ -618,3 +618,5 @@ function requiredTarget<T>(
 ): T {
   return required(targets[target], `${label} runtime lock for ${target}`);
 }
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";

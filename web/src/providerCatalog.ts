@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { ProviderCatalogResponse } from "../../components/provider-ui/src/index.ts";
+import type { ProviderCatalogResponse } from "@cowboy/provider-ui";
 import {
   loadProviderCatalog,
   peekProviderCatalog,

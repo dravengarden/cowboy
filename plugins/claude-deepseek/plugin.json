@@ -1,15 +1,16 @@
 {
   "schema_version": 1,
   "id": "claude-deepseek",
-  "version": "3.0.0",
+  "version": "3.1.0",
+  "component_release": "2.0.0",
   "publisher": "cowboy-first-party",
   "kind": "agent_provider",
   "entrypoint": "provider.json",
   "components": [
-    { "id": "cowboy.plugin-contract", "version": "1.0.0" },
-    { "id": "cowboy.plugin-sdk", "version": "1.0.0" },
-    { "id": "cowboy.provider-sdk", "version": "3.0.0" },
-    { "id": "cowboy.provider-ui", "version": "3.0.0" },
-    { "id": "cowboy.provider-runtime", "version": "1.0.0" }
+    { "id": "cowboy.plugin-contract", "version": "1.1.0" },
+    { "id": "cowboy.plugin-sdk", "version": "1.1.0" },
+    { "id": "cowboy.provider-sdk", "version": "3.1.0" },
+    { "id": "cowboy.provider-ui", "version": "3.1.0" },
+    { "id": "cowboy.provider-runtime", "version": "1.1.0" }
   ]
 }

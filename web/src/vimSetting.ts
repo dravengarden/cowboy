@@ -1,4 +1,4 @@
-import { persisted, useStore } from "./components/state/store/mod.ts";
+import { persisted, useStore } from "@cowboy/state-store";
 
 // Vim-mode preference, persisted + reactive across the app (the composer reads
 // it; the Settings toggle writes it) without prop-drilling. Vim itself is

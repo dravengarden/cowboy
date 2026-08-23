@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { type GalleryImage, ImageLightbox } from "./components/app-shell";
+import { type GalleryImage, ImageLightbox } from "@cowboy/app-shell";
 import type { Attachment } from "./attachments";
 
 // Fullscreen preview for a staged/queued attachment. Thin wrapper over the SHARED

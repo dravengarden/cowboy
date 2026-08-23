@@ -166,7 +166,7 @@ import {
     type MachineProviderInventory,
     type ProviderContractInventory,
     projectAgentPluginInventory,
-} from "../../components/provider-ui/src/index.ts";
+} from "@cowboy/provider-ui";
 import {
     type MachinePresence,
     machinePresencePresentation,
@@ -190,7 +190,7 @@ import {
     MobileSheetActionGroup,
     MobileSheetDismiss,
     NativeReleaseUpdatePrompt,
-} from "./components/app-shell";
+} from "@cowboy/app-shell";
 import { ConfirmSheet, Sheet } from "./Sheet";
 import { MobileDecisionActions } from "./MobileDecisionActions";
 import { Kbd, useConfirmEnter } from "./Kbd";
@@ -203,7 +203,7 @@ import { UsageLogs } from "./UsageLogs";
 import { fireLabel, fireRel } from "./scheduleTime";
 import { ResourceLightbox } from "./ResourceLightbox";
 import { desktopFocusBoundary, desktopFocusFill, type Mode as ThemeMode } from "./theme";
-import { persisted } from "./components/state/store/mod.ts";
+import { persisted } from "@cowboy/state-store";
 import { desktopImeOwnsKey } from "./desktop/commands/imeShortcut";
 import { workspaceCommandKey } from "./desktop/commands/workspaceCommandKey";
 import { sequentialShortcutAvailability } from "./desktop/commands/shortcutAvailability";

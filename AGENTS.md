@@ -50,7 +50,7 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
   (it would reformat 3700 lines). Match 4-space when editing it.
   (memory: cowboy-web-app-tsx-4space)
 - Web app-shell primitives and the Deno/Vite builder are owned by Cowboy under
-  `web/src/components/app-shell` and `nix/`; fresh worktrees must build without
+  `components/app-shell` and `nix/`; fresh worktrees must build without
   links to another repository.
 - The consolidated PostgreSQL and SQLite SQLx baselines are immutable after
   deployment, including comments and whitespace because their exact bytes are

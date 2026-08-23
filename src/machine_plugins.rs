@@ -2156,7 +2156,7 @@ mod tests {
             serde_json::from_str(include_str!("../plugins/gemini/plugin.json")).unwrap();
         let plugin_package = PluginPackage::new(
             manifest,
-            "1.0.0".to_owned(),
+            "2.0.0".to_owned(),
             PluginPayload::AgentProvider(Box::new(package.clone())),
         )
         .unwrap();
@@ -2171,7 +2171,7 @@ mod tests {
             artifact_url: "https://example.invalid/gemini.cowboy-plugin".to_owned(),
             publisher: package.manifest.publisher.clone(),
             contract_fingerprint: plugin_package.contract_fingerprint.clone(),
-            component_release: "1.0.0".to_owned(),
+            component_release: "2.0.0".to_owned(),
             signature: String::new(),
             supported_platforms: package
                 .manifest
@@ -2329,7 +2329,7 @@ mod tests {
             serde_json::from_str(include_str!("../plugins/zed/contract.json")).unwrap();
         let package = PluginPackage::new(
             manifest,
-            "1.0.0".to_owned(),
+            "2.0.0".to_owned(),
             PluginPayload::CodeIntelligence(contract),
         )
         .unwrap();
@@ -2337,14 +2337,14 @@ mod tests {
         let mut release = PluginRelease {
             release_schema: RELEASE_SCHEMA_VERSION,
             plugin_id: "zed".to_owned(),
-            plugin_version: "1.0.0".to_owned(),
+            plugin_version: "1.1.0".to_owned(),
             plugin_kind: cowboy_plugin_sdk::PluginKind::CodeIntelligence,
             package_digest: PluginPackage::artifact_digest(&bytes),
             artifact_digest: String::new(),
             artifact_url: "https://example.invalid/zed.cowboy-plugin".to_owned(),
             publisher: package.manifest.publisher.clone(),
             contract_fingerprint: package.contract_fingerprint.clone(),
-            component_release: "1.0.0".to_owned(),
+            component_release: "2.0.0".to_owned(),
             signature: String::new(),
             supported_platforms: vec![cowboy_provider_sdk::PlatformTarget {
                 os: OperatingSystem::Linux,

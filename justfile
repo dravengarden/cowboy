@@ -7,7 +7,7 @@ toolchain-check:
     required="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "cowboy") | .rust_version')"; actual="$(rustc --version --verbose | awk '/^release:/ { print $2 }')"; test "$required" = "$actual" || { echo "rust-version $required does not match pinned rustc $actual" >&2; exit 1; }
 
 # Install frontend deps. `deno install` reads package.json + deno.json and
-# populates web/node_modules (nodeModulesDir = "auto") so Vite resolves
+# populates web/node_modules (nodeModulesDir = "manual") so Vite resolves
 # `vite`, `tsc`, etc. from there as it always did.
 install:
     cd web && deno install
@@ -49,7 +49,12 @@ build-machine-bootstrap:
 
 # Generic Cowboy Plugin lifecycle. Agent Provider and code-intelligence are
 # payload kinds; neither owns a separate release or installation format.
-plugin-check:
+component-package-check:
+    for package in plugin-contract app-shell state-store state-sync state-sync-idb provider-ui provider-runtime code-intelligence; do npm pack --dry-run --json "./components/$package" >/dev/null; done
+    cargo package --locked --allow-dirty --list -p cowboy-provider-sdk >/dev/null
+    cargo package --locked --allow-dirty --list -p cowboy-plugin-sdk >/dev/null
+
+plugin-check: component-package-check
     deno check tools/check-plugin-components.ts
     deno test --allow-read tools/check-plugin-components_test.ts
     deno run --allow-read tools/check-plugin-components.ts
@@ -64,12 +69,28 @@ plugin-build PLUGIN:
 plugin-build-all:
     for plugin in claude-code claude-deepseek codex codex-deepseek gemini grok zed; do just plugin-build "$plugin"; done
 
+# Prove that one Plugin can build outside the Cowboy checkout using only its
+# own source directory, its component release pin, and the packaged SDK CLI.
+plugin-isolation-check PLUGIN="codex":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{PLUGIN}}" in (*[!a-z0-9-]*|"") echo "invalid plugin id" >&2; exit 2;; esac
+    repo_root="$PWD"
+    isolation_root="$(mktemp -d /tmp/cowboy-plugin-isolation-XXXXXX)"
+    cleanup() { rm -r -- "$isolation_root"; }
+    trap cleanup EXIT
+    cargo build --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack
+    cd "$isolation_root"
+    "$repo_root/target/debug/cowboy-plugin-pack" build "$repo_root/plugins/{{PLUGIN}}" "{{PLUGIN}}.cowboy-plugin"
+    test -s "{{PLUGIN}}.cowboy-plugin"
+    test -s "{{PLUGIN}}.release.json"
+
 # Agent Plugin payload helper. Its output is the generic runtime manifest
 # consumed by plugin-bind-runtime; it is not an independent release lifecycle.
 agent-plugin-runtime-build PLUGIN BASE_URL:
     case "{{PLUGIN}}" in (*[!a-z0-9-]*|"") echo "invalid plugin id" >&2; exit 2;; esac
     test "$(jq -r .kind "plugins/{{PLUGIN}}/plugin.json")" = agent_provider
-    deno run --allow-read --allow-write=dist --allow-net --allow-run tools/build-provider-runtime.ts "{{PLUGIN}}" "{{BASE_URL}}"
+    deno run --allow-read --allow-write=dist --allow-net --allow-run components/provider-runtime/build.ts "plugins/{{PLUGIN}}" "{{BASE_URL}}"
 
 plugin-set-artifact-url PLUGIN URL:
     cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- set-artifact-url "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.release.json" "{{URL}}"
@@ -91,14 +112,15 @@ plugin-publish PLUGIN CATALOG PUBLIC_KEY:
 # Cross-language package/linker conformance. This is also the Agent Plugin
 # payload gate used by the generic Plugin release workflow.
 provider-check: plugin-check
-    deno check tools/build-provider-runtime.ts tools/check-provider-runtime-lock.ts tools/plugin-publication-receipt.ts tools/publish-plugin-release.ts
+    deno check components/provider-runtime/build.ts components/provider-runtime/check.ts tools/plugin-publication-receipt.ts tools/publish-plugin-release.ts
     deno test --allow-read tools/provider-runtime-platforms_test.ts
     deno test --allow-read --allow-write .agents/skills/release-cowboy-plugin/scripts/audit-dependencies_test.ts
     deno test tools/plugin-publication-receipt_test.ts
-    deno run --allow-read tools/check-provider-runtime-lock.ts
+    deno run --allow-read components/provider-runtime/check.ts
     cargo test --locked -p cowboy-provider-sdk --all-targets
     cargo test --locked -p cowboy-plugin-sdk --all-targets
     just plugin-build-all
+    just plugin-isolation-check codex
     cd web && deno task typecheck
     deno run --allow-read components/provider-ui/validate-packages.ts dist/plugins/*/*.cowboy-plugin
     cd web && deno test --allow-read src/providerSdk.test.ts
@@ -133,11 +155,13 @@ feature-check:
     cargo check --locked --no-default-features --features code-adapter --bin cowboy-code-adapter
 
 test:
-    cargo test --all-targets --all-features --locked
+    # The invoking Codex Plugin exports its own signed package path. Cowboy's
+    # unit tests exercise embedded fixtures and must not inherit that runtime.
+    env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --all-targets --all-features --locked
     cd plugins/zed/adapter && cargo test --all-targets --locked
     cd web && deno task test
 
-check: toolchain-check plugin-check fmt lint dependencies typecheck feature-check test build
+check: toolchain-check provider-check fmt lint dependencies typecheck feature-check test build
 
 # Run the complete quality gate without growing workspace incremental caches.
 # sccache stays opt-in until cross-worktree Rust cache hits are proven locally.

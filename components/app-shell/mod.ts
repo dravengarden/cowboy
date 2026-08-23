@@ -9,7 +9,12 @@ export {
   selectionHaptic,
 } from "./haptics.ts";
 export { type HapticDelegationOptions, installHaptics } from "./haptic-delegation.ts";
-export { subscribeAnyDetentSheetOpen, useAnyDetentSheetOpen } from "./detent-sheet-open.ts";
+export {
+  isAnyDetentSheetOpen,
+  markDetentSheetOpen,
+  subscribeAnyDetentSheetOpen,
+  useAnyDetentSheetOpen,
+} from "./detent-sheet-open.ts";
 export {
   BottomSheet,
   type BottomSheetProps,

@@ -1,4 +1,4 @@
-import { persisted, useStore } from "./components/state/store/mod.ts";
+import { persisted, useStore } from "@cowboy/state-store";
 
 // Attention alert: a short chime (+ a vibration on devices that support it)
 // when an agent needs the user — a finished turn (done) or a permission request

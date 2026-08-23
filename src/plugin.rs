@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
-use anyhow::{Result, ensure};
+use anyhow::{Context as _, Result, ensure};
 #[cfg(test)]
 use cowboy_plugin_sdk::PluginKind;
 use cowboy_plugin_sdk::PluginManifest;
@@ -39,6 +39,22 @@ struct ComponentRecord {
     publisher: String,
     sources: Vec<String>,
     digest: String,
+    package: Option<ComponentPackage>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ComponentPackage {
+    kind: ComponentPackageKind,
+    name: String,
+    manifest: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ComponentPackageKind {
+    Cargo,
+    Npm,
 }
 
 const FIRST_PARTY_PLUGIN_SOURCES: [&str; 7] = [
@@ -81,7 +97,7 @@ fn component_registry() -> &'static ComponentRegistry {
         let registry: ComponentRegistry =
             serde_json::from_str(COMPONENT_REGISTRY_SOURCE).expect("component registry must parse");
         assert_eq!(
-            registry.schema_version, 1,
+            registry.schema_version, 2,
             "component registry schema must be supported"
         );
         let active = registry
@@ -100,8 +116,16 @@ fn validate_against_active_release(manifest: &PluginManifest) -> Result<()> {
     let registry = component_registry();
     let release = registry.releases.last().expect("component release exists");
     ensure!(
-        release.plugins.get(&manifest.id) == Some(&manifest.version),
-        "plugin version does not match active component release"
+        manifest.component_release == release.version,
+        "plugin component release does not match active component release"
+    );
+    let minimum_version = release
+        .plugins
+        .get(&manifest.id)
+        .context("plugin is absent from active component release")?;
+    ensure!(
+        semver::Version::parse(&manifest.version)? >= semver::Version::parse(minimum_version)?,
+        "plugin version predates active component release"
     );
     let components: BTreeMap<_, _> = release
         .components
@@ -119,6 +143,18 @@ fn validate_against_active_release(manifest: &PluginManifest) -> Result<()> {
                 component.digest.starts_with("sha256:"),
                 "component has invalid digest"
             );
+            let package = component
+                .package
+                .as_ref()
+                .context("active component has no distributable package")?;
+            ensure!(!package.name.is_empty(), "component package name is empty");
+            ensure!(
+                !package.manifest.is_empty(),
+                "component package manifest is empty"
+            );
+            match package.kind {
+                ComponentPackageKind::Cargo | ComponentPackageKind::Npm => {}
+            }
             Ok((component.id.as_str(), component.version.as_str()))
         })
         .collect::<Result<_>>()?;

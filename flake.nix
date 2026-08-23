@@ -164,12 +164,20 @@
       # (vendored npm cache, keyed by the lockfiles → depsHash below) + a normal
       # content-addressed offline build. Any source edit rebuilds automatically;
       # only refresh depsHash when web/deno.lock or web/package.json change
-      # (lib.fakeHash → build → copy "got"). App-shell components are ordinary
-      # committed Cowboy sources, so no external SDK is staged during a build.
+      # (lib.fakeHash → build → copy "got"). Local component packages are
+      # copied only to resolve their file: manifests; their source stays in the
+      # ordinary content-addressed build rather than the dependency cache.
       cowboy-web = buildDenoViteApp {
         pname = "cowboy";
         version = "0.1.0";
         src = pkgs.lib.cleanSource ./.;
+        localPackages = [
+          "components/app-shell"
+          "components/provider-ui"
+          "components/state-store"
+          "components/state-sync"
+          "components/state-sync-idb"
+        ];
         depsHash = "sha256-yBrkTBMRRuf3LFMWI9Nkbu3yFC2Wd1FWhcDQXPv+Pg8=";
       };
 
@@ -293,7 +301,7 @@
 
       cowboy-zed-adapter = rustPlatform.buildRustPackage {
         pname = "cowboy-zed-adapter";
-        version = "1.0.0";
+        version = "1.1.0";
         src = zed-adapter-src;
         cargoLock = {
           lockFile = ./plugins/zed/adapter/Cargo.lock;
@@ -415,11 +423,11 @@
         test -e ${cowboy-src}/components/provider-sdk/Cargo.toml
         test -e ${cowboy-src}/components/plugin-sdk/Cargo.toml
         test -e ${cowboy-src}/plugins/codex/provider.json
-        test ! -e ${cowboy-src}/components/provider-runtime-lock.json
+        test ! -e ${cowboy-src}/components/provider-runtime/lock.json
         test -e ${machine-src}/components/provider-sdk/Cargo.toml
         test -e ${machine-src}/components/plugin-sdk/Cargo.toml
         test -e ${machine-src}/plugins/gemini/provider.json
-        test ! -e ${machine-src}/components/provider-runtime-lock.json
+        test ! -e ${machine-src}/components/provider-runtime/lock.json
         test -e ${code-adapter-src}/components/provider-sdk/Cargo.toml
         test -e ${code-adapter-src}/components/plugin-sdk/Cargo.toml
         test ! -e ${code-adapter-src}/providers

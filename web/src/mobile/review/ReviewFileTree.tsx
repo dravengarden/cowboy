@@ -25,7 +25,7 @@ import {
   Typography,
 } from "@mui/material";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { MobileSheetActionGroup } from "../../components/app-shell";
+import { MobileSheetActionGroup } from "@cowboy/app-shell";
 import { openAppSettings } from "../../appSettings";
 import { NetworkIconButton } from "../../NetworkActionFeedback";
 import {

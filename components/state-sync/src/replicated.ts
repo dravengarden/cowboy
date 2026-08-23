@@ -12,7 +12,7 @@
 // multiplexed socket carrying far more than sync), so the seam is a plain `send`
 // callback rather than an owned connection.
 
-import type { ReadableStore } from "../../store/mod.ts";
+import type { ReadableStore } from "@cowboy/state-store";
 import { type Client, type ClientOpts, createClient } from "./client.ts";
 import type { ArgsOf, Mutators } from "./mutators.ts";
 import type { ClientSnapshot, LocalPersistence, Mutation, MutationId, Patch, Version } from "./types.ts";

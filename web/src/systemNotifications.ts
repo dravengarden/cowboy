@@ -1,4 +1,4 @@
-import { persisted, useStore } from "./components/state/store/mod.ts";
+import { persisted, useStore } from "@cowboy/state-store";
 import {
   DEFAULT_SYSTEM_NOTIFICATION_PREFERENCES,
   isSafeSessionId,

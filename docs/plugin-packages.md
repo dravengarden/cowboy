@@ -283,7 +283,7 @@ Such a package may appear in the Catalog as `release_state=unbound` so its UI
 can be reviewed, but Cowboy disables install and upgrade. For a production
 Agent Plugin release, `plugin-build` creates the data-only package,
 `agent-plugin-runtime-build <plugin-id> <artifact-base-url>` builds every declared target from
-`components/provider-runtime-lock.json` and assigns content-addressed HTTPS
+`components/provider-runtime/lock.json` and assigns content-addressed HTTPS
 URLs, and `plugin-bind-runtime` binds that output. Other Plugin kinds provide
 their own runtime builder but use the same bind/sign/publish commands. Binding requires exactly one
 runtime entry for every declared OS/architecture and exactly one matching
@@ -579,10 +579,10 @@ release. A release then requires `plugin-sign` and
 `plugin-publish`; publication independently re-runs `plugin-verify` with
 the supplied public key before writing any Catalog bytes.
 
-`components/provider-runtime-lock.json` is the single release-input lock for embedded
+`components/provider-runtime/lock.json` is the single release-input lock for embedded
 Node.js distributions, target-specific native npm archives, and exact Git
 gateway commits. Node-based components have isolated package roots and npm v3
-lockfiles under `components/provider-runtime-packages/`; the lock checker requires the
+lockfiles under `components/provider-runtime/packages/`; the lock checker requires the
 direct package version, resolved URL, and SRI to match the Provider manifest.
 The Machine never falls back to a global Node, npm, ACP adapter, Provider CLI,
 or gateway.

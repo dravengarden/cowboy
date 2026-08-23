@@ -16,7 +16,7 @@ import {
   RestartAlt,
   Search,
 } from "@mui/icons-material";
-import { DetentSheet, MobileSheetDismiss } from "./components/app-shell";
+import { DetentSheet, MobileSheetDismiss } from "@cowboy/app-shell";
 import { COMPOSER_COMMANDS, COMPOSER_COMMANDS_BY_ID } from "./composerCommands";
 import {
   DEFAULT_COMPOSER_TOOLBAR,

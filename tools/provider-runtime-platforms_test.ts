@@ -1,10 +1,10 @@
 import { assertEquals } from "jsr:@std/assert";
 
 const runtimeBuilder = await Deno.readTextFile(
-  new URL("./build-provider-runtime.ts", import.meta.url),
+  new URL("../components/provider-runtime/build.ts", import.meta.url),
 );
 const runtimeLockChecker = await Deno.readTextFile(
-  new URL("./check-provider-runtime-lock.ts", import.meta.url),
+  new URL("../components/provider-runtime/check.ts", import.meta.url),
 );
 
 for (const provider of ["claude-deepseek", "codex-deepseek"]) {

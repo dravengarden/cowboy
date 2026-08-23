@@ -11,7 +11,7 @@
 // requests in `new Promise` is unavoidable here.
 // oxlint-disable promise/avoid-new
 
-import type { LocalPersistence } from "../sync/mod.ts";
+import type { LocalPersistence } from "@cowboy/state-sync";
 
 export interface IdbOpts {
   /** Database name. The legacy default is retained to preserve browser data. */

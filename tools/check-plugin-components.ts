@@ -4,6 +4,11 @@ interface ComponentRecord {
   publisher: string;
   sources: string[];
   digest: string;
+  package?: {
+    kind: "cargo" | "npm";
+    name: string;
+    manifest: string;
+  };
 }
 
 interface ComponentRelease {
@@ -22,6 +27,7 @@ interface PluginManifest {
   schema_version: number;
   id: string;
   version: string;
+  component_release: string;
   publisher: string;
   kind: "agent_provider" | "code_intelligence";
   entrypoint: string;
@@ -30,7 +36,7 @@ interface PluginManifest {
 
 const semverPattern = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
 const registry = await readJson<ComponentRegistry>("components/registry.json");
-assert(registry.schema_version === 1, "unsupported component registry schema");
+assert(registry.schema_version === 2, "unsupported component registry schema");
 assert(registry.releases.length > 0, "component registry has no releases");
 
 const active = registry.releases.at(-1)!;
@@ -99,6 +105,8 @@ for (const component of active.components) {
     `${component.id}: invalid component publisher`,
   );
   assert(component.sources.length > 0, `${component.id}: no source roots`);
+  assert(component.package !== undefined, `${component.id}: no distributable package`);
+  await validatePackage(component);
   const digest = await sourceDigest(component.sources);
   if (Deno.args.includes("--print-digests")) {
     console.log(`${component.id} ${digest}`);
@@ -132,9 +140,14 @@ for (const pluginId of pluginEntries) {
   );
   assert(manifest.id === pluginId, `${pluginId}: directory identity mismatch`);
   assert(manifest.publisher.length > 0, `${pluginId}: publisher is empty`);
+  validateIndependentPluginVersion(
+    pluginId,
+    manifest.version,
+    active.plugins[pluginId]!,
+  );
   assert(
-    manifest.version === active.plugins[pluginId],
-    `${pluginId}: registry version mismatch`,
+    manifest.component_release === active.version,
+    `${pluginId}: component release mismatch`,
   );
   assert(
     exists(`plugins/${pluginId}/${manifest.entrypoint}`),
@@ -249,6 +262,102 @@ async function sourceDigest(sources: string[]): Promise<string> {
   }`;
 }
 
+export function validateIndependentPluginVersion(
+  pluginId: string,
+  version: string,
+  componentReleaseMinimum: string,
+): void {
+  assert(exactVersion(version), `${pluginId}: invalid plugin version ${version}`);
+  assert(
+    compareVersion(version, componentReleaseMinimum) >= 0,
+    `${pluginId}: version predates the active component release`,
+  );
+}
+
+async function validatePackage(component: ComponentRecord): Promise<void> {
+  const descriptor = component.package!;
+  assert(exists(descriptor.manifest), `${component.id}: package manifest is missing`);
+  if (descriptor.kind === "npm") {
+    const manifest = await readJson<{
+      name?: string;
+      version?: string;
+      private?: boolean;
+      exports?: unknown;
+      dependencies?: Record<string, string>;
+      peerDependencies?: Record<string, string>;
+    }>(descriptor.manifest);
+    assert(manifest.name === descriptor.name, `${component.id}: npm package name mismatch`);
+    assert(manifest.version === component.version, `${component.id}: npm package version mismatch`);
+    assert(manifest.private !== true, `${component.id}: npm package is private`);
+    assert(manifest.exports !== undefined, `${component.id}: npm package has no public exports`);
+    const packageRoot = dirname(descriptor.manifest);
+    for (const target of exportTargets(manifest.exports)) {
+      assert(target.startsWith("./"), `${component.id}: export is not package-relative`);
+      const exportedPath = resolve(packageRoot, target);
+      assert(
+        confined(packageRoot, exportedPath) && exists(exportedPath),
+        `${component.id}: export escapes or is missing: ${target}`,
+      );
+    }
+    await validateNpmSourceClosure(
+      component,
+      packageRoot,
+      { ...manifest.dependencies, ...manifest.peerDependencies },
+    );
+    return;
+  }
+  const cargo = await Deno.readTextFile(descriptor.manifest);
+  const packageBlock = cargo.split("[dependencies]", 1)[0] ?? cargo;
+  assert(
+    packageBlock.includes(`name = "${descriptor.name}"`),
+    `${component.id}: Cargo package name mismatch`,
+  );
+  assert(
+    packageBlock.includes(`version = "${component.version}"`),
+    `${component.id}: Cargo package version mismatch`,
+  );
+  assert(!packageBlock.includes("publish = false"), `${component.id}: Cargo package is private`);
+}
+
+async function validateNpmSourceClosure(
+  component: ComponentRecord,
+  packageRoot: string,
+  declaredDependencies: Record<string, string>,
+): Promise<void> {
+  const files: string[] = [];
+  await collectFiles(packageRoot, files);
+  const imports = /(?:from\s*|import\s*\()\s*["']([^"']+)["']/g;
+  for (const file of files.filter((path) => /\.[cm]?tsx?$/.test(path))) {
+    const source = await Deno.readTextFile(file);
+    for (const match of source.matchAll(imports)) {
+      const specifier = match[1]!;
+      if (specifier.startsWith(".")) {
+        assert(
+          confined(packageRoot, resolve(dirname(file), specifier)),
+          `${component.id}: relative import escapes package: ${file} -> ${specifier}`,
+        );
+      } else if (specifier.startsWith("@cowboy/")) {
+        assert(
+          exactVersion(declaredDependencies[specifier] ?? ""),
+          `${component.id}: Cowboy package dependency is not exact: ${specifier}`,
+        );
+      }
+    }
+  }
+}
+
+function exportTargets(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  assert(value !== null && typeof value === "object", "invalid npm exports");
+  return Object.values(value as Record<string, unknown>).flatMap(exportTargets);
+}
+
+function confined(root: string, path: string): boolean {
+  const pathFromRoot = relative(resolve(root), resolve(path));
+  return pathFromRoot === "" ||
+    (!pathFromRoot.startsWith("..") && !pathFromRoot.startsWith("/"));
+}
+
 async function collectFiles(path: string, files: string[]): Promise<void> {
   const stat = await Deno.stat(path);
   if (stat.isFile) {
@@ -323,3 +432,4 @@ async function readJson<T>(path: string): Promise<T> {
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
+import { dirname, relative, resolve } from "node:path";

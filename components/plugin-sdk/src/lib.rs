@@ -28,6 +28,7 @@ pub struct PluginManifest {
     pub schema_version: u16,
     pub id: String,
     pub version: String,
+    pub component_release: String,
     pub publisher: String,
     pub kind: PluginKind,
     pub entrypoint: String,
@@ -157,6 +158,7 @@ impl PluginManifest {
         );
         validate_id(&self.id, "plugin id")?;
         validate_version(&self.version, "plugin version")?;
+        validate_version(&self.component_release, "component release")?;
         ensure!(
             !self.publisher.trim().is_empty(),
             "plugin publisher is empty"
@@ -202,6 +204,10 @@ impl PluginPackage {
     ) -> Result<Self> {
         manifest.validate()?;
         validate_version(&component_release, "component release")?;
+        ensure!(
+            manifest.component_release == component_release,
+            "plugin manifest component release mismatch"
+        );
         validate_payload(&manifest, &payload)?;
         let contract_fingerprint = fingerprint_json(&serde_json::json!({
             "manifest": &manifest,
@@ -571,6 +577,7 @@ mod tests {
             schema_version: 1,
             id: "zed".to_owned(),
             version: "1.0.0".to_owned(),
+            component_release: "1.0.0".to_owned(),
             publisher: "cowboy-project".to_owned(),
             kind: PluginKind::CodeIntelligence,
             entrypoint: "adapter/Cargo.toml".to_owned(),

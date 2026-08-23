@@ -21,9 +21,9 @@ flowchart TB
 
 - **`cowboy-web`** uses Cowboy's local `nix/deno-vite-app.nix` builder — a
   deps-only FOD (vendored npm cache, keyed by `depsHash`) plus a normal offline
-  build. UI and state components are ordinary sources under
-  `web/src/components`. Refresh `depsHash` only when `web/deno.lock` or
-  `web/package.json` change.
+  build. UI and state components are publishable source packages under
+  `components/` and are linked through `web/package.json`. Refresh `depsHash`
+  only when `web/deno.lock` or `web/package.json` change.
 - **`cowboy`** is a `buildRustPackage` whose source filter excludes frontend
   files except the TypeScript protocol fixture used by Rust contract tests.
   It pins crates via **`cargoHash` / `fetchCargoVendor`** (not

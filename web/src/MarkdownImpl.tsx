@@ -29,7 +29,7 @@ import remarkFrontmatter from "remark-frontmatter";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
-import { ImageLightbox } from "./components/app-shell";
+import { ImageLightbox } from "@cowboy/app-shell";
 import { MermaidDiagram } from "./MermaidDiagram";
 import { copyText } from "./clipboard";
 import { openExternalUrl, shouldRouteExternalClick } from "./openExternal";

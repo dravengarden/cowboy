@@ -12,7 +12,7 @@
 // identical, so the same `useStore` renders either and a state can be promoted
 // from one tier to the other without touching the components.
 
-import type { Store } from "../../store/mod.ts";
+import type { Store } from "@cowboy/state-store";
 import type { LocalPersistence, RemoteBackend } from "./types.ts";
 
 export type SyncStatus = "connecting" | "live" | "offline";

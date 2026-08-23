@@ -9,12 +9,6 @@ use cowboy_plugin_sdk::{
     PluginRelease, PluginRuntimeArtifacts, RELEASE_SCHEMA_VERSION,
 };
 use cowboy_provider_sdk::{PlatformTarget, StandardProviderSource, build_package};
-use serde::Deserialize;
-
-#[derive(Deserialize)]
-struct ComponentRegistry {
-    active_release: String,
-}
 
 fn main() -> Result<()> {
     let arguments: Vec<_> = std::env::args_os().skip(1).collect();
@@ -55,8 +49,8 @@ fn build(arguments: &[std::ffi::OsString]) -> Result<()> {
             PluginPayload::CodeIntelligence(read_json(&root.join(&manifest.entrypoint))?)
         }
     };
-    let registry: ComponentRegistry = read_json(Path::new("components/registry.json"))?;
-    let package = PluginPackage::new(manifest, registry.active_release, payload)?;
+    let component_release = manifest.component_release.clone();
+    let package = PluginPackage::new(manifest, component_release, payload)?;
     let bytes = package.canonical_bytes()?;
     write_atomic(&output, &bytes)?;
     let digest = PluginPackage::artifact_digest(&bytes);

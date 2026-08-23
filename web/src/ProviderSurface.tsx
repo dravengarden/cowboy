@@ -30,7 +30,7 @@ import {
   transitionProvider,
   type UiAsset,
   type UiNode,
-} from "../../components/provider-ui/src/index.ts";
+} from "@cowboy/provider-ui";
 import {
   providerPresentationEntry,
   useProviderCatalog,

@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { persisted } from "./components/state/store/mod.ts";
+import { persisted } from "@cowboy/state-store";
 import { conn, useStoreSelector } from "./store";
 import {
   resolveWorkspaceBinding,

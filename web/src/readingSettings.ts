@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect } from "react";
 import { DEFAULT_FONT_ID, getFontPreset } from "./fonts";
-import { persisted, useStore } from "./components/state/store/mod.ts";
+import { persisted, useStore } from "@cowboy/state-store";
 
 // Application readability controls: font-size SCALE applies at the root so
 // transcript prose, MUI chrome, editors, keycaps, and functional icons move

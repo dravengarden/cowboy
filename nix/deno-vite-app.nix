@@ -10,6 +10,7 @@
   src,
   webRoot ? "web",
   depsHash,
+  localPackages ? [ ],
   installArgs ? "--frozen",
   nodejs ? pkgs.nodejs_24,
 }:
@@ -18,12 +19,16 @@ let
     pname = "${pname}-web-deps";
     inherit version;
     src = pkgs.runCommandLocal "${pname}-web-deps-src" { } ''
-      mkdir -p $out
+      mkdir -p $out/${webRoot}
       for f in deno.json deno.jsonc deno.lock package.json; do
         if [ -e "${src}/${webRoot}/$f" ]; then
-          cp "${src}/${webRoot}/$f" "$out/$f"
+          cp "${src}/${webRoot}/$f" "$out/${webRoot}/$f"
         fi
       done
+      ${lib.concatMapStringsSep "\n" (package: ''
+        mkdir -p "$out/$(dirname '${package}')"
+        cp -R "${src}/${package}" "$out/${package}"
+      '') localPackages}
     '';
     nativeBuildInputs = [ deno nodejs ];
     dontUnpack = true;
@@ -34,6 +39,7 @@ let
       export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
       cp -RL $src/. .
       chmod -R u+w .
+      cd ${webRoot}
       deno install ${installArgs}
     '';
     dontInstall = true;

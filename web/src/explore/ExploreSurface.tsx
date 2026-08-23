@@ -38,7 +38,7 @@ import { createPortal } from "react-dom";
 import {
   DetentSheet,
   MobileSheetActionGroup,
-} from "../components/app-shell";
+} from "@cowboy/app-shell";
 import {
   type DesktopCommand,
   useDesktopCommand,

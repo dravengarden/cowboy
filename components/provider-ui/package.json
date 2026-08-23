@@ -1,0 +1,12 @@
+{
+  "name": "@cowboy/provider-ui",
+  "version": "3.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": ["src", "README.md"],
+  "publishConfig": {
+    "access": "public"
+  }
+}

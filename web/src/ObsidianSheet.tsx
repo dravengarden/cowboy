@@ -16,8 +16,8 @@ import {
 } from "react";
 import { Box, Paper, Typography, useTheme } from "@mui/material";
 import { alpha } from "@mui/material/styles";
-import { markDetentSheetOpen } from "./components/app-shell/detent-sheet-open.ts";
-import { haptic as fireHaptic, MobileSheetDismiss } from "./components/app-shell";
+import { markDetentSheetOpen } from "@cowboy/app-shell";
+import { haptic as fireHaptic, MobileSheetDismiss } from "@cowboy/app-shell";
 import {
   OBSIDIAN_SHEET_INSET_PX,
   OBSIDIAN_SHEET_MAX_FRACTION,

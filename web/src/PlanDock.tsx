@@ -12,7 +12,7 @@ import {
 import { CheckCircle, Close, ExpandLess, ExpandMore, RadioButtonUnchecked } from "@mui/icons-material";
 import type { PlanEntry } from "./protocol";
 import { memo, type ReactNode } from "react";
-import { useStore } from "./components/state/store/mod.ts";
+import { useStore } from "@cowboy/state-store";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 import { desktopSurfaceSx } from "./desktop/DesktopEmbeddedControl";
 import {

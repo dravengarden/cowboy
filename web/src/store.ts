@@ -7,7 +7,7 @@
 // over HTTP. We dedup by (session_id, seq), so HTTP/live overlap is harmless.
 
 import { useCallback, useRef, useSyncExternalStore } from "react";
-import { createConnectionStore } from "./components/app-shell";
+import { createConnectionStore } from "@cowboy/app-shell";
 import {
   type ArgsOf,
   type ClientSnapshot,
@@ -15,8 +15,8 @@ import {
   replicatedStore,
   type ReplicatedStore,
   snapshotPatch,
-} from "./components/state/sync/mod.ts";
-import { idbListKeys, idbPersistence } from "./components/state/sync-idb/mod.ts";
+} from "@cowboy/state-sync";
+import { idbListKeys, idbPersistence } from "@cowboy/state-sync-idb";
 import { type Attachment, blocksToAttachments, buildContentBlocks } from "./attachments";
 import {
   isAppleTouchWebView,
@@ -84,7 +84,7 @@ export interface ErrorNotice {
 }
 
 /// Top-of-app connection / version banner — the app-shell component instance
-/// (see components/app-shell/connection-banner.tsx). Cowboy keeps its
+/// (see @cowboy/app-shell/connection-banner.tsx). Cowboy keeps its
 /// canonical behavior: red "down" past the threshold, green "reconnected" flash,
 /// blue "update" that counts 3→0 and clears caches + reloads on its own. The
 /// store reports socket open/close into `conn` and reads back the backoff delay;

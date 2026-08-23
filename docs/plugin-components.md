@@ -25,19 +25,39 @@ in-process Rust dependency.
 ## Component boundary
 
 Components contain reusable implementation or contracts, never an independently
-installed product. The initial registry includes the plugin contract, Web app
-shell, reactive store, optimistic sync, Provider SDK/UI/runtime pins, and the
-Zed code-intelligence contract. Web components now live under
-`web/src/components`; Cowboy no longer stages or imports `shared-utils`.
+installed product. Every active component is also a distributable package:
+Cargo crates for Rust SDKs and npm source packages with explicit exports for
+TypeScript, schemas, and runtime tooling. Cowboy consumes TypeScript components
+by package name rather than reaching into their source directories. The
+registry includes the plugin contract, Web app shell, reactive store,
+optimistic sync and IndexedDB adapter, Provider SDK/UI/runtime tooling, and the
+Zed code-intelligence contract. Cowboy no longer stages or imports
+`shared-utils`.
 
 Each component release records:
 
 - an exact component version;
 - every source path owned by that component;
 - a deterministic SHA-256 digest of those sources.
+- its Cargo/npm package name and package manifest.
 
-Plugins pin exact component versions. Ranges, implicit workspace versions, and
+Plugins pin exact component versions and the exact component release. Ranges,
+implicit workspace versions, private packages, missing public exports, and
 moving references are invalid.
+
+## Independent Plugin releases
+
+The component registry records the minimum Plugin version tested when a shared
+component release is cut. A Plugin may subsequently increase its own version
+without creating another component release or changing any sibling Plugin.
+When a component release changes, every Plugin must still increase its version,
+preserving the coordinated compatibility rule.
+
+`cowboy-plugin-pack build` reads the Plugin manifest's `component_release`; it
+does not read Cowboy's component registry or assume a Cowboy checkout as its
+working directory. `just plugin-isolation-check <id>` executes that build from
+an unrelated temporary directory. This is the repository acceptance proof for
+moving a Plugin to its own repository and release pipeline.
 
 ## Coordinated release rule
 
@@ -56,10 +76,12 @@ just plugin-check
 just plugin-build <plugin-id>
 ```
 
-`plugin-check` validates source digests, exact dependency pins, plugin and entry
-point identity, Provider payload versions, the Zed adapter version, and the
-all-plugins-bump rule between adjacent component releases. `provider-check` and
-the repository-wide `just check` include this gate.
+`plugin-check` validates publishable package manifests and exports, source
+digests, exact dependency pins, plugin and entry-point identity, Provider
+payload versions, the Zed adapter version, and the all-plugins-bump rule between
+adjacent component releases. `provider-check` additionally proves a Plugin can
+build from an unrelated working directory. The repository-wide `just check`
+includes both gates.
 
 ## Layout
 
@@ -67,18 +89,18 @@ the repository-wide `just check` include this gate.
 components/
   registry.json
   plugin-contract/
+  plugin-sdk/
+  app-shell/
+  state-store/
+  state-sync/
+  state-sync-idb/
   provider-sdk/
   provider-ui/
-  provider-runtime-*/
+  provider-runtime/
   code-intelligence/
 plugins/
   <agent-provider>/plugin.json + provider.json
   zed/plugin.json + adapter/
-web/src/components/
-  app-shell/
-  state/store/
-  state/sync/
-  state/sync-idb/
 ```
 
 Machine Plugin state lives under `plugins/`. Startup atomically adopts the old

@@ -1,4 +1,4 @@
-import { persisted, type Store } from "./components/state/store/store.ts";
+import { persisted, type Store } from "@cowboy/state-store";
 
 export type ComposerStackPanel = "plan" | "queued" | "draft";
 

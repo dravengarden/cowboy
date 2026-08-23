@@ -4,6 +4,11 @@
   "type": "module",
   "//": "Scripts moved to deno.json `tasks` — run `deno task <name>`.",
   "dependencies": {
+    "@cowboy/app-shell": "file:../components/app-shell",
+    "@cowboy/provider-ui": "file:../components/provider-ui",
+    "@cowboy/state-store": "file:../components/state-store",
+    "@cowboy/state-sync": "file:../components/state-sync",
+    "@cowboy/state-sync-idb": "file:../components/state-sync-idb",
     "@codemirror/autocomplete": "^6.18.0",
     "@codemirror/commands": "^6.7.0",
     "@codemirror/lang-markdown": "^6.3.0",

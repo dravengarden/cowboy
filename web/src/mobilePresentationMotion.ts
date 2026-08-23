@@ -1,4 +1,4 @@
-import { subscribeAnyDetentSheetOpen } from "./components/app-shell/detent-sheet-open";
+import { subscribeAnyDetentSheetOpen } from "@cowboy/app-shell";
 import {
   mobileCodeRestLayerSx,
   mobileCodeSwipeFlattenSx,

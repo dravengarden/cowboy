@@ -1,7 +1,7 @@
 import CheckIcon from "@mui/icons-material/Check";
 import { Box, Button, CircularProgress } from "@mui/material";
 import { useEffect, useState } from "react";
-import type { ConnectionStore } from "../components/app-shell";
+import type { ConnectionStore } from "@cowboy/app-shell";
 import {
   fetchReadyCowboyVersion,
   mobileUpdateBannerLabel,

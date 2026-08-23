@@ -1,4 +1,4 @@
-import { persisted, useStore } from "./components/state/store/mod.ts";
+import { persisted, useStore } from "@cowboy/state-store";
 
 // Composer expand preference, persisted + reactive (the ↗/↙ toggle writes it;
 // the composer reads it) without prop-drilling — same shape as vimSetting.ts.

@@ -28,7 +28,7 @@ import {
   type ProviderUiManifest,
   resolveProviderAuthenticationPresentation,
   projectAgentPluginInventory,
-} from "../../components/provider-ui/src/index.ts";
+} from "@cowboy/provider-ui";
 import {
   joinProviderInstallations,
   latestProviderEntries,

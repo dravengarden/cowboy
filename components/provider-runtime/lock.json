@@ -90,21 +90,21 @@
     "claude-agent-acp": {
       "kind": "node_npm",
       "version": "0.63.0",
-      "package_dir": "components/provider-runtime-packages/claude-agent-acp",
+      "package_dir": "packages/claude-agent-acp",
       "script": "node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js",
       "probe": ["--version"]
     },
     "codex-acp": {
       "kind": "node_npm",
       "version": "1.1.7",
-      "package_dir": "components/provider-runtime-packages/codex-acp",
+      "package_dir": "packages/codex-acp",
       "script": "node_modules/@agentclientprotocol/codex-acp/dist/index.js",
       "probe": ["--version"]
     },
     "google-gemini-cli": {
       "kind": "node_npm",
       "version": "0.55.1",
-      "package_dir": "components/provider-runtime-packages/gemini",
+      "package_dir": "packages/gemini",
       "script": "node_modules/@google/gemini-cli/bundle/gemini.js",
       "probe": ["--version"]
     },

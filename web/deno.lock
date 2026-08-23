@@ -3285,6 +3285,14 @@
     }
   },
   "workspace": {
+    "dependencies": [
+      "npm:@emotion/react@^11.13.0",
+      "npm:@emotion/styled@^11.13.0",
+      "npm:@mui/icons-material@7",
+      "npm:@mui/material@7",
+      "npm:react-dom@19",
+      "npm:react@19"
+    ],
     "packageJson": {
       "dependencies": [
         "npm:@codemirror/autocomplete@^6.18.0",

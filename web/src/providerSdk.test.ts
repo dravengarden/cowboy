@@ -16,7 +16,7 @@ import {
   validateProviderContractInventory,
   validateProviderManifest,
   validateProviderUiManifest,
-} from "../../components/provider-ui/src/index.ts";
+} from "@cowboy/provider-ui";
 import {
   exactProviderEntry,
   joinProviderInstallations,
@@ -984,11 +984,11 @@ Deno.test("Provider SDK enforces semantic release identity and precedence", () =
 
 Deno.test("Provider SDK rejects incompatible authoring SDK versions before rendering", () => {
   const newer = manifest();
-  newer.sdk_version = "3.0.1";
+  newer.sdk_version = "3.1.1";
   assertThrows(() => validateProviderManifest(newer), Error, "is incompatible");
 
   const current = manifest();
-  current.sdk_version = "3.0.0";
+  current.sdk_version = "3.1.0";
   validateProviderManifest(current);
 
   const oldMajor = manifest();

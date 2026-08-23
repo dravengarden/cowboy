@@ -83,29 +83,32 @@ interface NpmLock {
   }>;
 }
 
-const runtimeLock = await readJson<RuntimeLock>("components/provider-runtime-lock.json");
+const runtimeRoot = dirname(fileURLToPath(import.meta.url));
+const runtimeLock = await readJson<RuntimeLock>(join(runtimeRoot, "lock.json"));
 assert(runtimeLock.schema_version === 1, "unsupported runtime lock schema");
 assert(exactVersion(runtimeLock.node.version), "Node.js version is not exact");
 
-const providerIds: string[] = [];
-for await (const entry of Deno.readDir("plugins")) {
-  if (!entry.isDirectory) continue;
-  if (await exists(`plugins/${entry.name}/provider.json`)) {
-    providerIds.push(entry.name);
+const pluginRoots: string[] = [...Deno.args];
+if (pluginRoots.length === 0) {
+  for await (const entry of Deno.readDir("plugins")) {
+    if (!entry.isDirectory) continue;
+    if (await exists(`plugins/${entry.name}/provider.json`)) {
+      pluginRoots.push(`plugins/${entry.name}`);
+    }
   }
 }
-providerIds.sort();
-assert(providerIds.length > 0, "no Provider manifests found");
+pluginRoots.sort();
+assert(pluginRoots.length > 0, "no Provider manifests found");
 
 const validatedNpmRecipes = new Set<string>();
-for (const providerId of providerIds) {
+const providerIds: string[] = [];
+for (const pluginRoot of pluginRoots) {
   const source = await readJson<ProviderSource>(
-    `plugins/${providerId}/provider.json`,
+    join(pluginRoot, "provider.json"),
   );
-  assert(
-    source.id === providerId,
-    `${providerId}: directory identity mismatch`,
-  );
+  const providerId = source.id;
+  assert(/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(providerId), "invalid Provider id");
+  providerIds.push(providerId);
   assert(exactVersion(source.version), `${providerId}: version is not exact`);
 
   const dependencies = new Map<string, ExactDependency>();
@@ -278,10 +281,10 @@ async function validateNpmRecipe(
     `${providerId}: ${dependency.id} script is unsafe`,
   );
   const packageJson = await readJson<NpmPackage>(
-    `${recipe.package_dir}/package.json`,
+    join(runtimeRoot, recipe.package_dir, "package.json"),
   );
   const lock = await readJson<NpmLock>(
-    `${recipe.package_dir}/package-lock.json`,
+    join(runtimeRoot, recipe.package_dir, "package-lock.json"),
   );
   assert(
     packageJson.private,
@@ -349,3 +352,5 @@ function required<T>(value: T | undefined, message: string): T {
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";

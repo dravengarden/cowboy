@@ -14,7 +14,7 @@ import { alpha, createTheme, type Theme } from "@mui/material";
 import {
   type ThemeChoice,
   useThemeMode as useSharedThemeMode,
-} from "./components/app-shell";
+} from "@cowboy/app-shell";
 import {
   COARSE_POINTER_ROOT_CLASS,
   prefersCoarsePointer,

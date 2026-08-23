@@ -7,7 +7,7 @@ import {
   providerCompatibilityProblem,
   type ProviderCompatibilityTarget,
   validateProviderCatalog,
-} from "../../components/provider-ui/src/index.ts";
+} from "@cowboy/provider-ui";
 
 let cached: ProviderCatalogResponse | null = null;
 let pending: Promise<ProviderCatalogResponse> | null = null;

@@ -5,8 +5,8 @@ import {
   controlPlaneConnection,
   useActiveWorkspaceBinding,
 } from "../../controlPlane";
-import { NativeReleaseUpdatePrompt } from "../../components/app-shell";
-import { isAnyDetentSheetOpen } from "../../components/app-shell/detent-sheet-open";
+import { NativeReleaseUpdatePrompt } from "@cowboy/app-shell";
+import { isAnyDetentSheetOpen } from "@cowboy/app-shell";
 import { MobileConnectionBanner } from "../MobileConnectionBanner";
 import {
   OBSIDIAN_DRAWER_FLICK_PX_PER_MS,
