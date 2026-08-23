@@ -24,8 +24,9 @@ use cowboy_plugin_sdk::{
     PluginPayload, PluginRuntimeArtifacts,
 };
 use cowboy_provider_sdk::{
-    Architecture, OperatingSystem, PlatformRuntimeArtifacts, ProviderArtifactFormat,
-    ProviderPackage, ReleasedPrivateComponent, RuntimeContract,
+    AgentRuntimeBinding, Architecture, OperatingSystem, PlatformRuntimeArtifacts, PlatformTarget,
+    ProviderArtifactFormat, ProviderPackage, RUNTIME_BINDING_SCHEMA_VERSION,
+    ReleasedPrivateComponent, RuntimeContract,
 };
 use futures::StreamExt as _;
 use sha2::{Digest as _, Sha256};
@@ -45,7 +46,117 @@ const MAX_CREDENTIAL_BUNDLE_BYTES: usize = 16 * 1024 * 1024;
 const PROVIDER_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 const AUTH_CANDIDATE_MAX_AGE: Duration = Duration::from_mins(30);
 const AUTH_SEAL_DOMAIN: &[u8] = b"cowboy-provider-auth-seal-v1\0";
+const LEGACY_PROVIDER_RELEASE_SIGNATURE_NAMESPACE: &str = "cowboy-provider-release-v1";
 static ATOMIC_WRITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyProviderRelease {
+    release_schema: u16,
+    provider_id: String,
+    provider_version: String,
+    package_digest: String,
+    artifact_digest: String,
+    artifact_url: String,
+    publisher: String,
+    contract_fingerprint: String,
+    signature: String,
+    supported_platforms: Vec<PlatformTarget>,
+    runtime_artifacts: Vec<PlatformRuntimeArtifacts>,
+}
+
+impl LegacyProviderRelease {
+    fn proof(&self) -> Result<Vec<u8>> {
+        let runtime_artifacts = format!(
+            "sha256:{:x}",
+            Sha256::digest(serde_json::to_vec(&(
+                &self.supported_platforms,
+                &self.runtime_artifacts,
+            ))?)
+        );
+        let fields = [
+            self.provider_id.as_str(),
+            self.provider_version.as_str(),
+            self.package_digest.as_str(),
+            self.artifact_digest.as_str(),
+            self.publisher.as_str(),
+            self.contract_fingerprint.as_str(),
+            runtime_artifacts.as_str(),
+        ];
+        let mut proof = format!("{LEGACY_PROVIDER_RELEASE_SIGNATURE_NAMESPACE}\n").into_bytes();
+        for field in fields {
+            proof.extend_from_slice(field.len().to_string().as_bytes());
+            proof.push(b':');
+            proof.extend_from_slice(field.as_bytes());
+            proof.push(b'\n');
+        }
+        Ok(proof)
+    }
+
+    fn validate_and_project(&self, bytes: &[u8]) -> Result<(ProviderPackage, AgentRuntimeBinding)> {
+        ensure!(
+            self.release_schema == 2,
+            "unsupported legacy Provider release schema"
+        );
+        ensure!(
+            self.package_digest == ProviderPackage::artifact_digest(bytes),
+            "legacy Provider release package digest mismatch"
+        );
+        ensure!(
+            self.artifact_url.starts_with("https://"),
+            "legacy Provider artifact URL must use HTTPS"
+        );
+        ensure!(
+            !self.signature.trim().is_empty(),
+            "legacy Provider release is unsigned"
+        );
+        let package = ProviderPackage::from_bytes(bytes)?;
+        ensure!(
+            self.provider_id == package.manifest.id,
+            "legacy Provider release id mismatch"
+        );
+        ensure!(
+            self.provider_version == package.manifest.version,
+            "legacy Provider release version mismatch"
+        );
+        ensure!(
+            self.publisher == package.manifest.publisher,
+            "legacy Provider publisher mismatch"
+        );
+        ensure!(
+            self.contract_fingerprint == package.contract_fingerprint,
+            "legacy Provider contract mismatch"
+        );
+        let expected_digest = cowboy_provider_sdk::fingerprint_json(&serde_json::json!({
+            "release_schema": self.release_schema,
+            "provider_id": self.provider_id,
+            "provider_version": self.provider_version,
+            "package_digest": self.package_digest,
+            "publisher": self.publisher,
+            "contract_fingerprint": self.contract_fingerprint,
+            "supported_platforms": self.supported_platforms,
+            "runtime_artifacts": self.runtime_artifacts,
+        }))?;
+        ensure!(
+            self.artifact_digest == expected_digest,
+            "legacy Provider release composite artifact digest mismatch"
+        );
+        let mut binding = AgentRuntimeBinding {
+            binding_schema: RUNTIME_BINDING_SCHEMA_VERSION,
+            provider_id: self.provider_id.clone(),
+            provider_version: self.provider_version.clone(),
+            package_digest: self.package_digest.clone(),
+            artifact_digest: String::new(),
+            publisher: self.publisher.clone(),
+            contract_fingerprint: self.contract_fingerprint.clone(),
+            supported_platforms: self.supported_platforms.clone(),
+            runtime_artifacts: self.runtime_artifacts.clone(),
+        };
+        binding.artifact_digest = binding.computed_artifact_digest()?;
+        binding.validate_for(&package)?;
+        Ok((package, binding))
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct ProviderLaunchContext {
@@ -1123,6 +1234,15 @@ impl MachinePluginStore {
         cowboy_provider_sdk::AgentRuntimeBinding,
         PathBuf,
     )> {
+        let generation = digest_generation_name(digest)?;
+        let content = self
+            .plugin_root(provider_id)
+            .join("generations")
+            .join(generation)
+            .join("content");
+        if !content.join("package.cowboy-plugin").is_file() {
+            return self.verified_legacy_provider_generation(provider_id, digest, &content);
+        }
         let (plugin_package, plugin_release, content) =
             self.verified_plugin_generation(provider_id, digest)?;
         let path = content.join("package.cowboy-provider");
@@ -1142,6 +1262,48 @@ impl MachinePluginStore {
             "stored Provider id mismatch"
         );
         Ok((package, release, path))
+    }
+
+    fn verified_legacy_provider_generation(
+        &self,
+        provider_id: &str,
+        digest: &str,
+        content: &Path,
+    ) -> Result<(ProviderPackage, AgentRuntimeBinding, PathBuf)> {
+        let path = content.join("package.cowboy-provider");
+        let bytes = fs::read(&path)
+            .with_context(|| format!("reading legacy Provider generation {}", path.display()))?;
+        let release: LegacyProviderRelease = serde_json::from_slice(
+            &fs::read(content.join("release.json"))
+                .context("reading stored legacy Provider release")?,
+        )?;
+        ensure!(
+            release.artifact_digest == digest,
+            "stored legacy Provider release generation digest mismatch"
+        );
+        let publisher_key = fs::read_to_string(content.join("publisher.pub"))?;
+        ensure!(
+            crate::machine_auth::verify_namespaced(
+                &publisher_key,
+                LEGACY_PROVIDER_RELEASE_SIGNATURE_NAMESPACE,
+                &release.proof()?,
+                &release.signature,
+            )?,
+            "stored legacy Provider publisher signature is invalid"
+        );
+        let (package, binding) = release.validate_and_project(&bytes)?;
+        ensure!(
+            package.manifest.id == provider_id,
+            "stored legacy Provider id mismatch"
+        );
+        let target = matching_runtime_artifacts(&binding, &self.platform, &self.architecture)?;
+        let staging = target.clone();
+        let metadata = read_installed_runtime(content)?;
+        ensure!(
+            installed_runtime_matches(content, &staging, &metadata)?,
+            "retained legacy Provider runtime failed integrity verification"
+        );
+        Ok((package, binding, path))
     }
 
     fn verified_plugin_generation(
@@ -2154,9 +2316,10 @@ mod tests {
             .collect();
         let manifest: PluginManifest =
             serde_json::from_str(include_str!("../plugins/gemini/plugin.json")).unwrap();
+        let component_release = manifest.component_release.clone();
         let plugin_package = PluginPackage::new(
             manifest,
-            "2.0.0".to_owned(),
+            component_release.clone(),
             PluginPayload::AgentProvider(Box::new(package.clone())),
         )
         .unwrap();
@@ -2171,7 +2334,7 @@ mod tests {
             artifact_url: "https://example.invalid/gemini.cowboy-plugin".to_owned(),
             publisher: package.manifest.publisher.clone(),
             contract_fingerprint: plugin_package.contract_fingerprint.clone(),
-            component_release: "2.0.0".to_owned(),
+            component_release,
             signature: String::new(),
             supported_platforms: package
                 .manifest
@@ -2325,11 +2488,13 @@ mod tests {
         });
         let manifest: PluginManifest =
             serde_json::from_str(include_str!("../plugins/zed/plugin.json")).unwrap();
+        let component_release = manifest.component_release.clone();
+        let plugin_version = manifest.version.clone();
         let contract: CodeIntelligenceContract =
             serde_json::from_str(include_str!("../plugins/zed/contract.json")).unwrap();
         let package = PluginPackage::new(
             manifest,
-            "2.0.0".to_owned(),
+            component_release.clone(),
             PluginPayload::CodeIntelligence(contract),
         )
         .unwrap();
@@ -2337,14 +2502,14 @@ mod tests {
         let mut release = PluginRelease {
             release_schema: RELEASE_SCHEMA_VERSION,
             plugin_id: "zed".to_owned(),
-            plugin_version: "1.1.0".to_owned(),
+            plugin_version,
             plugin_kind: cowboy_plugin_sdk::PluginKind::CodeIntelligence,
             package_digest: PluginPackage::artifact_digest(&bytes),
             artifact_digest: String::new(),
             artifact_url: "https://example.invalid/zed.cowboy-plugin".to_owned(),
             publisher: package.manifest.publisher.clone(),
             contract_fingerprint: package.contract_fingerprint.clone(),
-            component_release: "2.0.0".to_owned(),
+            component_release,
             signature: String::new(),
             supported_platforms: vec![cowboy_provider_sdk::PlatformTarget {
                 os: OperatingSystem::Linux,
