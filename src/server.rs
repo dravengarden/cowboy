@@ -2778,6 +2778,16 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
     if method == Method::POST && path.starts_with("/api/machines/") && path.ends_with("/refresh") {
         return RouteAuth::Public;
     }
+    // Release transactions need a narrow, credential-free liveness signal on
+    // both the Controller host and remote Machines. Keep the full inventory
+    // protected; this endpoint exposes only connection state and the active
+    // ACP generation required to prove a rollout.
+    if method == Method::GET
+        && path.starts_with("/api/machines/")
+        && path.ends_with("/deployment-health")
+    {
+        return RouteAuth::Public;
+    }
     if path == "/api/sessions" && method == Method::POST {
         return RouteAuth::ProductOperator;
     }
@@ -4197,6 +4207,10 @@ async fn serve_axum(
             post(api_machine_create_enrollment).delete(api_machine_cancel_enrollment),
         )
         .route("/api/machines/{id}/events", get(api_machine_events))
+        .route(
+            "/api/machines/{id}/deployment-health",
+            get(api_machine_deployment_health),
+        )
         // Protocol-v4/web compatibility adapter. Delete after every supported
         // client consumes protocol-v5 Plugin inventory from `/plugins`.
         .route(
@@ -5721,6 +5735,63 @@ async fn api_machine_events(
     Path(machine_id): Path<String>,
 ) -> Response {
     Json(state.machine_control.events(&machine_id)).into_response()
+}
+
+#[derive(Debug, Serialize)]
+struct MachineDeploymentHealthResponse {
+    connected: bool,
+    status: String,
+    active_acp_generation: Option<String>,
+}
+
+async fn api_machine_deployment_health(
+    State(state): State<Arc<AppState>>,
+    Path(machine_id): Path<String>,
+) -> Response {
+    let Some(store) = state.store.as_ref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "machine registry unavailable",
+        )
+            .into_response();
+    };
+    let machines = match store.list_machines().await {
+        Ok(machines) => machines,
+        Err(error) => {
+            tracing::error!(%error, "reading Machine deployment health");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "could not read Machine deployment health",
+            )
+                .into_response();
+        }
+    };
+    let Some(machine) = machines
+        .into_iter()
+        .find(|machine| machine.id == machine_id && !machine.revoked)
+    else {
+        return (StatusCode::NOT_FOUND, "unknown or revoked Machine").into_response();
+    };
+    let active_acp_generation = machine
+        .inventory
+        .get("components")
+        .cloned()
+        .and_then(|value| {
+            serde_json::from_value::<Vec<crate::machine_protocol::ComponentInventory>>(value).ok()
+        })
+        .and_then(|components| {
+            components.into_iter().find_map(|component| {
+                (component.id.kind == crate::machine_protocol::ComponentKind::AcpRuntime
+                    && component.state == crate::machine_protocol::ComponentState::Active)
+                    .then_some(component.generation)
+            })
+        });
+    Json(MachineDeploymentHealthResponse {
+        connected: state.runtime_router.connected(&machine.id),
+        status: machine.status,
+        active_acp_generation,
+    })
+    .into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -12776,6 +12847,10 @@ mod product_auth_api_tests {
         );
         assert_eq!(
             classify_route(&Method::POST, "/api/machines/m-123/refresh"),
+            RouteAuth::Public
+        );
+        assert_eq!(
+            classify_route(&Method::GET, "/api/machines/m-123/deployment-health"),
             RouteAuth::Public
         );
         assert_eq!(
