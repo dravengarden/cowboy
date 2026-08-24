@@ -6001,12 +6001,12 @@ async fn connected_provider_authentication_executors(
         }) {
             if state
                 .provider_catalog
-                .resolve(
+                .package(
                     &installed.plugin_id,
-                    Some(&installed.plugin_version),
-                    Some(&installed.generation_digest),
+                    &installed.plugin_version,
+                    &installed.generation_digest,
                 )
-                .is_err()
+                .is_none()
             {
                 continue;
             }
@@ -6641,17 +6641,14 @@ async fn api_provider_auth_commit(
     Path(provider_id): Path<String>,
     Json(request): Json<ProviderAuthCommitRequest>,
 ) -> Response {
-    let desired = match state.provider_catalog.resolve(&provider_id, None, None) {
-        Ok(desired) => desired,
-        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
-    };
-    let package = match state.provider_catalog.package(
-        &provider_id,
-        &desired.release.plugin_version,
-        &desired.release.artifact_digest,
-    ) {
-        Some(package) => package,
-        None => return (StatusCode::CONFLICT, "Catalog package disappeared").into_response(),
+    let Some((_provider_version, _generation_digest, package)) =
+        state.provider_catalog.latest_package(&provider_id)
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Provider is known, but no signed runtime release is published in the Catalog",
+        )
+            .into_response();
     };
     let bundle = crate::machine_protocol::PortableCredentialBundle {
         portable_schema: package.manifest.authentication.portable_schema.clone(),
@@ -6789,20 +6786,16 @@ async fn api_provider_auth_start(
     Path(provider_id): Path<String>,
     Json(request): Json<ProviderAuthStartRequest>,
 ) -> Response {
-    let desired = match state.provider_catalog.resolve(
-        &provider_id,
-        Some(&request.provider_version),
-        Some(&request.generation_digest),
-    ) {
-        Ok(desired) => desired,
-        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
-    };
     let Some(package) = state.provider_catalog.package(
         &provider_id,
-        &desired.release.plugin_version,
-        &desired.release.artifact_digest,
+        &request.provider_version,
+        &request.generation_digest,
     ) else {
-        return (StatusCode::CONFLICT, "Catalog package disappeared").into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            "Provider release is not in the Catalog",
+        )
+            .into_response();
     };
     if !package
         .manifest
@@ -6840,8 +6833,8 @@ async fn api_provider_auth_start(
         if current_machine_plugin(&state, &machine_id, &provider_id)
             .await
             .is_ok_and(|installed| {
-                installed.plugin_version == desired.release.plugin_version
-                    && installed.generation_digest == desired.release.artifact_digest
+                installed.plugin_version == request.provider_version
+                    && installed.generation_digest == request.generation_digest
             })
         {
             executor = Some(machine_id);
@@ -6883,8 +6876,8 @@ async fn api_provider_auth_start(
         ProviderAuthExecutor {
             machine_id: machine_id.clone(),
             provider_id: provider_id.clone(),
-            provider_version: desired.release.plugin_version,
-            generation_digest: desired.release.artifact_digest,
+            provider_version: request.provider_version.clone(),
+            generation_digest: request.generation_digest.clone(),
             auth_contract_fingerprint: package
                 .manifest
                 .compatibility

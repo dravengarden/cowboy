@@ -12,20 +12,20 @@ pub(crate) fn available_codex_deepseek_catalog() -> Option<PathBuf> {
 #[cfg(feature = "full")]
 mod service_catalog {
     use std::collections::BTreeMap;
-    #[cfg(test)]
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
 
     use anyhow::{Context as _, Result, bail, ensure};
     use base64::Engine as _;
-    use cowboy_plugin_sdk::PluginPackage;
     use cowboy_provider_sdk::{
         PlatformTarget, ProviderPackage, ProviderUiManifest, StandardProviderSource, build_package,
     };
     use parking_lot::RwLock;
     use serde::Serialize;
 
+    use crate::legacy_provider_release::LegacyProviderRelease;
+    use crate::machine_auth::{LEGACY_PROVIDER_RELEASE_SIGNATURE_NAMESPACE, verify_namespaced};
     use crate::machine_protocol::DesiredPlugin;
 
     const EMBEDDED_SOURCES: [(&str, &str); 6] = [
@@ -78,18 +78,19 @@ mod service_catalog {
     #[derive(Clone)]
     struct CatalogArtifact {
         entry: CatalogEntry,
-        desired: DesiredPlugin,
+        package: ProviderPackage,
     }
 
     pub(crate) struct ProviderCatalog {
         embedded: BTreeMap<(String, String), CatalogEntry>,
         external: RwLock<BTreeMap<(String, String, String), CatalogArtifact>>,
         plugin_catalog: Arc<crate::plugin_catalog::PluginCatalog>,
+        legacy_root: Option<PathBuf>,
     }
 
     impl ProviderCatalog {
         pub(crate) fn open(
-            _data_dir: &Path,
+            data_dir: &Path,
             plugin_catalog: Arc<crate::plugin_catalog::PluginCatalog>,
         ) -> Result<Self> {
             let mut embedded = BTreeMap::new();
@@ -137,10 +138,17 @@ mod service_catalog {
                     "duplicate embedded Provider"
                 );
             }
+            // The generic Plugin Catalog is the only installable source. Read
+            // the former Provider Catalog only when the default directory was
+            // selected, so generations installed before the Plugin cutover
+            // remain schedulable until Machines upgrade them.
+            let legacy_root = (plugin_catalog.catalog_root() == data_dir.join("plugin-catalog"))
+                .then(|| data_dir.join("provider-catalog"));
             let catalog = Self {
                 embedded,
                 external: RwLock::new(BTreeMap::new()),
                 plugin_catalog,
+                legacy_root,
             };
             catalog.refresh_external()?;
             Ok(catalog)
@@ -164,6 +172,9 @@ mod service_catalog {
                 let artifact = catalog_artifact(desired)?;
                 insert_unique(&mut next, artifact)?;
             }
+            if let Some(root) = self.legacy_root.as_deref() {
+                load_legacy_catalog(root, &mut next)?;
+            }
             let count = next.len();
             *self.external.write() = next;
             Ok(count)
@@ -171,20 +182,15 @@ mod service_catalog {
 
         pub(crate) fn entries(&self) -> Vec<CatalogEntry> {
             let external = self.external.read();
-            let released_ids: std::collections::BTreeSet<_> = external
-                .values()
-                .map(|artifact| artifact.entry.provider_id.as_str())
-                .collect();
             let mut combined: Vec<_> = external
                 .values()
                 .map(|artifact| artifact.entry.clone())
                 .collect();
-            combined.extend(
-                self.embedded
-                    .values()
-                    .filter(|entry| !released_ids.contains(entry.provider_id.as_str()))
-                    .cloned(),
-            );
+            // Keep newer embedded manifests visible as presentation-only
+            // entries while an older signed generation remains installed.
+            // Catalog consumers prefer a ready release at equal SemVer, while
+            // session chrome may safely adopt a newer compatible presentation.
+            combined.extend(self.embedded.values().cloned());
             combined.sort_by(|left, right| {
                 left.provider_id
                     .cmp(&right.provider_id)
@@ -195,55 +201,6 @@ mod service_catalog {
                     .then(left.artifact_digest.cmp(&right.artifact_digest))
             });
             combined
-        }
-
-        pub(crate) fn resolve(
-            &self,
-            provider_id: &str,
-            version: Option<&str>,
-            digest: Option<&str>,
-        ) -> Result<DesiredPlugin> {
-            let external = self.external.read();
-            let mut candidates: Vec<_> = external
-                .values()
-                .filter(|artifact| artifact.entry.provider_id == provider_id)
-                .filter(|artifact| {
-                    version.is_none_or(|value| artifact.entry.provider_version == value)
-                })
-                .filter(|artifact| {
-                    digest.is_none_or(|value| {
-                        artifact.entry.artifact_digest.as_deref() == Some(value)
-                    })
-                })
-                .collect();
-            candidates.sort_by(|left, right| {
-                compare_versions(&left.entry.provider_version, &right.entry.provider_version)
-                    .then(left.entry.artifact_digest.cmp(&right.entry.artifact_digest))
-            });
-            let selected = match candidates.pop() {
-                Some(selected) => selected,
-                None if self
-                    .embedded
-                    .values()
-                    .any(|entry| entry.provider_id == provider_id) =>
-                {
-                    bail!(
-                        "Provider is known, but no signed runtime release is published in the Catalog"
-                    )
-                }
-                None => bail!("Agent Plugin release is not in the Plugin Catalog"),
-            };
-            if version.is_some() && digest.is_none() {
-                let same_version = candidates.iter().any(|candidate| {
-                    candidate.entry.provider_version == selected.entry.provider_version
-                        && candidate.entry.artifact_digest != selected.entry.artifact_digest
-                });
-                ensure!(
-                    !same_version,
-                    "Provider version is ambiguous; select its exact digest"
-                );
-            }
-            Ok(selected.desired.clone())
         }
 
         pub(crate) fn package(
@@ -260,13 +217,28 @@ mod service_catalog {
             self.external
                 .read()
                 .get(&key)
-                .and_then(|artifact| {
-                    base64::engine::general_purpose::STANDARD
-                        .decode(&artifact.desired.package_base64)
-                        .ok()
+                .map(|artifact| artifact.package.clone())
+        }
+
+        pub(crate) fn latest_package(
+            &self,
+            provider_id: &str,
+        ) -> Option<(String, String, ProviderPackage)> {
+            let external = self.external.read();
+            external
+                .values()
+                .filter(|artifact| artifact.entry.provider_id == provider_id)
+                .max_by(|left, right| {
+                    compare_versions(&left.entry.provider_version, &right.entry.provider_version)
+                        .then(left.entry.artifact_digest.cmp(&right.entry.artifact_digest))
                 })
-                .and_then(|bytes| PluginPackage::from_bytes(&bytes).ok())
-                .and_then(|package| package.agent_provider().cloned())
+                .and_then(|artifact| {
+                    Some((
+                        artifact.entry.provider_version.clone(),
+                        artifact.entry.artifact_digest.clone()?,
+                        artifact.package.clone(),
+                    ))
+                })
         }
 
         /// Return the newest signed package for each Provider in one public
@@ -298,13 +270,7 @@ mod service_catalog {
             }
             latest
                 .into_values()
-                .filter_map(|artifact| {
-                    base64::engine::general_purpose::STANDARD
-                        .decode(&artifact.desired.package_base64)
-                        .ok()
-                        .and_then(|bytes| PluginPackage::from_bytes(&bytes).ok())
-                        .and_then(|package| package.agent_provider().cloned())
-                })
+                .map(|artifact| artifact.package.clone())
                 .collect()
         }
 
@@ -332,7 +298,8 @@ mod service_catalog {
         let plugin_package = desired.release.validate_bytes(&bytes)?;
         let package = plugin_package
             .agent_provider()
-            .context("Agent Plugin has no Provider payload")?;
+            .context("Agent Plugin has no Provider payload")?
+            .clone();
         let release = &desired.release;
         let entry = CatalogEntry {
             provider_id: release.plugin_id.clone(),
@@ -347,7 +314,64 @@ mod service_catalog {
             supported_platforms: release.supported_platforms.clone(),
             manifest: package.manifest.ui_projection(),
         };
-        Ok(CatalogArtifact { entry, desired })
+        Ok(CatalogArtifact { entry, package })
+    }
+
+    fn load_legacy_catalog(
+        root: &Path,
+        target: &mut BTreeMap<(String, String, String), CatalogArtifact>,
+    ) -> Result<()> {
+        if !root.is_dir() {
+            return Ok(());
+        }
+        let trust_root = root.join("trusted-publishers");
+        for entry in fs::read_dir(root)
+            .with_context(|| format!("reading legacy Provider Catalog {}", root.display()))?
+        {
+            let path = entry?.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("cowboy-provider") {
+                continue;
+            }
+            let bytes = fs::read(&path)
+                .with_context(|| format!("reading legacy Provider artifact {}", path.display()))?;
+            let release_path = path.with_extension("release.json");
+            let release: LegacyProviderRelease = serde_json::from_slice(
+                &fs::read(&release_path)
+                    .with_context(|| format!("reading {}", release_path.display()))?,
+            )?;
+            let (package, _binding) = release.validate_and_project(&bytes)?;
+            let publisher_key_path = trust_root.join(format!("{}.pub", package.manifest.publisher));
+            let publisher_key = fs::read_to_string(&publisher_key_path).with_context(|| {
+                format!(
+                    "reading legacy trusted publisher {}",
+                    publisher_key_path.display()
+                )
+            })?;
+            ensure!(
+                verify_namespaced(
+                    &publisher_key,
+                    LEGACY_PROVIDER_RELEASE_SIGNATURE_NAMESPACE,
+                    &release.proof()?,
+                    &release.signature,
+                )?,
+                "legacy Provider release signature is invalid"
+            );
+            let entry = CatalogEntry {
+                provider_id: release.provider_id,
+                provider_version: release.provider_version,
+                package_digest: release.package_digest,
+                artifact_digest: Some(release.artifact_digest.clone()),
+                authentication_scope: package.manifest.authentication.portable_schema.clone(),
+                release_state: AgentPluginReleaseState::Ready,
+                release_detail: None,
+                publisher: release.publisher,
+                contract_fingerprint: package.contract_fingerprint.clone(),
+                supported_platforms: release.supported_platforms,
+                manifest: package.manifest.ui_projection(),
+            };
+            insert_unique(target, CatalogArtifact { entry, package })?;
+        }
+        Ok(())
     }
 
     fn insert_unique(
@@ -378,6 +402,118 @@ mod service_catalog {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        fn write_legacy_provider_release(root: &Path) -> (String, String, String) {
+            use cowboy_provider_sdk::{
+                PlatformRuntimeArtifacts, PlatformTarget, ProviderArtifactFormat,
+                ProviderArtifactProbe, ReleasedPrivateComponent, StandardProviderSource,
+                build_package,
+            };
+
+            let source: StandardProviderSource =
+                serde_json::from_str(include_str!("../plugins/gemini/provider.json")).unwrap();
+            let package = build_package(source.compile().unwrap()).unwrap();
+            let bytes = package.canonical_bytes().unwrap();
+            let runtime_artifacts: Vec<PlatformRuntimeArtifacts> = package
+                .manifest
+                .runtime
+                .platforms
+                .iter()
+                .map(|payload| PlatformRuntimeArtifacts {
+                    os: payload.os.clone(),
+                    architecture: payload.architecture.clone(),
+                    components: payload
+                        .private_components
+                        .iter()
+                        .map(|requirement| ReleasedPrivateComponent {
+                            kind: requirement.kind.clone(),
+                            slot: requirement.slot.clone(),
+                            dependency: requirement.dependency.clone(),
+                            version: package.manifest.runtime.dependencies[0].version.clone(),
+                            command: requirement.command.clone(),
+                            artifact_url: "https://example.invalid/runtime".to_owned(),
+                            artifact_digest: format!("sha256:{}", "ab".repeat(32)),
+                            artifact_format: ProviderArtifactFormat::Raw,
+                            entrypoint: None,
+                            probe: ProviderArtifactProbe {
+                                args: vec!["--version".to_owned()],
+                                timeout_ms: 1_000,
+                            },
+                        })
+                        .collect(),
+                })
+                .collect();
+            let supported_platforms = package
+                .manifest
+                .runtime
+                .platforms
+                .iter()
+                .map(|payload| PlatformTarget {
+                    os: payload.os.clone(),
+                    architecture: payload.architecture.clone(),
+                })
+                .collect::<Vec<_>>();
+            let mut release = LegacyProviderRelease {
+                release_schema: 2,
+                provider_id: package.manifest.id.clone(),
+                provider_version: package.manifest.version.clone(),
+                package_digest: ProviderPackage::artifact_digest(&bytes),
+                artifact_digest: String::new(),
+                artifact_url: "https://example.invalid/gemini.cowboy-provider".to_owned(),
+                publisher: package.manifest.publisher.clone(),
+                contract_fingerprint: package.contract_fingerprint.clone(),
+                signature: String::new(),
+                supported_platforms,
+                runtime_artifacts,
+            };
+            release.artifact_digest = cowboy_provider_sdk::fingerprint_json(&serde_json::json!({
+                "release_schema": release.release_schema,
+                "provider_id": release.provider_id,
+                "provider_version": release.provider_version,
+                "package_digest": release.package_digest,
+                "publisher": release.publisher,
+                "contract_fingerprint": release.contract_fingerprint,
+                "supported_platforms": release.supported_platforms,
+                "runtime_artifacts": release.runtime_artifacts,
+            }))
+            .unwrap();
+            let publisher = crate::machine_auth::MachineIdentity::load_or_create(
+                &root.join("legacy-publisher"),
+            )
+            .unwrap();
+            release.signature = publisher
+                .sign_namespaced(
+                    LEGACY_PROVIDER_RELEASE_SIGNATURE_NAMESPACE,
+                    &release.proof().unwrap(),
+                )
+                .unwrap();
+            let catalog = root.join("provider-catalog");
+            fs::create_dir_all(catalog.join("trusted-publishers")).unwrap();
+            fs::write(
+                catalog
+                    .join("trusted-publishers")
+                    .join(format!("{}.pub", release.publisher)),
+                publisher.public_key(),
+            )
+            .unwrap();
+            let basename = format!(
+                "{}-{}-{}",
+                release.provider_id,
+                release.provider_version,
+                release.artifact_digest.trim_start_matches("sha256:")
+            );
+            fs::write(catalog.join(format!("{basename}.cowboy-provider")), bytes).unwrap();
+            fs::write(
+                catalog.join(format!("{basename}.release.json")),
+                serde_json::to_vec(&release).unwrap(),
+            )
+            .unwrap();
+            (
+                release.provider_id,
+                release.provider_version,
+                release.artifact_digest,
+            )
+        }
 
         #[test]
         fn provider_fingerprints_ignore_serde_json_map_order() {
@@ -427,6 +563,45 @@ mod service_catalog {
                 matches!(entry.release_state, AgentPluginReleaseState::Unbound)
                     && entry.artifact_digest.is_none()
             }));
+            let _ = fs::remove_dir_all(root);
+        }
+
+        #[test]
+        fn default_catalog_retains_signed_legacy_generations_for_execution() {
+            let root = std::env::temp_dir().join(format!(
+                "cowboy-legacy-provider-catalog-test-{}",
+                std::process::id()
+            ));
+            let _ = fs::remove_dir_all(&root);
+            let (provider_id, provider_version, generation_digest) =
+                write_legacy_provider_release(&root);
+            let plugins =
+                Arc::new(crate::plugin_catalog::PluginCatalog::open(&root, None).unwrap());
+            let catalog = ProviderCatalog::open(&root, Arc::clone(&plugins)).unwrap();
+
+            let entry = catalog
+                .entries()
+                .into_iter()
+                .find(|entry| {
+                    entry.provider_id == provider_id
+                        && entry.provider_version == provider_version
+                        && entry.artifact_digest.as_deref() == Some(&generation_digest)
+                })
+                .unwrap();
+            assert!(matches!(
+                entry.release_state,
+                AgentPluginReleaseState::Ready
+            ));
+            assert!(catalog.entries().iter().any(|entry| {
+                entry.provider_id == provider_id
+                    && matches!(entry.release_state, AgentPluginReleaseState::Unbound)
+            }));
+            assert!(
+                catalog
+                    .package(&provider_id, &provider_version, &generation_digest)
+                    .is_some()
+            );
+            assert!(plugins.released_plugins().is_empty());
             let _ = fs::remove_dir_all(root);
         }
 

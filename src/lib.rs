@@ -44,6 +44,8 @@ mod files;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod grok;
 #[cfg(any(feature = "full", feature = "machine-host"))]
+mod legacy_provider_release;
+#[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod machine_auth;
 #[cfg(feature = "machine-host")]
 mod machine_broker;
