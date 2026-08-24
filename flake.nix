@@ -94,6 +94,7 @@
           ./src/cli.rs
           ./src/claude_shell.rs
           ./src/grok.rs
+          ./src/legacy_provider_release.rs
           ./src/machine_broker.rs
           ./src/machine_cli.rs
           ./src/machine_auth.rs
