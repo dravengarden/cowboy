@@ -43,6 +43,24 @@ SQLite deployments must create backups through SQLite's online backup API or
 file can omit committed WAL contents. A backend backup and the artifacts tree
 form one recovery set.
 
+## PostgreSQL to SQLite cutover
+
+`cowboy store-copy` performs the supported one-time production cutover. It
+accepts a PostgreSQL source and a new, non-existent SQLite destination. The
+source stays inside one read-only, repeatable-read transaction while every
+business table is streamed into one SQLite transaction. The command fails
+closed on an unexpected table or column, a row-count mismatch, a foreign-key
+violation, or a failed SQLite integrity check. It never copies only the hot
+session tail and never overwrites an existing destination.
+
+An online copy is suitable for a rehearsal only: writes accepted after its
+source snapshot are intentionally absent. For the final copy, stop the
+controller, leave Machine-owned workers running, copy and validate the store,
+then start the controller with the SQLite URL. Keep the PostgreSQL cluster and
+its last verified dump until the SQLite deployment has passed runtime and
+backup acceptance. The artifacts directory is backend-neutral and remains in
+place across the cutover.
+
 ## Artifacts
 
 Durable history externalizes large ACP image blocks into the content-addressed

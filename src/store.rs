@@ -34,9 +34,12 @@ use sha2::Digest as _;
 use sqlx::Row as _;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
+mod copy;
 mod sqlite;
 
 use sqlite::SqliteStorage;
+
+pub(crate) use copy::postgres_to_sqlite;
 
 use crate::core::{
     Envelope, Event, QuestionPageSummary, QueuedMessage, SessionMeta, SessionOrigin, Status,

@@ -41,6 +41,13 @@ enum Command {
     /// and creates an explicit key-rotation boundary.
     #[cfg(feature = "full")]
     MachineRevoke(MachineRevokeArgs),
+    /// Copy a complete Cowboy `PostgreSQL` store into a new `SQLite` database.
+    ///
+    /// The destination must not exist. The source is read through one
+    /// repeatable-read transaction, and the destination is committed only
+    /// after every table and integrity check succeeds.
+    #[cfg(feature = "full")]
+    StoreCopy(StoreCopyArgs),
     /// Register this computer with a Cowboy instance.
     ///
     /// Create a one-time code in the web UI first, then run:
@@ -51,6 +58,20 @@ enum Command {
     Register(RegisterArgs),
     /// Show this computer's Machine fingerprint and private-key path.
     Identity(IdentityArgs),
+}
+
+#[cfg(feature = "full")]
+#[derive(Args)]
+pub struct StoreCopyArgs {
+    /// `PostgreSQL` source URL.
+    #[arg(long)]
+    source: String,
+    /// New `SQLite` destination URL. The database file must not exist.
+    #[arg(long)]
+    destination: String,
+    /// Cowboy data directory whose artifacts remain shared across the cutover.
+    #[arg(long, env = "COWBOY_DATA_DIR", default_value = "/var/lib/cowboy")]
+    data_dir: PathBuf,
 }
 
 #[cfg(feature = "full")]
@@ -306,6 +327,8 @@ impl Cli {
                 store.migrate().await?;
                 store.revoke_machine(&args.machine_id).await
             }
+            #[cfg(feature = "full")]
+            Command::StoreCopy(args) => run_store_copy(args).await,
             Command::Register(args) => register_computer(args).await,
             Command::Identity(args) => {
                 let state_dirs = crate::machine_install::identity_state_dirs(args.state_dir)?;
@@ -342,6 +365,18 @@ impl Cli {
             }
         }
     }
+}
+
+#[cfg(feature = "full")]
+async fn run_store_copy(args: StoreCopyArgs) -> anyhow::Result<()> {
+    let report = crate::store::postgres_to_sqlite(
+        &args.source,
+        &args.destination,
+        args.data_dir.join("artifacts"),
+    )
+    .await?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
 }
 
 async fn register_computer(args: RegisterArgs) -> anyhow::Result<()> {
@@ -463,6 +498,25 @@ mod tests {
             panic!("expected serve command");
         };
         assert_eq!(args.database_url(), Some("postgresql:///cowboy"));
+    }
+
+    #[test]
+    #[cfg(feature = "full")]
+    fn store_copy_requires_explicit_source_and_destination() {
+        let cli = Cli::try_parse_from([
+            "cowboy",
+            "store-copy",
+            "--source",
+            "postgresql:///cowboy",
+            "--destination",
+            "sqlite:///tmp/cowboy.sqlite3",
+        ])
+        .unwrap();
+        let Command::StoreCopy(args) = cli.command else {
+            panic!("expected store-copy command");
+        };
+        assert_eq!(args.source, "postgresql:///cowboy");
+        assert_eq!(args.destination, "sqlite:///tmp/cowboy.sqlite3");
     }
 
     #[test]

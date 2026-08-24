@@ -32,7 +32,7 @@ primary phone/desktop product path.
 - [`architecture/08-memory.md`](architecture/08-memory.md) — Agent-owned memory and provider-state boundaries
 - [`architecture/09-frontend.md`](architecture/09-frontend.md) — React state, transcript, composer, PWA, and native-shell contracts
 - [`architecture/10-deploy-build.md`](architecture/10-deploy-build.md) — Pinned builds and component-scoped releases
-- [`architecture/11-operations.md`](architecture/11-operations.md) — Capacity, migrations, observability, and incident policy
+- [`architecture/11-operations.md`](architecture/11-operations.md) — Capacity, store backup and cutover, observability, and incident policy
 - [`architecture/12-rolling-updates.md`](architecture/12-rolling-updates.md) — Fencing, replay, draining, readiness, and rollback
 - [`architecture/13-code-review.md`](architecture/13-code-review.md) — Stable worktree, Git, file, diff, and language-intelligence API
 - [`architecture/14-admin.md`](architecture/14-admin.md) — Admin console and product registration

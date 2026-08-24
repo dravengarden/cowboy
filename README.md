@@ -89,6 +89,8 @@ just check           # fmt, clippy, tsc, tests, release build
 ```
 
 SQLite is the zero-ops local store. PostgreSQL speaks the same `Store` API (`--database-url postgresql://…`). Omit the URL and the daemon runs in-memory.
+Use `cowboy store-copy --source postgresql://… --destination sqlite:///…` for a
+fail-closed production migration into a new SQLite file.
 
 ## Architecture
 
