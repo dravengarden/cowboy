@@ -80,7 +80,7 @@ struct InstallView: View {
                     value: settingBinding(\.stateDirectory),
                     emptyLabel: "Automatic Service-scoped location"
                 )
-                Text("The enrollment code is written to a temporary mode-0600 file, passed with --token-file, and never stored in settings or activity history.")
+                Text("The enrollment code is passed to the existing --token-file backend through an anonymous pipe. It is never placed in process arguments, settings, activity history, or a disk file.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

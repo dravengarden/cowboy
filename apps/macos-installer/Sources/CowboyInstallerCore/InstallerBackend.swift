@@ -76,8 +76,6 @@ public final class ProcessInstallerBackend: InstallerBackend {
 
         cancellationRequested = false
         onProgress(.init(phase: .preparing, fraction: 0.08, message: "Preparing a secure enrollment request"))
-        let tokenURL = try writeTemporaryToken(request.enrollmentToken)
-        defer { try? fileManager.removeItem(at: tokenURL.deletingLastPathComponent()) }
 
         var arguments = [
             "register",
@@ -85,7 +83,7 @@ public final class ProcessInstallerBackend: InstallerBackend {
             "--workspace",
             "home=\(request.workspaceDirectory)",
             "--token-file",
-            tokenURL.path,
+            "/dev/fd/0",
             "--background",
         ]
         if let stateDirectory = request.stateDirectory, !stateDirectory.isEmpty {
@@ -98,10 +96,14 @@ public final class ProcessInstallerBackend: InstallerBackend {
         child.arguments = arguments
         let outputPipe = Pipe()
         let errorPipe = Pipe()
+        let tokenPipe = Pipe()
         child.standardOutput = outputPipe
         child.standardError = errorPipe
+        child.standardInput = tokenPipe
         process = child
 
+        try tokenPipe.fileHandleForWriting.write(contentsOf: Data(request.enrollmentToken.utf8))
+        try tokenPipe.fileHandleForWriting.close()
         onProgress(.init(phase: .installing, fraction: 0.48, message: "Installing Cowboy Machine with the existing backend"))
         let status = try await run(child)
         process = nil
@@ -160,16 +162,6 @@ public final class ProcessInstallerBackend: InstallerBackend {
         if let stateDirectory = request.stateDirectory, !stateDirectory.isEmpty, !stateDirectory.hasPrefix("/") {
             throw InstallerBackendError.stateDirectoryNotAbsolute
         }
-    }
-
-    private func writeTemporaryToken(_ token: String) throws -> URL {
-        let directory = fileManager.temporaryDirectory
-            .appendingPathComponent("cowboy-installer-\(UUID().uuidString)", isDirectory: true)
-        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        let tokenURL = directory.appendingPathComponent("enrollment-token")
-        try Data(token.utf8).write(to: tokenURL, options: .atomic)
-        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tokenURL.path)
-        return tokenURL
     }
 
     private func run(_ child: Process) async throws -> Int32 {

@@ -55,8 +55,9 @@ window with Install, Activity, and Settings surfaces. Its process-owned task
 model keeps an active install independent from any window, persists a bounded
 non-secret activity history, and marks a task left running across process
 termination as interrupted. It invokes the bundled `cowboy register` command
-with structured `Process` arguments and a temporary mode-0600 `--token-file`;
-the one-time enrollment code is never written to settings or activity history.
+with structured `Process` arguments and passes `/dev/fd/0` as `--token-file`
+over an anonymous pipe; the one-time enrollment code is never placed in process
+arguments, settings, activity history, or a disk file.
 
 The manager uses `SMAppService.mainApp` for its own optional Launch at Login
 setting. This is separate from the installed Machine LaunchAgent, which remains
