@@ -70,7 +70,10 @@ public final class InstalledStatusDetector: InstalledStatusDetecting, @unchecked
             return nil
         }
         guard process.terminationStatus == 0 else { return nil }
-        let text = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+        guard let text = String(
+            data: output.fileHandleForReading.readDataToEndOfFile(),
+            encoding: .utf8
+        ) else { return nil }
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
             .split(separator: " ").last.map(String.init)
     }

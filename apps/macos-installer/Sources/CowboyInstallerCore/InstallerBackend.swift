@@ -49,10 +49,16 @@ public final class ProcessInstallerBackend: InstallerBackend {
     private var process: Process?
     private var cancellationRequested = false
 
-    public init(
-        executableLocator: @escaping ExecutableLocator = ProcessInstallerBackend.bundledCowboyURL,
-        fileManager: FileManager = .default
-    ) {
+    public init(fileManager: FileManager = .default) {
+        executableLocator = {
+            Bundle.main.resourceURL?
+                .appendingPathComponent("bin", isDirectory: true)
+                .appendingPathComponent("cowboy")
+        }
+        self.fileManager = fileManager
+    }
+
+    public init(executableLocator: @escaping ExecutableLocator, fileManager: FileManager = .default) {
         self.executableLocator = executableLocator
         self.fileManager = fileManager
     }
@@ -181,12 +187,6 @@ public final class ProcessInstallerBackend: InstallerBackend {
         } onCancel: {
             child.terminate()
         }
-    }
-
-    private static func bundledCowboyURL() -> URL? {
-        Bundle.main.resourceURL?
-            .appendingPathComponent("bin", isDirectory: true)
-            .appendingPathComponent("cowboy")
     }
 
     private static func safeLog(stdout: String, stderr: String) -> String {
