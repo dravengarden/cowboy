@@ -742,6 +742,15 @@ Deno.test("Machine Provider UI resolves the exact installed package", () => {
   second.release_state = "unbound";
   assertEquals(
     providerPresentationEntry(
+      [second],
+      first.provider_id,
+      first.provider_version,
+      first.artifact_digest!,
+    ),
+    second,
+  );
+  assertEquals(
+    providerPresentationEntry(
       [second, first],
       first.provider_id,
       first.provider_version,

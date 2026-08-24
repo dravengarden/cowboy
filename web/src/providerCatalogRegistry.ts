@@ -185,6 +185,13 @@ export function providerPresentationEntry(
   const exactHostSchema = exact?.manifest.host.schema_version ?? 0;
   const latestUiSchema = latest?.manifest.ui.schema_version ?? 0;
   const latestHostSchema = latest?.manifest.host.schema_version ?? 0;
+  // Historical sessions can remain pinned to a runtime package that the
+  // current Catalog no longer carries. Runtime execution must keep that exact
+  // identity, but presentation-only chrome still needs the validated manifest
+  // for the same Provider; otherwise ProviderIcon renders nothing throughout
+  // the session list. An unbound current entry is safe for this narrow fallback
+  // because no lifecycle or execution path consumes this helper.
+  if (!exact) return latest;
   if (
     latest?.release_state === "ready" &&
     latestUiSchema >= exactUiSchema &&
