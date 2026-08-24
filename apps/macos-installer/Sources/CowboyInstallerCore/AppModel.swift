@@ -30,11 +30,13 @@ public final class AppModel: ObservableObject {
         self.statusDetector = statusDetector
         self.notifier = notifier
         self.targetVersion = targetVersion
-        settings = persistence.loadSettings()
-        history = persistence.loadHistory()
-        installedStatus = statusDetector.detect(
-            preferredStateDirectory: settings.stateDirectory.nilIfEmpty
+        let loadedSettings = persistence.loadSettings()
+        let detectedStatus = statusDetector.detect(
+            preferredStateDirectory: loadedSettings.stateDirectory.nilIfEmpty
         )
+        settings = loadedSettings
+        history = persistence.loadHistory()
+        installedStatus = detectedStatus
         installState = InstallState()
         recoverInterruptedInstallIfNeeded()
         configureAutomaticStatusChecks()

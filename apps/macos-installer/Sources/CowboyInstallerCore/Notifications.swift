@@ -1,6 +1,7 @@
 import Foundation
 import UserNotifications
 
+@MainActor
 public protocol InstallerNotifying: AnyObject {
     func requestAuthorization() async -> Bool
     func send(title: String, body: String) async
