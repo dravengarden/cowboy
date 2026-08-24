@@ -61,6 +61,13 @@ export const queueMutators = {
     value: QueueValue<R>,
     args: { row: R },
   ): QueueValue<R> => ({ ...value, queue: appendUnique(value.queue, args.row) }),
+  submitPrompt: <R extends QueueItem>(
+    value: QueueValue<R>,
+    args: { row: R },
+  ): QueueValue<R> => ({
+    ...value,
+    inFlight: appendUnique(value.inFlight ?? [], args.row),
+  }),
   forceQueue: <R extends QueueItem>(
     value: QueueValue<R>,
     args: { row: R },

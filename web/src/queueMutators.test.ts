@@ -51,6 +51,19 @@ Deno.test("sending or force-pushing a queued row parks it in-flight", () => {
   assertEquals(forced.inFlight.length, 1);
 });
 
+Deno.test("a direct prompt is retained in-flight until its user echo confirms it", () => {
+  const submitted = queueMutators.submitPrompt(emptyQueueValue(), {
+    row: presented,
+  });
+  assertEquals(submitted.queue, []);
+  assertEquals(submitted.drafts, []);
+  assertEquals(submitted.inFlight, [presented]);
+  assertEquals(
+    queueMutators.submitPrompt(submitted, { row: presented }).inFlight,
+    [presented],
+  );
+});
+
 Deno.test("returning a queued row restores it as a draft without duplicating", () => {
   const next = queueMutators.returnQueuedToDraft(
     { queue: [queued], drafts: [], inFlight: [] },

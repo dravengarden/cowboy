@@ -14,9 +14,9 @@ export function durableDeliveryAttempt(sent: boolean): DurableDeliveryAttempt {
   };
 }
 
-/** Transcript optimism has no durable outbox. Use it only when the socket can
- *  carry an immediately-dispatchable prompt; every reconnect window falls back
- *  to the durable queue mutation path. */
+/** Choose the immediate transcript presentation only when the prompt is likely
+ *  to dispatch. Both transcript and queued presentation use the same durable
+ *  IndexedDB mutation lane, so this predicate affects placement, not safety. */
 export function shouldUseTranscriptDelivery(
   connected: boolean,
   dispatchable: boolean,

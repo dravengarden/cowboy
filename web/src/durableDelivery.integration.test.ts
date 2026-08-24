@@ -7,6 +7,11 @@ import {
   replicatedStore,
 } from "@cowboy/state-sync";
 import { durableDeliveryAttempt } from "./durableDelivery.ts";
+import {
+  emptyQueueValue,
+  type QueueValue,
+  queueMutators as deliveryMutators,
+} from "./queueMutators.ts";
 
 interface QueueState {
   readonly rows: readonly string[];
@@ -94,4 +99,49 @@ Deno.test("offline durable send survives reload and resends the same cmid after 
   assertEquals(afterAckReload.get().rows, ["survive reconnect"]);
   assertEquals(afterAckReload.pending(), []);
   assertEquals(sent.map((mutation) => mutation.id), ["cmid-1"]);
+});
+
+Deno.test("a transcript prompt remains visible across reload until its user echo", async () => {
+  type Row = { id: string; text: string; cmid: string };
+  const persistence = memoryPersistence<ClientSnapshot<QueueValue<Row>>>();
+  const row: Row = { id: "opt-cmid-2", text: "still visible", cmid: "cmid-2" };
+
+  const beforeReload = replicatedStore<QueueValue<Row>, typeof deliveryMutators>({
+    clientId: "browser-tab",
+    mutators: deliveryMutators,
+    initial: emptyQueueValue<Row>(),
+    local: persistence,
+    send: () => {},
+  });
+  beforeReload.mutate("submitPrompt", { row }, row.cmid);
+  await beforeReload.flush();
+
+  const afterReload = replicatedStore<QueueValue<Row>, typeof deliveryMutators>({
+    clientId: "browser-tab-reloaded",
+    mutators: deliveryMutators,
+    initial: emptyQueueValue<Row>(),
+    local: persistence,
+    send: () => {},
+  });
+  await afterReload.hydrate();
+  assertEquals(afterReload.get().inFlight, [row]);
+  assertEquals(afterReload.pending().map((mutation) => mutation.id), [row.cmid]);
+
+  // The bootstrap/live user echo acknowledges the same cmid. Retiring the
+  // local mutation removes the bubble and its persisted replay obligation.
+  afterReload.confirm([row.cmid]);
+  await afterReload.flush();
+  assertEquals(afterReload.get().inFlight, []);
+  assertEquals(afterReload.pending(), []);
+
+  const afterEchoReload = replicatedStore<QueueValue<Row>, typeof deliveryMutators>({
+    clientId: "browser-tab-after-echo",
+    mutators: deliveryMutators,
+    initial: emptyQueueValue<Row>(),
+    local: persistence,
+    send: () => {},
+  });
+  await afterEchoReload.hydrate();
+  assertEquals(afterEchoReload.get().inFlight, []);
+  assertEquals(afterEchoReload.pending(), []);
 });

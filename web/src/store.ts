@@ -203,6 +203,11 @@ interface SessionHydration {
   controller: AbortController;
 }
 const sessionHydrations = new Map<string, SessionHydration>();
+const sessionHydrationRetryTimers = new Map<
+  string,
+  ReturnType<typeof setTimeout>
+>();
+const SESSION_HYDRATION_RETRY_DELAYS_MS = [750, 2_000] as const;
 // Each live config snapshot advances this revision. HTTP bootstrap is allowed
 // to seed the map only if no newer WebSocket snapshot arrived while it was in
 // flight; otherwise its stale response can visibly undo a just-selected preset.
@@ -222,6 +227,9 @@ function evictTranscriptSessions(sessionIds: readonly string[]): void {
   for (const sessionId of evicted) {
     sessionHydrations.get(sessionId)?.controller.abort();
     sessionHydrations.delete(sessionId);
+    const retry = sessionHydrationRetryTimers.get(sessionId);
+    if (retry !== undefined) clearTimeout(retry);
+    sessionHydrationRetryTimers.delete(sessionId);
     completeQuestionPages.delete(sessionId);
     transcriptEpoch.set(sessionId, (transcriptEpoch.get(sessionId) ?? 0) + 1);
   }
@@ -972,7 +980,55 @@ function handle(msg: Outbound): void {
             // part (if any) is filled before going further back.
             beforeSeq: msg.events[0]?.seq ?? null,
           });
-      setState({ ...state, timelines, hydrated, pagination });
+      const confirmedCmids = new Set(
+        msg.events.flatMap((event) => event.cmid === undefined ? [] : [event.cmid]),
+      );
+      const optimisticMessages = confirmedCmids.size === 0
+        ? state.optimisticMessages
+        : reconcileOptimistic(
+          state.optimisticMessages,
+          msg.session_id,
+          confirmedCmids,
+        );
+      setState({
+        ...state,
+        timelines,
+        hydrated,
+        pagination,
+        optimisticMessages,
+      });
+      // A reload may hydrate the durable outbox before this bootstrap arrives.
+      // If the daemon had already accepted the prompt, the snapshot's user echo
+      // is the acknowledgement: retire the persisted mutation so reconnect
+      // cannot resend it or paint a duplicate optimistic bubble.
+      if (confirmedCmids.size > 0) {
+        const client = qClients.get(msg.session_id);
+        const confirmedMutations = (client?.pending() ?? []).filter((mutation) => {
+          const rowCmid = (mutation.args as { row?: QueuedMessage }).row?.cmid;
+          return confirmedCmids.has(mutation.id) ||
+            (rowCmid !== undefined && confirmedCmids.has(rowCmid));
+        });
+        if (client !== undefined && confirmedMutations.length > 0) {
+          for (const mutation of confirmedMutations) {
+            const rowCmid = (mutation.args as { row?: QueuedMessage }).row?.cmid ??
+              mutation.id;
+            suppressedInFlight.add(rowCmid);
+            clearOptTimers(mutation.id);
+            qStatus.delete(mutation.id);
+            qStatus.delete(rowCmid);
+          }
+          client.confirm(confirmedMutations.map((mutation) => mutation.id));
+          commitQueue(msg.session_id);
+          for (const mutation of confirmedMutations) {
+            const rowCmid = (mutation.args as { row?: QueuedMessage }).row?.cmid ??
+              mutation.id;
+            suppressedInFlight.delete(rowCmid);
+          }
+        }
+      }
+      const retry = sessionHydrationRetryTimers.get(msg.session_id);
+      if (retry !== undefined) clearTimeout(retry);
+      sessionHydrationRetryTimers.delete(msg.session_id);
       break;
     }
     case "event": {
@@ -1092,15 +1148,27 @@ function handle(msg: Outbound): void {
   }
 }
 
-async function hydrateSession(sessionId: string, replace = false): Promise<void> {
+async function hydrateSession(
+  sessionId: string,
+  replace = false,
+  retryAttempt = 0,
+): Promise<void> {
   const existing = sessionHydrations.get(sessionId);
   if (existing && !replace) return existing.promise;
   existing?.controller.abort();
+  const scheduledRetry = sessionHydrationRetryTimers.get(sessionId);
+  if (scheduledRetry !== undefined) clearTimeout(scheduledRetry);
+  sessionHydrationRetryTimers.delete(sessionId);
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, 8000);
   const configOptionsRevisionAtRequestStart =
     configOptionsRevisions.get(sessionId) ?? 0;
   const promise = (async (): Promise<void> => {
+    let retryableFailure = false;
     try {
       const response = await fetch(
         `/api/sessions/${encodeURIComponent(sessionId)}/bootstrap`,
@@ -1120,17 +1188,48 @@ async function hydrateSession(sessionId: string, replace = false): Promise<void>
         }
         handle(message);
       }
+      if (!state.hydrated.has(sessionId)) {
+        throw new Error("session bootstrap contained no transcript snapshot");
+      }
     } catch (error) {
-      if (!controller.signal.aborted) console.warn("session bootstrap failed", error);
+      retryableFailure = timedOut || !controller.signal.aborted;
+      if (retryableFailure) console.warn("session bootstrap failed", error);
     } finally {
       clearTimeout(timeout);
       if (sessionHydrations.get(sessionId)?.controller === controller) {
         sessionHydrations.delete(sessionId);
       }
+      if (
+        retryableFailure &&
+        !state.hydrated.has(sessionId) &&
+        transcriptIsCached(sessionId) &&
+        openedSessionId === sessionId &&
+        retryAttempt < SESSION_HYDRATION_RETRY_DELAYS_MS.length
+      ) {
+        const delay = SESSION_HYDRATION_RETRY_DELAYS_MS[retryAttempt]!;
+        const retry = setTimeout(() => {
+          if (sessionHydrationRetryTimers.get(sessionId) !== retry) return;
+          sessionHydrationRetryTimers.delete(sessionId);
+          if (
+            !state.hydrated.has(sessionId) &&
+            transcriptIsCached(sessionId) &&
+            openedSessionId === sessionId
+          ) {
+            void hydrateSession(sessionId, true, retryAttempt + 1);
+          }
+        }, delay);
+        sessionHydrationRetryTimers.set(sessionId, retry);
+      }
     }
   })();
   sessionHydrations.set(sessionId, { promise, controller });
   return promise;
+}
+
+/** Retry only this session's bootstrap; never reload the whole application or
+ * discard a local composer/delivery state merely because history was slow. */
+export function retrySessionHydration(sessionId: string): Promise<void> {
+  return hydrateSession(sessionId, true, 0);
 }
 
 /**
@@ -1725,6 +1824,8 @@ type QValue = QueueValue<QueuedMessage>;
 const qMut = {
   addDraft: (v: QValue, a: { row: QueuedMessage }): QValue => queueMutators.addDraft(v, a),
   addQueue: (v: QValue, a: { row: QueuedMessage }): QValue => queueMutators.addQueue(v, a),
+  submitPrompt: (v: QValue, a: { row: QueuedMessage }): QValue =>
+    queueMutators.submitPrompt(v, a),
   forceQueue: (v: QValue, a: { row: QueuedMessage }): QValue => queueMutators.forceQueue(v, a),
   frontQueue: (v: QValue, a: { row: QueuedMessage }): QValue => queueMutators.frontQueue(v, a),
   activateDraft: (v: QValue, a: { id: string; row?: QueuedMessage }): QValue =>
@@ -1905,7 +2006,7 @@ function armQTimers(sessionId: string, cmid: string): void {
 /** Optimistic add to drafts or queue: mutate (id = cmid, so the server echo
  *  drops exactly this row — no ghost) + send the command + arm status timers. */
 function qAdd(
-  target: "drafts" | "queue",
+  target: "drafts" | "queue" | "transcript",
   sessionId: string,
   text: string,
   attachments: Attachment[],
@@ -1926,22 +2027,30 @@ function qAdd(
   qStatus.set(cmid, "pending");
   const mutator = target === "drafts"
     ? "addDraft"
+    : target === "transcript"
+    ? "submitPrompt"
     : mode === "force"
     ? "forceQueue"
     : mode === "front"
     ? "frontQueue"
     : "addQueue";
   store.mutate(mutator, { row }, cmid);
-  revealPendingArrival({
-    kind: target === "drafts" ? "draft" : "queued",
-    id: row.id,
-    cmid,
-  });
+  if (target !== "transcript") {
+    revealPendingArrival({
+      kind: target === "drafts" ? "draft" : "queued",
+      id: row.id,
+      cmid,
+    });
+  }
   return waitForState(
     (snapshot) =>
-      (target === "drafts" ? snapshot.drafts : snapshot.queues)
-        .get(sessionId)
-        ?.some((message) => message.cmid === cmid) === true,
+      target === "transcript"
+        ? (snapshot.optimisticMessages.get(sessionId) ?? []).some((message) =>
+          message.cmid === cmid
+        )
+        : (target === "drafts" ? snapshot.drafts : snapshot.queues)
+          .get(sessionId)
+          ?.some((message) => message.cmid === cmid) === true,
     target === "drafts" ? "Save draft" : "Send message",
   );
 }
@@ -2077,9 +2186,9 @@ function applyQueuePatch(sessionId: string, version: number, value: unknown, con
   commitQueue(sessionId);
 }
 
-// The optimistic CHAT-bubble overlay (submit-when-idle → transcript) is the one
-// append-optimistic path that isn't a small-value sync state — kept here, keyed
-// by cmid, reconciled by the user-echo Envelope (or a wrong-guess queue patch).
+// The optimistic CHAT-bubble overlay is projected from the same durable queue
+// sync state as drafts and queued prompts. It is keyed by cmid and reconciled
+// by the user-echo Envelope (or a wrong-guess queue patch).
 
 // cmid → its pending/timeout timers, so reconcile/retry can clear them. Shared
 // by the chat overlay AND the queue path (`armQTimers`).
@@ -2170,38 +2279,24 @@ export function retryMessage(sessionId: string, cmid: string): void {
 /** Discard a (usually failed) optimistic chat bubble locally — it never reached
  *  the daemon, so there's nothing server-side to remove. */
 export function discardMessage(sessionId: string, cmid: string): void {
+  const pending = pendingNamed(sessionId, cmid);
+  if (pending !== undefined) {
+    discardQueued(sessionId, pending.id);
+    return;
+  }
   clearOptTimers(cmid);
   patchMessage(sessionId, cmid, "drop");
 }
 
-/** Optimistic chat send (submit-when-idle): show a bubble in the transcript,
- *  fire the submit, arm timers. WS open → `pending`; WS down → `failed`. */
+/** Optimistic chat send (submit-when-idle): persist first, show a transcript
+ *  bubble, then submit. A closed socket leaves it pending for reconnect. */
 function optimisticMessage(
   sessionId: string,
   text: string,
   attachments: Attachment[],
   origin: DeliveryOrigin = "composer",
 ): Promise<void> {
-  if (!isConnected()) {
-    return qAdd("queue", sessionId, text, attachments, { origin });
-  }
-  const cmid = newCmid();
-  const sent = send({ type: "submit", session_id: sessionId, text, content: contentOf(text, attachments), cmid });
-  if (!sent) {
-    return qAdd("queue", sessionId, text, attachments, { origin });
-  }
-  const map = new Map(state.optimisticMessages);
-  const row: QueuedMessage = { id: `opt-${cmid}`, text, attachments, cmid, status: "sending", origin };
-  map.set(sessionId, [...(map.get(sessionId) ?? []), row]);
-  setState({ ...state, optimisticMessages: map });
-  armMsgTimers(sessionId, cmid);
-  return waitForState(
-    (snapshot) =>
-      (snapshot.optimisticMessages.get(sessionId) ?? []).some((message) =>
-        message.cmid === cmid
-      ),
-    "Send message",
-  );
+  return qAdd("transcript", sessionId, text, attachments, { origin });
 }
 
 // Tell the daemon the user opened/selected `id` so it revives that session's
@@ -2224,6 +2319,9 @@ export function openSession(id: string): void {
 // skeleton (`loading = !hydrated`) would spin forever on a freshly created
 // session. Idempotent; a later real snapshot (e.g. after reload) just no-ops.
 export function markSessionHydrated(id: string): void {
+  const retry = sessionHydrationRetryTimers.get(id);
+  if (retry !== undefined) clearTimeout(retry);
+  sessionHydrationRetryTimers.delete(id);
   if (state.hydrated.has(id)) return;
   setState({ ...state, hydrated: new Set(state.hydrated).add(id) });
 }

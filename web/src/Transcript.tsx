@@ -117,6 +117,7 @@ import {
   type QueuedMessage,
   releaseFollowedHistory,
   retryMessage,
+  retrySessionHydration,
   returnFailedMessage,
   send,
   useConnected,
@@ -180,6 +181,10 @@ import {
   transcriptViewportRestoreTimedOut,
   visibleTranscriptTopGap,
 } from "./transcriptViewport";
+import {
+  shouldInterruptTranscriptViewportRestore,
+  shouldShowBlockingTranscriptRestore,
+} from "./transcriptRestorePolicy";
 import {
   advanceTimelinePresentation,
   revealHistoryPrepend,
@@ -280,17 +285,20 @@ function TranscriptSkeleton({
   provider,
   providerVersion,
   providerDigest,
+  onRetry,
 }: {
   desktop: boolean;
   provider: string;
   providerVersion?: string | undefined;
   providerDigest?: string | undefined;
+  onRetry?: (() => void) | undefined;
 }): React.JSX.Element {
   const [stalled, setStalled] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     const timer = globalThis.setTimeout(() => setStalled(true), 8_000);
     return () => globalThis.clearTimeout(timer);
-  }, []);
+  }, [attempt]);
 
   const agent =
     providerPresentation(provider, providerVersion, providerDigest).agent;
@@ -357,14 +365,18 @@ function TranscriptSkeleton({
             )}
         </Stack>
       ))}
-      {stalled && (
+      {stalled && onRetry !== undefined && (
         <Button
           size="small"
           variant="text"
-          onClick={(): void => globalThis.location.reload()}
+          onClick={(): void => {
+            setStalled(false);
+            setAttempt((current) => current + 1);
+            onRetry();
+          }}
           sx={{ alignSelf: "flex-start", minHeight: 36, textTransform: "none" }}
         >
-          Taking a while — reload
+          Taking a while — retry
         </Button>
       )}
     </Stack>
@@ -4021,6 +4033,11 @@ export function Transcript({
     (snapshot) =>
       snapshot.optimisticMessages.get(sessionId) ?? EMPTY_OPTIMISTIC_MESSAGES,
   );
+  const blockingTranscriptRestore = shouldShowBlockingTranscriptRestore(
+    loading,
+    items.length,
+    optimisticMsgs.length,
+  );
   // "stick-to-bottom" UX, done properly this time:
   //
   // Previous bug: we listened to `onScroll` to decide if the user "wanted"
@@ -4922,6 +4939,26 @@ export function Transcript({
     };
   }, [desktopNavigation, managesScrollHistory, pageId, sessionId]);
 
+  // A fresh local prompt is more important than restoring an old reading
+  // position. Reveal and pin it immediately; history can continue hydrating in
+  // the background without covering the delivery state.
+  useLayoutEffect(() => {
+    if (
+      !shouldInterruptTranscriptViewportRestore(
+        viewportRestoreActiveRef.current,
+        optimisticMsgs.length,
+      )
+    ) return;
+    viewportRestoreActiveRef.current = false;
+    setMaskingViewportRestore(false);
+    stick.current = true;
+    setFollowingLive(true);
+    resetSticky(sessionId);
+    freezeRef.current.key = null;
+    const el = parentRef.current;
+    if (el) pinTranscriptToLatest(el);
+  }, [optimisticMsgs.length, sessionId]);
+
   // A live Page is allowed to follow only for the duration of its active turn.
   // As soon as that turn settles, freeze it as an ordinary reading page at its
   // current position. This also clears the shared highlight state so returning
@@ -5150,30 +5187,32 @@ export function Transcript({
           },
         }}
       >
-        {status === "starting" && items.length === 0
+        {status === "starting" && items.length === 0 &&
+            optimisticMsgs.length === 0
           ? (
             <ConversationEmptyState
               kind="preparing"
               context={conversationContext}
             />
           )
-          : loading && items.length === 0
+          : blockingTranscriptRestore
           ? (
             <TranscriptSkeleton
               desktop={desktopNavigation}
               provider={provider}
               providerVersion={providerVersion}
               providerDigest={providerDigest}
+              onRetry={() => void retrySessionHydration(sessionId)}
             />
           )
-          : showClearedEmptyState
+          : showClearedEmptyState && optimisticMsgs.length === 0
           ? (
             <ConversationEmptyState
               kind="cleared"
               context={conversationContext}
             />
           )
-          : showFreshSessionEmptyState
+          : showFreshSessionEmptyState && optimisticMsgs.length === 0
           ? (
             <ConversationEmptyState
               kind="ready"
@@ -5297,6 +5336,30 @@ export function Transcript({
                     <OptimisticUserBubble sessionId={sessionId} message={om} />
                   </Box>
                 ))}
+              {loading && items.length === 0 && optimisticMsgs.length > 0 && (
+                <Stack
+                  data-transcript-background-restore
+                  role="status"
+                  aria-live="polite"
+                  direction="row"
+                  spacing={1}
+                  alignItems="center"
+                  sx={{ py: 0.625, color: "text.secondary" }}
+                >
+                  <CircularProgress size={13} thickness={4} color="inherit" />
+                  <Typography variant="caption">
+                    Restoring earlier conversation…
+                  </Typography>
+                  <Button
+                    size="small"
+                    variant="text"
+                    onClick={() => void retrySessionHydration(sessionId)}
+                    sx={{ minHeight: 30, textTransform: "none" }}
+                  >
+                    Retry
+                  </Button>
+                </Stack>
+              )}
               {mountedItems
                 .slice()
                 .reverse()
