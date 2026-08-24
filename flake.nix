@@ -179,7 +179,7 @@
           "components/state-sync"
           "components/state-sync-idb"
         ];
-        depsHash = "sha256-yBrkTBMRRuf3LFMWI9Nkbu3yFC2Wd1FWhcDQXPv+Pg8=";
+        depsHash = "sha256-weQbbkgr61x3tcoIUc+CHRY6chtTUJxDq09fGjLZlx4=";
       };
 
       # This host's pinned Nixpkgs still has the first fetchCargoVendor
