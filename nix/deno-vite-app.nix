@@ -30,7 +30,7 @@ let
         cp -R "${src}/${package}" "$out/${package}"
       '') localPackages}
     '';
-    nativeBuildInputs = [ deno nodejs ];
+    nativeBuildInputs = [ deno nodejs pkgs.jq ];
     dontUnpack = true;
     dontConfigure = true;
     buildPhase = ''
@@ -41,6 +41,22 @@ let
       chmod -R u+w .
       cd ${webRoot}
       deno install ${installArgs}
+      # Deno writes npm registry objects in response-dependent key order and
+      # leaves timing-dependent SQLite analysis state in DENO_DIR. Neither is
+      # needed by the offline source build, so normalize the former and drop
+      # the latter before hashing this dependency-only output.
+      find "$DENO_DIR" -type f -name registry.json -print0 \
+        | while IFS= read -r -d $'\0' registry; do
+            jq --compact-output --sort-keys . "$registry" > "$registry.normalized"
+            mv "$registry.normalized" "$registry"
+          done
+      rm -f \
+        "$DENO_DIR/dep_analysis_cache_v2" \
+        "$DENO_DIR/dep_analysis_cache_v2-shm" \
+        "$DENO_DIR/dep_analysis_cache_v2-wal" \
+        "$DENO_DIR/node_analysis_cache_v2" \
+        "$DENO_DIR/node_analysis_cache_v2-shm" \
+        "$DENO_DIR/node_analysis_cache_v2-wal"
     '';
     dontInstall = true;
     dontFixup = true;
