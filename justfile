@@ -47,6 +47,17 @@ build: build-web
 build-machine-bootstrap:
     cargo build --release --locked --no-default-features --features machine-host --bin cowboy --bin cowboy-machine --bin cowboy-machine-install
 
+# Native macOS SwiftUI installer manager. Run these on macOS with Xcode's Swift
+# toolchain; build-app packages the existing Machine bootstrap commands.
+macos-installer-test:
+    swift test --package-path apps/macos-installer
+
+macos-installer-build:
+    bash apps/macos-installer/scripts/build-app.sh --build-backend
+
+macos-installer-verify APP="apps/macos-installer/dist/Cowboy Installer.app":
+    bash apps/macos-installer/scripts/verify-app.sh "{{APP}}"
+
 # Generic Cowboy Plugin lifecycle. Agent Provider and code-intelligence are
 # payload kinds; neither owns a separate release or installation format.
 component-package-check:

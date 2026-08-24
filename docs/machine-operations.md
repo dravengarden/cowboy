@@ -47,6 +47,36 @@ other two commands install the user service/LaunchAgent, a stable launcher, a
 mode-0600 one-time enrollment-token file, and the bootstrap host. The host
 deletes the token file immediately after successful enrollment.
 
+## Native macOS installer manager
+
+`apps/macos-installer` is the native SwiftUI wrapper around that same bootstrap
+contract. It provides a persistent menu-bar status item plus one management
+window with Install, Activity, and Settings surfaces. Its process-owned task
+model keeps an active install independent from any window, persists a bounded
+non-secret activity history, and marks a task left running across process
+termination as interrupted. It invokes the bundled `cowboy register` command
+with structured `Process` arguments and a temporary mode-0600 `--token-file`;
+the one-time enrollment code is never written to settings or activity history.
+
+The manager uses `SMAppService.mainApp` for its own optional Launch at Login
+setting. This is separate from the installed Machine LaunchAgent, which remains
+owned by the Rust backend. A normal menu-bar process is sufficient, so the app
+does not add XPC, a privileged helper, or a second installer implementation.
+
+On macOS, run the project-owned gates and package the app with:
+
+```sh
+just macos-installer-test
+just macos-installer-build
+just macos-installer-verify
+```
+
+The build places `Cowboy Installer.app` under
+`apps/macos-installer/dist/`, embeds all three Machine bootstrap commands, and
+uses ad-hoc signing unless `CODE_SIGN_IDENTITY` names a real signing identity.
+Copy a signed production build to `/Applications` before enabling Launch at
+Login. No certificate or signing credential belongs in this repository.
+
 On the device, prefer `cowboy register`. Create a one-time code in the UI
 first, copy the command, then paste the token when the CLI asks. Cowboy
 assigns the machine id. Interactive input is TTY-masked; after entry the CLI
