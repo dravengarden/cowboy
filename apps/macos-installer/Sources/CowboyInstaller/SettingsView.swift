@@ -43,7 +43,7 @@ struct SettingsView: View {
                     .disabled(launchAtLogin.status == .unavailable)
                 Text(launchStatusDescription)
                     .font(.caption)
-                    .foregroundStyle(launchAtLogin.errorMessage == nil ? .secondary : .red)
+                    .foregroundStyle(launchAtLogin.errorMessage == nil ? Color.secondary : Color.red)
                     .textSelection(.enabled)
                 Button("Refresh Login Item Status") { launchAtLogin.refresh() }
             }
@@ -123,7 +123,7 @@ struct SettingsView: View {
         if let error = launchAtLogin.errorMessage {
             return error
         }
-        switch launchAtLogin.status {
+        return switch launchAtLogin.status {
         case .enabled:
             "Registered with macOS as a login item."
         case .disabled:

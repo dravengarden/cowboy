@@ -52,11 +52,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+@MainActor
 enum AppWindow {
     static let managerID = "cowboy-installer-manager"
 
     static func activateExistingManager() {
-        NSApplication.shared.activate(ignoringOtherApps: true)
+        NSApplication.shared.activate()
         NSApplication.shared.windows
             .first(where: { $0.title == "Cowboy Installer" })?
             .makeKeyAndOrderFront(nil)
