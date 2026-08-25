@@ -8335,11 +8335,14 @@ async fn api_reconcile_project_sessions(
     }
 }
 
-fn product_session_owner(principal: &ProductPrincipal) -> crate::supervisor::SessionOwner<'_> {
-    crate::supervisor::SessionOwner {
+fn product_session_owner(
+    product_auth_enabled: bool,
+    principal: &ProductPrincipal,
+) -> Option<crate::supervisor::SessionOwner<'_>> {
+    product_auth_enabled.then_some(crate::supervisor::SessionOwner {
         user_id: &principal.user_id,
         username: Some(&principal.username),
-    }
+    })
 }
 
 async fn api_new_session(
@@ -8489,7 +8492,7 @@ async fn api_new_session(
                         auth_generation: provider_generation.auth_generation,
                         behavior: Some(&provider_generation.behavior),
                     },
-                    Some(product_session_owner(&principal)),
+                    product_session_owner(state.product_auth_enabled, &principal),
                 )
             },
         );
@@ -8613,7 +8616,7 @@ async fn api_new_session(
             auth_generation: None,
             behavior: None,
         },
-        Some(product_session_owner(&principal)),
+        product_session_owner(state.product_auth_enabled, &principal),
     ) {
         Ok(session_id) => {
             if let Some(prompt) = req
@@ -12976,6 +12979,7 @@ mod product_auth_api_tests {
         let principal = resolve_product_principal(false, None, &Hub::new(), &headers)
             .await
             .expect("disabled product auth should create a local principal");
+        assert!(product_session_owner(false, &principal).is_none());
         let principal = authorize_ws_upgrade(
             &headers,
             SocketAddr::from(([127, 0, 0, 1], 3333)),
@@ -12985,6 +12989,18 @@ mod product_auth_api_tests {
         .expect("local principal should be accepted");
         assert_eq!(principal.user_id, "local");
         assert_eq!(principal.role, crate::admin::AdminRole::Owner);
+    }
+
+    #[test]
+    fn enabled_product_auth_stamps_the_durable_user_as_session_owner() {
+        let principal = ProductPrincipal {
+            user_id: "0123456789abcdef0123456789abcdef".to_owned(),
+            username: "draven".to_owned(),
+            role: crate::admin::AdminRole::Owner,
+        };
+        let owner = product_session_owner(true, &principal).expect("session owner");
+        assert_eq!(owner.user_id, principal.user_id);
+        assert_eq!(owner.username, Some(principal.username.as_str()));
     }
 
     #[tokio::test]

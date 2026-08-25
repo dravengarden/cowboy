@@ -100,12 +100,18 @@ Deno.test("desktop can sign out through authApi without importing store", async 
   assert(store.includes("cowboy:product-auth-lost"));
   assertEquals(store.includes('from "./auth/'), false);
   assert(gate.includes("PRODUCT_AUTH_LOST_EVENT"));
-  assert(gate.includes("401/403/4001"));
+  const authLostHandler = gate.slice(
+    gate.indexOf("const onAuthLost"),
+    gate.indexOf("globalThis.addEventListener(PRODUCT_AUTH_LOST_EVENT"),
+  );
+  assert(authLostHandler.includes("void loadStatus()"));
+  assertEquals(authLostHandler.includes("authApi.logout()"), false);
+  assertEquals(authLostHandler.includes('setView("login")'), false);
 });
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
   const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
-  assert(sw.includes('const VERSION = "cowboy-v1563"'));
+  assert(sw.includes('const VERSION = "cowboy-v1564"'));
   const authStart = sw.indexOf('url.pathname.startsWith("/api/auth/")');
   const authBranch = sw.slice(authStart, sw.indexOf("return;", authStart) + "return;".length);
   assert(authBranch.includes("event.respondWith(fetch(request))"));

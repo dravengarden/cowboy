@@ -16,10 +16,13 @@ export function shouldShowFreshSessionEmptyState(input: {
   loading: boolean;
   itemCount: number;
   isLive: boolean;
+  busy: boolean;
   reachedStart: boolean | undefined;
   timelineEventCount: number;
 }): boolean {
-  if (input.loading || input.itemCount !== 0 || !input.isLive) return false;
+  if (input.loading || input.itemCount !== 0 || !input.isLive || input.busy) {
+    return false;
+  }
   // A fresh session can contain lifecycle metadata while still having no
   // conversation. Conversely, a tail made only of orphan tool deltas has no
   // renderable items but explicitly has older durable history. Never describe

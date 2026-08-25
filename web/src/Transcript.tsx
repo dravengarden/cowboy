@@ -3596,6 +3596,7 @@ export function Transcript({
     loading,
     itemCount: items.length,
     isLive,
+    busy,
     reachedStart: paging?.reachedStart,
     timelineEventCount: timeline.length,
   });

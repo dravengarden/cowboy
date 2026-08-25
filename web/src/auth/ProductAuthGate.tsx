@@ -196,23 +196,14 @@ export function ProductAuthGate({
   useEffect(() => {
     const onAuthLost = (): void => {
       if (!meRef.current) return;
-      generationRef.current += 1;
-      void (async () => {
-        try {
-          await authApi.logout();
-        } catch {
-          // Best-effort cookie clear after 401/403/4001.
-        }
-        await deleteProductHistoryCache();
-        announceProductSessionEnd();
-        meRef.current = null;
-        setMe(null);
-        setView("login");
-      })();
+      // A socket can report an auth-looking failure while the Controller is
+      // activating. Confirm against the public status endpoint before tearing
+      // down the mounted app; auth-off local owners cannot actually log out.
+      void loadStatus();
     };
     globalThis.addEventListener(PRODUCT_AUTH_LOST_EVENT, onAuthLost);
     return () => globalThis.removeEventListener(PRODUCT_AUTH_LOST_EVENT, onAuthLost);
-  }, []);
+  }, [loadStatus]);
 
   useEffect(() => {
     if (view !== "activating" && view !== "retry") return;

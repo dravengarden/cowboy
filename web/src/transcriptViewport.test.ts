@@ -213,6 +213,7 @@ Deno.test("empty transcript copy is reserved for a truly fresh session", () => {
       loading: false,
       itemCount: 0,
       isLive: true,
+      busy: false,
       reachedStart: true,
       timelineEventCount: 2,
     }),
@@ -223,8 +224,20 @@ Deno.test("empty transcript copy is reserved for a truly fresh session", () => {
       loading: false,
       itemCount: 0,
       isLive: true,
+      busy: false,
       reachedStart: false,
       timelineEventCount: 200,
+    }),
+    false,
+  );
+  assertEquals(
+    shouldShowFreshSessionEmptyState({
+      loading: false,
+      itemCount: 0,
+      isLive: true,
+      busy: true,
+      reachedStart: true,
+      timelineEventCount: 0,
     }),
     false,
   );
