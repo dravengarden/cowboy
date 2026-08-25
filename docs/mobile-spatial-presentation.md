@@ -186,11 +186,13 @@ iPadOS 26/27 standalone WebKit can keep painting system status/window chrome
 while reporting `safe-area-inset-top: 0`. The system-owned band is outside the
 DOM and cannot be covered by a page overlay. Cowboy therefore defines
 `--cowboy-system-top-clearance`: it follows the real inset normally and has a
-24 px minimum only for wide, coarse-pointer standalone displays. Every
-top-level Agent, Review, drawer, fullscreen, failure, and connection surface
-uses that contract. Keep the fallback solid and move transient glass below it;
-do not switch to `black-translucent`, spoof an iPad user agent, or add blur to
-hide the system material.
+24 px minimum only for wide, coarse-pointer standalone displays. Review,
+drawers, fullscreen, failure, and connection surfaces use that contract. The
+bottom-mode Transcript is the deliberate exception: continuous scroll uses only
+the real safe-area inset so a missing WebKit inset does not become an empty band.
+Keep fallback surfaces solid and move transient glass below them; do not switch
+to `black-translucent`, spoof an iPad user agent, or add blur to hide the system
+material.
 
 ### Composer frost
 

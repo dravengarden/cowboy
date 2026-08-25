@@ -2275,4 +2275,6 @@ Desktop Vim + IME checks:
     not use `black-translucent`, remove desktop window-control manifest behavior,
     or add user-agent detection as a workaround. Chrome emulation can validate
     the layout contract, but only an updated physical iPad PWA can accept the
-    system-drawn pixels.
+    system-drawn pixels. The bottom-mode Transcript is the exception: it uses
+    only the real safe-area inset because a synthetic 24 px floor interrupts the
+    continuous reading canvas with a conspicuous empty band.

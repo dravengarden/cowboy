@@ -41,17 +41,18 @@ Deno.test("wide standalone touch PWAs recover a missing iPad top inset", () => {
   );
 });
 
-Deno.test("agent and review surfaces share the solid system-chrome clearance", () => {
+Deno.test("Transcript keeps the real inset while other surfaces use iPad clearance", () => {
   assert(
     appSource.includes(
-      'height: navbarAtBottom ? "var(--cowboy-system-top-clearance)"',
+      'height: navbarAtBottom ? "env(safe-area-inset-top, 0px)"',
     ),
   );
   assert(
     appSource.includes(
-      'topInset={navbarAtBottom ? "var(--cowboy-system-top-clearance)"',
+      'topInset={navbarAtBottom ? "env(safe-area-inset-top, 0px)"',
     ),
   );
+  assert(appSource.includes('pt: "var(--cowboy-system-top-clearance)"'));
   assert(reviewSource.includes('pt: "var(--cowboy-system-top-clearance)"'));
   assert(
     repositorySource.includes(
