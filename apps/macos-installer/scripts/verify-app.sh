@@ -10,6 +10,7 @@ test -x "$app_bundle/Contents/MacOS/CowboyInstaller"
 test -x "$app_bundle/Contents/Resources/bin/cowboy"
 test -x "$app_bundle/Contents/Resources/bin/cowboy-machine"
 test -x "$app_bundle/Contents/Resources/bin/cowboy-machine-install"
+test -x "$app_bundle/Contents/Resources/bin/cowboy-code-adapter"
 test "$(plutil -extract CFBundleIdentifier raw "$app_bundle/Contents/Info.plist")" = \
     "xyz.stormbird.cowboy.installer"
 test "$(plutil -extract LSUIElement raw "$app_bundle/Contents/Info.plist")" = "true"

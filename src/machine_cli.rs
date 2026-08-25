@@ -375,6 +375,8 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
     let code_adapter = supervise_code_adapter(
         Arc::clone(&components),
         code_adapter_socket,
+        args.state_dir.join("bootstrap/cowboy-code-adapter"),
+        args.state_dir.join("worktrees"),
         Arc::clone(&workspaces),
     );
     let zed_adapter = supervise_zed_adapter(
@@ -631,6 +633,8 @@ fn selected_zed_pair(
 async fn supervise_code_adapter(
     components: Arc<ComponentStore>,
     socket: Option<PathBuf>,
+    bootstrap: PathBuf,
+    worktree_root: PathBuf,
     workspaces: Arc<WorkspaceConfig>,
 ) -> anyhow::Result<()> {
     let Some(socket) = socket else {
@@ -638,22 +642,21 @@ async fn supervise_code_adapter(
     };
     let mut workspace_updates = workspaces.subscribe();
     loop {
-        let command = components.command_path("cowboy-code-adapter");
-        let Ok(executable) = command.canonicalize() else {
+        let active_command = components.command_path("cowboy-code-adapter");
+        let Some(executable) = select_code_adapter_executable(&active_command, &bootstrap) else {
             tokio::time::sleep(Duration::from_secs(2)).await;
             continue;
         };
         let workspace_snapshot = workspaces.snapshot();
-        let mut child =
-            tokio::process::Command::new(&executable)
-                .arg("--socket")
-                .arg(&socket)
-                .args(workspace_snapshot.workspaces.iter().flat_map(|workspace| {
-                    ["--workspace".to_owned(), workspace.canonical_path.clone()]
-                }))
-                .kill_on_drop(true)
-                .spawn()
-                .with_context(|| format!("starting {}", executable.display()))?;
+        let mut process = tokio::process::Command::new(&executable);
+        process.arg("--socket").arg(&socket);
+        for root in code_adapter_trusted_roots(&worktree_root, &workspace_snapshot.workspaces) {
+            process.arg("--workspace").arg(root);
+        }
+        let mut child = process
+            .kill_on_drop(true)
+            .spawn()
+            .with_context(|| format!("starting {}", executable.display()))?;
         loop {
             tokio::select! {
                 status = child.wait() => {
@@ -661,7 +664,7 @@ async fn supervise_code_adapter(
                     break;
                 }
                 () = tokio::time::sleep(Duration::from_secs(2)) => {
-                    if command.canonicalize().ok().as_ref() != Some(&executable) {
+                    if select_code_adapter_executable(&active_command, &bootstrap).as_ref() != Some(&executable) {
                         child.kill().await?;
                         let _ = child.wait().await;
                         break;
@@ -677,6 +680,26 @@ async fn supervise_code_adapter(
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
+}
+
+fn select_code_adapter_executable(active: &Path, bootstrap: &Path) -> Option<PathBuf> {
+    active
+        .canonicalize()
+        .ok()
+        .or_else(|| bootstrap.canonicalize().ok())
+}
+
+fn code_adapter_trusted_roots(
+    worktree_root: &Path,
+    workspaces: &[MachineWorkspace],
+) -> Vec<PathBuf> {
+    std::iter::once(worktree_root.to_path_buf())
+        .chain(
+            workspaces
+                .iter()
+                .map(|workspace| PathBuf::from(&workspace.canonical_path)),
+        )
+        .collect()
 }
 
 fn validate_controller_url(value: &str) -> anyhow::Result<()> {
@@ -2883,20 +2906,21 @@ where
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::Duration;
 
     use clap::Parser as _;
 
     use super::{
         Args, WorkspaceConfig, bootstrap_acp_inventory, claude_runtime_enabled,
-        disabled_provider_slots_from, gemini_auth_from_metadata, gemini_env_value_from,
-        grok_auth_from_json, load_enrolled_machine_id, load_workspace_snapshot,
-        login_challenge_tokens, managed_provider_environment, npm_package_for_component,
-        npm_script_shell_with, npm_update_is_confirmed_by_inventory, parse_workspaces,
-        persist_enrolled_machine_id, pin_grok_runtime_args, provider_for_component,
-        reject_untrusted_workspace, resolve_runtime_machine_id, selected_zed_pair,
-        send_frame_with_timeout, validate_controller_url, workspace_path_allowed,
+        code_adapter_trusted_roots, disabled_provider_slots_from, gemini_auth_from_metadata,
+        gemini_env_value_from, grok_auth_from_json, load_enrolled_machine_id,
+        load_workspace_snapshot, login_challenge_tokens, managed_provider_environment,
+        npm_package_for_component, npm_script_shell_with, npm_update_is_confirmed_by_inventory,
+        parse_workspaces, persist_enrolled_machine_id, pin_grok_runtime_args,
+        provider_for_component, reject_untrusted_workspace, resolve_runtime_machine_id,
+        select_code_adapter_executable, selected_zed_pair, send_frame_with_timeout,
+        validate_controller_url, workspace_path_allowed,
     };
     use crate::machine_components::ComponentStore;
     use crate::machine_protocol::{
@@ -3532,5 +3556,46 @@ mod tests {
         assert!(config.reload().is_err());
         assert_eq!(config.snapshot().revision.as_deref(), Some("revision-two"));
         std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn code_adapter_prefers_active_component_and_falls_back_to_bootstrap() {
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-machine-code-adapter-selection-{}",
+            std::process::id()
+        ));
+        let active = root.join("components/commands/cowboy-code-adapter");
+        let bootstrap = root.join("bootstrap/cowboy-code-adapter");
+        std::fs::create_dir_all(active.parent().unwrap()).expect("active directory");
+        std::fs::create_dir_all(bootstrap.parent().unwrap()).expect("bootstrap directory");
+        std::fs::write(&bootstrap, "bootstrap").expect("bootstrap adapter");
+
+        assert_eq!(
+            select_code_adapter_executable(&active, &bootstrap),
+            Some(bootstrap.canonicalize().unwrap())
+        );
+
+        std::fs::write(&active, "active").expect("active adapter");
+        assert_eq!(
+            select_code_adapter_executable(&active, &bootstrap),
+            Some(active.canonicalize().unwrap())
+        );
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn code_adapter_trusts_the_managed_worktree_root() {
+        let workspaces = vec![crate::machine_protocol::MachineWorkspace {
+            id: "project".to_owned(),
+            display_name: "Project".to_owned(),
+            canonical_path: "/work/project".to_owned(),
+        }];
+        assert_eq!(
+            code_adapter_trusted_roots(Path::new("/state/worktrees"), &workspaces),
+            vec![
+                PathBuf::from("/state/worktrees"),
+                PathBuf::from("/work/project")
+            ]
+        );
     }
 }

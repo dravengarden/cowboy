@@ -158,6 +158,10 @@ fn machine_host_binary(explicit: Option<&Path>) -> PathBuf {
     )
 }
 
+fn companion_binary(machine: &Path, name: &str) -> PathBuf {
+    machine.with_file_name(name)
+}
+
 fn normalize_controller_url(origin: &str) -> Result<String> {
     let url = url::Url::parse(origin).context("invalid Cowboy origin")?;
     let host = url.host_str().unwrap_or_default();
@@ -250,10 +254,25 @@ fn prepare_install(args: &InstallArgs) -> Result<(PathBuf, PathBuf)> {
         "cowboy-machine was not found next to this cowboy binary ({})",
         source.display()
     );
+    let code_adapter_source = companion_binary(&source, "cowboy-code-adapter");
+    anyhow::ensure!(
+        code_adapter_source.is_file(),
+        "cowboy-code-adapter was not found next to the Machine host ({})",
+        code_adapter_source.display()
+    );
     let bootstrap = state.join("bootstrap/cowboy-machine");
     std::fs::copy(&source, &bootstrap)
         .with_context(|| format!("copying Machine host from {}", source.display()))?;
     set_mode(&bootstrap, 0o755)?;
+
+    let code_adapter_bootstrap = state.join("bootstrap/cowboy-code-adapter");
+    std::fs::copy(&code_adapter_source, &code_adapter_bootstrap).with_context(|| {
+        format!(
+            "copying Machine code adapter from {}",
+            code_adapter_source.display()
+        )
+    })?;
+    set_mode(&code_adapter_bootstrap, 0o755)?;
 
     let token = state.join("enrollment-token");
     std::fs::write(&token, &args.enrollment_token)?;
@@ -527,5 +546,16 @@ mod tests {
         assert!(normalize_controller_url("https://cowboy.example").is_ok());
         assert!(normalize_controller_url("http://127.0.0.1:3333").is_ok());
         assert!(normalize_controller_url("http://cowboy.example").is_err());
+    }
+
+    #[test]
+    fn code_adapter_is_resolved_next_to_the_machine_host() {
+        assert_eq!(
+            companion_binary(
+                Path::new("/release/bin/cowboy-machine"),
+                "cowboy-code-adapter"
+            ),
+            Path::new("/release/bin/cowboy-code-adapter")
+        );
     }
 }

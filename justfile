@@ -43,9 +43,10 @@ build: build-web
     cargo build --release --locked
     cd plugins/zed/adapter && cargo build --release --locked
 
-# Build the three user-scoped Machine bootstrap commands on macOS or Linux.
+# Build the user-scoped Machine bootstrap commands on macOS or Linux.
 build-machine-bootstrap:
     cargo build --release --locked --no-default-features --features machine-host --bin cowboy --bin cowboy-machine --bin cowboy-machine-install
+    cargo build --release --locked --no-default-features --features code-adapter --bin cowboy-code-adapter
 
 # Native macOS SwiftUI installer manager. Run these on macOS with Xcode's Swift
 # toolchain; build-app packages the existing Machine bootstrap commands.
