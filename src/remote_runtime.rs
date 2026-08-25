@@ -772,10 +772,9 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                     let auto_permission = codex_full_access_permission(shared, &session_id, &event);
                     let is_config_options = matches!(&event, RuntimeEvent::ConfigOptions { .. });
                     update_snapshot_from_event(shared, &session_id, runtime_seq, &event);
-                    if is_config_options
-                        && let Some(worker) = shared.workers.lock().get(&session_id).cloned()
-                    {
-                        sync_config_for_worker(shared, &worker);
+                    let worker = shared.workers.lock().get(&session_id).cloned();
+                    if is_config_options && let Some(worker) = worker.as_ref() {
+                        sync_config_for_worker(shared, worker);
                     }
                     if let Some((request_id, option_id)) = auto_permission {
                         tracing::info!(
@@ -787,6 +786,13 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                         queue_permission(shared, &session_id, request_id, option_id);
                     } else {
                         apply_event(&shared.hub, &session_id, event);
+                        if let Some(worker) = worker.as_ref() {
+                            // A replacement worker can register as Starting and
+                            // only prove itself idle with a later Ready event.
+                            // Snapshot-only reconciliation misses that edge and
+                            // leaves a pre-restart queue dispatch guard stuck.
+                            reconcile_idle_snapshot(shared, worker);
+                        }
                     }
                 }
                 shared.highwaters.lock().insert(key, runtime_seq);
@@ -2111,6 +2117,55 @@ mod tests {
         assert_eq!(
             rx.recv().await.expect("dispatch after broker drained").text,
             "second"
+        );
+    }
+
+    #[tokio::test]
+    async fn ready_event_reconciles_stale_in_flight_after_worker_restart() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        hub.set_dispatch_tx(tx);
+        hub.set_status("s", Status::Running, None);
+        hub.submit("s", "interrupted".to_owned(), vec![], None);
+        assert_eq!(rx.recv().await.expect("first dispatch").text, "interrupted");
+        hub.submit("s", "after restart".to_owned(), vec![], None);
+        hub.set_status("s", Status::Starting, None);
+
+        let mut starting = snapshot("s");
+        starting.state = WorkerState::Starting;
+        starting.current_turn_id = None;
+        starting.last_runtime_seq = 0;
+        let runtime = RemoteRuntime::for_test(hub, vec![starting]);
+
+        handle_frame(
+            &runtime.shared,
+            Frame::WorkerEvent {
+                session_id: "s".to_owned(),
+                worker_epoch: "epoch-1".to_owned(),
+                runtime_seq: 1,
+                event: RuntimeEvent::Ready {
+                    agent_session_id: Some("agent-1".to_owned()),
+                },
+            },
+            &mut tokio::io::sink(),
+        )
+        .await
+        .expect("replacement ready event");
+
+        assert_eq!(
+            rx.recv()
+                .await
+                .expect("queued dispatch after replacement became idle")
+                .text,
+            "after restart"
         );
     }
 
