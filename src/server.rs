@@ -7469,7 +7469,10 @@ async fn api_machine_enroll(
     }
 }
 
-const MACHINE_HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+// Existing Machine clients collect their bounded CLI/auth inventory after
+// receiving the challenge. Those probes can legitimately exceed 15 seconds on
+// a loaded macOS host, so keep the nonce window above their worst-case budget.
+const MACHINE_HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
 const MACHINE_HEARTBEAT_MS: u64 = 15_000;
 const WEBSOCKET_FRAME_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
@@ -7526,7 +7529,22 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     }
     let incoming = match tokio::time::timeout(MACHINE_HANDSHAKE_TIMEOUT, socket.recv()).await {
         Ok(Some(Ok(Message::Text(text)))) => text,
-        _ => return,
+        Ok(Some(Ok(_))) => {
+            tracing::warn!("Machine handshake received a non-text hello");
+            return;
+        }
+        Ok(Some(Err(error))) => {
+            tracing::warn!(%error, "reading Machine hello");
+            return;
+        }
+        Ok(None) => {
+            tracing::warn!("Machine disconnected before sending hello");
+            return;
+        }
+        Err(_) => {
+            tracing::warn!("Machine hello timed out while collecting host inventory");
+            return;
+        }
     };
     let crate::machine_protocol::MachineFrame::Hello { hello } =
         (match serde_json::from_str(&incoming) {
