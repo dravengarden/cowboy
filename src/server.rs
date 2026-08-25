@@ -1556,7 +1556,10 @@ async fn run_dispatcher(
             continue;
         };
         let title = first_prompt_title(&text, &content);
-        match supervisor.send(&session_id, AgentCommand::Prompt(blocks, cmid, None)) {
+        match supervisor.send(
+            &session_id,
+            AgentCommand::Prompt(blocks, cmid.clone(), None),
+        ) {
             Ok(()) => {
                 if let Some(t) = title {
                     hub.auto_title(&session_id, t);
@@ -1564,12 +1567,62 @@ async fn run_dispatcher(
             }
             Err(e) => {
                 tracing::warn!(session = %session_id, error = %e, "queued dispatch failed");
-                hub.clear_in_flight(&session_id);
-                hub.broadcast_error(Some(session_id), format!("send failed: {e}"));
+                retain_failed_dispatch(&hub, session_id, text, content, cmid, &e.to_string());
             }
         }
     }
     tracing::info!("dispatcher shutting down (channel closed)");
+}
+
+/// Restore a prompt that left the durable queue but never reached its runtime.
+///
+/// A remote machine can disconnect between queue drain and dispatch (notably
+/// while the controller is restarting). Keeping the original `cmid` makes the
+/// restore idempotent and lets every client reconcile the same queued item.
+fn retain_failed_dispatch(
+    hub: &Hub,
+    session_id: String,
+    text: String,
+    content: Vec<serde_json::Value>,
+    cmid: Option<String>,
+    error: &str,
+) {
+    hub.requeue_prompt(&session_id, text, content, cmid);
+    hub.broadcast_error(Some(session_id), format!("send failed: {error}"));
+}
+
+#[cfg(test)]
+mod dispatcher_failure_tests {
+    use super::*;
+
+    #[test]
+    fn failed_remote_dispatch_retains_the_original_prompt() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "remote-session".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "Remote session".to_owned(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+
+        retain_failed_dispatch(
+            &hub,
+            "remote-session".to_owned(),
+            "current status?".to_owned(),
+            Vec::new(),
+            Some("client-message-1".to_owned()),
+            "machine is not connected",
+        );
+
+        assert_eq!(hub.session_info("remote-session").unwrap().queue_count, 1);
+        let Some(Outbound::SyncPatch { value, .. }) = hub.queue_resync("remote-session") else {
+            panic!("queued prompt should be available to reconnecting clients");
+        };
+        assert_eq!(value["queue"][0]["text"], "current status?");
+        assert_eq!(value["queue"][0]["cmid"], "client-message-1");
+    }
 }
 
 fn plugin_fence_state_for_session(
