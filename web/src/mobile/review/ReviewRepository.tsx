@@ -268,7 +268,7 @@ export function ReviewRepository({
     <Stack sx={{ position: "relative", height: 1, minHeight: 0 }}>
       <Box
         sx={{
-          pt: "calc(env(safe-area-inset-top, 0px) + 14px)",
+          pt: "calc(var(--cowboy-system-top-clearance) + 14px)",
           px: 1.5,
           pb: 1,
         }}

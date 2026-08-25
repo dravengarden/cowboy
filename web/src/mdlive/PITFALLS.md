@@ -2261,3 +2261,18 @@ Desktop Vim + IME checks:
     variables. Preserve the textarea's IME ownership check and monotonic focused
     growth. Do not add another observer, per-frame React geometry state, editor
     remount, focus write, or selection repair.
+
+98. **The iPad standalone status/window band is system chrome, not a Web blur
+    layer.** Affected iPadOS 26/27 WebKit builds keep a visible top band outside
+    the DOM while `safe-area-inset-top` reports zero, so removing
+    `backdrop-filter`, changing z-index, or extending a fixed page surface cannot
+    paint over it. Use the shared `--cowboy-system-top-clearance`: preserve the
+    real inset everywhere, and on wide coarse-pointer standalone displays floor
+    it at 24 px so Cowboy titles, drawer headers, failure banners, and transient
+    glass sit below the system material. The backing remains opaque
+    `background.default`; `theme-color` uses the same token family so the
+    unreachable band and reachable page do not form a second material seam. Do
+    not use `black-translucent`, remove desktop window-control manifest behavior,
+    or add user-agent detection as a workaround. Chrome emulation can validate
+    the layout contract, but only an updated physical iPad PWA can accept the
+    system-drawn pixels.

@@ -169,7 +169,7 @@ export class AppErrorBoundary extends Component<{ children: ReactNode }, State> 
           bgcolor: "error.main",
           color: "error.contrastText",
           // Owns the notch (it's a full-screen takeover).
-          pt: "calc(env(safe-area-inset-top, 0px) + 24px)",
+          pt: "calc(var(--cowboy-system-top-clearance) + 24px)",
         }}
       >
         <Typography variant="h6" fontWeight={600}>

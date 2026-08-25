@@ -727,7 +727,7 @@ export const ComposerTextarea = forwardRef<
         maxHeight: anchorTop > 0
           ? `clamp(120px, calc(${
             String(anchorTop)
-          }px - env(safe-area-inset-top, 0px) - 12px), 40vh)`
+          }px - var(--cowboy-system-top-clearance) - 12px), 40vh)`
           : "40vh",
         overflowY: "auto",
         borderRadius: 1.5,

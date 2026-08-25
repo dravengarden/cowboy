@@ -1004,7 +1004,7 @@ function PageList({
           aria-hidden={!showEarlierLoading || !!query.trim()}
           sx={{
             position: "absolute",
-            top: 8,
+            top: "calc(var(--cowboy-system-top-clearance) + 8px)",
             left: "50%",
             transform: "translateX(-50%)",
             zIndex: 4,

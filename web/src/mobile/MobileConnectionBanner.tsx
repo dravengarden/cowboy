@@ -70,7 +70,7 @@ export function MobileConnectionBanner(
         gap: 1,
         px: 2,
         py: 0.75,
-        pt: "calc(env(safe-area-inset-top, 0px) + 6px)",
+        pt: "calc(var(--cowboy-system-top-clearance) + 6px)",
         bgcolor: `${palette}.main`,
         color: `${palette}.contrastText`,
         fontSize: "0.8125rem",

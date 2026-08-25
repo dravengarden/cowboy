@@ -48,6 +48,21 @@
            sheet dismiss that mounts under the same finger. */
         -webkit-tap-highlight-color: transparent;
       }
+      :root {
+        /* Keep every top-level surface on one inset contract. iPadOS normally
+           publishes the system-owned status/window chrome through safe-area,
+           but affected standalone WebKit builds report zero while still
+           painting that chrome above the page. */
+        --cowboy-system-top-clearance: env(safe-area-inset-top, 0px);
+      }
+      @media (display-mode: standalone) and (any-pointer: coarse) and (min-width: 700px) {
+        :root {
+          /* A quiet, solid-backed band keeps iPad window chrome away from
+             Cowboy titles and transient controls when WebKit loses the inset.
+             max() preserves a larger real safe area when the OS provides one. */
+          --cowboy-system-top-clearance: max(env(safe-area-inset-top, 0px), 24px);
+        }
+      }
       /* Page scroll is locked (html overflow:hidden); all real scrolling lives
          inside the transcript pane. NORMAL FLOW — NOT a position:fixed body: the
          native Tauri shell resizes the WKWebView for the keyboard

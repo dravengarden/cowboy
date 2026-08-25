@@ -2734,7 +2734,7 @@ export function App({
                             overflow: "hidden",
                             bgcolor: "background.default",
                             pointerEvents: "auto",
-                            pt: "env(safe-area-inset-top, 0px)",
+                            pt: "var(--cowboy-system-top-clearance)",
                             pl: "env(safe-area-inset-left, 0px)",
                             "@media (min-width: 768px)": {
                                 width:
@@ -3033,18 +3033,10 @@ export function App({
                         }}
                     />
                 )}
-                {/* Bottom-navbar mode leaves the TOP bare — the transcript runs
-                    under the iOS status bar (time/signal/battery), which clashed
-                    with the content. A frosted-glass strip over the safe-area-top
-                    fixes it the iOS way: the status bar sits on blur, and content
-                    scrolls UNDER it (the transcript's matching top inset clears it
-                    at rest, so the glass only shows while scrolling). Height is
-                    `env(safe-area-inset-top)` → 0 (invisible) off-device / on a
-                    no-notch screen / when hosted, so it costs nothing there.
-                    `pointer-events:none` so taps + scroll pass straight through.
-                    Top mode doesn't need it — the AppBar already owns that edge. */}
-                {/* TOP frosted glass. Bottom mode: a thin strip over the safe-area-top
-                    so the iOS status bar sits on blur and content scrolls under it. Top
+                {/* Top system-chrome backing. Bottom mode: a solid strip keeps
+                    content out from under the iOS status/window controls. On wide
+                    standalone touch displays the shared clearance also supplies a
+                    fallback when WebKit reports a zero safe-area inset. Top
                     mode (desktop): a full navbar-height slab — the frosted glass BEHIND
                     the (now transparent) top AppBar, so the transcript diffuses under the
                     navbar exactly like the mobile bottom bar. Height tracks the measured
@@ -3060,7 +3052,7 @@ export function App({
                         top: 0,
                         left: 0,
                         right: 0,
-                        height: navbarAtBottom ? "env(safe-area-inset-top, 0px)" : "var(--navbar-h, 0px)",
+                        height: navbarAtBottom ? "var(--cowboy-system-top-clearance)" : "var(--navbar-h, 0px)",
                         // Behind the AppBar content (zIndex 2) but above the transcript (0).
                         // Bottom mode's strip sits alone at the top, so keep it high.
                         zIndex: navbarAtBottom ? ((t) => t.zIndex.appBar) : 1,
@@ -3228,7 +3220,7 @@ export function App({
                         // placement. Landscape rounded-corner side insets (pl/pr) keep
                         // the bar clear of the iPhone/iPad R角. env() insets are 0
                         // off-device + when hosted.
-                        pt: navbarAtBottom ? 0 : "env(safe-area-inset-top, 0px)",
+                        pt: navbarAtBottom ? 0 : "var(--cowboy-system-top-clearance)",
                         // Bottom gap = the home-indicator zone. The FULL inset (~34px)
                         // read as a big, lopsided gap vs the slim composer→navbar gap
                         // above; shave it so the bar sits closer to the edge while the
@@ -3604,10 +3596,10 @@ export function App({
                                 // Gate the composer slab's up-shadow on real
                                 // scroll-overflow (content under the glass).
                                 onScrollableChange={setTranscriptScrollable}
-                                // Reserve the top frosted bar at the transcript's top so
-                                // content clears it at rest: the status-bar strip in
+                                // Reserve the top system-chrome backing so content
+                                // clears it at rest: the status-bar strip in
                                 // mobile mode, the full navbar height in desktop mode.
-                                topInset={navbarAtBottom ? "env(safe-area-inset-top, 0px)" : "var(--navbar-h, 0px)"}
+                                topInset={navbarAtBottom ? "var(--cowboy-system-top-clearance)" : "var(--navbar-h, 0px)"}
                                 // Mobile footer is in-flow, so the transcript
                                 // already ends above it. Desktop still floats.
                                 bottomInset={mobile

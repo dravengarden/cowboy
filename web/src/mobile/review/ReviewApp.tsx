@@ -2516,7 +2516,7 @@ export function ReviewApp({
           minWidth: 0,
           bgcolor: "background.default",
           color: "text.primary",
-          pt: "env(safe-area-inset-top, 0px)",
+          pt: "var(--cowboy-system-top-clearance)",
         }}
       >
         <Stack

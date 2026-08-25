@@ -275,7 +275,7 @@ export function ReviewChanges({
         sx={{
           px: 2,
           pt: drawer
-            ? "calc(env(safe-area-inset-top, 0px) + 18px)"
+            ? "calc(var(--cowboy-system-top-clearance) + 18px)"
             : 1,
           pb: 1,
         }}

@@ -528,7 +528,7 @@ export function ReviewFileTree({
         alignItems="center"
         spacing={1}
         sx={{
-          pt: "calc(env(safe-area-inset-top, 0px) + 18px)",
+          pt: "calc(var(--cowboy-system-top-clearance) + 18px)",
           px: 2,
           pb: 1.5,
         }}

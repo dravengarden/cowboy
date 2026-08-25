@@ -213,7 +213,7 @@ export function FullscreenComposer({
         // The removed top app bar used to consume this inset implicitly. Keep the
         // writing canvas below the Dynamic Island/status bar without restoring
         // an otherwise empty chrome row.
-        pt: "env(safe-area-inset-top, 0px)",
+        pt: "var(--cowboy-system-top-clearance)",
         // Reserve the on-screen keyboard's height so the toolbar (last child) sits
         // ABOVE it (a fixed element's bottom otherwise hides under the keyboard on
         // iOS — the layout viewport doesn't shrink). When the keyboard is down,
@@ -240,7 +240,7 @@ export function FullscreenComposer({
             sx={{
               position: "absolute",
               zIndex: 1,
-              top: "calc(env(safe-area-inset-top, 0px) + 4px)",
+              top: "calc(var(--cowboy-system-top-clearance) + 4px)",
               right: 8,
               width: 44,
               height: 44,
