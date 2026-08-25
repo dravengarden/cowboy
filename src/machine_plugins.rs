@@ -482,6 +482,17 @@ impl MachinePluginStore {
                     == package.manifest.compatibility.auth_contract_fingerprint,
                 "session Provider auth generation uses a different contract"
             );
+            let envelope = self
+                .latest_auth_envelope(provider_id)?
+                .context("session Provider auth replica is missing")?;
+            ensure!(
+                envelope.auth_generation == generation,
+                "session Provider auth replica uses a different generation"
+            );
+            ensure!(
+                self.materialization_is_current(&package, &envelope)?,
+                "session Provider auth generation is missing projected credentials"
+            );
             Some(materialized.join("home"))
         } else {
             None
@@ -931,17 +942,17 @@ impl MachinePluginStore {
                         == package.manifest.compatibility.auth_contract_fingerprint,
                 "existing Provider auth materialization has conflicting identity"
             );
-            ensure!(
-                generation.join("home").is_dir() && generation.join("environment.json").is_file(),
-                "existing Provider auth materialization is incomplete"
-            );
-            for file in auth.credential_files.iter().filter(|file| file.required) {
-                ensure!(
-                    generation.join("home").join(&file.relative_path).is_file(),
-                    "existing Provider auth materialization is missing required value {}",
-                    file.bundle_key
+            if materialization_contains_bundle(auth, &generation, bundle)? {
+                return activate_link(
+                    &provider_auth_root.join("materialized"),
+                    &auth_generation.to_string(),
                 );
             }
+            repair_materialized_bundle(auth, &generation, bundle)?;
+            ensure!(
+                materialization_contains_bundle(auth, &generation, bundle)?,
+                "repaired Provider auth materialization is incomplete"
+            );
             return activate_link(
                 &provider_auth_root.join("materialized"),
                 &auth_generation.to_string(),
@@ -1066,21 +1077,20 @@ impl MachinePluginStore {
             ProviderReplicaState::Absent
         };
         let materialization_state =
-            auth_generation.map_or(ProviderMaterializationState::NotInstalled, |generation| {
-                let current = self
-                    .auth_provider_root(provider_id)
-                    .join("materialized/current");
-                let metadata = fs::read(current.join("metadata.json"))
-                    .ok()
-                    .and_then(|bytes| {
-                        serde_json::from_slice::<MaterializationMetadata>(&bytes).ok()
-                    });
-                if metadata.is_some_and(|value| value.auth_generation == generation) {
-                    ProviderMaterializationState::Current
-                } else {
-                    ProviderMaterializationState::Failed
-                }
-            });
+            replica
+                .as_ref()
+                .map_or(ProviderMaterializationState::NotInstalled, |envelope| {
+                    if envelope.action == ProviderAuthAction::Wipe {
+                        ProviderMaterializationState::NotInstalled
+                    } else if self
+                        .materialization_is_current(&package, envelope)
+                        .unwrap_or(false)
+                    {
+                        ProviderMaterializationState::Current
+                    } else {
+                        ProviderMaterializationState::Failed
+                    }
+                });
         Ok(Some(PluginInventory {
             plugin_id: package.manifest.id.clone(),
             plugin_version: package.manifest.version.clone(),
@@ -1095,6 +1105,34 @@ impl MachinePluginStore {
             materialization_state,
             detail: None,
         }))
+    }
+
+    fn materialization_is_current(
+        &self,
+        package: &ProviderPackage,
+        envelope: &SealedProviderAuth,
+    ) -> Result<bool> {
+        if envelope.action != ProviderAuthAction::Apply {
+            return Ok(false);
+        }
+        let generation = self
+            .auth_provider_root(&package.manifest.id)
+            .join("materialized/generations")
+            .join(envelope.auth_generation.to_string());
+        let metadata = fs::read(generation.join("metadata.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<MaterializationMetadata>(&bytes).ok());
+        if !metadata.is_some_and(|value| {
+            value.auth_generation == envelope.auth_generation
+                && value.auth_contract_fingerprint
+                    == package.manifest.compatibility.auth_contract_fingerprint
+        }) {
+            return Ok(false);
+        }
+        let plaintext = self.encryption.open(envelope)?;
+        let bundle: PortableCredentialBundle = serde_json::from_slice(&plaintext)?;
+        validate_portable_bundle(&package.manifest.authentication, &bundle)?;
+        materialization_contains_bundle(&package.manifest.authentication, &generation, &bundle)
     }
 
     fn active_package(&self, provider_id: &str) -> Result<Option<(ProviderPackage, String)>> {
@@ -1336,6 +1374,98 @@ impl MachinePluginStore {
         }
         Ok(())
     }
+}
+
+fn materialization_contains_bundle(
+    auth: &cowboy_provider_sdk::AuthenticationContract,
+    generation: &Path,
+    bundle: &PortableCredentialBundle,
+) -> Result<bool> {
+    let home = generation.join("home");
+    let environment_path = generation.join("environment.json");
+    if !home.is_dir() || !environment_path.is_file() {
+        return Ok(false);
+    }
+    for file in &auth.credential_files {
+        if bundle.values.contains_key(&file.bundle_key) && !home.join(&file.relative_path).is_file()
+        {
+            return Ok(false);
+        }
+    }
+    let environment: BTreeMap<String, String> =
+        serde_json::from_slice(&fs::read(environment_path)?)?;
+    Ok(auth
+        .environment_projection
+        .iter()
+        .all(|(name, bundle_key)| {
+            !bundle.values.contains_key(bundle_key) || environment.contains_key(name)
+        }))
+}
+
+fn repair_materialized_bundle(
+    auth: &cowboy_provider_sdk::AuthenticationContract,
+    generation: &Path,
+    bundle: &PortableCredentialBundle,
+) -> Result<()> {
+    let home = generation.join("home");
+    fs::create_dir_all(&home)?;
+    set_tree_root_permissions(generation)?;
+    let mut total = 0_usize;
+    for file in &auth.credential_files {
+        let Some(value) = bundle.values.get(&file.bundle_key) else {
+            continue;
+        };
+        let destination = home.join(&file.relative_path);
+        ensure_within(&home, &destination)?;
+        if destination.is_file() {
+            continue;
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(value)
+            .with_context(|| format!("decoding credential value {}", file.bundle_key))?;
+        ensure!(
+            bytes.len() <= MAX_CREDENTIAL_VALUE_BYTES,
+            "credential value too large"
+        );
+        total = total.saturating_add(bytes.len());
+        ensure!(
+            total <= MAX_CREDENTIAL_BUNDLE_BYTES,
+            "credential bundle too large"
+        );
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
+            set_directory_chain_permissions(&home, parent)?;
+        }
+        atomic_write(&destination, &bytes, 0o600)?;
+    }
+    let environment_path = generation.join("environment.json");
+    let mut environment: BTreeMap<String, String> = if environment_path.is_file() {
+        serde_json::from_slice(&fs::read(&environment_path)?)?
+    } else {
+        BTreeMap::new()
+    };
+    let mut environment_changed = !environment_path.is_file();
+    for (name, bundle_key) in &auth.environment_projection {
+        if environment.contains_key(name) {
+            continue;
+        }
+        let Some(value) = bundle.values.get(bundle_key) else {
+            continue;
+        };
+        let bytes = base64::engine::general_purpose::STANDARD.decode(value)?;
+        ensure!(
+            bytes.len() <= MAX_CREDENTIAL_VALUE_BYTES,
+            "credential value too large"
+        );
+        let value = String::from_utf8(bytes).context("environment credential is not UTF-8")?;
+        ensure!(!value.contains('\0'), "environment credential contains NUL");
+        environment.insert(name.clone(), value);
+        environment_changed = true;
+    }
+    if environment_changed {
+        atomic_write(&environment_path, &serde_json::to_vec(&environment)?, 0o600)?;
+    }
+    Ok(())
 }
 
 fn matching_plugin_runtime_artifacts<'a>(
@@ -2624,6 +2754,47 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn same_generation_replay_repairs_missing_method_credential() {
+        use cowboy_provider_sdk::{StandardProviderSource, build_package};
+
+        let source: StandardProviderSource =
+            serde_json::from_str(include_str!("../plugins/grok/provider.json")).unwrap();
+        let package = build_package(source.compile().unwrap()).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-grok-auth-repair-test-{}-{}",
+            std::process::id(),
+            ATOMIC_WRITE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let store = MachinePluginStore::new(&root, Platform::Linux, "x86_64".to_owned()).unwrap();
+        let original = br#"{"account":{"key":"sealed-token"}}"#;
+        let bundle = PortableCredentialBundle {
+            portable_schema: package.manifest.authentication.portable_schema.clone(),
+            method_id: "xai-account".to_owned(),
+            values: BTreeMap::from([(
+                "auth_json".to_owned(),
+                base64::engine::general_purpose::STANDARD.encode(original),
+            )]),
+        };
+
+        store.materialize_bundle(&package, 1, &bundle).unwrap();
+        let auth_path = root
+            .join("provider-auth/providers/grok/materialized/generations/1/home/.grok/auth.json");
+        let refreshed = br#"{"account":{"key":"runtime-refreshed-token"}}"#;
+        fs::write(&auth_path, refreshed).unwrap();
+        let runtime_state = auth_path.parent().unwrap().join("active_sessions.json");
+        fs::write(&runtime_state, b"[]").unwrap();
+        store.materialize_bundle(&package, 1, &bundle).unwrap();
+        assert_eq!(fs::read(&auth_path).unwrap(), refreshed);
+
+        fs::remove_file(&auth_path).unwrap();
+        store.materialize_bundle(&package, 1, &bundle).unwrap();
+        assert_eq!(fs::read(&auth_path).unwrap(), original);
+        assert_eq!(fs::read(runtime_state).unwrap(), b"[]");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
