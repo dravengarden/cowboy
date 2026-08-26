@@ -2486,6 +2486,9 @@ export function ReviewApp({
       drawer={mode === "files"
         ? (
           <ReviewFileTree
+            key={workspace
+              ? JSON.stringify([workspace.sessionId, workspace.cwd])
+              : "none"}
             sessionId={workspace?.sessionId}
             cwd={workspace?.cwd}
             onOpenFile={openSource}

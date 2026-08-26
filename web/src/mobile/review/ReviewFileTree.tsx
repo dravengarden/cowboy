@@ -1,6 +1,6 @@
 import {
-  Close,
   ChevronRight,
+  Close,
   DescriptionOutlined,
   FolderOutlined,
   MyLocation,
@@ -35,6 +35,14 @@ import {
   fetchCodeTree,
 } from "./codeApi";
 import { directoryPrefetchTargets } from "./directoryPrefetch";
+import {
+  belongsToDirectorySubtree,
+  directoryListingContains,
+  directoryParentPath,
+  directoryTreeCacheKey,
+  directoryTreeCacheScope,
+  directoryTreeSessionPrefix,
+} from "./directoryTreeModel";
 import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
 
 type DirectoryPage = CodeTreePage & { cachedAt: number };
@@ -45,10 +53,6 @@ const MEMORY_MAX_AGE_MS = 5 * 60_000;
 const MEMORY_MAX_PAGES = 128;
 const DIRECTORY_PREFETCH_CONCURRENCY = 3;
 const DIRECTORY_PREFETCH_LIMIT = 12;
-
-function cacheKey(sessionId: string, path: string): string {
-  return `${sessionId}\0${path}`;
-}
 
 function getDirectoryPage(key: string): DirectoryPage | undefined {
   const page = directoryCache.get(key);
@@ -80,6 +84,7 @@ function DirectoryRows({
   loading,
   failed,
   onToggleDirectory,
+  onRetryDirectory,
   currentPath,
   depth = 0,
 }: {
@@ -90,6 +95,7 @@ function DirectoryRows({
   loading: ReadonlySet<string>;
   failed: ReadonlySet<string>;
   onToggleDirectory: (path: string) => void;
+  onRetryDirectory: (path: string) => void;
   currentPath: string | undefined;
   depth?: number;
 }): React.JSX.Element {
@@ -157,7 +163,7 @@ function DirectoryRows({
                   <IconButton
                     size="small"
                     aria-label={`Retry ${entry.name}`}
-                    onClick={() => onToggleDirectory(entry.path)}
+                    onClick={() => onRetryDirectory(entry.path)}
                   >
                     <Refresh fontSize="small" />
                   </IconButton>
@@ -176,6 +182,7 @@ function DirectoryRows({
                   loading={loading}
                   failed={failed}
                   onToggleDirectory={onToggleDirectory}
+                  onRetryDirectory={onRetryDirectory}
                   currentPath={currentPath}
                   depth={depth + 1}
                 />
@@ -249,6 +256,7 @@ export function ReviewFileTree({
   const prefetchGeneration = useRef(0);
   const treeScrollerRef = useRef<HTMLDivElement>(null);
   const previousRefreshToken = useRef(refreshToken);
+  const cacheScope = sessionId ? directoryTreeCacheScope(sessionId, cwd) : "";
 
   const resetPrefetch = useCallback((): void => {
     prefetchGeneration.current += 1;
@@ -267,7 +275,7 @@ export function ReviewFileTree({
     ) {
       const path = prefetchQueue.current.shift();
       if (!path) continue;
-      const key = cacheKey(sessionId, path);
+      const key = directoryTreeCacheKey(cacheScope, path);
       const cached = getDirectoryPage(key);
       if (cached && Date.now() - cached.cachedAt <= MEMORY_FRESH_MS) {
         prefetchPending.current.delete(path);
@@ -277,7 +285,7 @@ export function ReviewFileTree({
       const generation = prefetchGeneration.current;
       prefetchControllers.current.set(path, controller);
       prefetchActive.current += 1;
-      void fetchCodeTree(sessionId, path, controller.signal)
+      void fetchCodeTree(sessionId, path, controller.signal, true)
         .then((page) => {
           if (generation !== prefetchGeneration.current) return;
           putDirectoryPage(key, { ...page, cachedAt: Date.now() });
@@ -296,7 +304,7 @@ export function ReviewFileTree({
           pumpPrefetchQueue();
         });
     }
-  }, [sessionId]);
+  }, [cacheScope, sessionId]);
 
   const prefetchChildDirectories = useCallback(
     (page: CodeTreePage): void => {
@@ -306,7 +314,9 @@ export function ReviewFileTree({
         DIRECTORY_PREFETCH_LIMIT,
       );
       for (const path of paths) {
-        const cached = getDirectoryPage(cacheKey(sessionId, path));
+        const cached = getDirectoryPage(
+          directoryTreeCacheKey(cacheScope, path),
+        );
         if (
           (cached && Date.now() - cached.cachedAt <= MEMORY_FRESH_MS) ||
           prefetchPending.current.has(path) ||
@@ -319,7 +329,7 @@ export function ReviewFileTree({
       }
       pumpPrefetchQueue();
     },
-    [pumpPrefetchQueue, sessionId],
+    [cacheScope, pumpPrefetchQueue, sessionId],
   );
 
   const load = useCallback(async (refresh = false): Promise<void> => {
@@ -334,7 +344,7 @@ export function ReviewFileTree({
       });
       return;
     }
-    const key = cacheKey(sessionId, "");
+    const key = directoryTreeCacheKey(cacheScope, "");
     const cached = getDirectoryPage(key);
     if (cached && !refresh) {
       setRoot(cached);
@@ -343,9 +353,9 @@ export function ReviewFileTree({
     }
     if (refresh) {
       resetPrefetch();
-      for (const cacheKey of directoryCache.keys()) {
-        if (cacheKey.startsWith(`${sessionId}\0`)) {
-          directoryCache.delete(cacheKey);
+      for (const key of directoryCache.keys()) {
+        if (key.startsWith(directoryTreeSessionPrefix(sessionId))) {
+          directoryCache.delete(key);
         }
       }
       setRevision((current) => current + 1);
@@ -357,7 +367,7 @@ export function ReviewFileTree({
     controllerRef.current = controller;
     try {
       const page = {
-        ...(await fetchCodeTree(sessionId, "", controller.signal, refresh)),
+        ...(await fetchCodeTree(sessionId, "", controller.signal, true)),
         cachedAt: Date.now(),
       };
       putDirectoryPage(key, page);
@@ -376,11 +386,65 @@ export function ReviewFileTree({
         setLoading(false);
       }
     }
-  }, [prefetchChildDirectories, resetPrefetch, sessionId]);
+  }, [cacheScope, prefetchChildDirectories, resetPrefetch, sessionId]);
+
+  const reconcileFailedDirectory = useCallback(async (
+    path: string,
+    signal: AbortSignal,
+  ): Promise<boolean> => {
+    if (!sessionId) return false;
+    const parentPath = directoryParentPath(path);
+    let page: DirectoryPage;
+    try {
+      page = {
+        ...(await fetchCodeTree(sessionId, parentPath, signal, true)),
+        cachedAt: Date.now(),
+      };
+    } catch {
+      return false;
+    }
+    putDirectoryPage(directoryTreeCacheKey(cacheScope, parentPath), page);
+    if (parentPath) {
+      setPages((current) => new Map(current).set(parentPath, page));
+    } else {
+      setRoot(page);
+    }
+    prefetchChildDirectories(page);
+    if (directoryListingContains(page.entries, path)) return false;
+
+    const subtreeKey = directoryTreeCacheKey(cacheScope, path);
+    for (const key of directoryCache.keys()) {
+      if (key === subtreeKey || key.startsWith(`${subtreeKey}/`)) {
+        directoryCache.delete(key);
+      }
+    }
+    setPages((current) =>
+      new Map(
+        [...current].filter(([candidate]) =>
+          !belongsToDirectorySubtree(candidate, path)
+        ),
+      )
+    );
+    setExpanded((current) =>
+      new Set(
+        [...current].filter((candidate) =>
+          !belongsToDirectorySubtree(candidate, path)
+        ),
+      )
+    );
+    setDirectoryFailed((current) =>
+      new Set(
+        [...current].filter((candidate) =>
+          !belongsToDirectorySubtree(candidate, path)
+        ),
+      )
+    );
+    return true;
+  }, [cacheScope, prefetchChildDirectories, sessionId]);
 
   const loadDirectory = useCallback(async (path: string): Promise<void> => {
     if (!sessionId) return;
-    const key = cacheKey(sessionId, path);
+    const key = directoryTreeCacheKey(cacheScope, path);
     const cached = getDirectoryPage(key);
     if (cached) {
       setPages((current) => new Map(current).set(path, cached));
@@ -401,7 +465,7 @@ export function ReviewFileTree({
     });
     try {
       const page = {
-        ...(await fetchCodeTree(sessionId, path, controller.signal)),
+        ...(await fetchCodeTree(sessionId, path, controller.signal, true)),
         cachedAt: Date.now(),
       };
       putDirectoryPage(key, page);
@@ -412,7 +476,13 @@ export function ReviewFileTree({
         !cached &&
         !(error instanceof DOMException && error.name === "AbortError")
       ) {
-        setDirectoryFailed((current) => new Set(current).add(path));
+        const reconciled = await reconcileFailedDirectory(
+          path,
+          controller.signal,
+        );
+        if (!reconciled && !controller.signal.aborted) {
+          setDirectoryFailed((current) => new Set(current).add(path));
+        }
       }
     } finally {
       if (directoryControllers.current.get(path) === controller) {
@@ -424,7 +494,12 @@ export function ReviewFileTree({
         });
       }
     }
-  }, [prefetchChildDirectories, sessionId]);
+  }, [
+    cacheScope,
+    prefetchChildDirectories,
+    reconcileFailedDirectory,
+    sessionId,
+  ]);
 
   const toggleDirectory = useCallback((path: string): void => {
     setExpanded((current) => {
@@ -438,6 +513,10 @@ export function ReviewFileTree({
       }
       return next;
     });
+  }, [loadDirectory]);
+
+  const retryDirectory = useCallback((path: string): void => {
+    void loadDirectory(path);
   }, [loadDirectory]);
 
   const rootDirectories = root.entries
@@ -625,7 +704,9 @@ export function ReviewFileTree({
                       </ListItemIcon>
                       <ListItemText
                         primary={split >= 0 ? path.slice(split + 1) : path}
-                        secondary={split >= 0 ? path.slice(0, split) : undefined}
+                        secondary={split >= 0
+                          ? path.slice(0, split)
+                          : undefined}
                         primaryTypographyProps={{
                           noWrap: true,
                           fontFamily: "var(--cowboy-font-mono)",
@@ -665,7 +746,7 @@ export function ReviewFileTree({
             <List disablePadding>
               {sessionId && (
                 <DirectoryRows
-                  key={`${sessionId}:${revision}`}
+                  key={`${cacheScope}:${revision}`}
                   entries={root.entries}
                   onOpenFile={onOpenFile}
                   expanded={expanded}
@@ -673,6 +754,7 @@ export function ReviewFileTree({
                   loading={directoryLoading}
                   failed={directoryFailed}
                   onToggleDirectory={toggleDirectory}
+                  onRetryDirectory={retryDirectory}
                   currentPath={currentPath}
                 />
               )}
