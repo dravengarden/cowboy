@@ -462,7 +462,7 @@ function CodeBlock({
           // overflows / gets clipped at the code block's right edge. Resting: a
           // 32px square; copied: `auto` so it grows to fit "✓ Copied".
           width: copied ? "auto" : 32,
-          // Resting: a compact frosted square (opt out of the global 44px icon
+          // Resting: a compact translucent square (opt out of the global 44px icon
           // button). On success it MORPHS into a labelled green pill — an
           // icon-only swap is too easy to miss; "Copied" is unmistakable. The
           // padding/gap animate the morph; right-anchored so it grows leftward
@@ -487,7 +487,10 @@ function CodeBlock({
             : dark
               ? "rgba(40,44,52,0.7)"
               : "rgba(255,255,255,0.82)",
-          backdropFilter: "blur(4px)",
+          // Do not give every code block its own backdrop-filter layer. Long
+          // generated answers can contain hundreds of copy controls; WebKit
+          // otherwise re-samples every off-screen blur while the transcript
+          // scrolls. The existing opaque tint keeps the same readable affordance.
           border: 1,
           borderColor: copied ? "success.main" : "divider",
           // Mouse: faint until the block is hovered (the wrapper's &:hover rule

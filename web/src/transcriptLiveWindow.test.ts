@@ -2,6 +2,8 @@ import { assertEquals } from "jsr:@std/assert";
 import {
   liveTranscriptMountedRows,
   liveTranscriptWindow,
+  needsLiveTranscriptRowMeasurements,
+  observedTranscriptBlockSize,
   recycledTranscriptHeight,
   shouldWindowLiveTranscript,
   TRANSCRIPT_LIVE_MOUNTED_ROWS,
@@ -9,6 +11,23 @@ import {
   TRANSCRIPT_RECYCLED_ROW_FALLBACK_PX,
   typicalTranscriptRowHeight,
 } from "./transcriptLiveWindow.ts";
+
+Deno.test("short long-form pages skip live-window row measurement", () => {
+  assertEquals(needsLiveTranscriptRowMeasurements(1), false);
+  assertEquals(
+    needsLiveTranscriptRowMeasurements(TRANSCRIPT_LIVE_MOUNTED_ROWS),
+    false,
+  );
+  assertEquals(
+    needsLiveTranscriptRowMeasurements(TRANSCRIPT_LIVE_MOUNTED_ROWS + 1),
+    true,
+  );
+});
+
+Deno.test("observed row height prefers the asynchronous border box", () => {
+  assertEquals(observedTranscriptBlockSize([{ blockSize: 64 }], 52), 64);
+  assertEquals(observedTranscriptBlockSize([], 52), 52);
+});
 
 Deno.test("live window stays off until the reader follows an overflowing tail", () => {
   assertEquals(

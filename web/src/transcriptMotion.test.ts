@@ -7,6 +7,9 @@ const transcriptSource = await Deno.readTextFile(
 const providerTranscriptSource = await Deno.readTextFile(
   new URL("./ProviderTranscript.tsx", import.meta.url),
 );
+const markdownSource = await Deno.readTextFile(
+  new URL("./MarkdownImpl.tsx", import.meta.url),
+);
 
 Deno.test("thinking activity renders the exact Provider loading surface", () => {
   const component = transcriptSource.match(
@@ -42,6 +45,31 @@ Deno.test("followed live tails recycle older rows into a height spacer", () => {
   assert(transcriptSource.includes("data-transcript-recycled-spacer"));
   assert(transcriptSource.includes("shouldWindowLiveTranscript"));
   assert(transcriptSource.includes("recycledTranscriptHeight"));
+});
+
+Deno.test("live-tail bookkeeping never synchronously measures a long Markdown row", () => {
+  assert(transcriptSource.includes("new ResizeObserver((entries) =>"));
+  assert(
+    transcriptSource.includes(
+      "if (!needsLiveTranscriptRowMeasurements(items.length)) return undefined",
+    ),
+  );
+  assertEquals(
+    transcriptSource.includes(
+      "rowHeightsRef.current.set(key, node.offsetHeight)",
+    ),
+    false,
+  );
+});
+
+Deno.test("repeated Markdown copy controls do not create backdrop blur layers", () => {
+  const codeBlock = markdownSource.match(
+    /function CodeBlock[\s\S]*?(?=\nclass MarkdownCodeBoundary)/,
+  )?.[0];
+  assert(codeBlock);
+  assert(codeBlock.includes('className="cowboy-copy-btn"'));
+  assertEquals(codeBlock.includes("backdropFilter"), false);
+  assertEquals(codeBlock.includes("WebkitBackdropFilter"), false);
 });
 
 Deno.test("drawer swipe does not React-render on transcript finger-down", () => {

@@ -5,6 +5,27 @@ export const TRANSCRIPT_LIVE_MOUNTED_ROWS = 20;
 export const TRANSCRIPT_LIVE_VIEWPORT_BUFFER_ROWS = 8;
 export const TRANSCRIPT_RECYCLED_ROW_FALLBACK_PX = 88;
 
+/** Row measurements only feed the followed-tail recycler. A short Page View
+ * can still contain one enormous Markdown answer; measuring that row after
+ * every streamed render forces the browser to synchronously lay out the whole
+ * document even though no row can be recycled. */
+export function needsLiveTranscriptRowMeasurements(rowCount: number): boolean {
+  return rowCount > TRANSCRIPT_LIVE_MOUNTED_ROWS;
+}
+
+/** ResizeObserver's border box matches offsetHeight without forcing layout.
+ * contentRect is a safe fallback for engines that omit borderBoxSize. */
+export function observedTranscriptBlockSize(
+  borderBoxSizes: readonly { blockSize: number }[],
+  contentHeight: number,
+): number {
+  const borderBoxHeight = borderBoxSizes[0]?.blockSize;
+  return borderBoxHeight !== undefined && Number.isFinite(borderBoxHeight) &&
+      borderBoxHeight > 0
+    ? borderBoxHeight
+    : Math.max(0, contentHeight);
+}
+
 export function shouldWindowLiveTranscript(input: {
   following: boolean;
   rowCount: number;

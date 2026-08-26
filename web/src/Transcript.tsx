@@ -153,6 +153,8 @@ import { transcriptRowContainment } from "./transcriptMotion";
 import {
   liveTranscriptMountedRows,
   liveTranscriptWindow,
+  needsLiveTranscriptRowMeasurements,
+  observedTranscriptBlockSize,
   recycledTranscriptHeight,
   shouldWindowLiveTranscript,
   TRANSCRIPT_LIVE_MOUNTED_ROWS,
@@ -4084,19 +4086,60 @@ export function Transcript({
     rowHeightsRef.current,
     typicalRowHeight,
   );
-  useLayoutEffect(() => {
+  const mountedItemKeySignature = mountedItems.map((item) => item.key).join(
+    "\u001f",
+  );
+  useEffect(() => {
+    // Page View often has only a few semantic rows even when one answer is a
+    // very large Markdown document. There is nothing to recycle in that case,
+    // so do not observe or measure the giant row at all.
+    if (!needsLiveTranscriptRowMeasurements(items.length)) return undefined;
     const root = parentRef.current;
-    if (!root) return;
+    if (!root || typeof ResizeObserver === "undefined") return undefined;
+    let viewportHeight = 0;
+    let measurementFrame = 0;
+    const publishMountedRows = (): void => {
+      measurementFrame = 0;
+      if (viewportHeight <= 0) return;
+      const nextMounted = liveTranscriptMountedRows(
+        viewportHeight,
+        typicalTranscriptRowHeight(rowHeightsRef.current),
+      );
+      setLiveMountedRows((current) =>
+        current === nextMounted ? current : nextMounted
+      );
+    };
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const height = observedTranscriptBlockSize(
+          entry.borderBoxSize,
+          entry.contentRect.height,
+        );
+        if (entry.target === root) {
+          viewportHeight = height;
+          continue;
+        }
+        const key = (entry.target as HTMLElement).dataset["key"];
+        if (key) rowHeightsRef.current.set(key, height);
+      }
+      // ResizeObserver can deliver while streamed Markdown is still settling.
+      // Coalesce bookkeeping outside the observer callback so it cannot start
+      // a resize loop or compete with the current paint.
+      if (measurementFrame === 0) {
+        measurementFrame = requestAnimationFrame(publishMountedRows);
+      }
+    });
+    observer.observe(root, { box: "border-box" });
     for (const node of root.querySelectorAll<HTMLElement>("[data-key]")) {
-      const key = node.dataset["key"];
-      if (key) rowHeightsRef.current.set(key, node.offsetHeight);
+      observer.observe(node, { box: "border-box" });
     }
-    const nextMounted = liveTranscriptMountedRows(
-      root.clientHeight,
-      typicalTranscriptRowHeight(rowHeightsRef.current),
-    );
-    setLiveMountedRows((current) => current === nextMounted ? current : nextMounted);
-  });
+    return () => {
+      observer.disconnect();
+      if (measurementFrame !== 0) cancelAnimationFrame(measurementFrame);
+    };
+    // Text streamed into an existing row keeps the same signature and is
+    // handled asynchronously by ResizeObserver instead of re-binding here.
+  }, [items.length, mountedItemKeySignature, sessionId]);
   const workingRef = useRef(working);
   workingRef.current = working;
   // Transcript is NOT remounted per session (it re-pins via the sessionId
