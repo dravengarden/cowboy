@@ -34,6 +34,10 @@ const DIRECT_WORKER_GRACEFUL_STOP_TIMEOUT: Duration = Duration::from_secs(3);
 const DIRECT_WORKER_TERM_TIMEOUT: Duration = Duration::from_secs(2);
 const DIRECT_WORKER_KILL_TIMEOUT: Duration = Duration::from_secs(1);
 const DIRECT_WORKER_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
+/// Direct workers reconnect within milliseconds of a broker restart. Waiting the
+/// systemd heartbeat window here would leave macOS sessions ownerless after a
+/// Machine relaunch, then race a later `EnsureSession` into a duplicate spawn.
+const DIRECT_ADOPT_RECONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpawnMode {
@@ -157,6 +161,118 @@ async fn reap_direct_worker_group(
     reaped
 }
 
+async fn signal_process_group(pid: u32, signal: &str) -> Result<()> {
+    let status = Command::new("kill")
+        .arg(signal)
+        .arg(format!("-{pid}"))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .with_context(|| format!("sending {signal} to process group {pid}"))?;
+    if status.success() || !direct_worker_group_exists(pid).await {
+        return Ok(());
+    }
+    anyhow::bail!("kill {signal} {pid} exited {status}")
+}
+
+/// Terminate a Direct worker that this broker did not spawn, so its PID is not
+/// in the owner map. Used for leftovers after a Machine restart.
+async fn reap_untracked_direct_worker(session_id: &str, pid: u32) -> bool {
+    if !direct_worker_group_exists(pid).await {
+        return true;
+    }
+    tracing::warn!(session = %session_id, pid, "reaping untracked direct worker process group");
+    if let Err(error) = signal_process_group(pid, "-TERM").await {
+        tracing::warn!(session = %session_id, pid, %error, "untracked direct worker TERM failed");
+    }
+    if wait_for_direct_worker_group_exit(pid, DIRECT_WORKER_TERM_TIMEOUT).await {
+        return true;
+    }
+    tracing::error!(session = %session_id, pid, "untracked direct worker ignored TERM; sending KILL");
+    if let Err(error) = signal_process_group(pid, "-KILL").await {
+        tracing::error!(session = %session_id, pid, %error, "untracked direct worker KILL failed");
+    }
+    wait_for_direct_worker_group_exit(pid, DIRECT_WORKER_KILL_TIMEOUT).await
+}
+
+fn sockets_match(worker_socket: &str, socket: &Path) -> bool {
+    let worker = Path::new(worker_socket);
+    if worker == socket {
+        return true;
+    }
+    match (worker.canonicalize(), socket.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+fn command_invokes_acp_worker(command: &str) -> bool {
+    command.split_whitespace().any(|part| {
+        Path::new(part).file_name().and_then(|name| name.to_str()) == Some("cowboy-acp-worker")
+    })
+}
+
+/// Return the session id when `command` is a `cowboy-acp-worker` targeting `socket`.
+fn direct_worker_session_for_socket(command: &str, socket: &Path) -> Option<String> {
+    if !command_invokes_acp_worker(command) {
+        return None;
+    }
+    let parts: Vec<&str> = command.split_whitespace().collect();
+    let mut session_id = None;
+    let mut worker_socket = None;
+    let mut index = 0;
+    while index < parts.len() {
+        match parts[index] {
+            "--socket" => {
+                worker_socket = parts.get(index + 1).copied().map(str::to_owned);
+                index += 2;
+            }
+            "--session-id" => {
+                session_id = parts.get(index + 1).copied().map(str::to_owned);
+                index += 2;
+            }
+            _ => index += 1,
+        }
+    }
+    let worker_socket = worker_socket?;
+    let session_id = session_id.filter(|id| !id.is_empty())?;
+    sockets_match(&worker_socket, socket).then_some(session_id)
+}
+
+fn parse_ps_pid_command(line: &str) -> Option<(u32, &str)> {
+    let line = line.trim();
+    let (pid, command) = line.split_once(char::is_whitespace)?;
+    let pid = pid.parse().ok()?;
+    let command = command.trim();
+    (!command.is_empty()).then_some((pid, command))
+}
+
+async fn list_direct_workers_on_socket(socket: &Path) -> Result<Vec<(String, u32)>> {
+    let output = Command::new("ps")
+        .args(["-axo", "pid=,command="])
+        .output()
+        .await
+        .context("listing Direct worker processes")?;
+    if !output.status.success() {
+        anyhow::bail!("ps exited {}", output.status);
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut workers = Vec::new();
+    for line in stdout.lines() {
+        let Some((pid, command)) = parse_ps_pid_command(line) else {
+            continue;
+        };
+        if pid == std::process::id() {
+            continue;
+        }
+        if let Some(session_id) = direct_worker_session_for_socket(command, socket) {
+            workers.push((session_id, pid));
+        }
+    }
+    Ok(workers)
+}
+
 async fn enforce_direct_worker_exit(
     workers: Arc<Mutex<HashMap<String, u32>>>,
     session_id: String,
@@ -272,6 +388,8 @@ struct Broker {
     generation_commands: Mutex<HashMap<String, PathBuf>>,
     #[cfg(test)]
     deleted_session_owner_collected: AtomicBool,
+    #[cfg(test)]
+    adopt_reconnect_timeout: Mutex<Option<Duration>>,
     next_connection: AtomicU64,
     next_lease: AtomicU64,
 }
@@ -344,6 +462,8 @@ impl Broker {
             generation_commands: Mutex::new(generation_commands),
             #[cfg(test)]
             deleted_session_owner_collected: AtomicBool::new(false),
+            #[cfg(test)]
+            adopt_reconnect_timeout: Mutex::new(None),
             next_connection: AtomicU64::new(1),
             next_lease: AtomicU64::new(1),
         }
@@ -579,6 +699,94 @@ impl Broker {
                 tracing::error!(session = %session_id, pid, "direct worker remained owned after KILL timeout");
             }
         });
+    }
+
+    async fn reap_untracked_direct_workers_for_session(&self, session_id: &str) {
+        if self.args.spawn_mode != SpawnMode::Direct {
+            return;
+        }
+        let found = match list_direct_workers_on_socket(&self.args.socket).await {
+            Ok(found) => found,
+            Err(error) => {
+                tracing::warn!(%error, "listing Direct workers before launch failed");
+                return;
+            }
+        };
+        let owned = self.direct_worker_pids.lock().get(session_id).copied();
+        for (found_session, pid) in found {
+            if found_session != session_id || owned == Some(pid) {
+                continue;
+            }
+            if !reap_untracked_direct_worker(&found_session, pid).await {
+                tracing::error!(
+                    session = %found_session,
+                    pid,
+                    "untracked Direct worker survived KILL before launch"
+                );
+            }
+        }
+    }
+
+    async fn reap_orphaned_direct_workers(&self) {
+        if self.args.spawn_mode != SpawnMode::Direct {
+            return;
+        }
+        let found = match list_direct_workers_on_socket(&self.args.socket).await {
+            Ok(found) => found,
+            Err(error) => {
+                tracing::warn!(%error, "listing orphaned Direct workers failed");
+                return;
+            }
+        };
+        let owned: HashSet<u32> = self.direct_worker_pids.lock().values().copied().collect();
+        for (session_id, pid) in found {
+            if owned.contains(&pid) {
+                continue;
+            }
+            tracing::warn!(
+                session = %session_id,
+                pid,
+                "reaping Direct worker left by a previous Machine process"
+            );
+            if !reap_untracked_direct_worker(&session_id, pid).await {
+                tracing::error!(
+                    session = %session_id,
+                    pid,
+                    "orphaned Direct worker survived KILL"
+                );
+            }
+        }
+    }
+
+    async fn shutdown_direct_workers(&self) {
+        if self.args.spawn_mode != SpawnMode::Direct {
+            return;
+        }
+        let owners: Vec<(String, u32)> = self
+            .direct_worker_pids
+            .lock()
+            .iter()
+            .map(|(session_id, pid)| (session_id.clone(), *pid))
+            .collect();
+        for (session_id, pid) in owners {
+            if !enforce_direct_worker_exit(
+                Arc::clone(&self.direct_worker_pids),
+                session_id.clone(),
+                pid,
+                Duration::ZERO,
+                DIRECT_WORKER_TERM_TIMEOUT,
+                DIRECT_WORKER_KILL_TIMEOUT,
+            )
+            .await
+            {
+                tracing::error!(
+                    session = %session_id,
+                    pid,
+                    "direct worker remained owned during broker shutdown"
+                );
+            }
+        }
+        self.reap_orphaned_direct_workers().await;
     }
 
     /// New prompts wait behind a generation handoff. Cancellation and
@@ -1041,6 +1249,15 @@ impl Broker {
             self.arm_reconnect_timeout(session.session_id.clone());
             return;
         }
+        self.launch_registered_session(session);
+    }
+
+    fn launch_registered_session(self: &Arc<Self>, session: StartSession) {
+        if self.cancelled_sessions.lock().contains(&session.session_id)
+            || self.workers.lock().contains_key(&session.session_id)
+        {
+            return;
+        }
         self.awaiting_reconnect.lock().remove(&session.session_id);
         self.session_states
             .lock()
@@ -1145,45 +1362,70 @@ impl Broker {
         });
     }
 
+    fn adopt_reconnect_timeout(&self) -> Duration {
+        #[cfg(test)]
+        if let Some(timeout) = *self.adopt_reconnect_timeout.lock() {
+            return timeout;
+        }
+        match self.args.spawn_mode {
+            SpawnMode::Direct => DIRECT_ADOPT_RECONNECT_TIMEOUT,
+            SpawnMode::SystemdUser => WORKER_HEARTBEAT_TIMEOUT,
+        }
+    }
+
     fn arm_reconnect_timeout(self: &Arc<Self>, session_id: String) {
-        if self.args.spawn_mode != SpawnMode::SystemdUser
-            || !self.awaiting_reconnect.lock().insert(session_id.clone())
-        {
+        if !self.awaiting_reconnect.lock().insert(session_id.clone()) {
             return;
         }
+        let timeout = self.adopt_reconnect_timeout();
         let broker = Arc::clone(self);
         tokio::spawn(async move {
-            tokio::time::sleep(WORKER_HEARTBEAT_TIMEOUT).await;
+            tokio::time::sleep(timeout).await;
             if !broker.awaiting_reconnect.lock().remove(&session_id)
                 || broker.workers.lock().contains_key(&session_id)
                 || !broker.sessions.lock().contains_key(&session_id)
+                || broker.cancelled_sessions.lock().contains(&session_id)
             {
                 return;
             }
-            tracing::error!(
-                session = %session_id,
-                "declared worker never reconnected; applying session-level extreme recovery"
-            );
-            let stop = Command::new("systemctl")
-                .args([
-                    "--user",
-                    "stop",
-                    &worker_unit_name(&broker.args.socket, &session_id),
-                ])
-                .status();
-            match tokio::time::timeout(Duration::from_secs(10), stop).await {
-                Ok(Ok(status)) if status.success() => {}
-                Ok(Ok(status)) => {
-                    tracing::warn!(session = %session_id, %status, "stopping missing worker unit failed")
+            match broker.args.spawn_mode {
+                SpawnMode::SystemdUser => {
+                    tracing::error!(
+                        session = %session_id,
+                        "declared worker never reconnected; applying session-level extreme recovery"
+                    );
+                    let stop = Command::new("systemctl")
+                        .args([
+                            "--user",
+                            "stop",
+                            &worker_unit_name(&broker.args.socket, &session_id),
+                        ])
+                        .status();
+                    match tokio::time::timeout(Duration::from_secs(10), stop).await {
+                        Ok(Ok(status)) if status.success() => {}
+                        Ok(Ok(status)) => {
+                            tracing::warn!(session = %session_id, %status, "stopping missing worker unit failed")
+                        }
+                        Ok(Err(error)) => {
+                            tracing::warn!(session = %session_id, %error, "stopping missing worker unit failed")
+                        }
+                        Err(_) => {
+                            tracing::warn!(session = %session_id, "stopping missing worker unit timed out")
+                        }
+                    }
+                    broker.publish_session_state(&session_id, WorkerState::Crashed);
                 }
-                Ok(Err(error)) => {
-                    tracing::warn!(session = %session_id, %error, "stopping missing worker unit failed")
-                }
-                Err(_) => {
-                    tracing::warn!(session = %session_id, "stopping missing worker unit timed out")
+                SpawnMode::Direct => {
+                    tracing::warn!(
+                        session = %session_id,
+                        "declared Direct worker never reconnected; launching a replacement owner"
+                    );
+                    let Some(session) = broker.sessions.lock().get(&session_id).cloned() else {
+                        return;
+                    };
+                    broker.launch_registered_session(session);
                 }
             }
-            broker.publish_session_state(&session_id, WorkerState::Crashed);
         });
     }
 
@@ -1728,6 +1970,8 @@ impl Broker {
                 )
             })?;
         if self.args.spawn_mode == SpawnMode::Direct {
+            self.reap_untracked_direct_workers_for_session(&session.session_id)
+                .await;
             let workers = Arc::clone(&self.direct_worker_pids);
             let existing_pid = workers.lock().get(&session.session_id).copied();
             if let Some(existing_pid) = existing_pid {
@@ -2126,8 +2370,24 @@ pub async fn run(args: MachineBrokerArgs) -> Result<()> {
         None => bind_runtime_listener(&args.socket).await?,
     };
     let broker = Arc::new(Broker::new(args));
+    broker.reap_orphaned_direct_workers().await;
     tokio::spawn(monitor_workers(Arc::clone(&broker)));
-    accept_runtime_peers(broker.args.socket.clone(), listener, broker).await
+    let socket = broker.args.socket.clone();
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .context("installing SIGTERM handler")?;
+    tokio::select! {
+        result = accept_runtime_peers(socket, listener, Arc::clone(&broker)) => result,
+        _ = tokio::signal::ctrl_c() => {
+            tracing::warn!("received SIGINT; stopping Direct workers");
+            broker.shutdown_direct_workers().await;
+            anyhow::bail!("received SIGINT")
+        }
+        _ = sigterm.recv() => {
+            tracing::warn!("received SIGTERM; stopping Direct workers");
+            broker.shutdown_direct_workers().await;
+            anyhow::bail!("received SIGTERM")
+        }
+    }
 }
 
 async fn bind_runtime_listener(socket: &Path) -> Result<UnixListener> {
@@ -2691,6 +2951,53 @@ mod tests {
         assert!(!transient_unit_collected(""));
         assert!(transient_unit_collected("not-found"));
         assert!(!transient_unit_collected("loaded"));
+    }
+
+    #[test]
+    fn direct_worker_parser_matches_socket_and_ignores_the_machine_host() {
+        let socket = Path::new("/tmp/cowboy-machine.sock");
+        assert_eq!(
+            direct_worker_session_for_socket(
+                "cowboy-acp-worker --socket /tmp/cowboy-machine.sock --session-id sess-1 --provider grok",
+                socket
+            )
+            .as_deref(),
+            Some("sess-1")
+        );
+        assert_eq!(
+            direct_worker_session_for_socket(
+                "/nix/store/abc/bin/cowboy-acp-worker --session-id sess-2 --socket /tmp/cowboy-machine.sock",
+                socket
+            )
+            .as_deref(),
+            Some("sess-2")
+        );
+        assert_eq!(
+            direct_worker_session_for_socket(
+                "/bin/sh /tmp/cowboy-acp-worker --socket /tmp/cowboy-machine.sock --session-id sess-3",
+                socket
+            )
+            .as_deref(),
+            Some("sess-3")
+        );
+        assert_eq!(
+            direct_worker_session_for_socket(
+                "cowboy-machine --socket /tmp/cowboy-machine.sock --session-id sess-1",
+                socket
+            ),
+            None
+        );
+        assert_eq!(
+            direct_worker_session_for_socket(
+                "cowboy-acp-worker --socket /tmp/other.sock --session-id sess-1",
+                socket
+            ),
+            None
+        );
+        assert_eq!(
+            parse_ps_pid_command("  11702 cowboy-acp-worker --socket /tmp/cowboy-machine.sock"),
+            Some((11702, "cowboy-acp-worker --socket /tmp/cowboy-machine.sock"))
+        );
     }
 
     #[test]
@@ -3999,6 +4306,226 @@ mod tests {
             .expect("replacement worker wait");
         assert!(!replacement_status.success());
         assert!(broker.direct_worker_pids.lock().is_empty());
+    }
+
+    fn write_executable(path: &Path, body: &str) {
+        std::fs::write(path, body).expect("write executable");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mut permissions = std::fs::metadata(path).expect("metadata").permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(path, permissions).expect("chmod");
+        }
+    }
+
+    #[tokio::test]
+    async fn startup_reaps_orphaned_direct_workers_on_the_same_socket() {
+        let root = PathBuf::from("/tmp").join(format!(
+            "cw-orphan-{}-{}",
+            std::process::id(),
+            broker_nonce()
+        ));
+        std::fs::create_dir_all(&root).expect("create fixture directory");
+        let socket = root.join("broker.sock");
+        std::fs::write(&socket, "").expect("create socket path");
+        let fake_worker = root.join("cowboy-acp-worker");
+        write_executable(&fake_worker, "#!/bin/sh\nwhile :; do sleep 1; done\n");
+        let mut command = Command::new(&fake_worker);
+        command
+            .arg("--socket")
+            .arg(&socket)
+            .arg("--session-id")
+            .arg("sess-orphan");
+        command.kill_on_drop(true);
+        command.as_std_mut().process_group(0);
+        let mut child = command.spawn().expect("spawn orphan worker fixture");
+        let pid = child.id().expect("orphan fixture pid");
+        let broker = Broker::new(MachineBrokerArgs {
+            socket: socket.clone(),
+            worker_command: PathBuf::from("/bin/false"),
+            desired_generation: "gen-1".to_owned(),
+            spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
+            worktree_root: root.join("worktrees"),
+            worker_ready_timeout: Duration::from_secs(1),
+        });
+
+        broker.reap_orphaned_direct_workers().await;
+        let status = tokio::time::timeout(Duration::from_secs(2), child.wait())
+            .await
+            .expect("orphan reaper timeout")
+            .expect("orphan wait");
+        assert!(!status.success() || !direct_worker_group_exists(pid).await);
+        assert!(!direct_worker_group_exists(pid).await);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn shutdown_terminates_tracked_direct_workers() {
+        let broker = Broker::new(MachineBrokerArgs {
+            socket: PathBuf::from("/tmp/unused.sock"),
+            worker_command: PathBuf::from("false"),
+            desired_generation: "gen-1".to_owned(),
+            spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worker_ready_timeout: Duration::from_secs(1),
+        });
+        let mut command = Command::new("sh");
+        command.arg("-c").arg("sleep 60");
+        command.kill_on_drop(true);
+        command.as_std_mut().process_group(0);
+        let mut child = command.spawn().expect("spawn shutdown fixture");
+        let pid = child.id().expect("shutdown fixture pid");
+        broker
+            .direct_worker_pids
+            .lock()
+            .insert("sess-shutdown".to_owned(), pid);
+        let workers = Arc::clone(&broker.direct_worker_pids);
+        let reaper = tokio::spawn(async move {
+            let status = child.wait().await.expect("wait for shutdown fixture");
+            if reap_direct_worker_group(&workers, "sess-shutdown", pid).await {
+                let mut workers = workers.lock();
+                if workers.get("sess-shutdown").copied() == Some(pid) {
+                    workers.remove("sess-shutdown");
+                }
+            }
+            status
+        });
+
+        broker.shutdown_direct_workers().await;
+        let status = tokio::time::timeout(Duration::from_secs(3), reaper)
+            .await
+            .expect("shutdown reaper timeout")
+            .expect("shutdown reaper");
+        assert!(!status.success());
+        assert!(broker.direct_worker_pids.lock().is_empty());
+        assert!(!direct_worker_group_exists(pid).await);
+    }
+
+    #[tokio::test]
+    async fn concurrent_direct_spawns_keep_a_single_owner() {
+        let root = PathBuf::from("/tmp").join(format!(
+            "cw-conc-{}-{}",
+            std::process::id(),
+            broker_nonce()
+        ));
+        std::fs::create_dir_all(&root).expect("create fixture directory");
+        let worker = root.join("worker.sh");
+        write_executable(&worker, "#!/bin/sh\nexec sleep 60\n");
+        let broker = Broker::new(MachineBrokerArgs {
+            socket: root.join("broker.sock"),
+            worker_command: worker,
+            desired_generation: "gen-1".to_owned(),
+            spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
+            worktree_root: root.join("worktrees"),
+            worker_ready_timeout: Duration::from_secs(1),
+        });
+        let session = StartSession {
+            session_id: "sess-concurrent".to_owned(),
+            provider: "codex".to_owned(),
+            provider_version: String::new(),
+            provider_generation_digest: String::new(),
+            provider_auth_generation: None,
+            provider_behavior: None,
+            cwd: "/tmp".to_owned(),
+            agent_session_id: None,
+            system: true,
+            context_window: None,
+            auto_compact_token_limit: None,
+            cache_protection: None,
+            generation: "gen-1".to_owned(),
+            fallback_for: None,
+            adopt_only: false,
+        };
+
+        let (first, second) =
+            tokio::join!(broker.spawn_worker(&session), broker.spawn_worker(&session));
+        assert!(
+            first.is_ok() || second.is_ok(),
+            "at least one spawn must obtain the owner: {:?}, {:?}",
+            first.as_ref().err().map(ToString::to_string),
+            second.as_ref().err().map(ToString::to_string)
+        );
+        let owners = broker.direct_worker_pids.lock().clone();
+        assert_eq!(owners.len(), 1, "session must keep a single Direct owner");
+        let pid = *owners.get("sess-concurrent").expect("owner pid");
+        assert!(direct_worker_group_exists(pid).await);
+        assert!(
+            reap_untracked_direct_worker("sess-concurrent", pid).await,
+            "cleanup concurrent spawn fixture"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn direct_adopt_timeout_launches_when_no_worker_reconnects() {
+        let broker = Arc::new(Broker::new(MachineBrokerArgs {
+            socket: PathBuf::from("/tmp/unused.sock"),
+            worker_command: PathBuf::from("/bin/false"),
+            desired_generation: "gen-1".to_owned(),
+            spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worker_ready_timeout: Duration::from_millis(200),
+        }));
+        *broker.adopt_reconnect_timeout.lock() = Some(Duration::from_millis(30));
+        broker
+            .ensure_session(StartSession {
+                session_id: "sess-adopt-timeout".to_owned(),
+                provider: "codex".to_owned(),
+                provider_version: String::new(),
+                provider_generation_digest: String::new(),
+                provider_auth_generation: None,
+                provider_behavior: None,
+                cwd: "/tmp".to_owned(),
+                agent_session_id: None,
+                system: true,
+                context_window: None,
+                auto_compact_token_limit: None,
+                cache_protection: None,
+                generation: "gen-1".to_owned(),
+                fallback_for: None,
+                adopt_only: true,
+            })
+            .await;
+        assert!(broker.workers.lock().is_empty());
+        assert!(broker.launching.lock().is_empty());
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let crashed = broker
+                .session_states
+                .lock()
+                .get("sess-adopt-timeout")
+                .copied()
+                == Some(WorkerState::Crashed);
+            if crashed || tokio::time::Instant::now() >= deadline {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            broker
+                .session_states
+                .lock()
+                .get("sess-adopt-timeout")
+                .copied(),
+            Some(WorkerState::Crashed),
+            "Direct adopt timeout must launch a replacement that can fail closed"
+        );
+        assert!(
+            !broker
+                .awaiting_reconnect
+                .lock()
+                .contains("sess-adopt-timeout")
+        );
     }
 
     #[tokio::test]

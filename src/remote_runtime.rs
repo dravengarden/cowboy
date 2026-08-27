@@ -33,6 +33,12 @@ fn broker_retry_delay(backoff: &mut Duration, stable_connection: bool) -> Durati
     delay
 }
 
+fn terminal_broker_rejection(error: &anyhow::Error) -> bool {
+    let message = error.to_string();
+    message.contains("Machine broker rejected Cowboy")
+        || message.contains("Machine broker rejected controller")
+}
+
 pub struct RemoteBootstrap {
     socket: PathBuf,
     reader: FrameReader<OwnedReadHalf>,
@@ -605,6 +611,10 @@ async fn connection_manager(
             };
         let (reader, writer, buffered) = match connection {
             Ok(connection) => connection,
+            Err(error) if terminal_broker_rejection(&error) => {
+                tracing::error!(error = %error, "Machine broker rejected Cowboy; not retrying");
+                return;
+            }
             Err(error) => {
                 shared.connected.store(false, Ordering::Release);
                 let retry_delay = broker_retry_delay(&mut backoff, false);
@@ -621,6 +631,10 @@ async fn connection_manager(
         shared.connected.store(true, Ordering::Release);
         shared.sent.lock().clear();
         if let Err(error) = connected(&shared, reader, writer, buffered, &mut notify_rx).await {
+            if terminal_broker_rejection(&error) {
+                tracing::error!(error = %error, "Machine broker rejected Cowboy; not retrying");
+                return;
+            }
             tracing::warn!(error = %error, "Machine broker connection dropped");
         }
         shared.connected.store(false, Ordering::Release);
@@ -1560,6 +1574,19 @@ fn reset_after_workspace_replacement(shared: &Shared, session_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn broker_rejection_stops_the_reconnect_loop() {
+        assert!(terminal_broker_rejection(&anyhow::anyhow!(
+            "Machine broker rejected Cowboy: no protocol overlap"
+        )));
+        assert!(terminal_broker_rejection(&anyhow::anyhow!(
+            "Machine broker rejected controller: lease taken"
+        )));
+        assert!(!terminal_broker_rejection(&anyhow::anyhow!(
+            "Machine broker connection dropped"
+        )));
+    }
 
     #[test]
     fn short_lived_broker_connections_keep_exponential_backoff() {

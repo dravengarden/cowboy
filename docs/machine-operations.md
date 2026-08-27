@@ -226,13 +226,23 @@ has not exited within three seconds, Machine sends `TERM` to that process group,
 then `KILL` after another two seconds. The reaper removes the PID mapping before
 it may be reused, so a stale watchdog cannot signal an unrelated process.
 
+Direct workers do not survive a Machine restart. On listen, and again before a
+replacement spawn, Machine lists `cowboy-acp-worker` processes whose `--socket`
+matches this broker and terminates any PID it does not own. SIGTERM/SIGINT
+likewise TERM/KILL every tracked Direct process group before the host exits, so
+launchd KeepAlive cannot inherit orphans that reconnect into a new broker.
+
+A controller `adopt_only` EnsureSession waits five seconds for a Direct worker
+to reconnect, then launches one. systemd-user still uses the longer heartbeat
+window, because those units can outlive the broker.
+
 Broker rejection is terminal for a worker (duplicate epoch, deleted session, or
-protocol mismatch). Transient worker and Cowboy-to-broker failures always wait
-with exponential backoff from 100 ms through 5 seconds, and only a connection
-that remains healthy for ten seconds resets that backoff. A deleted session's
-final worker events are consumed and acknowledged locally even though they are
-not forwarded to the controller; this lets the outbox drain without reviving
-the deleted session.
+protocol mismatch) and for Cowboy's broker client. Transient worker and
+Cowboy-to-broker failures always wait with exponential backoff from 100 ms
+through 5 seconds, and only a connection that remains healthy for ten seconds
+resets that backoff. A deleted session's final worker events are consumed and
+acknowledged locally even though they are not forwarded to the controller; this
+lets the outbox drain without reviving the deleted session.
 
 For emergency containment, unload the exact LaunchAgent first and verify that
 no `cowboy-machine`, `cowboy-acp-worker`, or `cowboy-code-adapter` process

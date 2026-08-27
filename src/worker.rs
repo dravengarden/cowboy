@@ -528,6 +528,7 @@ async fn connected(
     // unacknowledged final event turns this select loop into a CPU spin and can
     // starve the broker ACK that would let the worker drain.
     let mut agent_done = false;
+    let mut notify_open = true;
     send_outbox(&shared, &mut writer, &mut last_sent).await?;
     let mut heartbeat = tokio::time::interval(Duration::from_secs(10));
     loop {
@@ -566,12 +567,15 @@ async fn connected(
                     other => tracing::debug!(?other, "ignoring unrelated runtime frame"),
                 }
             }
-            notified = notify_rx.recv() => {
-                if notified.is_none()
-                    && agent_done
-                    && shared.outbox.lock().is_empty()
-                {
-                    return Ok(ConnectedExit::WorkerDrained);
+            notified = notify_rx.recv(), if notify_open => {
+                if notified.is_none() {
+                    // Same closed-channel trap as `done_rx`: disable this
+                    // branch before looping so an empty notify sender cannot
+                    // keep the select hot while ACP is still running.
+                    notify_open = false;
+                    if agent_done && shared.outbox.lock().is_empty() {
+                        return Ok(ConnectedExit::WorkerDrained);
+                    }
                 }
                 send_outbox(&shared, &mut writer, &mut last_sent).await?;
             }
@@ -983,6 +987,63 @@ mod tests {
         .expect("stopped worker drains cleanly");
         acp.await.expect("ACP simulation");
         broker.await.expect("broker task");
+        std::fs::remove_file(&socket).expect("remove broker socket");
+        std::fs::remove_dir(&root).expect("remove socket directory");
+    }
+
+    #[tokio::test]
+    async fn closed_notify_channel_does_not_spin_while_agent_is_alive() {
+        let root = PathBuf::from("/tmp").join(format!("cw-{}", generated_epoch()));
+        std::fs::create_dir_all(&root).expect("create socket directory");
+        let socket = root.join("broker.sock");
+        let listener = UnixListener::bind(&socket).expect("bind broker socket");
+        let broker = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept worker");
+            assert!(matches!(
+                read_frame(&mut stream).await.expect("read worker hello"),
+                Some(Frame::Hello {
+                    role: PeerRole::Worker,
+                    ..
+                })
+            ));
+            write_frame(
+                &mut stream,
+                &Frame::Welcome {
+                    protocol: PROTOCOL_VERSION,
+                    controller_epoch: 1,
+                    workers: Vec::new(),
+                },
+            )
+            .await
+            .expect("welcome worker");
+            assert!(matches!(
+                read_frame(&mut stream).await.expect("read snapshot"),
+                Some(Frame::Snapshot { .. })
+            ));
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            assert!(
+                tokio::time::timeout(Duration::from_millis(50), listener.accept())
+                    .await
+                    .is_err(),
+                "a closed notify channel must not reconnect"
+            );
+        });
+
+        let (shared, _live_notify) = shared();
+        shared.emit(RuntimeEvent::Status {
+            state: WorkerState::Running,
+            detail: Some("pending".to_owned()),
+        });
+        let (cmd_tx, _cmd_rx) = mpsc::unbounded_channel();
+        let (_done_tx, mut done_rx) = mpsc::channel(1);
+        let (notify_tx, notify_rx) = mpsc::unbounded_channel();
+        drop(notify_tx);
+        let loop_fut = connection_loop(&socket, shared, cmd_tx, notify_rx, &mut done_rx);
+        tokio::pin!(loop_fut);
+        tokio::select! {
+            result = &mut loop_fut => panic!("connection loop exited: {result:?}"),
+            result = broker => result.expect("broker task"),
+        }
         std::fs::remove_file(&socket).expect("remove broker socket");
         std::fs::remove_dir(&root).expect("remove socket directory");
     }
