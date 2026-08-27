@@ -815,8 +815,10 @@ mod tests {
 
     #[tokio::test]
     async fn broker_rejection_is_terminal_and_is_not_retried() {
-        let root =
-            std::env::temp_dir().join(format!("cowboy-worker-rejection-{}", generated_epoch()));
+        // macOS limits Unix-domain socket paths to 103 bytes. TMPDIR commonly
+        // points into a long /var/folders path there, so keep this hermetic
+        // broker fixture under the short, standard Unix temporary directory.
+        let root = PathBuf::from("/tmp").join(format!("cw-{}", generated_epoch()));
         std::fs::create_dir_all(&root).expect("create socket directory");
         let socket = root.join("broker.sock");
         let listener = UnixListener::bind(&socket).expect("bind broker socket");
