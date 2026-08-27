@@ -212,7 +212,12 @@ systemctl --user enable --now cowboy-machine-<service-id>.service
 The installer writes
 `~/Library/LaunchAgents/xyz.stormbird.cowboy-machine.<service-id>.plist`
 and bootstraps it in the current GUI domain. Enrollment secrets are kept only
-in the one-time mode-0600 file and never enter the plist.
+in the one-time mode-0600 file and never enter the plist. The background
+LaunchAgent sends stdout and stderr to `/dev/null`: launchd opens a file target
+once, every worker and Provider descendant inherits it, and launchd supplies no
+size or retention bound. Machine and session health remain visible through the
+controller; unload the LaunchAgent and run its launcher in the foreground for a
+bounded diagnostic capture when raw stderr is required.
 
 ## Component publication
 

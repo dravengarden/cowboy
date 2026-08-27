@@ -415,13 +415,7 @@ fn install_launch_agent(
     let agent_dir = home.join("Library/LaunchAgents");
     std::fs::create_dir_all(&agent_dir)?;
     let label = format!("xyz.stormbird.cowboy-machine.{service_id}");
-    let log_path = home.join(format!("Library/Logs/cowboy-machine-{service_id}.log"));
-    let plist = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict><key>Label</key><string>{label}</string><key>ProgramArguments</key><array><string>{}</string></array><key>RunAtLoad</key><true/><key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict><key>ThrottleInterval</key><integer>2</integer><key>StandardOutPath</key><string>{}</string><key>StandardErrorPath</key><string>{}</string></dict></plist>\n",
-        xml_escape(&launcher.display().to_string()),
-        xml_escape(&log_path.display().to_string()),
-        xml_escape(&log_path.display().to_string())
-    );
+    let plist = launch_agent_plist(&label, launcher);
     let path = agent_dir.join(format!("{label}.plist"));
     std::fs::write(&path, plist)?;
     if !no_start {
@@ -439,6 +433,19 @@ fn install_launch_agent(
         )?;
     }
     Ok(())
+}
+
+fn launch_agent_plist(label: &str, launcher: &Path) -> String {
+    // launchd opens StandardOutPath once and every worker/provider descendant
+    // inherits that descriptor. It has no retention policy, so a retry defect
+    // can otherwise keep an unlinked multi-gigabyte file alive indefinitely.
+    // Runtime health is reported through the controller; operators can run the
+    // launcher in the foreground when raw stderr is required for diagnosis.
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict><key>Label</key><string>{}</string><key>ProgramArguments</key><array><string>{}</string></array><key>RunAtLoad</key><true/><key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict><key>ThrottleInterval</key><integer>2</integer><key>StandardOutPath</key><string>/dev/null</string><key>StandardErrorPath</key><string>/dev/null</string></dict></plist>\n",
+        xml_escape(label),
+        xml_escape(&launcher.display().to_string())
+    )
 }
 
 #[cfg(unix)]
@@ -539,6 +546,16 @@ mod tests {
         };
         let script = launcher_script(&args, Path::new("/state"), Path::new("/state/token"));
         assert!(!script.contains("--machine-id"));
+    }
+
+    #[test]
+    fn launch_agent_does_not_create_an_unbounded_log_file() {
+        let plist = launch_agent_plist(
+            "xyz.stormbird.cowboy-machine.svc-test",
+            Path::new("/Users/test/.local/bin/cowboy-machine-launch-svc-test"),
+        );
+        assert_eq!(plist.matches("<string>/dev/null</string>").count(), 2);
+        assert!(!plist.contains("Library/Logs"));
     }
 
     #[test]

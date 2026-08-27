@@ -20,8 +20,8 @@
   <key>ProcessType</key>
   <string>Background</string>
   <key>StandardOutPath</key>
-  <string>__HOME__/Library/Logs/cowboy-machine.log</string>
+  <string>/dev/null</string>
   <key>StandardErrorPath</key>
-  <string>__HOME__/Library/Logs/cowboy-machine.log</string>
+  <string>/dev/null</string>
 </dict>
 </plist>

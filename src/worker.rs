@@ -9,7 +9,7 @@ use std::os::unix::fs::MetadataExt as _;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use agent_client_protocol::schema::v1::ContentBlock;
 use anyhow::{Context as _, Result};
@@ -25,6 +25,10 @@ use crate::runtime_wire::{
     Frame, FrameReader, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION, PeerRole, RuntimeEvent,
     WorkerCommand, WorkerSnapshot, WorkerState, read_frame, write_frame,
 };
+
+const BROKER_RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(100);
+const BROKER_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(5);
+const BROKER_CONNECTION_STABLE_AFTER: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 pub struct WorkerArgs {
@@ -422,40 +426,66 @@ async fn connection_loop(
     mut notify_rx: mpsc::UnboundedReceiver<()>,
     done_rx: &mut mpsc::Receiver<()>,
 ) -> Result<()> {
-    let mut backoff = Duration::from_millis(100);
+    let mut backoff = BROKER_RECONNECT_INITIAL_DELAY;
     let mut cmd_tx = Some(cmd_tx);
     loop {
         let stream = match UnixStream::connect(socket).await {
             Ok(stream) => stream,
             Err(error) => {
-                tracing::warn!(error = %error, socket = %socket.display(), "Machine broker unavailable; worker keeps running");
-                tokio::time::sleep(backoff).await;
-                backoff = (backoff * 2).min(Duration::from_secs(5));
+                tracing::warn!(
+                    error = %error,
+                    socket = %socket.display(),
+                    retry_after_ms = backoff.as_millis(),
+                    "Machine broker unavailable; worker keeps running"
+                );
+                wait_for_broker_retry(&mut backoff).await;
                 continue;
             }
         };
-        backoff = Duration::from_millis(100);
-        match connected(
+        let connected_at = Instant::now();
+        let outcome = connected(
             stream,
             Arc::clone(&shared),
             &mut cmd_tx,
             &mut notify_rx,
             done_rx,
         )
-        .await
-        {
+        .await;
+        if connected_at.elapsed() >= BROKER_CONNECTION_STABLE_AFTER {
+            backoff = BROKER_RECONNECT_INITIAL_DELAY;
+        }
+        match outcome {
             Ok(ConnectedExit::WorkerDrained) => return Ok(()),
-            Ok(ConnectedExit::Disconnected) => {}
+            Ok(ConnectedExit::Rejected { reason }) => {
+                anyhow::bail!("Machine broker rejected worker: {reason}")
+            }
+            Ok(ConnectedExit::Disconnected) => {
+                tracing::warn!(
+                    retry_after_ms = backoff.as_millis(),
+                    "Machine broker connection closed; reconnecting"
+                );
+            }
             Err(error) => {
-                tracing::warn!(error = %error, "Machine broker connection lost; reconnecting")
+                tracing::warn!(
+                    error = %error,
+                    retry_after_ms = backoff.as_millis(),
+                    "Machine broker connection lost; reconnecting"
+                );
             }
         }
+        wait_for_broker_retry(&mut backoff).await;
     }
+}
+
+async fn wait_for_broker_retry(backoff: &mut Duration) {
+    tokio::time::sleep(*backoff).await;
+    *backoff = (*backoff * 2).min(BROKER_RECONNECT_MAX_DELAY);
 }
 
 enum ConnectedExit {
     Disconnected,
     WorkerDrained,
+    Rejected { reason: String },
 }
 
 async fn connected(
@@ -483,7 +513,7 @@ async fn connected(
     .await?;
     match read_frame(&mut reader).await? {
         Some(Frame::Welcome { .. }) => {}
-        Some(Frame::Reject { reason }) => anyhow::bail!("Machine broker rejected worker: {reason}"),
+        Some(Frame::Reject { reason }) => return Ok(ConnectedExit::Rejected { reason }),
         Some(other) => anyhow::bail!("unexpected Machine broker handshake frame: {other:?}"),
         None => return Ok(ConnectedExit::Disconnected),
     }
@@ -528,7 +558,9 @@ async fn connected(
                         send_outbox(&shared, &mut writer, &mut last_sent).await?;
                     }
                     Frame::Heartbeat => {}
-                    Frame::Reject { reason } => anyhow::bail!("Machine broker rejected live worker: {reason}"),
+                    Frame::Reject { reason } => {
+                        return Ok(ConnectedExit::Rejected { reason });
+                    }
                     other => tracing::debug!(?other, "ignoring unrelated runtime frame"),
                 }
             }
@@ -738,6 +770,7 @@ fn command_ack(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::net::UnixListener;
 
     fn shared() -> (Arc<Shared>, mpsc::UnboundedReceiver<()>) {
         let (tx, rx) = mpsc::unbounded_channel();
@@ -778,6 +811,58 @@ mod tests {
             }),
             rx,
         )
+    }
+
+    #[tokio::test]
+    async fn broker_rejection_is_terminal_and_is_not_retried() {
+        let root =
+            std::env::temp_dir().join(format!("cowboy-worker-rejection-{}", generated_epoch()));
+        std::fs::create_dir_all(&root).expect("create socket directory");
+        let socket = root.join("broker.sock");
+        let listener = UnixListener::bind(&socket).expect("bind broker socket");
+        let broker = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept worker");
+            assert!(matches!(
+                read_frame(&mut stream).await.expect("read worker hello"),
+                Some(Frame::Hello {
+                    role: PeerRole::Worker,
+                    ..
+                })
+            ));
+            write_frame(
+                &mut stream,
+                &Frame::Reject {
+                    reason: "duplicate worker epoch".to_owned(),
+                },
+            )
+            .await
+            .expect("reject worker");
+            assert!(
+                tokio::time::timeout(Duration::from_millis(250), listener.accept())
+                    .await
+                    .is_err(),
+                "a rejected worker must not reconnect"
+            );
+        });
+
+        let (shared, notify_rx) = shared();
+        let (cmd_tx, _cmd_rx) = mpsc::unbounded_channel();
+        let (_done_tx, mut done_rx) = mpsc::channel(1);
+        let error = tokio::time::timeout(
+            Duration::from_secs(1),
+            connection_loop(&socket, shared, cmd_tx, notify_rx, &mut done_rx),
+        )
+        .await
+        .expect("rejected worker exits promptly")
+        .expect_err("broker rejection is terminal");
+        assert!(
+            error
+                .to_string()
+                .contains("Machine broker rejected worker: duplicate worker epoch")
+        );
+        broker.await.expect("broker task");
+        std::fs::remove_file(&socket).expect("remove broker socket");
+        std::fs::remove_dir(&root).expect("remove socket directory");
     }
 
     #[test]
