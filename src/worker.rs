@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::os::unix::fs::MetadataExt as _;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use agent_client_protocol::schema::v1::ContentBlock;
@@ -58,7 +58,6 @@ struct Shared {
     outbox: Mutex<BTreeMap<u64, RuntimeEvent>>,
     notify: mpsc::UnboundedSender<()>,
     seen_commands: Mutex<HashSet<String>>,
-    done: AtomicBool,
     workspace_path: PathBuf,
     workspace_identity: Option<WorkspaceIdentity>,
 }
@@ -389,7 +388,6 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
         outbox: Mutex::new(BTreeMap::new()),
         notify: notify_tx,
         seen_commands: Mutex::new(HashSet::new()),
-        done: AtomicBool::new(false),
         workspace_path: args.cwd.clone(),
         workspace_identity: expected_workspace_identity,
     });
@@ -406,7 +404,6 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
                 shared: Arc::clone(&thread_shared),
             });
             acp::run_agent_with_sink(&spec, &session_id, cwd, resume, cmd_rx, &sink);
-            thread_shared.done.store(true, Ordering::Release);
             let _ = done_tx.blocking_send(());
         })
         .context("spawning ACP worker thread")?;
@@ -526,6 +523,11 @@ async fn connected(
     .await?;
     let mut reader = FrameReader::new(reader);
     let mut last_sent = 0;
+    // `done_rx.recv()` becomes immediately ready forever after its sender is
+    // dropped. Poll it exactly once; otherwise a completed ACP thread with an
+    // unacknowledged final event turns this select loop into a CPU spin and can
+    // starve the broker ACK that would let the worker drain.
+    let mut agent_done = false;
     send_outbox(&shared, &mut writer, &mut last_sent).await?;
     let mut heartbeat = tokio::time::interval(Duration::from_secs(10));
     loop {
@@ -548,7 +550,7 @@ async fn connected(
                     Frame::Ack { session_id, worker_epoch, runtime_seq }
                         if session_id == shared.session_id && worker_epoch == shared.worker_epoch => {
                         shared.ack(runtime_seq);
-                        if shared.done.load(Ordering::Acquire) && shared.outbox.lock().is_empty() {
+                        if agent_done && shared.outbox.lock().is_empty() {
                             return Ok(ConnectedExit::WorkerDrained);
                         }
                     }
@@ -566,15 +568,19 @@ async fn connected(
             }
             notified = notify_rx.recv() => {
                 if notified.is_none()
-                    && shared.done.load(Ordering::Acquire)
+                    && agent_done
                     && shared.outbox.lock().is_empty()
                 {
                     return Ok(ConnectedExit::WorkerDrained);
                 }
                 send_outbox(&shared, &mut writer, &mut last_sent).await?;
             }
-            done = done_rx.recv() => {
-                if done.is_some() && shared.outbox.lock().is_empty() {
+            _ = done_rx.recv(), if !agent_done => {
+                // `None` is completion too: it means the ACP thread dropped
+                // its final sender (including a panic path). Disable this
+                // branch before looping so a closed receiver cannot stay hot.
+                agent_done = true;
+                if shared.outbox.lock().is_empty() {
                     return Ok(ConnectedExit::WorkerDrained);
                 }
                 send_outbox(&shared, &mut writer, &mut last_sent).await?;
@@ -805,7 +811,6 @@ mod tests {
                 outbox: Mutex::new(BTreeMap::new()),
                 notify: tx,
                 seen_commands: Mutex::new(HashSet::new()),
-                done: AtomicBool::new(false),
                 workspace_path,
                 workspace_identity: expected_workspace_identity,
             }),
@@ -862,6 +867,121 @@ mod tests {
                 .to_string()
                 .contains("Machine broker rejected worker: duplicate worker epoch")
         );
+        broker.await.expect("broker task");
+        std::fs::remove_file(&socket).expect("remove broker socket");
+        std::fs::remove_dir(&root).expect("remove socket directory");
+    }
+
+    #[tokio::test]
+    async fn stop_with_a_final_event_drains_once_without_reconnecting() {
+        let root = PathBuf::from("/tmp").join(format!("cw-{}", generated_epoch()));
+        std::fs::create_dir_all(&root).expect("create socket directory");
+        let socket = root.join("broker.sock");
+        let listener = UnixListener::bind(&socket).expect("bind broker socket");
+        let broker = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept worker");
+            assert!(matches!(
+                read_frame(&mut stream).await.expect("read worker hello"),
+                Some(Frame::Hello {
+                    role: PeerRole::Worker,
+                    ..
+                })
+            ));
+            write_frame(
+                &mut stream,
+                &Frame::Welcome {
+                    protocol: PROTOCOL_VERSION,
+                    controller_epoch: 1,
+                    workers: Vec::new(),
+                },
+            )
+            .await
+            .expect("welcome worker");
+            assert!(matches!(
+                read_frame(&mut stream).await.expect("read worker snapshot"),
+                Some(Frame::Snapshot { .. })
+            ));
+            write_frame(
+                &mut stream,
+                &Frame::WorkerCommand {
+                    session_id: "sess-1".to_owned(),
+                    command: WorkerCommand::Stop {
+                        command_id: "delete-sess-1".to_owned(),
+                    },
+                },
+            )
+            .await
+            .expect("stop worker");
+
+            let mut saw_final_event = false;
+            let mut saw_stop_ack = false;
+            loop {
+                let frame = tokio::time::timeout(Duration::from_secs(1), read_frame(&mut stream))
+                    .await
+                    .expect("stopped worker frame timeout")
+                    .expect("read stopped worker frame");
+                let Some(frame) = frame else { break };
+                match frame {
+                    Frame::WorkerEvent {
+                        session_id,
+                        worker_epoch,
+                        runtime_seq,
+                        event:
+                            RuntimeEvent::Status {
+                                state: WorkerState::Exited,
+                                ..
+                            },
+                    } => {
+                        saw_final_event = true;
+                        write_frame(
+                            &mut stream,
+                            &Frame::Ack {
+                                session_id,
+                                worker_epoch,
+                                runtime_seq,
+                            },
+                        )
+                        .await
+                        .expect("ack final worker event");
+                    }
+                    Frame::CommandAck {
+                        command_id,
+                        accepted: true,
+                        ..
+                    } if command_id == "delete-sess-1" => saw_stop_ack = true,
+                    _ => {}
+                }
+            }
+            assert!(saw_final_event, "stopped worker must publish Exited");
+            assert!(saw_stop_ack, "stopped worker must ACK Stop");
+            assert!(
+                tokio::time::timeout(Duration::from_millis(250), listener.accept())
+                    .await
+                    .is_err(),
+                "a drained worker must not reconnect"
+            );
+        });
+
+        let (shared, notify_rx) = shared();
+        let acp_shared = Arc::clone(&shared);
+        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel();
+        let (done_tx, mut done_rx) = mpsc::channel(1);
+        let acp = tokio::spawn(async move {
+            assert!(matches!(cmd_rx.recv().await, Some(AgentCommand::Cancel)));
+            acp_shared.emit(RuntimeEvent::Status {
+                state: WorkerState::Exited,
+                detail: None,
+            });
+            done_tx.send(()).await.expect("signal ACP completion");
+        });
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            connection_loop(&socket, shared, cmd_tx, notify_rx, &mut done_rx),
+        )
+        .await
+        .expect("stopped worker exits promptly")
+        .expect("stopped worker drains cleanly");
+        acp.await.expect("ACP simulation");
         broker.await.expect("broker task");
         std::fs::remove_file(&socket).expect("remove broker socket");
         std::fs::remove_dir(&root).expect("remove socket directory");

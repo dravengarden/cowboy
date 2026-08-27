@@ -20,6 +20,19 @@ use crate::runtime_wire::{
     RuntimeEvent, StartSession, WorkerSnapshot, WorkerState, read_frame, write_frame,
 };
 
+const BROKER_RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(100);
+const BROKER_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(5);
+const BROKER_CONNECTION_STABLE_AFTER: Duration = Duration::from_secs(10);
+
+fn broker_retry_delay(backoff: &mut Duration, stable_connection: bool) -> Duration {
+    if stable_connection {
+        *backoff = BROKER_RECONNECT_INITIAL_DELAY;
+    }
+    let delay = *backoff;
+    *backoff = (*backoff * 2).min(BROKER_RECONNECT_MAX_DELAY);
+    delay
+}
+
 pub struct RemoteBootstrap {
     socket: PathBuf,
     reader: FrameReader<OwnedReadHalf>,
@@ -575,7 +588,7 @@ async fn connection_manager(
     mut notify_rx: mpsc::UnboundedReceiver<()>,
     mut initial: Option<(FrameReader<OwnedReadHalf>, OwnedWriteHalf, Vec<Frame>)>,
 ) {
-    let mut backoff = Duration::from_millis(100);
+    let mut backoff = BROKER_RECONNECT_INITIAL_DELAY;
     loop {
         if shared.shutdown.load(Ordering::Acquire) {
             return;
@@ -594,22 +607,35 @@ async fn connection_manager(
             Ok(connection) => connection,
             Err(error) => {
                 shared.connected.store(false, Ordering::Release);
-                tracing::warn!(error = %error, "Machine broker unavailable; Cowboy queues runtime commands");
-                tokio::time::sleep(backoff).await;
-                backoff = (backoff * 2).min(Duration::from_secs(5));
+                let retry_delay = broker_retry_delay(&mut backoff, false);
+                tracing::warn!(
+                    error = %error,
+                    retry_after_ms = retry_delay.as_millis(),
+                    "Machine broker unavailable; Cowboy queues runtime commands"
+                );
+                tokio::time::sleep(retry_delay).await;
                 continue;
             }
         };
-        backoff = Duration::from_millis(100);
+        let connected_at = tokio::time::Instant::now();
         shared.connected.store(true, Ordering::Release);
         shared.sent.lock().clear();
         if let Err(error) = connected(&shared, reader, writer, buffered, &mut notify_rx).await {
-            tracing::warn!(error = %error, "Machine broker connection dropped; reconnecting");
+            tracing::warn!(error = %error, "Machine broker connection dropped");
         }
         shared.connected.store(false, Ordering::Release);
         if shared.shutdown.load(Ordering::Acquire) {
             return;
         }
+        let retry_delay = broker_retry_delay(
+            &mut backoff,
+            connected_at.elapsed() >= BROKER_CONNECTION_STABLE_AFTER,
+        );
+        tracing::warn!(
+            retry_after_ms = retry_delay.as_millis(),
+            "Cowboy will reconnect to the Machine broker"
+        );
+        tokio::time::sleep(retry_delay).await;
     }
 }
 
@@ -1534,6 +1560,33 @@ fn reset_after_workspace_replacement(shared: &Shared, session_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn short_lived_broker_connections_keep_exponential_backoff() {
+        let mut backoff = BROKER_RECONNECT_INITIAL_DELAY;
+        assert_eq!(
+            broker_retry_delay(&mut backoff, false),
+            Duration::from_millis(100)
+        );
+        assert_eq!(
+            broker_retry_delay(&mut backoff, false),
+            Duration::from_millis(200)
+        );
+        assert_eq!(
+            broker_retry_delay(&mut backoff, false),
+            Duration::from_millis(400)
+        );
+        backoff = BROKER_RECONNECT_MAX_DELAY;
+        assert_eq!(
+            broker_retry_delay(&mut backoff, false),
+            BROKER_RECONNECT_MAX_DELAY
+        );
+        assert_eq!(
+            broker_retry_delay(&mut backoff, true),
+            BROKER_RECONNECT_INITIAL_DELAY,
+            "only a stable connection resets the retry delay"
+        );
+    }
 
     fn compaction_started() -> RuntimeEvent {
         RuntimeEvent::Update {

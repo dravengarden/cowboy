@@ -219,6 +219,27 @@ size or retention bound. Machine and session health remain visible through the
 controller; unload the LaunchAgent and run its launcher in the foreground for a
 bounded diagnostic capture when raw stderr is required.
 
+macOS uses direct child-process workers rather than user-systemd units. Each
+worker leads an isolated process group containing its Provider/adapter subtree.
+A normal session stop drains the worker protocol first; if the exact child owner
+has not exited within three seconds, Machine sends `TERM` to that process group,
+then `KILL` after another two seconds. The reaper removes the PID mapping before
+it may be reused, so a stale watchdog cannot signal an unrelated process.
+
+Broker rejection is terminal for a worker (duplicate epoch, deleted session, or
+protocol mismatch). Transient worker and Cowboy-to-broker failures always wait
+with exponential backoff from 100 ms through 5 seconds, and only a connection
+that remains healthy for ten seconds resets that backoff. A deleted session's
+final worker events are consumed and acknowledged locally even though they are
+not forwarded to the controller; this lets the outbox drain without reviving
+the deleted session.
+
+For emergency containment, unload the exact LaunchAgent first and verify that
+no `cowboy-machine`, `cowboy-acp-worker`, or `cowboy-code-adapter` process
+remains. `lsof +L1` must show no deleted Cowboy log held open before the agent is
+started again. Do not delete Machine state, session worktrees, or enrollment
+identity as part of this containment.
+
 ## Component publication
 
 The controller manifest is a JSON array of `DesiredComponent`. Each artifact

@@ -6,7 +6,9 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::os::fd::FromRawFd as _;
+use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -28,13 +30,156 @@ use crate::runtime_wire::{
 const WORKER_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(45);
 const WORKER_MONITOR_INTERVAL: Duration = Duration::from_secs(15);
 const TRANSIENT_UNIT_COLLECT_TIMEOUT: Duration = Duration::from_secs(10);
+const DIRECT_WORKER_GRACEFUL_STOP_TIMEOUT: Duration = Duration::from_secs(3);
+const DIRECT_WORKER_TERM_TIMEOUT: Duration = Duration::from_secs(2);
+const DIRECT_WORKER_KILL_TIMEOUT: Duration = Duration::from_secs(1);
+const DIRECT_WORKER_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpawnMode {
-    /// Child process mode for development and hermetic tests. Production uses
-    /// user-systemd so worker units are siblings and survive Machine broker restarts.
+    /// Child process mode for macOS, development, and hermetic tests. Linux
+    /// production uses user-systemd so workers survive broker restarts.
     Direct,
     SystemdUser,
+}
+
+fn direct_worker_is_current(
+    workers: &Mutex<HashMap<String, u32>>,
+    session_id: &str,
+    pid: u32,
+) -> bool {
+    workers.lock().get(session_id).copied() == Some(pid)
+}
+
+async fn wait_for_direct_worker_exit(
+    workers: &Mutex<HashMap<String, u32>>,
+    session_id: &str,
+    pid: u32,
+    timeout: Duration,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if !direct_worker_is_current(workers, session_id, pid) {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(DIRECT_WORKER_EXIT_POLL_INTERVAL).await;
+    }
+}
+
+async fn signal_direct_worker(
+    workers: &Mutex<HashMap<String, u32>>,
+    session_id: &str,
+    pid: u32,
+    signal: &str,
+) -> Result<()> {
+    // The reaper removes the exact mapping before a PID can be reused for a
+    // future session worker. Recheck immediately before signalling so a stale
+    // watchdog can never target an unrelated process.
+    if !direct_worker_is_current(workers, session_id, pid) {
+        return Ok(());
+    }
+    let status = Command::new("kill")
+        .arg(signal)
+        // Direct workers lead an isolated process group. A negative target
+        // fences the worker and every provider/adapter child that has not
+        // deliberately escaped that group, avoiding orphaned sidecars after a
+        // hard kill.
+        .arg(format!("-{pid}"))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .with_context(|| format!("sending {signal} to direct worker {session_id} pid {pid}"))?;
+    if status.success() || !direct_worker_is_current(workers, session_id, pid) {
+        return Ok(());
+    }
+    anyhow::bail!("kill {signal} {pid} exited {status}")
+}
+
+async fn direct_worker_group_exists(pid: u32) -> bool {
+    match Command::new("kill")
+        .arg("-0")
+        .arg(format!("-{pid}"))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+    {
+        Ok(status) => status.success(),
+        Err(error) => {
+            // Fail closed: losing the platform signal utility must retain the
+            // owner fence instead of declaring a potentially live group gone.
+            tracing::error!(pid, %error, "probing direct worker process group failed");
+            true
+        }
+    }
+}
+
+async fn wait_for_direct_worker_group_exit(pid: u32, timeout: Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if !direct_worker_group_exists(pid).await {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(DIRECT_WORKER_EXIT_POLL_INTERVAL).await;
+    }
+}
+
+async fn reap_direct_worker_group(
+    workers: &Mutex<HashMap<String, u32>>,
+    session_id: &str,
+    pid: u32,
+) -> bool {
+    if !direct_worker_group_exists(pid).await {
+        return true;
+    }
+    tracing::warn!(session = %session_id, pid, "direct worker exited with live process-group descendants; sending TERM");
+    if let Err(error) = signal_direct_worker(workers, session_id, pid, "-TERM").await {
+        tracing::warn!(session = %session_id, pid, %error, "direct worker descendant TERM failed");
+    }
+    if wait_for_direct_worker_group_exit(pid, DIRECT_WORKER_TERM_TIMEOUT).await {
+        return true;
+    }
+    tracing::error!(session = %session_id, pid, "direct worker descendants ignored TERM; sending KILL");
+    if let Err(error) = signal_direct_worker(workers, session_id, pid, "-KILL").await {
+        tracing::error!(session = %session_id, pid, %error, "direct worker descendant KILL failed");
+    }
+    let reaped = wait_for_direct_worker_group_exit(pid, DIRECT_WORKER_KILL_TIMEOUT).await;
+    if !reaped {
+        tracing::error!(session = %session_id, pid, "direct worker process group survived KILL timeout");
+    }
+    reaped
+}
+
+async fn enforce_direct_worker_exit(
+    workers: Arc<Mutex<HashMap<String, u32>>>,
+    session_id: String,
+    pid: u32,
+    graceful_timeout: Duration,
+    term_timeout: Duration,
+    kill_timeout: Duration,
+) -> bool {
+    if wait_for_direct_worker_exit(&workers, &session_id, pid, graceful_timeout).await {
+        return true;
+    }
+    tracing::warn!(session = %session_id, pid, "direct worker ignored graceful Stop; sending TERM");
+    if let Err(error) = signal_direct_worker(&workers, &session_id, pid, "-TERM").await {
+        tracing::warn!(session = %session_id, pid, %error, "direct worker TERM failed");
+    }
+    if wait_for_direct_worker_exit(&workers, &session_id, pid, term_timeout).await {
+        return true;
+    }
+    tracing::error!(session = %session_id, pid, "direct worker ignored TERM; sending KILL");
+    if let Err(error) = signal_direct_worker(&workers, &session_id, pid, "-KILL").await {
+        tracing::error!(session = %session_id, pid, %error, "direct worker KILL failed");
+    }
+    wait_for_direct_worker_exit(&workers, &session_id, pid, kill_timeout).await
 }
 
 #[derive(Clone)]
@@ -118,6 +263,10 @@ struct Broker {
     /// Tracking the source lets deletion retract only its own failure.
     unhealthy_generations: Mutex<HashMap<(String, String), HashSet<String>>>,
     healthy_generations: Mutex<HashSet<(String, String)>>,
+    /// Exact direct-mode worker owners. A bounded stop watchdog uses this map
+    /// on macOS where per-session systemd units are unavailable. Entries are
+    /// removed only by the task that reaps the matching child PID.
+    direct_worker_pids: Arc<Mutex<HashMap<String, u32>>>,
     desired_generation: Mutex<String>,
     previous_generation: Mutex<Option<String>>,
     generation_commands: Mutex<HashMap<String, PathBuf>>,
@@ -190,6 +339,7 @@ impl Broker {
             fallback_targets: Mutex::new(HashMap::new()),
             unhealthy_generations: Mutex::new(HashMap::new()),
             healthy_generations: Mutex::new(HashSet::new()),
+            direct_worker_pids: Arc::new(Mutex::new(HashMap::new())),
             previous_generation: Mutex::new(None),
             generation_commands: Mutex::new(generation_commands),
             #[cfg(test)]
@@ -383,6 +533,7 @@ impl Broker {
     }
 
     fn route_worker(&self, session_id: &str, command: WorkerCommand) {
+        let terminal_stop = matches!(&command, WorkerCommand::Stop { .. });
         match self
             .workers
             .lock()
@@ -399,6 +550,35 @@ impl Broker {
                 self.queue_pending(session_id, command);
             }
         }
+        if terminal_stop {
+            self.arm_direct_worker_stop(session_id);
+        }
+    }
+
+    fn arm_direct_worker_stop(&self, session_id: &str) {
+        if self.args.spawn_mode != SpawnMode::Direct {
+            return;
+        }
+        let workers = Arc::clone(&self.direct_worker_pids);
+        let pid = workers.lock().get(session_id).copied();
+        let Some(pid) = pid else {
+            return;
+        };
+        let session_id = session_id.to_owned();
+        tokio::spawn(async move {
+            if !enforce_direct_worker_exit(
+                workers,
+                session_id.clone(),
+                pid,
+                DIRECT_WORKER_GRACEFUL_STOP_TIMEOUT,
+                DIRECT_WORKER_TERM_TIMEOUT,
+                DIRECT_WORKER_KILL_TIMEOUT,
+            )
+            .await
+            {
+                tracing::error!(session = %session_id, pid, "direct worker remained owned after KILL timeout");
+            }
+        });
     }
 
     /// New prompts wait behind a generation handoff. Cancellation and
@@ -521,6 +701,28 @@ impl Broker {
         }
     }
 
+    fn acknowledge_worker_event(
+        &self,
+        session_id: &str,
+        connection_id: u64,
+        worker_epoch: String,
+        runtime_seq: u64,
+    ) {
+        let tx = self
+            .workers
+            .lock()
+            .get(session_id)
+            .filter(|worker| worker.connection_id == connection_id && worker.epoch == worker_epoch)
+            .map(|worker| worker.tx.clone());
+        if let Some(tx) = tx {
+            let _ = tx.send(Frame::Ack {
+                session_id: session_id.to_owned(),
+                worker_epoch,
+                runtime_seq,
+            });
+        }
+    }
+
     fn register_worker(&self, registration: WorkerRegistration) -> Result<()> {
         let WorkerRegistration {
             session_id,
@@ -532,12 +734,9 @@ impl Broker {
             tx,
         } = registration;
         if self.cancelled_sessions.lock().contains(&session_id) {
-            let _ = tx.send(Frame::WorkerCommand {
-                session_id: session_id.clone(),
-                command: WorkerCommand::Stop {
-                    command_id: format!("deleted-session-stop-{session_id}"),
-                },
-            });
+            // `handle_peer` turns this error into the only legal pre-Welcome
+            // response: Reject. Sending Stop first makes the worker treat the
+            // handshake as malformed and retry a permanently deleted session.
             anyhow::bail!("session {session_id} was deleted");
         }
         self.awaiting_reconnect.lock().remove(&session_id);
@@ -1146,6 +1345,22 @@ impl Broker {
                 ])
                 .status()
                 .await;
+        } else {
+            let workers = Arc::clone(&self.direct_worker_pids);
+            let pid = workers.lock().get(session_id).copied();
+            if let Some(pid) = pid
+                && !enforce_direct_worker_exit(
+                    workers,
+                    session_id.to_owned(),
+                    pid,
+                    DIRECT_WORKER_GRACEFUL_STOP_TIMEOUT,
+                    DIRECT_WORKER_TERM_TIMEOUT,
+                    DIRECT_WORKER_KILL_TIMEOUT,
+                )
+                .await
+            {
+                tracing::error!(session = %session_id, pid, "failed-start direct worker remained owned after KILL timeout");
+            }
         }
         // A worker whose IPC loop is wedged may never consume Stop. Fence it so
         // a fallback generation can register; its stale connection is ignored.
@@ -1512,6 +1727,36 @@ impl Broker {
                     session.generation
                 )
             })?;
+        if self.args.spawn_mode == SpawnMode::Direct {
+            let workers = Arc::clone(&self.direct_worker_pids);
+            let existing_pid = workers.lock().get(&session.session_id).copied();
+            if let Some(existing_pid) = existing_pid {
+                tracing::warn!(
+                    session = %session.session_id,
+                    pid = existing_pid,
+                    "waiting for previous direct worker owner before launch"
+                );
+                ensure!(
+                    enforce_direct_worker_exit(
+                        Arc::clone(&workers),
+                        session.session_id.clone(),
+                        existing_pid,
+                        DIRECT_WORKER_GRACEFUL_STOP_TIMEOUT,
+                        DIRECT_WORKER_TERM_TIMEOUT,
+                        DIRECT_WORKER_KILL_TIMEOUT,
+                    )
+                    .await,
+                    "previous direct worker {} pid {} did not exit before replacement",
+                    session.session_id,
+                    existing_pid
+                );
+            }
+            ensure!(
+                !workers.lock().contains_key(&session.session_id),
+                "direct worker {} still has a live process owner",
+                session.session_id
+            );
+        }
         let mut command = match self.args.spawn_mode {
             SpawnMode::Direct => {
                 let mut command = Command::new(&worker_command);
@@ -1631,6 +1876,30 @@ impl Broker {
         if session.system {
             command.arg("--system");
         }
+        if self.args.spawn_mode == SpawnMode::Direct {
+            // If the broker runtime itself disappears, Tokio dropping the
+            // reaper must not orphan a macOS worker outside our ownership.
+            command.kill_on_drop(true);
+            // Make the worker the leader of an isolated process group. The
+            // bounded watchdog can then terminate its whole provider subtree,
+            // not just the worker parent.
+            command.as_std_mut().process_group(0);
+        }
+        // Close the final race between the async owner check above and spawn:
+        // two concurrent launch tasks must never overwrite each other's PID.
+        // `Command::spawn` is synchronous, so this lock is not held across an
+        // await point.
+        let mut direct_workers = if self.args.spawn_mode == SpawnMode::Direct {
+            let workers = self.direct_worker_pids.lock();
+            ensure!(
+                !workers.contains_key(&session.session_id),
+                "direct worker {} acquired a process owner during launch",
+                session.session_id
+            );
+            Some(workers)
+        } else {
+            None
+        };
         let mut child = command
             .spawn()
             .with_context(|| match self.args.spawn_mode {
@@ -1638,9 +1907,37 @@ impl Broker {
                 SpawnMode::SystemdUser => "starting transient worker unit",
             })?;
         let session_id = session.session_id.clone();
+        let direct_pid = if self.args.spawn_mode == SpawnMode::Direct {
+            let pid = child
+                .id()
+                .context("direct worker did not expose its process id")?;
+            direct_workers
+                .as_mut()
+                .expect("direct worker registry lock")
+                .insert(session_id.clone(), pid);
+            Some(pid)
+        } else {
+            None
+        };
+        drop(direct_workers);
+        let direct_worker_pids = Arc::clone(&self.direct_worker_pids);
         let (exit_tx, exit_rx) = oneshot::channel();
         tokio::spawn(async move {
             let result = child.wait().await.map_err(|error| error.to_string());
+            if let Some(pid) = direct_pid {
+                if reap_direct_worker_group(&direct_worker_pids, &session_id, pid).await {
+                    let mut workers = direct_worker_pids.lock();
+                    if workers.get(&session_id).copied() == Some(pid) {
+                        workers.remove(&session_id);
+                    }
+                } else {
+                    tracing::error!(
+                        session = %session_id,
+                        pid,
+                        "retaining direct worker owner fence after process-group cleanup failure"
+                    );
+                }
+            }
             match &result {
                 Ok(status) => {
                     tracing::info!(session = %session_id, %status, "worker process exited")
@@ -1931,6 +2228,10 @@ async fn monitor_workers(broker: Arc<Broker>) {
                         tracing::warn!(session = %session_id, "stopping stale worker timed out")
                     }
                 }
+            } else {
+                // A stale direct worker may no longer service IPC even though
+                // its process (or Provider descendants) is still live.
+                broker.arm_direct_worker_stop(&session_id);
             }
             broker.worker_disconnected(session_id, peer).await;
         }
@@ -2237,6 +2538,9 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
                     accepted: true,
                     reason: None,
                 });
+                // The IPC peer can disappear before the owned direct process.
+                // Deletion must still arm the process-group watchdog.
+                broker.arm_direct_worker_stop(&session_id);
             }
             broker.cleanup_deleted_session(&session_id, &cleanup_command_id);
         }
@@ -2309,6 +2613,17 @@ async fn handle_worker(
             } if event_session == session_id && worker_epoch == epoch => {
                 let cancelled = broker.cancelled_sessions.lock();
                 if cancelled.contains(session_id) {
+                    // The event is intentionally not forwarded after permanent
+                    // deletion, but it was consumed by this broker. ACK it so
+                    // the stopping worker can drain its final Exited event and
+                    // terminate instead of retaining an unbounded outbox.
+                    drop(cancelled);
+                    broker.acknowledge_worker_event(
+                        session_id,
+                        connection_id,
+                        worker_epoch,
+                        runtime_seq,
+                    );
                     continue;
                 }
                 let rehabilitated =
@@ -3329,7 +3644,7 @@ mod tests {
     }
 
     #[test]
-    fn cancelled_worker_reconnect_is_rejected_and_stopped() {
+    fn cancelled_worker_reconnect_is_rejected_without_a_pre_handshake_command() {
         let broker = Broker::new(MachineBrokerArgs {
             socket: PathBuf::from("/tmp/unused.sock"),
             worker_command: PathBuf::from("/bin/false"),
@@ -3360,13 +3675,330 @@ mod tests {
 
         assert!(error.to_string().contains("was deleted"));
         assert!(broker.workers.lock().is_empty());
+        assert!(
+            worker_rx.try_recv().is_err(),
+            "handle_peer must send Reject as the first and only handshake response"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelled_worker_handshake_sends_reject_as_its_first_frame() {
+        let broker = Arc::new(Broker::new(MachineBrokerArgs {
+            socket: PathBuf::from("/tmp/unused.sock"),
+            worker_command: PathBuf::from("/bin/false"),
+            desired_generation: "gen-1".to_owned(),
+            spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worker_ready_timeout: Duration::from_millis(100),
+        }));
+        broker
+            .cancelled_sessions
+            .lock()
+            .insert("sess-deleted-handshake".to_owned());
+        let (mut worker_stream, broker_stream) = UnixStream::pair().expect("worker socket pair");
+        let peer_task = tokio::spawn(handle_peer(Arc::clone(&broker), broker_stream));
+        write_frame(
+            &mut worker_stream,
+            &Frame::Hello {
+                role: PeerRole::Worker,
+                min_protocol: MIN_PROTOCOL_VERSION,
+                max_protocol: PROTOCOL_VERSION,
+                build: "test".to_owned(),
+                session_id: Some("sess-deleted-handshake".to_owned()),
+                worker_epoch: Some("epoch-deleted-handshake".to_owned()),
+                generation: Some("gen-1".to_owned()),
+                executable: Some("/bin/false".to_owned()),
+                fallback_for: None,
+            },
+        )
+        .await
+        .expect("send worker hello");
+
+        let first = tokio::time::timeout(Duration::from_secs(1), read_frame(&mut worker_stream))
+            .await
+            .expect("worker handshake timeout")
+            .expect("read worker handshake")
+            .expect("worker handshake response");
         assert!(matches!(
-            worker_rx.try_recv(),
-            Ok(Frame::WorkerCommand {
-                command: WorkerCommand::Stop { .. },
-                ..
-            })
+            first,
+            Frame::Reject { reason } if reason.contains("was deleted")
         ));
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), read_frame(&mut worker_stream))
+                .await
+                .expect("worker handshake close timeout")
+                .expect("read worker handshake close")
+                .is_none(),
+            "Reject must be the only handshake response"
+        );
+        peer_task
+            .await
+            .expect("broker peer task")
+            .expect("broker peer result");
+    }
+
+    #[tokio::test]
+    async fn cancelled_worker_final_event_is_acknowledged_locally() {
+        let broker = Arc::new(Broker::new(MachineBrokerArgs {
+            socket: PathBuf::from("/tmp/unused.sock"),
+            worker_command: PathBuf::from("/bin/false"),
+            desired_generation: "gen-1".to_owned(),
+            spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worker_ready_timeout: Duration::from_millis(100),
+        }));
+        let (peer_tx, mut peer_rx) = mpsc::unbounded_channel();
+        broker
+            .register_worker(WorkerRegistration {
+                session_id: "sess-deleted-final-event".to_owned(),
+                epoch: "epoch-deleted-final-event".to_owned(),
+                generation: "gen-1".to_owned(),
+                executable: Some("/bin/false".to_owned()),
+                fallback_for: None,
+                connection_id: 11,
+                tx: peer_tx,
+            })
+            .expect("register worker before deletion");
+        broker
+            .cancelled_sessions
+            .lock()
+            .insert("sess-deleted-final-event".to_owned());
+
+        let (mut worker_stream, broker_stream) = UnixStream::pair().expect("worker socket pair");
+        let (mut broker_reader, _broker_writer) = broker_stream.into_split();
+        let task_broker = Arc::clone(&broker);
+        let worker_task = tokio::spawn(async move {
+            handle_worker(
+                task_broker,
+                11,
+                "sess-deleted-final-event",
+                "epoch-deleted-final-event",
+                &mut broker_reader,
+            )
+            .await
+        });
+        write_frame(
+            &mut worker_stream,
+            &Frame::WorkerEvent {
+                session_id: "sess-deleted-final-event".to_owned(),
+                worker_epoch: "epoch-deleted-final-event".to_owned(),
+                runtime_seq: 7,
+                event: RuntimeEvent::Status {
+                    state: WorkerState::Exited,
+                    detail: None,
+                },
+            },
+        )
+        .await
+        .expect("send final worker event");
+
+        let ack = tokio::time::timeout(Duration::from_secs(1), peer_rx.recv())
+            .await
+            .expect("deleted worker event ACK timeout")
+            .expect("deleted worker event ACK channel");
+        assert!(matches!(
+            ack,
+            Frame::Ack {
+                session_id,
+                worker_epoch,
+                runtime_seq: 7,
+            } if session_id == "sess-deleted-final-event"
+                && worker_epoch == "epoch-deleted-final-event"
+        ));
+        assert!(broker.current_controller().is_none());
+
+        drop(worker_stream);
+        worker_task
+            .await
+            .expect("worker reader task")
+            .expect("worker reader result");
+    }
+
+    #[tokio::test]
+    async fn direct_worker_watchdog_reaps_an_unresponsive_process() {
+        let workers = Arc::new(Mutex::new(HashMap::new()));
+        let mut command = Command::new("sh");
+        command.arg("-c").arg("trap '' TERM; while :; do :; done");
+        command.kill_on_drop(true);
+        command.as_std_mut().process_group(0);
+        let mut child = command.spawn().expect("spawn unresponsive worker fixture");
+        let pid = child.id().expect("worker fixture pid");
+        workers.lock().insert("sess-unresponsive".to_owned(), pid);
+        let reaper_workers = Arc::clone(&workers);
+        let reaper = tokio::spawn(async move {
+            let status = child.wait().await.expect("wait for worker fixture");
+            let mut workers = reaper_workers.lock();
+            if workers.get("sess-unresponsive").copied() == Some(pid) {
+                workers.remove("sess-unresponsive");
+            }
+            status
+        });
+
+        assert!(
+            enforce_direct_worker_exit(
+                Arc::clone(&workers),
+                "sess-unresponsive".to_owned(),
+                pid,
+                Duration::from_millis(100),
+                Duration::from_millis(100),
+                Duration::from_secs(1),
+            )
+            .await,
+            "watchdog must observe the exact worker owner exit"
+        );
+        let status = tokio::time::timeout(Duration::from_secs(1), reaper)
+            .await
+            .expect("worker reaper timeout")
+            .expect("worker reaper task");
+        assert!(!status.success());
+        assert!(workers.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn deletion_reaps_a_direct_owner_after_its_ipc_peer_disappears() {
+        let broker = Arc::new(Broker::new(MachineBrokerArgs {
+            socket: PathBuf::from("/tmp/unused.sock"),
+            worker_command: PathBuf::from("false"),
+            desired_generation: "gen-1".to_owned(),
+            spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worker_ready_timeout: Duration::from_secs(1),
+        }));
+        let mut command = Command::new("sh");
+        command.arg("-c").arg("sleep 60");
+        command.kill_on_drop(true);
+        command.as_std_mut().process_group(0);
+        let mut child = command.spawn().expect("spawn disconnected worker fixture");
+        let pid = child.id().expect("disconnected worker fixture pid");
+        broker
+            .direct_worker_pids
+            .lock()
+            .insert("sess-disconnected-delete".to_owned(), pid);
+        let workers = Arc::clone(&broker.direct_worker_pids);
+        let reaper = tokio::spawn(async move {
+            let status = child.wait().await.expect("wait for disconnected worker");
+            if reap_direct_worker_group(&workers, "sess-disconnected-delete", pid).await {
+                let mut workers = workers.lock();
+                if workers.get("sess-disconnected-delete").copied() == Some(pid) {
+                    workers.remove("sess-disconnected-delete");
+                }
+            }
+            status
+        });
+
+        handle_core_command(
+            &broker,
+            CoreCommand::StopSession {
+                session_id: "sess-disconnected-delete".to_owned(),
+                command_id: "delete-disconnected-owner".to_owned(),
+            },
+        )
+        .await;
+
+        let status = tokio::time::timeout(Duration::from_secs(5), reaper)
+            .await
+            .expect("direct deletion watchdog timeout")
+            .expect("direct deletion reaper");
+        assert!(!status.success());
+        assert!(broker.direct_worker_pids.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn direct_worker_reaper_terminates_remaining_process_group_descendants() {
+        let workers = Arc::new(Mutex::new(HashMap::new()));
+        let mut command = Command::new("sh");
+        command.arg("-c").arg("trap '' HUP; sleep 60 &");
+        command.kill_on_drop(true);
+        command.as_std_mut().process_group(0);
+        let mut child = command.spawn().expect("spawn worker descendant fixture");
+        let pid = child.id().expect("worker descendant fixture pid");
+        workers.lock().insert("sess-descendant".to_owned(), pid);
+        let status = match tokio::time::timeout(Duration::from_secs(1), child.wait()).await {
+            Ok(result) => result.expect("wait for worker descendant fixture"),
+            Err(_) => {
+                let _ = signal_direct_worker(&workers, "sess-descendant", pid, "-KILL").await;
+                panic!("worker fixture leader did not exit");
+            }
+        };
+        assert!(status.success());
+        assert!(
+            direct_worker_group_exists(pid).await,
+            "fixture must leave a process-group descendant"
+        );
+
+        assert!(reap_direct_worker_group(&workers, "sess-descendant", pid).await);
+        assert!(!direct_worker_group_exists(pid).await);
+        workers.lock().remove("sess-descendant");
+    }
+
+    #[tokio::test]
+    async fn direct_worker_replacement_waits_for_the_previous_process_owner() {
+        let broker = Broker::new(MachineBrokerArgs {
+            socket: PathBuf::from("/tmp/unused.sock"),
+            worker_command: PathBuf::from("false"),
+            desired_generation: "gen-1".to_owned(),
+            spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worker_ready_timeout: Duration::from_secs(1),
+        });
+        let mut old_command = Command::new("sh");
+        old_command.arg("-c").arg("sleep 0.2");
+        old_command.kill_on_drop(true);
+        old_command.as_std_mut().process_group(0);
+        let mut old_child = old_command.spawn().expect("spawn previous worker fixture");
+        let old_pid = old_child.id().expect("previous worker fixture pid");
+        broker
+            .direct_worker_pids
+            .lock()
+            .insert("sess-replacement".to_owned(), old_pid);
+        let old_workers = Arc::clone(&broker.direct_worker_pids);
+        let old_reaper = tokio::spawn(async move {
+            old_child.wait().await.expect("wait for previous worker");
+            if reap_direct_worker_group(&old_workers, "sess-replacement", old_pid).await {
+                let mut workers = old_workers.lock();
+                if workers.get("sess-replacement").copied() == Some(old_pid) {
+                    workers.remove("sess-replacement");
+                }
+            }
+        });
+        let session = StartSession {
+            session_id: "sess-replacement".to_owned(),
+            provider: "codex".to_owned(),
+            provider_version: String::new(),
+            provider_generation_digest: String::new(),
+            provider_auth_generation: None,
+            provider_behavior: None,
+            cwd: "/tmp".to_owned(),
+            agent_session_id: None,
+            system: true,
+            context_window: None,
+            auto_compact_token_limit: None,
+            cache_protection: None,
+            generation: "gen-1".to_owned(),
+            fallback_for: None,
+            adopt_only: false,
+        };
+
+        let replacement_exit = broker
+            .spawn_worker(&session)
+            .await
+            .expect("spawn replacement after previous owner exits");
+        old_reaper.await.expect("previous worker reaper");
+        let replacement_status = tokio::time::timeout(Duration::from_secs(1), replacement_exit)
+            .await
+            .expect("replacement worker exit timeout")
+            .expect("replacement worker exit channel")
+            .expect("replacement worker wait");
+        assert!(!replacement_status.success());
+        assert!(broker.direct_worker_pids.lock().is_empty());
     }
 
     #[tokio::test]

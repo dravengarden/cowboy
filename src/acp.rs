@@ -1926,6 +1926,10 @@ async fn agent_main(
     ) {
         command.env(key, value);
     }
+    // Every return from `agent_main` ends this session owner. Do not rely on a
+    // Provider noticing stdin EOF promptly: a wedged adapter could otherwise
+    // outlive its worker on macOS, where Linux cgroup cleanup is unavailable.
+    command.kill_on_drop(true);
     let mut child = command
         .current_dir(&cwd)
         .stdin(Stdio::piped())
