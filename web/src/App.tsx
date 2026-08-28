@@ -918,12 +918,17 @@ function SessionList({
                                 // Bind current-session material to the row itself.
                                 // This survives both the in-flow rail and the
                                 // compact Desktop DetentSheet, whose DOM has no
-                                // sessions.list region ancestor.
-                                borderColor: (t) => alpha(t.palette.primary.main, 0.38),
-                                bgcolor: (t) => alpha(t.palette.primary.main, 0.13),
-                                boxShadow: (t) =>
-                                    `inset 0 0 0 1px ${alpha(t.palette.primary.main, 0.08)}`,
-                                "&.Mui-selected:hover": {
+                                // sessions.list region ancestor. Repeat the
+                                // selected/current selectors with higher
+                                // specificity so desktopListItemSx's quieter
+                                // shared selection material cannot override it.
+                                "&&.Mui-selected, &&[data-desktop-current='true']": {
+                                    borderColor: (t) => alpha(t.palette.primary.main, 0.38),
+                                    bgcolor: (t) => alpha(t.palette.primary.main, 0.13),
+                                    boxShadow: (t) =>
+                                        `inset 0 0 0 1px ${alpha(t.palette.primary.main, 0.08)}`,
+                                },
+                                "&&.Mui-selected:hover, &&[data-desktop-current='true']:hover": {
                                     borderColor: (t) => alpha(t.palette.primary.main, 0.48),
                                     bgcolor: (t) => alpha(t.palette.primary.main, 0.16),
                                 },

@@ -24,6 +24,18 @@ Deno.test("the open session owns selected material in rail and collapsed layouts
   );
   assertEquals(
     appSource.includes(
+      `"&&.Mui-selected, &&[data-desktop-current='true']": {`,
+    ),
+    true,
+  );
+  assertEquals(
+    appSource.includes(
+      `"&&.Mui-selected:hover, &&[data-desktop-current='true']:hover": {`,
+    ),
+    true,
+  );
+  assertEquals(
+    appSource.includes(
       `"& [data-desktop-region='sessions.list'] [data-desktop-item][data-desktop-current='true']"`,
     ),
     false,
