@@ -391,15 +391,22 @@ impl Supervisor {
             return Ok(false);
         }
         let runtime = self.runtime_for_session(session_id)?;
-        if runtime.has_worker(session_id) {
-            if meta.status != Status::Busy && !runtime.worker_matches_cwd(session_id, &meta.cwd) {
-                self.recycle_session_inner(session_id)?;
-                return Ok(true);
-            }
-            return Ok(false);
+        let has_worker = runtime.has_worker(session_id);
+        if has_worker
+            && meta.status != Status::Busy
+            && !runtime.worker_matches_cwd(session_id, &meta.cwd)
+        {
+            self.recycle_session_inner(session_id)?;
+            return Ok(true);
         }
+        // An explicit open is also a state-reconciliation request. The
+        // Controller and Machine can briefly disagree after reconnect (for
+        // example, a wedged worker may look live here after its durable
+        // lifecycle already reached Exited). Always let the Machine broker
+        // make the final idempotent decision: a healthy worker is a no-op,
+        // while a terminal owner is fenced and replaced.
         runtime.ensure(self.start_session(session_id)?);
-        Ok(true)
+        Ok(!has_worker)
     }
 
     /// Build the idempotent worker launch declaration for a persisted session.
@@ -1019,7 +1026,45 @@ mod tests {
         let supervisor = remote_supervisor(hub, runtime.clone(), root.0.clone());
 
         assert!(!supervisor.ensure_alive("s").expect("open busy worker"));
-        assert!(runtime.pending_for_test().is_empty());
+        let pending = runtime.pending_for_test();
+        assert!(pending.iter().any(|command| {
+            matches!(command, CoreCommand::EnsureSession { session } if session.session_id == "s")
+        }));
+        assert!(
+            !pending
+                .iter()
+                .any(|command| matches!(command, CoreCommand::StopSession { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn opening_exited_session_reasserts_ensure_for_divergent_runtime_snapshot() {
+        let root = TestDir::new();
+        let prepared = root.path().join("worktrees/s");
+        std::fs::create_dir_all(&prepared).expect("prepared");
+        let hub = Hub::new();
+        preparing_web_session(&hub, prepared.to_string_lossy().as_ref());
+        hub.set_status("s", Status::Exited, None);
+        let mut worker = worker_snapshot(prepared.to_string_lossy().as_ref());
+        worker.state = WorkerState::Running;
+        let runtime = RemoteRuntime::for_test(hub.clone(), vec![worker]);
+        let supervisor = remote_supervisor(hub, runtime.clone(), root.0.clone());
+
+        assert!(
+            !supervisor
+                .ensure_alive("s")
+                .expect("open divergent exited session")
+        );
+
+        let pending = runtime.pending_for_test();
+        assert!(pending.iter().any(|command| {
+            matches!(command, CoreCommand::EnsureSession { session } if session.session_id == "s")
+        }));
+        assert!(
+            !pending
+                .iter()
+                .any(|command| matches!(command, CoreCommand::StopSession { .. }))
+        );
     }
 
     #[tokio::test]
