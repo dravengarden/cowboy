@@ -9906,25 +9906,20 @@ async fn resolve_code_context(state: &AppState, id: &str) -> Option<ResolvedCode
             session_id: None,
         });
     }
-    state
-        .hub
-        .session_list()
-        .into_iter()
-        .find(|meta| meta.id == id)
-        .map(|meta| ResolvedCodeContext {
-            machine_id: meta.machine_id,
-            cwd: meta.cwd,
-            session_id: Some(meta.id),
-        })
+    session_code_context(state, id)
 }
 
-fn session_cwd(state: &AppState, session_id: &str) -> Option<String> {
+fn session_code_context(state: &AppState, session_id: &str) -> Option<ResolvedCodeContext> {
     state
         .hub
         .session_list()
         .into_iter()
         .find(|meta| meta.id == session_id)
-        .map(|meta| meta.cwd)
+        .map(|meta| ResolvedCodeContext {
+            machine_id: meta.machine_id,
+            cwd: meta.cwd,
+            session_id: Some(meta.id),
+        })
 }
 
 async fn api_code_manifest(
@@ -10557,13 +10552,15 @@ async fn api_code_language(
     Path(session_id): Path<String>,
     Query(query): Query<CodeLanguageQuery>,
 ) -> Response {
-    let Some(cwd) = session_cwd(&state, &session_id) else {
+    let Some(context) = session_code_context(&state, &session_id) else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
     if query.path.is_empty() {
         return (StatusCode::BAD_REQUEST, "invalid buffer path").into_response();
     }
-    let Some((worktree, path)) = zed_language_target(&cwd, &query.path) else {
+    let Some((worktree, path)) =
+        zed_language_target(&context.machine_id, &context.cwd, &query.path)
+    else {
         return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable").into_response();
     };
     match zed_adapter_request_for_session(
@@ -10614,13 +10611,15 @@ async fn api_code_hover(
     Path(session_id): Path<String>,
     Query(query): Query<CodeHoverQuery>,
 ) -> Response {
-    let Some(cwd) = session_cwd(&state, &session_id) else {
+    let Some(context) = session_code_context(&state, &session_id) else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
     if query.path.is_empty() {
         return (StatusCode::BAD_REQUEST, "invalid buffer path").into_response();
     }
-    let Some((worktree, path)) = zed_language_target(&cwd, &query.path) else {
+    let Some((worktree, path)) =
+        zed_language_target(&context.machine_id, &context.cwd, &query.path)
+    else {
         return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable").into_response();
     };
     match zed_adapter_request_for_session(
@@ -10663,13 +10662,15 @@ async fn api_code_navigation(
     Path(session_id): Path<String>,
     Query(query): Query<CodeNavigationQuery>,
 ) -> Response {
-    let Some(cwd) = session_cwd(&state, &session_id) else {
+    let Some(context) = session_code_context(&state, &session_id) else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
     if query.path.is_empty() {
         return (StatusCode::BAD_REQUEST, "invalid buffer path").into_response();
     }
-    let Some((worktree, path)) = zed_language_target(&cwd, &query.path) else {
+    let Some((worktree, path)) =
+        zed_language_target(&context.machine_id, &context.cwd, &query.path)
+    else {
         return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable").into_response();
     };
     match zed_adapter_request_for_session(
@@ -10715,13 +10716,15 @@ async fn api_code_outline(
     Path(session_id): Path<String>,
     Query(query): Query<CodeLanguageQuery>,
 ) -> Response {
-    let Some(cwd) = session_cwd(&state, &session_id) else {
+    let Some(context) = session_code_context(&state, &session_id) else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
     if query.path.is_empty() {
         return (StatusCode::BAD_REQUEST, "invalid buffer path").into_response();
     }
-    let Some((worktree, path)) = zed_language_target(&cwd, &query.path) else {
+    let Some((worktree, path)) =
+        zed_language_target(&context.machine_id, &context.cwd, &query.path)
+    else {
         return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable").into_response();
     };
     match zed_adapter_request_for_session(
@@ -10771,7 +10774,7 @@ async fn api_code_buffer_lease(
     request: CodeBufferLeaseRequest,
     open: bool,
 ) -> Response {
-    let Some(cwd) = session_cwd(&state, &session_id) else {
+    let Some(context) = session_code_context(&state, &session_id) else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
     if request.path.is_empty()
@@ -10781,7 +10784,9 @@ async fn api_code_buffer_lease(
     {
         return (StatusCode::BAD_REQUEST, "invalid buffer lease").into_response();
     }
-    let Some((worktree, path)) = zed_language_target(&cwd, &request.path) else {
+    let Some((worktree, path)) =
+        zed_language_target(&context.machine_id, &context.cwd, &request.path)
+    else {
         // Missing files, path escapes, and unregistered aggregate projections
         // are deterministic lease misses, not adapter outages. Registered
         // `projects/<name>/...` files lease against that checkout so hover can
@@ -10842,7 +10847,25 @@ async fn api_code_buffer_lease(
     }
 }
 
-fn zed_language_target(cwd: &str, relative: &str) -> Option<(String, String)> {
+/// Resolve a browser buffer path on the host that owns the session.
+///
+/// Local sessions can be canonicalized here, including Columbus aggregate
+/// projections. A remote Machine path does not exist on the Controller, so the
+/// Controller only applies the portable relative-path boundary and leaves the
+/// authoritative canonical/trusted-root check to that Machine's Zed adapter.
+fn zed_language_target(machine_id: &str, cwd: &str, relative: &str) -> Option<(String, String)> {
+    if machine_id != "local" {
+        if relative.is_empty()
+            || relative.starts_with('/')
+            || relative.contains(['\\', '\0'])
+            || relative
+                .split('/')
+                .any(|component| matches!(component, "" | "." | ".."))
+        {
+            return None;
+        }
+        return Some((cwd.to_owned(), relative.to_owned()));
+    }
     crate::code_review::LocalCodeProvider::new(std::path::Path::new(cwd))
         .language_buffer_key(relative)
         .map(|(worktree, path)| {
@@ -10851,25 +10874,6 @@ fn zed_language_target(cwd: &str, relative: &str) -> Option<(String, String)> {
                 path.to_string_lossy().replace('\\', "/"),
             )
         })
-}
-
-#[cfg(test)]
-fn local_buffer_file_exists(cwd: &str, relative: &str) -> bool {
-    let relative = FsPath::new(relative);
-    if relative.is_absolute()
-        || relative
-            .components()
-            .any(|component| !matches!(component, std::path::Component::Normal(_)))
-    {
-        return false;
-    }
-    let Ok(root) = FsPath::new(cwd).canonicalize() else {
-        return false;
-    };
-    let Ok(file) = root.join(relative).canonicalize() else {
-        return false;
-    };
-    file.starts_with(&root) && file.is_file()
 }
 
 #[derive(Debug, Serialize)]
@@ -12373,7 +12377,7 @@ where
 
 #[cfg(test)]
 mod code_file_policy_tests {
-    use super::{code_file_error_response, local_buffer_file_exists};
+    use super::{code_file_error_response, zed_language_target};
     use axum::http::StatusCode;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -12399,7 +12403,7 @@ mod code_file_policy_tests {
     }
 
     #[test]
-    fn buffer_leases_require_a_real_file_inside_the_session_worktree() {
+    fn local_buffer_leases_require_a_real_file_inside_the_session_worktree() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -12409,11 +12413,30 @@ mod code_file_policy_tests {
         fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
 
         let root_text = root.to_string_lossy();
-        assert!(local_buffer_file_exists(&root_text, "src/main.rs"));
-        assert!(!local_buffer_file_exists(&root_text, "src/missing.rs"));
-        assert!(!local_buffer_file_exists(&root_text, "../outside.rs"));
+        assert!(zed_language_target("local", &root_text, "src/main.rs").is_some());
+        assert!(zed_language_target("local", &root_text, "src/missing.rs").is_none());
+        assert!(zed_language_target("local", &root_text, "../outside.rs").is_none());
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn remote_buffer_leases_are_resolved_on_the_session_machine() {
+        let remote_root = "/Users/example/.local/state/cowboy-machine/worktrees/session";
+        assert_eq!(
+            zed_language_target(
+                "macbook-air",
+                remote_root,
+                "service/workflow/core/webhook_helpers.go",
+            ),
+            Some((
+                remote_root.to_owned(),
+                "service/workflow/core/webhook_helpers.go".to_owned(),
+            ))
+        );
+        assert!(zed_language_target("macbook-air", remote_root, "../outside.go").is_none());
+        assert!(zed_language_target("macbook-air", remote_root, "/etc/passwd").is_none());
+        assert!(zed_language_target("macbook-air", remote_root, "src\\outside.go").is_none());
     }
 }
 
