@@ -1033,17 +1033,68 @@ impl Broker {
         self.sessions
             .lock()
             .insert(session.session_id.clone(), session.clone());
-        if self.workers.lock().contains_key(&session.session_id) {
-            if let Some(worker) = self
-                .snapshots()
-                .into_iter()
-                .find(|worker| worker.session_id == session.session_id)
-            {
+        let replacement_in_progress = self.replacing.lock().contains_key(&session.session_id);
+        let existing = {
+            let mut workers = self.workers.lock();
+            match workers.get(&session.session_id) {
+                Some(worker)
+                    if !adopt_only
+                        && !replacement_in_progress
+                        && matches!(
+                            worker.snapshot.state,
+                            WorkerState::Exited | WorkerState::Crashed
+                        ) =>
+                {
+                    workers.remove(&session.session_id).map(Ok)
+                }
+                Some(worker) => Some(Err(worker.snapshot.clone())),
+                None => None,
+            }
+        };
+        match existing {
+            Some(Err(worker)) => {
                 self.send_controller(Frame::Snapshot {
                     worker: Box::new(worker),
                 });
+                return;
             }
-            return;
+            Some(Ok(worker)) => {
+                self.startup_failures.lock().remove(&session.session_id);
+                tracing::warn!(
+                    session = %session.session_id,
+                    state = ?worker.snapshot.state,
+                    generation = %worker.snapshot.generation,
+                    "recycling terminal worker before session revive"
+                );
+                let _ = worker.tx.send(Frame::WorkerCommand {
+                    session_id: session.session_id.clone(),
+                    command: WorkerCommand::Stop {
+                        command_id: format!("revive-stop-{}", session.session_id),
+                    },
+                });
+                if self.args.spawn_mode == SpawnMode::Direct {
+                    let workers = Arc::clone(&self.direct_worker_pids);
+                    let pid = workers.lock().get(&session.session_id).copied();
+                    if let Some(pid) = pid
+                        && !enforce_direct_worker_exit(
+                            workers,
+                            session.session_id.clone(),
+                            pid,
+                            DIRECT_WORKER_GRACEFUL_STOP_TIMEOUT,
+                            DIRECT_WORKER_TERM_TIMEOUT,
+                            DIRECT_WORKER_KILL_TIMEOUT,
+                        )
+                        .await
+                    {
+                        tracing::error!(
+                            session = %session.session_id,
+                            pid,
+                            "terminal direct worker remained owned after KILL timeout"
+                        );
+                    }
+                }
+            }
+            None => {}
         }
         if adopt_only {
             tracing::debug!(session = %session.session_id, "adopted launch registry; waiting for worker reconnect");
@@ -3542,6 +3593,145 @@ mod tests {
         let adopted = sessions.get("sess-adopt").expect("registry entry");
         assert!(!adopted.adopt_only, "launch specs must be normalized");
         assert!(broker.workers.lock().is_empty());
+        assert!(broker.launching.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn explicit_revive_recycles_an_attached_terminal_worker() {
+        let broker = Arc::new(Broker::new(MachineBrokerArgs {
+            socket: PathBuf::from("/tmp/unused.sock"),
+            worker_command: PathBuf::from("/bin/false"),
+            desired_generation: "gen-current".to_owned(),
+            spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worker_ready_timeout: Duration::from_millis(10),
+        }));
+        let (worker_tx, mut worker_rx) = mpsc::unbounded_channel();
+        broker
+            .register_worker(WorkerRegistration {
+                session_id: "sess-terminal".to_owned(),
+                epoch: "epoch-terminal".to_owned(),
+                generation: "gen-retired".to_owned(),
+                executable: Some("/bin/false".to_owned()),
+                fallback_for: None,
+                connection_id: 41,
+                tx: worker_tx,
+            })
+            .expect("register terminal worker");
+        broker
+            .workers
+            .lock()
+            .get_mut("sess-terminal")
+            .expect("terminal worker")
+            .snapshot
+            .state = WorkerState::Exited;
+        broker.startup_failures.lock().insert(
+            "sess-terminal".to_owned(),
+            "stale terminal failure".to_owned(),
+        );
+
+        broker
+            .ensure_session(StartSession {
+                session_id: "sess-terminal".to_owned(),
+                provider: "codex".to_owned(),
+                provider_version: String::new(),
+                provider_generation_digest: String::new(),
+                provider_auth_generation: None,
+                provider_behavior: None,
+                cwd: "/work".to_owned(),
+                agent_session_id: Some("agent-terminal".to_owned()),
+                system: false,
+                context_window: None,
+                auto_compact_token_limit: None,
+                cache_protection: None,
+                generation: "gen-current".to_owned(),
+                fallback_for: None,
+                adopt_only: false,
+            })
+            .await;
+
+        assert!(matches!(
+            worker_rx.try_recv(),
+            Ok(Frame::WorkerCommand {
+                session_id,
+                command: WorkerCommand::Stop { command_id },
+            }) if session_id == "sess-terminal"
+                && command_id == "revive-stop-sess-terminal"
+        ));
+        assert!(
+            !broker.workers.lock().contains_key("sess-terminal"),
+            "the terminal peer must be fenced before replacement startup"
+        );
+        assert!(
+            broker
+                .pending_commands
+                .lock()
+                .get("sess-terminal")
+                .is_none(),
+            "the old Stop command must not leak to the replacement worker"
+        );
+        assert!(
+            !broker.startup_failures.lock().contains_key("sess-terminal"),
+            "the replacement must not inherit stale startup failure detail"
+        );
+    }
+
+    #[tokio::test]
+    async fn adopt_only_keeps_an_attached_terminal_worker_dormant() {
+        let broker = Arc::new(Broker::new(MachineBrokerArgs {
+            socket: PathBuf::from("/tmp/unused.sock"),
+            worker_command: PathBuf::from("/bin/false"),
+            desired_generation: "gen-current".to_owned(),
+            spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worker_ready_timeout: Duration::from_millis(10),
+        }));
+        let (worker_tx, mut worker_rx) = mpsc::unbounded_channel();
+        broker
+            .register_worker(WorkerRegistration {
+                session_id: "sess-dormant".to_owned(),
+                epoch: "epoch-dormant".to_owned(),
+                generation: "gen-retired".to_owned(),
+                executable: Some("/bin/false".to_owned()),
+                fallback_for: None,
+                connection_id: 42,
+                tx: worker_tx,
+            })
+            .expect("register dormant worker");
+        broker
+            .workers
+            .lock()
+            .get_mut("sess-dormant")
+            .expect("dormant worker")
+            .snapshot
+            .state = WorkerState::Exited;
+
+        broker
+            .ensure_session(StartSession {
+                session_id: "sess-dormant".to_owned(),
+                provider: "codex".to_owned(),
+                provider_version: String::new(),
+                provider_generation_digest: String::new(),
+                provider_auth_generation: None,
+                provider_behavior: None,
+                cwd: "/work".to_owned(),
+                agent_session_id: Some("agent-dormant".to_owned()),
+                system: false,
+                context_window: None,
+                auto_compact_token_limit: None,
+                cache_protection: None,
+                generation: "gen-current".to_owned(),
+                fallback_for: None,
+                adopt_only: true,
+            })
+            .await;
+
+        assert!(worker_rx.try_recv().is_err());
+        assert!(broker.workers.lock().contains_key("sess-dormant"));
         assert!(broker.launching.lock().is_empty());
     }
 
