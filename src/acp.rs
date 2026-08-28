@@ -42,7 +42,7 @@ use agent_client_protocol::schema::v1::{
     SetSessionConfigOptionRequest, SetSessionModeRequest,
 };
 use agent_client_protocol::{
-    Agent, ByteStreams, Client, ConnectionTo, Error, JsonRpcRequest, JsonRpcResponse,
+    Agent, ByteStreams, Client, ConnectionTo, Error, ErrorCode, JsonRpcRequest, JsonRpcResponse,
 };
 use anyhow::{Context, Result};
 use tokio::io::{AsyncBufReadExt as _, BufReader};
@@ -862,6 +862,26 @@ fn provider_session_meta(provider_id: &str) -> Option<Meta> {
     stable_claude_session_meta(provider_id)
 }
 
+fn projected_auth_error(
+    provider_id: &str,
+    service_auth_projected: bool,
+    session_can_rebind: bool,
+    error: Error,
+) -> Error {
+    // `InitializeResponse.auth_methods` advertises supported login mechanisms
+    // even for an authenticated Agent. Only ACP's AuthRequired error is an
+    // authoritative rejection of the projected Service credentials.
+    if !service_auth_projected || error.code != ErrorCode::AuthRequired {
+        return error;
+    }
+    let diagnostic = error.data.unwrap_or_else(|| error.message.into());
+    Error::new(
+        i32::from(ErrorCode::AuthRequired),
+        crate::provider::provider_auth_required_detail(provider_id, session_can_rebind),
+    )
+    .data(diagnostic)
+}
+
 fn new_session_request(provider_id: &str, cwd: PathBuf) -> NewSessionRequest {
     NewSessionRequest::new(cwd).meta(provider_session_meta(provider_id))
 }
@@ -890,16 +910,16 @@ mod startup_mode_tests {
         codex_full_access_available, codex_full_access_selected, deepseek_session_environment,
         grok_cowboy_options, grok_model_request, grok_permission_notification, grok_session_usage,
         is_empty_stream_message_update, load_session_request, new_session_request,
-        permission_auto_approve_enabled, preferred_allow_option, resume_session_request,
-        run_serial_config_queue, select_resume_method, session_config_value,
-        startup_full_access_mode,
+        permission_auto_approve_enabled, preferred_allow_option, projected_auth_error,
+        resume_session_request, run_serial_config_queue, select_resume_method,
+        session_config_value, startup_full_access_mode,
     };
-    use agent_client_protocol::Error;
     use agent_client_protocol::JsonRpcMessage as _;
     use agent_client_protocol::schema::v1::{
         PermissionOption, PermissionOptionKind, SessionConfigOption, SessionConfigOptionValue,
         SessionConfigSelectOption, SessionId,
     };
+    use agent_client_protocol::{Error, ErrorCode};
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -918,6 +938,31 @@ mod startup_mode_tests {
         );
         assert_eq!(startup_full_access_mode("gemini"), Some("yolo"));
         assert_eq!(startup_full_access_mode("codex"), None);
+    }
+
+    #[test]
+    fn projected_service_auth_rewrites_only_acp_authentication_required() {
+        let rejected = Error::auth_required().data("no auth method id provided");
+        let detail = projected_auth_error("grok", true, true, rejected);
+
+        assert_eq!(detail.code, ErrorCode::AuthRequired);
+        assert!(crate::provider_behavior::is_provider_auth_required_error(
+            &detail.to_string()
+        ));
+        assert!(detail.to_string().contains("Settings > Providers"));
+        assert_eq!(
+            projected_auth_error("grok", false, true, Error::auth_required()).message,
+            "Authentication required"
+        );
+        assert_eq!(
+            projected_auth_error("grok", true, true, Error::internal_error()).code,
+            ErrorCode::InternalError
+        );
+        assert!(
+            projected_auth_error("grok", true, false, Error::auth_required())
+                .message
+                .contains("start a new session")
+        );
     }
 
     #[test]
@@ -1705,6 +1750,9 @@ struct ClientState {
     sink: Arc<dyn AgentSink>,
     session_id: String,
     provider_id: String,
+    /// This worker opened an immutable Service-owned credential projection.
+    /// ACP authentication failures can therefore expire that exact generation.
+    service_auth_projected: bool,
     /// Pending permission requests awaiting a client answer, keyed by request
     /// id. The connection's permission handler inserts a sender; the command
     /// loop resolves exactly one (first-response-wins).
@@ -1796,6 +1844,7 @@ pub fn run_agent_with_sink(
     session_id: &str,
     cwd: PathBuf,
     resume: Option<String>,
+    service_auth_projected: bool,
     mut cmd_rx: mpsc::UnboundedReceiver<AgentCommand>,
     sink: &Arc<dyn AgentSink>,
 ) {
@@ -1828,6 +1877,7 @@ pub fn run_agent_with_sink(
             session_id,
             cwd.clone(),
             resume.clone(),
+            service_auth_projected,
             &mut cmd_rx,
             Arc::clone(sink),
         )
@@ -1849,7 +1899,16 @@ pub fn run_agent_with_sink(
                 Status::Starting,
                 Some("agent slow to start — retrying…".to_owned()),
             );
-            result = agent_main(spec, session_id, cwd, resume, &mut cmd_rx, Arc::clone(sink)).await;
+            result = agent_main(
+                spec,
+                session_id,
+                cwd,
+                resume,
+                service_auth_projected,
+                &mut cmd_rx,
+                Arc::clone(sink),
+            )
+            .await;
         }
         result
     });
@@ -1898,6 +1957,7 @@ async fn agent_main(
     session_id: &str,
     cwd: PathBuf,
     resume: Option<String>,
+    service_auth_projected: bool,
     cmd_rx: &mut mpsc::UnboundedReceiver<AgentCommand>,
     sink: Arc<dyn AgentSink>,
 ) -> Result<()> {
@@ -1978,6 +2038,7 @@ async fn agent_main(
         sink,
         session_id: session_id.to_owned(),
         provider_id: spec.id.clone(),
+        service_auth_projected,
         pending: Mutex::new(HashMap::new()),
         prompt_lock: tokio::sync::Mutex::new(()),
         active_prompt: Mutex::new(None),
@@ -2114,7 +2175,16 @@ async fn agent_main(
             agent_client_protocol::on_receive_request!(),
         )
         .connect_with(transport, async move |cx: ConnectionTo<Agent>| {
-            run_session(&main_state, cx, resume, cwd, cmd_rx, &spec.id, &run_progress).await
+            run_session(
+                &main_state,
+                cx,
+                resume,
+                cwd,
+                cmd_rx,
+                &spec.id,
+                &run_progress,
+            )
+            .await
         });
 
     // Race the connection against the subprocess's OWN exit. The connection
@@ -2309,11 +2379,15 @@ async fn run_session(
     startup_phase: &watch::Sender<StartupPhase>,
 ) -> Result<(), Error> {
     let session_id = state.session_id.clone();
+    let service_auth_projected = state.service_auth_projected;
 
     let init = cx
         .send_request(InitializeRequest::new(ProtocolVersion::V1))
         .block_task()
-        .await?;
+        .await
+        .map_err(|error| {
+            projected_auth_error(provider_id, service_auth_projected, resume.is_none(), error)
+        })?;
     let initialize_meta = init.meta.clone();
     let agent_can_load = init.agent_capabilities.load_session;
     let agent_can_resume = init
@@ -2364,6 +2438,7 @@ async fn run_session(
                         session_meta = resp.meta;
                     }
                     Err(e) => {
+                        let e = projected_auth_error(provider_id, service_auth_projected, false, e);
                         tracing::error!(session = %session_id, error = ?e, "session/resume failed; preserving native thread identity");
                         return Err(e);
                     }
@@ -2390,6 +2465,7 @@ async fn run_session(
                         session_meta = resp.meta;
                     }
                     Err(e) => {
+                        let e = projected_auth_error(provider_id, service_auth_projected, false, e);
                         tracing::error!(session = %session_id, error = ?e, "session/load failed; preserving native thread identity");
                         return Err(e);
                     }
@@ -2404,7 +2480,10 @@ async fn run_session(
         let session = cx
             .send_request(new_session_request(provider_id, cwd.clone()))
             .block_task()
-            .await?;
+            .await
+            .map_err(|error| {
+                projected_auth_error(provider_id, service_auth_projected, true, error)
+            })?;
         // Persist the agent's own id so a future revive can resume this exact
         // conversation rather than opening a blank one.
         state
@@ -2808,6 +2887,8 @@ async fn run_session(
                             }
                         }
                         Err(e) => {
+                            let e =
+                                projected_auth_error(&provider, service_auth_projected, false, e);
                             let detail = e.to_string();
                             let pending_update = prompt.pending_empty_stream_update.lock().take();
                             if let Some(update) = pending_update {

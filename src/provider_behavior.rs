@@ -7,6 +7,12 @@
 //! process recipes.
 
 pub(crate) const COMPONENT_COMMANDS_ENV: &str = "COWBOY_PROVIDER_COMPONENT_COMMANDS";
+pub(crate) const PROVIDER_AUTH_REQUIRED_PREFIX: &str = "Provider authentication required - ";
+
+#[must_use]
+pub(crate) fn is_provider_auth_required_error(detail: &str) -> bool {
+    detail.contains(PROVIDER_AUTH_REQUIRED_PREFIX)
+}
 
 #[must_use]
 pub(crate) fn legacy_behavior(id: &str) -> cowboy_provider_sdk::ProviderBehaviorContract {

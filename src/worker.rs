@@ -397,13 +397,22 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
     let session_id = args.session_id.clone();
     let cwd = args.cwd;
     let resume = args.resume;
+    let service_auth_projected = args.provider_auth_generation.is_some();
     std::thread::Builder::new()
         .name(format!("acp-worker-{session_id}"))
         .spawn(move || {
             let sink: Arc<dyn AgentSink> = Arc::new(RemoteSink {
                 shared: Arc::clone(&thread_shared),
             });
-            acp::run_agent_with_sink(&spec, &session_id, cwd, resume, cmd_rx, &sink);
+            acp::run_agent_with_sink(
+                &spec,
+                &session_id,
+                cwd,
+                resume,
+                service_auth_projected,
+                cmd_rx,
+                &sink,
+            );
             let _ = done_tx.blocking_send(());
         })
         .context("spawning ACP worker thread")?;

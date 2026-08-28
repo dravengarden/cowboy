@@ -947,6 +947,21 @@ pub fn user_facing_startup_error(
         .and_then(|rule| rule.user_detail.clone())
 }
 
+#[must_use]
+pub fn provider_auth_required_detail(provider_id: &str, session_can_rebind: bool) -> String {
+    let name = display_name(provider_id);
+    let prefix = crate::provider_behavior::PROVIDER_AUTH_REQUIRED_PREFIX;
+    if session_can_rebind {
+        format!(
+            "{prefix}{name} credentials expired or were rejected. Reconnect {name} in Settings > Providers, then retry this session."
+        )
+    } else {
+        format!(
+            "{prefix}{name} credentials expired or were rejected. Reconnect {name} in Settings > Providers, then start a new session; this established session remains pinned to its original credentials."
+        )
+    }
+}
+
 /// Entries a DeepSeek provider shares with the runtime's ordinary home.
 ///
 /// A DeepSeek provider differs from its ordinary counterpart in exactly two

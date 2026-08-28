@@ -425,6 +425,14 @@ same-generation envelopes with different meaning are rejected. Sessions open
 the exact immutable auth projection generation recorded at creation rather
 than following a mutable `current` link.
 
+An ACP agent that returns `AuthenticationRequired` while establishing a session
+after Cowboy projected a Service credential has rejected that projection.
+Cowboy marks the exact generation `expired` and preserves that cause instead of
+falling back to an older worker binary. A later explicit Service login may
+rebind only a failed session that never received a native ACP session ID, and
+only after the same signed auth contract is synchronized to its selected
+Machine. Established native sessions never change auth identity.
+
 Online Machines reconcile as part of login. Offline Machines retain `pending`
 convergence and reconcile immediately after reconnect. New Machines receive the
 current generation after enrollment. Installing a Provider on a Machine that

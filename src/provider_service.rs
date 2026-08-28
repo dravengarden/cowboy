@@ -569,6 +569,34 @@ impl ProviderAuthService {
         self.replace_locked(&mut providers, stored)
     }
 
+    /// Mark the exact Service credential generation rejected by a live Agent.
+    /// A stale worker cannot expire a newer login, and repeated reports for the
+    /// same generation are idempotent.
+    pub(crate) fn mark_expired(
+        &self,
+        provider_id: &str,
+        generation: u64,
+    ) -> Result<Option<ProviderAuthenticationStatus>> {
+        let mut providers = self.providers.write();
+        let Some(mut stored) = providers.get(provider_id).cloned() else {
+            return Ok(None);
+        };
+        if stored.auth_generation != generation {
+            return Ok(None);
+        }
+        if stored.authentication_state == ServiceAuthenticationState::Expired {
+            return Ok(Some(stored.status()));
+        }
+        if stored.authentication_state != ServiceAuthenticationState::Ready
+            || stored.action != ProviderAuthAction::Apply
+        {
+            return Ok(None);
+        }
+        stored.authentication_state = ServiceAuthenticationState::Expired;
+        stored.updated_at_ms = now_ms();
+        self.replace_locked(&mut providers, stored).map(Some)
+    }
+
     fn replace_locked(
         &self,
         providers: &mut BTreeMap<String, StoredProviderAuthentication>,
@@ -652,8 +680,10 @@ fn validate_stored(stored: &StoredProviderAuthentication) -> Result<()> {
         "invalid Provider auth generation"
     );
     ensure!(
-        (stored.authentication_state == ServiceAuthenticationState::Ready
-            && stored.action == ProviderAuthAction::Apply)
+        (matches!(
+            stored.authentication_state,
+            ServiceAuthenticationState::Ready | ServiceAuthenticationState::Expired
+        ) && stored.action == ProviderAuthAction::Apply)
             || (stored.authentication_state == ServiceAuthenticationState::SignedOut
                 && stored.action == ProviderAuthAction::Wipe),
         "inconsistent Provider authentication state and action"
@@ -1074,6 +1104,48 @@ mod tests {
         assert_eq!(
             reopened.authentication_state,
             ServiceAuthenticationState::SignedOut
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejected_generation_expires_durably_without_overwriting_a_new_login() {
+        let (root, service) = service();
+        let package = package("gemini");
+        let bundle = bundle(&package);
+        service
+            .commit(&package, &bundle, Some("account".to_owned()), None)
+            .unwrap();
+
+        let expired = service
+            .mark_expired("gemini", 1)
+            .unwrap()
+            .expect("matching ready generation");
+        assert_eq!(
+            expired.authentication_state,
+            ServiceAuthenticationState::Expired
+        );
+        assert!(
+            service
+                .with_scheduling_generation("gemini", true, Some(1), || ())
+                .unwrap_err()
+                .to_string()
+                .contains("not ready")
+        );
+        let reopened = ProviderAuthService::open(&root).unwrap();
+        assert_eq!(
+            reopened.status("gemini").unwrap().authentication_state,
+            ServiceAuthenticationState::Expired
+        );
+
+        let refreshed = service
+            .commit(&package, &bundle, Some("account".to_owned()), Some(1))
+            .unwrap();
+        assert_eq!(refreshed.auth_generation, 2);
+        assert!(service.mark_expired("gemini", 1).unwrap().is_none());
+        assert_eq!(
+            service.status("gemini").unwrap().authentication_state,
+            ServiceAuthenticationState::Ready
         );
         fs::remove_dir_all(root).unwrap();
     }

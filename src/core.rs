@@ -672,6 +672,24 @@ struct Session {
     mobile_review: MobileReviewState,
 }
 
+fn latest_crash_detail_for_session(session: &Session) -> Option<&str> {
+    if session.meta.status != Status::Crashed {
+        return None;
+    }
+    for envelope in session.log.iter().rev() {
+        let Event::Lifecycle { status, detail } = &envelope.event else {
+            continue;
+        };
+        if *status != Status::Crashed {
+            return None;
+        }
+        if let Some(detail) = detail.as_deref() {
+            return Some(detail);
+        }
+    }
+    None
+}
+
 const MOBILE_REVIEW_TAB_CAP: usize = 12;
 const MOBILE_REVIEW_PROGRESS_CAP: usize = 512;
 const MOBILE_REVIEW_POSITION_CAP: usize = 512;
@@ -1191,6 +1209,10 @@ pub enum StoreWrite {
     SetAgentSessionId {
         session_id: String,
         agent_session_id: Option<String>,
+    },
+    UpdateProviderAuthGeneration {
+        session_id: String,
+        provider_auth_generation: u64,
     },
     /// Persist the latest agent-advertised config option snapshot so a fresh
     /// device can render session controls before the worker is warm.
@@ -3037,6 +3059,50 @@ impl Hub {
             .flatten()
     }
 
+    /// Move an unstarted failed session onto a newer compatible Service-auth
+    /// generation. Once an Agent has allocated a native session id, the auth
+    /// identity remains immutable so a different account cannot inherit it.
+    pub fn rebind_provider_auth_generation(
+        &self,
+        session_id: &str,
+        expected_status_revision: (Status, u64),
+        expected_crash_detail: &str,
+        expected_generation: u64,
+        next_generation: u64,
+    ) -> Result<bool, String> {
+        if next_generation <= expected_generation {
+            return Err("Provider auth generation must advance".to_owned());
+        }
+        let rebound = {
+            let mut sessions = self.inner.sessions.lock();
+            let session = sessions
+                .get_mut(session_id)
+                .ok_or_else(|| format!("unknown session {session_id:?}"))?;
+            if (session.meta.status, session.lifecycle_epoch) != expected_status_revision
+                || latest_crash_detail_for_session(session) != Some(expected_crash_detail)
+                || session.meta.provider_auth_generation != Some(expected_generation)
+                || session.meta.agent_session_id.is_some()
+                || session.meta.status != Status::Crashed
+            {
+                false
+            } else {
+                session.meta.provider_auth_generation = Some(next_generation);
+                true
+            }
+        };
+        if !rebound {
+            return Ok(false);
+        }
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::UpdateProviderAuthGeneration {
+                session_id: session_id.to_owned(),
+                provider_auth_generation: next_generation,
+            });
+        }
+        self.broadcast_sessions();
+        Ok(true)
+    }
+
     /// Retarget a Cowboy session to a replacement checkout while preserving its
     /// transcript, queue, Cowboy id, and native agent session id. A creation-time
     /// default title follows the cwd; user-authored and auto-derived titles do not.
@@ -3474,21 +3540,7 @@ impl Hub {
     pub fn latest_crash_detail(&self, session_id: &str) -> Option<String> {
         let sessions = self.inner.sessions.lock();
         let session = sessions.get(session_id)?;
-        if session.meta.status != Status::Crashed {
-            return None;
-        }
-        for envelope in session.log.iter().rev() {
-            let Event::Lifecycle { status, detail } = &envelope.event else {
-                continue;
-            };
-            if *status != Status::Crashed {
-                return None;
-            }
-            if detail.is_some() {
-                return detail.clone();
-            }
-        }
-        None
+        latest_crash_detail_for_session(session).map(str::to_owned)
     }
 
     fn next_qid(&self) -> String {
@@ -6371,6 +6423,88 @@ mod core_tests {
             hub.agent_session_id_for_resume("truncated-native-history")
                 .as_deref(),
             Some("thread-existing")
+        );
+    }
+
+    #[test]
+    fn only_unstarted_failed_sessions_rebind_to_refreshed_provider_auth() {
+        let hub = Hub::new();
+        hub.create_session(SessionRegistration {
+            id: "auth-refresh".to_owned(),
+            provider: "grok".to_owned(),
+            provider_version: "1.1.8".to_owned(),
+            provider_generation_digest: "sha256:provider".to_owned(),
+            provider_auth_generation: Some(2),
+            provider_behavior: None,
+            machine_id: "hawk".to_owned(),
+            workspace_id: None,
+            workspace_name: None,
+            workspace_source_path: None,
+            cwd: "/tmp".to_owned(),
+            title: "test".to_owned(),
+            origin: SessionOrigin::Web,
+            system: false,
+            owner_user_id: None,
+            owner_username: None,
+        });
+        hub.set_status(
+            "auth-refresh",
+            Status::Crashed,
+            Some("login required".to_owned()),
+        );
+        let crashed_revision = hub.status_revision("auth-refresh").unwrap();
+        hub.set_status(
+            "auth-refresh",
+            Status::Crashed,
+            Some("new crash edge".to_owned()),
+        );
+        assert!(
+            !hub.rebind_provider_auth_generation(
+                "auth-refresh",
+                crashed_revision,
+                "login required",
+                2,
+                3,
+            )
+            .expect("stale lifecycle edge")
+        );
+        let crashed_revision = hub.status_revision("auth-refresh").unwrap();
+
+        assert!(
+            hub.rebind_provider_auth_generation(
+                "auth-refresh",
+                crashed_revision,
+                "new crash edge",
+                2,
+                3,
+            )
+            .expect("safe rebind")
+        );
+        assert_eq!(
+            hub.session_info("auth-refresh")
+                .unwrap()
+                .meta
+                .provider_auth_generation,
+            Some(3)
+        );
+
+        hub.set_agent_session_id("auth-refresh", "native-thread".to_owned());
+        assert!(
+            !hub.rebind_provider_auth_generation(
+                "auth-refresh",
+                crashed_revision,
+                "new crash edge",
+                3,
+                4,
+            )
+            .expect("native thread remains immutable")
+        );
+        assert_eq!(
+            hub.session_info("auth-refresh")
+                .unwrap()
+                .meta
+                .provider_auth_generation,
+            Some(3)
         );
     }
 

@@ -35,6 +35,10 @@ const DIRECT_WORKER_TERM_TIMEOUT: Duration = Duration::from_secs(2);
 const DIRECT_WORKER_KILL_TIMEOUT: Duration = Duration::from_secs(1);
 const DIRECT_WORKER_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
+fn worker_generation_failure_allows_fallback(error: &anyhow::Error) -> bool {
+    !crate::provider_behavior::is_provider_auth_required_error(&format!("{error:#}"))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpawnMode {
     /// Child process mode for macOS, development, and hermetic tests. Linux
@@ -239,6 +243,10 @@ struct Broker {
     pending_commands: Mutex<HashMap<String, VecDeque<WorkerCommand>>>,
     sessions: Mutex<HashMap<String, StartSession>>,
     session_states: Mutex<HashMap<String, WorkerState>>,
+    /// Last startup detail emitted by a worker before readiness. Generation
+    /// fallback decisions use this to distinguish session-scoped failures from
+    /// a bad Cowboy worker rollout.
+    startup_failures: Mutex<HashMap<String, String>>,
     launching: Mutex<HashSet<String>>,
     awaiting_reconnect: Mutex<HashSet<String>>,
     cancelled_sessions: Mutex<HashSet<String>>,
@@ -328,6 +336,7 @@ impl Broker {
             pending_commands: Mutex::new(HashMap::new()),
             sessions: Mutex::new(HashMap::new()),
             session_states: Mutex::new(HashMap::new()),
+            startup_failures: Mutex::new(HashMap::new()),
             launching: Mutex::new(HashSet::new()),
             awaiting_reconnect: Mutex::new(HashSet::new()),
             cancelled_sessions: Mutex::new(HashSet::new()),
@@ -1104,6 +1113,7 @@ impl Broker {
         self.awaiting_reconnect.lock().remove(&session_id);
         self.session_states.lock().remove(&session_id);
         self.pending_commands.lock().remove(&session_id);
+        self.startup_failures.lock().remove(&session_id);
         self.unpin_fallback(&session_id);
         self.force_recycle_failed_start(&session_id).await;
 
@@ -1219,6 +1229,11 @@ impl Broker {
                 Ok(())
             }
             Err(error) => {
+                if !worker_generation_failure_allows_fallback(&error) {
+                    self.clear_generation_failures_for_session(&selected.session_id);
+                    self.unpin_fallback(&selected.session_id);
+                    return Err(error);
+                }
                 {
                     let cancelled = self.cancelled_sessions.lock();
                     if cancelled.contains(&selected.session_id) {
@@ -1268,6 +1283,7 @@ impl Broker {
         if self.cancelled_sessions.lock().contains(&session.session_id) {
             anyhow::bail!("session {} was deleted during launch", session.session_id);
         }
+        self.startup_failures.lock().remove(&session.session_id);
         self.session_states
             .lock()
             .insert(session.session_id.clone(), WorkerState::Starting);
@@ -1290,7 +1306,14 @@ impl Broker {
                     return Ok(());
                 }
                 Some(WorkerState::Exited | WorkerState::Crashed) => {
+                    let detail = self.startup_failures.lock().remove(&session.session_id);
                     self.force_recycle_failed_start(&session.session_id).await;
+                    if let Some(detail) = detail {
+                        anyhow::bail!(
+                            "worker {} entered {state:?} before readiness: {detail}",
+                            session.session_id
+                        );
+                    }
                     anyhow::bail!(
                         "worker {} entered {state:?} before readiness",
                         session.session_id
@@ -1308,7 +1331,14 @@ impl Broker {
             }
             tokio::select! {
                 exit = &mut worker_exit => {
+                    let detail = self.startup_failures.lock().remove(&session.session_id);
                     self.force_recycle_failed_start(&session.session_id).await;
+                    if let Some(detail) = detail {
+                        anyhow::bail!(
+                            "worker {} exited before readiness: {detail}",
+                            session.session_id
+                        );
+                    }
                     match exit {
                         Ok(Ok(status)) => anyhow::bail!(
                             "worker {} exited before readiness with {status}",
@@ -1502,6 +1532,7 @@ impl Broker {
         match event {
             RuntimeEvent::Ready { agent_session_id } => {
                 worker.snapshot.state = WorkerState::Running;
+                self.startup_failures.lock().remove(session_id);
                 if agent_session_id.is_some() {
                     worker
                         .snapshot
@@ -1509,7 +1540,18 @@ impl Broker {
                         .clone_from(agent_session_id);
                 }
             }
-            RuntimeEvent::Status { state, .. } => worker.snapshot.state = *state,
+            RuntimeEvent::Status { state, detail } => {
+                worker.snapshot.state = *state;
+                if matches!(state, WorkerState::Exited | WorkerState::Crashed) {
+                    if let Some(detail) = detail {
+                        self.startup_failures
+                            .lock()
+                            .insert(session_id.to_owned(), detail.clone());
+                    }
+                } else {
+                    self.startup_failures.lock().remove(session_id);
+                }
+            }
             RuntimeEvent::TurnStarted { turn_id, .. } => {
                 worker.snapshot.state = WorkerState::Busy;
                 worker.snapshot.current_turn_id = Some(turn_id.clone());
@@ -1608,6 +1650,7 @@ impl Broker {
         if !self.sessions.lock().contains_key(&session_id) {
             self.session_states.lock().remove(&session_id);
             self.pending_commands.lock().remove(&session_id);
+            self.startup_failures.lock().remove(&session_id);
             self.unpin_fallback(&session_id);
             return;
         }
@@ -2518,6 +2561,7 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
             broker.awaiting_reconnect.lock().remove(&session_id);
             broker.session_states.lock().remove(&session_id);
             broker.pending_commands.lock().remove(&session_id);
+            broker.startup_failures.lock().remove(&session_id);
             broker.unpin_fallback(&session_id);
             drop(cancelled);
             if let Some(cwd) = cleanup_cwd {
@@ -2691,6 +2735,18 @@ mod tests {
         assert!(!transient_unit_collected(""));
         assert!(transient_unit_collected("not-found"));
         assert!(!transient_unit_collected("loaded"));
+    }
+
+    #[test]
+    fn projected_auth_rejection_never_triggers_worker_generation_fallback() {
+        let auth = anyhow::anyhow!(format!(
+            "{}Grok credentials expired",
+            crate::provider_behavior::PROVIDER_AUTH_REQUIRED_PREFIX
+        ));
+        let binary = anyhow::anyhow!("worker exited before readiness");
+
+        assert!(!worker_generation_failure_allows_fallback(&auth));
+        assert!(worker_generation_failure_allows_fallback(&binary));
     }
 
     #[test]

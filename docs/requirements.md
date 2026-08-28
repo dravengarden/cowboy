@@ -312,6 +312,14 @@ A new session is schedulable only when its Machine has the Provider installed,
 the required Service authentication is ready, and the Machine has acknowledged
 materializing and probing the current authentication generation.
 
+If an Agent rejects a projected credential generation before allocating a
+native ACP session, Cowboy marks only that exact Service generation expired and
+must not classify the rejection as a worker-generation rollout failure. After
+an explicit successful Service login, the failed registration may compare-and-
+swap to the newer auth generation only when the signed auth contract is
+unchanged and the selected Machine acknowledged that exact projection. Once a
+native ACP session ID exists, its auth generation remains immutable.
+
 ### CR-10: Uninstall is explicit and recoverable for a bounded period
 
 Uninstalling `(machine_id, provider_id)` blocks new matching sessions, identifies

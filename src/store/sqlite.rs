@@ -2981,6 +2981,25 @@ impl SqliteStorage {
         Ok(())
     }
 
+    pub(super) async fn update_provider_auth_generation(
+        &self,
+        session_id: &str,
+        provider_auth_generation: u64,
+    ) -> Result<()> {
+        let provider_auth_generation = i64::try_from(provider_auth_generation)
+            .context("Provider auth generation exceeds SQLite INTEGER")?;
+        sqlx::query(
+            "UPDATE sessions SET provider_auth_generation = ?1, updated_at_ms = ?2 WHERE id = ?3",
+        )
+        .bind(provider_auth_generation)
+        .bind(now_ms())
+        .bind(session_id)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPDATE SQLite session Provider auth generation {session_id}"))?;
+        Ok(())
+    }
+
     pub(super) async fn update_config_options(
         &self,
         session_id: &str,

@@ -1065,6 +1065,17 @@ impl Store {
         dispatch_storage!(self, update_agent_session_id(session_id, agent_session_id))
     }
 
+    pub async fn update_provider_auth_generation(
+        &self,
+        session_id: &str,
+        provider_auth_generation: u64,
+    ) -> Result<()> {
+        dispatch_storage!(
+            self,
+            update_provider_auth_generation(session_id, provider_auth_generation)
+        )
+    }
+
     pub async fn update_config_options(
         &self,
         session_id: &str,
@@ -3133,6 +3144,29 @@ impl PostgresStorage {
             .execute(&self.pool)
             .await
             .with_context(|| format!("UPDATE session agent_session_id {session_id}"))?;
+        Ok(())
+    }
+
+    /// Persist a safe Service-auth refresh for a session that never acquired a
+    /// native Agent thread.
+    ///
+    /// # Errors
+    /// If the generation cannot be represented by `PostgreSQL` or the UPDATE fails.
+    pub async fn update_provider_auth_generation(
+        &self,
+        session_id: &str,
+        provider_auth_generation: u64,
+    ) -> Result<()> {
+        let provider_auth_generation = i64::try_from(provider_auth_generation)
+            .context("Provider auth generation exceeds PostgreSQL BIGINT")?;
+        sqlx::query(
+            "UPDATE sessions SET provider_auth_generation = $1, updated_at = now() WHERE id = $2",
+        )
+        .bind(provider_auth_generation)
+        .bind(session_id)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPDATE session Provider auth generation {session_id}"))?;
         Ok(())
     }
 
@@ -6610,6 +6644,7 @@ mod storage_contract_tests {
         store
             .update_agent_session_id(session_id, Some("agent-thread"))
             .await?;
+        store.update_provider_auth_generation(session_id, 9).await?;
         store
             .update_config_options(session_id, &serde_json::json!({"model": "gpt-test"}))
             .await?;
@@ -6721,6 +6756,7 @@ mod storage_contract_tests {
             restored.meta.agent_session_id.as_deref(),
             Some("agent-thread")
         );
+        assert_eq!(restored.meta.provider_auth_generation, Some(9));
         assert_eq!(restored.meta.title, "Storage contract retargeted");
         assert_eq!(restored.meta.cwd, "/tmp/cowboy-retargeted");
         assert!(restored.meta.owner_user_id.is_none());

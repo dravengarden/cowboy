@@ -1326,6 +1326,14 @@ async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyhow::Result<
                 .update_agent_session_id(session_id, agent_session_id.as_deref())
                 .await
         }
+        StoreWrite::UpdateProviderAuthGeneration {
+            session_id,
+            provider_auth_generation,
+        } => {
+            store
+                .update_provider_auth_generation(session_id, *provider_auth_generation)
+                .await
+        }
         StoreWrite::UpdateConfigOptions {
             session_id,
             options,
@@ -6433,7 +6441,9 @@ async fn api_machine_plugin_install(
     // failure leaves a valid installed generation unschedulable until normal
     // reconciliation catches up; it never launches with stale credentials.
     let auth_sync = if is_agent_plugin && state.provider_auth.status(&provider_id).is_some() {
-        sync_provider_auth_to_machine(&state, &machine_id, &provider_id).await
+        sync_provider_auth_to_machine(&state, &machine_id, &provider_id)
+            .await
+            .map(|_| ())
     } else {
         Ok(())
     };
@@ -6805,6 +6815,7 @@ async fn api_provider_auth_commit(
         Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
     };
     let (statuses, replicas) = distribute_and_mark_provider_auth(&state, statuses).await;
+    rebind_unstarted_provider_sessions(&state, &statuses, &replicas);
     let Some(status) = statuses
         .iter()
         .find(|status| status.provider_id == provider_id)
@@ -7172,6 +7183,8 @@ struct ProviderDistributionOutcome {
     succeeded: usize,
     failed: usize,
     pending: usize,
+    #[serde(skip)]
+    synchronized_generations: BTreeMap<String, u64>,
 }
 
 async fn distribute_and_mark_provider_auth(
@@ -7186,12 +7199,20 @@ async fn distribute_and_mark_provider_auth(
     for status in statuses {
         let provider_id = status.provider_id.clone();
         let outcome = distribute_provider_auth(state, &provider_id).await;
-        let marked = state
-            .provider_auth
-            .mark_distribution(&provider_id, status.auth_generation, outcome.state())
-            .unwrap_or(status);
-        replicas.insert(provider_id, outcome);
-        next.push(marked);
+        match state.provider_auth.mark_distribution(
+            &provider_id,
+            status.auth_generation,
+            outcome.state(),
+        ) {
+            Ok(marked) => {
+                replicas.insert(provider_id, outcome);
+                next.push(marked);
+            }
+            Err(error) => {
+                tracing::warn!(%error, %provider_id, "ignoring stale Provider auth distribution result");
+                next.push(state.provider_auth.status(&provider_id).unwrap_or(status));
+            }
+        }
     }
     (next, replicas)
 }
@@ -7209,6 +7230,92 @@ impl ProviderDistributionOutcome {
             ServiceDistributionState::Partial
         }
     }
+}
+
+fn provider_auth_rebind_generations(
+    session: &crate::core::SessionMeta,
+    status: &crate::provider_service::ProviderAuthenticationStatus,
+    synchronized_generations: &BTreeMap<String, u64>,
+    pinned_auth_contract_fingerprint: &str,
+) -> Option<(u64, u64)> {
+    let expected_generation = session.provider_auth_generation?;
+    (status.provider_id == session.provider
+        && status.authentication_state
+            == crate::provider_service::ServiceAuthenticationState::Ready
+        && status.auth_generation > expected_generation
+        && synchronized_generations.get(&session.machine_id) == Some(&status.auth_generation)
+        && status.auth_contract_fingerprint == pinned_auth_contract_fingerprint)
+        .then_some((expected_generation, status.auth_generation))
+}
+
+fn rebindable_provider_auth_failure(
+    hub: &Hub,
+    session_id: &str,
+) -> Option<((Status, u64), String)> {
+    let revision @ (Status::Crashed, _) = hub.status_revision(session_id)? else {
+        return None;
+    };
+    let detail = hub.latest_crash_detail(session_id)?;
+    crate::provider_behavior::is_provider_auth_required_error(&detail).then_some((revision, detail))
+}
+
+fn rebind_unstarted_provider_sessions(
+    state: &AppState,
+    statuses: &[crate::provider_service::ProviderAuthenticationStatus],
+    replicas: &BTreeMap<String, ProviderDistributionOutcome>,
+) -> Vec<String> {
+    let mut rebound = Vec::new();
+    for session in state.hub.session_list() {
+        let Some((status_revision, crash_detail)) =
+            rebindable_provider_auth_failure(&state.hub, &session.id)
+        else {
+            continue;
+        };
+        let Some(status) = statuses
+            .iter()
+            .find(|status| status.provider_id == session.provider)
+        else {
+            continue;
+        };
+        let Some(outcome) = replicas.get(&session.provider) else {
+            continue;
+        };
+        let Some(package) = state.provider_catalog.package(
+            &session.provider,
+            &session.provider_version,
+            &session.provider_generation_digest,
+        ) else {
+            continue;
+        };
+        let Some((expected_generation, next_generation)) = provider_auth_rebind_generations(
+            &session,
+            status,
+            &outcome.synchronized_generations,
+            &package.manifest.compatibility.auth_contract_fingerprint,
+        ) else {
+            continue;
+        };
+        match state.hub.rebind_provider_auth_generation(
+            &session.id,
+            status_revision,
+            &crash_detail,
+            expected_generation,
+            next_generation,
+        ) {
+            Ok(true) => rebound.push(session.id),
+            Ok(false) => {}
+            Err(error) => tracing::warn!(
+                session = %session.id,
+                provider = %session.provider,
+                %error,
+                "rebinding refreshed Provider authentication"
+            ),
+        }
+    }
+    if !rebound.is_empty() {
+        tracing::info!(sessions = ?rebound, "rebound unstarted sessions to refreshed Provider authentication");
+    }
+    rebound
 }
 
 async fn distribute_provider_auth(
@@ -7240,7 +7347,12 @@ async fn distribute_provider_auth(
             continue;
         }
         match sync_provider_auth_to_machine(state, &machine_id, provider_id).await {
-            Ok(()) => outcome.succeeded += 1,
+            Ok(auth_generation) => {
+                outcome.succeeded += 1;
+                outcome
+                    .synchronized_generations
+                    .insert(machine_id, auth_generation);
+            }
             Err(error) => {
                 outcome.failed += 1;
                 tracing::warn!(%error, %machine_id, %provider_id, "Provider auth replica sync failed");
@@ -7254,7 +7366,7 @@ async fn sync_provider_auth_to_machine(
     state: &Arc<AppState>,
     machine_id: &str,
     provider_id: &str,
-) -> Result<(), String> {
+) -> Result<u64, String> {
     let store = state
         .store
         .as_ref()
@@ -7268,6 +7380,7 @@ async fn sync_provider_auth_to_machine(
         .provider_auth
         .seal_for_machine(provider_id, &public_key)
         .map_err(|error| error.to_string())?;
+    let auth_generation = envelope.auth_generation;
     let request_id = machine_request_id("provider-auth");
     state
         .machine_control
@@ -7279,7 +7392,8 @@ async fn sync_provider_auth_to_machine(
                 envelope: Box::new(envelope),
             },
         )
-        .await
+        .await?;
+    Ok(auth_generation)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -7357,7 +7471,8 @@ async fn accept_service_auth_candidate(
         )
     })
     .map_err(|error| error.to_string())?;
-    let (statuses, _replicas) = distribute_and_mark_provider_auth(state, statuses).await;
+    let (statuses, replicas) = distribute_and_mark_provider_auth(state, statuses).await;
+    rebind_unstarted_provider_sessions(state, &statuses, &replicas);
     let mut warnings = Vec::new();
     if !statuses
         .iter()
@@ -7702,12 +7817,18 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
         let machine_id = hello.machine_id.clone();
         tokio::spawn(async move {
             let outcome = distribute_provider_auth(&sync_state, &authentication.provider_id).await;
-            if let Err(error) = sync_state.provider_auth.mark_distribution(
+            match sync_state.provider_auth.mark_distribution(
                 &authentication.provider_id,
                 authentication.auth_generation,
                 outcome.state(),
             ) {
-                tracing::warn!(%error, %machine_id, provider_id = %authentication.provider_id, "recording reconnected Machine Provider auth convergence");
+                Ok(marked) => {
+                    let replicas = BTreeMap::from([(marked.provider_id.clone(), outcome)]);
+                    rebind_unstarted_provider_sessions(&sync_state, &[marked], &replicas);
+                }
+                Err(error) => {
+                    tracing::warn!(%error, %machine_id, provider_id = %authentication.provider_id, "recording reconnected Machine Provider auth convergence");
+                }
             }
         });
     }
@@ -7724,6 +7845,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     {
         let router = Arc::clone(&state.runtime_router);
         let hub = state.hub.clone();
+        let provider_auth = Arc::clone(&state.provider_auth);
         let machine_id = hello.machine_id.clone();
         let generation = hello
             .components
@@ -7743,7 +7865,13 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                     // Executable paths are machine-local. The remote broker
                     // registered this generation from its own active
                     // content-addressed component before connecting.
-                    let runtime = RemoteRuntime::new(hub, &bootstrap, generation, None);
+                    let runtime = RemoteRuntime::new_with_provider_auth(
+                        hub,
+                        &bootstrap,
+                        generation,
+                        None,
+                        provider_auth,
+                    );
                     router.install(machine_id, Arc::clone(&runtime));
                     runtime.start(bootstrap);
                     let _ = runtime_tx.send(runtime);
@@ -8735,10 +8863,12 @@ fn resolve_machine_workspace<'a>(
 #[cfg(test)]
 mod machine_provider_tests {
     use super::{
-        ProviderAuthExecutor, apply_workspace_inventory, resolve_machine_workspace,
+        ProviderAuthExecutor, apply_workspace_inventory, provider_auth_rebind_generations,
+        rebindable_provider_auth_failure, resolve_machine_workspace,
         resolve_scheduling_auth_generation, web_session_is_missing_machine,
     };
-    use crate::core::SessionOrigin;
+    use crate::core::{Hub, SessionOrigin, Status};
+    use std::collections::BTreeMap;
 
     fn installed_auth(generation: u64) -> crate::machine_protocol::PluginInventory {
         crate::machine_protocol::PluginInventory {
@@ -8866,6 +8996,92 @@ mod machine_provider_tests {
         assert_eq!(
             resolve_scheduling_auth_generation(&installed, false, None),
             Ok(None)
+        );
+    }
+
+    #[test]
+    fn auth_refresh_rebind_requires_newer_ready_credentials_on_the_selected_machine() {
+        let hub = Hub::new();
+        hub.create_session(crate::core::SessionRegistration {
+            id: "s".to_owned(),
+            provider: "gemini".to_owned(),
+            provider_version: "1.0.0".to_owned(),
+            provider_generation_digest: "sha256:provider".to_owned(),
+            provider_auth_generation: Some(7),
+            provider_behavior: None,
+            machine_id: "hawk".to_owned(),
+            workspace_id: None,
+            workspace_name: None,
+            workspace_source_path: None,
+            cwd: "/tmp".to_owned(),
+            title: "test".to_owned(),
+            origin: SessionOrigin::Web,
+            system: false,
+            owner_user_id: None,
+            owner_username: None,
+        });
+        let session = hub.session_info("s").unwrap().meta;
+        let ready = service_auth(
+            8,
+            crate::provider_service::ServiceAuthenticationState::Ready,
+        );
+        let synchronized = BTreeMap::from([("hawk".to_owned(), 8)]);
+
+        hub.set_status("s", Status::Crashed, Some("unrelated failure".to_owned()));
+        assert!(rebindable_provider_auth_failure(&hub, "s").is_none());
+        hub.set_status(
+            "s",
+            Status::Crashed,
+            Some(crate::provider::provider_auth_required_detail(
+                "gemini", true,
+            )),
+        );
+        assert!(rebindable_provider_auth_failure(&hub, "s").is_some());
+
+        assert_eq!(
+            provider_auth_rebind_generations(
+                &session,
+                &ready,
+                &synchronized,
+                &ready.auth_contract_fingerprint,
+            ),
+            Some((7, 8))
+        );
+        assert_eq!(
+            provider_auth_rebind_generations(
+                &session,
+                &ready,
+                &BTreeMap::new(),
+                &ready.auth_contract_fingerprint,
+            ),
+            None
+        );
+        let stale_projection = BTreeMap::from([("hawk".to_owned(), 7)]);
+        assert_eq!(
+            provider_auth_rebind_generations(
+                &session,
+                &ready,
+                &stale_projection,
+                &ready.auth_contract_fingerprint,
+            ),
+            None
+        );
+        assert_eq!(
+            provider_auth_rebind_generations(&session, &ready, &synchronized, "sha256:different",),
+            None
+        );
+        let expired = service_auth(
+            8,
+            crate::provider_service::ServiceAuthenticationState::Expired,
+        );
+        assert_eq!(
+            provider_auth_rebind_generations(
+                &session,
+                &expired,
+                &synchronized,
+                &expired.auth_contract_fingerprint,
+            ),
+            None
         );
     }
 

@@ -83,6 +83,7 @@ struct Shared {
     shutdown: AtomicBool,
     desired_generation: String,
     desired_worker_command: Option<String>,
+    provider_auth: Option<Arc<crate::provider_service::ProviderAuthService>>,
 }
 
 pub struct RemoteRuntime {
@@ -102,12 +103,45 @@ pub struct RemoteRuntimeStats {
 }
 
 impl RemoteRuntime {
+    #[cfg(test)]
     #[must_use]
     pub fn new(
         hub: Hub,
         bootstrap: &RemoteBootstrap,
         desired_generation: String,
         desired_worker_command: Option<String>,
+    ) -> Arc<Self> {
+        Self::new_inner(
+            hub,
+            bootstrap,
+            desired_generation,
+            desired_worker_command,
+            None,
+        )
+    }
+
+    pub(crate) fn new_with_provider_auth(
+        hub: Hub,
+        bootstrap: &RemoteBootstrap,
+        desired_generation: String,
+        desired_worker_command: Option<String>,
+        provider_auth: Arc<crate::provider_service::ProviderAuthService>,
+    ) -> Arc<Self> {
+        Self::new_inner(
+            hub,
+            bootstrap,
+            desired_generation,
+            desired_worker_command,
+            Some(provider_auth),
+        )
+    }
+
+    fn new_inner(
+        hub: Hub,
+        bootstrap: &RemoteBootstrap,
+        desired_generation: String,
+        desired_worker_command: Option<String>,
+        provider_auth: Option<Arc<crate::provider_service::ProviderAuthService>>,
     ) -> Arc<Self> {
         let (notify, notify_rx) = mpsc::unbounded_channel();
         let declarations = bootstrap
@@ -144,6 +178,7 @@ impl RemoteRuntime {
                 shutdown: AtomicBool::new(false),
                 desired_generation,
                 desired_worker_command,
+                provider_auth,
             }),
             notify_rx: Mutex::new(Some(notify_rx)),
         })
@@ -811,6 +846,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                         );
                         queue_permission(shared, &session_id, request_id, option_id);
                     } else {
+                        mark_projected_provider_auth_expired(shared, &session_id, &event);
                         apply_event(&shared.hub, &session_id, event);
                         if let Some(worker) = worker.as_ref() {
                             // A replacement worker can register as Starting and
@@ -1435,6 +1471,58 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
     }
 }
 
+fn projected_provider_auth_failure(
+    hub: &Hub,
+    session_id: &str,
+    event: &RuntimeEvent,
+) -> Option<(String, u64)> {
+    let RuntimeEvent::Status {
+        detail: Some(detail),
+        ..
+    } = event
+    else {
+        return None;
+    };
+    if !crate::provider_behavior::is_provider_auth_required_error(detail) {
+        return None;
+    }
+    let meta = hub.session_info(session_id)?.meta;
+    Some((meta.provider, meta.provider_auth_generation?))
+}
+
+fn mark_projected_provider_auth_expired(shared: &Shared, session_id: &str, event: &RuntimeEvent) {
+    let Some(provider_auth) = shared.provider_auth.as_ref() else {
+        return;
+    };
+    let Some((provider_id, generation)) =
+        projected_provider_auth_failure(&shared.hub, session_id, event)
+    else {
+        return;
+    };
+    match provider_auth.mark_expired(&provider_id, generation) {
+        Ok(Some(status)) => tracing::warn!(
+            session = session_id,
+            provider = %provider_id,
+            auth_generation = generation,
+            authentication_state = ?status.authentication_state,
+            "Agent rejected the projected Provider credentials"
+        ),
+        Ok(None) => tracing::debug!(
+            session = session_id,
+            provider = %provider_id,
+            auth_generation = generation,
+            "ignoring stale Provider credential rejection"
+        ),
+        Err(error) => tracing::error!(
+            session = session_id,
+            provider = %provider_id,
+            auth_generation = generation,
+            %error,
+            "persisting expired Provider authentication state"
+        ),
+    }
+}
+
 const REMOTE_COMPACT_FAILURE_PREFIX: &str = "Error running remote compact task:";
 
 /// Codex ACP currently reports a failed remote `/compact` as an ordinary
@@ -1586,6 +1674,43 @@ mod tests {
             BROKER_RECONNECT_INITIAL_DELAY,
             "only a stable connection resets the retry delay"
         );
+    }
+
+    #[test]
+    fn projected_auth_failure_targets_only_the_session_generation() {
+        let hub = Hub::new();
+        hub.create_session(crate::core::SessionRegistration {
+            id: "s".to_owned(),
+            provider: "grok".to_owned(),
+            provider_version: "1.1.8".to_owned(),
+            provider_generation_digest: "sha256:provider".to_owned(),
+            provider_auth_generation: Some(7),
+            provider_behavior: None,
+            machine_id: "hawk".to_owned(),
+            workspace_id: None,
+            workspace_name: None,
+            workspace_source_path: None,
+            cwd: "/tmp".to_owned(),
+            title: "test".to_owned(),
+            origin: crate::core::SessionOrigin::Web,
+            system: false,
+            owner_user_id: None,
+            owner_username: None,
+        });
+        let rejected = RuntimeEvent::Status {
+            state: WorkerState::Crashed,
+            detail: Some(crate::provider::provider_auth_required_detail("grok", true)),
+        };
+        let unrelated = RuntimeEvent::Status {
+            state: WorkerState::Crashed,
+            detail: Some("worker exited".to_owned()),
+        };
+
+        assert_eq!(
+            projected_provider_auth_failure(&hub, "s", &rejected),
+            Some(("grok".to_owned(), 7))
+        );
+        assert_eq!(projected_provider_auth_failure(&hub, "s", &unrelated), None);
     }
 
     fn compaction_started() -> RuntimeEvent {
