@@ -32,7 +32,7 @@ Deno.test("session settings exposes confirmed compact and clear actions", () => 
   );
 });
 
-Deno.test("session actions default collapsed and expand as full-width rows", () => {
+Deno.test("session actions default collapsed and expand compact and clear rows", () => {
   assertEquals(
     composerSource.includes(
       "const [sessionActionsExpanded, setSessionActionsExpanded] = useState(false);",
@@ -62,5 +62,5 @@ Deno.test("session actions default collapsed and expand as full-width rows", () 
   const disclosureSource = composerSource.slice(disclosureStart, disclosureEnd);
   assertEquals(disclosureStart >= 0 && disclosureEnd > disclosureStart, true);
   assertEquals(disclosureSource.includes('direction="row"'), false);
-  assertEquals(disclosureSource.match(/\bfullWidth\b/g)?.length, 3);
+  assertEquals(disclosureSource.match(/\bfullWidth\b/g)?.length, 2);
 });

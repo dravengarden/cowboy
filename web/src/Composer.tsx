@@ -128,7 +128,7 @@ import {
   providerUsage,
   type UsageSnapshot,
 } from "./usageLimits";
-import { SessionReloadDialog } from "./SessionReloadDialog";
+import { reloadSession } from "./sessionReload";
 import { createPortal, flushSync } from "react-dom";
 import { FullscreenComposer } from "./FullscreenComposer";
 import { ComposerToolbarSettings } from "./ComposerToolbarSettings";
@@ -6777,7 +6777,6 @@ function ComposerSheet({
     false,
   );
   const [cmdConfirm, setCmdConfirm] = useState<SessionAction | null>(null);
-  const [reloadConfirm, setReloadConfirm] = useState(false);
   useEffect(() => {
     if (open) {
       setCustomizeAgent(false);
@@ -6785,7 +6784,6 @@ function ComposerSheet({
       setSessionActionsExpanded(false);
       setWorkspaceOptionsExpanded(false);
       setCmdConfirm(null);
-      setReloadConfirm(false);
     }
   }, [open, session?.id]);
   useEffect(() => {
@@ -6839,7 +6837,6 @@ function ComposerSheet({
     setSessionActionsExpanded(false);
     setWorkspaceOptionsExpanded(false);
     setCmdConfirm(null);
-    setReloadConfirm(false);
     onClose();
   };
   const confirmSessionAction = async (): Promise<void> => {
@@ -6916,15 +6913,9 @@ function ComposerSheet({
           actionsExpanded={sessionActionsExpanded}
           onActionsExpandedChange={setSessionActionsExpanded}
           onSessionAction={setCmdConfirm}
-          onReload={(): void => setReloadConfirm(true)}
         />
       )}
-      {session && (
-        <SessionProviderSection
-          session={session}
-          onReload={(): void => setReloadConfirm(true)}
-        />
-      )}
+      {session && <SessionProviderSection session={session} />}
       {session && (
         <WorkspaceOptionsSection
           session={session}
@@ -7086,10 +7077,6 @@ function ComposerSheet({
         onClose={(): void => setCmdConfirm(null)}
         onConfirm={confirmSessionAction}
       />
-      <SessionReloadDialog
-        session={reloadConfirm ? session : null}
-        onClose={(): void => setReloadConfirm(false)}
-      />
       </Sheet>
     </>
   );
@@ -7153,7 +7140,6 @@ function SessionInfoSection({
   actionsExpanded,
   onActionsExpandedChange,
   onSessionAction,
-  onReload,
 }: {
   session: SessionMeta;
   title: string;
@@ -7169,7 +7155,6 @@ function SessionInfoSection({
   actionsExpanded: boolean;
   onActionsExpandedChange: (expanded: boolean) => void;
   onSessionAction: (action: SessionAction) => void;
-  onReload: () => void;
 }): React.JSX.Element {
   // Title is editable right here — this sheet already shows the session's identity,
   // so the rename (edit-title) belongs with it rather than off in app Settings.
@@ -7438,19 +7423,6 @@ function SessionInfoSection({
           </ButtonBase>
           <Collapse id={actionsPanelId} in={actionsExpanded} unmountOnExit>
             <Stack spacing={1} sx={{ pt: 0.75 }}>
-              <Button
-                fullWidth
-                variant="outlined"
-                startIcon={<Refresh />}
-                aria-label="reload session from session settings"
-                onClick={(event): void => {
-                  event.currentTarget.blur();
-                  onReload();
-                }}
-                sx={{ minHeight: 44, textTransform: "none" }}
-              >
-                Reload session
-              </Button>
               {compactAction && (
                 <Button
                   fullWidth
@@ -7492,12 +7464,77 @@ function SessionInfoSection({
   );
 }
 
+function SessionProviderReloadCard(
+  { sessionId }: { sessionId: string },
+): React.JSX.Element {
+  const action = useNetworkActionState();
+  const activateTap = useReliableTouchTap<HTMLButtonElement>(() => {
+    haptic();
+    void action.run(() => reloadSession(sessionId));
+  });
+
+  return (
+    <ButtonBase
+      {...activateTap}
+      disabled={action.pending}
+      aria-busy={action.pending || undefined}
+      aria-label="reload session runtime from provider"
+      data-session-provider-reload
+      sx={{
+        width: "100%",
+        minHeight: 58,
+        mt: 0.75,
+        mb: 0.5,
+        px: 1.5,
+        py: 1,
+        borderRadius: 1,
+        border: 1,
+        borderColor: "divider",
+        bgcolor: (theme) => alpha(theme.palette.background.default, 0.34),
+        color: "text.primary",
+        textAlign: "left",
+        justifyContent: "flex-start",
+        touchAction: "manipulation",
+        "&:active": { transform: "scale(0.99)" },
+        "&.Mui-disabled": { opacity: 0.58 },
+      }}
+    >
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Typography variant="body2" sx={{ fontWeight: 750 }}>
+          Reload session
+        </Typography>
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ display: "block", mt: 0.2 }}
+        >
+          Reload the agent runtime and keep this session
+        </Typography>
+      </Box>
+      <Box
+        aria-hidden
+        sx={{
+          width: 20,
+          height: 20,
+          ml: 1,
+          display: "grid",
+          placeItems: "center",
+          flexShrink: 0,
+          color: "primary.main",
+        }}
+      >
+        {action.progress
+          ? <CircularProgress size={16} thickness={4.5} color="inherit" />
+          : <Refresh fontSize="small" />}
+      </Box>
+    </ButtonBase>
+  );
+}
+
 function SessionProviderSection({
   session,
-  onReload,
 }: {
   session: SessionMeta;
-  onReload: () => void;
 }): React.JSX.Element {
   const { catalog } = useProviderCatalog();
   const entry = currentProviderEntry(
@@ -7597,52 +7634,21 @@ function SessionProviderSection({
         </ButtonBase>
         <Collapse id={panelId} in={expanded}>
           <Box sx={{ pt: 0.5 }}>
-            <Stack
-              direction="row"
-              alignItems="flex-start"
-              spacing={1}
-              sx={{
-                px: 0.5,
-                pb: 0.25,
-              }}
-            >
-              {entry && (
-                <Typography
-                  variant="caption"
-                  color="text.secondary"
-                  sx={{
-                    display: "block",
-                    flex: 1,
-                    minWidth: 0,
-                    pt: 0.5,
-                    lineHeight: 1.4,
-                  }}
-                >
-                  {entry.manifest.display.summary}
-                </Typography>
-              )}
-              <Button
-                variant="outlined"
-                size="small"
-                startIcon={<Refresh fontSize="small" />}
-                aria-label="reload session runtime from provider"
-                onClick={(event): void => {
-                  event.currentTarget.blur();
-                  haptic();
-                  onReload();
-                }}
+            {entry && (
+              <Typography
+                variant="caption"
+                color="text.secondary"
                 sx={{
-                  height: 44,
-                  minHeight: 44,
-                  px: 1.25,
-                  ml: "auto",
-                  flexShrink: 0,
-                  textTransform: "none",
+                  display: "block",
+                  px: 0.5,
+                  pb: 0.25,
+                  lineHeight: 1.4,
                 }}
               >
-                Reload
-              </Button>
-            </Stack>
+                {entry.manifest.display.summary}
+              </Typography>
+            )}
+            <SessionProviderReloadCard sessionId={session.id} />
             {entry && (
               <List dense disablePadding>
                 {facts.map((row) => (

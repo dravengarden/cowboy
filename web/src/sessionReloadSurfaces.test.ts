@@ -16,22 +16,30 @@ Deno.test("desktop session dialog exposes confirmed runtime reload", () => {
   assert(appSource.includes("<SessionReloadDialog"));
 });
 
-Deno.test("mobile session settings sheet exposes the same reload dialog", () => {
-  assert(composerSource.includes('aria-label="reload session from session settings"'));
+Deno.test("mobile Provider reload uses the existing card language and acts directly", () => {
   assert(
     composerSource.includes(
       'aria-label="reload session runtime from provider"',
     ),
   );
-  assertEquals(
-    composerSource.split("onReload={(): void => setReloadConfirm(true)}")
-      .length - 1,
-    2,
+  assert(composerSource.includes("data-session-provider-reload"));
+  assert(
+    composerSource.includes(
+      "void action.run(() => reloadSession(sessionId));",
+    ),
   );
-  assert(composerSource.includes("session={reloadConfirm ? session : null}"));
+  assert(composerSource.includes("minHeight: 58"));
+  assertEquals(composerSource.includes("<SessionReloadDialog"), false);
+  assertEquals(composerSource.includes("reloadConfirm"), false);
+  assertEquals(
+    composerSource.includes(
+      'aria-label="reload session from session settings"',
+    ),
+    false,
+  );
 });
 
-Deno.test("reload confirmation names every preserved session state", () => {
+Deno.test("desktop reload confirmation names every preserved session state", () => {
   for (const phrase of [
     "Conversation history",
     "session ID",
