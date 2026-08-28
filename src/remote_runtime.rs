@@ -785,6 +785,47 @@ async fn send_declarations<W: tokio::io::AsyncWrite + Unpin>(
     Ok(())
 }
 
+// Broker snapshots and outbound controller commands travel independently. A
+// pre-existing retired snapshot must not acknowledge an EnsureSession before
+// that command reaches Machine, or an explicit revive can disappear in flight.
+fn snapshot_satisfies_ensure(worker: &WorkerSnapshot, session: &StartSession) -> bool {
+    let Some(launch) = worker.launch.as_ref() else {
+        return false;
+    };
+    if launch.cwd != session.cwd
+        || launch.provider != session.provider
+        || matches!(worker.state, WorkerState::Exited | WorkerState::Crashed)
+    {
+        return false;
+    }
+    if session.generation.is_empty() || worker.generation == session.generation {
+        return true;
+    }
+    if launch.fallback_for.as_deref() == Some(session.generation.as_str()) {
+        return true;
+    }
+    worker.state == WorkerState::Busy
+        || worker.current_turn_id.is_some()
+        || !worker.pending_permissions.is_empty()
+}
+
+fn acknowledge_pending_ensure_from_snapshot(shared: &Shared, worker: &WorkerSnapshot) {
+    let key = format!("ensure:{}", worker.session_id);
+    let removed = {
+        let mut pending = shared.pending.lock();
+        let Some(CoreCommand::EnsureSession { session }) = pending.get(&key) else {
+            return;
+        };
+        if !snapshot_satisfies_ensure(worker, session) {
+            return;
+        }
+        pending.remove(&key).is_some()
+    };
+    if removed {
+        shared.sent.lock().remove(&key);
+    }
+}
+
 #[allow(clippy::too_many_lines)] // One exhaustive wire-frame dispatch keeps broker ordering visible.
 async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
     shared: &Shared,
@@ -919,11 +960,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                 .workers
                 .lock()
                 .insert(session_id.clone(), (*worker).clone());
-            shared
-                .pending
-                .lock()
-                .remove(&format!("ensure:{session_id}"));
-            shared.sent.lock().remove(&format!("ensure:{session_id}"));
+            acknowledge_pending_ensure_from_snapshot(shared, &worker);
             if apply_snapshot(shared, &worker) {
                 reconcile_idle_snapshot(shared, &worker);
             }
@@ -1012,14 +1049,7 @@ fn update_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) {
         if apply_snapshot(shared, &worker) {
             reconcile_idle_snapshot(shared, &worker);
         }
-        shared
-            .pending
-            .lock()
-            .remove(&format!("ensure:{}", worker.session_id));
-        shared
-            .sent
-            .lock()
-            .remove(&format!("ensure:{}", worker.session_id));
+        acknowledge_pending_ensure_from_snapshot(shared, &worker);
         current.insert(worker.session_id.clone(), worker);
     }
     *shared.workers.lock() = current;
@@ -1035,14 +1065,7 @@ fn merge_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) {
         if apply_snapshot(shared, &worker) {
             reconcile_idle_snapshot(shared, &worker);
         }
-        shared
-            .pending
-            .lock()
-            .remove(&format!("ensure:{}", worker.session_id));
-        shared
-            .sent
-            .lock()
-            .remove(&format!("ensure:{}", worker.session_id));
+        acknowledge_pending_ensure_from_snapshot(shared, &worker);
         current.insert(worker.session_id.clone(), worker);
     }
 }
@@ -2080,6 +2103,101 @@ mod tests {
 
         assert!(runtime.has_worker("s"));
         assert!(runtime.shared.declarations.lock().contains_key("s"));
+    }
+
+    #[tokio::test]
+    async fn stale_retired_snapshot_cannot_ack_explicit_ensure() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        let runtime = RemoteRuntime::for_test(hub, Vec::new());
+        let mut session = snapshot("s").launch.expect("launch metadata");
+        session.generation.clear();
+        runtime.ensure(session);
+
+        let mut retired = snapshot("s");
+        retired.state = WorkerState::Draining;
+        retired.current_turn_id = None;
+        retired.generation = "gen-retired".to_owned();
+        retired.drain_requested = true;
+        retired.launch.as_mut().expect("retired launch").generation = "gen-retired".to_owned();
+        handle_frame(
+            &runtime.shared,
+            Frame::Snapshot {
+                worker: Box::new(retired.clone()),
+            },
+            &mut tokio::io::sink(),
+        )
+        .await
+        .expect("retired snapshot");
+
+        assert!(runtime.pending_for_test().iter().any(|command| {
+            matches!(command, CoreCommand::EnsureSession { session } if session.session_id == "s")
+        }));
+
+        retired.worker_epoch = "epoch-replacement".to_owned();
+        retired.state = WorkerState::Starting;
+        retired.generation = "test-generation".to_owned();
+        retired.drain_requested = false;
+        retired
+            .launch
+            .as_mut()
+            .expect("replacement launch")
+            .generation = "test-generation".to_owned();
+        handle_frame(
+            &runtime.shared,
+            Frame::Snapshot {
+                worker: Box::new(retired),
+            },
+            &mut tokio::io::sink(),
+        )
+        .await
+        .expect("replacement snapshot");
+
+        assert!(!runtime.pending_for_test().iter().any(|command| {
+            matches!(command, CoreCommand::EnsureSession { session } if session.session_id == "s")
+        }));
+    }
+
+    #[tokio::test]
+    async fn busy_retired_snapshot_acknowledges_ensure_without_forcing_cutover() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        let runtime = RemoteRuntime::for_test(hub, Vec::new());
+        let mut session = snapshot("s").launch.expect("launch metadata");
+        session.generation.clear();
+        runtime.ensure(session);
+
+        let mut busy = snapshot("s");
+        busy.generation = "gen-retired".to_owned();
+        busy.drain_requested = true;
+        busy.launch.as_mut().expect("busy launch").generation = "gen-retired".to_owned();
+        handle_frame(
+            &runtime.shared,
+            Frame::Snapshot {
+                worker: Box::new(busy),
+            },
+            &mut tokio::io::sink(),
+        )
+        .await
+        .expect("busy snapshot");
+
+        assert!(!runtime.pending_for_test().iter().any(|command| {
+            matches!(command, CoreCommand::EnsureSession { session } if session.session_id == "s")
+        }));
     }
 
     #[test]
