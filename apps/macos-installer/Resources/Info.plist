@@ -5,15 +5,15 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleDisplayName</key>
-    <string>Cowboy Installer</string>
+    <string>Cowboy Manager</string>
     <key>CFBundleExecutable</key>
     <string>CowboyInstaller</string>
     <key>CFBundleIdentifier</key>
-    <string>xyz.stormbird.cowboy.installer</string>
+    <string>xyz.stormbird.cowboy.manager</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>Cowboy Installer</string>
+    <string>Cowboy Manager</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

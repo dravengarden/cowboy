@@ -8,7 +8,7 @@ configuration="${CONFIGURATION:-release}"
 version="${COWBOY_INSTALLER_VERSION:-0.1.0}"
 build_number="${COWBOY_INSTALLER_BUILD:-1}"
 output_root="${COWBOY_INSTALLER_OUTPUT_DIR:-$app_root/dist}"
-app_bundle="$output_root/Cowboy Installer.app"
+app_bundle="$output_root/Cowboy Manager.app"
 backend_dir="${COWBOY_BOOTSTRAP_DIR:-$repo_root/target/release}"
 
 if [[ "${1:-}" == "--build-backend" ]]; then

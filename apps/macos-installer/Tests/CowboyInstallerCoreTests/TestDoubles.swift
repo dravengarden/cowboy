@@ -70,6 +70,101 @@ final class StubStatusDetector: InstalledStatusDetecting {
     func detect(preferredStateDirectory _: String?) -> InstalledStatus { status }
 }
 
+final class MockMachineServiceController: MachineServiceControlling, @unchecked Sendable {
+    var startError: Error?
+    var stopError: Error?
+    var onStart: (() -> Void)?
+    var onStop: (() -> Void)?
+    private(set) var startCount = 0
+    private(set) var stopCount = 0
+
+    func start(_: InstalledStatus) async throws {
+        startCount += 1
+        if let startError { throw startError }
+        onStart?()
+    }
+
+    func stop(_: InstalledStatus) async throws {
+        stopCount += 1
+        if let stopError { throw stopError }
+        onStop?()
+    }
+}
+
+final class MockCowboyServiceClient: CowboyServiceClient, @unchecked Sendable {
+    var status = AccountStatus(
+        phase: .localOwner,
+        account: "local",
+        role: "owner",
+        administratorAccess: true,
+        message: "ready"
+    )
+    var machineSummary = ManagedMachineSummary(
+        id: "macbook-air",
+        displayName: "MacBook Air",
+        status: "online",
+        connected: true,
+        activeSessions: 0,
+        pendingUpdates: [],
+        components: []
+    )
+    var plan = DependencyUpdatePlan(
+        machineID: "macbook-air",
+        machineName: "MacBook Air",
+        activeSessions: 0,
+        items: []
+    )
+    var error: Error?
+    private(set) var signInCount = 0
+    private(set) var signOutCount = 0
+    private(set) var checkCount = 0
+    private(set) var applied: [DependencyUpdateItem] = []
+
+    func accountStatus(controllerURL _: String) async throws -> AccountStatus {
+        if let error { throw error }
+        return status
+    }
+
+    func signIn(controllerURL _: String, account _: String, password _: String) async throws -> AccountStatus {
+        signInCount += 1
+        if let error { throw error }
+        return status
+    }
+
+    func signOut(controllerURL _: String) async throws -> AccountStatus {
+        signOutCount += 1
+        if let error { throw error }
+        return AccountStatus(phase: .signedOut, message: "signed out")
+    }
+
+    func machine(controllerURL _: String, machineID: String) async throws -> ManagedMachineSummary {
+        if let error { throw error }
+        guard machineSummary.id == machineID else {
+            throw CowboyServiceClientError.machineNotFound(machineID)
+        }
+        return machineSummary
+    }
+
+    func dependencyUpdatePlan(
+        controllerURL _: String,
+        machineID _: String,
+        refresh _: Bool
+    ) async throws -> DependencyUpdatePlan {
+        checkCount += 1
+        if let error { throw error }
+        return plan
+    }
+
+    func applyDependencyUpdate(
+        controllerURL _: String,
+        machineID _: String,
+        item: DependencyUpdateItem
+    ) async throws {
+        if let error { throw error }
+        applied.append(item)
+    }
+}
+
 final class StubNotifier: InstallerNotifying {
     var authorization = true
     private(set) var notifications: [(String, String)] = []
@@ -97,13 +192,17 @@ func makeModel(
     backend: MockInstallerBackend,
     persistence: MemoryPersistence = MemoryPersistence(),
     detector: StubStatusDetector = StubStatusDetector(),
-    notifier: StubNotifier = StubNotifier()
+    notifier: StubNotifier = StubNotifier(),
+    machineService: MockMachineServiceController = MockMachineServiceController(),
+    serviceClient: MockCowboyServiceClient = MockCowboyServiceClient()
 ) -> AppModel {
     AppModel(
         backend: backend,
         persistence: persistence,
         statusDetector: detector,
         notifier: notifier,
+        machineService: machineService,
+        serviceClient: serviceClient,
         targetVersion: "1.2.3"
     )
 }

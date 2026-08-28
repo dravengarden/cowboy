@@ -92,6 +92,10 @@ public struct InstalledStatus: Codable, Equatable, Sendable {
     public let version: String?
     public let location: String?
     public let serviceOrigin: String?
+    public let serviceID: String?
+    public let machineID: String?
+    public let launchAgentLabel: String?
+    public let launchAgentPath: String?
     public let launchAgentLoaded: Bool
 
     public init(
@@ -99,16 +103,298 @@ public struct InstalledStatus: Codable, Equatable, Sendable {
         version: String? = nil,
         location: String? = nil,
         serviceOrigin: String? = nil,
+        serviceID: String? = nil,
+        machineID: String? = nil,
+        launchAgentLabel: String? = nil,
+        launchAgentPath: String? = nil,
         launchAgentLoaded: Bool = false
     ) {
         self.isInstalled = isInstalled
         self.version = version
         self.location = location
         self.serviceOrigin = serviceOrigin
+        self.serviceID = serviceID
+        self.machineID = machineID
+        self.launchAgentLabel = launchAgentLabel
+        self.launchAgentPath = launchAgentPath
         self.launchAgentLoaded = launchAgentLoaded
     }
 
     public static let notInstalled = InstalledStatus(isInstalled: false)
+}
+
+public enum MachineServiceActionPhase: String, Equatable, Sendable {
+    case idle
+    case starting
+    case stopping
+    case failed
+
+    public var isRunning: Bool {
+        self == .starting || self == .stopping
+    }
+}
+
+public struct MachineServiceActionState: Equatable, Sendable {
+    public var phase: MachineServiceActionPhase
+    public var message: String
+    public var errorMessage: String?
+
+    public init(
+        phase: MachineServiceActionPhase = .idle,
+        message: String = "Ready",
+        errorMessage: String? = nil
+    ) {
+        self.phase = phase
+        self.message = message
+        self.errorMessage = errorMessage
+    }
+}
+
+public enum AccountPhase: String, Equatable, Sendable {
+    case unknown
+    case checking
+    case localOwner
+    case signedOut
+    case signedIn
+    case setupRequired
+    case failed
+}
+
+public struct AccountStatus: Equatable, Sendable {
+    public var phase: AccountPhase
+    public var account: String?
+    public var role: String?
+    public var administratorAccess: Bool
+    public var message: String
+    public var errorMessage: String?
+
+    public init(
+        phase: AccountPhase = .unknown,
+        account: String? = nil,
+        role: String? = nil,
+        administratorAccess: Bool = false,
+        message: String = "Account status has not been checked",
+        errorMessage: String? = nil
+    ) {
+        self.phase = phase
+        self.account = account
+        self.role = role
+        self.administratorAccess = administratorAccess
+        self.message = message
+        self.errorMessage = errorMessage
+    }
+
+    public var canReadProduct: Bool {
+        phase == .localOwner || phase == .signedIn
+    }
+
+    public var canManageDependencies: Bool {
+        canReadProduct && administratorAccess
+    }
+}
+
+public struct MachineComponentIdentifier: Codable, Equatable, Hashable, Sendable {
+    public let kind: String
+    public let slot: String?
+
+    public init(kind: String, slot: String? = nil) {
+        self.kind = kind
+        self.slot = slot
+    }
+}
+
+public struct MachineComponentReleaseUpdate: Codable, Equatable, Sendable {
+    public let latestVersion: String
+    public let available: Bool
+    public let source: String
+    public let checkedAtMilliseconds: Int64
+    public let installable: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case latestVersion = "latest_version"
+        case available
+        case source
+        case checkedAtMilliseconds = "checked_at_ms"
+        case installable
+    }
+
+    public init(
+        latestVersion: String,
+        available: Bool,
+        source: String,
+        checkedAtMilliseconds: Int64,
+        installable: Bool
+    ) {
+        self.latestVersion = latestVersion
+        self.available = available
+        self.source = source
+        self.checkedAtMilliseconds = checkedAtMilliseconds
+        self.installable = installable
+    }
+}
+
+public struct MachineComponentSummary: Codable, Equatable, Sendable {
+    public let id: MachineComponentIdentifier
+    public let state: String
+    public let version: String
+    public let generation: String
+    public let activeLeases: UInt64
+    public let update: MachineComponentReleaseUpdate?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case state
+        case version
+        case generation
+        case activeLeases = "active_leases"
+        case update
+    }
+
+    public init(
+        id: MachineComponentIdentifier,
+        state: String,
+        version: String,
+        generation: String,
+        activeLeases: UInt64,
+        update: MachineComponentReleaseUpdate? = nil
+    ) {
+        self.id = id
+        self.state = state
+        self.version = version
+        self.generation = generation
+        self.activeLeases = activeLeases
+        self.update = update
+    }
+}
+
+public struct ManagedMachineSummary: Codable, Equatable, Sendable {
+    public let id: String
+    public let displayName: String
+    public let status: String
+    public let connected: Bool
+    public let activeSessions: UInt32
+    public let pendingUpdates: [MachineComponentIdentifier]
+    public let components: [MachineComponentSummary]
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case displayName = "display_name"
+        case status
+        case connected
+        case activeSessions = "active_sessions"
+        case pendingUpdates = "pending_updates"
+        case components
+    }
+
+    public init(
+        id: String,
+        displayName: String,
+        status: String,
+        connected: Bool,
+        activeSessions: UInt32,
+        pendingUpdates: [MachineComponentIdentifier],
+        components: [MachineComponentSummary]
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.status = status
+        self.connected = connected
+        self.activeSessions = activeSessions
+        self.pendingUpdates = pendingUpdates
+        self.components = components
+    }
+}
+
+public enum DependencyUpdateChannel: String, Codable, Equatable, Sendable {
+    case signedComponent
+    case npm
+}
+
+public struct DependencyUpdateItem: Codable, Equatable, Identifiable, Sendable {
+    public let component: MachineComponentIdentifier
+    public let displayName: String
+    public let currentVersion: String
+    public let targetVersion: String
+    public let activeLeases: UInt64
+    public let channel: DependencyUpdateChannel
+
+    public var id: String {
+        "\(channel.rawValue):\(component.kind):\(component.slot ?? "")"
+    }
+
+    public init(
+        component: MachineComponentIdentifier,
+        displayName: String,
+        currentVersion: String,
+        targetVersion: String,
+        activeLeases: UInt64,
+        channel: DependencyUpdateChannel
+    ) {
+        self.component = component
+        self.displayName = displayName
+        self.currentVersion = currentVersion
+        self.targetVersion = targetVersion
+        self.activeLeases = activeLeases
+        self.channel = channel
+    }
+}
+
+public struct DependencyUpdatePlan: Equatable, Sendable {
+    public let machineID: String
+    public let machineName: String
+    public let activeSessions: UInt32
+    public let items: [DependencyUpdateItem]
+
+    public init(
+        machineID: String,
+        machineName: String,
+        activeSessions: UInt32,
+        items: [DependencyUpdateItem]
+    ) {
+        self.machineID = machineID
+        self.machineName = machineName
+        self.activeSessions = activeSessions
+        self.items = items
+    }
+
+    public var requiresConfirmation: Bool {
+        activeSessions > 0 && items.contains(where: { $0.activeLeases > 0 })
+    }
+}
+
+public enum DependencyUpdatePhase: String, Equatable, Sendable {
+    case idle
+    case checking
+    case ready
+    case updating
+    case succeeded
+    case failed
+
+    public var isRunning: Bool {
+        self == .checking || self == .updating
+    }
+}
+
+public struct DependencyUpdateState: Equatable, Sendable {
+    public var phase: DependencyUpdatePhase
+    public var progress: Double
+    public var message: String
+    public var plan: DependencyUpdatePlan?
+    public var errorMessage: String?
+
+    public init(
+        phase: DependencyUpdatePhase = .idle,
+        progress: Double = 0,
+        message: String = "Updates have not been checked",
+        plan: DependencyUpdatePlan? = nil,
+        errorMessage: String? = nil
+    ) {
+        self.phase = phase
+        self.progress = progress
+        self.message = message
+        self.plan = plan
+        self.errorMessage = errorMessage
+    }
 }
 
 public enum ActivityResult: String, Codable, Equatable, Sendable {

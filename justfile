@@ -56,7 +56,7 @@ macos-installer-test:
 macos-installer-build:
     bash apps/macos-installer/scripts/build-app.sh --build-backend
 
-macos-installer-verify APP="apps/macos-installer/dist/Cowboy Installer.app":
+macos-installer-verify APP="apps/macos-installer/dist/Cowboy Manager.app":
     bash apps/macos-installer/scripts/verify-app.sh "{{APP}}"
 
 # Generic Cowboy Plugin lifecycle. Agent Provider and code-intelligence are

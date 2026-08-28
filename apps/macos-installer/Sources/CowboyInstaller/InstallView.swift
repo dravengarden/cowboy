@@ -49,7 +49,8 @@ struct InstallView: View {
                 LabeledContent("Target version", value: model.targetVersion)
                 LabeledContent("Installed version", value: model.installedStatus.version ?? "—")
                 LabeledContent("Installation location", value: model.installedStatus.location ?? effectiveStateDirectory)
-                if let origin = model.installedStatus.serviceOrigin {
+                LabeledContent("Background service", value: model.isMachineRunning ? "Running" : "Stopped")
+                if let origin = model.installedStatus.serviceOrigin ?? model.controllerURL?.absoluteString {
                     LabeledContent("Cowboy Service", value: origin)
                 }
                 if let error = model.installState.errorMessage {
@@ -96,7 +97,7 @@ struct InstallView: View {
                 Button("Cancel", role: .destructive) { model.cancelInstall() }
                     .keyboardShortcut(.cancelAction)
             } else {
-                Button(model.installedStatus.isInstalled ? "Update" : "Install") { start() }
+                Button(model.installedStatus.isInstalled ? "Repair / Re-enroll" : "Install") { start() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(enrollmentToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }

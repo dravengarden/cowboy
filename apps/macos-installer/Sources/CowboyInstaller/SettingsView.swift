@@ -5,15 +5,24 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var launchAtLogin: LaunchAtLoginController
+    @State private var showStopConfirmation = false
 
     var body: some View {
         Form {
+            Section("Cowboy Service") {
+                TextField("Service URL", text: stringSettingBinding(\.controllerURL))
+                    .textContentType(.URL)
+                Text("Used for Open Cowboy, account status, and dependency management.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Updates") {
                 Toggle(
-                    "Automatically check for updates",
+                    "Automatically check dependency status",
                     isOn: boolSettingBinding(\.automaticallyCheckForUpdates)
                 )
-                Text("Cowboy Machine applies signed automatic component generations itself. This manager does not create a second auto-install channel.")
+                Text("This manager checks without installing. Cowboy Machine still applies signed automatic component generations through its existing control channel.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -38,8 +47,17 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("Startup") {
-                Toggle("Launch at Login", isOn: launchBinding)
+            Section("Background") {
+                Toggle("Run Cowboy Machine in background", isOn: machineBackgroundBinding)
+                    .disabled(
+                        !model.installedStatus.isInstalled
+                            || model.serviceActionState.phase.isRunning
+                    )
+                Text("The Machine is a separate user LaunchAgent and keeps running when this menu app quits.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Show Cowboy in the menu bar at login", isOn: launchBinding)
                     .disabled(launchAtLogin.status == .unavailable)
                 Text(launchStatusDescription)
                     .font(.caption)
@@ -49,7 +67,7 @@ struct SettingsView: View {
             }
 
             Section("About") {
-                LabeledContent("Application", value: "Cowboy Installer")
+                LabeledContent("Application", value: "Cowboy Manager")
                 LabeledContent("Version", value: model.targetVersion)
                 LabeledContent("Bundle ID", value: Bundle.main.bundleIdentifier ?? "development")
                 Link("Cowboy project", destination: URL(string: "https://github.com/dravengarden/cowboy")!)
@@ -60,6 +78,21 @@ struct SettingsView: View {
         .navigationTitle("Settings")
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             launchAtLogin.refresh()
+            model.refreshAll()
+        }
+        .confirmationDialog(
+            "Stop Cowboy Machine?",
+            isPresented: $showStopConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Stop Machine", role: .destructive) { model.stopMachine() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            if let count = model.remoteMachine?.activeSessions, count > 0 {
+                Text("\(count) active session\(count == 1 ? "" : "s") will disconnect until the Machine starts again.")
+            } else {
+                Text("New sessions cannot run on this Mac until the Machine starts again.")
+            }
         }
     }
 
@@ -90,6 +123,19 @@ struct SettingsView: View {
         Binding(
             get: { launchAtLogin.isEnabled },
             set: { launchAtLogin.setEnabled($0) }
+        )
+    }
+
+    private var machineBackgroundBinding: Binding<Bool> {
+        Binding(
+            get: { model.isMachineRunning },
+            set: { enabled in
+                if enabled {
+                    model.startMachine()
+                } else {
+                    showStopConfirmation = true
+                }
+            }
         )
     }
 
@@ -125,13 +171,13 @@ struct SettingsView: View {
         }
         return switch launchAtLogin.status {
         case .enabled:
-            "Registered with macOS as a login item."
+            "The lightweight menu app starts at login."
         case .disabled:
-            "Not registered as a login item."
+            "The menu app does not start automatically."
         case .requiresApproval:
             "macOS requires approval in System Settings → General → Login Items."
         case .unavailable:
-            "Install Cowboy Installer in /Applications before enabling Launch at Login."
+            "Install Cowboy Manager in /Applications before enabling Launch at Login."
         }
     }
 }

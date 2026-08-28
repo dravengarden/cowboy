@@ -47,22 +47,47 @@ other two commands install the user service/LaunchAgent, a stable launcher, a
 mode-0600 one-time enrollment-token file, and the bootstrap host. The host
 deletes the token file immediately after successful enrollment.
 
-## Native macOS installer manager
+## Native macOS manager
 
-`apps/macos-installer` is the native SwiftUI wrapper around that same bootstrap
-contract. It provides a persistent menu-bar status item plus one management
-window with Install, Activity, and Settings surfaces. Its process-owned task
-model keeps an active install independent from any window, persists a bounded
-non-secret activity history, and marks a task left running across process
-termination as interrupted. It invokes the bundled `cowboy register` command
-with structured `Process` arguments and passes `/dev/fd/0` as `--token-file`
-over an anonymous pipe; the one-time enrollment code is never placed in process
-arguments, settings, activity history, or a disk file.
+`apps/macos-installer` is the native AppKit/SwiftUI manager around that same
+bootstrap contract. It is a menu-bar accessory with no WebView, Electron,
+Tauri, XPC, or privileged helper. The management window has Dashboard, Install,
+Activity, Account, and Settings surfaces. Dashboard opens the installed
+`top.thundersparrow.cowboy` desktop shell when present, otherwise the configured
+Cowboy Service, starts or stops the exact user LaunchAgent, reports the local
+and Controller Machine state, and checks or applies managed dependency updates.
+Stopping a Machine or rolling a dependency used by active sessions requires an
+explicit confirmation.
+
+The manager recognizes both current Service-scoped installations and the
+legacy `~/.local/state/cowboy-machine` layout. It reads the controller origin
+from `service-origin` or the installed launcher, matches only
+`xyz.stormbird.cowboy-machine[.<service-id>]` plists inside the current user's
+`~/Library/LaunchAgents`, and invokes `/bin/launchctl` with structured
+arguments. Quitting the menu app does not stop the independently owned Machine
+LaunchAgent.
+
+The process-owned task model keeps an active install or dependency update
+independent from any window. Installation persists a bounded non-secret
+activity history and marks a task left running across process termination as
+interrupted. It invokes the bundled `cowboy register` command with structured
+`Process` arguments and passes `/dev/fd/0` as `--token-file` over an anonymous
+pipe; the one-time enrollment code is never placed in process arguments,
+settings, activity history, or a disk file.
+
+The Account surface uses the configured HTTPS origin's existing product and
+admin endpoints. The password remains only in the view long enough to create
+the two Service sessions and is never persisted. First-time host setup stays in
+the browser so the host setup code never enters this app. Auth-off Services
+remain usable as the synthetic local owner, while dependency mutations still
+require the owner/admin session. Dependency checks read the Controller's
+Machine inventory; mutations call the existing signed reconcile or bounded npm
+update commands and never install directly from the macOS app.
 
 The manager uses `SMAppService.mainApp` for its own optional Launch at Login
-setting. This is separate from the installed Machine LaunchAgent, which remains
-owned by the Rust backend. A normal menu-bar process is sufficient, so the app
-does not add XPC, a privileged helper, or a second installer implementation.
+setting. This starts only the lightweight menu app. The separate "Run Cowboy
+Machine in background" control manages the installed Machine LaunchAgent,
+which remains owned by the Rust backend.
 
 On macOS, run the project-owned gates and package the app with:
 
@@ -72,7 +97,7 @@ just macos-installer-build
 just macos-installer-verify
 ```
 
-The build places `Cowboy Installer.app` under
+The build places `Cowboy Manager.app` under
 `apps/macos-installer/dist/`, embeds all three Machine bootstrap commands, and
 uses ad-hoc signing unless `CODE_SIGN_IDENTITY` names a real signing identity.
 Copy a signed production build to `/Applications` before enabling Launch at

@@ -6,6 +6,11 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var installedStatus: InstalledStatus
     @Published public private(set) var history: [ActivityRecord]
     @Published public private(set) var settings: InstallerSettings
+    @Published public private(set) var serviceActionState: MachineServiceActionState
+    @Published public private(set) var accountStatus: AccountStatus
+    @Published public private(set) var remoteMachine: ManagedMachineSummary?
+    @Published public private(set) var remoteStatusError: String?
+    @Published public private(set) var dependencyUpdateState: DependencyUpdateState
 
     public let targetVersion: String
 
@@ -13,8 +18,13 @@ public final class AppModel: ObservableObject {
     private let persistence: InstallerPersistence
     private let statusDetector: InstalledStatusDetecting
     private let notifier: InstallerNotifying
+    private let machineService: MachineServiceControlling
+    private let serviceClient: CowboyServiceClient
     private var installationTask: Task<Void, Never>?
-    private var automaticStatusTask: Task<Void, Never>?
+    private var serviceActionTask: Task<Void, Never>?
+    private var accountTask: Task<Void, Never>?
+    private var dependencyTask: Task<Void, Never>?
+    private var monitoringTask: Task<Void, Never>?
     private var currentStartedAt: Date?
     private var lastRequestWithoutToken: InstallRequest?
 
@@ -23,29 +33,71 @@ public final class AppModel: ObservableObject {
         persistence: InstallerPersistence,
         statusDetector: InstalledStatusDetecting,
         notifier: InstallerNotifying,
+        machineService: MachineServiceControlling = LaunchctlMachineServiceController(),
+        serviceClient: CowboyServiceClient = URLSessionCowboyServiceClient(),
         targetVersion: String
     ) {
         self.backend = backend
         self.persistence = persistence
         self.statusDetector = statusDetector
         self.notifier = notifier
+        self.machineService = machineService
+        self.serviceClient = serviceClient
         self.targetVersion = targetVersion
-        let loadedSettings = persistence.loadSettings()
+
+        var loadedSettings = persistence.loadSettings()
         let detectedStatus = statusDetector.detect(
             preferredStateDirectory: loadedSettings.stateDirectory.nilIfEmpty
         )
+        if loadedSettings.controllerURL.isEmpty, let origin = detectedStatus.serviceOrigin {
+            loadedSettings.controllerURL = origin
+            persistence.saveSettings(loadedSettings)
+        }
         settings = loadedSettings
         history = persistence.loadHistory()
         installedStatus = detectedStatus
         installState = InstallState()
+        serviceActionState = MachineServiceActionState()
+        accountStatus = AccountStatus()
+        remoteMachine = nil
+        remoteStatusError = nil
+        dependencyUpdateState = DependencyUpdateState()
         recoverInterruptedInstallIfNeeded()
-        configureAutomaticStatusChecks()
     }
 
     public var isRunning: Bool { installState.phase.isRunning }
 
+    public var isMachineRunning: Bool { installedStatus.launchAgentLoaded }
+
+    public var isBusy: Bool {
+        isRunning || serviceActionState.phase.isRunning || dependencyUpdateState.phase.isRunning
+    }
+
     public var canRetry: Bool {
         [.failed, .cancelled, .interrupted].contains(installState.phase)
+    }
+
+    public var controllerURL: URL? {
+        let value = settings.controllerURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: value), url.host != nil else { return nil }
+        return url
+    }
+
+    public func startMonitoring() {
+        guard monitoringTask == nil else { return }
+        monitoringTask = Task { [weak self] in
+            guard let self else { return }
+            await refreshRemoteState(checkDependencies: settings.automaticallyCheckForUpdates)
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .seconds(30))
+                } catch {
+                    return
+                }
+                refreshInstalledStatus()
+                await refreshRemoteState(checkDependencies: settings.automaticallyCheckForUpdates)
+            }
+        }
     }
 
     @discardableResult
@@ -70,7 +122,7 @@ public final class AppModel: ObservableObject {
                     self?.apply(progress)
                 }
                 apply(.init(phase: .refreshing, fraction: 0.94, message: "Refreshing installed status"))
-                installedStatus = statusDetector.detect(preferredStateDirectory: request.stateDirectory)
+                refreshInstalledStatus()
                 if !installedStatus.isInstalled {
                     installedStatus = InstalledStatus(
                         isInstalled: true,
@@ -87,6 +139,7 @@ public final class AppModel: ObservableObject {
                     details: receipt.log,
                     targetVersion: request.targetVersion
                 )
+                await refreshRemoteState(checkDependencies: false)
                 if settings.notificationsEnabled {
                     await notifier.send(title: "Cowboy is ready", body: "Cowboy Machine was installed successfully.")
                 }
@@ -130,15 +183,260 @@ public final class AppModel: ObservableObject {
         installedStatus = statusDetector.detect(
             preferredStateDirectory: settings.stateDirectory.nilIfEmpty
         )
+        if settings.controllerURL.isEmpty, let origin = installedStatus.serviceOrigin {
+            settings.controllerURL = origin
+            persistence.saveSettings(settings)
+        }
+    }
+
+    public func refreshAll() {
+        refreshInstalledStatus()
+        Task { [weak self] in
+            await self?.refreshRemoteState(checkDependencies: false)
+        }
+    }
+
+    @discardableResult
+    public func startMachine() -> Bool {
+        guard serviceActionTask == nil, installedStatus.isInstalled, !isMachineRunning else {
+            return false
+        }
+        let status = installedStatus
+        serviceActionState = MachineServiceActionState(
+            phase: .starting,
+            message: "Starting Cowboy Machine"
+        )
+        serviceActionTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await machineService.start(status)
+                try await refreshMachineService(untilRunning: true)
+                serviceActionState = MachineServiceActionState(message: "Cowboy Machine is running")
+                await refreshRemoteState(checkDependencies: false)
+            } catch {
+                let message = Self.userFacing(error)
+                serviceActionState = MachineServiceActionState(
+                    phase: .failed,
+                    message: "Could not start Cowboy Machine",
+                    errorMessage: message
+                )
+            }
+            serviceActionTask = nil
+        }
+        return true
+    }
+
+    @discardableResult
+    public func stopMachine() -> Bool {
+        guard serviceActionTask == nil, installedStatus.isInstalled, isMachineRunning else {
+            return false
+        }
+        let status = installedStatus
+        serviceActionState = MachineServiceActionState(
+            phase: .stopping,
+            message: "Stopping Cowboy Machine"
+        )
+        serviceActionTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await machineService.stop(status)
+                try await refreshMachineService(untilRunning: false)
+                serviceActionState = MachineServiceActionState(message: "Cowboy Machine is stopped")
+                await refreshRemoteState(checkDependencies: false)
+            } catch {
+                let message = Self.userFacing(error)
+                serviceActionState = MachineServiceActionState(
+                    phase: .failed,
+                    message: "Could not stop Cowboy Machine",
+                    errorMessage: message
+                )
+            }
+            serviceActionTask = nil
+        }
+        return true
+    }
+
+    public func waitForServiceAction() async {
+        await serviceActionTask?.value
+    }
+
+    @discardableResult
+    public func signIn(account: String, password: String) -> Bool {
+        guard accountTask == nil, !settings.controllerURL.isEmpty else { return false }
+        accountStatus = AccountStatus(phase: .checking, message: "Signing in")
+        accountTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                accountStatus = try await serviceClient.signIn(
+                    controllerURL: settings.controllerURL,
+                    account: account,
+                    password: password
+                )
+                await refreshRemoteMachine()
+            } catch {
+                accountStatus = AccountStatus(
+                    phase: .failed,
+                    message: "Sign-in failed",
+                    errorMessage: Self.userFacing(error)
+                )
+            }
+            accountTask = nil
+        }
+        return true
+    }
+
+    @discardableResult
+    public func signOut() -> Bool {
+        guard accountTask == nil, !settings.controllerURL.isEmpty else { return false }
+        accountStatus = AccountStatus(phase: .checking, message: "Signing out")
+        accountTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                accountStatus = try await serviceClient.signOut(controllerURL: settings.controllerURL)
+                remoteMachine = nil
+                remoteStatusError = nil
+            } catch {
+                accountStatus = AccountStatus(
+                    phase: .failed,
+                    message: "Sign-out failed",
+                    errorMessage: Self.userFacing(error)
+                )
+            }
+            accountTask = nil
+        }
+        return true
+    }
+
+    public func waitForAccountAction() async {
+        await accountTask?.value
+    }
+
+    @discardableResult
+    public func checkDependencies(refresh: Bool = true) -> Bool {
+        guard dependencyTask == nil,
+              accountStatus.canReadProduct,
+              let machineID = installedStatus.machineID,
+              !settings.controllerURL.isEmpty
+        else {
+            return false
+        }
+        dependencyUpdateState = DependencyUpdateState(
+            phase: .checking,
+            progress: 0.05,
+            message: refresh ? "Checking dependency releases" : "Refreshing dependency status"
+        )
+        dependencyTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let plan = try await serviceClient.dependencyUpdatePlan(
+                    controllerURL: settings.controllerURL,
+                    machineID: machineID,
+                    refresh: refresh
+                )
+                dependencyUpdateState = DependencyUpdateState(
+                    phase: plan.items.isEmpty ? .succeeded : .ready,
+                    progress: 1,
+                    message: plan.items.isEmpty
+                        ? "All managed dependencies are up to date"
+                        : "\(plan.items.count) dependency update\(plan.items.count == 1 ? "" : "s") available",
+                    plan: plan
+                )
+                remoteMachine = try? await serviceClient.machine(
+                    controllerURL: settings.controllerURL,
+                    machineID: machineID
+                )
+            } catch {
+                dependencyUpdateState = DependencyUpdateState(
+                    phase: .failed,
+                    message: "Dependency check failed",
+                    errorMessage: Self.userFacing(error)
+                )
+            }
+            dependencyTask = nil
+        }
+        return true
+    }
+
+    @discardableResult
+    public func applyDependencyUpdates() -> Bool {
+        guard dependencyTask == nil,
+              accountStatus.canManageDependencies,
+              let plan = dependencyUpdateState.plan,
+              !plan.items.isEmpty,
+              !settings.controllerURL.isEmpty
+        else {
+            return false
+        }
+        dependencyUpdateState = DependencyUpdateState(
+            phase: .updating,
+            progress: 0,
+            message: "Preparing dependency updates",
+            plan: plan
+        )
+        dependencyTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                for (index, item) in plan.items.enumerated() {
+                    dependencyUpdateState = DependencyUpdateState(
+                        phase: .updating,
+                        progress: Double(index) / Double(plan.items.count),
+                        message: "Updating \(item.displayName)",
+                        plan: plan
+                    )
+                    try await serviceClient.applyDependencyUpdate(
+                        controllerURL: settings.controllerURL,
+                        machineID: plan.machineID,
+                        item: item
+                    )
+                }
+                let remaining = try await serviceClient.dependencyUpdatePlan(
+                    controllerURL: settings.controllerURL,
+                    machineID: plan.machineID,
+                    refresh: false
+                )
+                dependencyUpdateState = DependencyUpdateState(
+                    phase: .succeeded,
+                    progress: 1,
+                    message: remaining.items.isEmpty
+                        ? "Dependencies updated successfully"
+                        : "Updates completed; \(remaining.items.count) item\(remaining.items.count == 1 ? "" : "s") still need attention",
+                    plan: remaining
+                )
+                remoteMachine = try? await serviceClient.machine(
+                    controllerURL: settings.controllerURL,
+                    machineID: plan.machineID
+                )
+                if settings.notificationsEnabled {
+                    await notifier.send(
+                        title: "Cowboy dependencies updated",
+                        body: dependencyUpdateState.message
+                    )
+                }
+            } catch {
+                let message = Self.userFacing(error)
+                dependencyUpdateState = DependencyUpdateState(
+                    phase: .failed,
+                    progress: dependencyUpdateState.progress,
+                    message: "Dependency update failed",
+                    plan: plan,
+                    errorMessage: message
+                )
+                if settings.notificationsEnabled {
+                    await notifier.send(title: "Cowboy update needs attention", body: message)
+                }
+            }
+            dependencyTask = nil
+        }
+        return true
+    }
+
+    public func waitForDependencyAction() async {
+        await dependencyTask?.value
     }
 
     public func updateSettings(_ update: (inout InstallerSettings) -> Void) {
-        let previousAutomaticCheck = settings.automaticallyCheckForUpdates
         update(&settings)
         persistence.saveSettings(settings)
-        if previousAutomaticCheck != settings.automaticallyCheckForUpdates {
-            configureAutomaticStatusChecks()
-        }
     }
 
     public func requestNotificationAuthorization() async -> Bool {
@@ -151,6 +449,73 @@ public final class AppModel: ObservableObject {
 
     public func retryTemplate() -> InstallRequest? {
         lastRequestWithoutToken
+    }
+
+    private func refreshMachineService(untilRunning expected: Bool) async throws {
+        for _ in 0..<20 {
+            refreshInstalledStatus()
+            if installedStatus.launchAgentLoaded == expected {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(250))
+        }
+        throw MachineServiceControllerError.commandFailed(
+            expected
+                ? "Cowboy Machine was loaded but did not become ready."
+                : "Cowboy Machine did not stop before the timeout."
+        )
+    }
+
+    private func refreshRemoteState(checkDependencies: Bool) async {
+        guard accountTask == nil else { return }
+        guard !settings.controllerURL.isEmpty else {
+            accountStatus = AccountStatus(
+                phase: .unknown,
+                message: "Set the Cowboy Service URL to check account status."
+            )
+            remoteMachine = nil
+            return
+        }
+        do {
+            accountStatus = try await serviceClient.accountStatus(controllerURL: settings.controllerURL)
+            await refreshRemoteMachine()
+            if checkDependencies,
+               dependencyTask == nil,
+               accountStatus.canReadProduct,
+               installedStatus.machineID != nil
+            {
+                _ = self.checkDependencies(refresh: false)
+            }
+        } catch {
+            accountStatus = AccountStatus(
+                phase: .failed,
+                message: "Could not reach Cowboy Service",
+                errorMessage: Self.userFacing(error)
+            )
+            remoteMachine = nil
+            remoteStatusError = Self.userFacing(error)
+        }
+    }
+
+    private func refreshRemoteMachine() async {
+        guard accountStatus.canReadProduct,
+              let machineID = installedStatus.machineID,
+              !settings.controllerURL.isEmpty
+        else {
+            remoteMachine = nil
+            remoteStatusError = nil
+            return
+        }
+        do {
+            remoteMachine = try await serviceClient.machine(
+                controllerURL: settings.controllerURL,
+                machineID: machineID
+            )
+            remoteStatusError = nil
+        } catch {
+            remoteMachine = nil
+            remoteStatusError = Self.userFacing(error)
+        }
     }
 
     private func apply(_ progress: InstallProgress) {
@@ -206,7 +571,8 @@ public final class AppModel: ObservableObject {
             ),
             at: 0
         )
-        persistence.saveHistory(Array(history.prefix(50)))
+        history = Array(history.prefix(50))
+        persistence.saveHistory(history)
         persistence.savePendingInstall(nil)
         installState = InstallState(
             phase: .interrupted,
@@ -214,22 +580,6 @@ public final class AppModel: ObservableObject {
             message: summary,
             errorMessage: "Create a new one-time enrollment code and retry."
         )
-    }
-
-    private func configureAutomaticStatusChecks() {
-        automaticStatusTask?.cancel()
-        automaticStatusTask = nil
-        guard settings.automaticallyCheckForUpdates else { return }
-        automaticStatusTask = Task { [weak self] in
-            while !Task.isCancelled {
-                do {
-                    try await Task.sleep(for: .seconds(1_800))
-                } catch {
-                    return
-                }
-                self?.refreshInstalledStatus()
-            }
-        }
     }
 
     private static func userFacing(_ error: Error) -> String {
@@ -255,14 +605,17 @@ public final class AppRuntime {
 
     public static func live() -> AppRuntime {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development"
+        let model = AppModel(
+            backend: ProcessInstallerBackend(),
+            persistence: UserDefaultsInstallerPersistence(),
+            statusDetector: InstalledStatusDetector(),
+            notifier: SystemInstallerNotifier(),
+            machineService: LaunchctlMachineServiceController(),
+            serviceClient: URLSessionCowboyServiceClient(),
+            targetVersion: version
+        )
         return AppRuntime(
-            model: AppModel(
-                backend: ProcessInstallerBackend(),
-                persistence: UserDefaultsInstallerPersistence(),
-                statusDetector: InstalledStatusDetector(),
-                notifier: SystemInstallerNotifier(),
-                targetVersion: version
-            ),
+            model: model,
             launchAtLogin: LaunchAtLoginController()
         )
     }

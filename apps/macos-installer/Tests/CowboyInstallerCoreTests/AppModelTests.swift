@@ -91,4 +91,83 @@ struct AppModelTests {
 
         #expect(runtime.menuModel === runtime.windowModel)
     }
+
+    @Test
+    func startsAndStopsTheDetectedLaunchAgent() async {
+        let detector = StubStatusDetector()
+        detector.status = installedStatus(running: false)
+        let service = MockMachineServiceController()
+        service.onStart = { detector.status = installedStatus(running: true) }
+        service.onStop = { detector.status = installedStatus(running: false) }
+        let model = makeModel(
+            backend: MockInstallerBackend(),
+            detector: detector,
+            machineService: service
+        )
+
+        #expect(model.startMachine())
+        await model.waitForServiceAction()
+        #expect(model.isMachineRunning)
+        #expect(service.startCount == 1)
+
+        #expect(model.stopMachine())
+        await model.waitForServiceAction()
+        #expect(!model.isMachineRunning)
+        #expect(service.stopCount == 1)
+    }
+
+    @Test
+    func signsInThenAppliesDependencyPlan() async {
+        let persistence = MemoryPersistence()
+        persistence.settings.controllerURL = "https://cowboy.example"
+        let detector = StubStatusDetector()
+        detector.status = installedStatus(running: true)
+        let client = MockCowboyServiceClient()
+        let update = DependencyUpdateItem(
+            component: .init(kind: "provider_cli", slot: "codex"),
+            displayName: "Codex CLI",
+            currentVersion: "1.0.0",
+            targetVersion: "1.1.0",
+            activeLeases: 0,
+            channel: .npm
+        )
+        client.plan = DependencyUpdatePlan(
+            machineID: "macbook-air",
+            machineName: "MacBook Air",
+            activeSessions: 0,
+            items: [update]
+        )
+        let model = makeModel(
+            backend: MockInstallerBackend(),
+            persistence: persistence,
+            detector: detector,
+            serviceClient: client
+        )
+
+        #expect(model.signIn(account: "owner", password: "password"))
+        await model.waitForAccountAction()
+        #expect(model.accountStatus.canManageDependencies)
+
+        #expect(model.checkDependencies())
+        await model.waitForDependencyAction()
+        #expect(model.dependencyUpdateState.plan?.items == [update])
+
+        #expect(model.applyDependencyUpdates())
+        await model.waitForDependencyAction()
+        #expect(client.applied == [update])
+        #expect(model.dependencyUpdateState.phase == .succeeded)
+    }
+}
+
+private func installedStatus(running: Bool) -> InstalledStatus {
+    InstalledStatus(
+        isInstalled: true,
+        version: "1.2.3",
+        location: "/state",
+        serviceOrigin: "https://cowboy.example",
+        machineID: "macbook-air",
+        launchAgentLabel: "xyz.stormbird.cowboy-machine",
+        launchAgentPath: "/Users/test/Library/LaunchAgents/xyz.stormbird.cowboy-machine.plist",
+        launchAgentLoaded: running
+    )
 }
