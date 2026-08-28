@@ -284,6 +284,16 @@ struct Broker {
     next_lease: AtomicU64,
 }
 
+fn should_recycle_for_explicit_revive(worker: &WorkerSnapshot, desired_generation: &str) -> bool {
+    matches!(worker.state, WorkerState::Exited | WorkerState::Crashed)
+        || (!desired_generation.is_empty()
+            && worker.generation != desired_generation
+            && worker.drain_requested
+            && worker.current_turn_id.is_none()
+            && worker.pending_permissions.is_empty()
+            && matches!(worker.state, WorkerState::Running | WorkerState::Draining))
+}
+
 impl Broker {
     fn revoke_cache_protection(
         &self,
@@ -1034,15 +1044,16 @@ impl Broker {
             .lock()
             .insert(session.session_id.clone(), session.clone());
         let replacement_in_progress = self.replacing.lock().contains_key(&session.session_id);
+        let desired_generation = self.desired_generation.lock().clone();
         let existing = {
             let mut workers = self.workers.lock();
             match workers.get(&session.session_id) {
                 Some(worker)
                     if !adopt_only
                         && !replacement_in_progress
-                        && matches!(
-                            worker.snapshot.state,
-                            WorkerState::Exited | WorkerState::Crashed
+                        && should_recycle_for_explicit_revive(
+                            &worker.snapshot,
+                            &desired_generation,
                         ) =>
                 {
                     workers.remove(&session.session_id).map(Ok)
@@ -1064,7 +1075,9 @@ impl Broker {
                     session = %session.session_id,
                     state = ?worker.snapshot.state,
                     generation = %worker.snapshot.generation,
-                    "recycling terminal worker before session revive"
+                    drain_requested = worker.snapshot.drain_requested,
+                    desired_generation = %desired_generation,
+                    "recycling stale worker before session revive"
                 );
                 let _ = worker.tx.send(Frame::WorkerCommand {
                     session_id: session.session_id.clone(),
@@ -1089,7 +1102,7 @@ impl Broker {
                         tracing::error!(
                             session = %session.session_id,
                             pid,
-                            "terminal direct worker remained owned after KILL timeout"
+                            "stale direct worker remained owned after KILL timeout"
                         );
                     }
                 }
@@ -3675,6 +3688,74 @@ mod tests {
         assert!(
             !broker.startup_failures.lock().contains_key("sess-terminal"),
             "the replacement must not inherit stale startup failure detail"
+        );
+    }
+
+    #[tokio::test]
+    async fn explicit_revive_recycles_a_drain_ready_retired_worker() {
+        let broker = Arc::new(Broker::new(MachineBrokerArgs {
+            socket: PathBuf::from("/tmp/unused.sock"),
+            worker_command: PathBuf::from("/bin/false"),
+            desired_generation: "gen-current".to_owned(),
+            spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worker_ready_timeout: Duration::from_millis(10),
+        }));
+        let (worker_tx, mut worker_rx) = mpsc::unbounded_channel();
+        broker
+            .register_worker(WorkerRegistration {
+                session_id: "sess-retired".to_owned(),
+                epoch: "epoch-retired".to_owned(),
+                generation: "gen-retired".to_owned(),
+                executable: Some("/bin/false".to_owned()),
+                fallback_for: None,
+                connection_id: 43,
+                tx: worker_tx,
+            })
+            .expect("register retired worker");
+        {
+            let mut workers = broker.workers.lock();
+            let snapshot = &mut workers
+                .get_mut("sess-retired")
+                .expect("retired worker")
+                .snapshot;
+            snapshot.state = WorkerState::Draining;
+            snapshot.drain_requested = true;
+        }
+
+        broker
+            .ensure_session(StartSession {
+                session_id: "sess-retired".to_owned(),
+                provider: "codex".to_owned(),
+                provider_version: String::new(),
+                provider_generation_digest: String::new(),
+                provider_auth_generation: None,
+                provider_behavior: None,
+                cwd: "/work".to_owned(),
+                agent_session_id: Some("agent-retired".to_owned()),
+                system: false,
+                context_window: None,
+                auto_compact_token_limit: None,
+                cache_protection: None,
+                generation: "gen-current".to_owned(),
+                fallback_for: None,
+                adopt_only: false,
+            })
+            .await;
+
+        assert!(matches!(
+            worker_rx.try_recv(),
+            Ok(Frame::WorkerCommand {
+                session_id,
+                command: WorkerCommand::Stop { command_id },
+            }) if session_id == "sess-retired"
+                && command_id == "revive-stop-sess-retired"
+        ));
+        assert!(
+            !broker.workers.lock().contains_key("sess-retired"),
+            "the drain-ready retired peer must be fenced before replacement startup"
         );
     }
 
