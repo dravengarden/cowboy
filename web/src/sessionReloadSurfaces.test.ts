@@ -1,4 +1,4 @@
-import { assert } from "jsr:@std/assert";
+import { assert, assertEquals } from "jsr:@std/assert";
 
 const appSource = await Deno.readTextFile(
   new URL("./App.tsx", import.meta.url),
@@ -18,7 +18,16 @@ Deno.test("desktop session dialog exposes confirmed runtime reload", () => {
 
 Deno.test("mobile session settings sheet exposes the same reload dialog", () => {
   assert(composerSource.includes('aria-label="reload session from session settings"'));
-  assert(composerSource.includes("onReload={(): void => setReloadConfirm(true)}"));
+  assert(
+    composerSource.includes(
+      'aria-label="reload session runtime from provider"',
+    ),
+  );
+  assertEquals(
+    composerSource.split("onReload={(): void => setReloadConfirm(true)}")
+      .length - 1,
+    2,
+  );
   assert(composerSource.includes("session={reloadConfirm ? session : null}"));
 });
 

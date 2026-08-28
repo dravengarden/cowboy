@@ -6919,7 +6919,12 @@ function ComposerSheet({
           onReload={(): void => setReloadConfirm(true)}
         />
       )}
-      {session && <SessionProviderSection session={session} />}
+      {session && (
+        <SessionProviderSection
+          session={session}
+          onReload={(): void => setReloadConfirm(true)}
+        />
+      )}
       {session && (
         <WorkspaceOptionsSection
           session={session}
@@ -7489,8 +7494,10 @@ function SessionInfoSection({
 
 function SessionProviderSection({
   session,
+  onReload,
 }: {
   session: SessionMeta;
+  onReload: () => void;
 }): React.JSX.Element {
   const { catalog } = useProviderCatalog();
   const entry = currentProviderEntry(
@@ -7590,52 +7597,84 @@ function SessionProviderSection({
         </ButtonBase>
         <Collapse id={panelId} in={expanded}>
           <Box sx={{ pt: 0.5 }}>
-            {entry && (
-              <>
+            <Stack
+              direction="row"
+              alignItems="flex-start"
+              spacing={1}
+              sx={{
+                px: 0.5,
+                pb: 0.25,
+              }}
+            >
+              {entry && (
                 <Typography
                   variant="caption"
                   color="text.secondary"
                   sx={{
                     display: "block",
-                    px: 0.5,
-                    pb: 0.25,
+                    flex: 1,
+                    minWidth: 0,
+                    pt: 0.5,
                     lineHeight: 1.4,
                   }}
                 >
                   {entry.manifest.display.summary}
                 </Typography>
-                <List dense disablePadding>
-                  {facts.map((row) => (
-                    <SheetDetailRow
-                      key={row.label}
-                      label={row.label}
-                      value={row.value}
-                      mono={row.mono === true}
-                    />
-                  ))}
-                  {sessionProviderShowsUsage({
-                    ready,
-                    ...(entry.manifest.host.account_usage?.provider
-                      ? {
-                        accountUsageProvider:
-                          entry.manifest.host.account_usage.provider,
-                      }
-                      : {}),
-                  }) && (
-                    <SessionProviderUsage
-                      provider={session.provider}
-                      {...(session.provider_version === undefined
-                        ? {}
-                        : { providerVersion: session.provider_version })}
-                      {...(session.provider_generation_digest === undefined
-                        ? {}
-                        : {
-                          providerDigest: session.provider_generation_digest,
-                        })}
-                    />
-                  )}
-                </List>
-              </>
+              )}
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<Refresh fontSize="small" />}
+                aria-label="reload session runtime from provider"
+                onClick={(event): void => {
+                  event.currentTarget.blur();
+                  haptic();
+                  onReload();
+                }}
+                sx={{
+                  height: 44,
+                  minHeight: 44,
+                  px: 1.25,
+                  ml: "auto",
+                  flexShrink: 0,
+                  textTransform: "none",
+                }}
+              >
+                Reload
+              </Button>
+            </Stack>
+            {entry && (
+              <List dense disablePadding>
+                {facts.map((row) => (
+                  <SheetDetailRow
+                    key={row.label}
+                    label={row.label}
+                    value={row.value}
+                    mono={row.mono === true}
+                  />
+                ))}
+                {sessionProviderShowsUsage({
+                  ready,
+                  ...(entry.manifest.host.account_usage?.provider
+                    ? {
+                      accountUsageProvider:
+                        entry.manifest.host.account_usage.provider,
+                    }
+                    : {}),
+                }) && (
+                  <SessionProviderUsage
+                    provider={session.provider}
+                    {...(session.provider_version === undefined
+                      ? {}
+                      : { providerVersion: session.provider_version })}
+                    {...(session.provider_generation_digest === undefined
+                      ? {}
+                      : {
+                        providerDigest: session.provider_generation_digest,
+                      })}
+                  />
+                )}
+              </List>
             )}
             {ready && (
               <ButtonBase
