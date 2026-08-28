@@ -1043,14 +1043,12 @@ impl Broker {
         self.sessions
             .lock()
             .insert(session.session_id.clone(), session.clone());
-        let replacement_in_progress = self.replacing.lock().contains_key(&session.session_id);
         let desired_generation = self.desired_generation.lock().clone();
         let existing = {
             let mut workers = self.workers.lock();
             match workers.get(&session.session_id) {
                 Some(worker)
                     if !adopt_only
-                        && !replacement_in_progress
                         && should_recycle_for_explicit_revive(
                             &worker.snapshot,
                             &desired_generation,
@@ -1070,6 +1068,10 @@ impl Broker {
                 return;
             }
             Some(Ok(worker)) => {
+                // A legacy worker can publish its terminal event and then
+                // remain connected forever. Take ownership from a rollout
+                // that was waiting for that impossible disconnect.
+                self.replacing.lock().remove(&session.session_id);
                 self.startup_failures.lock().remove(&session.session_id);
                 tracing::warn!(
                     session = %session.session_id,
@@ -3644,6 +3646,10 @@ mod tests {
             "sess-terminal".to_owned(),
             "stale terminal failure".to_owned(),
         );
+        broker
+            .replacing
+            .lock()
+            .insert("sess-terminal".to_owned(), "gen-retired".to_owned());
 
         broker
             .ensure_session(StartSession {
@@ -3688,6 +3694,10 @@ mod tests {
         assert!(
             !broker.startup_failures.lock().contains_key("sess-terminal"),
             "the replacement must not inherit stale startup failure detail"
+        );
+        assert!(
+            !broker.replacing.lock().contains_key("sess-terminal"),
+            "explicit revive must take ownership from the stuck rollout"
         );
     }
 
