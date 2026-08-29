@@ -56,6 +56,9 @@ native-shell-check:
     rg -q 'modalPresentationStyle = UIModalPresentationPageSheet' src-tauri/gen/apple/Sources/cowboy-app/CowboyNativeTweaks.mm
     rg -q 'prefersGrabberVisible = YES' src-tauri/gen/apple/Sources/cowboy-app/CowboyNativeTweaks.mm
     rg -q '\[gCowboyAuthenticationURL isEqual:url\]' src-tauri/gen/apple/Sources/cowboy-app/CowboyNativeTweaks.mm
+    rg -q 'SFSafariViewControllerDelegate, UIAdaptivePresentationControllerDelegate' src-tauri/gen/apple/Sources/cowboy-app/CowboyNativeTweaks.mm
+    rg -q 'cowboy:native-authentication-browser-closed' src-tauri/gen/apple/Sources/cowboy-app/CowboyNativeTweaks.mm
+    ! rg -q 'temporary collapse|resumes the same Safari page' src-tauri/gen/apple/Sources/cowboy-app/CowboyNativeTweaks.mm src-tauri/README.md
     ! rg -q 'static __weak SFSafariViewController \*gCowboyAuthenticationBrowser' src-tauri/gen/apple/Sources/cowboy-app/CowboyNativeTweaks.mm
     tools/check-keyboard-geometry.sh
 

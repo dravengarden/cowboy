@@ -72,11 +72,10 @@ The point of the native shell is doing what a pure-web PWA can't. What's wired u
   Mobile Paste button.
 - **Provider sign-in browser** — browser-code authentication opens in a native
   `SFSafariViewController` page sheet with a visible grabber plus system
-  Done/back/forward controls. Done or swipe-down temporarily collapses the
-  browser so the device code remains reachable in Cowboy; opening it again
-  resumes the same Safari page and history. Cowboy's WebView and its polling
-  dialog stay alive underneath, and a successful or cancelled flow releases
-  the retained browser through the native bridge.
+  Done/back/forward controls. Done or swipe-down dispatches a native dismissal
+  event to Cowboy, which immediately cancels the PKCE-bound server handoff and
+  clears the waiting state. A successful flow closes the sheet programmatically
+  without emitting a false cancellation event.
 - **File-picker permissions** — `src-tauri/Info.ios.plist` carries
   `NSCameraUsageDescription` / `NSPhotoLibraryUsageDescription` (+ encryption
   declaration). Tauri **merges** this file into the app Info.plist on every build.

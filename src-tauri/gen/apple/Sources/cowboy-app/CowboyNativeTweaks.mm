@@ -446,15 +446,47 @@ static __weak WKWebView *gCowboyWebView = nil;
 
 // (2c) Provider authentication browser. Browser-code flows do not redirect
 // back into Cowboy, so ASWebAuthenticationSession is the wrong lifecycle: the
-// Cowboy dialog must keep polling while the user completes an arbitrary number
+// Cowboy dialog must keep waiting while the user completes an arbitrary number
 // of Provider pages. SFSafariViewController provides a trusted Safari surface
 // with native Done, back, forward, and Open in Safari controls without replacing
 // the shell's one WKWebView or losing its authentication state.
-// Retain a user-dismissed browser until the web flow completes or is cancelled.
-// This turns Done / swipe-down into a temporary collapse: tapping Open again
-// resumes the same Safari controller, including its current page and history.
+// A user-initiated Done or swipe-down is a real cancellation. Notify the WebView
+// immediately so it can remove the PKCE-bound server handoff instead of leaving
+// a misleading waiting state behind. Programmatic close after success clears the
+// tracked browser before dismissal and therefore emits no cancellation event.
 static SFSafariViewController *gCowboyAuthenticationBrowser = nil;
 static NSURL *gCowboyAuthenticationURL = nil;
+
+@interface CowboyAuthenticationBrowserDelegate
+    : NSObject <SFSafariViewControllerDelegate, UIAdaptivePresentationControllerDelegate>
+@property(nonatomic, weak) SFSafariViewController *browser;
+@end
+
+static CowboyAuthenticationBrowserDelegate *gCowboyAuthenticationBrowserDelegate = nil;
+
+static void cowboyAuthenticationBrowserDidDismiss(SFSafariViewController *browser) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (browser == nil || browser != gCowboyAuthenticationBrowser) return;
+        gCowboyAuthenticationBrowser = nil;
+        gCowboyAuthenticationURL = nil;
+        gCowboyAuthenticationBrowserDelegate = nil;
+        [gCowboyWebView
+            evaluateJavaScript:
+                @"window.dispatchEvent(new Event('cowboy:native-authentication-browser-closed'));"
+            completionHandler:nil];
+    });
+}
+
+@implementation CowboyAuthenticationBrowserDelegate
+- (void)safariViewControllerDidFinish:(SFSafariViewController *)controller {
+    cowboyAuthenticationBrowserDidDismiss(controller);
+}
+
+- (void)presentationControllerDidDismiss:(UIPresentationController *)presentationController {
+    (void)presentationController;
+    cowboyAuthenticationBrowserDidDismiss(self.browser);
+}
+@end
 
 static UIViewController *cowboyTopViewController(void) {
     UIWindow *window = gCowboyWebView.window;
@@ -483,6 +515,7 @@ static void cowboyDismissAuthenticationBrowser(void) {
         SFSafariViewController *browser = gCowboyAuthenticationBrowser;
         gCowboyAuthenticationBrowser = nil;
         gCowboyAuthenticationURL = nil;
+        gCowboyAuthenticationBrowserDelegate = nil;
         if (browser.presentingViewController != nil) {
             [browser dismissViewControllerAnimated:YES completion:nil];
         }
@@ -519,29 +552,35 @@ static void cowboyPresentAuthenticationBrowser(NSURL *url) {
             UIViewController *presenter = cowboyTopViewController();
             if (presenter == nil) return;
             SFSafariViewController *browser = cowboyNewAuthenticationBrowser(url);
+            CowboyAuthenticationBrowserDelegate *delegate =
+                [[CowboyAuthenticationBrowserDelegate alloc] init];
+            delegate.browser = browser;
+            browser.delegate = delegate;
             gCowboyAuthenticationBrowser = browser;
             gCowboyAuthenticationURL = url;
-            [presenter presentViewController:browser animated:YES completion:nil];
+            gCowboyAuthenticationBrowserDelegate = delegate;
+            [presenter presentViewController:browser animated:YES completion:^{
+                if (browser == gCowboyAuthenticationBrowser) {
+                    browser.presentationController.delegate = delegate;
+                }
+            }];
         };
         SFSafariViewController *existing = gCowboyAuthenticationBrowser;
-        if (existing != nil && [gCowboyAuthenticationURL isEqual:url]) {
-            if (existing.presentingViewController == nil) {
-                UIViewController *presenter = cowboyTopViewController();
-                if (presenter != nil) {
-                    [presenter presentViewController:existing animated:YES completion:nil];
-                }
-            }
+        if (existing != nil && [gCowboyAuthenticationURL isEqual:url] &&
+            existing.presentingViewController != nil) {
             return;
         }
         if (existing.presentingViewController != nil) {
+            gCowboyAuthenticationBrowser = nil;
+            gCowboyAuthenticationURL = nil;
+            gCowboyAuthenticationBrowserDelegate = nil;
             [existing dismissViewControllerAnimated:NO completion:^{
-                gCowboyAuthenticationBrowser = nil;
-                gCowboyAuthenticationURL = nil;
                 present();
             }];
         } else {
             gCowboyAuthenticationBrowser = nil;
             gCowboyAuthenticationURL = nil;
+            gCowboyAuthenticationBrowserDelegate = nil;
             present();
         }
     });
