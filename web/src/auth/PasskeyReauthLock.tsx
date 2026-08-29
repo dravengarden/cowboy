@@ -1,7 +1,11 @@
 import { Alert, Box, Button, Stack, Typography } from "@mui/material";
 import { useEffect, useState } from "react";
-import { AuthApiError, authApi, type ProductMe } from "./authApi";
-import { assertPasskey, passkeysSupported } from "./passkeyBrowser";
+import { type ProductMe } from "./authApi";
+import {
+  passkeyErrorMessage,
+  passkeyFlowSupported,
+  verifyPasskey,
+} from "./passkeyFlow";
 
 export function PasskeyReauthLock({
   me,
@@ -35,18 +39,16 @@ export function PasskeyReauthLock({
   if (!locked) return null;
 
   const confirm = (): void => {
-    if (busy || !passkeysSupported()) return;
+    if (busy || !passkeyFlowSupported()) return;
     setBusy(true);
     setError(null);
     void (async () => {
-      const ceremony = await authApi.startPasskeyAssert();
-      const credential = await assertPasskey(ceremony);
-      const next = await authApi.completePasskeyAssert(ceremony.challenge_id, credential);
+      const next = await verifyPasskey();
       setLocked(false);
       onUnlocked(next);
     })()
       .catch((err: unknown) => {
-        setError(err instanceof AuthApiError ? err.message : "Passkey verification failed");
+        setError(passkeyErrorMessage(err, "Passkey verification failed"));
       })
       .finally(() => setBusy(false));
   };

@@ -1,4 +1,4 @@
-import type { PasskeyCeremony } from "./authApi";
+import type { PasskeyOptions } from "./authApi";
 
 function bufferToBase64Url(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
@@ -85,7 +85,7 @@ export function passkeysSupported(): boolean {
 }
 
 export async function createPasskey(
-  ceremony: PasskeyCeremony,
+  ceremony: PasskeyOptions,
 ): Promise<Record<string, unknown>> {
   const credential = await navigator.credentials.create(
     reviveCreateOptions(ceremony.publicKey as Record<string, unknown>),
@@ -97,7 +97,7 @@ export async function createPasskey(
 }
 
 export async function assertPasskey(
-  ceremony: PasskeyCeremony,
+  ceremony: PasskeyOptions,
 ): Promise<Record<string, unknown>> {
   const credential = await navigator.credentials.get(
     reviveRequestOptions(ceremony.publicKey as Record<string, unknown>),

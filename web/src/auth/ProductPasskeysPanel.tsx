@@ -19,10 +19,11 @@ import {
   type ProductPasskey,
 } from "./authApi";
 import {
-  assertPasskey,
-  createPasskey,
-  passkeysSupported,
-} from "./passkeyBrowser";
+  passkeyErrorMessage,
+  passkeyFlowSupported,
+  registerPasskey,
+  verifyPasskey,
+} from "./passkeyFlow";
 import { useProductAuth } from "./ProductAuthGate";
 
 const REFRESH_INTERVALS = [
@@ -62,21 +63,17 @@ export function ProductPasskeysPanel({
   }, [load, me.auth_enabled, policy?.enabled]);
 
   const add = (): void => {
-    if (busy || !passkeysSupported() || nickname.trim() === "") return;
+    if (busy || !passkeyFlowSupported() || nickname.trim() === "") return;
     setBusy(true);
     setError(null);
     void (async () => {
-      const ceremony = await authApi.startPasskeyRegister(nickname.trim());
-      const credential = await createPasskey(ceremony);
-      await authApi.completePasskeyRegister(ceremony.challenge_id, credential);
+      await registerPasskey(nickname.trim());
       setNickname("This device");
       await load();
       updateMe(await authApi.me());
     })()
       .catch((err: unknown) => {
-        setError(
-          err instanceof AuthApiError ? err.message : "Could not add a passkey",
-        );
+        setError(passkeyErrorMessage(err, "Could not add a passkey"));
       })
       .finally(() => setBusy(false));
   };
@@ -111,12 +108,7 @@ export function ProductPasskeysPanel({
       let updated = await authApi.setPasskeyReauth(next, reauthAfterMs);
       if (next) {
         try {
-          const ceremony = await authApi.startPasskeyAssert();
-          const credential = await assertPasskey(ceremony);
-          updated = await authApi.completePasskeyAssert(
-            ceremony.challenge_id,
-            credential,
-          );
+          updated = await verifyPasskey();
         } catch (error) {
           await authApi.setPasskeyReauth(false, reauthAfterMs).catch(() =>
             undefined
@@ -132,9 +124,7 @@ export function ProductPasskeysPanel({
         onMe?.(updated);
       })
       .catch((err: unknown) => {
-        setError(
-          err instanceof AuthApiError ? err.message : "Could not save setting",
-        );
+        setError(passkeyErrorMessage(err, "Could not save setting"));
       })
       .finally(() => setBusy(false));
   };
@@ -214,7 +204,7 @@ export function ProductPasskeysPanel({
             Passkey session refresh is disabled by this Cowboy Service.
           </Alert>
         )}
-      {passkeysSupported()
+      {passkeyFlowSupported()
         ? (
           <Stack direction="row" spacing={1} alignItems="center">
             <TextField

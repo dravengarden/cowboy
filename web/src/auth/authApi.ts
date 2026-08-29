@@ -170,6 +170,21 @@ async function readJson<T>(path: string, init?: RequestInit): Promise<T> {
   return (text ? JSON.parse(text) as T : {}) as T;
 }
 
+async function readPublicJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(path, {
+    ...init,
+    cache: "no-store",
+    credentials: "omit",
+    referrerPolicy: "no-referrer",
+    headers: { accept: "application/json", ...init?.headers },
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new AuthApiError(text || response.statusText, response.status);
+  }
+  return (text ? JSON.parse(text) as T : {}) as T;
+}
+
 export type AuthStatusProbe =
   | { kind: "ok"; httpStatus: 200; body: AuthStatus }
   | { kind: "unsupported"; httpStatus: number }
@@ -288,6 +303,32 @@ export const authApi = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ challenge_id: challengeId, credential }),
     }),
+  startExternalPasskey: (
+    action: ExternalPasskeyAction,
+    codeChallenge: string,
+    nickname?: string,
+  ) =>
+    readJson<ExternalPasskeyStart>("/api/auth/passkeys/external/start", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action,
+        code_challenge: codeChallenge,
+        ...(nickname === undefined ? {} : { nickname }),
+      }),
+    }),
+  finalizeExternalPasskey: (transactionId: string, codeVerifier: string) =>
+    readJson<ExternalPasskeyFinalize>(
+      "/api/auth/passkeys/external/finalize",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          transaction_id: transactionId,
+          code_verifier: codeVerifier,
+        }),
+      },
+    ),
   setPasskeyReauth: (enabled: boolean, reauthAfterMs?: number) =>
     readJson<ProductMe>("/api/auth/passkeys/reauth", {
       method: "PUT",
@@ -298,6 +339,36 @@ export const authApi = {
     readJson<{ ok: boolean }>(`/api/auth/passkeys/${id}`, { method: "DELETE" }),
 };
 
+export const externalPasskeyApi = {
+  options: (transactionId: string) =>
+    readPublicJson<ExternalPasskeyBrowserState>(
+      "/api/auth/passkeys/external/options",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ transaction_id: transactionId }),
+      },
+    ),
+  complete: (
+    transactionId: string,
+    credential: PublicKeyCredentialJSON,
+  ) =>
+    readPublicJson<{ status: "complete" }>(
+      "/api/auth/passkeys/external/complete",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ transaction_id: transactionId, credential }),
+      },
+    ),
+  fail: (transactionId: string) =>
+    readPublicJson<{ ok: boolean }>("/api/auth/passkeys/external/fail", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ transaction_id: transactionId }),
+    }),
+};
+
 export interface ProductPasskey {
   id: string;
   nickname: string;
@@ -305,12 +376,38 @@ export interface ProductPasskey {
   last_used_at_ms?: number | null;
 }
 
-export interface PasskeyCeremony {
-  challenge_id: string;
+export interface PasskeyOptions {
   publicKey:
     | PublicKeyCredentialCreationOptionsJSON
     | PublicKeyCredentialRequestOptionsJSON;
 }
+
+export interface PasskeyCeremony extends PasskeyOptions {
+  challenge_id: string;
+}
+
+export type ExternalPasskeyAction = "register" | "assert";
+
+export interface ExternalPasskeyStart {
+  transaction_id: string;
+  expires_in_seconds: number;
+}
+
+export type ExternalPasskeyBrowserState =
+  | {
+    status: "ready";
+    action: ExternalPasskeyAction;
+    publicKey:
+      | PublicKeyCredentialCreationOptionsJSON
+      | PublicKeyCredentialRequestOptionsJSON;
+  }
+  | { status: "complete" }
+  | { status: "failed" };
+
+export type ExternalPasskeyFinalize =
+  | { status: "pending" }
+  | { status: "complete"; passkey: ProductPasskey }
+  | { status: "complete"; me: ProductMe };
 
 type PublicKeyCredentialJSON = Record<string, unknown>;
 type PublicKeyCredentialCreationOptionsJSON = Record<string, unknown>;

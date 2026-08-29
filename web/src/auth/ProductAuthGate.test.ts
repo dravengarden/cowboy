@@ -13,6 +13,9 @@ async function readAuthSources(): Promise<string> {
     "ProductTokensPanel.tsx",
     "ProductPasskeysPanel.tsx",
     "PasskeyReauthLock.tsx",
+    "passkeyBrowser.ts",
+    "passkeyExternalPage.ts",
+    "passkeyFlow.ts",
     "idleLock.ts",
     "useIdlePasskeyLock.ts",
   ];
@@ -42,6 +45,16 @@ Deno.test("ProductAuthGate wraps DesktopApp and MobileApp in main.tsx", async ()
   assert(main.includes("<MobileApp"));
   assertEquals(app.includes("ProductAuthGate"), false);
   assertEquals(app.includes("/api/auth/status"), false);
+});
+
+Deno.test("system Safari Passkey page is isolated from the cached app shell", async () => {
+  const page = await Deno.readTextFile(new URL("../../passkey.html", import.meta.url));
+  const worker = await Deno.readTextFile(new URL("../../public/sw.js", import.meta.url));
+  assert(page.includes('name="referrer" content="no-referrer"'));
+  assert(page.includes("default-src 'none'"));
+  assert(page.includes('src="/src/auth/passkeyExternalPage.ts"'));
+  assert(worker.includes('url.pathname === "/passkey.html"'));
+  assert(worker.includes("event.respondWith(fetch(request))"));
 });
 
 Deno.test("login page is product chrome and hides register unless accepted", async () => {
@@ -123,7 +136,7 @@ Deno.test("desktop can sign out through authApi without importing store", async 
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
   const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
-  assert(sw.includes('const VERSION = "cowboy-v1574"'));
+  assert(sw.includes('const VERSION = "cowboy-v1575"'));
   const authStart = sw.indexOf('url.pathname.startsWith("/api/auth/")');
   const authBranch = sw.slice(
     authStart,

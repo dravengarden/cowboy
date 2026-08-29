@@ -3,6 +3,7 @@ import {
   authApi,
   AuthApiError,
   authStatusFromJson,
+  externalPasskeyApi,
   fetchAuthStatus,
   isHtmlContentType,
 } from "./authApi.ts";
@@ -148,6 +149,44 @@ Deno.test("auth API surfaces HTTP error text", async () => {
       "invalid credentials",
     );
     assertEquals(error.status, 401);
+  } finally {
+    restore();
+  }
+});
+
+Deno.test("external Passkey handoff keeps the verifier in the signed-in client", async () => {
+  const calls: FetchArgs[] = [];
+  const restore = withFetch((args) => {
+    calls.push(args);
+    if (args.input.endsWith("/start")) {
+      return new Response(
+        JSON.stringify({
+          transaction_id: "a".repeat(64),
+          expires_in_seconds: 120,
+        }),
+        { status: 200 },
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        status: "ready",
+        action: "register",
+        publicKey: {},
+      }),
+      { status: 200 },
+    );
+  });
+  try {
+    await authApi.startExternalPasskey("register", "c".repeat(43), "iPhone");
+    await externalPasskeyApi.options("a".repeat(64));
+    const started = calls[0];
+    const browser = calls[1];
+    assertEquals(started.init?.credentials, "same-origin");
+    assertEquals(browser.init?.credentials, "omit");
+    assertEquals(browser.init?.referrerPolicy, "no-referrer");
+    const body = JSON.parse(String(started.init?.body));
+    assertEquals(body.code_challenge, "c".repeat(43));
+    assertEquals("code_verifier" in body, false);
   } finally {
     restore();
   }

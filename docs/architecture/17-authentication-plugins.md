@@ -150,6 +150,27 @@ upstream Cardea session as proof of user presence. Disabling server refresh
 immediately stops enforcing old per-user refresh settings and stops creating
 30-day replacements; revoking the Passkey does not revive an expired session.
 
+The iOS native shell runs the WebAuthn prompt in a system
+`SFSafariViewController`, not its embedded `WKWebView`. This keeps Passkeys
+available to SideStore-signed builds that cannot obtain the Associated Domains
+entitlement and preserves the normal origin-bound Safari ceremony. The handoff
+does not transfer the product cookie:
+
+1. the authenticated Cowboy window creates an S256 PKCE challenge and starts a
+   120-second transaction bound to the exact user and cookie-session hash;
+2. only a random transaction token is placed in the fragment of the fixed
+   `/passkey.html` URL, so it is absent from HTTP requests and referrers;
+3. system Safari performs WebAuthn and can only stage the verified result; and
+4. the original window must present the verifier from the same exact session
+   before Cowboy persists a registration or rotates that window's cookie.
+
+The browser page omits credentials on its API calls, removes the fragment from
+history before invoking WebAuthn, uses a restrictive CSP and no-referrer policy,
+and cannot choose an account, return URL, or session. Transactions are bounded,
+single-use, and fail closed on expiry, cancellation, origin mismatch, session
+mismatch, or PKCE mismatch. Ordinary Safari, installed PWAs, and desktop
+browsers continue to use direct WebAuthn.
+
 ## Public examples
 
 - [`../../examples/authentication/google`](../../examples/authentication/google)

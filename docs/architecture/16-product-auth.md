@@ -98,6 +98,17 @@ turns the policy off and caps extended session expiry. No Passkey means the
 feature cannot be enabled. Admin keeps its separate five-minute idle-view
 lock and 12-hour cookie.
 
+The SideStore iOS shell cannot rely on the Associated Domains entitlement for
+WebAuthn inside `WKWebView`. It therefore opens the fixed `/passkey.html` page
+in a system Safari sheet. An authenticated start binds a 120-second transaction
+to the exact Cowboy user and cookie session plus an S256 challenge. Safari sees
+only an opaque token in the URL fragment and can stage a verified credential;
+it cannot persist the Passkey or extend a cookie. The original Cowboy window
+must finalize with the retained verifier and the same session. Success closes
+the sheet; cancellation, expiry, session replacement, and PKCE mismatch fail
+closed. The system sheet is presentation only: all account mutation and cookie
+rotation remain Controller-owned.
+
 Roles reuse the serde names `owner` / `operator` / `viewer`. Product roles
 live only in `cowboy.permissions` (`role_for`); there is no `users.role`
 column. Admin roles live on `cowboy.admin.identities`.
@@ -156,6 +167,10 @@ visible id is never dropped (`[A,B,C]` + `[C,A]` → `[C,B,A]`).
 | `POST` | `/api/auth/logout` | cookie optional | clear cookie |
 | `GET` | `/api/auth/me` | product | current principal |
 | `POST` | `/api/auth/passkeys/assert/*` | product session | verify and rotate a Passkey-extended session |
+| `POST` | `/api/auth/passkeys/external/start` | exact product cookie + Origin | start a session-bound native Safari ceremony |
+| `POST` | `/api/auth/passkeys/external/options` | public; Origin + opaque transaction | return only staged WebAuthn options to system Safari |
+| `POST` | `/api/auth/passkeys/external/complete` | public; Origin + opaque transaction | verify and stage Safari's credential without changing account state |
+| `POST` | `/api/auth/passkeys/external/finalize` | exact product cookie + Origin + PKCE | persist or rotate only after the original window proves the handoff |
 | `PUT` | `/api/auth/passkeys/reauth` | fresh product session | opt in/out and set the bounded interval |
 | `POST` | `/api/auth/tokens` | product operator+ | create own `cow_…` token |
 | `GET` | `/api/auth/tokens` | product (own rows) | list prefixes |

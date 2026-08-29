@@ -23,6 +23,7 @@ export default defineConfig({
       input: {
         main: resolve(webRoot, "index.html"),
         admin: resolve(webRoot, "admin.html"),
+        passkey: resolve(webRoot, "passkey.html"),
       },
       output: {
         manualChunks(id: string): string | undefined {

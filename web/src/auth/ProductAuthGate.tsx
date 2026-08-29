@@ -17,7 +17,6 @@ import {
 } from "react";
 import {
   authApi,
-  AuthApiError,
   type ProductMe,
   type ProductOidcProvider,
   type ProductPasskeyServerPolicy,
@@ -34,7 +33,11 @@ import {
   shouldMountProductApp,
 } from "./authStatus";
 import { PasskeyReauthLock } from "./PasskeyReauthLock";
-import { createPasskey, passkeysSupported } from "./passkeyBrowser";
+import {
+  passkeyErrorMessage,
+  passkeyFlowSupported,
+  registerPasskey,
+} from "./passkeyFlow";
 import { ProductLoginPage } from "./ProductLoginPage";
 import { ConfirmSheet } from "../Sheet";
 
@@ -187,20 +190,14 @@ function PasskeySetupPrompt({
     setDismissed(true);
   };
   const add = (): void => {
-    if (busy || !passkeysSupported()) return;
+    if (busy || !passkeyFlowSupported()) return;
     setBusy(true);
     setError(null);
     void (async () => {
-      const ceremony = await authApi.startPasskeyRegister("This device");
-      const credential = await createPasskey(ceremony);
-      await authApi.completePasskeyRegister(ceremony.challenge_id, credential);
+      await registerPasskey("This device");
       onCreated(await authApi.me());
     })().catch((reason: unknown) => {
-      setError(
-        reason instanceof AuthApiError
-          ? reason.message
-          : "Could not add a Passkey",
-      );
+      setError(passkeyErrorMessage(reason, "Could not add a Passkey"));
     }).finally(() => setBusy(false));
   };
   return (
@@ -213,7 +210,7 @@ function PasskeySetupPrompt({
           <Button color="inherit" onClick={dismiss}>Not now</Button>
           <Button
             variant="contained"
-            disabled={busy || !passkeysSupported()}
+            disabled={busy || !passkeyFlowSupported()}
             onClick={add}
           >
             Add Passkey
@@ -227,7 +224,7 @@ function PasskeySetupPrompt({
           refresh this browser&apos;s session after you explicitly verify.
           Automatic session refresh stays off until you enable it in Settings.
         </Typography>
-        {!passkeysSupported() && (
+        {!passkeyFlowSupported() && (
           <Alert severity="info">This browser cannot create a Passkey.</Alert>
         )}
         {error && <Alert severity="error">{error}</Alert>}

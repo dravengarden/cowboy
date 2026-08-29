@@ -9,7 +9,7 @@
 // Bump on EVERY web deploy — the app's foreground update-check (main.tsx) only
 // detects a new worker when this string changes. Desktop auto-reloads after its
 // visible countdown; Mobile waits for an explicit Update tap.
-const VERSION = "cowboy-v1574";
+const VERSION = "cowboy-v1575";
 const ASSET_CACHE = `${VERSION}-assets`;
 // The app shell ("/" — index.html). Cowboy serves the independently switched
 // frontend on the same origin as the API/WS, so when the daemon is down (e.g. a
@@ -231,6 +231,12 @@ self.addEventListener("fetch", (event) => {
   // `caches.match("/")` fallback was dead code (nothing ever cached "/"), so a
   // dead daemon = blank white page instead of the cached shell + reconnect UI.
   if (request.mode === "navigate") {
+    // The system-Safari Passkey ceremony is a short-lived security surface,
+    // not the application shell. Never cache it as the offline root document.
+    if (url.pathname === "/passkey.html") {
+      event.respondWith(fetch(request));
+      return;
+    }
     // The admin console is a separate Vite entry. Never pin /admin, /admin/*,
     // or /admin.html as the PWA shell and never serve the chat shell when
     // /admin is offline. A successful admin navigation must not write SHELL_CACHE["/"].

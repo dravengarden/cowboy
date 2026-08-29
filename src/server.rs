@@ -1865,6 +1865,26 @@ fn product_auth_router(state: ProductAuthState) -> Router {
             "/api/auth/passkeys/assert/complete",
             post(api_auth_passkey_assert_complete),
         )
+        .route(
+            "/api/auth/passkeys/external/start",
+            post(api_auth_passkey_external_start),
+        )
+        .route(
+            "/api/auth/passkeys/external/options",
+            post(api_auth_passkey_external_options),
+        )
+        .route(
+            "/api/auth/passkeys/external/complete",
+            post(api_auth_passkey_external_complete),
+        )
+        .route(
+            "/api/auth/passkeys/external/fail",
+            post(api_auth_passkey_external_fail),
+        )
+        .route(
+            "/api/auth/passkeys/external/finalize",
+            post(api_auth_passkey_external_finalize),
+        )
         .route("/api/auth/passkeys/reauth", put(api_auth_passkey_reauth))
         .route("/api/auth/passkeys/{id}", delete(api_auth_delete_passkey))
         .route(
@@ -2947,6 +2967,14 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
     }
     if path.starts_with("/api/auth/tokens/") {
         return RouteAuth::Product;
+    }
+    if matches!(
+        path,
+        "/api/auth/passkeys/external/options"
+            | "/api/auth/passkeys/external/complete"
+            | "/api/auth/passkeys/external/fail"
+    ) {
+        return RouteAuth::Public;
     }
     if path.starts_with("/api/auth/passkeys") {
         return RouteAuth::Product;
@@ -4387,12 +4415,27 @@ async fn api_auth_passkey_register_complete(
         Ok(created) => created,
         Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
     };
+    match persist_product_passkey_registration(store, &user, nickname, credential_id, passkey_json)
+        .await
+    {
+        Ok(passkey) => Json(passkey).into_response(),
+        Err(response) => response,
+    }
+}
+
+async fn persist_product_passkey_registration(
+    store: &Store,
+    user: &crate::store::ProductUser,
+    nickname: String,
+    credential_id: String,
+    passkey_json: String,
+) -> Result<crate::passkey::PasskeyView, Response> {
     let now = auth_now_ms();
     let passkey = crate::passkey::UserPasskey {
         id: match crate::product_auth::new_user_id() {
             Ok(id) => id,
             Err(error) => {
-                return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+                return Err((StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response());
             }
         },
         user_id: user.id.clone(),
@@ -4403,16 +4446,15 @@ async fn api_auth_passkey_register_complete(
         last_used_at_ms: Some(now),
     };
     if let Err(error) = store.insert_user_passkey(&passkey).await {
-        return (StatusCode::CONFLICT, error.to_string()).into_response();
+        return Err((StatusCode::CONFLICT, error.to_string()).into_response());
     }
     let _ = store.touch_user_last_step_up(&user.id, now).await;
-    Json(crate::passkey::PasskeyView {
+    Ok(crate::passkey::PasskeyView {
         id: passkey.id,
         nickname: passkey.nickname,
         created_at_ms: passkey.created_at_ms,
         last_used_at_ms: passkey.last_used_at_ms,
     })
-    .into_response()
 }
 
 async fn api_auth_passkey_assert_options(
@@ -4497,12 +4539,40 @@ async fn api_auth_passkey_assert_complete(
         Ok(done) => done,
         Err(error) => return (StatusCode::UNAUTHORIZED, error.to_string()).into_response(),
     };
+    match persist_product_passkey_assertion(
+        &state,
+        &headers,
+        store,
+        &user,
+        passkey_id,
+        passkey_json,
+    )
+    .await
+    {
+        Ok(result) => product_passkey_assertion_response(result),
+        Err(response) => response,
+    }
+}
+
+struct ProductPasskeyAssertionResult {
+    me: ProductMe,
+    set_cookie: Option<String>,
+}
+
+async fn persist_product_passkey_assertion(
+    state: &ProductAuthState,
+    headers: &HeaderMap,
+    store: &Store,
+    user: &crate::store::ProductUser,
+    passkey_id: String,
+    passkey_json: String,
+) -> Result<ProductPasskeyAssertionResult, Response> {
     let now = auth_now_ms();
     if let Err(error) = store
         .update_user_passkey(&user.id, &passkey_id, &passkey_json, now)
         .await
     {
-        return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response());
     }
     let _ = store.touch_user_last_step_up(&user.id, now).await;
     let policy = store.user_passkey_policy(&user.id).await.ok().flatten();
@@ -4512,13 +4582,13 @@ async fn api_auth_passkey_assert_complete(
         .session_refresh_enabled
         && policy.as_ref().is_some_and(|policy| policy.enabled)
     {
-        let Some(previous_token) = crate::product_auth::user_cookie_token(&headers) else {
-            return StatusCode::UNAUTHORIZED.into_response();
+        let Some(previous_token) = crate::product_auth::user_cookie_token(headers) else {
+            return Err(StatusCode::UNAUTHORIZED.into_response());
         };
         let token = match crate::product_auth::new_session_token() {
             Ok(token) => token,
             Err(error) => {
-                return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+                return Err((StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response());
             }
         };
         let session = crate::store::ProductUserSession {
@@ -4540,22 +4610,18 @@ async fn api_auth_passkey_assert_complete(
             )
             .await
         {
-            return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response());
         }
-        return (
-            [(
-                header::SET_COOKIE,
-                crate::product_auth::session_cookie(
-                    &token,
-                    crate::product_auth::request_is_https(&headers),
-                    crate::product_auth::PASSKEY_SESSION_TTL_SECS,
-                ),
-            )],
-            Json(product_me_for_user(Some(store), &state.hub, &user, Some(&session)).await),
-        )
-            .into_response();
+        return Ok(ProductPasskeyAssertionResult {
+            me: product_me_for_user(Some(store), &state.hub, user, Some(&session)).await,
+            set_cookie: Some(crate::product_auth::session_cookie(
+                &token,
+                crate::product_auth::request_is_https(headers),
+                crate::product_auth::PASSKEY_SESSION_TTL_SECS,
+            )),
+        });
     }
-    let current_session = match crate::product_auth::user_cookie_token(&headers) {
+    let current_session = match crate::product_auth::user_cookie_token(headers) {
         Some(token) => store
             .user_session_by_token_hash(&crate::admin::hex_sha256(token.as_bytes()))
             .await
@@ -4563,8 +4629,325 @@ async fn api_auth_passkey_assert_complete(
             .flatten(),
         None => None,
     };
-    Json(product_me_for_user(Some(store), &state.hub, &user, current_session.as_ref()).await)
-        .into_response()
+    Ok(ProductPasskeyAssertionResult {
+        me: product_me_for_user(Some(store), &state.hub, user, current_session.as_ref()).await,
+        set_cookie: None,
+    })
+}
+
+fn product_passkey_assertion_response(result: ProductPasskeyAssertionResult) -> Response {
+    match result.set_cookie {
+        Some(cookie) => ([(header::SET_COOKIE, cookie)], Json(result.me)).into_response(),
+        None => Json(result.me).into_response(),
+    }
+}
+
+async fn api_auth_passkey_external_start(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(request): Json<crate::passkey::ExternalStartRequest>,
+) -> Response {
+    if !state.product_authentication.passkeys.enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let peer = peer_addr(peer);
+    if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
+        return rejected;
+    }
+    let Some(store) = durable_store(&state.store) else {
+        return missing_store();
+    };
+    let Some((session, user)) = product_session_and_user_from_store_cookie(store, &headers).await
+    else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    if request.action == crate::passkey::ExternalPasskeyAction::Register {
+        if let Err(response) = ensure_product_session_passkey_fresh(
+            store,
+            &session,
+            state
+                .product_authentication
+                .passkeys
+                .session_refresh_enabled,
+        )
+        .await
+        {
+            return response;
+        }
+        if !product_session_has_recent_step_up(&session, auth_now_ms()) {
+            return (
+                StatusCode::PRECONDITION_REQUIRED,
+                "Recent login or Passkey verification required",
+            )
+                .into_response();
+        }
+    }
+    let existing = match store.list_user_passkeys(&user.id).await {
+        Ok(existing) => existing,
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+        }
+    };
+    let webauthn = match crate::passkey::webauthn_for_request(&headers) {
+        Ok(webauthn) => webauthn,
+        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    };
+    let transaction_id = match request.action {
+        crate::passkey::ExternalPasskeyAction::Register => {
+            let Some(nickname) = request.nickname else {
+                return (StatusCode::BAD_REQUEST, "passkey name is required").into_response();
+            };
+            let nickname = match crate::passkey::normalize_nickname(&nickname) {
+                Ok(nickname) => nickname,
+                Err(error) => {
+                    return (StatusCode::BAD_REQUEST, error.to_string()).into_response();
+                }
+            };
+            state.passkeys.start_external_registration(
+                crate::passkey::ExternalPasskeyBinding {
+                    user_id: &user.id,
+                    session_token_hash: &session.token_hash,
+                    code_challenge: &request.code_challenge,
+                },
+                &user.username,
+                nickname,
+                &existing,
+                &webauthn,
+            )
+        }
+        crate::passkey::ExternalPasskeyAction::Assert => {
+            if request.nickname.is_some() {
+                return (StatusCode::BAD_REQUEST, "passkey name is not accepted").into_response();
+            }
+            state.passkeys.start_external_assertion(
+                crate::passkey::ExternalPasskeyBinding {
+                    user_id: &user.id,
+                    session_token_hash: &session.token_hash,
+                    code_challenge: &request.code_challenge,
+                },
+                &existing,
+                &webauthn,
+            )
+        }
+    };
+    match transaction_id {
+        Ok(transaction_id) => Json(serde_json::json!({
+            "transaction_id": transaction_id,
+            "expires_in_seconds": crate::passkey::EXTERNAL_CEREMONY_TTL_SECS,
+        }))
+        .into_response(),
+        Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    }
+}
+
+async fn api_auth_passkey_external_options(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(request): Json<crate::passkey::ExternalTransactionRequest>,
+) -> Response {
+    if !state.product_authentication.passkeys.enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    if let Some(rejected) = reject_bad_origin(&headers, peer_addr(peer), &state.public_origins) {
+        return rejected;
+    }
+    match state
+        .passkeys
+        .external_browser_state(&request.transaction_id)
+    {
+        Ok(crate::passkey::ExternalBrowserState::Ready { action, public_key }) => {
+            Json(serde_json::json!({
+                "status": "ready",
+                "action": action,
+                "publicKey": public_key,
+            }))
+            .into_response()
+        }
+        Ok(crate::passkey::ExternalBrowserState::Complete) => {
+            Json(serde_json::json!({ "status": "complete" })).into_response()
+        }
+        Ok(crate::passkey::ExternalBrowserState::Failed) => {
+            Json(serde_json::json!({ "status": "failed" })).into_response()
+        }
+        Err(_) => (StatusCode::GONE, "Passkey setup expired").into_response(),
+    }
+}
+
+async fn api_auth_passkey_external_complete(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(request): Json<crate::passkey::ExternalCompleteRequest>,
+) -> Response {
+    if !state.product_authentication.passkeys.enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    if let Some(rejected) = reject_bad_origin(&headers, peer_addr(peer), &state.public_origins) {
+        return rejected;
+    }
+    let (action, user_id) = match state.passkeys.external_subject(&request.transaction_id) {
+        Ok(subject) => subject,
+        Err(_) => return (StatusCode::GONE, "Passkey setup expired").into_response(),
+    };
+    let webauthn = match crate::passkey::webauthn_for_request(&headers) {
+        Ok(webauthn) => webauthn,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Passkey origin is invalid").into_response(),
+    };
+    let completed = match action {
+        crate::passkey::ExternalPasskeyAction::Register => {
+            match serde_json::from_value::<webauthn_rs::prelude::RegisterPublicKeyCredential>(
+                request.credential,
+            ) {
+                Ok(credential) => state.passkeys.complete_external_registration(
+                    &request.transaction_id,
+                    credential,
+                    &webauthn,
+                ),
+                Err(error) => Err(error.into()),
+            }
+        }
+        crate::passkey::ExternalPasskeyAction::Assert => {
+            let Some(store) = durable_store(&state.store) else {
+                return missing_store();
+            };
+            let existing = match store.list_user_passkeys(&user_id).await {
+                Ok(existing) => existing,
+                Err(error) => {
+                    tracing::error!(%error, "external_passkey_list");
+                    return StatusCode::SERVICE_UNAVAILABLE.into_response();
+                }
+            };
+            match serde_json::from_value::<webauthn_rs::prelude::PublicKeyCredential>(
+                request.credential,
+            ) {
+                Ok(credential) => state.passkeys.complete_external_assertion(
+                    &request.transaction_id,
+                    credential,
+                    &existing,
+                    &webauthn,
+                ),
+                Err(error) => Err(error.into()),
+            }
+        }
+    };
+    match completed {
+        Ok(()) => Json(serde_json::json!({ "status": "complete" })).into_response(),
+        Err(error) => {
+            tracing::warn!(%error, "external_passkey_rejected");
+            (StatusCode::UNAUTHORIZED, "Passkey verification failed").into_response()
+        }
+    }
+}
+
+async fn api_auth_passkey_external_fail(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(request): Json<crate::passkey::ExternalTransactionRequest>,
+) -> Response {
+    if !state.product_authentication.passkeys.enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    if let Some(rejected) = reject_bad_origin(&headers, peer_addr(peer), &state.public_origins) {
+        return rejected;
+    }
+    match state.passkeys.fail_external(&request.transaction_id) {
+        Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Err(_) => (StatusCode::GONE, "Passkey setup expired").into_response(),
+    }
+}
+
+async fn api_auth_passkey_external_finalize(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(request): Json<crate::passkey::ExternalFinalizeRequest>,
+) -> Response {
+    if !state.product_authentication.passkeys.enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    if let Some(rejected) = reject_bad_origin(&headers, peer_addr(peer), &state.public_origins) {
+        return rejected;
+    }
+    let Some(store) = durable_store(&state.store) else {
+        return missing_store();
+    };
+    let Some((session, user)) = product_session_and_user_from_store_cookie(store, &headers).await
+    else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let outcome = match state.passkeys.finalize_external(
+        &request.transaction_id,
+        &user.id,
+        &session.token_hash,
+        &request.code_verifier,
+    ) {
+        Ok(outcome) => outcome,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "Passkey setup expired or did not complete",
+            )
+                .into_response();
+        }
+    };
+    match outcome {
+        crate::passkey::ExternalFinalizeResult::Pending => (
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({ "status": "pending" })),
+        )
+            .into_response(),
+        crate::passkey::ExternalFinalizeResult::Failed => {
+            (StatusCode::BAD_REQUEST, "Passkey setup was cancelled").into_response()
+        }
+        crate::passkey::ExternalFinalizeResult::Registration {
+            nickname,
+            credential_id,
+            passkey_json,
+        } => match persist_product_passkey_registration(
+            store,
+            &user,
+            nickname,
+            credential_id,
+            passkey_json,
+        )
+        .await
+        {
+            Ok(passkey) => Json(serde_json::json!({
+                "status": "complete",
+                "passkey": passkey,
+            }))
+            .into_response(),
+            Err(response) => response,
+        },
+        crate::passkey::ExternalFinalizeResult::Assertion {
+            passkey_id,
+            passkey_json,
+        } => match persist_product_passkey_assertion(
+            &state,
+            &headers,
+            store,
+            &user,
+            passkey_id,
+            passkey_json,
+        )
+        .await
+        {
+            Ok(result) => {
+                let body = Json(serde_json::json!({
+                    "status": "complete",
+                    "me": result.me,
+                }));
+                match result.set_cookie {
+                    Some(cookie) => ([(header::SET_COOKIE, cookie)], body).into_response(),
+                    None => body.into_response(),
+                }
+            }
+            Err(response) => response,
+        },
+    }
 }
 
 async fn api_auth_passkey_reauth(
@@ -12120,7 +12503,28 @@ async fn static_handler(
         // bundle. The files this covers are tiny (HTML, sw.js, manifest, icons).
         "no-store"
     };
-    let mime = mime_guess::from_path(name).first_or_octet_stream();
+    let mime = mime_guess::from_path(&name).first_or_octet_stream();
+    if name == "passkey.html" {
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, mime.as_ref())
+            .header(header::CACHE_CONTROL, cache_control)
+            .header(header::ETAG, etag.as_str())
+            .header("referrer-policy", "no-referrer")
+            .header("x-content-type-options", "nosniff")
+            .header("x-frame-options", "DENY")
+            .header(
+                "content-security-policy",
+                "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
+                 connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+            )
+            .header(
+                "permissions-policy",
+                "publickey-credentials-create=(self), publickey-credentials-get=(self)",
+            )
+            .body(Body::from(content))
+            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+    }
     (
         [
             (header::CONTENT_TYPE, mime.as_ref()),
@@ -14085,6 +14489,19 @@ mod product_auth_api_tests {
             classify_route(&Method::DELETE, "/api/auth/tokens/abc"),
             RouteAuth::Product
         );
+        for path in [
+            "/api/auth/passkeys/external/options",
+            "/api/auth/passkeys/external/complete",
+            "/api/auth/passkeys/external/fail",
+        ] {
+            assert_eq!(classify_route(&Method::POST, path), RouteAuth::Public);
+        }
+        for path in [
+            "/api/auth/passkeys/external/start",
+            "/api/auth/passkeys/external/finalize",
+        ] {
+            assert_eq!(classify_route(&Method::POST, path), RouteAuth::Product);
+        }
         assert_eq!(
             classify_route(&Method::POST, "/api/auth/setup"),
             RouteAuth::Public
@@ -14983,6 +15400,134 @@ mod product_auth_api_tests {
         assert_eq!(disabled.status(), StatusCode::OK);
         let disabled_body: serde_json::Value = disabled.json().await.unwrap();
         assert_eq!(disabled_body["passkey_reauth_enabled"], false);
+
+        server.abort();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn external_passkey_handoff_is_public_only_in_safari_and_bound_to_one_session() {
+        use sha2::Digest as _;
+
+        let (store, root) = test_store().await;
+        let mut state = auth_state(Hub::new(), Some(store));
+        state.public_origins = Arc::new(vec!["https://cowboy.example".to_owned()]);
+        let token = setup_token_from(&state);
+        let (base, server) = spawn_auth(state).await;
+        let origin = "https://cowboy.example".to_owned();
+        let setup_cookie = prove_setup(&base, &origin, &token).await;
+        let registered = post_json(
+            &format!("{base}/api/auth/register"),
+            &origin,
+            Some(&setup_cookie),
+            serde_json::json!({
+                "account": "draven",
+                "password": "Correct-horse-bat1",
+            }),
+        )
+        .await;
+        assert_eq!(registered.status(), StatusCode::OK);
+        let first_cookie = cookie_header(&set_cookie(&registered, USER_SESSION_COOKIE).unwrap());
+        let second_login = post_json(
+            &format!("{base}/api/auth/login"),
+            &origin,
+            None,
+            serde_json::json!({
+                "account": "draven",
+                "password": "Correct-horse-bat1",
+            }),
+        )
+        .await;
+        assert_eq!(second_login.status(), StatusCode::OK);
+        let second_cookie = cookie_header(&set_cookie(&second_login, USER_SESSION_COOKIE).unwrap());
+        let verifier = "a".repeat(64);
+        let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+        let started = post_json(
+            &format!("{base}/api/auth/passkeys/external/start"),
+            &origin,
+            Some(&first_cookie),
+            serde_json::json!({
+                "action": "register",
+                "nickname": "iPhone",
+                "code_challenge": challenge,
+            }),
+        )
+        .await;
+        let started_status = started.status();
+        let started_text = started.text().await.unwrap();
+        assert_eq!(started_status, StatusCode::OK, "{started_text}");
+        let started_body: serde_json::Value = serde_json::from_str(&started_text).unwrap();
+        let transaction_id = started_body["transaction_id"].as_str().unwrap();
+        assert_eq!(transaction_id.len(), 64);
+        assert_eq!(started_body["expires_in_seconds"], 120);
+
+        let evil_options = post_json(
+            &format!("{base}/api/auth/passkeys/external/options"),
+            "https://evil.example",
+            None,
+            serde_json::json!({ "transaction_id": transaction_id }),
+        )
+        .await;
+        assert_eq!(evil_options.status(), StatusCode::FORBIDDEN);
+        let options = post_json(
+            &format!("{base}/api/auth/passkeys/external/options"),
+            &origin,
+            None,
+            serde_json::json!({ "transaction_id": transaction_id }),
+        )
+        .await;
+        assert_eq!(options.status(), StatusCode::OK);
+        let options_body: serde_json::Value = options.json().await.unwrap();
+        assert_eq!(options_body["status"], "ready");
+        assert_eq!(options_body["action"], "register");
+        assert!(options_body.get("publicKey").is_some());
+
+        let wrong_session = post_json(
+            &format!("{base}/api/auth/passkeys/external/finalize"),
+            &origin,
+            Some(&second_cookie),
+            serde_json::json!({
+                "transaction_id": transaction_id,
+                "code_verifier": verifier,
+            }),
+        )
+        .await;
+        assert_eq!(wrong_session.status(), StatusCode::BAD_REQUEST);
+        let pending = post_json(
+            &format!("{base}/api/auth/passkeys/external/finalize"),
+            &origin,
+            Some(&first_cookie),
+            serde_json::json!({
+                "transaction_id": transaction_id,
+                "code_verifier": verifier,
+            }),
+        )
+        .await;
+        assert_eq!(pending.status(), StatusCode::ACCEPTED);
+
+        let cancelled = post_json(
+            &format!("{base}/api/auth/passkeys/external/fail"),
+            &origin,
+            None,
+            serde_json::json!({ "transaction_id": transaction_id }),
+        )
+        .await;
+        assert_eq!(cancelled.status(), StatusCode::OK);
+        let finalized = post_json(
+            &format!("{base}/api/auth/passkeys/external/finalize"),
+            &origin,
+            Some(&first_cookie),
+            serde_json::json!({
+                "transaction_id": transaction_id,
+                "code_verifier": verifier,
+            }),
+        )
+        .await;
+        assert_eq!(finalized.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            finalized.text().await.unwrap(),
+            "Passkey setup was cancelled"
+        );
 
         server.abort();
         let _ = std::fs::remove_dir_all(root);
