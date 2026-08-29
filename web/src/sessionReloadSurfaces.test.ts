@@ -16,7 +16,7 @@ Deno.test("desktop session dialog exposes confirmed runtime reload", () => {
   assert(appSource.includes("<SessionReloadDialog"));
 });
 
-Deno.test("mobile Provider reload uses the existing card language and acts directly", () => {
+Deno.test("mobile Provider reload reuses the compact About refresh control and acts directly", () => {
   assert(
     composerSource.includes(
       'aria-label="reload session runtime from provider"',
@@ -25,10 +25,16 @@ Deno.test("mobile Provider reload uses the existing card language and acts direc
   assert(composerSource.includes("data-session-provider-reload"));
   assert(
     composerSource.includes(
-      "void action.run(() => reloadSession(sessionId));",
+      "networkAction={(): Promise<void> => reloadSession(session.id)}",
     ),
   );
-  assert(composerSource.includes("minHeight: 58"));
+  assert(
+    composerSource.includes(
+      "sx={{ width: 32, height: 32, flexShrink: 0 }}",
+    ),
+  );
+  assert(composerSource.includes('<Refresh sx={{ fontSize: 17 }} />'));
+  assertEquals(composerSource.includes("SessionProviderReloadCard"), false);
   assertEquals(composerSource.includes("<SessionReloadDialog"), false);
   assertEquals(composerSource.includes("reloadConfirm"), false);
   assertEquals(

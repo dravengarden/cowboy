@@ -7464,73 +7464,6 @@ function SessionInfoSection({
   );
 }
 
-function SessionProviderReloadCard(
-  { sessionId }: { sessionId: string },
-): React.JSX.Element {
-  const action = useNetworkActionState();
-  const activateTap = useReliableTouchTap<HTMLButtonElement>(() => {
-    haptic();
-    void action.run(() => reloadSession(sessionId));
-  });
-
-  return (
-    <ButtonBase
-      {...activateTap}
-      disabled={action.pending}
-      aria-busy={action.pending || undefined}
-      aria-label="reload session runtime from provider"
-      data-session-provider-reload
-      sx={{
-        width: "100%",
-        minHeight: 58,
-        mt: 0.75,
-        mb: 0.5,
-        px: 1.5,
-        py: 1,
-        borderRadius: 1,
-        border: 1,
-        borderColor: "divider",
-        bgcolor: (theme) => alpha(theme.palette.background.default, 0.34),
-        color: "text.primary",
-        textAlign: "left",
-        justifyContent: "flex-start",
-        touchAction: "manipulation",
-        "&:active": { transform: "scale(0.99)" },
-        "&.Mui-disabled": { opacity: 0.58 },
-      }}
-    >
-      <Box sx={{ flex: 1, minWidth: 0 }}>
-        <Typography variant="body2" sx={{ fontWeight: 750 }}>
-          Reload session
-        </Typography>
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          sx={{ display: "block", mt: 0.2 }}
-        >
-          Reload the agent runtime and keep this session
-        </Typography>
-      </Box>
-      <Box
-        aria-hidden
-        sx={{
-          width: 20,
-          height: 20,
-          ml: 1,
-          display: "grid",
-          placeItems: "center",
-          flexShrink: 0,
-          color: "primary.main",
-        }}
-      >
-        {action.progress
-          ? <CircularProgress size={16} thickness={4.5} color="inherit" />
-          : <Refresh fontSize="small" />}
-      </Box>
-    </ButtonBase>
-  );
-}
-
 function SessionProviderSection({
   session,
 }: {
@@ -7634,21 +7567,38 @@ function SessionProviderSection({
         </ButtonBase>
         <Collapse id={panelId} in={expanded}>
           <Box sx={{ pt: 0.5 }}>
-            {entry && (
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                sx={{
-                  display: "block",
-                  px: 0.5,
-                  pb: 0.25,
-                  lineHeight: 1.4,
-                }}
+            <Stack
+              direction="row"
+              alignItems="center"
+              spacing={1}
+              sx={{ px: 0.5, pb: 0.25 }}
+            >
+              {entry
+                ? (
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{
+                      display: "block",
+                      flex: 1,
+                      minWidth: 0,
+                      lineHeight: 1.4,
+                    }}
+                  >
+                    {entry.manifest.display.summary}
+                  </Typography>
+                )
+                : <Box sx={{ flex: 1 }} />}
+              <NetworkIconButton
+                aria-label="reload session runtime from provider"
+                data-session-provider-reload
+                networkAction={(): Promise<void> => reloadSession(session.id)}
+                size="small"
+                sx={{ width: 32, height: 32, flexShrink: 0 }}
               >
-                {entry.manifest.display.summary}
-              </Typography>
-            )}
-            <SessionProviderReloadCard sessionId={session.id} />
+                <Refresh sx={{ fontSize: 17 }} />
+              </NetworkIconButton>
+            </Stack>
             {entry && (
               <List dense disablePadding>
                 {facts.map((row) => (
