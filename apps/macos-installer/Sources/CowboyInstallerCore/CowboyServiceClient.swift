@@ -358,7 +358,7 @@ public final class URLSessionCowboyServiceClient: CowboyServiceClient, @unchecke
                 administratorAccess: administratorAccess,
                 message: administratorAccess
                     ? "Local access is enabled and administrator controls are unlocked."
-                    : "Local access is enabled. Sign in to unlock dependency updates."
+                    : "Local access is enabled. Authentication is optional and can be configured later."
             )
         }
         if let me = product.me {

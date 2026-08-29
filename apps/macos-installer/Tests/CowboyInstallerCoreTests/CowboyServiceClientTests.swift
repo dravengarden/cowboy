@@ -15,7 +15,25 @@ struct CowboyServiceClientTests {
 
         #expect(status.phase == .localOwner)
         #expect(status.account == "local")
+        #expect(status.authenticationIsOptional)
         #expect(status.canManageDependencies)
+    }
+
+    @Test
+    func authOffLocalOwnerDoesNotRequireImmediateAuthentication() async throws {
+        let transport = SequenceHTTPTransport(responses: [
+            jsonResponse(#"{"setup_required":false,"me":{"account":"local","role":"owner","auth_enabled":false}}"#),
+            jsonResponse(#"{"authenticated":false,"role":null}"#),
+        ])
+        let client = URLSessionCowboyServiceClient(transport: transport)
+
+        let status = try await client.accountStatus(controllerURL: "https://cowboy.example")
+
+        #expect(status.phase == .localOwner)
+        #expect(status.authenticationIsOptional)
+        #expect(status.canReadProduct)
+        #expect(!status.canManageDependencies)
+        #expect(status.message == "Local access is enabled. Authentication is optional and can be configured later.")
     }
 
     @Test

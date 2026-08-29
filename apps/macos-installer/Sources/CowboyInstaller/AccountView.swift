@@ -7,6 +7,7 @@ struct AccountView: View {
     @State private var account = ""
     @State private var password = ""
     @State private var rememberLogin = true
+    @State private var showsOptionalSignIn = false
 
     var body: some View {
         Form {
@@ -32,7 +33,7 @@ struct AccountView: View {
                 }
                 LabeledContent(
                     "Dependency controls",
-                    value: model.accountStatus.canManageDependencies ? "Unlocked" : "Locked"
+                    value: dependencyControlsLabel
                 )
 
                 if model.accountStatus.phase == .checking {
@@ -40,24 +41,41 @@ struct AccountView: View {
                         .controlSize(.small)
                 }
 
-                if needsCredentials {
+                if optionalSignInAvailable && !showsOptionalSignIn {
+                    Text("Account passwords and passkeys are optional for local access. Continue using Cowboy now and configure authentication later when you want protected administrator actions.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("Use Account Password…") {
+                        showsOptionalSignIn = true
+                    }
+                }
+
+                if needsCredentials && (!optionalSignInAvailable || showsOptionalSignIn) {
                     TextField("Account", text: $account)
                         .textContentType(.username)
                     SecureField("Password", text: $password)
                         .textContentType(.password)
-                    Button("Sign In") {
-                        if model.signIn(
-                            account: account,
-                            password: password,
-                            remember: rememberLogin
-                        ) {
-                            password = ""
+                    HStack {
+                        Button("Sign In") {
+                            if model.signIn(
+                                account: account,
+                                password: password,
+                                remember: rememberLogin
+                            ) {
+                                password = ""
+                            }
+                        }
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(account.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || password.isEmpty)
+                        if optionalSignInAvailable {
+                            Button("Not Now") {
+                                password = ""
+                                showsOptionalSignIn = false
+                            }
                         }
                     }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(account.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || password.isEmpty)
                     Toggle(
-                        "Keep all Cowboy accounts signed in automatically",
+                        "Save this optional sign-in in macOS Keychain",
                         isOn: $rememberLogin
                     )
                 } else if model.accountStatus.phase == .signedIn || model.accountStatus.administratorAccess {
@@ -91,7 +109,7 @@ struct AccountView: View {
             }
 
             Section("Privacy") {
-                Text("The password is sent only to the configured HTTPS Cowboy Service. When automatic sign-in is selected, it is stored only in this app's macOS Keychain item; it never enters settings, logs, activity history, or the browser. The resulting Service cookies remain separate from the default browser.")
+                Text("Local-owner mode does not require an account password or passkey. If optional password sign-in is used, the password is sent only to the configured HTTPS Cowboy Service. When saving is selected, it is stored only in this app's macOS Keychain item; it never enters settings, logs, activity history, or the browser.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -118,6 +136,18 @@ struct AccountView: View {
         default:
             false
         }
+    }
+
+    private var optionalSignInAvailable: Bool {
+        model.accountStatus.authenticationIsOptional
+            && !model.accountStatus.administratorAccess
+    }
+
+    private var dependencyControlsLabel: String {
+        if model.accountStatus.canManageDependencies {
+            return "Unlocked"
+        }
+        return optionalSignInAvailable ? "Protected" : "Locked"
     }
 
     private var accountSymbol: String {

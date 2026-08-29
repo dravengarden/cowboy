@@ -188,6 +188,10 @@ public struct AccountStatus: Equatable, Sendable {
         phase == .localOwner || phase == .signedIn
     }
 
+    public var authenticationIsOptional: Bool {
+        phase == .localOwner
+    }
+
     public var canManageDependencies: Bool {
         canReadProduct && administratorAccess
     }
