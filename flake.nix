@@ -193,7 +193,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-O2VL9eBkQlEY6Yvmswr3n7gWu7fIkZqq147azj2yepU=";
+        hash = "sha256-jvOrs6YPqcJQZ3kLmhCoz7RWuDKRTUbqk/cpRSRjXeA=";
         preBuild = ''
           vendor_util="$(command -v fetch-cargo-vendor-util-v2 || command -v fetch-cargo-vendor-util)"
           if grep -q "https://crates.io/api/v1/crates/" "$vendor_util"; then
