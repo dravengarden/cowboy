@@ -1,5 +1,3 @@
-/** Product PWA idle lock. */
-export const PRODUCT_PASSKEY_IDLE_MS = 15 * 60 * 1_000;
 /** Admin console idle lock. */
 export const ADMIN_PASSKEY_IDLE_MS = 5 * 60 * 1_000;
 

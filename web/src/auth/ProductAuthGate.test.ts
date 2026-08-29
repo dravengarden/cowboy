@@ -13,6 +13,7 @@ async function readAuthSources(): Promise<string> {
     "ProductTokensPanel.tsx",
     "ProductPasskeysPanel.tsx",
     "PasskeyReauthLock.tsx",
+    "passkeyReauthSchedule.ts",
     "passkeyBrowser.ts",
     "passkeyExternalPage.ts",
     "passkeyFlow.ts",
@@ -114,7 +115,7 @@ Deno.test("login page is product chrome and hides register unless accepted", asy
   assert(login.includes('id: "password", label: "Password"'));
   assert(gate.includes("<ConfirmSheet"));
   assertEquals(gate.includes("<Dialog"), false);
-  assert(gate.includes("Automatic session refresh stays off"));
+  assert(gate.includes("Periodic Passkey verification stays off"));
   assert(gate.includes("passkeyFlowCancelled(reason)"));
 });
 
@@ -164,7 +165,7 @@ Deno.test("desktop can sign out through authApi without importing store", async 
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
   const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
-  assert(sw.includes('const VERSION = "cowboy-v1579"'));
+  assert(sw.includes('const VERSION = "cowboy-v1580"'));
   const authStart = sw.indexOf('url.pathname.startsWith("/api/auth/")');
   const authBranch = sw.slice(
     authStart,
@@ -173,4 +174,32 @@ Deno.test("service worker does not cache /api/auth and bumped VERSION", async ()
   assert(authBranch.includes("event.respondWith(fetch(request))"));
   assertEquals(authBranch.includes("caches."), false);
   assertEquals(authBranch.includes("caches.match"), false);
+});
+
+Deno.test("Passkey names are explicit and the product lock is event-driven", async () => {
+  const gate = await Deno.readTextFile(new URL("ProductAuthGate.tsx", authDir));
+  const panel = await Deno.readTextFile(
+    new URL("ProductPasskeysPanel.tsx", authDir),
+  );
+  const lock = await Deno.readTextFile(
+    new URL("PasskeyReauthLock.tsx", authDir),
+  );
+  const admin = await Deno.readTextFile(
+    new URL("admin/AdminPasskeys.tsx", webSrc),
+  );
+  const idleLock = await Deno.readTextFile(
+    new URL("useIdlePasskeyLock.ts", authDir),
+  );
+  assertEquals(`${gate}\n${panel}\n${admin}`.includes('"This device"'), false);
+  assert(gate.includes('const [nickname, setNickname] = useState("")'));
+  assert(panel.includes('const [nickname, setNickname] = useState("")'));
+  assert(panel.includes('Every 3 days · Default'));
+  assert(panel.includes('Every 4 hours'));
+  assert(lock.includes('globalThis.setTimeout(arm, delay)'));
+  assert(lock.includes('addEventListener("visibilitychange", arm)'));
+  assertEquals(lock.includes("setInterval"), false);
+  assertEquals(idleLock.includes("setInterval"), false);
+  assert(idleLock.includes("globalThis.setTimeout(arm, delay)"));
+  assert(lock.includes('backdropFilter: "blur(24px) saturate(65%)"'));
+  assert(lock.includes("Unlock with Passkey"));
 });

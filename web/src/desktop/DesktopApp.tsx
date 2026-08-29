@@ -45,7 +45,7 @@ function EnabledDesktopAccountCommands({
   const passkeysCommand = useMemo<DesktopCommand>(() => ({
     id: "account.passkeys",
     title: "Passkeys",
-    description: "Add a Passkey or turn off the 15-minute viewing lock",
+    description: "Add a Passkey or configure periodic verification",
     group: "Account",
     run: () => setPasskeysOpen(true),
   }), []);
@@ -69,7 +69,7 @@ function EnabledDesktopAccountCommands({
       open={passkeysOpen}
       onClose={() => setPasskeysOpen(false)}
       title="Passkeys"
-      description="Password login stays first. A Passkey is optional, then locks this view after 15 minutes idle."
+      description="Password login stays first. A Passkey can periodically lock this view while agents keep running."
       width={520}
     >
       <Box sx={{ px: 2.25, py: 2 }}>

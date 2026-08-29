@@ -3,17 +3,18 @@ import {
   ADMIN_PASSKEY_IDLE_MS,
   idleLockShouldEngage,
   noteActivity,
-  PRODUCT_PASSKEY_IDLE_MS,
 } from "./idleLock.ts";
+
+const TEST_IDLE_MS = 15 * 60 * 1_000;
 
 Deno.test("idle lock waits for the full idle window", () => {
   assertEquals(
     idleLockShouldEngage({
       eligible: true,
       alreadyLocked: false,
-      nowMs: PRODUCT_PASSKEY_IDLE_MS,
+      nowMs: TEST_IDLE_MS,
       lastActiveMs: 0,
-      idleAfterMs: PRODUCT_PASSKEY_IDLE_MS,
+      idleAfterMs: TEST_IDLE_MS,
     }),
     true,
   );
@@ -21,9 +22,9 @@ Deno.test("idle lock waits for the full idle window", () => {
     idleLockShouldEngage({
       eligible: true,
       alreadyLocked: false,
-      nowMs: PRODUCT_PASSKEY_IDLE_MS - 1,
+      nowMs: TEST_IDLE_MS - 1,
       lastActiveMs: 0,
-      idleAfterMs: PRODUCT_PASSKEY_IDLE_MS,
+      idleAfterMs: TEST_IDLE_MS,
     }),
     false,
   );
@@ -34,9 +35,9 @@ Deno.test("idle lock never engages without a passkey or when turned off", () => 
     idleLockShouldEngage({
       eligible: false,
       alreadyLocked: false,
-      nowMs: PRODUCT_PASSKEY_IDLE_MS + 1,
+      nowMs: TEST_IDLE_MS + 1,
       lastActiveMs: 0,
-      idleAfterMs: PRODUCT_PASSKEY_IDLE_MS,
+      idleAfterMs: TEST_IDLE_MS,
     }),
     false,
   );

@@ -132,7 +132,7 @@ impl SqliteUserPasskeyRow {
 #[derive(sqlx::FromRow)]
 struct SqlitePasskeyPolicyRow {
     passkey_reauth_enabled: i64,
-    passkey_refresh_interval_ms: i64,
+    passkey_reauth_interval_ms: i64,
     last_step_up_at_ms: Option<i64>,
     passkey_count: i64,
 }
@@ -141,7 +141,7 @@ impl SqlitePasskeyPolicyRow {
     fn into_policy(self) -> crate::passkey::PasskeyPolicy {
         crate::passkey::PasskeyPolicy {
             enabled: self.passkey_reauth_enabled != 0,
-            reauth_after_ms: self.passkey_refresh_interval_ms,
+            reauth_after_ms: self.passkey_reauth_interval_ms,
             last_step_up_at_ms: self.last_step_up_at_ms,
             passkey_count: u32::try_from(self.passkey_count.max(0)).unwrap_or(0),
         }
@@ -2462,7 +2462,7 @@ impl SqliteStorage {
         );
         sqlx::query(
             "INSERT INTO users (id, username, password_algo, password_hash, created_at_ms, \
-             updated_at_ms, disabled_at_ms, passkey_reauth_enabled, passkey_refresh_interval_ms) \
+             updated_at_ms, disabled_at_ms, passkey_reauth_enabled, passkey_reauth_interval_ms) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8)",
         )
         .bind(&user.id)
@@ -2921,7 +2921,7 @@ impl SqliteStorage {
         user_id: &str,
     ) -> Result<Option<crate::passkey::PasskeyPolicy>> {
         let row = sqlx::query_as::<_, SqlitePasskeyPolicyRow>(
-            "SELECT passkey_reauth_enabled, passkey_refresh_interval_ms, last_step_up_at_ms, \
+            "SELECT passkey_reauth_enabled, passkey_reauth_interval_ms, last_step_up_at_ms, \
              (SELECT COUNT(*) FROM user_passkeys WHERE user_id = ?1) AS passkey_count \
              FROM users WHERE id = ?1",
         )
@@ -2948,7 +2948,9 @@ impl SqliteStorage {
             .await
             .context("BEGIN SQLite Passkey refresh update")?;
         let result = sqlx::query(
-            "UPDATE users SET passkey_reauth_enabled = ?2, passkey_refresh_interval_ms = ?3, \
+            "UPDATE users SET passkey_reauth_enabled = ?2, passkey_reauth_interval_ms = ?3, \
+             passkey_refresh_interval_ms = CASE WHEN ?3 IN \
+             (86400000, 604800000, 1209600000) THEN ?3 ELSE passkey_refresh_interval_ms END, \
              updated_at_ms = ?4 WHERE id = ?1 AND (?2 = 0 OR EXISTS ( \
              SELECT 1 FROM user_passkeys WHERE user_id = ?1))",
         )
@@ -4234,7 +4236,7 @@ mod baseline_compatibility_tests {
                 .fetch_all(&storage.pool)
                 .await
                 .unwrap();
-        assert_eq!(versions, (1_i64..=9).collect::<Vec<_>>());
+        assert_eq!(versions, (1_i64..=10).collect::<Vec<_>>());
         let machines_after: i64 = sqlx::query_scalar("SELECT count(*) FROM machines")
             .fetch_one(&storage.pool)
             .await

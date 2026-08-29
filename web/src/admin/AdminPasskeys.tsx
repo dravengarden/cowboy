@@ -1,4 +1,13 @@
-import { Alert, Button, FormControlLabel, Paper, Stack, Switch, TextField, Typography } from "@mui/material";
+import {
+  Alert,
+  Button,
+  FormControlLabel,
+  Paper,
+  Stack,
+  Switch,
+  TextField,
+  Typography,
+} from "@mui/material";
 import { useCallback, useEffect, useState } from "react";
 import { ADMIN_PASSKEY_IDLE_MS } from "../auth/idleLock";
 import {
@@ -21,7 +30,7 @@ export function AdminPasskeysCard({
   onAuth: (auth: AdminAuthStatus) => void;
 }): React.JSX.Element {
   const [passkeys, setPasskeys] = useState<AdminPasskey[]>([]);
-  const [nickname, setNickname] = useState("This device");
+  const [nickname, setNickname] = useState("");
   const [enabled, setEnabled] = useState(auth.passkey_reauth_enabled !== false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -67,6 +76,7 @@ export function AdminPasskeysCard({
               label="Passkey name"
               value={nickname}
               onChange={(event) => setNickname(event.target.value)}
+              slotProps={{ htmlInput: { maxLength: 64 } }}
             />
             <Button
               variant="outlined"
@@ -78,7 +88,7 @@ export function AdminPasskeysCard({
                   const ceremony = await adminApi.startPasskeyRegister(nickname.trim());
                   const credential = await createPasskey(ceremony);
                   await adminApi.completePasskeyRegister(ceremony.challenge_id, credential);
-                  setNickname("This device");
+                  setNickname("");
                   await load();
                   onAuth(await adminApi.auth());
                 })().catch((err: Error) => setError(err.message)).finally(() => setBusy(false));

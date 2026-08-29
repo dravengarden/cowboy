@@ -691,7 +691,7 @@ impl ProductPasskeyRow {
 #[derive(sqlx::FromRow)]
 struct ProductPasskeyPolicyRow {
     passkey_reauth_enabled: bool,
-    passkey_refresh_interval_ms: i64,
+    passkey_reauth_interval_ms: i64,
     last_step_up_at: Option<DateTime<Utc>>,
     passkey_count: i64,
 }
@@ -700,7 +700,7 @@ impl ProductPasskeyPolicyRow {
     fn into_policy(self) -> crate::passkey::PasskeyPolicy {
         crate::passkey::PasskeyPolicy {
             enabled: self.passkey_reauth_enabled,
-            reauth_after_ms: self.passkey_refresh_interval_ms,
+            reauth_after_ms: self.passkey_reauth_interval_ms,
             last_step_up_at_ms: self.last_step_up_at.map(|value| value.timestamp_millis()),
             passkey_count: u32::try_from(self.passkey_count.max(0)).unwrap_or(0),
         }
@@ -2653,7 +2653,7 @@ impl PostgresStorage {
         );
         sqlx::query(
             "INSERT INTO users (id, username, password_algo, password_hash, created_at, \
-             updated_at, disabled_at, passkey_reauth_enabled, passkey_refresh_interval_ms) VALUES ( \
+             updated_at, disabled_at, passkey_reauth_enabled, passkey_reauth_interval_ms) VALUES ( \
              $1, $2, $3, $4, to_timestamp($5::double precision / 1000), \
              to_timestamp($6::double precision / 1000), \
              to_timestamp($7::double precision / 1000), false, $8)",
@@ -3102,7 +3102,7 @@ impl PostgresStorage {
         user_id: &str,
     ) -> Result<Option<crate::passkey::PasskeyPolicy>> {
         let row = sqlx::query_as::<_, ProductPasskeyPolicyRow>(
-            "SELECT passkey_reauth_enabled, passkey_refresh_interval_ms, last_step_up_at, \
+            "SELECT passkey_reauth_enabled, passkey_reauth_interval_ms, last_step_up_at, \
              (SELECT COUNT(*) FROM user_passkeys WHERE user_id = $1)::bigint AS passkey_count \
              FROM users WHERE id = $1",
         )
@@ -3129,7 +3129,9 @@ impl PostgresStorage {
             .await
             .context("BEGIN Passkey refresh update")?;
         let result = sqlx::query(
-            "UPDATE users SET passkey_reauth_enabled = $2, passkey_refresh_interval_ms = $3, \
+            "UPDATE users SET passkey_reauth_enabled = $2, passkey_reauth_interval_ms = $3, \
+             passkey_refresh_interval_ms = CASE WHEN $3 IN \
+             (86400000, 604800000, 1209600000) THEN $3 ELSE passkey_refresh_interval_ms END, \
              updated_at = now() WHERE id = $1 AND (NOT $2 OR EXISTS ( \
              SELECT 1 FROM user_passkeys WHERE user_id = $1))",
         )
@@ -6645,6 +6647,15 @@ mod storage_contract_tests {
             Some("draven".to_owned())
         );
         assert_eq!(store.list_users().await?.len(), 1);
+        let initial_passkey_policy = store
+            .user_passkey_policy(&user.id)
+            .await?
+            .context("new user Passkey policy was not restored")?;
+        assert!(!initial_passkey_policy.enabled);
+        assert_eq!(
+            initial_passkey_policy.reauth_after_ms,
+            crate::passkey::DEFAULT_PASSKEY_REAUTH_AFTER_MS
+        );
         let duplicate = ProductUser {
             id: "fedcba9876543210fedcba9876543210".to_owned(),
             username: "DRAVEN".to_owned(),
@@ -6731,12 +6742,14 @@ mod storage_contract_tests {
             })
             .await?;
         store
-            .set_user_passkey_reauth(
-                &user.id,
-                true,
-                crate::passkey::DEFAULT_PASSKEY_REAUTH_AFTER_MS,
-            )
+            .set_user_passkey_reauth(&user.id, true, 4 * 60 * 60 * 1_000)
             .await?;
+        let short_passkey_policy = store
+            .user_passkey_policy(&user.id)
+            .await?
+            .context("short Passkey policy was not restored")?;
+        assert!(short_passkey_policy.enabled);
+        assert_eq!(short_passkey_policy.reauth_after_ms, 4 * 60 * 60 * 1_000);
         store
             .rotate_user_session(&session.token_hash, &rotated)
             .await?;
@@ -7389,7 +7402,7 @@ mod storage_contract_tests {
                 .fetch_all(&storage.pool)
                 .await
                 .unwrap();
-        assert_eq!(versions, (1_i64..=35).collect::<Vec<_>>());
+        assert_eq!(versions, (1_i64..=36).collect::<Vec<_>>());
         let machines_after: i64 = sqlx::query_scalar("SELECT count(*) FROM machines")
             .fetch_one(&storage.pool)
             .await

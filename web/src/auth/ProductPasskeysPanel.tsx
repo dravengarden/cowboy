@@ -20,6 +20,7 @@ import {
 } from "./authApi";
 import {
   passkeyErrorMessage,
+  passkeyFlowCancelled,
   passkeyFlowSupported,
   registerPasskey,
   verifyPasskey,
@@ -27,10 +28,15 @@ import {
 import { useProductAuth } from "./ProductAuthGate";
 
 const REFRESH_INTERVALS = [
+  { label: "Every 4 hours", value: 4 * 60 * 60 * 1_000 },
+  { label: "Every 8 hours", value: 8 * 60 * 60 * 1_000 },
+  { label: "Every 12 hours", value: 12 * 60 * 60 * 1_000 },
   { label: "Every day", value: 24 * 60 * 60 * 1_000 },
+  { label: "Every 3 days · Default", value: 3 * 24 * 60 * 60 * 1_000 },
   { label: "Every 7 days", value: 7 * 24 * 60 * 60 * 1_000 },
   { label: "Every 14 days", value: 14 * 24 * 60 * 60 * 1_000 },
 ] as const;
+const DEFAULT_REAUTH_INTERVAL_MS = 3 * 24 * 60 * 60 * 1_000;
 
 export function ProductPasskeysPanel({
   onMe,
@@ -39,10 +45,10 @@ export function ProductPasskeysPanel({
 }): React.JSX.Element {
   const { me, passkeys: policy, updateMe } = useProductAuth();
   const [passkeys, setPasskeys] = useState<ProductPasskey[]>([]);
-  const [nickname, setNickname] = useState("This device");
+  const [nickname, setNickname] = useState("");
   const [enabled, setEnabled] = useState(me.passkey_reauth_enabled === true);
   const [reauthAfterMs, setReauthAfterMs] = useState(
-    me.passkey_reauth_after_ms ?? REFRESH_INTERVALS[1].value,
+    me.passkey_reauth_after_ms ?? DEFAULT_REAUTH_INTERVAL_MS,
   );
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -68,7 +74,7 @@ export function ProductPasskeysPanel({
     setError(null);
     void (async () => {
       await registerPasskey(nickname.trim());
-      setNickname("This device");
+      setNickname("");
       await load();
       updateMe(await authApi.me());
     })()
@@ -124,6 +130,7 @@ export function ProductPasskeysPanel({
         onMe?.(updated);
       })
       .catch((err: unknown) => {
+        if (passkeyFlowCancelled(err)) return;
         setError(passkeyErrorMessage(err, "Could not save setting"));
       })
       .finally(() => setBusy(false));
@@ -161,10 +168,11 @@ export function ProductPasskeysPanel({
   return (
     <Stack spacing={1.5}>
       <Typography variant="body2" color="text.secondary">
-        Password and external sign-ins last one day. Passkey refresh is optional
-        and off by default. A successful Passkey rotates this browser&apos;s
-        session and extends it for up to 30 days. Turning it on verifies your
-        Passkey immediately.
+        Password and external sign-ins last one day. Periodic Passkey checks are
+        optional and off by default. When one is due, Cowboy hides this screen
+        until you choose to unlock it; running agents continue in the
+        background. A successful check rotates this browser&apos;s session and
+        extends it for up to 30 days.
       </Typography>
       {error && <Alert severity="error">{error}</Alert>}
       {refreshEnabled
@@ -178,15 +186,15 @@ export function ProductPasskeysPanel({
                   onChange={(event) => toggle(event.target.checked)}
                 />
               }
-              label="Keep this session signed in with Passkey refresh"
+              label="Require Passkey periodically"
             />
             <FormControl size="small" disabled={busy || passkeys.length === 0}>
               <InputLabel id="passkey-refresh-interval-label">
-                Refresh frequency
+                Verification frequency
               </InputLabel>
               <Select
                 labelId="passkey-refresh-interval-label"
-                label="Refresh frequency"
+                label="Verification frequency"
                 value={reauthAfterMs}
                 onChange={(event) => changeInterval(Number(event.target.value))}
               >
@@ -201,7 +209,7 @@ export function ProductPasskeysPanel({
         )
         : (
           <Alert severity="info">
-            Passkey session refresh is disabled by this Cowboy Service.
+            Periodic Passkey verification is disabled by this Cowboy Service.
           </Alert>
         )}
       {passkeyFlowSupported()
@@ -212,6 +220,7 @@ export function ProductPasskeysPanel({
               label="Passkey name"
               value={nickname}
               onChange={(event) => setNickname(event.target.value)}
+              slotProps={{ htmlInput: { maxLength: 64 } }}
               fullWidth
             />
             <Button
@@ -227,8 +236,9 @@ export function ProductPasskeysPanel({
       {passkeys.length === 0
         ? (
           <Typography variant="body2" color="text.secondary">
-            No passkeys yet. Add one, then turn on session refresh when you want
-            it.
+            No passkeys yet. Add one, then turn on periodic verification when
+            you want it. The name is required so you can identify and revoke
+            the right device later.
           </Typography>
         )
         : (

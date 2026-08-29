@@ -4,6 +4,7 @@ import {
   Button,
   CircularProgress,
   Stack,
+  TextField,
   Typography,
 } from "@mui/material";
 import {
@@ -180,6 +181,7 @@ function PasskeySetupPrompt({
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [nickname, setNickname] = useState("");
   const open = policy?.enabled === true && policy.prompt_after_login &&
     (me.passkey_count ?? 0) === 0 && !dismissed;
   const dismiss = (): void => {
@@ -191,11 +193,11 @@ function PasskeySetupPrompt({
     setDismissed(true);
   };
   const add = (): void => {
-    if (busy || !passkeyFlowSupported()) return;
+    if (busy || !passkeyFlowSupported() || nickname.trim() === "") return;
     setBusy(true);
     setError(null);
     void (async () => {
-      await registerPasskey("This device");
+      await registerPasskey(nickname.trim());
       onCreated(await authApi.me());
     })().catch((reason: unknown) => {
       if (passkeyFlowCancelled(reason)) return;
@@ -212,7 +214,9 @@ function PasskeySetupPrompt({
           <Button color="inherit" onClick={dismiss}>Not now</Button>
           <Button
             variant="contained"
-            disabled={busy || !passkeyFlowSupported()}
+            disabled={
+              busy || !passkeyFlowSupported() || nickname.trim() === ""
+            }
             onClick={add}
           >
             Add Passkey
@@ -224,8 +228,16 @@ function PasskeySetupPrompt({
         <Typography color="text.secondary">
           A Passkey is optional. It adds phishing-resistant verification and can
           refresh this browser&apos;s session after you explicitly verify.
-          Automatic session refresh stays off until you enable it in Settings.
+          Periodic Passkey verification stays off until you enable it in
+          Settings.
         </Typography>
+        <TextField
+          label="Passkey name"
+          value={nickname}
+          onChange={(event) => setNickname(event.target.value)}
+          slotProps={{ htmlInput: { maxLength: 64 } }}
+          fullWidth
+        />
         {!passkeyFlowSupported() && (
           <Alert severity="info">This browser cannot create a Passkey.</Alert>
         )}

@@ -11,26 +11,6 @@ export function useIdlePasskeyLock(eligible: boolean, idleAfterMs: number): {
   const lastActiveMs = useRef(Date.now());
   const lockedRef = useRef(false);
 
-  const markActive = useCallback((): void => {
-    const next = noteActivity({ alreadyLocked: lockedRef.current, nowMs: Date.now() });
-    if (next != null) lastActiveMs.current = next;
-  }, []);
-
-  const evaluate = useCallback((): void => {
-    if (
-      idleLockShouldEngage({
-        eligible,
-        alreadyLocked: lockedRef.current,
-        nowMs: Date.now(),
-        lastActiveMs: lastActiveMs.current,
-        idleAfterMs,
-      })
-    ) {
-      lockedRef.current = true;
-      setLocked(true);
-    }
-  }, [eligible, idleAfterMs]);
-
   useEffect(() => {
     if (!eligible) {
       lockedRef.current = false;
@@ -40,26 +20,58 @@ export function useIdlePasskeyLock(eligible: boolean, idleAfterMs: number): {
   }, [eligible]);
 
   useEffect(() => {
+    let timer: number | undefined;
+    const arm = (): void => {
+      if (timer != null) globalThis.clearTimeout(timer);
+      if (!eligible || lockedRef.current) return;
+      const now = Date.now();
+      if (
+        idleLockShouldEngage({
+          eligible,
+          alreadyLocked: lockedRef.current,
+          nowMs: now,
+          lastActiveMs: lastActiveMs.current,
+          idleAfterMs,
+        })
+      ) {
+        lockedRef.current = true;
+        setLocked(true);
+        return;
+      }
+      const delay = Math.max(
+        0,
+        idleAfterMs - (now - lastActiveMs.current),
+      );
+      timer = globalThis.setTimeout(arm, delay);
+    };
     const onActivity = (): void => {
-      markActive();
+      const next = noteActivity({
+        alreadyLocked: lockedRef.current,
+        nowMs: Date.now(),
+      });
+      if (next == null) return;
+      lastActiveMs.current = next;
+      arm();
     };
     for (const name of ACTIVITY_EVENTS) {
       globalThis.addEventListener(name, onActivity, { passive: true });
     }
     const onVisible = (): void => {
       if (document.visibilityState !== "visible") return;
-      evaluate();
+      arm();
     };
     document.addEventListener("visibilitychange", onVisible);
-    const timer = globalThis.setInterval(evaluate, 5_000);
+    globalThis.addEventListener("focus", arm);
+    arm();
     return () => {
       for (const name of ACTIVITY_EVENTS) {
         globalThis.removeEventListener(name, onActivity);
       }
       document.removeEventListener("visibilitychange", onVisible);
-      globalThis.clearInterval(timer);
+      globalThis.removeEventListener("focus", arm);
+      if (timer != null) globalThis.clearTimeout(timer);
     };
-  }, [evaluate, markActive]);
+  }, [eligible, idleAfterMs, locked]);
 
   const unlock = useCallback((): void => {
     lockedRef.current = false;
