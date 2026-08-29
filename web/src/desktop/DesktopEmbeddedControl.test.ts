@@ -16,6 +16,9 @@ const embeddedControlSource = await Deno.readTextFile(
 const shortcutKeycapSource = await Deno.readTextFile(
   new URL("../ShortcutKeycap.tsx", import.meta.url),
 );
+const appSource = await Deno.readTextFile(
+  new URL("../App.tsx", import.meta.url),
+);
 
 Deno.test("desktop embedded control icons follow the global root font size", () => {
   assertEquals(desktopEmbeddedControlIconSx(), {
@@ -66,6 +69,19 @@ Deno.test("idle Desktop controls use a neutral boundary", () => {
   assertEquals(
     embeddedControlSource.includes("open ? 0.68 : active ? 0.5 : 0.3"),
     false,
+  );
+});
+
+Deno.test("focused Topbar paints only the real keyboard cursor", () => {
+  assertEquals(
+    appSource.includes(
+      '"& [data-desktop-region=\'topbar.controls\'][data-desktop-focused=\'true\']"',
+    ),
+    false,
+  );
+  assertEquals(
+    appSource.includes('"& [data-desktop-item]:focus-visible"'),
+    true,
   );
 });
 

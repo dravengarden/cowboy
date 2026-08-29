@@ -2533,14 +2533,6 @@ export function App({
                         borderColor: desktopFocusBoundary,
                         bgcolor: desktopFocusFill,
                     },
-                    // Topbar focus belongs to the whole Toolbar, not the inner
-                    // controls Stack. Use the same header language as Prompt,
-                    // Conversation and Sessions: quiet tint + a 2px accent rail.
-                    "& [data-desktop-region='topbar.controls'][data-desktop-focused='true']": {
-                        color: "primary.main",
-                        bgcolor: desktopFocusFill,
-                        boxShadow: "inset 0 2px 0 0 currentColor",
-                    },
                     "& [data-desktop-pane] > [data-desktop-pane-header]": {
                         color: "text.secondary",
                         bgcolor: (t) => alpha(t.palette.background.paper, 0.16),
@@ -2559,6 +2551,10 @@ export function App({
                         outline: "none",
                         boxShadow: "none",
                     },
+                    // The Topbar status line already identifies the active
+                    // keyboard region. Paint only its real cursor: styling the
+                    // Toolbar would make every color="inherit" control look
+                    // selected at once.
                     "& [data-desktop-item]:focus-visible": {
                         outline: "none",
                         bgcolor: (t) => alpha(t.palette.primary.main, 0.105),
