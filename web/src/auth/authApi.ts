@@ -33,6 +33,18 @@ export function nativeOidcPollPath(provider: ProductOidcProvider): string {
     : `/api/auth/providers/${encodeURIComponent(provider.id)}/native/poll`;
 }
 
+export function nativeOidcEventsPath(provider: ProductOidcProvider): string {
+  return provider.start_url === "/api/auth/oidc/start"
+    ? "/api/auth/oidc/native/events"
+    : `/api/auth/providers/${encodeURIComponent(provider.id)}/native/events`;
+}
+
+export function nativeOidcCancelPath(provider: ProductOidcProvider): string {
+  return provider.start_url === "/api/auth/oidc/start"
+    ? "/api/auth/oidc/native/cancel"
+    : `/api/auth/providers/${encodeURIComponent(provider.id)}/native/cancel`;
+}
+
 export interface ProductPasskeyServerPolicy {
   enabled: boolean;
   prompt_after_login: boolean;
@@ -258,6 +270,22 @@ export const authApi = {
   ) =>
     readJson<NativeOidcPoll>(
       nativeOidcPollPath(provider),
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          handoff_token: handoffToken,
+          code_verifier: codeVerifier,
+        }),
+      },
+    ),
+  cancelNativeOidc: (
+    provider: ProductOidcProvider,
+    handoffToken: string,
+    codeVerifier: string,
+  ) =>
+    readJson<Record<string, never>>(
+      nativeOidcCancelPath(provider),
       {
         method: "POST",
         headers: { "content-type": "application/json" },

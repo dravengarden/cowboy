@@ -72,6 +72,7 @@
       "properties": {
         "issuer": { "$ref": "#/$defs/issuerUrl" },
         "authorization_endpoint": { "$ref": "#/$defs/httpsUrl" },
+        "pushed_authorization_request_endpoint": { "$ref": "#/$defs/httpsUrl" },
         "token_endpoint": { "$ref": "#/$defs/httpsUrl" },
         "jwks_uri": { "$ref": "#/$defs/httpsUrl" },
         "scopes": {

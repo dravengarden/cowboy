@@ -233,6 +233,43 @@ Deno.test("native OIDC poll keeps both raw bindings in a same-origin body", asyn
   }
 });
 
+Deno.test("native OIDC cancellation is same-origin and keeps proofs out of the URL", async () => {
+  let seen: FetchArgs | undefined;
+  const restore = withFetch((args) => {
+    seen = args;
+    return new Response(null, { status: 204 });
+  });
+  try {
+    await authApi.cancelNativeOidc(
+      {
+        id: "google-workspace",
+        display_name: "Google Workspace",
+        button_label: "Continue with Google",
+        start_url: "/api/auth/providers/google-workspace/start",
+      },
+      "h".repeat(43),
+      "v".repeat(43),
+    );
+    assertEquals(
+      seen?.input,
+      "/api/auth/providers/google-workspace/native/cancel",
+    );
+    assertEquals(seen?.init?.method, "POST");
+    assertEquals(seen?.init?.credentials, "same-origin");
+    assertEquals(
+      seen?.init?.body,
+      JSON.stringify({
+        handoff_token: "h".repeat(43),
+        code_verifier: "v".repeat(43),
+      }),
+    );
+    assertEquals(String(seen?.input).includes("h".repeat(43)), false);
+    assertEquals(String(seen?.input).includes("v".repeat(43)), false);
+  } finally {
+    restore();
+  }
+});
+
 Deno.test("status 404 and 501 are unsupported, not login", async () => {
   for (const status of [404, 501] as const) {
     const restore = withFetch(() => new Response("not found", { status }));

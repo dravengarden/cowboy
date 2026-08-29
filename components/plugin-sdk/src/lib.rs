@@ -115,6 +115,8 @@ pub enum AuthenticationProtocol {
 pub struct OpenIdConnectContract {
     pub issuer: String,
     pub authorization_endpoint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pushed_authorization_request_endpoint: Option<String>,
     pub token_endpoint: String,
     pub jwks_uri: String,
     pub scopes: Vec<String>,
@@ -677,6 +679,9 @@ fn validate_oidc_contract(contract: &OpenIdConnectContract) -> Result<()> {
         &contract.authorization_endpoint,
         "OIDC authorization endpoint",
     )?;
+    if let Some(endpoint) = contract.pushed_authorization_request_endpoint.as_deref() {
+        validate_https_url(endpoint, "OIDC pushed authorization request endpoint")?;
+    }
     validate_https_url(&contract.token_endpoint, "OIDC token endpoint")?;
     validate_https_url(&contract.jwks_uri, "OIDC JWKS endpoint")?;
     ensure!(
@@ -875,6 +880,7 @@ mod tests {
             protocol: AuthenticationProtocol::OpenIdConnect(OpenIdConnectContract {
                 issuer: "https://accounts.google.com".to_owned(),
                 authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth".to_owned(),
+                pushed_authorization_request_endpoint: None,
                 token_endpoint: "https://oauth2.googleapis.com/token".to_owned(),
                 jwks_uri: "https://www.googleapis.com/oauth2/v3/certs".to_owned(),
                 scopes: vec!["openid".to_owned(), "email".to_owned()],

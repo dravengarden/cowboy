@@ -35,6 +35,7 @@ const NATIVE_HANDOFF_TTL: Duration = Duration::from_secs(60);
 const MAX_NATIVE_HANDOFFS: usize = 128;
 const MAX_SECRET_BYTES: u64 = 8_192;
 const MAX_TOKEN_RESPONSE_BYTES: usize = 32 * 1_024;
+const MAX_PAR_RESPONSE_BYTES: usize = 8 * 1_024;
 const MAX_JWT_BYTES: usize = 8_192;
 const CLIENT_ASSERTION_TYPE: &str = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
 
@@ -102,6 +103,13 @@ struct PublicJwk {
     x: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PushedAuthorizationResponse {
+    request_uri: String,
+    expires_in: u64,
+}
+
 #[derive(Clone)]
 pub struct OidcProvider {
     id: String,
@@ -109,6 +117,7 @@ pub struct OidcProvider {
     button_label: String,
     issuer: String,
     authorization_endpoint: Url,
+    pushed_authorization_request_endpoint: Option<String>,
     token_endpoint: String,
     jwks_uri: Option<String>,
     scopes: String,
@@ -208,10 +217,17 @@ struct StoredNativeHandoff {
     created: Instant,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum BrowserHandoffState {
     Pending,
     Ready { user_id: String },
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowserHandoffEvent {
+    Pending,
+    Ready,
     Failed,
 }
 
@@ -220,6 +236,7 @@ struct StoredBrowserHandoff {
     provider_id: String,
     code_challenge: String,
     state: BrowserHandoffState,
+    events: tokio::sync::watch::Sender<BrowserHandoffEvent>,
     expires: Instant,
     created: Instant,
 }
@@ -450,6 +467,7 @@ impl OidcProvider {
             button_label: "Continue with Cardea".to_owned(),
             issuer,
             authorization_endpoint,
+            pushed_authorization_request_endpoint: None,
             token_endpoint,
             jwks_uri: None,
             scopes: "openid".to_owned(),
@@ -495,6 +513,12 @@ impl OidcProvider {
             "OIDC issuer must not contain a query"
         );
         let authorization_endpoint = exact_https_url(&protocol.authorization_endpoint)?;
+        let pushed_authorization_request_endpoint = protocol
+            .pushed_authorization_request_endpoint
+            .as_deref()
+            .map(exact_https_url)
+            .transpose()?
+            .map(Into::into);
         let token_endpoint = exact_https_url(&protocol.token_endpoint)?.into();
         let jwks_uri = exact_https_url(&protocol.jwks_uri)?.into();
         let redirect = exact_https_url(&runtime.redirect_uri)?;
@@ -604,6 +628,7 @@ impl OidcProvider {
             button_label: contract.button_label.clone(),
             issuer: protocol.issuer.clone(),
             authorization_endpoint,
+            pushed_authorization_request_endpoint,
             token_endpoint,
             jwks_uri: Some(jwks_uri),
             scopes: protocol.scopes.join(" "),
@@ -661,24 +686,15 @@ impl OidcProvider {
         self.admin_account.as_deref()
     }
 
-    pub async fn exchange(
+    fn append_client_authentication(
         &self,
-        transaction: &OidcTransaction,
-        code: &str,
-    ) -> Result<VerifiedIdentity> {
-        anyhow::ensure!(valid_authorization_code(code), "invalid authorization code");
-        let now = now_seconds()?;
-        anyhow::ensure!(transaction.provider_id == self.id, "OIDC provider mismatch");
-        let mut form = vec![
-            ("grant_type", "authorization_code".to_owned()),
-            ("client_id", self.client_id.clone()),
-            ("code", code.to_owned()),
-            ("redirect_uri", self.redirect_uri.clone()),
-            ("code_verifier", transaction.pkce_verifier.clone()),
-        ];
+        form: &mut Vec<(String, String)>,
+        audience: &str,
+        now: u64,
+    ) -> Result<()> {
         match &self.client_authentication {
             RuntimeClientAuthentication::ClientSecretPost(secret) => {
-                form.push(("client_secret", secret.clone()));
+                form.push(("client_secret".to_owned(), secret.clone()));
             }
             RuntimeClientAuthentication::PrivateKeyJwtEd25519 {
                 key_id,
@@ -689,13 +705,16 @@ impl OidcProvider {
                     signing_seed,
                     key_id,
                     &self.client_id,
-                    &self.token_endpoint,
+                    audience,
                     &assertion_id,
                     now,
                 )
                 .context("building OIDC client assertion")?;
-                form.push(("client_assertion_type", CLIENT_ASSERTION_TYPE.to_owned()));
-                form.push(("client_assertion", assertion));
+                form.push((
+                    "client_assertion_type".to_owned(),
+                    CLIENT_ASSERTION_TYPE.to_owned(),
+                ));
+                form.push(("client_assertion".to_owned(), assertion));
             }
             RuntimeClientAuthentication::AppleClientSecretEs256 {
                 team_id,
@@ -703,12 +722,130 @@ impl OidcProvider {
                 signing_key,
             } => {
                 form.push((
-                    "client_secret",
+                    "client_secret".to_owned(),
                     apple_client_secret(signing_key, team_id, key_id, &self.client_id, now)
                         .context("building Apple client secret")?,
                 ));
             }
         }
+        Ok(())
+    }
+
+    fn authorization_parameters(
+        &self,
+        state: &str,
+        nonce: &str,
+        challenge: &str,
+    ) -> Vec<(String, String)> {
+        let mut parameters = vec![
+            ("response_type".to_owned(), "code".to_owned()),
+            ("client_id".to_owned(), self.client_id.clone()),
+            ("redirect_uri".to_owned(), self.redirect_uri.clone()),
+            ("scope".to_owned(), self.scopes.clone()),
+            ("state".to_owned(), state.to_owned()),
+            ("nonce".to_owned(), nonce.to_owned()),
+            ("code_challenge".to_owned(), challenge.to_owned()),
+            ("code_challenge_method".to_owned(), "S256".to_owned()),
+        ];
+        parameters.extend(
+            self.authorization_parameters
+                .iter()
+                .map(|(name, value)| (name.clone(), value.clone())),
+        );
+        parameters
+    }
+
+    fn pushed_authorization_location(&self, pushed: PushedAuthorizationResponse) -> Result<String> {
+        let request_uri = Url::parse(&pushed.request_uri)
+            .context("OIDC pushed authorization request URI is invalid")?;
+        anyhow::ensure!(
+            pushed.request_uri.len() <= 2_048
+                && matches!(request_uri.scheme(), "https" | "urn")
+                && request_uri.fragment().is_none()
+                && (1..=TRANSACTION_TTL.as_secs()).contains(&pushed.expires_in),
+            "OIDC pushed authorization response policy mismatch"
+        );
+        let mut authorization = self.authorization_endpoint.clone();
+        authorization.query_pairs_mut().extend_pairs([
+            ("client_id", self.client_id.as_str()),
+            ("request_uri", pushed.request_uri.as_str()),
+        ]);
+        Ok(authorization.into())
+    }
+
+    async fn authorization_location(
+        &self,
+        state: &str,
+        nonce: &str,
+        challenge: &str,
+    ) -> Result<String> {
+        let mut parameters = self.authorization_parameters(state, nonce, challenge);
+
+        let Some(endpoint) = self.pushed_authorization_request_endpoint.as_deref() else {
+            let mut authorization = self.authorization_endpoint.clone();
+            authorization.query_pairs_mut().extend_pairs(parameters);
+            return Ok(authorization.into());
+        };
+
+        self.append_client_authentication(&mut parameters, endpoint, now_seconds()?)?;
+        let response = self
+            .http
+            .post(endpoint)
+            .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .form(&parameters)
+            .send()
+            .await
+            .context("pushing OIDC authorization request")?;
+        anyhow::ensure!(
+            response.status().is_success(),
+            "OIDC pushed authorization request rejected"
+        );
+        anyhow::ensure!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.split(';').next() == Some("application/json")),
+            "OIDC pushed authorization endpoint returned an invalid content type"
+        );
+        anyhow::ensure!(
+            response
+                .content_length()
+                .is_none_or(|length| length <= MAX_PAR_RESPONSE_BYTES as u64),
+            "OIDC pushed authorization response is too large"
+        );
+        let bytes = response
+            .bytes()
+            .await
+            .context("reading OIDC pushed authorization response")?;
+        anyhow::ensure!(
+            bytes.len() <= MAX_PAR_RESPONSE_BYTES,
+            "OIDC pushed authorization response is too large"
+        );
+        let pushed: PushedAuthorizationResponse = serde_json::from_slice(&bytes)
+            .context("decoding OIDC pushed authorization response")?;
+        self.pushed_authorization_location(pushed)
+    }
+
+    pub async fn exchange(
+        &self,
+        transaction: &OidcTransaction,
+        code: &str,
+    ) -> Result<VerifiedIdentity> {
+        anyhow::ensure!(valid_authorization_code(code), "invalid authorization code");
+        let now = now_seconds()?;
+        anyhow::ensure!(transaction.provider_id == self.id, "OIDC provider mismatch");
+        let mut form = vec![
+            ("grant_type".to_owned(), "authorization_code".to_owned()),
+            ("client_id".to_owned(), self.client_id.clone()),
+            ("code".to_owned(), code.to_owned()),
+            ("redirect_uri".to_owned(), self.redirect_uri.clone()),
+            (
+                "code_verifier".to_owned(),
+                transaction.pkce_verifier.clone(),
+            ),
+        ];
+        self.append_client_authentication(&mut form, &self.token_endpoint, now)?;
         let response = self
             .http
             .post(&self.token_endpoint)
@@ -870,7 +1007,7 @@ impl OidcProvider {
 }
 
 impl OidcTransactions {
-    pub fn begin(
+    pub async fn begin(
         &self,
         provider: &OidcProvider,
         source_ip: IpAddr,
@@ -904,54 +1041,51 @@ impl OidcTransactions {
         let pkce_verifier = new_session_token()?;
         let challenge = pkce_challenge(&pkce_verifier).context("building OIDC PKCE challenge")?;
         let now = Instant::now();
-        let mut entries = self.entries.lock();
-        entries.retain(|_, row| row.expires > now);
-        anyhow::ensure!(
-            entries
-                .values()
-                .filter(|row| row.source_ip == source_ip)
-                .count()
-                < MAX_TRANSACTIONS_PER_IP,
-            "too many OIDC login attempts"
-        );
-        if entries.len() >= MAX_TRANSACTIONS
-            && let Some(oldest) = entries
-                .iter()
-                .min_by_key(|(_, row)| row.created)
-                .map(|(key, _)| key.clone())
         {
-            entries.remove(&oldest);
+            let mut entries = self.entries.lock();
+            entries.retain(|_, row| row.expires > now);
+            anyhow::ensure!(
+                entries
+                    .values()
+                    .filter(|row| row.source_ip == source_ip)
+                    .count()
+                    < MAX_TRANSACTIONS_PER_IP,
+                "too many OIDC login attempts"
+            );
+            if entries.len() >= MAX_TRANSACTIONS
+                && let Some(oldest) = entries
+                    .iter()
+                    .min_by_key(|(_, row)| row.created)
+                    .map(|(key, _)| key.clone())
+            {
+                entries.remove(&oldest);
+            }
+            entries.insert(
+                hex_sha256(cookie_token.as_bytes()),
+                StoredTransaction {
+                    provider_id: provider.id.clone(),
+                    state_hash: hex_sha256(state.as_bytes()),
+                    nonce: nonce.clone(),
+                    pkce_verifier,
+                    source_ip,
+                    expires: now + TRANSACTION_TTL,
+                    created: now,
+                    target,
+                },
+            );
         }
-        entries.insert(
-            hex_sha256(cookie_token.as_bytes()),
-            StoredTransaction {
-                provider_id: provider.id.clone(),
-                state_hash: hex_sha256(state.as_bytes()),
-                nonce: nonce.clone(),
-                pkce_verifier,
-                source_ip,
-                expires: now + TRANSACTION_TTL,
-                created: now,
-                target,
-            },
-        );
-        drop(entries);
-        let mut authorization = provider.authorization_endpoint.clone();
-        authorization.query_pairs_mut().extend_pairs([
-            ("response_type", "code"),
-            ("client_id", provider.client_id.as_str()),
-            ("redirect_uri", provider.redirect_uri.as_str()),
-            ("scope", provider.scopes.as_str()),
-            ("state", state.as_str()),
-            ("nonce", nonce.as_str()),
-            ("code_challenge", challenge.as_str()),
-            ("code_challenge_method", "S256"),
-        ]);
-        authorization
-            .query_pairs_mut()
-            .extend_pairs(provider.authorization_parameters.iter());
+        let location = match provider
+            .authorization_location(&state, &nonce, &challenge)
+            .await
+        {
+            Ok(location) => location,
+            Err(error) => {
+                self.cancel(&cookie_token);
+                return Err(error);
+            }
+        };
         Ok(StartedAuthorization {
-            location: authorization.into(),
+            location,
             cookie_token,
         })
     }
@@ -1028,6 +1162,7 @@ impl NativeHandoffs {
         );
         let key = hex_sha256(handoff_challenge.as_bytes());
         let now = Instant::now();
+        let (events, _) = tokio::sync::watch::channel(BrowserHandoffEvent::Pending);
         let mut entries = self.browser_entries.lock();
         entries.retain(|_, row| row.expires > now);
         anyhow::ensure!(
@@ -1048,6 +1183,7 @@ impl NativeHandoffs {
                 provider_id: provider_id.to_owned(),
                 code_challenge: code_challenge.to_owned(),
                 state: BrowserHandoffState::Pending,
+                events,
                 expires: now + TRANSACTION_TTL,
                 created: now,
             },
@@ -1083,6 +1219,7 @@ impl NativeHandoffs {
         stored.state = BrowserHandoffState::Ready {
             user_id: user_id.to_owned(),
         };
+        stored.events.send_replace(BrowserHandoffEvent::Ready);
         Ok(())
     }
 
@@ -1106,7 +1243,38 @@ impl NativeHandoffs {
             "browser handoff provider mismatch"
         );
         stored.state = BrowserHandoffState::Failed;
+        stored.events.send_replace(BrowserHandoffEvent::Failed);
         Ok(())
+    }
+
+    pub fn subscribe_browser(
+        &self,
+        provider_id: &str,
+        handoff_token: &str,
+        code_verifier: &str,
+    ) -> Result<tokio::sync::watch::Receiver<BrowserHandoffEvent>> {
+        anyhow::ensure!(
+            valid_identifier(provider_id),
+            "invalid browser handoff provider"
+        );
+        let handoff_challenge =
+            pkce_challenge(handoff_token).context("invalid browser handoff token")?;
+        let code_challenge =
+            pkce_challenge(code_verifier).context("invalid browser-shell PKCE verifier")?;
+        let key = hex_sha256(handoff_challenge.as_bytes());
+        let now = Instant::now();
+        let mut entries = self.browser_entries.lock();
+        entries.retain(|_, row| row.expires > now);
+        let stored = entries.get(&key).context("browser handoff expired")?;
+        anyhow::ensure!(
+            constant_time_equal(stored.provider_id.as_bytes(), provider_id.as_bytes()),
+            "browser handoff provider mismatch"
+        );
+        anyhow::ensure!(
+            constant_time_equal(code_challenge.as_bytes(), stored.code_challenge.as_bytes()),
+            "browser-shell PKCE mismatch"
+        );
+        Ok(stored.events.subscribe())
     }
 
     pub fn poll_browser(
@@ -1144,6 +1312,37 @@ impl NativeHandoffs {
             BrowserHandoffState::Ready { user_id } => Ok(BrowserHandoffPoll::Ready { user_id }),
             BrowserHandoffState::Failed => Ok(BrowserHandoffPoll::Failed),
         }
+    }
+
+    pub fn cancel_browser(
+        &self,
+        provider_id: &str,
+        handoff_token: &str,
+        code_verifier: &str,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            valid_identifier(provider_id),
+            "invalid browser handoff provider"
+        );
+        let handoff_challenge =
+            pkce_challenge(handoff_token).context("invalid browser handoff token")?;
+        let code_challenge =
+            pkce_challenge(code_verifier).context("invalid browser-shell PKCE verifier")?;
+        let key = hex_sha256(handoff_challenge.as_bytes());
+        let now = Instant::now();
+        let mut entries = self.browser_entries.lock();
+        entries.retain(|_, row| row.expires > now);
+        let stored = entries.remove(&key).context("browser handoff expired")?;
+        anyhow::ensure!(
+            constant_time_equal(stored.provider_id.as_bytes(), provider_id.as_bytes()),
+            "browser handoff provider mismatch"
+        );
+        anyhow::ensure!(
+            constant_time_equal(code_challenge.as_bytes(), stored.code_challenge.as_bytes()),
+            "browser-shell PKCE mismatch"
+        );
+        stored.events.send_replace(BrowserHandoffEvent::Failed);
+        Ok(())
     }
 
     pub fn issue(
@@ -1560,11 +1759,13 @@ fn now_seconds() -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        NATIVE_CALLBACK_SCHEME, NativeHandoffs, OidcTransactions, TRANSACTION_COOKIE,
+        IdTokenVerifier, NATIVE_CALLBACK_SCHEME, NativeHandoffs, OidcProvider, OidcTransactions,
+        PushedAuthorizationResponse, RuntimeClientAuthentication, TRANSACTION_COOKIE,
         clear_transaction_cookie, read_protected_file,
     };
     use base64::Engine as _;
     use ed25519_dalek::{Signer as _, SigningKey};
+    use std::collections::{BTreeMap, HashMap};
     use std::os::unix::fs::{PermissionsExt as _, symlink};
 
     #[test]
@@ -1583,6 +1784,93 @@ mod tests {
         assert!(cookie.contains("Secure"));
         let ordinary = super::transaction_cookie(&"a".repeat(64), true, false);
         assert!(ordinary.contains("SameSite=Lax"));
+    }
+
+    #[test]
+    fn pushed_authorization_is_signed_and_browser_url_contains_only_request_uri() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let par_endpoint = "https://cardea.example/oauth2/par".to_owned();
+        let signing = SigningKey::from_bytes(&[7; 32]);
+        let provider = OidcProvider {
+            id: "cardea".to_owned(),
+            display_name: "Cardea".to_owned(),
+            button_label: "Continue with Cardea".to_owned(),
+            issuer: "https://cardea.example".to_owned(),
+            authorization_endpoint: url::Url::parse("https://cardea.example/oauth2/authorize")
+                .unwrap(),
+            pushed_authorization_request_endpoint: Some(par_endpoint.clone()),
+            token_endpoint: "https://cardea.example/oauth2/token".to_owned(),
+            jwks_uri: None,
+            scopes: "openid".to_owned(),
+            authorization_parameters: BTreeMap::from([(
+                "approval_mode".to_owned(),
+                "manual".to_owned(),
+            )]),
+            client_id: "cowboy-production".to_owned(),
+            client_authentication: RuntimeClientAuthentication::PrivateKeyJwtEd25519 {
+                key_id: "cowboy-2026".to_owned(),
+                signing_seed: signing.to_bytes(),
+            },
+            id_token_verifier: IdTokenVerifier::PinnedEd25519 {
+                key_id: "cardea-2026".to_owned(),
+                verifying_key: signing.verifying_key().to_bytes(),
+            },
+            subject: "draven".to_owned(),
+            account: "draven".to_owned(),
+            admin_account: Some("draven".to_owned()),
+            redirect_uri: "https://cowboy.example/api/auth/oidc/callback".to_owned(),
+            http: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap(),
+        };
+
+        let mut form =
+            provider.authorization_parameters(&"s".repeat(64), &"n".repeat(64), &"c".repeat(43));
+        provider
+            .append_client_authentication(&mut form, &par_endpoint, 1_000)
+            .unwrap();
+        let form: HashMap<_, _> = form.into_iter().collect();
+        let expected_request_uri = format!("urn:ietf:params:oauth:request_uri:{}", "r".repeat(43));
+        let location = provider
+            .pushed_authorization_location(PushedAuthorizationResponse {
+                request_uri: expected_request_uri.clone(),
+                expires_in: 300,
+            })
+            .unwrap();
+        let location = url::Url::parse(&location).unwrap();
+        let query: HashMap<_, _> = location.query_pairs().into_owned().collect();
+        let expected_code_challenge = "c".repeat(43);
+        assert_eq!(query.len(), 2);
+        assert_eq!(
+            query.get("client_id").map(String::as_str),
+            Some("cowboy-production")
+        );
+        assert_eq!(
+            query.get("request_uri").map(String::as_str),
+            Some(expected_request_uri.as_str())
+        );
+
+        assert_eq!(
+            form.get("approval_mode").map(String::as_str),
+            Some("manual")
+        );
+        assert_eq!(
+            form.get("code_challenge").map(String::as_str),
+            Some(expected_code_challenge.as_str())
+        );
+        assert!(!form.contains_key("client_secret"));
+        let assertion = form.get("client_assertion").unwrap();
+        let claims = assertion.split('.').nth(1).unwrap();
+        let claims: serde_json::Value = serde_json::from_slice(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(claims)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(claims["aud"], par_endpoint);
+        assert_eq!(claims["iss"], "cowboy-production");
+        assert_eq!(claims["sub"], "cowboy-production");
     }
 
     #[test]
@@ -1683,6 +1971,46 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn browser_handoff_pushes_only_bound_state_changes() {
+        let handoffs = NativeHandoffs::default();
+        let verifier = "v".repeat(64);
+        let handoff_token = "h".repeat(64);
+        let code_challenge = super::pkce_challenge(&verifier).unwrap();
+        let handoff_challenge = super::pkce_challenge(&handoff_token).unwrap();
+        handoffs
+            .begin_browser("cardea", &code_challenge, &handoff_challenge)
+            .unwrap();
+        assert!(
+            handoffs
+                .subscribe_browser("cardea", &handoff_token, &"w".repeat(64))
+                .is_err()
+        );
+        let mut events = handoffs
+            .subscribe_browser("cardea", &handoff_token, &verifier)
+            .unwrap();
+        assert_eq!(
+            *events.borrow_and_update(),
+            super::BrowserHandoffEvent::Pending
+        );
+        handoffs
+            .complete_browser("cardea", &handoff_challenge, &"b".repeat(32))
+            .unwrap();
+        events.changed().await.unwrap();
+        assert_eq!(
+            *events.borrow_and_update(),
+            super::BrowserHandoffEvent::Ready
+        );
+        assert_eq!(
+            handoffs
+                .poll_browser("cardea", &handoff_token, &verifier)
+                .unwrap(),
+            super::BrowserHandoffPoll::Ready {
+                user_id: "b".repeat(32)
+            }
+        );
+    }
+
     #[test]
     fn browser_handoff_wrong_verifier_fails_closed() {
         let handoffs = NativeHandoffs::default();
@@ -1728,6 +2056,40 @@ mod tests {
         assert!(
             handoffs
                 .poll_browser("cardea", &handoff_token, &verifier)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn browser_handoff_cancel_requires_both_proofs_and_is_single_use() {
+        let handoffs = NativeHandoffs::default();
+        let verifier = "v".repeat(64);
+        let handoff_token = "h".repeat(64);
+        let code_challenge = super::pkce_challenge(&verifier).unwrap();
+        let handoff_challenge = super::pkce_challenge(&handoff_token).unwrap();
+        handoffs
+            .begin_browser("cardea", &code_challenge, &handoff_challenge)
+            .unwrap();
+        handoffs
+            .cancel_browser("cardea", &handoff_token, &verifier)
+            .unwrap();
+        assert!(
+            handoffs
+                .poll_browser("cardea", &handoff_token, &verifier)
+                .is_err()
+        );
+
+        handoffs
+            .begin_browser("cardea", &code_challenge, &handoff_challenge)
+            .unwrap();
+        assert!(
+            handoffs
+                .cancel_browser("cardea", &handoff_token, &"w".repeat(64))
+                .is_err()
+        );
+        assert!(
+            handoffs
+                .cancel_browser("cardea", &handoff_token, &verifier)
                 .is_err()
         );
     }

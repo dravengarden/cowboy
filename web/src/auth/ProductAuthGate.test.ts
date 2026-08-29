@@ -27,14 +27,16 @@ async function readAuthSources(): Promise<string> {
   return chunks.join("\n");
 }
 
-Deno.test("auth package never imports store.ts or constructs WebSocket", async () => {
+Deno.test("auth package never imports store.ts or opens the product WebSocket", async () => {
   const source = await readAuthSources();
   assertEquals(source.includes('from "../store"'), false);
   assertEquals(source.includes('from "../store.ts"'), false);
   assertEquals(source.includes('from "./store"'), false);
   assertEquals(source.includes('from "../store.ts"'), false);
-  assertEquals(/new\s+WebSocket\b/.test(source), false);
-  assertEquals(source.includes("/ws"), false);
+  assert(source.includes("nativeOidcEventsPath"));
+  assert(source.includes("new WebSocket"));
+  assertEquals(source.includes('new WebSocket(`${proto}//${globalThis.location.host}/ws'), false);
+  assertEquals(source.includes('"/ws"'), false);
 });
 
 Deno.test("ProductAuthGate wraps DesktopApp and MobileApp in main.tsx", async () => {
@@ -141,7 +143,7 @@ Deno.test("desktop can sign out through authApi without importing store", async 
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
   const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
-  assert(sw.includes('const VERSION = "cowboy-v1577"'));
+  assert(sw.includes('const VERSION = "cowboy-v1578"'));
   const authStart = sw.indexOf('url.pathname.startsWith("/api/auth/")');
   const authBranch = sw.slice(
     authStart,

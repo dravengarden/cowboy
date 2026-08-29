@@ -2013,6 +2013,11 @@ struct OidcNativePollPending {
     status: &'static str,
 }
 
+#[derive(Debug, Serialize)]
+struct OidcNativeEventStatus {
+    status: &'static str,
+}
+
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 struct AdminCreateUserRequest {
@@ -2068,6 +2073,14 @@ fn product_auth_router(state: ProductAuthState) -> Router {
             post(api_auth_oidc_native_poll),
         )
         .route(
+            "/api/auth/oidc/native/events",
+            get(api_auth_oidc_native_events),
+        )
+        .route(
+            "/api/auth/oidc/native/cancel",
+            post(api_auth_oidc_native_cancel),
+        )
+        .route(
             "/api/auth/oidc/native/complete",
             get(api_auth_oidc_native_complete),
         )
@@ -2086,6 +2099,14 @@ fn product_auth_router(state: ProductAuthState) -> Router {
         .route(
             "/api/auth/providers/{provider_id}/native/poll",
             post(api_auth_oidc_native_poll),
+        )
+        .route(
+            "/api/auth/providers/{provider_id}/native/events",
+            get(api_auth_oidc_native_events),
+        )
+        .route(
+            "/api/auth/providers/{provider_id}/native/cancel",
+            post(api_auth_oidc_native_cancel),
         )
         .route("/api/auth/logout", post(api_auth_logout))
         .route("/api/auth/me", get(api_auth_me))
@@ -3328,11 +3349,15 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
         || path == "/api/auth/oidc/callback"
         || path == "/api/auth/oidc/native/exchange"
         || path == "/api/auth/oidc/native/poll"
+        || path == "/api/auth/oidc/native/events"
+        || path == "/api/auth/oidc/native/cancel"
         || path == "/api/auth/oidc/native/complete"
         || authentication_provider_id(path, "start").is_some()
         || authentication_provider_id(path, "callback").is_some()
         || authentication_provider_id(path, "native/exchange").is_some()
         || authentication_provider_id(path, "native/poll").is_some()
+        || authentication_provider_id(path, "native/events").is_some()
+        || authentication_provider_id(path, "native/cancel").is_some()
         || path == "/api/admin/auth"
         || path == "/api/admin/auth/setup"
         || path == "/api/admin/auth/bootstrap"
@@ -4091,6 +4116,7 @@ async fn api_auth_oidc_start(
     let started = match state
         .oidc_transactions
         .begin(provider, source_ip, target.clone())
+        .await
     {
         Ok(started) => started,
         Err(error) => {
@@ -4478,6 +4504,136 @@ async fn api_auth_oidc_native_exchange(
     response
 }
 
+const OIDC_NATIVE_EVENTS_HANDSHAKE_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(10);
+const OIDC_NATIVE_EVENTS_TTL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+const OIDC_NATIVE_EVENTS_HEARTBEAT: std::time::Duration = std::time::Duration::from_secs(25);
+
+async fn api_auth_oidc_native_events(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    uri: Uri,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+) -> Response {
+    if !state.product_auth_enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let provider_id = authentication_provider_id(uri.path(), "native/events")
+        .unwrap_or("cardea")
+        .to_owned();
+    let Some(provider) = state.product_authentication.provider(&provider_id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let peer = peer_addr(peer);
+    if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
+        return rejected;
+    }
+    if provider.admin_account().is_some()
+        && let Some(rejected) = reject_insecure_admin(&headers, peer)
+    {
+        return rejected;
+    }
+    ws.max_message_size(4 * 1_024)
+        .max_frame_size(4 * 1_024)
+        .on_upgrade(move |socket| handle_oidc_native_events(socket, state, provider_id))
+}
+
+async fn handle_oidc_native_events(
+    mut socket: WebSocket,
+    state: ProductAuthState,
+    provider_id: String,
+) {
+    let request =
+        match tokio::time::timeout(OIDC_NATIVE_EVENTS_HANDSHAKE_TIMEOUT, socket.recv()).await {
+            Ok(Some(Ok(Message::Text(text)))) => {
+                serde_json::from_str::<OidcNativePollRequest>(text.as_str()).ok()
+            }
+            _ => None,
+        };
+    let Some(request) = request else {
+        let _ = socket.close().await;
+        return;
+    };
+    let mut events = match state.oidc_native_handoffs.subscribe_browser(
+        &provider_id,
+        &request.handoff_token,
+        &request.code_verifier,
+    ) {
+        Ok(events) => events,
+        Err(error) => {
+            tracing::info!(%error, "oidc_browser_handoff_events_rejected");
+            let _ = send_json(
+                &mut socket,
+                &OidcNativeEventStatus {
+                    status: "unavailable",
+                },
+            )
+            .await;
+            let _ = socket.close().await;
+            return;
+        }
+    };
+    let deadline = tokio::time::sleep(OIDC_NATIVE_EVENTS_TTL);
+    tokio::pin!(deadline);
+    let mut heartbeat = tokio::time::interval(OIDC_NATIVE_EVENTS_HEARTBEAT);
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    heartbeat.tick().await;
+
+    loop {
+        let status = *events.borrow_and_update();
+        let terminal = match status {
+            crate::oidc::BrowserHandoffEvent::Pending => None,
+            crate::oidc::BrowserHandoffEvent::Ready => Some("ready"),
+            crate::oidc::BrowserHandoffEvent::Failed => Some("failed"),
+        };
+        if let Some(status) = terminal {
+            let _ = send_json(&mut socket, &OidcNativeEventStatus { status }).await;
+            let _ = socket.close().await;
+            return;
+        }
+
+        tokio::select! {
+            changed = events.changed() => {
+                if changed.is_err() {
+                    let _ = send_json(
+                        &mut socket,
+                        &OidcNativeEventStatus { status: "unavailable" },
+                    ).await;
+                    let _ = socket.close().await;
+                    return;
+                }
+            }
+            incoming = socket.recv() => match incoming {
+                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return,
+                Some(Ok(Message::Ping(payload))) => {
+                    if socket.send(Message::Pong(payload)).await.is_err() {
+                        return;
+                    }
+                }
+                Some(Ok(Message::Pong(_))) => {}
+                Some(Ok(_)) => {
+                    let _ = socket.close().await;
+                    return;
+                }
+            },
+            _ = heartbeat.tick() => {
+                if socket.send(Message::Ping(Vec::new().into())).await.is_err() {
+                    return;
+                }
+            }
+            () = &mut deadline => {
+                let _ = send_json(
+                    &mut socket,
+                    &OidcNativeEventStatus { status: "unavailable" },
+                ).await;
+                let _ = socket.close().await;
+                return;
+            }
+        }
+    }
+}
+
 async fn api_auth_oidc_native_poll(
     State(state): State<ProductAuthState>,
     peer: ConnectInfo<SocketAddr>,
@@ -4563,6 +4719,42 @@ async fn api_auth_oidc_native_poll(
         "oidc_browser_handoff_complete"
     );
     response
+}
+
+async fn api_auth_oidc_native_cancel(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    uri: Uri,
+    headers: HeaderMap,
+    Json(request): Json<OidcNativePollRequest>,
+) -> Response {
+    if !state.product_auth_enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let provider_id = authentication_provider_id(uri.path(), "native/cancel").unwrap_or("cardea");
+    let Some(provider) = state.product_authentication.provider(provider_id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let peer = peer_addr(peer);
+    if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
+        return rejected;
+    }
+    if provider.admin_account().is_some()
+        && let Some(rejected) = reject_insecure_admin(&headers, peer)
+    {
+        return rejected;
+    }
+    match state.oidc_native_handoffs.cancel_browser(
+        provider_id,
+        &request.handoff_token,
+        &request.code_verifier,
+    ) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => {
+            tracing::info!(%error, "oidc_browser_handoff_cancel_rejected");
+            (StatusCode::UNAUTHORIZED, "native authorization failed").into_response()
+        }
+    }
 }
 
 async fn api_auth_oidc_native_complete() -> Response {
@@ -14516,6 +14708,8 @@ mod product_auth_api_tests {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use ed25519_dalek::SigningKey;
     use std::os::unix::fs::PermissionsExt as _;
+    use tokio_tungstenite::tungstenite::Message as TungsteniteMessage;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 
     fn auth_state(hub: Hub, store: Option<Store>) -> ProductAuthState {
         let data_dir = std::env::temp_dir().join(format!(
@@ -14907,11 +15101,27 @@ mod product_auth_api_tests {
             RouteAuth::Public
         );
         assert_eq!(
+            classify_route(&Method::GET, "/api/auth/oidc/native/events"),
+            RouteAuth::Public
+        );
+        assert_eq!(
+            classify_route(&Method::POST, "/api/auth/oidc/native/cancel"),
+            RouteAuth::Public
+        );
+        assert_eq!(
             classify_route(&Method::GET, "/api/auth/oidc/native/complete"),
             RouteAuth::Public
         );
         assert_eq!(
             classify_route(&Method::POST, "/api/auth/providers/cardea/native/poll"),
+            RouteAuth::Public
+        );
+        assert_eq!(
+            classify_route(&Method::GET, "/api/auth/providers/cardea/native/events"),
+            RouteAuth::Public
+        );
+        assert_eq!(
+            classify_route(&Method::POST, "/api/auth/providers/cardea/native/cancel"),
             RouteAuth::Public
         );
         assert_eq!(
@@ -15165,6 +15375,36 @@ mod product_auth_api_tests {
         .await;
         assert_eq!(replayed.status(), StatusCode::UNAUTHORIZED);
 
+        let cancelled_verifier = "c".repeat(64);
+        let cancelled_handoff_token = "x".repeat(64);
+        handoffs
+            .begin_browser(
+                "cardea",
+                &crate::oidc::pkce_challenge(&cancelled_verifier).unwrap(),
+                &crate::oidc::pkce_challenge(&cancelled_handoff_token).unwrap(),
+            )
+            .unwrap();
+        let cancelled_body = serde_json::json!({
+            "handoff_token": cancelled_handoff_token,
+            "code_verifier": cancelled_verifier,
+        });
+        let cancelled = post_json(
+            &format!("{base}/api/auth/providers/cardea/native/cancel"),
+            &origin_for(&base),
+            None,
+            cancelled_body.clone(),
+        )
+        .await;
+        assert_eq!(cancelled.status(), StatusCode::NO_CONTENT);
+        let cancelled_poll = post_json(
+            &format!("{base}/api/auth/oidc/native/poll"),
+            &origin_for(&base),
+            None,
+            cancelled_body,
+        )
+        .await;
+        assert_eq!(cancelled_poll.status(), StatusCode::UNAUTHORIZED);
+
         let denied_verifier = "d".repeat(64);
         let denied_handoff_token = "n".repeat(64);
         let denied_code_challenge = crate::oidc::pkce_challenge(&denied_verifier).unwrap();
@@ -15246,6 +15486,86 @@ mod product_auth_api_tests {
         );
         assert!(completion.headers().contains_key("content-security-policy"));
 
+        handle.abort();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn browser_shell_oidc_events_are_origin_bound_and_do_not_consume_the_handoff() {
+        install_rustls();
+        let (store, root) = test_store().await;
+        let mut state = auth_state(Hub::new(), Some(store));
+        state.product_authentication =
+            Arc::new(crate::auth_plugins::ProductAuthentication::test_default(
+                Some(test_oidc_provider(&root, "owner", Some("owner"))),
+            ));
+        let verifier = "v".repeat(64);
+        let handoff_token = "h".repeat(64);
+        let handoff_challenge = crate::oidc::pkce_challenge(&handoff_token).unwrap();
+        state
+            .oidc_native_handoffs
+            .begin_browser(
+                "cardea",
+                &crate::oidc::pkce_challenge(&verifier).unwrap(),
+                &handoff_challenge,
+            )
+            .unwrap();
+        let handoffs = state.oidc_native_handoffs.clone();
+        let (base, handle) = spawn_auth(state).await;
+        let socket_url = format!(
+            "{}/api/auth/oidc/native/events",
+            base.replacen("http://", "ws://", 1)
+        );
+
+        let rejected = tokio_tungstenite::connect_async(&socket_url)
+            .await
+            .expect_err("a native handoff socket without Origin must fail");
+        assert!(matches!(
+            rejected,
+            tokio_tungstenite::tungstenite::Error::Http(response)
+                if response.status() == StatusCode::FORBIDDEN
+        ));
+
+        let mut request = socket_url.into_client_request().unwrap();
+        request
+            .headers_mut()
+            .insert(header::ORIGIN, origin_for(&base).parse().unwrap());
+        let (mut socket, response) = tokio_tungstenite::connect_async(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+        socket
+            .send(TungsteniteMessage::Text(
+                serde_json::json!({
+                    "handoff_token": handoff_token,
+                    "code_verifier": verifier,
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        handoffs
+            .complete_browser("cardea", &handoff_challenge, &"a".repeat(32))
+            .unwrap();
+        let message = tokio::time::timeout(std::time::Duration::from_secs(2), socket.next())
+            .await
+            .expect("native handoff event timed out")
+            .expect("native handoff socket closed")
+            .expect("native handoff event failed");
+        let TungsteniteMessage::Text(message) = message else {
+            panic!("expected a native handoff text event");
+        };
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&message).unwrap(),
+            serde_json::json!({ "status": "ready" })
+        );
+        assert!(matches!(
+            handoffs
+                .poll_browser("cardea", &"h".repeat(64), &"v".repeat(64))
+                .unwrap(),
+            crate::oidc::BrowserHandoffPoll::Ready { .. }
+        ));
+
+        let _ = socket.close(None).await;
         handle.abort();
         let _ = std::fs::remove_dir_all(root);
     }

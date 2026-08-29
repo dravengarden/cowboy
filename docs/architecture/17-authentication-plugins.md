@@ -87,6 +87,15 @@ random single-use state, and a nonce. The package cannot override those
 parameters. The callback consumes its transaction before exchanging a code and
 binds the transaction to the exact provider ID.
 
+An Authentication Provider may declare an HTTPS
+`pushed_authorization_request_endpoint`. Cowboy sends the complete request
+directly to that endpoint, authenticates it with the configured client method,
+accepts only a bounded JSON `request_uri` plus expiry, and navigates the browser
+with only `client_id` and `request_uri`. This is the generic path for approval
+gateways such as Cardea: the browser needs no pre-existing provider cookie to
+create a request, while an unauthenticated caller cannot manufacture requests
+for a registered client.
+
 The driver currently supports these closed methods:
 
 | Method | Intended use | Secret behavior |
@@ -109,12 +118,14 @@ from the signed `jwks_uri` location.
 ## Human approval over OIDC
 
 Cardea keeps the public Cowboy driver standard: its package uses OpenID Connect
-and adds the reviewed `approval_mode=manual` authorization parameter. The
-browser confirms the request, Cardea publishes it to the approval inbox, and
-only a separate Cardea approval may release the one-time OIDC code. A Cardea
-login session alone is not approval. Other approval systems should expose the
-same security properties behind OIDC rather than asking Cowboy to execute
-provider code or accept a provider-specific session token.
+PAR and adds the reviewed `approval_mode=manual` authorization parameter. The
+registered Cowboy backend signs the pushed request, the browser confirms that
+exact request without entering Cardea credentials, Cardea publishes it to the
+assigned identity's approval inbox, and only a separate Cardea approval may
+release the one-time OIDC code. A Cardea login session alone is not approval.
+Other approval systems should expose the same security properties behind OIDC
+rather than asking Cowboy to execute provider code or accept a
+provider-specific session token.
 
 ## Login UI
 
@@ -128,10 +139,17 @@ start URL; packages cannot supply a callback or return destination. Cowboy
 Manager uses its existing PKCE query and the provider-scoped
 `/native/exchange`. The iOS browser shell uses `client=browser-shell` with two
 independent S256 challenges, opens the start URL outside the app's sole
-`WKWebView`, and polls the provider-scoped `/native/poll` from the original
-same-origin window. Only the original window retains the two raw random
-secrets and receives Cowboy cookies; the authorization browser receives
-neither. Legacy Cardea keeps the equivalent fixed `/api/auth/oidc/*` aliases.
+`WKWebView`, and retains the provider-scoped `/native/poll` only as the
+one-time cookie exchange. Waiting uses a provider-scoped `/native/events`
+WebSocket whose URL contains no proof; the window sends both raw PKCE proofs
+only as its first WebSocket message. A `ready` event is only an invalidation
+signal, after which the window performs exactly one `/native/poll` exchange to
+consume the handoff and receive its Cowboy cookies.
+Closing the native authorization browser dispatches a shell event; the
+original window uses both proofs to cancel the server handoff and clear the
+waiting UI immediately. Only the original window retains those secrets and
+receives Cowboy cookies; the authorization browser receives neither. Legacy
+Cardea keeps the equivalent fixed `/api/auth/oidc/*` aliases.
 
 ## Passkey and session lifetime
 

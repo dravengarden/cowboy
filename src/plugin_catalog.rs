@@ -369,6 +369,7 @@ mod tests {
                     issuer: "https://accounts.google.com".to_owned(),
                     authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth"
                         .to_owned(),
+                    pushed_authorization_request_endpoint: None,
                     token_endpoint: "https://oauth2.googleapis.com/token".to_owned(),
                     jwks_uri: "https://www.googleapis.com/oauth2/v3/certs".to_owned(),
                     scopes: vec!["openid".to_owned()],
