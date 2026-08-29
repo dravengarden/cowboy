@@ -226,6 +226,13 @@ struct AppModelTests {
         let persistence = MemoryPersistence()
         persistence.settings.controllerURL = "https://cowboy.example"
         let client = MockCowboyServiceClient()
+        client.status = AccountStatus(
+            phase: .localOwner,
+            account: "local",
+            role: "owner",
+            administratorAccess: false,
+            message: "local access"
+        )
         let model = makeModel(
             backend: MockInstallerBackend(),
             persistence: persistence,
