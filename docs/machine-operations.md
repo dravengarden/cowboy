@@ -104,8 +104,11 @@ just macos-installer-verify
 The build places `Cowboy Manager.app` under
 `apps/macos-installer/dist/`, embeds all three Machine bootstrap commands, and
 uses ad-hoc signing unless `CODE_SIGN_IDENTITY` names a real signing identity.
-Copy a signed production build to `/Applications` before enabling Launch at
-Login. No certificate or signing credential belongs in this repository.
+Sign every production update with the same stable identity so macOS continues
+to authorize the app's existing Keychain item; changing identities requires the
+user to sign in again. Copy a signed production build to `/Applications` before
+enabling Launch at Login. No certificate or signing credential belongs in this
+repository.
 
 On the device, prefer `cowboy register`. Create a one-time code in the UI
 first, copy the command, then paste the token when the CLI asks. Cowboy
