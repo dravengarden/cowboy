@@ -1,21 +1,36 @@
 import { Alert, Box, Button, Stack, Typography } from "@mui/material";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AuthApiError, authApi, type ProductMe } from "./authApi";
-import { PRODUCT_PASSKEY_IDLE_MS } from "./idleLock";
 import { assertPasskey, passkeysSupported } from "./passkeyBrowser";
-import { useIdlePasskeyLock } from "./useIdlePasskeyLock";
 
 export function PasskeyReauthLock({
   me,
   onUnlocked,
+  onSignOut,
 }: {
   me: ProductMe;
   onUnlocked: (me: ProductMe) => void;
+  onSignOut: () => Promise<void>;
 }): React.JSX.Element | null {
-  const eligible = me.passkey_reauth_enabled !== false && (me.passkey_count ?? 0) > 0;
-  const { locked, unlock } = useIdlePasskeyLock(eligible, PRODUCT_PASSKEY_IDLE_MS);
+  const eligible = me.passkey_reauth_enabled === true && (me.passkey_count ?? 0) > 0;
+  const dueAt = me.passkey_reauth_due_at_ms ?? null;
+  const serverRequired = me.passkey_reauth_required === true;
+  const [locked, setLocked] = useState(
+    eligible && (serverRequired || (dueAt != null && Date.now() >= dueAt)),
+  );
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!eligible || dueAt == null) {
+      setLocked(false);
+      return;
+    }
+    const evaluate = (): void => setLocked(serverRequired || Date.now() >= dueAt);
+    evaluate();
+    const timer = globalThis.setInterval(evaluate, 5_000);
+    return () => globalThis.clearInterval(timer);
+  }, [dueAt, eligible, serverRequired]);
 
   if (!locked) return null;
 
@@ -27,7 +42,7 @@ export function PasskeyReauthLock({
       const ceremony = await authApi.startPasskeyAssert();
       const credential = await assertPasskey(ceremony);
       const next = await authApi.completePasskeyAssert(ceremony.challenge_id, credential);
-      unlock();
+      setLocked(false);
       onUnlocked(next);
     })()
       .catch((err: unknown) => {
@@ -52,12 +67,16 @@ export function PasskeyReauthLock({
           Confirm it&apos;s you
         </Typography>
         <Typography color="text.secondary">
-          This page has been idle for 15 minutes. Use your Passkey to keep
-          reading. You can turn this off in Settings.
+          Your configured Passkey refresh is due. Verify now to rotate this
+          browser&apos;s session and keep it signed in. You can turn this off or
+          change the frequency in Settings.
         </Typography>
         {error && <Alert severity="error">{error}</Alert>}
         <Button variant="contained" disabled={busy} onClick={confirm}>
           Continue with Passkey
+        </Button>
+        <Button color="inherit" disabled={busy} onClick={() => void onSignOut()}>
+          Sign out and use a one-day login
         </Button>
       </Stack>
     </Box>

@@ -8,7 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { authApi, type ProductMe } from "./authApi";
+import { authApi, type ProductMe, type ProductOidcProvider } from "./authApi";
 import {
   announceProductSessionEnd,
   classifyAuthStatus,
@@ -144,6 +144,7 @@ export function ProductAuthGate({
   const [me, setMe] = useState<ProductMe | null>(null);
   const [setupRequired, setSetupRequired] = useState(false);
   const [setupPending, setSetupPending] = useState(false);
+  const [providers, setProviders] = useState<ProductOidcProvider[]>([]);
   const attemptsRef = useRef(0);
   const meRef = useRef<ProductMe | null>(null);
   const generationRef = useRef(0);
@@ -184,7 +185,9 @@ export function ProductAuthGate({
 
   const loadStatus = useCallback(async (): Promise<void> => {
     const generation = ++generationRef.current;
-    const decision = classifyAuthStatus(await authApi.status());
+    const probe = await authApi.status();
+    if (probe.kind === "ok") setProviders(probe.body.providers ?? []);
+    const decision = classifyAuthStatus(probe);
     if (generation !== generationRef.current) return;
     await applyDecision(decision);
   }, [applyDecision]);
@@ -239,7 +242,7 @@ export function ProductAuthGate({
       <ProductAuthContext.Provider value={{ me, updateMe, signOut }}>
         {children}
         {me.auth_enabled !== false && (
-          <PasskeyReauthLock me={me} onUnlocked={updateMe} />
+          <PasskeyReauthLock me={me} onUnlocked={updateMe} onSignOut={signOut} />
         )}
       </ProductAuthContext.Provider>
     );
@@ -249,10 +252,12 @@ export function ProductAuthGate({
       <ProductLoginPage
         setupRequired={setupRequired}
         setupPending={setupPending}
+        providers={providers}
         onAuthed={handleAuthed}
         onStatus={(status) => {
           setSetupRequired(status.setup_required === true);
           setSetupPending(status.setup_pending === true);
+          setProviders(status.providers ?? []);
         }}
       />
     );

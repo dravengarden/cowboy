@@ -14,6 +14,17 @@
     <string>6.0</string>
     <key>CFBundleName</key>
     <string>Cowboy Manager</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>xyz.stormbird.cowboy.manager.auth</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>xyz.stormbird.cowboy.manager</string>
+            </array>
+        </dict>
+    </array>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

@@ -247,6 +247,7 @@ Deno.test("auth status JSON requires the public registration shape", () => {
       registration: { enabled: true, mode: "token", accepts_registration: true },
       setup_required: false,
       setup_pending: false,
+      providers: [],
       me: { account: "draven", role: "operator", auth_enabled: false },
     },
   );

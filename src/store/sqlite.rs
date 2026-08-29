@@ -85,6 +85,7 @@ struct SqliteProductUserSessionRow {
     expires_at_ms: i64,
     last_seen_at_ms: i64,
     user_agent: Option<String>,
+    passkey_verified_at_ms: Option<i64>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -131,6 +132,7 @@ impl SqliteUserPasskeyRow {
 #[derive(sqlx::FromRow)]
 struct SqlitePasskeyPolicyRow {
     passkey_reauth_enabled: i64,
+    passkey_refresh_interval_ms: i64,
     last_step_up_at_ms: Option<i64>,
     passkey_count: i64,
 }
@@ -139,6 +141,7 @@ impl SqlitePasskeyPolicyRow {
     fn into_policy(self) -> crate::passkey::PasskeyPolicy {
         crate::passkey::PasskeyPolicy {
             enabled: self.passkey_reauth_enabled != 0,
+            reauth_after_ms: self.passkey_refresh_interval_ms,
             last_step_up_at_ms: self.last_step_up_at_ms,
             passkey_count: u32::try_from(self.passkey_count.max(0)).unwrap_or(0),
         }
@@ -170,6 +173,7 @@ impl From<SqliteProductUserSessionRow> for ProductUserSession {
             expires_at_ms: row.expires_at_ms,
             last_seen_at_ms: row.last_seen_at_ms,
             user_agent: row.user_agent,
+            passkey_verified_at_ms: row.passkey_verified_at_ms,
         }
     }
 }
@@ -2458,7 +2462,8 @@ impl SqliteStorage {
         );
         sqlx::query(
             "INSERT INTO users (id, username, password_algo, password_hash, created_at_ms, \
-             updated_at_ms, disabled_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             updated_at_ms, disabled_at_ms, passkey_reauth_enabled, passkey_refresh_interval_ms) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8)",
         )
         .bind(&user.id)
         .bind(&username)
@@ -2467,6 +2472,7 @@ impl SqliteStorage {
         .bind(user.created_at_ms)
         .bind(user.updated_at_ms)
         .bind(user.disabled_at_ms)
+        .bind(crate::passkey::DEFAULT_PASSKEY_REAUTH_AFTER_MS)
         .execute(&self.pool)
         .await
         .map_err(|error| {
@@ -2577,7 +2583,8 @@ impl SqliteStorage {
         let user_agent = truncate_user_agent(session.user_agent.as_deref());
         sqlx::query(
             "INSERT INTO user_sessions (token_hash, user_id, created_at_ms, expires_at_ms, \
-             last_seen_at_ms, user_agent) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+             last_seen_at_ms, user_agent, passkey_verified_at_ms) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )
         .bind(&session.token_hash)
         .bind(&session.user_id)
@@ -2585,6 +2592,7 @@ impl SqliteStorage {
         .bind(session.expires_at_ms)
         .bind(session.last_seen_at_ms)
         .bind(user_agent.as_deref())
+        .bind(session.passkey_verified_at_ms)
         .execute(&self.pool)
         .await
         .context("INSERT SQLite user session")?;
@@ -2597,7 +2605,7 @@ impl SqliteStorage {
     ) -> Result<Option<ProductUserSession>> {
         let row = sqlx::query_as::<_, SqliteProductUserSessionRow>(
             "SELECT token_hash, user_id, created_at_ms, expires_at_ms, last_seen_at_ms, \
-             user_agent FROM user_sessions WHERE token_hash = ?1",
+             user_agent, passkey_verified_at_ms FROM user_sessions WHERE token_hash = ?1",
         )
         .bind(token_hash)
         .fetch_optional(&self.pool)
@@ -2621,6 +2629,80 @@ impl SqliteStorage {
             .execute(&self.pool)
             .await
             .with_context(|| format!("DELETE SQLite user sessions for {user_id}"))?;
+        Ok(result.rows_affected())
+    }
+
+    pub(super) async fn rotate_user_session(
+        &self,
+        previous_token_hash: &str,
+        session: &ProductUserSession,
+    ) -> Result<()> {
+        anyhow::ensure!(!session.token_hash.is_empty(), "token hash cannot be empty");
+        let user_agent = truncate_user_agent(session.user_agent.as_deref());
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN SQLite user session rotation")?;
+        let refresh_enabled = sqlx::query(
+            "UPDATE users SET updated_at_ms = updated_at_ms \
+             WHERE id = ?1 AND passkey_reauth_enabled = 1",
+        )
+        .bind(&session.user_id)
+        .execute(&mut *transaction)
+        .await
+        .context("LOCK SQLite user Passkey refresh policy")?;
+        anyhow::ensure!(
+            refresh_enabled.rows_affected() == 1,
+            "Passkey refresh is disabled"
+        );
+        let deleted =
+            sqlx::query("DELETE FROM user_sessions WHERE token_hash = ?1 AND user_id = ?2")
+                .bind(previous_token_hash)
+                .bind(&session.user_id)
+                .execute(&mut *transaction)
+                .await
+                .context("DELETE previous SQLite user session")?;
+        anyhow::ensure!(
+            deleted.rows_affected() == 1,
+            "previous user session is unavailable"
+        );
+        sqlx::query(
+            "INSERT INTO user_sessions (token_hash, user_id, created_at_ms, expires_at_ms, \
+             last_seen_at_ms, user_agent, passkey_verified_at_ms) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )
+        .bind(&session.token_hash)
+        .bind(&session.user_id)
+        .bind(session.created_at_ms)
+        .bind(session.expires_at_ms)
+        .bind(session.last_seen_at_ms)
+        .bind(user_agent.as_deref())
+        .bind(session.passkey_verified_at_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("INSERT rotated SQLite user session")?;
+        transaction
+            .commit()
+            .await
+            .context("COMMIT SQLite user session rotation")?;
+        Ok(())
+    }
+
+    pub(super) async fn cap_user_session_expiry(
+        &self,
+        user_id: &str,
+        expires_at_ms: i64,
+    ) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE user_sessions SET expires_at_ms = ?2 \
+             WHERE user_id = ?1 AND expires_at_ms > ?2",
+        )
+        .bind(user_id)
+        .bind(expires_at_ms)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("CAP SQLite user sessions for {user_id}"))?;
         Ok(result.rows_affected())
     }
 
@@ -2764,12 +2846,51 @@ impl SqliteStorage {
     }
 
     pub(super) async fn delete_user_passkey(&self, user_id: &str, passkey_id: &str) -> Result<u64> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN SQLite user passkey deletion")?;
         let result = sqlx::query("DELETE FROM user_passkeys WHERE id = ?1 AND user_id = ?2")
             .bind(passkey_id)
             .bind(user_id)
-            .execute(&self.pool)
+            .execute(&mut *transaction)
             .await
             .with_context(|| format!("DELETE SQLite user passkey {passkey_id}"))?;
+        if result.rows_affected() == 1 {
+            let remaining = sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM user_passkeys WHERE user_id = ?1",
+            )
+            .bind(user_id)
+            .fetch_one(&mut *transaction)
+            .await
+            .context("COUNT remaining SQLite user passkeys")?;
+            if remaining == 0 {
+                sqlx::query(
+                    "UPDATE users SET passkey_reauth_enabled = 0, updated_at_ms = ?2 \
+                     WHERE id = ?1",
+                )
+                .bind(user_id)
+                .bind(now_ms())
+                .execute(&mut *transaction)
+                .await
+                .context("DISABLE SQLite Passkey refresh after final passkey deletion")?;
+                let cutoff = now_ms().saturating_add(crate::product_auth::USER_SESSION_TTL_MS);
+                sqlx::query(
+                    "UPDATE user_sessions SET expires_at_ms = ?2 \
+                     WHERE user_id = ?1 AND expires_at_ms > ?2",
+                )
+                .bind(user_id)
+                .bind(cutoff)
+                .execute(&mut *transaction)
+                .await
+                .context("CAP SQLite sessions after final passkey deletion")?;
+            }
+        }
+        transaction
+            .commit()
+            .await
+            .context("COMMIT SQLite user passkey deletion")?;
         Ok(result.rows_affected())
     }
 
@@ -2800,7 +2921,7 @@ impl SqliteStorage {
         user_id: &str,
     ) -> Result<Option<crate::passkey::PasskeyPolicy>> {
         let row = sqlx::query_as::<_, SqlitePasskeyPolicyRow>(
-            "SELECT passkey_reauth_enabled, last_step_up_at_ms, \
+            "SELECT passkey_reauth_enabled, passkey_refresh_interval_ms, last_step_up_at_ms, \
              (SELECT COUNT(*) FROM user_passkeys WHERE user_id = ?1) AS passkey_count \
              FROM users WHERE id = ?1",
         )
@@ -2811,17 +2932,53 @@ impl SqliteStorage {
         Ok(row.map(SqlitePasskeyPolicyRow::into_policy))
     }
 
-    pub(super) async fn set_user_passkey_reauth(&self, user_id: &str, enabled: bool) -> Result<()> {
+    pub(super) async fn set_user_passkey_reauth(
+        &self,
+        user_id: &str,
+        enabled: bool,
+        reauth_after_ms: i64,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            crate::passkey::valid_reauth_interval(reauth_after_ms),
+            "Passkey refresh interval is unsupported"
+        );
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN SQLite Passkey refresh update")?;
         let result = sqlx::query(
-            "UPDATE users SET passkey_reauth_enabled = ?2, updated_at_ms = ?3 WHERE id = ?1",
+            "UPDATE users SET passkey_reauth_enabled = ?2, passkey_refresh_interval_ms = ?3, \
+             updated_at_ms = ?4 WHERE id = ?1 AND (?2 = 0 OR EXISTS ( \
+             SELECT 1 FROM user_passkeys WHERE user_id = ?1))",
         )
         .bind(user_id)
         .bind(i64::from(enabled))
+        .bind(reauth_after_ms)
         .bind(now_ms())
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await
         .with_context(|| format!("UPDATE SQLite passkey reauth {user_id}"))?;
-        anyhow::ensure!(result.rows_affected() == 1, "user {user_id} not found");
+        anyhow::ensure!(
+            result.rows_affected() == 1,
+            "user not found or no Passkey is registered"
+        );
+        if !enabled {
+            let cutoff = now_ms().saturating_add(crate::product_auth::USER_SESSION_TTL_MS);
+            sqlx::query(
+                "UPDATE user_sessions SET expires_at_ms = ?2 \
+                 WHERE user_id = ?1 AND expires_at_ms > ?2",
+            )
+            .bind(user_id)
+            .bind(cutoff)
+            .execute(&mut *transaction)
+            .await
+            .context("CAP SQLite sessions after disabling Passkey refresh")?;
+        }
+        transaction
+            .commit()
+            .await
+            .context("COMMIT SQLite Passkey refresh update")?;
         Ok(())
     }
 
@@ -4077,7 +4234,7 @@ mod baseline_compatibility_tests {
                 .fetch_all(&storage.pool)
                 .await
                 .unwrap();
-        assert_eq!(versions, (1_i64..=8).collect::<Vec<_>>());
+        assert_eq!(versions, (1_i64..=9).collect::<Vec<_>>());
         let machines_after: i64 = sqlx::query_scalar("SELECT count(*) FROM machines")
             .fetch_one(&storage.pool)
             .await

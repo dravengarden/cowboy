@@ -27,6 +27,42 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Session security") {
+                if let refresh = model.accountStatus.passkeySessionRefresh {
+                    Toggle("Refresh browser sessions with a Passkey", isOn: passkeyRefreshBinding)
+                        .disabled(refresh.registeredCount == 0)
+                    Picker("Refresh frequency", selection: passkeyIntervalBinding) {
+                        Text("Every day").tag(Int64(86_400_000))
+                        Text("Every 7 days").tag(Int64(604_800_000))
+                        Text("Every 14 days").tag(Int64(1_209_600_000))
+                    }
+                    .disabled(refresh.registeredCount == 0)
+                    Text("Off by default. Password and Cardea sessions last one day. After verification in Cowboy, that browser session rotates for up to 30 days and asks again at this frequency. Cowboy Manager keeps its separate one-day session and can sign in again from macOS Keychain.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if refresh.registeredCount == 0 {
+                        Text("Add a Passkey in Cowboy before enabling refresh.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        LabeledContent("Registered Passkeys", value: String(refresh.registeredCount))
+                    }
+                    if model.controllerURL != nil {
+                        Button("Verify or Manage Passkeys in Cowboy") {
+                            CowboyOpener.open(controllerURL: model.controllerURL)
+                        }
+                    }
+                } else {
+                    Text("Sign in to manage optional Passkey session refresh.")
+                        .foregroundStyle(.secondary)
+                }
+                if let error = model.accountStatus.errorMessage {
+                    Text(error)
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
+                }
+            }
+
             Section("Locations") {
                 directorySetting(
                     "Workspace",
@@ -115,6 +151,34 @@ struct SettingsView: View {
                 } else {
                     model.updateSettings { $0.notificationsEnabled = false }
                 }
+            }
+        )
+    }
+
+    private var passkeyRefreshBinding: Binding<Bool> {
+        Binding(
+            get: { model.accountStatus.passkeySessionRefresh?.enabled ?? false },
+            set: { enabled in
+                guard let refresh = model.accountStatus.passkeySessionRefresh else { return }
+                _ = model.setPasskeySessionRefresh(
+                    enabled: enabled,
+                    intervalMilliseconds: refresh.intervalMilliseconds
+                )
+            }
+        )
+    }
+
+    private var passkeyIntervalBinding: Binding<Int64> {
+        Binding(
+            get: {
+                model.accountStatus.passkeySessionRefresh?.intervalMilliseconds ?? 604_800_000
+            },
+            set: { interval in
+                guard let refresh = model.accountStatus.passkeySessionRefresh else { return }
+                _ = model.setPasskeySessionRefresh(
+                    enabled: refresh.enabled,
+                    intervalMilliseconds: interval
+                )
             }
         )
     }

@@ -66,6 +66,8 @@ mod memory_observability;
 #[cfg(feature = "full")]
 mod observability;
 #[cfg(feature = "full")]
+mod oidc;
+#[cfg(feature = "full")]
 mod passkey;
 #[cfg(feature = "full")]
 mod persistence;

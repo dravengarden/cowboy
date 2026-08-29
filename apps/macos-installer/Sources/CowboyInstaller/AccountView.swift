@@ -42,7 +42,7 @@ struct AccountView: View {
                 }
 
                 if optionalSignInAvailable && !showsOptionalSignIn {
-                    Text("Account passwords and passkeys are optional for local access. Continue using Cowboy now and configure authentication later when you want protected administrator actions.")
+                    Text("This Service explicitly allows trusted local-owner access. Sign in only when you need protected administrator actions.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Button("Use Account Password…") {
@@ -50,7 +50,29 @@ struct AccountView: View {
                     }
                 }
 
+                if needsCredentials && !model.accountStatus.signInProviders.isEmpty {
+                    ForEach(model.accountStatus.signInProviders) { provider in
+                        Button("Continue with \(provider.displayName)") {
+                            guard let launchURL = model.beginFederatedSignIn(provider: provider) else {
+                                return
+                            }
+                            if !NSWorkspace.shared.open(launchURL) {
+                                model.cancelFederatedSignIn()
+                            }
+                        }
+                    }
+                    Text("One Cardea authorization signs Cowboy Manager into the product and its explicitly mapped administrator account. No Cardea token is stored by this app.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 if needsCredentials && (!optionalSignInAvailable || showsOptionalSignIn) {
+                    if !model.accountStatus.signInProviders.isEmpty {
+                        Divider()
+                        Text("Or use the Cowboy account password")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     TextField("Account", text: $account)
                         .textContentType(.username)
                     SecureField("Password", text: $password)
@@ -75,7 +97,9 @@ struct AccountView: View {
                         }
                     }
                     Toggle(
-                        "Save this optional sign-in in macOS Keychain",
+                        optionalSignInAvailable
+                            ? "Save this optional sign-in in macOS Keychain"
+                            : "Save this sign-in in macOS Keychain",
                         isOn: $rememberLogin
                     )
                 } else if model.accountStatus.phase == .signedIn || model.accountStatus.administratorAccess {
@@ -109,7 +133,7 @@ struct AccountView: View {
             }
 
             Section("Privacy") {
-                Text("Local-owner mode does not require an account password or passkey. If optional password sign-in is used, the password is sent only to the configured HTTPS Cowboy Service. When saving is selected, it is stored only in this app's macOS Keychain item; it never enters settings, logs, activity history, or the browser.")
+                Text(privacyDescription)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -148,6 +172,13 @@ struct AccountView: View {
             return "Unlocked"
         }
         return optionalSignInAvailable ? "Protected" : "Locked"
+    }
+
+    private var privacyDescription: String {
+        if model.accountStatus.authenticationIsOptional {
+            return "This Service is currently in explicit trusted local-owner mode. A password is sent only to the configured HTTPS Cowboy Service and, when saved, stays in this app's macOS Keychain item."
+        }
+        return "Login is required. Cowboy passwords are sent only to the configured HTTPS Cowboy Service and can be stored only in this app's macOS Keychain. Cardea uses Authorization Code flow with PKCE; the app receives only a short-lived one-time handoff code, never Cardea credentials or tokens."
     }
 
     private var accountSymbol: String {

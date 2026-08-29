@@ -32,6 +32,10 @@ public final class AppModel: ObservableObject {
     private var lastRequestWithoutToken: InstallRequest?
     private var rejectedAutomaticCredential: ServiceCredential?
     private var nextAutomaticSignInAt = Date.distantPast
+    private var pendingOidcAuthorization: (
+        request: OidcAuthorizationRequest,
+        previousStatus: AccountStatus
+    )?
 
     public init(
         backend: InstallerBackend,
@@ -284,9 +288,115 @@ public final class AppModel: ObservableObject {
         )
     }
 
+    public func beginFederatedSignIn(provider: AccountSignInProvider) -> URL? {
+        guard accountTask == nil,
+              pendingOidcAuthorization == nil,
+              !settings.controllerURL.isEmpty
+        else {
+            return nil
+        }
+        let previousStatus = accountStatus
+        do {
+            let request = try serviceClient.oidcAuthorizationRequest(
+                controllerURL: settings.controllerURL,
+                provider: provider
+            )
+            pendingOidcAuthorization = (request, previousStatus)
+            accountStatus = AccountStatus(
+                phase: .checking,
+                signInProviders: previousStatus.signInProviders,
+                message: "Continue sign-in with \(provider.displayName)"
+            )
+            return request.launchURL
+        } catch {
+            accountStatus = Self.signInFailureStatus(
+                preserving: previousStatus,
+                automatic: false,
+                error: error
+            )
+            return nil
+        }
+    }
+
+    @discardableResult
+    public func completeFederatedSignIn(callbackURL: URL) -> Bool {
+        guard accountTask == nil,
+              let pending = pendingOidcAuthorization,
+              !settings.controllerURL.isEmpty
+        else {
+            return false
+        }
+        pendingOidcAuthorization = nil
+        accountStatus = AccountStatus(
+            phase: .checking,
+            signInProviders: pending.previousStatus.signInProviders,
+            message: "Completing secure sign-in"
+        )
+        accountTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                accountStatus = try await serviceClient.completeOidcAuthorization(
+                    controllerURL: settings.controllerURL,
+                    callbackURL: callbackURL,
+                    codeVerifier: pending.request.codeVerifier
+                )
+                rejectedAutomaticCredential = nil
+                nextAutomaticSignInAt = .distantPast
+                await refreshRemoteMachine()
+            } catch {
+                accountStatus = Self.signInFailureStatus(
+                    preserving: pending.previousStatus,
+                    automatic: false,
+                    error: error
+                )
+            }
+            accountTask = nil
+        }
+        return true
+    }
+
+    public func cancelFederatedSignIn() {
+        guard let pending = pendingOidcAuthorization else { return }
+        pendingOidcAuthorization = nil
+        accountStatus = pending.previousStatus
+        accountStatus.errorMessage = "Could not open the secure sign-in page."
+    }
+
+    @discardableResult
+    public func setPasskeySessionRefresh(
+        enabled: Bool,
+        intervalMilliseconds: Int64
+    ) -> Bool {
+        guard accountTask == nil,
+              pendingOidcAuthorization == nil,
+              accountStatus.phase == .signedIn,
+              !settings.controllerURL.isEmpty
+        else {
+            return false
+        }
+        let previousStatus = accountStatus
+        accountStatus.message = "Updating Passkey session refresh"
+        accountTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                accountStatus = try await serviceClient.setPasskeySessionRefresh(
+                    controllerURL: settings.controllerURL,
+                    enabled: enabled,
+                    intervalMilliseconds: intervalMilliseconds
+                )
+            } catch {
+                accountStatus = previousStatus
+                accountStatus.errorMessage = Self.userFacing(error)
+            }
+            accountTask = nil
+        }
+        return true
+    }
+
     @discardableResult
     public func signOut() -> Bool {
         guard accountTask == nil, !settings.controllerURL.isEmpty else { return false }
+        pendingOidcAuthorization = nil
         forgetSavedLogin()
         accountStatus = AccountStatus(phase: .checking, message: "Signing out")
         accountTask = Task { [weak self] in
@@ -451,6 +561,7 @@ public final class AppModel: ObservableObject {
         update(&settings)
         persistence.saveSettings(settings)
         if settings.controllerURL != previousControllerURL {
+            pendingOidcAuthorization = nil
             rejectedAutomaticCredential = nil
             nextAutomaticSignInAt = .distantPast
             refreshSavedLoginAvailability()
@@ -485,7 +596,7 @@ public final class AppModel: ObservableObject {
     }
 
     private func refreshRemoteState(checkDependencies: Bool) async {
-        guard accountTask == nil else { return }
+        guard accountTask == nil, pendingOidcAuthorization == nil else { return }
         guard !settings.controllerURL.isEmpty else {
             accountStatus = AccountStatus(
                 phase: .unknown,
@@ -542,7 +653,12 @@ public final class AppModel: ObservableObject {
         remember: Bool,
         automatic: Bool
     ) -> Bool {
-        guard accountTask == nil, !settings.controllerURL.isEmpty else { return false }
+        guard accountTask == nil,
+              pendingOidcAuthorization == nil,
+              !settings.controllerURL.isEmpty
+        else {
+            return false
+        }
         let previousStatus = accountStatus
         accountStatus = AccountStatus(
             phase: .checking,

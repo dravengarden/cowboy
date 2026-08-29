@@ -19,9 +19,13 @@ pub const WS_AUTH_REQUIRED_CLOSE_CODE: u16 = 4001;
 
 /// Product login cookie. Distinct from `cowboy_admin`.
 pub const USER_SESSION_COOKIE: &str = "cowboy_user";
-/// Absolute cookie / `user_sessions` TTL.
-pub const USER_SESSION_TTL_SECS: i64 = 14 * 86_400;
+/// Password and OIDC sessions expire after one day unless a Passkey assertion
+/// rotates the current session into the bounded extended lifetime.
+pub const USER_SESSION_TTL_SECS: i64 = 86_400;
 pub const USER_SESSION_TTL_MS: i64 = USER_SESSION_TTL_SECS * 1_000;
+/// Maximum lifetime issued after a fresh user-verifying Passkey assertion.
+pub const PASSKEY_SESSION_TTL_SECS: i64 = 30 * 86_400;
+pub const PASSKEY_SESSION_TTL_MS: i64 = PASSKEY_SESSION_TTL_SECS * 1_000;
 
 /// Stored in `users.password_algo`. The PHC string is the only hash material.
 pub const PASSWORD_ALGO_ARGON2ID: &str = "argon2id";
@@ -183,9 +187,9 @@ pub fn user_cookie_token(headers: &HeaderMap) -> Option<String> {
 }
 
 #[must_use]
-pub fn session_cookie(token: &str, secure: bool) -> String {
+pub fn session_cookie(token: &str, secure: bool, max_age_secs: i64) -> String {
     let mut cookie = format!(
-        "{USER_SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={USER_SESSION_TTL_SECS}"
+        "{USER_SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age_secs}"
     );
     if secure {
         cookie.push_str("; Secure");

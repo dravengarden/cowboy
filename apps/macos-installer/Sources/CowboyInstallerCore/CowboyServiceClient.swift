@@ -1,4 +1,6 @@
 @preconcurrency import Foundation
+import CryptoKit
+import Security
 
 public struct ServiceHTTPResponse: Equatable, Sendable {
     public let statusCode: Int
@@ -14,8 +16,21 @@ public protocol ServiceHTTPTransport: Sendable {
     func send(_ request: URLRequest) async throws -> ServiceHTTPResponse
 }
 
+private final class RedirectRejectingSessionDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
+    }
+}
+
 public final class URLSessionHTTPTransport: ServiceHTTPTransport, @unchecked Sendable {
     private let providedSession: URLSession?
+    private let redirectDelegate = RedirectRejectingSessionDelegate()
     private let sessionLock = NSLock()
     private var storedSession: URLSession?
 
@@ -43,7 +58,11 @@ public final class URLSessionHTTPTransport: ServiceHTTPTransport, @unchecked Sen
         let configuration = URLSessionConfiguration.default
         configuration.httpShouldSetCookies = true
         configuration.httpCookieAcceptPolicy = .always
-        let session = URLSession(configuration: configuration)
+        let session = URLSession(
+            configuration: configuration,
+            delegate: redirectDelegate,
+            delegateQueue: nil
+        )
         storedSession = session
         return session
     }
@@ -52,6 +71,20 @@ public final class URLSessionHTTPTransport: ServiceHTTPTransport, @unchecked Sen
 public protocol CowboyServiceClient: Sendable {
     func accountStatus(controllerURL: String) async throws -> AccountStatus
     func signIn(controllerURL: String, account: String, password: String) async throws -> AccountStatus
+    func oidcAuthorizationRequest(
+        controllerURL: String,
+        provider: AccountSignInProvider
+    ) throws -> OidcAuthorizationRequest
+    func completeOidcAuthorization(
+        controllerURL: String,
+        callbackURL: URL,
+        codeVerifier: String
+    ) async throws -> AccountStatus
+    func setPasskeySessionRefresh(
+        controllerURL: String,
+        enabled: Bool,
+        intervalMilliseconds: Int64
+    ) async throws -> AccountStatus
     func signOut(controllerURL: String) async throws -> AccountStatus
     func machine(controllerURL: String, machineID: String) async throws -> ManagedMachineSummary
     func dependencyUpdatePlan(
@@ -69,6 +102,9 @@ public protocol CowboyServiceClient: Sendable {
 public enum CowboyServiceClientError: LocalizedError, Equatable {
     case invalidControllerURL
     case invalidResponse
+    case invalidAuthenticationCallback
+    case authenticationCancelled
+    case secureRandomnessUnavailable
     case credentialsRequired
     case setupRequired
     case machineNotFound(String)
@@ -82,6 +118,12 @@ public enum CowboyServiceClientError: LocalizedError, Equatable {
             "Enter a valid HTTPS Cowboy Service URL. Loopback HTTP is allowed for development."
         case .invalidResponse:
             "Cowboy Service returned an invalid response."
+        case .invalidAuthenticationCallback:
+            "Cowboy Manager received an invalid sign-in callback. Start the sign-in again."
+        case .authenticationCancelled:
+            "Cardea sign-in was cancelled or could not be completed."
+        case .secureRandomnessUnavailable:
+            "macOS could not create a secure sign-in challenge."
         case .credentialsRequired:
             "Enter the Cowboy owner account and password."
         case .setupRequired:
@@ -136,6 +178,95 @@ public final class URLSessionCowboyServiceClient: CowboyServiceClient, @unchecke
             controllerURL,
             path: "/api/admin/auth/login",
             body: credentials
+        )
+        return try await accountStatus(controllerURL: controllerURL)
+    }
+
+    public func oidcAuthorizationRequest(
+        controllerURL: String,
+        provider: AccountSignInProvider
+    ) throws -> OidcAuthorizationRequest {
+        guard provider.startPath == "/api/auth/oidc/start",
+              Self.validProviderID(provider.id)
+        else {
+            throw CowboyServiceClientError.invalidResponse
+        }
+        let verifier = try Self.pkceVerifier()
+        let digest = SHA256.hash(data: Data(verifier.utf8))
+        let challenge = Self.base64URL(Data(digest))
+        let serviceEndpoint = try endpoint(controllerURL, path: provider.startPath)
+        guard var components = URLComponents(
+            url: serviceEndpoint.url,
+            resolvingAgainstBaseURL: false
+        ) else {
+            throw CowboyServiceClientError.invalidControllerURL
+        }
+        components.queryItems = [
+            URLQueryItem(name: "client", value: "macos-manager"),
+            URLQueryItem(name: "code_challenge", value: challenge),
+        ]
+        guard let launchURL = components.url else {
+            throw CowboyServiceClientError.invalidControllerURL
+        }
+        return OidcAuthorizationRequest(launchURL: launchURL, codeVerifier: verifier)
+    }
+
+    public func completeOidcAuthorization(
+        controllerURL: String,
+        callbackURL: URL,
+        codeVerifier: String
+    ) async throws -> AccountStatus {
+        guard let components = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false),
+              components.scheme == "xyz.stormbird.cowboy.manager",
+              components.host == "auth",
+              components.path == "/callback",
+              components.user == nil,
+              components.password == nil,
+              components.fragment == nil
+        else {
+            throw CowboyServiceClientError.invalidAuthenticationCallback
+        }
+        let queryItems = components.queryItems ?? []
+        guard queryItems.allSatisfy({ ["code", "error"].contains($0.name) }) else {
+            throw CowboyServiceClientError.invalidAuthenticationCallback
+        }
+        if queryItems.contains(where: { $0.name == "error" }) {
+            throw CowboyServiceClientError.authenticationCancelled
+        }
+        let codes = queryItems.filter { $0.name == "code" }.compactMap(\.value)
+        guard codes.count == 1,
+              (16...512).contains(codes[0].count),
+              codes[0].utf8.allSatisfy({ byte in
+                  (65...90).contains(byte)
+                      || (97...122).contains(byte)
+                      || (48...57).contains(byte)
+                      || byte == 45
+                      || byte == 95
+                      || byte == 46
+              })
+        else {
+            throw CowboyServiceClientError.invalidAuthenticationCallback
+        }
+        let _: ProductMeDTO = try await post(
+            controllerURL,
+            path: "/api/auth/oidc/native/exchange",
+            body: OidcNativeExchangeDTO(code: codes[0], codeVerifier: codeVerifier)
+        )
+        return try await accountStatus(controllerURL: controllerURL)
+    }
+
+    public func setPasskeySessionRefresh(
+        controllerURL: String,
+        enabled: Bool,
+        intervalMilliseconds: Int64
+    ) async throws -> AccountStatus {
+        let _: ProductMeDTO = try await put(
+            controllerURL,
+            path: "/api/auth/passkeys/reauth",
+            body: PasskeyRefreshDTO(
+                enabled: enabled,
+                reauthAfterMilliseconds: intervalMilliseconds
+            )
         )
         return try await accountStatus(controllerURL: controllerURL)
     }
@@ -291,6 +422,21 @@ public final class URLSessionCowboyServiceClient: CowboyServiceClient, @unchecke
         return try await send(request)
     }
 
+    private func put<Body: Encodable, Response: Decodable>(
+        _ controllerURL: String,
+        path: String,
+        body: Body
+    ) async throws -> Response {
+        let serviceEndpoint = try endpoint(controllerURL, path: path)
+        var request = URLRequest(url: serviceEndpoint.url)
+        request.httpMethod = "PUT"
+        request.httpBody = try encoder.encode(body)
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(serviceEndpoint.origin, forHTTPHeaderField: "Origin")
+        return try await send(request)
+    }
+
     private func send<Response: Decodable>(_ request: URLRequest) async throws -> Response {
         let response = try await transport.send(request)
         guard (200..<300).contains(response.statusCode) else {
@@ -337,16 +483,70 @@ public final class URLSessionCowboyServiceClient: CowboyServiceClient, @unchecke
         value.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? value
     }
 
+    private static func pkceVerifier() throws -> String {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
+            throw CowboyServiceClientError.secureRandomnessUnavailable
+        }
+        return base64URL(Data(bytes))
+    }
+
+    private static func base64URL(_ data: Data) -> String {
+        data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
+    private static func validProviderID(_ value: String) -> Bool {
+        (1...64).contains(value.count) && value.utf8.allSatisfy { byte in
+            (97...122).contains(byte)
+                || (48...57).contains(byte)
+                || byte == 45
+                || byte == 95
+        }
+    }
+
     private static func accountStatus(
         product: ProductAuthStatusDTO,
         admin: AdminAuthStatusDTO
     ) -> AccountStatus {
         let administratorAccess = admin.authenticated
             && ["owner", "operator"].contains(admin.role ?? "")
+        let providers = (product.providers ?? []).compactMap { provider -> AccountSignInProvider? in
+            guard validProviderID(provider.id),
+                  !provider.displayName.isEmpty,
+                  provider.displayName.count <= 64,
+                  provider.startURL == "/api/auth/oidc/start"
+            else {
+                return nil
+            }
+            return AccountSignInProvider(
+                id: provider.id,
+                displayName: provider.displayName,
+                startPath: provider.startURL
+            )
+        }
+        let passkeySessionRefresh = product.me.flatMap { me -> PasskeySessionRefreshStatus? in
+            guard let registeredCount = me.passkeyCount,
+                  registeredCount >= 0,
+                  let enabled = me.passkeyReauthEnabled,
+                  let intervalMilliseconds = me.passkeyReauthAfterMilliseconds,
+                  [86_400_000, 604_800_000, 1_209_600_000].contains(intervalMilliseconds)
+            else {
+                return nil
+            }
+            return PasskeySessionRefreshStatus(
+                registeredCount: registeredCount,
+                enabled: enabled,
+                intervalMilliseconds: intervalMilliseconds
+            )
+        }
         if product.setupRequired {
             return AccountStatus(
                 phase: .setupRequired,
                 administratorAccess: administratorAccess,
+                signInProviders: providers,
                 message: "Complete first-time setup in Cowboy before signing in here."
             )
         }
@@ -356,6 +556,8 @@ public final class URLSessionCowboyServiceClient: CowboyServiceClient, @unchecke
                 account: product.me?.account ?? "local",
                 role: product.me?.role ?? "owner",
                 administratorAccess: administratorAccess,
+                signInProviders: providers,
+                passkeySessionRefresh: passkeySessionRefresh,
                 message: administratorAccess
                     ? "Local access is enabled and administrator controls are unlocked."
                     : "Local access is enabled. Authentication is optional and can be configured later."
@@ -367,6 +569,8 @@ public final class URLSessionCowboyServiceClient: CowboyServiceClient, @unchecke
                 account: me.account,
                 role: me.role,
                 administratorAccess: administratorAccess,
+                signInProviders: providers,
+                passkeySessionRefresh: passkeySessionRefresh,
                 message: administratorAccess
                     ? "Signed in with administrator controls."
                     : "Signed in. Administrator access is required for dependency updates."
@@ -375,6 +579,7 @@ public final class URLSessionCowboyServiceClient: CowboyServiceClient, @unchecke
         return AccountStatus(
             phase: .signedOut,
             administratorAccess: administratorAccess,
+            signInProviders: providers,
             message: "Sign in to this Cowboy Service."
         )
     }
@@ -404,6 +609,26 @@ private struct CredentialsDTO: Encodable {
     let password: String
 }
 
+private struct OidcNativeExchangeDTO: Encodable {
+    let code: String
+    let codeVerifier: String
+
+    enum CodingKeys: String, CodingKey {
+        case code
+        case codeVerifier = "code_verifier"
+    }
+}
+
+private struct PasskeyRefreshDTO: Encodable {
+    let enabled: Bool
+    let reauthAfterMilliseconds: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case enabled
+        case reauthAfterMilliseconds = "reauth_after_ms"
+    }
+}
+
 private struct EmptyBody: Encodable {}
 
 private struct IgnoredResponse: Decodable {}
@@ -411,10 +636,24 @@ private struct IgnoredResponse: Decodable {}
 private struct ProductAuthStatusDTO: Decodable {
     let setupRequired: Bool
     let me: ProductMeDTO?
+    let providers: [ProductProviderDTO]?
 
     enum CodingKeys: String, CodingKey {
         case setupRequired = "setup_required"
         case me
+        case providers
+    }
+}
+
+private struct ProductProviderDTO: Decodable {
+    let id: String
+    let displayName: String
+    let startURL: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case displayName = "display_name"
+        case startURL = "start_url"
     }
 }
 
@@ -422,11 +661,17 @@ private struct ProductMeDTO: Decodable {
     let account: String
     let role: String
     let authEnabled: Bool?
+    let passkeyCount: Int?
+    let passkeyReauthEnabled: Bool?
+    let passkeyReauthAfterMilliseconds: Int64?
 
     enum CodingKeys: String, CodingKey {
         case account
         case role
         case authEnabled = "auth_enabled"
+        case passkeyCount = "passkey_count"
+        case passkeyReauthEnabled = "passkey_reauth_enabled"
+        case passkeyReauthAfterMilliseconds = "passkey_reauth_after_ms"
     }
 }
 

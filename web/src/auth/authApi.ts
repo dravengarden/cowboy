@@ -14,12 +14,21 @@ export interface ProductMe {
   passkey_count?: number;
   passkey_reauth_enabled?: boolean;
   passkey_reauth_required?: boolean;
+  passkey_reauth_after_ms?: number;
+  passkey_reauth_due_at_ms?: number | null;
+}
+
+export interface ProductOidcProvider {
+  id: "cardea";
+  display_name: string;
+  start_url: string;
 }
 
 export interface AuthStatus {
   registration: RegistrationPublicStatus;
   setup_required?: boolean;
   setup_pending?: boolean;
+  providers?: ProductOidcProvider[];
   me?: ProductMe;
 }
 
@@ -33,6 +42,7 @@ export function authStatusFromJson(value: unknown): AuthStatus | undefined {
     registration?: Partial<RegistrationPublicStatus>;
     setup_required?: boolean;
     setup_pending?: boolean;
+    providers?: unknown;
     me?: Partial<ProductMe>;
   };
   const registration = record.registration;
@@ -54,7 +64,23 @@ export function authStatusFromJson(value: unknown): AuthStatus | undefined {
     },
     setup_required: record.setup_required === true,
     setup_pending: record.setup_pending === true,
+    providers: [],
   };
+  if (Array.isArray(record.providers)) {
+    status.providers = record.providers.flatMap((provider): ProductOidcProvider[] => {
+      if (provider == null || typeof provider !== "object") return [];
+      const candidate = provider as Partial<ProductOidcProvider>;
+      return candidate.id === "cardea" &&
+          typeof candidate.display_name === "string" && candidate.display_name.length > 0 &&
+          candidate.start_url === "/api/auth/oidc/start"
+        ? [{
+          id: candidate.id,
+          display_name: candidate.display_name,
+          start_url: candidate.start_url,
+        }]
+        : [];
+    });
+  }
   const me = record.me;
   if (me && typeof me.account === "string" && me.account.length > 0) {
     const role = me.role;
@@ -67,6 +93,12 @@ export function authStatusFromJson(value: unknown): AuthStatus | undefined {
       }
       if (typeof me.passkey_reauth_required === "boolean") {
         next.passkey_reauth_required = me.passkey_reauth_required;
+      }
+      if (typeof me.passkey_reauth_after_ms === "number") {
+        next.passkey_reauth_after_ms = me.passkey_reauth_after_ms;
+      }
+      if (typeof me.passkey_reauth_due_at_ms === "number" || me.passkey_reauth_due_at_ms === null) {
+        next.passkey_reauth_due_at_ms = me.passkey_reauth_due_at_ms;
       }
       status.me = next;
     }
@@ -209,11 +241,11 @@ export const authApi = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ challenge_id: challengeId, credential }),
     }),
-  setPasskeyReauth: (enabled: boolean) =>
+  setPasskeyReauth: (enabled: boolean, reauthAfterMs?: number) =>
     readJson<ProductMe>("/api/auth/passkeys/reauth", {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ enabled }),
+      body: JSON.stringify({ enabled, reauth_after_ms: reauthAfterMs }),
     }),
   deletePasskey: (id: string) =>
     readJson<{ ok: boolean }>(`/api/auth/passkeys/${id}`, { method: "DELETE" }),

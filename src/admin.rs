@@ -626,6 +626,19 @@ impl AdminIdentities {
         self.issue_session(&account, now_ms)
     }
 
+    /// Issue an admin session only after an external identity has already been
+    /// verified and mapped to this exact, pre-existing Cowboy admin account.
+    pub(crate) fn login_federated(&mut self, account: &str, now_ms: i64) -> Result<String> {
+        let account = normalize_admin_account(account)?;
+        anyhow::ensure!(
+            self.accounts
+                .iter()
+                .any(|existing| existing.account == account),
+            "federated admin account not found"
+        );
+        self.issue_session(&account, now_ms)
+    }
+
     fn issue_session(&mut self, account: &str, now_ms: i64) -> Result<String> {
         let mut token_bytes = [0_u8; 32];
         std::fs::File::open("/dev/urandom")
@@ -676,6 +689,7 @@ impl AdminIdentities {
             .find(|existing| existing.account == account);
         crate::passkey::PasskeyPolicy {
             enabled: stored.is_none_or(|account| account.passkey_reauth_enabled),
+            reauth_after_ms: crate::passkey::ADMIN_PASSKEY_REAUTH_AFTER_MS,
             last_step_up_at_ms: stored.and_then(|account| account.last_step_up_at_ms),
             passkey_count,
         }

@@ -606,6 +606,7 @@ pub struct ProductUserSession {
     pub expires_at_ms: i64,
     pub last_seen_at_ms: i64,
     pub user_agent: Option<String>,
+    pub passkey_verified_at_ms: Option<i64>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -643,6 +644,7 @@ struct ProductUserSessionRow {
     expires_at: DateTime<Utc>,
     last_seen_at: DateTime<Utc>,
     user_agent: Option<String>,
+    passkey_verified_at: Option<DateTime<Utc>>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -689,6 +691,7 @@ impl ProductPasskeyRow {
 #[derive(sqlx::FromRow)]
 struct ProductPasskeyPolicyRow {
     passkey_reauth_enabled: bool,
+    passkey_refresh_interval_ms: i64,
     last_step_up_at: Option<DateTime<Utc>>,
     passkey_count: i64,
 }
@@ -697,6 +700,7 @@ impl ProductPasskeyPolicyRow {
     fn into_policy(self) -> crate::passkey::PasskeyPolicy {
         crate::passkey::PasskeyPolicy {
             enabled: self.passkey_reauth_enabled,
+            reauth_after_ms: self.passkey_refresh_interval_ms,
             last_step_up_at_ms: self.last_step_up_at.map(|value| value.timestamp_millis()),
             passkey_count: u32::try_from(self.passkey_count.max(0)).unwrap_or(0),
         }
@@ -728,6 +732,9 @@ impl ProductUserSession {
             expires_at_ms: row.expires_at.timestamp_millis(),
             last_seen_at_ms: row.last_seen_at.timestamp_millis(),
             user_agent: row.user_agent,
+            passkey_verified_at_ms: row
+                .passkey_verified_at
+                .map(|value| value.timestamp_millis()),
         }
     }
 }
@@ -1354,6 +1361,20 @@ impl Store {
         dispatch_storage!(self, delete_user_sessions_for_user(user_id))
     }
 
+    /// Replace one cookie session atomically after a successful Passkey assertion.
+    pub async fn rotate_user_session(
+        &self,
+        previous_token_hash: &str,
+        session: &ProductUserSession,
+    ) -> Result<()> {
+        dispatch_storage!(self, rotate_user_session(previous_token_hash, session))
+    }
+
+    /// Shorten any extended sessions when Passkey refresh is disabled or removed.
+    pub async fn cap_user_session_expiry(&self, user_id: &str, expires_at_ms: i64) -> Result<u64> {
+        dispatch_storage!(self, cap_user_session_expiry(user_id, expires_at_ms))
+    }
+
     /// Persist a hashed personal access token. The plaintext secret is never stored.
     ///
     /// # Errors
@@ -1439,8 +1460,16 @@ impl Store {
         dispatch_storage!(self, user_passkey_policy(user_id))
     }
 
-    pub async fn set_user_passkey_reauth(&self, user_id: &str, enabled: bool) -> Result<()> {
-        dispatch_storage!(self, set_user_passkey_reauth(user_id, enabled))
+    pub async fn set_user_passkey_reauth(
+        &self,
+        user_id: &str,
+        enabled: bool,
+        reauth_after_ms: i64,
+    ) -> Result<()> {
+        dispatch_storage!(
+            self,
+            set_user_passkey_reauth(user_id, enabled, reauth_after_ms)
+        )
     }
 
     pub async fn touch_user_last_step_up(&self, user_id: &str, now_ms: i64) -> Result<()> {
@@ -2624,10 +2653,10 @@ impl PostgresStorage {
         );
         sqlx::query(
             "INSERT INTO users (id, username, password_algo, password_hash, created_at, \
-             updated_at, disabled_at) VALUES ( \
+             updated_at, disabled_at, passkey_reauth_enabled, passkey_refresh_interval_ms) VALUES ( \
              $1, $2, $3, $4, to_timestamp($5::double precision / 1000), \
              to_timestamp($6::double precision / 1000), \
-             to_timestamp($7::double precision / 1000))",
+             to_timestamp($7::double precision / 1000), false, $8)",
         )
         .bind(&user.id)
         .bind(&username)
@@ -2636,6 +2665,7 @@ impl PostgresStorage {
         .bind(user.created_at_ms)
         .bind(user.updated_at_ms)
         .bind(user.disabled_at_ms)
+        .bind(crate::passkey::DEFAULT_PASSKEY_REAUTH_AFTER_MS)
         .execute(&self.pool)
         .await
         .map_err(|error| unique_constraint_error(error, "account already exists", "INSERT user"))?;
@@ -2739,10 +2769,11 @@ impl PostgresStorage {
         let user_agent = truncate_user_agent(session.user_agent.as_deref());
         sqlx::query(
             "INSERT INTO user_sessions (token_hash, user_id, created_at, expires_at, \
-             last_seen_at, user_agent) VALUES ( \
+             last_seen_at, user_agent, passkey_verified_at) VALUES ( \
              $1, $2, to_timestamp($3::double precision / 1000), \
              to_timestamp($4::double precision / 1000), \
-             to_timestamp($5::double precision / 1000), $6)",
+             to_timestamp($5::double precision / 1000), $6, \
+             to_timestamp($7::double precision / 1000))",
         )
         .bind(&session.token_hash)
         .bind(&session.user_id)
@@ -2750,6 +2781,7 @@ impl PostgresStorage {
         .bind(session.expires_at_ms)
         .bind(session.last_seen_at_ms)
         .bind(user_agent.as_deref())
+        .bind(session.passkey_verified_at_ms)
         .execute(&self.pool)
         .await
         .context("INSERT user session")?;
@@ -2761,7 +2793,8 @@ impl PostgresStorage {
         token_hash: &str,
     ) -> Result<Option<ProductUserSession>> {
         let row = sqlx::query_as::<_, ProductUserSessionRow>(
-            "SELECT token_hash, user_id, created_at, expires_at, last_seen_at, user_agent \
+            "SELECT token_hash, user_id, created_at, expires_at, last_seen_at, user_agent, \
+             passkey_verified_at \
              FROM user_sessions WHERE token_hash = $1",
         )
         .bind(token_hash)
@@ -2786,6 +2819,75 @@ impl PostgresStorage {
             .execute(&self.pool)
             .await
             .with_context(|| format!("DELETE user sessions for {user_id}"))?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn rotate_user_session(
+        &self,
+        previous_token_hash: &str,
+        session: &ProductUserSession,
+    ) -> Result<()> {
+        anyhow::ensure!(!session.token_hash.is_empty(), "token hash cannot be empty");
+        let user_agent = truncate_user_agent(session.user_agent.as_deref());
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN user session rotation")?;
+        let refresh_enabled = sqlx::query_scalar::<_, bool>(
+            "SELECT passkey_reauth_enabled FROM users WHERE id = $1 FOR UPDATE",
+        )
+        .bind(&session.user_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .context("LOCK user Passkey refresh policy")?;
+        anyhow::ensure!(refresh_enabled == Some(true), "Passkey refresh is disabled");
+        let deleted =
+            sqlx::query("DELETE FROM user_sessions WHERE token_hash = $1 AND user_id = $2")
+                .bind(previous_token_hash)
+                .bind(&session.user_id)
+                .execute(&mut *transaction)
+                .await
+                .context("DELETE previous user session")?;
+        anyhow::ensure!(
+            deleted.rows_affected() == 1,
+            "previous user session is unavailable"
+        );
+        sqlx::query(
+            "INSERT INTO user_sessions (token_hash, user_id, created_at, expires_at, \
+             last_seen_at, user_agent, passkey_verified_at) VALUES ( \
+             $1, $2, to_timestamp($3::double precision / 1000), \
+             to_timestamp($4::double precision / 1000), \
+             to_timestamp($5::double precision / 1000), $6, \
+             to_timestamp($7::double precision / 1000))",
+        )
+        .bind(&session.token_hash)
+        .bind(&session.user_id)
+        .bind(session.created_at_ms)
+        .bind(session.expires_at_ms)
+        .bind(session.last_seen_at_ms)
+        .bind(user_agent.as_deref())
+        .bind(session.passkey_verified_at_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("INSERT rotated user session")?;
+        transaction
+            .commit()
+            .await
+            .context("COMMIT user session rotation")?;
+        Ok(())
+    }
+
+    pub async fn cap_user_session_expiry(&self, user_id: &str, expires_at_ms: i64) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE user_sessions SET expires_at = to_timestamp($2::double precision / 1000) \
+             WHERE user_id = $1 AND expires_at > to_timestamp($2::double precision / 1000)",
+        )
+        .bind(user_id)
+        .bind(expires_at_ms)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("CAP user sessions for {user_id}"))?;
         Ok(result.rows_affected())
     }
 
@@ -2923,12 +3025,52 @@ impl PostgresStorage {
     }
 
     pub async fn delete_user_passkey(&self, user_id: &str, passkey_id: &str) -> Result<u64> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN user passkey deletion")?;
         let result = sqlx::query("DELETE FROM user_passkeys WHERE id = $1 AND user_id = $2")
             .bind(passkey_id)
             .bind(user_id)
-            .execute(&self.pool)
+            .execute(&mut *transaction)
             .await
             .with_context(|| format!("DELETE user passkey {passkey_id}"))?;
+        if result.rows_affected() == 1 {
+            let remaining = sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*)::bigint FROM user_passkeys WHERE user_id = $1",
+            )
+            .bind(user_id)
+            .fetch_one(&mut *transaction)
+            .await
+            .context("COUNT remaining user passkeys")?;
+            if remaining == 0 {
+                sqlx::query(
+                    "UPDATE users SET passkey_reauth_enabled = false, updated_at = now() \
+                     WHERE id = $1",
+                )
+                .bind(user_id)
+                .execute(&mut *transaction)
+                .await
+                .context("DISABLE Passkey refresh after final passkey deletion")?;
+                let cutoff = Utc::now()
+                    .timestamp_millis()
+                    .saturating_add(crate::product_auth::USER_SESSION_TTL_MS);
+                sqlx::query(
+                    "UPDATE user_sessions SET expires_at = to_timestamp($2::double precision / 1000) \
+                     WHERE user_id = $1 AND expires_at > to_timestamp($2::double precision / 1000)",
+                )
+                .bind(user_id)
+                .bind(cutoff)
+                .execute(&mut *transaction)
+                .await
+                .context("CAP user sessions after final passkey deletion")?;
+            }
+        }
+        transaction
+            .commit()
+            .await
+            .context("COMMIT user passkey deletion")?;
         Ok(result.rows_affected())
     }
 
@@ -2960,7 +3102,7 @@ impl PostgresStorage {
         user_id: &str,
     ) -> Result<Option<crate::passkey::PasskeyPolicy>> {
         let row = sqlx::query_as::<_, ProductPasskeyPolicyRow>(
-            "SELECT passkey_reauth_enabled, last_step_up_at, \
+            "SELECT passkey_reauth_enabled, passkey_refresh_interval_ms, last_step_up_at, \
              (SELECT COUNT(*) FROM user_passkeys WHERE user_id = $1)::bigint AS passkey_count \
              FROM users WHERE id = $1",
         )
@@ -2971,16 +3113,54 @@ impl PostgresStorage {
         Ok(row.map(ProductPasskeyPolicyRow::into_policy))
     }
 
-    pub async fn set_user_passkey_reauth(&self, user_id: &str, enabled: bool) -> Result<()> {
+    pub async fn set_user_passkey_reauth(
+        &self,
+        user_id: &str,
+        enabled: bool,
+        reauth_after_ms: i64,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            crate::passkey::valid_reauth_interval(reauth_after_ms),
+            "Passkey refresh interval is unsupported"
+        );
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN Passkey refresh update")?;
         let result = sqlx::query(
-            "UPDATE users SET passkey_reauth_enabled = $2, updated_at = now() WHERE id = $1",
+            "UPDATE users SET passkey_reauth_enabled = $2, passkey_refresh_interval_ms = $3, \
+             updated_at = now() WHERE id = $1 AND (NOT $2 OR EXISTS ( \
+             SELECT 1 FROM user_passkeys WHERE user_id = $1))",
         )
         .bind(user_id)
         .bind(enabled)
-        .execute(&self.pool)
+        .bind(reauth_after_ms)
+        .execute(&mut *transaction)
         .await
         .with_context(|| format!("UPDATE passkey reauth {user_id}"))?;
-        anyhow::ensure!(result.rows_affected() == 1, "user {user_id} not found");
+        anyhow::ensure!(
+            result.rows_affected() == 1,
+            "user not found or no Passkey is registered"
+        );
+        if !enabled {
+            let cutoff = Utc::now()
+                .timestamp_millis()
+                .saturating_add(crate::product_auth::USER_SESSION_TTL_MS);
+            sqlx::query(
+                "UPDATE user_sessions SET expires_at = to_timestamp($2::double precision / 1000) \
+                 WHERE user_id = $1 AND expires_at > to_timestamp($2::double precision / 1000)",
+            )
+            .bind(user_id)
+            .bind(cutoff)
+            .execute(&mut *transaction)
+            .await
+            .context("CAP user sessions after disabling Passkey refresh")?;
+        }
+        transaction
+            .commit()
+            .await
+            .context("COMMIT Passkey refresh update")?;
         Ok(())
     }
 
@@ -6506,6 +6686,7 @@ mod storage_contract_tests {
             expires_at_ms: created_at_ms + 14 * 24 * 60 * 60 * 1_000,
             last_seen_at_ms: created_at_ms,
             user_agent: Some("CowboyContract/1.0".to_owned()),
+            passkey_verified_at_ms: Some(created_at_ms),
         };
         store.insert_user_session(&session).await?;
         let restored_session = store
@@ -6517,14 +6698,70 @@ mod storage_contract_tests {
             restored_session.user_agent.as_deref(),
             Some("CowboyContract/1.0")
         );
-        store.delete_user_session(&session.token_hash).await?;
+        assert_eq!(restored_session.passkey_verified_at_ms, Some(created_at_ms));
+        let rotated = ProductUserSession {
+            token_hash: "cc".repeat(32),
+            expires_at_ms: created_at_ms + 30 * 24 * 60 * 60 * 1_000,
+            passkey_verified_at_ms: Some(created_at_ms + 1_000),
+            ..session.clone()
+        };
+        assert!(
+            store
+                .rotate_user_session(&session.token_hash, &rotated)
+                .await
+                .expect_err("disabled Passkey refresh must reject a long session")
+                .to_string()
+                .contains("Passkey refresh is disabled")
+        );
+        assert!(
+            store
+                .user_session_by_token_hash(&session.token_hash)
+                .await?
+                .is_some()
+        );
+        store
+            .insert_user_passkey(&crate::passkey::UserPasskey {
+                id: "1234567890abcdef1234567890abcdef".to_owned(),
+                user_id: user.id.clone(),
+                credential_id: "contract-credential".to_owned(),
+                nickname: "Contract Passkey".to_owned(),
+                passkey_json: "{}".to_owned(),
+                created_at_ms,
+                last_used_at_ms: Some(created_at_ms),
+            })
+            .await?;
+        store
+            .set_user_passkey_reauth(
+                &user.id,
+                true,
+                crate::passkey::DEFAULT_PASSKEY_REAUTH_AFTER_MS,
+            )
+            .await?;
+        store
+            .rotate_user_session(&session.token_hash, &rotated)
+            .await?;
         assert!(
             store
                 .user_session_by_token_hash(&session.token_hash)
                 .await?
                 .is_none()
         );
-        store.insert_user_session(&session).await?;
+        let shortened_expiry = created_at_ms + 24 * 60 * 60 * 1_000;
+        assert_eq!(
+            store
+                .cap_user_session_expiry(&user.id, shortened_expiry)
+                .await?,
+            1
+        );
+        let shortened = store
+            .user_session_by_token_hash(&rotated.token_hash)
+            .await?
+            .context("rotated product user session was not restored")?;
+        assert_eq!(shortened.expires_at_ms, shortened_expiry);
+        assert_eq!(
+            shortened.passkey_verified_at_ms,
+            rotated.passkey_verified_at_ms
+        );
         assert_eq!(store.delete_user_sessions_for_user(&user.id).await?, 1);
 
         let token = ProductApiToken {
@@ -7152,7 +7389,7 @@ mod storage_contract_tests {
                 .fetch_all(&storage.pool)
                 .await
                 .unwrap();
-        assert_eq!(versions, (1_i64..=34).collect::<Vec<_>>());
+        assert_eq!(versions, (1_i64..=35).collect::<Vec<_>>());
         let machines_after: i64 = sqlx::query_scalar("SELECT count(*) FROM machines")
             .fetch_one(&storage.pool)
             .await

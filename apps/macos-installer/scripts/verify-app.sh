@@ -16,5 +16,7 @@ test "$(plutil -extract CFBundleIdentifier raw "$app_bundle/Contents/Info.plist"
 test "$(plutil -extract CFBundleDisplayName raw "$app_bundle/Contents/Info.plist")" = \
     "Cowboy Manager"
 test "$(plutil -extract LSUIElement raw "$app_bundle/Contents/Info.plist")" = "true"
+test "$(plutil -extract CFBundleURLTypes.0.CFBundleURLSchemes.0 raw "$app_bundle/Contents/Info.plist")" = \
+    "xyz.stormbird.cowboy.manager"
 codesign --verify --deep --strict --verbose=2 "$app_bundle"
 "$app_bundle/Contents/Resources/bin/cowboy" --version

@@ -1,18 +1,21 @@
 # Product login and self-host identity
 
 Cowboy is a **self-hosted, single-instance** control plane. One household or
-company runs one Service. There is no multi-tenant SaaS, no vendor IdP, and
-no Service-side E2EE. Whoever operates that instance is inside the trust
+company runs one Service. There is no multi-tenant SaaS and no Service-side
+E2EE. The instance may accept its local password or one explicitly pinned
+Cardea authorization provider; Cardea never creates Cowboy users or chooses
+their roles. Whoever operates the Cowboy instance remains inside the trust
 boundary: the Service already commands Machines to run agents and already
 stores plaintext transcripts.
 
-Accounts are required on `/` and product APIs. There is no anonymous product
-path. The published HTTPS origin in the URL bar is the Web trust source. The
-packaged app will store that origin on a Source page (not shipped in this
-chapter). `/admin` stays a separate identity plane and cookie. This stage
-is **single-user**: first-run on `/` proves the host setup code, then
-creates the only user (and the matching admin owner). Extra users, invites,
-and open registration fail closed.
+Accounts are required on `/` and product APIs when
+`COWBOY_PRODUCT_AUTH_ENABLED=true`. A deliberate `false` value restores the
+trusted-network synthetic local owner without weakening the separate admin
+plane. The published HTTPS origin in the URL bar is the Web trust source.
+`/admin` stays a separate identity plane and cookie. This stage is
+**single-user**: first-run on `/` proves the host setup code, then creates the
+only user (and the matching admin owner). Extra users, invites, and open
+registration fail closed.
 
 See [Admin](14-admin.md) for the setup-code protocol.
 
@@ -36,7 +39,7 @@ Never mix these in one cookie.
 | Principal | Proof | Scope |
 |---|---|---|
 | `AdminPrincipal` | `cowboy_admin` cookie (12h, `SameSite=Strict`) | `/api/admin/*` only |
-| `ProductPrincipal` | `cowboy_user` cookie or `Authorization: Bearer cow_…` | PWA REST, `/ws`, product APIs |
+| `ProductPrincipal` | one-day `cowboy_user` cookie, Passkey-extended cookie, or `Authorization: Bearer cow_…` | PWA REST, `/ws`, product APIs |
 | `MachinePrincipal` | enrollment token, then signed challenge | machine enroll / connect |
 
 A same handle on admin and product is coincidence, not a link.
@@ -47,16 +50,53 @@ loopback proxy only, a one-time host setup token, and rate-limited
 setup/bootstrap/login. See
 [Admin](14-admin.md).
 
-## Passkeys (optional step-up)
+## Cardea authorization (optional provider)
 
-Password login stays first. After sign-in a product user may register a
-discoverable WebAuthn Passkey (`POST /api/auth/passkeys/register/*`). The
-PWA default is to lock the **view after 15 minutes idle** (no pointer,
-key, or visible tab) when a Passkey exists. Settings can turn that lock
-off (`PUT /api/auth/passkeys/reauth`). No Passkey means the lock never
-engages. The cookie and `/ws` stay valid. Admin uses the same split with
-a **5-minute idle** window. Modeled on Cardea's password-then-Passkey
-split, not its login-blocking factor ticket.
+Local Cowboy password login always remains available. When
+`COWBOY_CARDEA_OIDC_CONFIG` points to a protected consumer profile,
+`GET /api/auth/status` advertises Cardea as an additional sign-in choice.
+Cowboy uses Authorization Code flow with two independent PKCE boundaries:
+
+- Browser login binds a five-minute transaction to a callback-only HttpOnly
+  cookie, random state, nonce, and S256 verifier. The callback is the fixed
+  `/api/auth/oidc/callback`; no request supplies a return destination.
+- Cowboy authenticates to Cardea's token endpoint with a short-lived Ed25519
+  client assertion. Redirects are disabled and response time, type, and size
+  are bounded.
+- The five-minute ID token is verified against the exact issuer, audience,
+  nonce, signing key id, pinned Ed25519 public key, and configured subject.
+  That subject maps only to the exact pre-existing Cowboy user. An optional
+  admin mapping issues the separate admin cookie only for an exact,
+  pre-existing admin account.
+- Cowboy Manager adds a second S256 challenge. After the browser callback,
+  Cowboy returns only a 60-second, single-use handoff code to the fixed
+  reverse-domain `xyz.stormbird.cowboy.manager://auth/callback` URL. The app
+  rejects HTTP redirects and never receives or stores a
+  Cardea token or client private key.
+
+The provider profile and client private JWK must both be regular, non-symlink
+files inaccessible to group and others. The profile pins all trust material;
+loading any malformed or over-broad file fails controller startup. Cardea
+proves identity only. Cowboy owns its cookie lifetime, revocation, role, and
+trusted-network auth-off switch.
+
+## Passkeys (optional session extension)
+
+Password and Cardea login issue a one-day product session. After sign-in a
+product user may register a discoverable WebAuthn Passkey
+(`POST /api/auth/passkeys/register/*`). Passkey refresh is off by default.
+When the user enables it, the browser immediately performs a user-verifying
+assertion and atomically rotates only that cookie into a maximum 30-day
+session. The user chooses a 1-, 7-, or 14-day assertion interval.
+
+Only Passkey-extended sessions are subject to that interval. Once due, the
+server rejects product REST and `/ws` with `428 Precondition Required`; the
+PWA overlay is presentation, not the security boundary. Passkey assertion,
+status, logout, and a new one-day password/Cardea login remain available for
+recovery. Disabling refresh or deleting the final Passkey transactionally
+turns the policy off and caps extended session expiry. No Passkey means the
+feature cannot be enabled. Admin keeps its separate five-minute idle-view
+lock and 12-hour cookie.
 
 Roles reuse the serde names `owner` / `operator` / `viewer`. Product roles
 live only in `cowboy.permissions` (`role_for`); there is no `users.role`
@@ -110,8 +150,13 @@ visible id is never dropped (`[A,B,C]` + `[C,A]` → `[C,B,A]`).
 | `POST` | `/api/auth/setup` | public; HTTPS | prove host setup code; 10-minute setup cookie |
 | `POST` | `/api/auth/register` | public; setup cookie | create the only user + `cowboy_user` |
 | `POST` | `/api/auth/login` | public | cookie + `me` |
+| `GET` | `/api/auth/oidc/start` | public | fixed Cardea Authorization Code + PKCE start |
+| `GET` | `/api/auth/oidc/callback` | public; transaction cookie | verify Cardea response and issue Cowboy session |
+| `POST` | `/api/auth/oidc/native/exchange` | same-origin; one-time handoff + PKCE | issue Manager product/admin cookies |
 | `POST` | `/api/auth/logout` | cookie optional | clear cookie |
 | `GET` | `/api/auth/me` | product | current principal |
+| `POST` | `/api/auth/passkeys/assert/*` | product session | verify and rotate a Passkey-extended session |
+| `PUT` | `/api/auth/passkeys/reauth` | fresh product session | opt in/out and set the bounded interval |
 | `POST` | `/api/auth/tokens` | product operator+ | create own `cow_…` token |
 | `GET` | `/api/auth/tokens` | product (own rows) | list prefixes |
 | `DELETE` | `/api/auth/tokens/{id}` | product (own row; else 404) | revoke |
@@ -132,6 +177,11 @@ Product passwords are argon2id PHC strings. Admin passwords stay iterated
 SHA-256 in this slice. Cookie `Secure` is set when the request is HTTPS or
 `X-Forwarded-Proto: https`.
 
+Password/Cardea cookies have a one-day absolute lifetime. A successful
+Passkey assertion rotates the current token rather than extending it in place,
+sets a 30-day absolute lifetime, and records the assertion time on that session
+only. One device can never refresh another device's cookie.
+
 `serve-acp` requires `--token` / `COWBOY_USER_TOKEN` and **exits** on
 401/403. There is no anonymous loopback product bypass.
 
@@ -145,7 +195,15 @@ Product login is guarded by the controller feature flag
 defaults to `false`: the controller exposes a synthetic local owner, keeps the
 PWA and product APIs available without a cookie, and leaves the separate admin
 authentication plane intact. Set it to `true` only when the complete login
-stack is ready and deploy Web plus controller together.
+stack is ready and deploy Web plus controller together. Keeping the flag is an
+intentional emergency rollback and trusted-intranet mode, not a UI-only switch.
+
+Cardea is independently optional. The provider file uses schema
+`dravengarden.cowboy.cardea-oidc/v1` and pins `issuer`, `client_id`,
+`client_key_id`, `client_private_key_file`, `id_token_key_id`,
+`id_token_public_key_jwk`, `subject`, `account`, optional `admin_account`, and
+the exact HTTPS `redirect_uri`. Private key material stays outside Git and the
+Nix store.
 
 `ProductAuthGate` wraps Desktop/Mobile in `web/src/main.tsx`.
 `web/src/auth/*` must not import `web/src/store.ts` (`subscribe()` opens
@@ -191,8 +249,9 @@ controller activate is a **planned outage** of `/` and Zed.
 6. This instance stays single-user. Extra-user APIs return 403.
 7. Prefer `COWBOY_PUBLIC_ORIGIN=https://<instance>` on the same activate.
 
-`/admin` remains the break-glass after first-run. Rollback is a previous
-controller generation, not a mode flag.
+`/admin` remains the break-glass after first-run. The auth-off flag is the
+bounded product-plane rollback; a previous controller generation remains the
+code rollback.
 
 Hygiene-only settings redaction (allow-list `Outbound::Settings`) is the
 only controller activate that is both safe and useful by itself.

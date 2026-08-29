@@ -160,11 +160,47 @@ public enum AccountPhase: String, Equatable, Sendable {
     case failed
 }
 
+public struct AccountSignInProvider: Equatable, Sendable, Identifiable {
+    public let id: String
+    public let displayName: String
+    public let startPath: String
+
+    public init(id: String, displayName: String, startPath: String) {
+        self.id = id
+        self.displayName = displayName
+        self.startPath = startPath
+    }
+}
+
+public struct PasskeySessionRefreshStatus: Equatable, Sendable {
+    public var registeredCount: Int
+    public var enabled: Bool
+    public var intervalMilliseconds: Int64
+
+    public init(registeredCount: Int, enabled: Bool, intervalMilliseconds: Int64) {
+        self.registeredCount = registeredCount
+        self.enabled = enabled
+        self.intervalMilliseconds = intervalMilliseconds
+    }
+}
+
+public struct OidcAuthorizationRequest: Equatable, Sendable {
+    public let launchURL: URL
+    public let codeVerifier: String
+
+    public init(launchURL: URL, codeVerifier: String) {
+        self.launchURL = launchURL
+        self.codeVerifier = codeVerifier
+    }
+}
+
 public struct AccountStatus: Equatable, Sendable {
     public var phase: AccountPhase
     public var account: String?
     public var role: String?
     public var administratorAccess: Bool
+    public var signInProviders: [AccountSignInProvider]
+    public var passkeySessionRefresh: PasskeySessionRefreshStatus?
     public var message: String
     public var errorMessage: String?
 
@@ -173,6 +209,8 @@ public struct AccountStatus: Equatable, Sendable {
         account: String? = nil,
         role: String? = nil,
         administratorAccess: Bool = false,
+        signInProviders: [AccountSignInProvider] = [],
+        passkeySessionRefresh: PasskeySessionRefreshStatus? = nil,
         message: String = "Account status has not been checked",
         errorMessage: String? = nil
     ) {
@@ -180,6 +218,8 @@ public struct AccountStatus: Equatable, Sendable {
         self.account = account
         self.role = role
         self.administratorAccess = administratorAccess
+        self.signInProviders = signInProviders
+        self.passkeySessionRefresh = passkeySessionRefresh
         self.message = message
         self.errorMessage = errorMessage
     }

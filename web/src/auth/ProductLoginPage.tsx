@@ -3,6 +3,7 @@ import {
   Alert,
   Box,
   Button,
+  Divider,
   IconButton,
   InputAdornment,
   Stack,
@@ -12,16 +13,24 @@ import {
 import { useEffect, useState } from "react";
 import { PasswordStrength } from "../admin/PasswordStrength";
 import { assessAdminPassword } from "../admin/passwordStrength";
-import { AuthApiError, authApi, type AuthStatus, type ProductMe } from "./authApi";
+import {
+  AuthApiError,
+  authApi,
+  type AuthStatus,
+  type ProductMe,
+  type ProductOidcProvider,
+} from "./authApi";
 
 export function ProductLoginPage({
   setupRequired,
   setupPending,
+  providers,
   onAuthed,
   onStatus,
 }: {
   setupRequired: boolean;
   setupPending: boolean;
+  providers: ProductOidcProvider[];
   onAuthed: (me: ProductMe) => void;
   onStatus?: (status: AuthStatus) => void;
 }): React.JSX.Element {
@@ -128,6 +137,20 @@ export function ProductLoginPage({
           </>
         )}
         {error && <Alert severity="error">{error}</Alert>}
+        {!setupRequired && providers.map((provider) => (
+          <Button
+            key={provider.id}
+            href={provider.start_url}
+            variant="outlined"
+            size="large"
+            fullWidth
+          >
+            Continue with {provider.display_name}
+          </Button>
+        ))}
+        {!setupRequired && providers.length > 0 && (
+          <Divider>or use your Cowboy password</Divider>
+        )}
         {needsCode ? (
           <TextField
             label="Setup code"

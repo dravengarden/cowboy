@@ -15,8 +15,14 @@ use webauthn_rs::prelude::{
 
 use crate::product_auth::new_user_id;
 
-/// Product PWA idle lock. Admin uses [`ADMIN_PASSKEY_REAUTH_AFTER_MS`].
-pub const PASSKEY_REAUTH_AFTER_MS: i64 = 15 * 60 * 1_000;
+/// Default interval between product Passkey refresh assertions.
+pub const DEFAULT_PASSKEY_REAUTH_AFTER_MS: i64 = 7 * 24 * 60 * 60 * 1_000;
+/// Closed set exposed by the Web and native settings surfaces.
+pub const PASSKEY_REAUTH_INTERVALS_MS: [i64; 3] = [
+    24 * 60 * 60 * 1_000,
+    DEFAULT_PASSKEY_REAUTH_AFTER_MS,
+    14 * 24 * 60 * 60 * 1_000,
+];
 /// Admin console idle lock. Shorter because the console is break-glass.
 pub const ADMIN_PASSKEY_REAUTH_AFTER_MS: i64 = 5 * 60 * 1_000;
 const CEREMONY_TTL: Duration = Duration::from_secs(300);
@@ -44,19 +50,22 @@ pub struct UserPasskey {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PasskeyPolicy {
     pub enabled: bool,
+    pub reauth_after_ms: i64,
     pub last_step_up_at_ms: Option<i64>,
     pub passkey_count: u32,
 }
 
 impl PasskeyPolicy {
-    /// Whether the client may engage an idle viewing lock.
-    ///
-    /// The lock itself is idle-based in the browser. The server does not
-    /// treat wall-clock time since login as a reason to lock.
+    /// Whether a client can require a fresh Passkey assertion.
     #[must_use]
-    pub fn idle_lock_eligible(&self) -> bool {
+    pub fn reauth_eligible(&self) -> bool {
         self.enabled && self.passkey_count > 0
     }
+}
+
+#[must_use]
+pub fn valid_reauth_interval(value: i64) -> bool {
+    PASSKEY_REAUTH_INTERVALS_MS.contains(&value)
 }
 
 pub fn normalize_nickname(nickname: &str) -> Result<String> {
@@ -279,6 +288,7 @@ pub struct AssertCompleteRequest {
 #[derive(Debug, Deserialize)]
 pub struct ReauthSettingRequest {
     pub enabled: bool,
+    pub reauth_after_ms: Option<i64>,
 }
 
 #[cfg(test)]
@@ -286,30 +296,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn idle_lock_is_eligible_only_with_a_passkey_and_the_setting_on() {
+    fn reauth_is_eligible_only_with_a_passkey_and_the_setting_on() {
         assert!(
             !PasskeyPolicy {
                 enabled: true,
+                reauth_after_ms: DEFAULT_PASSKEY_REAUTH_AFTER_MS,
                 last_step_up_at_ms: Some(1),
                 passkey_count: 0,
             }
-            .idle_lock_eligible()
+            .reauth_eligible()
         );
         assert!(
             PasskeyPolicy {
                 enabled: true,
+                reauth_after_ms: DEFAULT_PASSKEY_REAUTH_AFTER_MS,
                 last_step_up_at_ms: Some(1),
                 passkey_count: 1,
             }
-            .idle_lock_eligible()
+            .reauth_eligible()
         );
         assert!(
             !PasskeyPolicy {
                 enabled: false,
+                reauth_after_ms: DEFAULT_PASSKEY_REAUTH_AFTER_MS,
                 last_step_up_at_ms: Some(1),
                 passkey_count: 1,
             }
-            .idle_lock_eligible()
+            .reauth_eligible()
         );
+    }
+
+    #[test]
+    fn product_reauth_intervals_are_closed() {
+        assert!(valid_reauth_interval(24 * 60 * 60 * 1_000));
+        assert!(valid_reauth_interval(7 * 24 * 60 * 60 * 1_000));
+        assert!(valid_reauth_interval(14 * 24 * 60 * 60 * 1_000));
+        assert!(!valid_reauth_interval(60 * 60 * 1_000));
+        assert!(!valid_reauth_interval(2 * 24 * 60 * 60 * 1_000));
     }
 }

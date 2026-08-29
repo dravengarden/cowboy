@@ -182,6 +182,90 @@ struct AppModelTests {
     }
 
     @Test
+    func cardeaCallbackCompletesOneFederatedSignInWithoutSavingAPassword() async {
+        let persistence = MemoryPersistence()
+        persistence.settings.controllerURL = "https://cowboy.example"
+        let client = MockCowboyServiceClient()
+        client.signInStatus = AccountStatus(
+            phase: .signedIn,
+            account: "owner",
+            role: "owner",
+            administratorAccess: true,
+            message: "all account planes ready"
+        )
+        let credentialStore = MemoryServiceCredentialStore()
+        let model = makeModel(
+            backend: MockInstallerBackend(),
+            persistence: persistence,
+            serviceClient: client,
+            credentialStore: credentialStore
+        )
+        let provider = AccountSignInProvider(
+            id: "cardea",
+            displayName: "Cardea",
+            startPath: "/api/auth/oidc/start"
+        )
+
+        #expect(model.beginFederatedSignIn(provider: provider) != nil)
+        #expect(model.completeFederatedSignIn(
+            callbackURL: URL(string: "xyz.stormbird.cowboy.manager://auth/callback?code=\(String(repeating: "a", count: 64))")!
+        ))
+        await model.waitForAccountAction()
+
+        #expect(client.oidcStartCount == 1)
+        #expect(client.oidcCompleteCount == 1)
+        #expect(model.accountStatus.canManageDependencies)
+        #expect(credentialStore.credentials.isEmpty)
+    }
+
+    @Test
+    func passkeyRefreshSettingIsOptInAndServerBacked() async {
+        let persistence = MemoryPersistence()
+        persistence.settings.controllerURL = "https://cowboy.example"
+        let client = MockCowboyServiceClient()
+        client.status = AccountStatus(
+            phase: .signedIn,
+            account: "owner",
+            role: "owner",
+            administratorAccess: true,
+            passkeySessionRefresh: PasskeySessionRefreshStatus(
+                registeredCount: 1,
+                enabled: false,
+                intervalMilliseconds: 604_800_000
+            ),
+            message: "signed in"
+        )
+        client.signInStatus = AccountStatus(
+            phase: .signedIn,
+            account: "owner",
+            role: "owner",
+            administratorAccess: true,
+            passkeySessionRefresh: PasskeySessionRefreshStatus(
+                registeredCount: 1,
+                enabled: true,
+                intervalMilliseconds: 86_400_000
+            ),
+            message: "updated"
+        )
+        let model = makeModel(
+            backend: MockInstallerBackend(),
+            persistence: persistence,
+            serviceClient: client
+        )
+
+        await model.refreshAllAndWait()
+        #expect(model.setPasskeySessionRefresh(
+            enabled: true,
+            intervalMilliseconds: 86_400_000
+        ))
+        await model.waitForAccountAction()
+
+        #expect(client.passkeyRefreshCount == 1)
+        #expect(model.accountStatus.passkeySessionRefresh?.enabled == true)
+        #expect(model.accountStatus.passkeySessionRefresh?.intervalMilliseconds == 86_400_000)
+    }
+
+    @Test
     func automaticSignInRestoresAdministratorWithoutLosingLocalOwner() async {
         let persistence = MemoryPersistence()
         persistence.settings.controllerURL = "https://cowboy.example"

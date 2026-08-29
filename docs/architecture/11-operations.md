@@ -25,10 +25,11 @@ Large transformations use expand/contract:
 The legacy event-log compaction predates this rule and demonstrated the failure
 mode by blocking one startup for more than ten minutes. Do not repeat it.
 
-PostgreSQL and SQLite each have one byte-for-byte immutable consolidated
-baseline. Their SQL remains backend-specific; never copy one baseline to the
-other and assume it is portable. Every new storage change must update both
-histories and pass the shared storage contract against both backends.
+PostgreSQL and SQLite each start from one byte-for-byte immutable consolidated
+baseline. New changes append immutable backend-specific migrations; never copy
+SQL from one history to the other and assume it is portable. Every new storage
+change must update both histories and pass the shared storage contract against
+both backends.
 
 ## Backups
 

@@ -68,6 +68,109 @@ struct CowboyServiceClientTests {
     }
 
     @Test
+    func cardeaAuthorizationUsesFixedNativePKCEHandoff() async throws {
+        let transport = SequenceHTTPTransport(responses: [
+            jsonResponse(#"{"setup_required":false,"providers":[{"id":"cardea","display_name":"Cardea","start_url":"/api/auth/oidc/start"}]}"#),
+            jsonResponse(#"{"authenticated":false,"role":null}"#),
+        ])
+        let client = URLSessionCowboyServiceClient(transport: transport)
+        let status = try await client.accountStatus(controllerURL: "https://cowboy.example")
+        let provider = try #require(status.signInProviders.first)
+
+        let authorization = try client.oidcAuthorizationRequest(
+            controllerURL: "https://cowboy.example",
+            provider: provider
+        )
+        let components = try #require(URLComponents(
+            url: authorization.launchURL,
+            resolvingAgainstBaseURL: false
+        ))
+        let query = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).compactMap {
+            item in item.value.map { (item.name, $0) }
+        })
+
+        #expect(authorization.launchURL.scheme == "https")
+        #expect(authorization.launchURL.host == "cowboy.example")
+        #expect(authorization.launchURL.path == "/api/auth/oidc/start")
+        #expect(query["client"] == "macos-manager")
+        #expect(query["code_challenge"]?.count == 43)
+        #expect(authorization.codeVerifier.count == 43)
+        #expect(query["code_challenge"] != authorization.codeVerifier)
+    }
+
+    @Test
+    func nativeHandoffExchangeSignsInProductAndAdministratorSessions() async throws {
+        let transport = SequenceHTTPTransport(responses: [
+            jsonResponse(#"{"account":"owner","role":"owner"}"#),
+            jsonResponse(#"{"setup_required":false,"providers":[{"id":"cardea","display_name":"Cardea","start_url":"/api/auth/oidc/start"}],"me":{"account":"owner","role":"owner","passkey_count":0,"passkey_reauth_enabled":false,"passkey_reauth_after_ms":604800000}}"#),
+            jsonResponse(#"{"authenticated":true,"role":"owner"}"#),
+        ])
+        let client = URLSessionCowboyServiceClient(transport: transport)
+        let callback = URL(string: "xyz.stormbird.cowboy.manager://auth/callback?code=\(String(repeating: "a", count: 64))")!
+
+        let status = try await client.completeOidcAuthorization(
+            controllerURL: "https://cowboy.example",
+            callbackURL: callback,
+            codeVerifier: String(repeating: "b", count: 43)
+        )
+        let requests = await transport.requests
+        let exchangeBody = try #require(requests[0].httpBody)
+        let exchange = try #require(
+            JSONSerialization.jsonObject(with: exchangeBody) as? [String: Any]
+        )
+
+        #expect(status.phase == .signedIn)
+        #expect(status.canManageDependencies)
+        #expect(status.passkeySessionRefresh?.enabled == false)
+        #expect(requests.map(\.url?.path) == [
+            "/api/auth/oidc/native/exchange",
+            "/api/auth/status",
+            "/api/admin/auth",
+        ])
+        #expect(requests[0].httpMethod == "POST")
+        #expect(requests[0].value(forHTTPHeaderField: "Origin") == "https://cowboy.example")
+        #expect(exchange["code"] as? String == String(repeating: "a", count: 64))
+        #expect(exchange["code_verifier"] as? String == String(repeating: "b", count: 43))
+    }
+
+    @Test
+    func nativeHandoffRejectsForeignCallbackSchemesWithoutNetwork() async {
+        let transport = SequenceHTTPTransport(responses: [])
+        let client = URLSessionCowboyServiceClient(transport: transport)
+
+        await #expect(throws: CowboyServiceClientError.invalidAuthenticationCallback) {
+            _ = try await client.completeOidcAuthorization(
+                controllerURL: "https://cowboy.example",
+                callbackURL: URL(string: "https://attacker.example/?code=abc")!,
+                codeVerifier: String(repeating: "b", count: 43)
+            )
+        }
+        #expect(await transport.requests.isEmpty)
+    }
+
+    @Test
+    func passkeyRefreshSettingUsesBoundedServerPolicyEndpoint() async throws {
+        let transport = SequenceHTTPTransport(responses: [
+            jsonResponse(#"{"account":"owner","role":"owner","passkey_count":1,"passkey_reauth_enabled":true,"passkey_reauth_after_ms":86400000}"#),
+            jsonResponse(#"{"setup_required":false,"me":{"account":"owner","role":"owner","passkey_count":1,"passkey_reauth_enabled":true,"passkey_reauth_after_ms":86400000}}"#),
+            jsonResponse(#"{"authenticated":true,"role":"owner"}"#),
+        ])
+        let client = URLSessionCowboyServiceClient(transport: transport)
+
+        let status = try await client.setPasskeySessionRefresh(
+            controllerURL: "https://cowboy.example",
+            enabled: true,
+            intervalMilliseconds: 86_400_000
+        )
+        let requests = await transport.requests
+
+        #expect(status.passkeySessionRefresh?.enabled == true)
+        #expect(status.passkeySessionRefresh?.intervalMilliseconds == 86_400_000)
+        #expect(requests[0].httpMethod == "PUT")
+        #expect(requests[0].url?.path == "/api/auth/passkeys/reauth")
+    }
+
+    @Test
     func buildsOnePlanForSignedAndNpmUpdates() async throws {
         let transport = SequenceHTTPTransport(responses: [jsonResponse(#"""
         [

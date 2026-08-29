@@ -46,11 +46,15 @@ live fan-out latency to storage, so cowboy keeps that window observable and boun
 
 ## Schema
 
-Each backend has one immutable SQLx baseline: PostgreSQL uses
+Each backend starts from one immutable SQLx baseline: PostgreSQL uses
 `migrations/0034_baseline.sql`, while SQLite uses
 `migrations/sqlite/0008_baseline.sql`. Each baseline preserves the former
 incremental statements in their original order, so fresh-database defaults,
 data normalization, constraints, and indexes remain identical.
+
+Later schema changes append backend-specific immutable migrations after those
+baselines. They never rewrite the consolidated files, and both backend
+histories advance together through the shared storage contract.
 
 Before applying the consolidated baseline, Cowboy recognizes only the complete,
 checksum-verified predecessor histories (PostgreSQL 1–33 and SQLite 1–7).

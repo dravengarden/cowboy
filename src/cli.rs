@@ -205,6 +205,11 @@ pub struct ServeArgs {
     )]
     pub product_auth_enabled: bool,
 
+    /// Protected Cardea OIDC consumer profile. When present, the product login
+    /// page offers Cardea alongside the local Cowboy password.
+    #[arg(long, env = "COWBOY_CARDEA_OIDC_CONFIG")]
+    pub cardea_oidc_config: Option<PathBuf>,
+
     /// Unix socket of Cowboy's isolated Zed protocol adapter. When omitted,
     /// code review remains available but language intelligence is reported as
     /// unavailable.

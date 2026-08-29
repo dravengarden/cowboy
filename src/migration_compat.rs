@@ -199,11 +199,15 @@ pub(crate) fn needs_baseline_marker(
     {
         return Ok(false);
     }
+    let predecessor = applied
+        .iter()
+        .filter(|(version, _, _)| *version < baseline_version)
+        .collect::<Vec<_>>();
     ensure!(
-        applied.len() == legacy.len(),
+        predecessor.len() == legacy.len(),
         "database has a partial or unknown migration history; expected {} legacy versions, found {}",
         legacy.len(),
-        applied.len()
+        predecessor.len()
     );
     for (version, expected_checksum) in legacy {
         let (_, success, actual_checksum) = applied
@@ -246,6 +250,16 @@ mod tests {
         assert!(
             needs_baseline_marker(&complete, SQLITE_BASELINE_VERSION, LEGACY_SQLITE_MIGRATIONS)
                 .unwrap()
+        );
+        let mut upgraded_without_marker = complete.clone();
+        upgraded_without_marker.push((SQLITE_BASELINE_VERSION + 1, true, vec![2]));
+        assert!(
+            needs_baseline_marker(
+                &upgraded_without_marker,
+                SQLITE_BASELINE_VERSION,
+                LEGACY_SQLITE_MIGRATIONS
+            )
+            .unwrap()
         );
         assert!(
             !needs_baseline_marker(&[], SQLITE_BASELINE_VERSION, LEGACY_SQLITE_MIGRATIONS).unwrap()

@@ -117,6 +117,9 @@ final class MockCowboyServiceClient: CowboyServiceClient, @unchecked Sendable {
     )
     var error: Error?
     private(set) var signInCount = 0
+    private(set) var oidcStartCount = 0
+    private(set) var oidcCompleteCount = 0
+    private(set) var passkeyRefreshCount = 0
     private(set) var signOutCount = 0
     private(set) var checkCount = 0
     private(set) var applied: [DependencyUpdateItem] = []
@@ -128,6 +131,38 @@ final class MockCowboyServiceClient: CowboyServiceClient, @unchecked Sendable {
 
     func signIn(controllerURL _: String, account _: String, password _: String) async throws -> AccountStatus {
         signInCount += 1
+        if let error { throw error }
+        return signInStatus ?? status
+    }
+
+    func oidcAuthorizationRequest(
+        controllerURL _: String,
+        provider _: AccountSignInProvider
+    ) throws -> OidcAuthorizationRequest {
+        oidcStartCount += 1
+        if let error { throw error }
+        return OidcAuthorizationRequest(
+            launchURL: URL(string: "https://cowboy.example/api/auth/oidc/start")!,
+            codeVerifier: String(repeating: "a", count: 43)
+        )
+    }
+
+    func completeOidcAuthorization(
+        controllerURL _: String,
+        callbackURL _: URL,
+        codeVerifier _: String
+    ) async throws -> AccountStatus {
+        oidcCompleteCount += 1
+        if let error { throw error }
+        return signInStatus ?? status
+    }
+
+    func setPasskeySessionRefresh(
+        controllerURL _: String,
+        enabled _: Bool,
+        intervalMilliseconds _: Int64
+    ) async throws -> AccountStatus {
+        passkeyRefreshCount += 1
         if let error { throw error }
         return signInStatus ?? status
     }

@@ -45,6 +45,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         false
     }
 
+    func application(_: NSApplication, open urls: [URL]) {
+        guard let callback = urls.first(where: {
+            $0.scheme == "xyz.stormbird.cowboy.manager"
+                && $0.host == "auth"
+                && $0.path == "/callback"
+        }) else {
+            return
+        }
+        _ = runtime.model.completeFederatedSignIn(callbackURL: callback)
+        showManager(section: .account)
+    }
+
     func windowWillClose(_: Notification) {
         runtime.model.windowDidClose()
     }

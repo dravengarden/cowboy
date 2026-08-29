@@ -1,4 +1,16 @@
-import { Alert, Button, FormControlLabel, Stack, Switch, TextField, Typography } from "@mui/material";
+import {
+  Alert,
+  Button,
+  FormControl,
+  FormControlLabel,
+  InputLabel,
+  MenuItem,
+  Select,
+  Stack,
+  Switch,
+  TextField,
+  Typography,
+} from "@mui/material";
 import { useCallback, useEffect, useState } from "react";
 import {
   AuthApiError,
@@ -6,8 +18,14 @@ import {
   type ProductMe,
   type ProductPasskey,
 } from "./authApi";
-import { createPasskey, passkeysSupported } from "./passkeyBrowser";
+import { assertPasskey, createPasskey, passkeysSupported } from "./passkeyBrowser";
 import { useProductAuth } from "./ProductAuthGate";
+
+const REFRESH_INTERVALS = [
+  { label: "Every day", value: 24 * 60 * 60 * 1_000 },
+  { label: "Every 7 days", value: 7 * 24 * 60 * 60 * 1_000 },
+  { label: "Every 14 days", value: 14 * 24 * 60 * 60 * 1_000 },
+] as const;
 
 export function ProductPasskeysPanel({
   onMe,
@@ -17,13 +35,17 @@ export function ProductPasskeysPanel({
   const { me, updateMe } = useProductAuth();
   const [passkeys, setPasskeys] = useState<ProductPasskey[]>([]);
   const [nickname, setNickname] = useState("This device");
-  const [enabled, setEnabled] = useState(me.passkey_reauth_enabled !== false);
+  const [enabled, setEnabled] = useState(me.passkey_reauth_enabled === true);
+  const [reauthAfterMs, setReauthAfterMs] = useState(
+    me.passkey_reauth_after_ms ?? REFRESH_INTERVALS[1].value,
+  );
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async (): Promise<void> => {
     const body = await authApi.listPasskeys();
     setPasskeys(body.passkeys);
+    setReauthAfterMs(body.reauth_after_ms);
   }, []);
 
   useEffect(() => {
@@ -57,7 +79,13 @@ export function ProductPasskeysPanel({
     setError(null);
     void authApi
       .deletePasskey(id)
-      .then(load)
+      .then(async () => {
+        await load();
+        const updated = await authApi.me();
+        setEnabled(updated.passkey_reauth_enabled === true);
+        updateMe(updated);
+        onMe?.(updated);
+      })
       .catch((err: unknown) => {
         setError(err instanceof AuthApiError ? err.message : "Could not revoke passkey");
       })
@@ -67,10 +95,38 @@ export function ProductPasskeysPanel({
   const toggle = (next: boolean): void => {
     setBusy(true);
     setError(null);
-    void authApi
-      .setPasskeyReauth(next)
+    void (async () => {
+      let updated = await authApi.setPasskeyReauth(next, reauthAfterMs);
+      if (next) {
+        try {
+          const ceremony = await authApi.startPasskeyAssert();
+          const credential = await assertPasskey(ceremony);
+          updated = await authApi.completePasskeyAssert(ceremony.challenge_id, credential);
+        } catch (error) {
+          await authApi.setPasskeyReauth(false, reauthAfterMs).catch(() => undefined);
+          throw error;
+        }
+      }
+      return updated;
+    })()
       .then((updated) => {
-        setEnabled(updated.passkey_reauth_enabled !== false);
+        setEnabled(updated.passkey_reauth_enabled === true);
+        updateMe(updated);
+        onMe?.(updated);
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof AuthApiError ? err.message : "Could not save setting");
+      })
+      .finally(() => setBusy(false));
+  };
+
+  const changeInterval = (next: number): void => {
+    setBusy(true);
+    setError(null);
+    void authApi
+      .setPasskeyReauth(enabled, next)
+      .then((updated) => {
+        setReauthAfterMs(updated.passkey_reauth_after_ms ?? next);
         updateMe(updated);
         onMe?.(updated);
       })
@@ -85,20 +141,35 @@ export function ProductPasskeysPanel({
   return (
     <Stack spacing={1.5}>
       <Typography variant="body2" color="text.secondary">
-        After password login, add a Passkey. The web UI locks after 15 minutes
-        idle and asks for that Passkey. Turn the lock off here.
+        Password and Cardea sign-ins last one day. Passkey refresh is optional
+        and off by default. A successful Passkey rotates this browser&apos;s
+        session and extends it for up to 30 days. Turning it on verifies your
+        Passkey immediately.
       </Typography>
       {error && <Alert severity="error">{error}</Alert>}
       <FormControlLabel
         control={
           <Switch
             checked={enabled}
-            disabled={busy}
+            disabled={busy || passkeys.length === 0}
             onChange={(event) => toggle(event.target.checked)}
           />
         }
-        label="Require Passkey after 15 minutes idle"
+        label="Keep this session signed in with Passkey refresh"
       />
+      <FormControl size="small" disabled={busy || passkeys.length === 0}>
+        <InputLabel id="passkey-refresh-interval-label">Refresh frequency</InputLabel>
+        <Select
+          labelId="passkey-refresh-interval-label"
+          label="Refresh frequency"
+          value={reauthAfterMs}
+          onChange={(event) => changeInterval(Number(event.target.value))}
+        >
+          {REFRESH_INTERVALS.map((option) => (
+            <MenuItem key={option.value} value={option.value}>{option.label}</MenuItem>
+          ))}
+        </Select>
+      </FormControl>
       {passkeysSupported() ? (
         <Stack direction="row" spacing={1} alignItems="center">
           <TextField
@@ -121,7 +192,7 @@ export function ProductPasskeysPanel({
       )}
       {passkeys.length === 0 ? (
         <Typography variant="body2" color="text.secondary">
-          No passkeys yet. The viewing lock stays off until you add one.
+          No passkeys yet. Add one, then turn on session refresh when you want it.
         </Typography>
       ) : (
         passkeys.map((passkey) => (

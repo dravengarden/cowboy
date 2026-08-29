@@ -76,20 +76,30 @@ pipe; the one-time enrollment code is never placed in process arguments,
 settings, activity history, or a disk file.
 
 The Account surface uses the configured HTTPS origin's existing product and
-admin endpoints. Auth-off Services present the account password and passkey as
-optional follow-up configuration rather than an installation or ordinary-use
-gate; the password form stays collapsed until requested. One password sign-in
-creates both Service sessions. When the user keeps automatic sign-in selected,
-the credential is stored only in a Service-origin-scoped macOS Keychain item
-and is retried after an app restart or session expiry; it never enters settings,
-activity history, logs, browser storage, or process arguments. Sign-out deletes
-the Keychain item before ending the Service sessions. First-time host setup
-stays in the browser so the host setup code never enters this app. Auth-off
-Services remain usable as the synthetic local owner even when administrator
-sign-in fails, while dependency mutations still require the owner/admin
-session. Dependency checks read the Controller's Machine inventory; mutations
-call the existing signed reconcile or bounded npm update commands and never
-install directly from the macOS app.
+admin endpoints. Auth-required Services offer both the local Cowboy password
+and every exact provider advertised by `/api/auth/status`. Cardea opens in the
+default browser with S256 PKCE, returns only a 60-second single-use code through
+the fixed reverse-domain `xyz.stormbird.cowboy.manager://auth/callback` scheme,
+and creates both Cowboy
+sessions through a second same-origin exchange. Cardea credentials and tokens
+never enter the app. Auth-off Services present sign-in as an optional follow-up
+rather than an installation or ordinary-use gate; the password form stays
+collapsed until requested.
+
+One password sign-in creates both Service sessions. When the user keeps
+automatic sign-in selected, the credential is stored only in a
+Service-origin-scoped macOS Keychain item and is retried after an app restart or
+the one-day session expires; it never enters settings, activity history, logs,
+browser storage, or process arguments. Sign-out deletes the Keychain item
+before ending the Service sessions. First-time host setup stays in the browser
+so the host setup code never enters this app. Settings may opt into and select
+the interval for browser Passkey refresh, but WebAuthn verification and the
+30-day browser-cookie rotation happen in Cowboy itself; the Manager keeps its
+separate one-day session. Auth-off Services remain usable as the synthetic
+local owner even when administrator sign-in fails, while dependency mutations
+still require the owner/admin session. Dependency checks read the Controller's
+Machine inventory; mutations call the existing signed reconcile or bounded npm
+update commands and never install directly from the macOS app.
 
 The manager uses `SMAppService.mainApp` for its own optional Launch at Login
 setting. This starts only the lightweight menu app. The separate "Run Cowboy
