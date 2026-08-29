@@ -7945,9 +7945,7 @@ fn product_machine_is_visible(
     machine: &crate::store::MachineRecord,
     product_auth_enabled: bool,
 ) -> bool {
-    !machine.revoked
-        && (!product_auth_enabled
-            || machine.connection_mode == "outbound_wss" && machine.fingerprint.is_some())
+    !machine.revoked && (!product_auth_enabled || machine.fingerprint.is_some())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -15716,7 +15714,7 @@ mod product_auth_api_tests {
     }
 
     #[test]
-    fn product_machine_list_excludes_local_and_unenrolled_records() {
+    fn product_machine_list_includes_enrolled_local_and_excludes_unenrolled_records() {
         let machine = |connection_mode: &str, fingerprint: Option<&str>, revoked: bool| {
             crate::store::MachineRecord {
                 id: "machine".to_owned(),
@@ -15733,6 +15731,10 @@ mod product_auth_api_tests {
         };
         assert!(product_machine_is_visible(
             &machine("outbound_wss", Some("SHA256:key"), false),
+            true,
+        ));
+        assert!(product_machine_is_visible(
+            &machine("local", Some("SHA256:key"), false),
             true,
         ));
         assert!(!product_machine_is_visible(
