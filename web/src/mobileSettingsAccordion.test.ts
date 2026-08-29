@@ -39,6 +39,12 @@ Deno.test("mobile Settings uses an index and one lightweight detail route", () =
     ),
   );
   assert(appSource.includes("<MobileSheetActionGroup"));
+  assert(appSource.includes("data-mobile-settings-navigation"));
+  assert(appSource.includes("KEYBOARD_INSET_CHANGED_EVENT"));
+  assert(appSource.includes("settingsFocusRevealDelta("));
+  assert(
+    appSource.includes('viewport?.addEventListener("resize", scheduleReveal)'),
+  );
   assert(appSource.includes("<ArrowBackIosNew"));
   assert(appSource.includes("changeMobileSettingsSection(null)"));
   assertEquals(appSource.includes("<Accordion"), false);

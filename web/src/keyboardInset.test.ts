@@ -172,6 +172,7 @@ Deno.test("keyboard inset measures the painted page instead of innerHeight", asy
   assertEquals(source.includes('"--vv-height"'), true);
   assertEquals(source.includes('"--vv-offset"'), true);
   assertEquals(source.includes('vv.addEventListener("scroll", applyScroll)'), true);
+  assertEquals(source.includes("new CustomEvent(KEYBOARD_INSET_CHANGED_EVENT"), true);
   assertEquals(source.includes("fight the form scroller every frame"), true);
 });
 

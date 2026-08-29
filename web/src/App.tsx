@@ -86,6 +86,7 @@ import {
 import { ReviewSettingsContent } from "./mobile/review/ReviewSettings";
 import { NotificationSettingsContent } from "./NotificationSettings";
 import { claimKeyboard } from "./keyboardClaim";
+import { KEYBOARD_INSET_CHANGED_EVENT } from "./keyboardInset";
 import { machineVersionPresentation } from "./machineVersions";
 import { DelayedNetworkProgress, NetworkIconButton } from "./NetworkActionFeedback";
 import { setObservabilityContext } from "./observability";
@@ -234,6 +235,7 @@ import {
     closestScrollableSettingsSurface,
     destinationScrollTop,
     nextSavedSettingsScroll,
+    settingsFocusRevealDelta,
 } from "./settingsDrillInScroll";
 import {
     CONTROL_CENTER_PANEL_EXIT_MS,
@@ -4837,6 +4839,27 @@ function isSettingsEditableTarget(target: EventTarget | null): target is HTMLEle
     );
 }
 
+function isSettingsTextEntryTarget(target: EventTarget | null): target is HTMLElement {
+    if (target instanceof HTMLTextAreaElement) return true;
+    if (target instanceof HTMLInputElement) {
+        return ![
+            "button",
+            "checkbox",
+            "color",
+            "file",
+            "hidden",
+            "radio",
+            "range",
+            "reset",
+            "submit",
+        ].includes(target.type);
+    }
+    return target instanceof HTMLElement && (
+        target.matches("[contenteditable='true']") ||
+        target.closest("[contenteditable='true']") !== null
+    );
+}
+
 const SettingsController = memo(forwardRef<
     SettingsControllerHandle,
     {
@@ -5024,6 +5047,83 @@ function SettingsShell({
         if (!open || !tabPanelVisible || renderedTab !== tab) return;
         applyDestinationScroll(renderedTab);
     }, [applyDestinationScroll, open, renderedTab, tab, tabPanelVisible]);
+    useEffect(() => {
+        if (!open || desktop) return undefined;
+        const doc = globalThis.document;
+        const viewport = globalThis.visualViewport;
+        let raf = 0;
+        let timers: number[] = [];
+        const clearTimers = (): void => {
+            for (const timer of timers) globalThis.clearTimeout(timer);
+            timers = [];
+        };
+        const revealFocusedSetting = (): void => {
+            raf = 0;
+            const panel = settingsListRef.current;
+            const active = doc.activeElement;
+            if (
+                panel === null || !isSettingsTextEntryTarget(active) ||
+                !panel.contains(active)
+            ) return;
+            const surface = closestScrollableSettingsSurface(panel);
+            const sheet = surface.closest<HTMLElement>(
+                "[data-detent-sheet='true']",
+            );
+            const navigation = sheet?.querySelector<HTMLElement>(
+                "[data-mobile-settings-navigation]",
+            );
+            if (navigation === undefined || navigation === null) return;
+            const field = active.closest<HTMLElement>(".MuiFormControl-root") ?? active;
+            const header = panel.querySelector<HTMLElement>(
+                "[data-mobile-settings-detail-header]",
+            );
+            const surfaceBounds = surface.getBoundingClientRect();
+            const delta = settingsFocusRevealDelta(
+                field.getBoundingClientRect(),
+                {
+                    top: Math.max(
+                        surfaceBounds.top,
+                        header?.getBoundingClientRect().bottom ?? surfaceBounds.top,
+                    ),
+                    bottom: Math.min(
+                        surfaceBounds.bottom,
+                        navigation.getBoundingClientRect().top,
+                    ),
+                },
+            );
+            if (Math.abs(delta) < 0.5) return;
+            surface.scrollBy({ top: delta, behavior: "auto" });
+        };
+        const queueReveal = (): void => {
+            if (raf !== 0) globalThis.cancelAnimationFrame(raf);
+            raf = globalThis.requestAnimationFrame(revealFocusedSetting);
+        };
+        const scheduleReveal = (): void => {
+            queueReveal();
+            clearTimers();
+            timers = [120, 300, 550].map((delay) =>
+                globalThis.setTimeout(revealFocusedSetting, delay)
+            );
+        };
+        const onFocusIn = (event: FocusEvent): void => {
+            const panel = settingsListRef.current;
+            if (
+                panel !== null && panel.contains(event.target as Node) &&
+                isSettingsTextEntryTarget(event.target)
+            ) scheduleReveal();
+        };
+        doc.addEventListener("focusin", onFocusIn);
+        viewport?.addEventListener("resize", scheduleReveal);
+        globalThis.addEventListener(KEYBOARD_INSET_CHANGED_EVENT, scheduleReveal);
+        if (isSettingsTextEntryTarget(doc.activeElement)) scheduleReveal();
+        return () => {
+            doc.removeEventListener("focusin", onFocusIn);
+            viewport?.removeEventListener("resize", scheduleReveal);
+            globalThis.removeEventListener(KEYBOARD_INSET_CHANGED_EVENT, scheduleReveal);
+            clearTimers();
+            if (raf !== 0) globalThis.cancelAnimationFrame(raf);
+        };
+    }, [desktop, mobileSettingsSection, open]);
     const composerDebug = useComposerDebugSetting();
     const reading = useReadingSettings();
     // Font picker is collapsed by default (the 7 preview cards otherwise fill the
@@ -5269,18 +5369,20 @@ function SettingsShell({
             mobileDismiss={desktop ? "footer" : "none"}
             actions={!desktop
                 ? (
-                    <MobileSheetActionGroup
-                        actions={[{
-                            key: mobileSettingsSection === null ? "close" : "back",
-                            label: mobileSettingsSection === null ? "Close" : "Back",
-                            onPress: mobileSettingsSection === null
-                                ? onClose
-                                : (): void => changeMobileSettingsSection(null),
-                            icon: mobileSettingsSection === null
-                                ? <CloseIcon aria-hidden fontSize="small" />
-                                : <ArrowBackIosNew aria-hidden fontSize="small" />,
-                        }]}
-                    />
+                    <Box data-mobile-settings-navigation sx={{ width: "100%" }}>
+                        <MobileSheetActionGroup
+                            actions={[{
+                                key: mobileSettingsSection === null ? "close" : "back",
+                                label: mobileSettingsSection === null ? "Close" : "Back",
+                                onPress: mobileSettingsSection === null
+                                    ? onClose
+                                    : (): void => changeMobileSettingsSection(null),
+                                icon: mobileSettingsSection === null
+                                    ? <CloseIcon aria-hidden fontSize="small" />
+                                    : <ArrowBackIosNew aria-hidden fontSize="small" />,
+                            }]}
+                        />
+                    </Box>
                 )
                 : undefined}
         >

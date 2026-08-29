@@ -11,6 +11,8 @@ import {
 import { isMobileEditorFocusTransferPending } from "./composer/mobileComposerFocus";
 import { isNativeShell } from "./nativeShell";
 
+export const KEYBOARD_INSET_CHANGED_EVENT = "cowboy:keyboard-inset-changed";
+
 // Publish the on-screen keyboard's overlap of the layout viewport as the
 // `--kb-inset` CSS var (px). Browser/PWA surfaces use it to clear the keyboard
 // and the iOS-native accessory / IME-candidate bar. The Tauri shell skips it
@@ -107,6 +109,11 @@ export function useKeyboardInset(): void {
       if (overlap !== lastInset) {
         lastInset = overlap;
         root.style.setProperty("--kb-inset", `${String(overlap)}px`);
+        globalThis.dispatchEvent(
+          new CustomEvent(KEYBOARD_INSET_CHANGED_EVENT, {
+            detail: { inset: overlap },
+          }),
+        );
       }
     };
     const flush = (): void => {

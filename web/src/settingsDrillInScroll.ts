@@ -29,3 +29,22 @@ export function closestScrollableSettingsSurface(panel: HTMLElement): HTMLElemen
   }
   return panel;
 }
+
+interface VerticalBounds {
+  readonly top: number;
+  readonly bottom: number;
+}
+
+/** Scroll distance needed to keep a focused setting between sticky chrome. */
+export function settingsFocusRevealDelta(
+  target: VerticalBounds,
+  visible: VerticalBounds,
+  gap = 12,
+): number {
+  const visibleTop = visible.top + gap;
+  const visibleBottom = visible.bottom - gap;
+  if (visibleBottom <= visibleTop) return 0;
+  if (target.bottom > visibleBottom) return target.bottom - visibleBottom;
+  if (target.top < visibleTop) return target.top - visibleTop;
+  return 0;
+}
