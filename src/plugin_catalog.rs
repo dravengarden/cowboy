@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, ensure};
 use base64::Engine as _;
 use cowboy_plugin_sdk::{
-    PLUGIN_RELEASE_SIGNATURE_NAMESPACE, PluginKind, PluginManifest, PluginPackage, PluginRelease,
+    AuthenticationProviderContract, PLUGIN_RELEASE_SIGNATURE_NAMESPACE, PluginKind, PluginManifest,
+    PluginPackage, PluginRelease,
 };
 use cowboy_provider_sdk::PlatformTarget;
 use parking_lot::RwLock;
@@ -49,6 +50,7 @@ pub(crate) enum PluginReleaseState {
 struct CatalogArtifact {
     entry: PluginCatalogEntry,
     desired: DesiredPlugin,
+    package: PluginPackage,
 }
 
 pub(crate) struct PluginCatalog {
@@ -176,8 +178,30 @@ impl PluginCatalog {
         self.external
             .read()
             .values()
+            .filter(|artifact| artifact.entry.plugin_kind != PluginKind::AuthenticationProvider)
             .map(|artifact| artifact.desired.clone())
             .collect()
+    }
+
+    pub(crate) fn resolve_authentication_provider(
+        &self,
+        plugin_id: &str,
+        version: &str,
+        digest: &str,
+    ) -> Result<AuthenticationProviderContract> {
+        let external = self.external.read();
+        let artifact = external
+            .get(&(plugin_id.to_owned(), version.to_owned(), digest.to_owned()))
+            .context("authentication Plugin release is not in the Catalog")?;
+        ensure!(
+            artifact.entry.plugin_kind == PluginKind::AuthenticationProvider,
+            "configured Plugin is not an Authentication Provider"
+        );
+        artifact
+            .package
+            .authentication_provider()
+            .cloned()
+            .context("authentication Plugin payload is unavailable")
     }
 
     pub(crate) fn published_artifact_path(&self, digest: &str, name: &str) -> Option<PathBuf> {
@@ -270,6 +294,7 @@ fn catalog_artifact(
             package_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
             publisher_public_key: crate::machine_auth::validate_public_key(public_key)?,
         },
+        package,
     })
 }
 
@@ -294,5 +319,119 @@ mod tests {
             entry.plugin_id == "zed" && entry.plugin_kind == PluginKind::CodeIntelligence
         }));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn signed_authentication_plugin_is_resolved_but_never_sent_to_machine() {
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-auth-plugin-catalog-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let catalog_root = root.join("catalog");
+        let trust_root = catalog_root.join("trusted-publishers");
+        fs::create_dir_all(&trust_root).unwrap();
+        let identity =
+            crate::machine_auth::MachineIdentity::load_or_create(&root.join("identity")).unwrap();
+        fs::write(
+            trust_root.join("example-publisher.pub"),
+            identity.public_key(),
+        )
+        .unwrap();
+
+        let manifest = cowboy_plugin_sdk::PluginManifest {
+            schema_version: 1,
+            id: "google".to_owned(),
+            version: "1.0.0".to_owned(),
+            component_release: "2.0.3".to_owned(),
+            publisher: "example-publisher".to_owned(),
+            kind: PluginKind::AuthenticationProvider,
+            entrypoint: "authentication.json".to_owned(),
+            components: vec![cowboy_plugin_sdk::ComponentDependency {
+                id: "cowboy.plugin-contract".to_owned(),
+                version: "1.2.0".to_owned(),
+            }],
+        };
+        let contract = cowboy_plugin_sdk::AuthenticationProviderContract {
+            schema_version: 1,
+            id: "google".to_owned(),
+            version: "1.0.0".to_owned(),
+            display_name: "Google".to_owned(),
+            button_label: "Continue with Google".to_owned(),
+            protocol: cowboy_plugin_sdk::AuthenticationProtocol::OpenIdConnect(
+                cowboy_plugin_sdk::OpenIdConnectContract {
+                    issuer: "https://accounts.google.com".to_owned(),
+                    authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth"
+                        .to_owned(),
+                    token_endpoint: "https://oauth2.googleapis.com/token".to_owned(),
+                    jwks_uri: "https://www.googleapis.com/oauth2/v3/certs".to_owned(),
+                    scopes: vec!["openid".to_owned()],
+                    client_authentication_methods: vec![
+                        cowboy_plugin_sdk::OidcClientAuthenticationMethod::ClientSecretPost,
+                    ],
+                    id_token_signing_algorithms: vec![
+                        cowboy_plugin_sdk::OidcIdTokenAlgorithm::RS256,
+                    ],
+                    authorization_parameters: BTreeMap::new(),
+                },
+            ),
+        };
+        let package = cowboy_plugin_sdk::PluginPackage::new(
+            manifest,
+            "2.0.3".to_owned(),
+            cowboy_plugin_sdk::PluginPayload::AuthenticationProvider(contract.clone()),
+        )
+        .unwrap();
+        let bytes = package.canonical_bytes().unwrap();
+        let mut release = cowboy_plugin_sdk::PluginRelease {
+            release_schema: cowboy_plugin_sdk::RELEASE_SCHEMA_VERSION,
+            plugin_id: "google".to_owned(),
+            plugin_version: "1.0.0".to_owned(),
+            plugin_kind: PluginKind::AuthenticationProvider,
+            package_digest: cowboy_plugin_sdk::PluginPackage::artifact_digest(&bytes),
+            artifact_digest: String::new(),
+            artifact_url: "https://plugins.example/google.cowboy-plugin".to_owned(),
+            publisher: "example-publisher".to_owned(),
+            contract_fingerprint: package.contract_fingerprint.clone(),
+            component_release: "2.0.3".to_owned(),
+            signature: String::new(),
+            supported_platforms: Vec::new(),
+            runtime_artifacts: Vec::new(),
+        };
+        release.artifact_digest = release.computed_artifact_digest().unwrap();
+        release.signature = identity
+            .sign_namespaced(PLUGIN_RELEASE_SIGNATURE_NAMESPACE, &release.proof())
+            .unwrap();
+        release.validate_bytes(&bytes).unwrap();
+        fs::write(catalog_root.join("google.cowboy-plugin"), &bytes).unwrap();
+        fs::write(
+            catalog_root.join("google.release.json"),
+            serde_json::to_vec(&release).unwrap(),
+        )
+        .unwrap();
+
+        let catalog = PluginCatalog::open(&root, Some(catalog_root)).unwrap();
+        assert!(catalog.released_plugins().is_empty());
+        assert_eq!(
+            catalog
+                .resolve_authentication_provider("google", "1.0.0", &release.artifact_digest,)
+                .unwrap(),
+            contract
+        );
+        assert!(
+            catalog
+                .resolve_authentication_provider(
+                    "google",
+                    "1.0.0",
+                    &format!("sha256:{}", "0".repeat(64)),
+                )
+                .is_err()
+        );
+        drop(catalog);
+        drop(identity);
+        fs::remove_dir_all(root).unwrap();
     }
 }

@@ -18,6 +18,8 @@ mod agent_sink;
 #[cfg(feature = "full")]
 mod artifacts;
 #[cfg(feature = "full")]
+mod auth_plugins;
+#[cfg(feature = "full")]
 mod cgroup;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod claude_shell;

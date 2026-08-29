@@ -1,11 +1,12 @@
 {
   "name": "@cowboy/plugin-contract",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "type": "module",
   "exports": {
-    "./schema.json": "./schema.json"
+    "./schema.json": "./schema.json",
+    "./authentication-provider.schema.json": "./authentication-provider.schema.json"
   },
-  "files": ["schema.json"],
+  "files": ["schema.json", "authentication-provider.schema.json"],
   "publishConfig": {
     "access": "public"
   }

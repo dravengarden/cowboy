@@ -1,0 +1,19 @@
+name = "cowboy-email-login-example"
+main = "worker.ts"
+compatibility_date = "2026-08-29"
+
+[[durable_objects.bindings]]
+name = "LOGIN_TRANSACTIONS"
+class_name = "LoginTransaction"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["LoginTransaction"]
+
+[[send_email]]
+name = "EMAIL"
+
+[vars]
+PUBLIC_ORIGIN = "https://email-login.example.com"
+# Install mailbox mappings, client registrations, secrets, and signing keys
+# through protected bindings. They must not be plaintext vars.

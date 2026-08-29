@@ -68,14 +68,15 @@ struct CowboyServiceClientTests {
     }
 
     @Test
-    func cardeaAuthorizationUsesFixedNativePKCEHandoff() async throws {
+    func providerAuthorizationUsesProviderBoundNativePKCEHandoff() async throws {
         let transport = SequenceHTTPTransport(responses: [
-            jsonResponse(#"{"setup_required":false,"providers":[{"id":"cardea","display_name":"Cardea","start_url":"/api/auth/oidc/start"}]}"#),
+            jsonResponse(#"{"setup_required":false,"password_enabled":false,"providers":[{"id":"cardea","display_name":"Cardea","start_url":"/api/auth/oidc/start"}]}"#),
             jsonResponse(#"{"authenticated":false,"role":null}"#),
         ])
         let client = URLSessionCowboyServiceClient(transport: transport)
         let status = try await client.accountStatus(controllerURL: "https://cowboy.example")
         let provider = try #require(status.signInProviders.first)
+        #expect(!status.passwordEnabled)
 
         let authorization = try client.oidcAuthorizationRequest(
             controllerURL: "https://cowboy.example",
@@ -91,11 +92,44 @@ struct CowboyServiceClientTests {
 
         #expect(authorization.launchURL.scheme == "https")
         #expect(authorization.launchURL.host == "cowboy.example")
+        #expect(authorization.providerID == "cardea")
         #expect(authorization.launchURL.path == "/api/auth/oidc/start")
+        #expect(authorization.usesLegacyRoutes)
         #expect(query["client"] == "macos-manager")
         #expect(query["code_challenge"]?.count == 43)
         #expect(authorization.codeVerifier.count == 43)
         #expect(query["code_challenge"] != authorization.codeVerifier)
+    }
+
+    @Test
+    func scopedProviderAuthorizationCannotEscapeItsProviderPath() throws {
+        let client = URLSessionCowboyServiceClient(
+            transport: SequenceHTTPTransport(responses: [])
+        )
+        let google = AccountSignInProvider(
+            id: "google",
+            displayName: "Google",
+            startPath: "/api/auth/providers/google/start"
+        )
+        let authorization = try client.oidcAuthorizationRequest(
+            controllerURL: "https://cowboy.example",
+            provider: google
+        )
+        #expect(authorization.providerID == "google")
+        #expect(authorization.launchURL.path == "/api/auth/providers/google/start")
+        #expect(!authorization.usesLegacyRoutes)
+
+        let forged = AccountSignInProvider(
+            id: "google",
+            displayName: "Google",
+            startPath: "/api/auth/providers/cardea/start"
+        )
+        #expect(throws: CowboyServiceClientError.invalidResponse) {
+            try client.oidcAuthorizationRequest(
+                controllerURL: "https://cowboy.example",
+                provider: forged
+            )
+        }
     }
 
     @Test
@@ -111,6 +145,8 @@ struct CowboyServiceClientTests {
         let status = try await client.completeOidcAuthorization(
             controllerURL: "https://cowboy.example",
             callbackURL: callback,
+            providerID: "cardea",
+            usesLegacyRoutes: true,
             codeVerifier: String(repeating: "b", count: 43)
         )
         let requests = await transport.requests
@@ -142,6 +178,8 @@ struct CowboyServiceClientTests {
             _ = try await client.completeOidcAuthorization(
                 controllerURL: "https://cowboy.example",
                 callbackURL: URL(string: "https://attacker.example/?code=abc")!,
+                providerID: "cardea",
+                usesLegacyRoutes: true,
                 codeVerifier: String(repeating: "b", count: 43)
             )
         }

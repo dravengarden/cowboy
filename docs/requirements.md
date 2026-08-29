@@ -40,9 +40,10 @@ of the Cowboy Service's authoritative Provider authentication state.
 Every first-party integration has a generic `plugin.json` manifest with an
 exact ID, SemVer version, kind, entry point, and exact Cowboy component
 dependencies. Agent integrations use the `agent_provider` kind; their Provider
-contract is a typed payload, not a second release or installation unit. Zed
-uses the `code_intelligence` kind and retains its isolated process and license
-boundary.
+contract is a typed payload, not a second release or installation unit.
+Product-login integrations use the data-only `authentication_provider` kind
+and execute only through Controller-owned protocol drivers. Zed uses the
+`code_intelligence` kind and retains its isolated process and license boundary.
 
 Reusable implementation belongs to an owned component, not a plugin copy or an
 external source-tree link. Component releases bind exact versions, source

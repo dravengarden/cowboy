@@ -1,0 +1,16 @@
+{
+  "plugin_id": "google",
+  "plugin_version": "1.0.0",
+  "artifact_digest": "sha256:<signed-release-artifact-digest>",
+  "oidc": {
+    "client_id": "<google-web-client-id>",
+    "redirect_uri": "https://cowboy.example/api/auth/providers/google/callback",
+    "subject": "<exact-google-sub>",
+    "account": "owner",
+    "admin_account": "owner",
+    "client_authentication": {
+      "method": "client_secret_post",
+      "client_secret_file": "/run/credentials/cowboy/google-client-secret"
+    }
+  }
+}

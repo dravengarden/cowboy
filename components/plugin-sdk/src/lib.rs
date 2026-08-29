@@ -5,7 +5,7 @@
 
 #![warn(clippy::pedantic)]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context as _, Result, bail, ensure};
 use cowboy_provider_sdk::{
@@ -17,6 +17,7 @@ use cowboy_provider_sdk::{
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
+use url::Url;
 
 pub const PACKAGE_SCHEMA_VERSION: u16 = 1;
 pub const RELEASE_SCHEMA_VERSION: u16 = 1;
@@ -39,6 +40,7 @@ pub struct PluginManifest {
 #[serde(rename_all = "snake_case")]
 pub enum PluginKind {
     AgentProvider,
+    AuthenticationProvider,
     CodeIntelligence,
 }
 
@@ -63,7 +65,56 @@ pub struct PluginPackage {
 #[serde(tag = "kind", content = "contract", rename_all = "snake_case")]
 pub enum PluginPayload {
     AgentProvider(Box<ProviderPackage>),
+    AuthenticationProvider(AuthenticationProviderContract),
     CodeIntelligence(CodeIntelligenceContract),
+}
+
+/// Declarative identity-provider package consumed by Cowboy's built-in
+/// protocol drivers. Authentication plugins never execute code in the
+/// Controller and never contain client secrets or account mappings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthenticationProviderContract {
+    pub schema_version: u16,
+    pub id: String,
+    pub version: String,
+    pub display_name: String,
+    pub button_label: String,
+    pub protocol: AuthenticationProtocol,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "configuration", rename_all = "snake_case")]
+pub enum AuthenticationProtocol {
+    OpenIdConnect(OpenIdConnectContract),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OpenIdConnectContract {
+    pub issuer: String,
+    pub authorization_endpoint: String,
+    pub token_endpoint: String,
+    pub jwks_uri: String,
+    pub scopes: Vec<String>,
+    pub client_authentication_methods: Vec<OidcClientAuthenticationMethod>,
+    pub id_token_signing_algorithms: Vec<OidcIdTokenAlgorithm>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub authorization_parameters: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OidcClientAuthenticationMethod {
+    ClientSecretPost,
+    PrivateKeyJwtEd25519,
+    AppleClientSecretEs256,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum OidcIdTokenAlgorithm {
+    EdDSA,
+    RS256,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -264,7 +315,15 @@ impl PluginPackage {
     pub fn agent_provider(&self) -> Option<&ProviderPackage> {
         match &self.payload {
             PluginPayload::AgentProvider(provider) => Some(provider),
-            PluginPayload::CodeIntelligence(_) => None,
+            PluginPayload::AuthenticationProvider(_) | PluginPayload::CodeIntelligence(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub fn authentication_provider(&self) -> Option<&AuthenticationProviderContract> {
+        match &self.payload {
+            PluginPayload::AuthenticationProvider(provider) => Some(provider),
+            PluginPayload::AgentProvider(_) | PluginPayload::CodeIntelligence(_) => None,
         }
     }
 
@@ -280,6 +339,7 @@ impl PluginPackage {
                     architecture: platform.architecture.clone(),
                 })
                 .collect(),
+            PluginPayload::AuthenticationProvider(_) => BTreeSet::new(),
             PluginPayload::CodeIntelligence(contract) => {
                 contract.supported_platforms.iter().cloned().collect()
             }
@@ -499,6 +559,9 @@ fn validate_payload(manifest: &PluginManifest, payload: &PluginPayload) -> Resul
                 "agent payload publisher mismatch"
             );
         }
+        (PluginKind::AuthenticationProvider, PluginPayload::AuthenticationProvider(contract)) => {
+            validate_authentication_provider(manifest, contract)?;
+        }
         (PluginKind::CodeIntelligence, PluginPayload::CodeIntelligence(contract)) => {
             ensure!(
                 contract.schema_version == 1,
@@ -524,6 +587,141 @@ fn validate_payload(manifest: &PluginManifest, payload: &PluginPayload) -> Resul
         _ => bail!("plugin kind and payload kind mismatch"),
     }
     Ok(())
+}
+
+fn validate_authentication_provider(
+    manifest: &PluginManifest,
+    contract: &AuthenticationProviderContract,
+) -> Result<()> {
+    ensure!(
+        contract.schema_version == 1,
+        "unsupported authentication contract"
+    );
+    ensure!(
+        contract.id == manifest.id,
+        "authentication payload id mismatch"
+    );
+    ensure!(
+        contract.version == manifest.version,
+        "authentication payload version mismatch"
+    );
+    ensure!(
+        valid_label(&contract.display_name, 64) && valid_label(&contract.button_label, 80),
+        "authentication labels are invalid"
+    );
+    match &contract.protocol {
+        AuthenticationProtocol::OpenIdConnect(oidc) => validate_oidc_contract(oidc),
+    }
+}
+
+fn validate_oidc_contract(contract: &OpenIdConnectContract) -> Result<()> {
+    const RESERVED: [&str; 9] = [
+        "response_type",
+        "client_id",
+        "redirect_uri",
+        "scope",
+        "state",
+        "nonce",
+        "code_challenge",
+        "code_challenge_method",
+        "request_uri",
+    ];
+
+    validate_oidc_issuer(&contract.issuer)?;
+    validate_https_url(
+        &contract.authorization_endpoint,
+        "OIDC authorization endpoint",
+    )?;
+    validate_https_url(&contract.token_endpoint, "OIDC token endpoint")?;
+    validate_https_url(&contract.jwks_uri, "OIDC JWKS endpoint")?;
+    ensure!(
+        contract
+            .scopes
+            .first()
+            .is_some_and(|scope| scope == "openid"),
+        "OIDC scopes must start with openid"
+    );
+    ensure!(
+        !contract.scopes.is_empty()
+            && contract.scopes.len() <= 32
+            && contract.scopes.iter().all(|scope| valid_scope(scope))
+            && unique_values(&contract.scopes),
+        "OIDC scopes must be non-empty and unique"
+    );
+    ensure!(
+        !contract.client_authentication_methods.is_empty()
+            && unique_values(&contract.client_authentication_methods),
+        "OIDC client authentication methods must be non-empty and unique"
+    );
+    ensure!(
+        !contract.id_token_signing_algorithms.is_empty()
+            && unique_values(&contract.id_token_signing_algorithms),
+        "OIDC ID-token algorithms must be non-empty and unique"
+    );
+    ensure!(
+        contract.authorization_parameters.len() <= 32,
+        "too many OIDC authorization parameters"
+    );
+    for (name, value) in &contract.authorization_parameters {
+        ensure!(
+            valid_parameter_name(name) && !RESERVED.contains(&name.as_str()),
+            "OIDC authorization parameter is reserved or invalid"
+        );
+        ensure!(
+            valid_label(value, 256),
+            "OIDC authorization parameter is invalid"
+        );
+    }
+    Ok(())
+}
+
+fn validate_https_url(value: &str, label: &str) -> Result<()> {
+    ensure!(value.len() <= 2_048, "{label} is too long");
+    let url = Url::parse(value).with_context(|| format!("invalid {label}"))?;
+    ensure!(
+        url.scheme() == "https"
+            && url.host_str().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.fragment().is_none(),
+        "{label} must use HTTPS without credentials or a fragment"
+    );
+    Ok(())
+}
+
+fn validate_oidc_issuer(value: &str) -> Result<()> {
+    validate_https_url(value, "OIDC issuer")?;
+    let issuer = Url::parse(value).context("invalid OIDC issuer")?;
+    ensure!(
+        issuer.query().is_none(),
+        "OIDC issuer must not contain a query"
+    );
+    Ok(())
+}
+
+fn valid_label(value: &str, maximum: usize) -> bool {
+    !value.is_empty()
+        && value.chars().count() <= maximum
+        && value.trim() == value
+        && !value.chars().any(char::is_control)
+}
+
+fn valid_parameter_name(value: &str) -> bool {
+    (1..=64).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
+fn valid_scope(value: &str) -> bool {
+    (1..=128).contains(&value.len())
+        && value.bytes().all(|byte| {
+            byte == 0x21 || (0x23..=0x5b).contains(&byte) || (0x5d..=0x7e).contains(&byte)
+        })
+}
+
+fn unique_values<T: Ord>(values: &[T]) -> bool {
+    values.iter().collect::<BTreeSet<_>>().len() == values.len()
 }
 
 fn fingerprint_json(value: &serde_json::Value) -> Result<String> {
@@ -592,5 +790,76 @@ mod tests {
         manifest.components.pop();
         manifest.version = "1.x".to_owned();
         assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn authentication_plugin_is_data_only_and_rejects_reserved_parameters() {
+        let manifest = PluginManifest {
+            schema_version: 1,
+            id: "google".to_owned(),
+            version: "1.0.0".to_owned(),
+            component_release: "2.0.3".to_owned(),
+            publisher: "example".to_owned(),
+            kind: PluginKind::AuthenticationProvider,
+            entrypoint: "authentication.json".to_owned(),
+            components: vec![ComponentDependency {
+                id: "cowboy.plugin-contract".to_owned(),
+                version: "1.2.0".to_owned(),
+            }],
+        };
+        let mut contract = AuthenticationProviderContract {
+            schema_version: 1,
+            id: "google".to_owned(),
+            version: "1.0.0".to_owned(),
+            display_name: "Google".to_owned(),
+            button_label: "Continue with Google".to_owned(),
+            protocol: AuthenticationProtocol::OpenIdConnect(OpenIdConnectContract {
+                issuer: "https://accounts.google.com".to_owned(),
+                authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth".to_owned(),
+                token_endpoint: "https://oauth2.googleapis.com/token".to_owned(),
+                jwks_uri: "https://www.googleapis.com/oauth2/v3/certs".to_owned(),
+                scopes: vec!["openid".to_owned(), "email".to_owned()],
+                client_authentication_methods: vec![
+                    OidcClientAuthenticationMethod::ClientSecretPost,
+                ],
+                id_token_signing_algorithms: vec![OidcIdTokenAlgorithm::RS256],
+                authorization_parameters: BTreeMap::new(),
+            }),
+        };
+        let package = PluginPackage::new(
+            manifest.clone(),
+            manifest.component_release.clone(),
+            PluginPayload::AuthenticationProvider(contract.clone()),
+        )
+        .unwrap();
+        assert!(package.expected_platforms().is_empty());
+
+        let mut too_many_scopes = contract.clone();
+        let AuthenticationProtocol::OpenIdConnect(oidc) = &mut too_many_scopes.protocol;
+        oidc.scopes = std::iter::once("openid".to_owned())
+            .chain((0..32).map(|index| format!("scope-{index}")))
+            .collect();
+        assert!(
+            PluginPackage::new(
+                manifest.clone(),
+                manifest.component_release.clone(),
+                PluginPayload::AuthenticationProvider(too_many_scopes),
+            )
+            .is_err()
+        );
+
+        let AuthenticationProtocol::OpenIdConnect(oidc) = &mut contract.protocol;
+        oidc.authorization_parameters.insert(
+            "redirect_uri".to_owned(),
+            "https://attacker.example".to_owned(),
+        );
+        assert!(
+            PluginPackage::new(
+                manifest.clone(),
+                manifest.component_release,
+                PluginPayload::AuthenticationProvider(contract),
+            )
+            .is_err()
+        );
     }
 }

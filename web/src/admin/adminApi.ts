@@ -96,7 +96,10 @@ export interface ProductUser {
 export interface PluginRelease {
   plugin_id: string;
   plugin_version: string;
-  plugin_kind: "agent_provider" | "code_intelligence";
+  plugin_kind:
+    | "agent_provider"
+    | "authentication_provider"
+    | "code_intelligence";
   package_digest: string;
   artifact_digest: string | null;
   release_state: string;
@@ -174,7 +177,11 @@ export const adminApi = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ enabled, mode }),
     }),
-  issueToken: (name: string, usesAllowed: number | null, ttlSeconds: number | null) =>
+  issueToken: (
+    name: string,
+    usesAllowed: number | null,
+    ttlSeconds: number | null,
+  ) =>
     readJson<{ token: string; record: RegistrationToken }>(
       "/api/admin/registration/tokens",
       {
@@ -226,7 +233,10 @@ export const adminApi = {
         body: JSON.stringify({ nickname }),
       },
     ),
-  completePasskeyRegister: (challengeId: string, credential: Record<string, unknown>) =>
+  completePasskeyRegister: (
+    challengeId: string,
+    credential: Record<string, unknown>,
+  ) =>
     readJson<AdminPasskey>("/api/admin/passkeys/register/complete", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -237,7 +247,10 @@ export const adminApi = {
       "/api/admin/passkeys/assert/options",
       { method: "POST" },
     ),
-  completePasskeyAssert: (challengeId: string, credential: Record<string, unknown>) =>
+  completePasskeyAssert: (
+    challengeId: string,
+    credential: Record<string, unknown>,
+  ) =>
     readJson<AdminAuthStatus>("/api/admin/passkeys/assert/complete", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -250,5 +263,7 @@ export const adminApi = {
       body: JSON.stringify({ enabled }),
     }),
   deletePasskey: (id: string) =>
-    readJson<{ ok: boolean }>(`/api/admin/passkeys/${id}`, { method: "DELETE" }),
+    readJson<{ ok: boolean }>(`/api/admin/passkeys/${id}`, {
+      method: "DELETE",
+    }),
 };

@@ -21,7 +21,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::extract::DefaultBodyLimit;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{ConnectInfo, Json, Path, Query, State};
+use axum::extract::{ConnectInfo, Form, Json, Path, Query, State};
 use axum::http::{HeaderMap, Method, StatusCode, Uri, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -192,7 +192,7 @@ struct AppState {
     web_push: Arc<WebPushService>,
     public_origins: Arc<Vec<String>>,
     product_auth_enabled: bool,
-    oidc_provider: Option<Arc<crate::oidc::OidcProvider>>,
+    product_authentication: Arc<crate::auth_plugins::ProductAuthentication>,
     oidc_transactions: Arc<crate::oidc::OidcTransactions>,
     oidc_native_handoffs: Arc<crate::oidc::NativeHandoffs>,
 }
@@ -242,7 +242,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         Vec::new()
     };
     init_tracing();
-    let oidc_provider = load_oidc_provider(
+    let legacy_oidc_provider = load_oidc_provider(
         args.product_auth_enabled,
         args.cardea_oidc_config.as_deref(),
     )?;
@@ -273,6 +273,21 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         &args.data_dir,
         args.plugin_catalog_dir.clone(),
     )?);
+    let product_authentication = Arc::new(if args.product_auth_enabled {
+        crate::auth_plugins::ProductAuthentication::load(
+            args.auth_config.as_deref(),
+            &plugin_catalog,
+            legacy_oidc_provider,
+        )
+        .context("loading product authentication methods")?
+    } else {
+        if args.auth_config.is_some() {
+            tracing::warn!(
+                "authentication Plugins are configured but product authentication is disabled"
+            );
+        }
+        crate::auth_plugins::ProductAuthentication::disabled()
+    });
     let provider_catalog = Arc::new(crate::provider_catalog::ProviderCatalog::open(
         &args.data_dir,
         Arc::clone(&plugin_catalog),
@@ -744,7 +759,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             web_push,
             public_origins: Arc::new(crate::product_auth::load_public_origins()),
             product_auth_enabled: args.product_auth_enabled,
-            oidc_provider,
+            product_authentication,
             oidc_transactions: Arc::new(crate::oidc::OidcTransactions::default()),
             oidc_native_handoffs: Arc::new(crate::oidc::NativeHandoffs::default()),
         },
@@ -1720,7 +1735,7 @@ struct ProductAuthState {
     setup: Arc<crate::admin::AdminSetupState>,
     setup_lock: Arc<tokio::sync::Mutex<()>>,
     product_auth_enabled: bool,
-    oidc_provider: Option<Arc<crate::oidc::OidcProvider>>,
+    product_authentication: Arc<crate::auth_plugins::ProductAuthentication>,
     oidc_transactions: Arc<crate::oidc::OidcTransactions>,
     oidc_native_handoffs: Arc<crate::oidc::NativeHandoffs>,
 }
@@ -1746,6 +1761,8 @@ struct OidcCallbackQuery {
     state: Option<String>,
     error: Option<String>,
     error_description: Option<String>,
+    #[serde(default)]
+    user: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1804,9 +1821,24 @@ fn product_auth_router(state: ProductAuthState) -> Router {
         .route("/api/auth/register", post(api_auth_register))
         .route("/api/auth/login", post(api_auth_login))
         .route("/api/auth/oidc/start", get(api_auth_oidc_start))
-        .route("/api/auth/oidc/callback", get(api_auth_oidc_callback))
+        .route(
+            "/api/auth/oidc/callback",
+            get(api_auth_oidc_callback).post(api_auth_oidc_callback_form),
+        )
         .route(
             "/api/auth/oidc/native/exchange",
+            post(api_auth_oidc_native_exchange),
+        )
+        .route(
+            "/api/auth/providers/{provider_id}/start",
+            get(api_auth_oidc_start),
+        )
+        .route(
+            "/api/auth/providers/{provider_id}/callback",
+            get(api_auth_oidc_callback).post(api_auth_oidc_callback_form),
+        )
+        .route(
+            "/api/auth/providers/{provider_id}/native/exchange",
             post(api_auth_oidc_native_exchange),
         )
         .route("/api/auth/logout", post(api_auth_logout))
@@ -3021,6 +3053,9 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
         || path == "/api/auth/oidc/start"
         || path == "/api/auth/oidc/callback"
         || path == "/api/auth/oidc/native/exchange"
+        || authentication_provider_id(path, "start").is_some()
+        || authentication_provider_id(path, "callback").is_some()
+        || authentication_provider_id(path, "native/exchange").is_some()
         || path == "/api/admin/auth"
         || path == "/api/admin/auth/setup"
         || path == "/api/admin/auth/bootstrap"
@@ -3130,7 +3165,11 @@ async fn product_session_and_user_from_store_cookie(
 async fn ensure_product_session_passkey_fresh(
     store: &Store,
     session: &crate::store::ProductUserSession,
+    refresh_enabled: bool,
 ) -> Result<(), Response> {
+    if !refresh_enabled {
+        return Ok(());
+    }
     let policy = store
         .user_passkey_policy(&session.user_id)
         .await
@@ -3310,7 +3349,15 @@ async fn enforce_product_api(
         return StatusCode::UNAUTHORIZED.into_response();
     };
     if let (Some(store), Some(session)) = (state.store.as_ref(), cookie_session.as_ref())
-        && let Err(response) = ensure_product_session_passkey_fresh(store, session).await
+        && let Err(response) = ensure_product_session_passkey_fresh(
+            store,
+            session,
+            state
+                .product_authentication
+                .passkeys
+                .session_refresh_enabled,
+        )
+        .await
     {
         return response;
     }
@@ -3458,12 +3505,13 @@ async fn api_auth_status(
         },
         "setup_required": setup_required,
         "setup_pending": setup_pending,
-        "providers": state
-            .oidc_provider
-            .as_deref()
-            .map(crate::oidc::OidcProvider::public)
-            .into_iter()
-            .collect::<Vec<_>>(),
+        "password_enabled": state.product_authentication.password_enabled,
+        "passkeys": {
+            "enabled": state.product_authentication.passkeys.enabled,
+            "prompt_after_login": state.product_authentication.passkeys.prompt_after_login,
+            "session_refresh_enabled": state.product_authentication.passkeys.session_refresh_enabled,
+        },
+        "providers": state.product_authentication.public_providers(),
     });
     if let Some((session, user)) = product_session_and_user_from_cookie(&state, &headers).await {
         body["me"] = serde_json::to_value(
@@ -3642,6 +3690,9 @@ async fn api_auth_login(
     headers: HeaderMap,
     Json(request): Json<LoginRequest>,
 ) -> Response {
+    if !state.product_authentication.password_enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     let peer = peer_addr(peer);
     if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
         return rejected;
@@ -3694,13 +3745,19 @@ async fn api_auth_login(
 async fn api_auth_oidc_start(
     State(state): State<ProductAuthState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    uri: Uri,
     headers: HeaderMap,
     Query(query): Query<OidcStartQuery>,
 ) -> Response {
     if !state.product_auth_enabled {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let Some(provider) = state.oidc_provider.as_deref() else {
+    let provider_id = authentication_provider_id(uri.path(), "start").unwrap_or("cardea");
+    let Some(provider) = state
+        .product_authentication
+        .provider(provider_id)
+        .map(AsRef::as_ref)
+    else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let Some(store) = durable_store(&state.store) else {
@@ -3734,7 +3791,16 @@ async fn api_auth_oidc_start(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     let source_ip = crate::product_auth::client_ip(&headers, peer);
-    apply_rate_limit(&state, "oidc:start", &source_ip.to_string()).await;
+    let rate_key = format!("oidc:{provider_id}:start");
+    let secure = crate::product_auth::request_is_https(&headers);
+    if provider.requires_cross_site_post_cookie() && !secure {
+        return (
+            StatusCode::BAD_REQUEST,
+            "form_post authentication requires HTTPS",
+        )
+            .into_response();
+    }
+    apply_rate_limit(&state, &rate_key, &source_ip.to_string()).await;
     let started = match state.oidc_transactions.begin(provider, source_ip, target) {
         Ok(started) => started,
         Err(error) => {
@@ -3742,9 +3808,7 @@ async fn api_auth_oidc_start(
             return (StatusCode::TOO_MANY_REQUESTS, "try again later").into_response();
         }
     };
-    state
-        .rate_limits
-        .reset("oidc:start", &source_ip.to_string());
+    state.rate_limits.reset(&rate_key, &source_ip.to_string());
     (
         StatusCode::SEE_OTHER,
         [
@@ -3753,7 +3817,8 @@ async fn api_auth_oidc_start(
                 header::SET_COOKIE,
                 crate::oidc::transaction_cookie(
                     &started.cookie_token,
-                    crate::product_auth::request_is_https(&headers),
+                    secure,
+                    provider.requires_cross_site_post_cookie(),
                 ),
             ),
         ],
@@ -3763,14 +3828,38 @@ async fn api_auth_oidc_start(
 
 async fn api_auth_oidc_callback(
     State(state): State<ProductAuthState>,
+    uri: Uri,
     headers: HeaderMap,
     Query(query): Query<OidcCallbackQuery>,
+) -> Response {
+    api_auth_oidc_callback_inner(state, uri, headers, query).await
+}
+
+async fn api_auth_oidc_callback_form(
+    State(state): State<ProductAuthState>,
+    uri: Uri,
+    headers: HeaderMap,
+    Form(query): Form<OidcCallbackQuery>,
+) -> Response {
+    api_auth_oidc_callback_inner(state, uri, headers, query).await
+}
+
+async fn api_auth_oidc_callback_inner(
+    state: ProductAuthState,
+    uri: Uri,
+    headers: HeaderMap,
+    query: OidcCallbackQuery,
 ) -> Response {
     let secure = crate::product_auth::request_is_https(&headers);
     if !state.product_auth_enabled {
         return oidc_callback_error(StatusCode::NOT_FOUND, secure);
     }
-    let Some(provider) = state.oidc_provider.as_deref() else {
+    let provider_id = authentication_provider_id(uri.path(), "callback").unwrap_or("cardea");
+    let Some(provider) = state
+        .product_authentication
+        .provider(provider_id)
+        .map(AsRef::as_ref)
+    else {
         return oidc_callback_error(StatusCode::NOT_FOUND, secure);
     };
     let Some(cookie) = crate::product_auth::cookie_value(&headers, crate::oidc::TRANSACTION_COOKIE)
@@ -3780,7 +3869,10 @@ async fn api_auth_oidc_callback(
     let Some(returned_state) = query.state.as_deref() else {
         return oidc_callback_error(StatusCode::UNAUTHORIZED, secure);
     };
-    let transaction = match state.oidc_transactions.consume(&cookie, returned_state) {
+    let transaction = match state
+        .oidc_transactions
+        .consume(provider_id, &cookie, returned_state)
+    {
         Ok(transaction) => transaction,
         Err(error) => {
             tracing::info!(%error, "oidc_callback_rejected");
@@ -3788,6 +3880,9 @@ async fn api_auth_oidc_callback(
         }
     };
     let target = transaction.target().clone();
+    if query.user.as_ref().is_some_and(|user| user.len() > 8_192) {
+        return oidc_callback_target_error(StatusCode::BAD_REQUEST, secure, &target);
+    }
     if query.error.is_some() || query.error_description.is_some() {
         tracing::info!("oidc_authorization_denied");
         return oidc_callback_target_error(StatusCode::UNAUTHORIZED, secure, &target);
@@ -3823,7 +3918,10 @@ async fn api_auth_oidc_callback(
         "product_oidc_login"
     );
     if let crate::oidc::AuthorizationTarget::MacOs { code_challenge } = target {
-        let handoff = match state.oidc_native_handoffs.issue(&user.id, &code_challenge) {
+        let handoff = match state
+            .oidc_native_handoffs
+            .issue(provider_id, &user.id, &code_challenge)
+        {
             Ok(handoff) => handoff,
             Err(error) => {
                 tracing::error!(%error, "oidc_native_handoff_issue");
@@ -3912,13 +4010,19 @@ fn oidc_admin_session_cookie(
 async fn api_auth_oidc_native_exchange(
     State(state): State<ProductAuthState>,
     peer: ConnectInfo<SocketAddr>,
+    uri: Uri,
     headers: HeaderMap,
     Json(request): Json<OidcNativeExchangeRequest>,
 ) -> Response {
     if !state.product_auth_enabled {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let Some(provider) = state.oidc_provider.as_deref() else {
+    let provider_id = authentication_provider_id(uri.path(), "native/exchange").unwrap_or("cardea");
+    let Some(provider) = state
+        .product_authentication
+        .provider(provider_id)
+        .map(AsRef::as_ref)
+    else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let peer = peer_addr(peer);
@@ -3935,17 +4039,18 @@ async fn api_auth_oidc_native_exchange(
     };
     let source_ip = crate::product_auth::client_ip(&headers, peer).to_string();
     apply_rate_limit(&state, "oidc:native", &source_ip).await;
-    let user_id = match state
-        .oidc_native_handoffs
-        .consume(&request.code, &request.code_verifier)
-    {
-        Ok(user_id) => user_id,
-        Err(error) => {
-            state.rate_limits.record_failure("oidc:native", &source_ip);
-            tracing::info!(%error, "oidc_native_exchange_rejected");
-            return (StatusCode::UNAUTHORIZED, "native authorization failed").into_response();
-        }
-    };
+    let user_id =
+        match state
+            .oidc_native_handoffs
+            .consume(provider_id, &request.code, &request.code_verifier)
+        {
+            Ok(user_id) => user_id,
+            Err(error) => {
+                state.rate_limits.record_failure("oidc:native", &source_ip);
+                tracing::info!(%error, "oidc_native_exchange_rejected");
+                return (StatusCode::UNAUTHORIZED, "native authorization failed").into_response();
+            }
+        };
     let user = match store.user_by_id(&user_id).await {
         Ok(Some(user)) if user.disabled_at_ms.is_none() && user.username == provider.account() => {
             user
@@ -3987,9 +4092,20 @@ fn oidc_callback_error(status: StatusCode, secure: bool) -> Response {
             header::SET_COOKIE,
             crate::oidc::clear_transaction_cookie(secure),
         )],
-        "Cardea login could not be completed",
+        "External login could not be completed",
     )
         .into_response()
+}
+
+fn authentication_provider_id<'a>(path: &'a str, suffix: &str) -> Option<&'a str> {
+    let middle = path.strip_prefix("/api/auth/providers/")?;
+    let provider_id = middle.strip_suffix(&format!("/{suffix}"))?;
+    (!provider_id.is_empty()
+        && !provider_id.contains('/')
+        && provider_id
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'))
+    .then_some(provider_id)
 }
 
 async fn api_auth_logout(
@@ -4090,7 +4206,58 @@ async fn require_fresh_product_user(
     else {
         return Err(StatusCode::UNAUTHORIZED.into_response());
     };
-    ensure_product_session_passkey_fresh(store, &session).await?;
+    ensure_product_session_passkey_fresh(
+        store,
+        &session,
+        state
+            .product_authentication
+            .passkeys
+            .session_refresh_enabled,
+    )
+    .await?;
+    Ok(user)
+}
+
+const PASSKEY_MANAGEMENT_STEP_UP_MAX_AGE_MS: i64 = 5 * 60 * 1_000;
+
+fn product_session_has_recent_step_up(
+    session: &crate::store::ProductUserSession,
+    now_ms: i64,
+) -> bool {
+    let verified_at = session
+        .passkey_verified_at_ms
+        .unwrap_or(session.created_at_ms);
+    verified_at <= now_ms.saturating_add(60_000)
+        && verified_at.saturating_add(PASSKEY_MANAGEMENT_STEP_UP_MAX_AGE_MS) > now_ms
+}
+
+async fn require_recent_product_user(
+    state: &ProductAuthState,
+    headers: &HeaderMap,
+) -> Result<crate::store::ProductUser, Response> {
+    let Some(store) = state.store.as_ref() else {
+        return Err(missing_store());
+    };
+    let Some((session, user)) = product_session_and_user_from_store_cookie(store, headers).await
+    else {
+        return Err(StatusCode::UNAUTHORIZED.into_response());
+    };
+    ensure_product_session_passkey_fresh(
+        store,
+        &session,
+        state
+            .product_authentication
+            .passkeys
+            .session_refresh_enabled,
+    )
+    .await?;
+    if !product_session_has_recent_step_up(&session, auth_now_ms()) {
+        return Err((
+            StatusCode::PRECONDITION_REQUIRED,
+            "Recent login or Passkey verification required",
+        )
+            .into_response());
+    }
     Ok(user)
 }
 
@@ -4098,6 +4265,9 @@ async fn api_auth_list_passkeys(
     State(state): State<ProductAuthState>,
     headers: HeaderMap,
 ) -> Response {
+    if !state.product_authentication.passkeys.enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     let user = match require_fresh_product_user(&state, &headers).await {
         Ok(user) => user,
         Err(response) => return response,
@@ -4140,11 +4310,14 @@ async fn api_auth_passkey_register_options(
     headers: HeaderMap,
     Json(request): Json<crate::passkey::RegisterStartRequest>,
 ) -> Response {
+    if !state.product_authentication.passkeys.enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     let peer = peer_addr(peer);
     if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
         return rejected;
     }
-    let user = match require_fresh_product_user(&state, &headers).await {
+    let user = match require_recent_product_user(&state, &headers).await {
         Ok(user) => user,
         Err(response) => return response,
     };
@@ -4187,11 +4360,14 @@ async fn api_auth_passkey_register_complete(
     headers: HeaderMap,
     Json(request): Json<crate::passkey::RegisterCompleteRequest>,
 ) -> Response {
+    if !state.product_authentication.passkeys.enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     let peer = peer_addr(peer);
     if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
         return rejected;
     }
-    let user = match require_fresh_product_user(&state, &headers).await {
+    let user = match require_recent_product_user(&state, &headers).await {
         Ok(user) => user,
         Err(response) => return response,
     };
@@ -4244,6 +4420,9 @@ async fn api_auth_passkey_assert_options(
     peer: ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Response {
+    if !state.product_authentication.passkeys.enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     let peer = peer_addr(peer);
     if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
         return rejected;
@@ -4284,6 +4463,9 @@ async fn api_auth_passkey_assert_complete(
     headers: HeaderMap,
     Json(request): Json<crate::passkey::AssertCompleteRequest>,
 ) -> Response {
+    if !state.product_authentication.passkeys.enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     let peer = peer_addr(peer);
     if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
         return rejected;
@@ -4324,7 +4506,12 @@ async fn api_auth_passkey_assert_complete(
     }
     let _ = store.touch_user_last_step_up(&user.id, now).await;
     let policy = store.user_passkey_policy(&user.id).await.ok().flatten();
-    if policy.as_ref().is_some_and(|policy| policy.enabled) {
+    if state
+        .product_authentication
+        .passkeys
+        .session_refresh_enabled
+        && policy.as_ref().is_some_and(|policy| policy.enabled)
+    {
         let Some(previous_token) = crate::product_auth::user_cookie_token(&headers) else {
             return StatusCode::UNAUTHORIZED.into_response();
         };
@@ -4386,6 +4573,14 @@ async fn api_auth_passkey_reauth(
     headers: HeaderMap,
     Json(request): Json<crate::passkey::ReauthSettingRequest>,
 ) -> Response {
+    if !state.product_authentication.passkeys.enabled
+        || !state
+            .product_authentication
+            .passkeys
+            .session_refresh_enabled
+    {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     let peer = peer_addr(peer);
     if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
         return rejected;
@@ -4436,11 +4631,14 @@ async fn api_auth_delete_passkey(
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
+    if !state.product_authentication.passkeys.enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     let peer = peer_addr(peer);
     if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
         return rejected;
     }
-    let user = match require_fresh_product_user(&state, &headers).await {
+    let user = match require_recent_product_user(&state, &headers).await {
         Ok(user) => user,
         Err(response) => return response,
     };
@@ -4483,7 +4681,15 @@ async fn api_auth_list_tokens(
         return missing_store();
     };
     if let Some(session) = cookie_session.as_ref()
-        && let Err(response) = ensure_product_session_passkey_fresh(store, session).await
+        && let Err(response) = ensure_product_session_passkey_fresh(
+            store,
+            session,
+            state
+                .product_authentication
+                .passkeys
+                .session_refresh_enabled,
+        )
+        .await
     {
         return response;
     }
@@ -4528,7 +4734,15 @@ async fn api_auth_create_token(
         return missing_store();
     };
     if let Some(session) = cookie_session.as_ref()
-        && let Err(response) = ensure_product_session_passkey_fresh(&store, session).await
+        && let Err(response) = ensure_product_session_passkey_fresh(
+            &store,
+            session,
+            state
+                .product_authentication
+                .passkeys
+                .session_refresh_enabled,
+        )
+        .await
     {
         return response;
     }
@@ -4603,7 +4817,15 @@ async fn api_auth_delete_token(
         return missing_store();
     };
     if let Some(session) = cookie_session.as_ref()
-        && let Err(response) = ensure_product_session_passkey_fresh(store, session).await
+        && let Err(response) = ensure_product_session_passkey_fresh(
+            store,
+            session,
+            state
+                .product_authentication
+                .passkeys
+                .session_refresh_enabled,
+        )
+        .await
     {
         return response;
     }
@@ -4788,7 +5010,7 @@ async fn serve_axum(
         setup,
         setup_lock: Arc::new(tokio::sync::Mutex::new(())),
         product_auth_enabled: state.product_auth_enabled,
-        oidc_provider: state.oidc_provider.clone(),
+        product_authentication: state.product_authentication.clone(),
         oidc_transactions: state.oidc_transactions.clone(),
         oidc_native_handoffs: state.oidc_native_handoffs.clone(),
     };
@@ -12151,9 +12373,16 @@ async fn principal_still_valid(
         );
         match product_session_and_user_from_store_cookie(store, &headers).await {
             Some((session, user))
-                if ensure_product_session_passkey_fresh(store, &session)
-                    .await
-                    .is_ok() =>
+                if ensure_product_session_passkey_fresh(
+                    store,
+                    &session,
+                    state
+                        .product_authentication
+                        .passkeys
+                        .session_refresh_enabled,
+                )
+                .await
+                .is_ok() =>
             {
                 Some(product_principal(&state.hub, &user))
             }
@@ -13534,7 +13763,9 @@ mod product_auth_api_tests {
             setup,
             setup_lock: Arc::new(tokio::sync::Mutex::new(())),
             product_auth_enabled: true,
-            oidc_provider: None,
+            product_authentication: Arc::new(
+                crate::auth_plugins::ProductAuthentication::test_default(None),
+            ),
             oidc_transactions: Arc::new(crate::oidc::OidcTransactions::default()),
             oidc_native_handoffs: Arc::new(crate::oidc::NativeHandoffs::default()),
         }
@@ -13930,12 +14161,15 @@ mod product_auth_api_tests {
         let hub = Hub::new();
         let _ = seed_admin(&hub);
         let mut state = auth_state(hub, Some(store));
-        state.oidc_provider = Some(test_oidc_provider(&root, "owner", Some("owner")));
+        state.product_authentication =
+            Arc::new(crate::auth_plugins::ProductAuthentication::test_default(
+                Some(test_oidc_provider(&root, "owner", Some("owner"))),
+            ));
         let verifier = "v".repeat(64);
         let challenge = crate::oidc::pkce_challenge(&verifier).unwrap();
         let handoff = state
             .oidc_native_handoffs
-            .issue(&user.id, &challenge)
+            .issue("cardea", &user.id, &challenge)
             .unwrap();
         let callback = url::Url::parse(&handoff.location).unwrap();
         let code = callback
@@ -14874,5 +15108,26 @@ mod product_auth_api_tests {
             ..policy
         };
         assert_eq!(product_passkey_due_at(&disabled, Some(&session)), None);
+    }
+
+    #[test]
+    fn passkey_management_requires_a_recent_session_local_step_up() {
+        let now = 1_000_000;
+        let mut session = crate::store::ProductUserSession {
+            token_hash: "aa".repeat(32),
+            user_id: "user-1".to_owned(),
+            created_at_ms: now - PASSKEY_MANAGEMENT_STEP_UP_MAX_AGE_MS + 1,
+            expires_at_ms: now + 1_000,
+            last_seen_at_ms: now,
+            user_agent: None,
+            passkey_verified_at_ms: None,
+        };
+        assert!(product_session_has_recent_step_up(&session, now));
+        session.created_at_ms = now - PASSKEY_MANAGEMENT_STEP_UP_MAX_AGE_MS;
+        assert!(!product_session_has_recent_step_up(&session, now));
+        session.passkey_verified_at_ms = Some(now - 1);
+        assert!(product_session_has_recent_step_up(&session, now));
+        session.passkey_verified_at_ms = Some(now + 60_001);
+        assert!(!product_session_has_recent_step_up(&session, now));
     }
 }

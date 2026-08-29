@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "id": "google",
+  "version": "1.0.0",
+  "display_name": "Google",
+  "button_label": "Continue with Google",
+  "protocol": {
+    "kind": "open_id_connect",
+    "configuration": {
+      "issuer": "https://accounts.google.com",
+      "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
+      "token_endpoint": "https://oauth2.googleapis.com/token",
+      "jwks_uri": "https://www.googleapis.com/oauth2/v3/certs",
+      "scopes": ["openid", "email", "profile"],
+      "client_authentication_methods": ["client_secret_post"],
+      "id_token_signing_algorithms": ["RS256"],
+      "authorization_parameters": { "prompt": "select_account" }
+    }
+  }
+}

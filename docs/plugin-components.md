@@ -2,7 +2,8 @@
 
 Cowboy organizes independently versioned integrations as plugins and reusable
 implementation as components. The machine-readable sources of truth are
-`plugins/*/plugin.json`, `components/plugin-contract/schema.json`, and
+`plugins/*/plugin.json`, `components/plugin-contract/schema.json`,
+`components/plugin-contract/authentication-provider.schema.json`, and
 `components/registry.json`.
 
 ## Plugin boundary
@@ -12,6 +13,9 @@ component dependency list. The initial kinds are:
 
 - `agent_provider`: an installable agent integration whose entry point is the
   existing signed, data-only Provider package contract;
+- `authentication_provider`: a signed, data-only OpenID Connect product-login
+  integration. The Controller owns credentials, account mappings, protocol
+  execution, and Cowboy sessions; the package cannot execute provider code;
 - `code_intelligence`: an isolated code-intelligence integration. The first is
   the separately built GPL Zed adapter.
 
@@ -101,6 +105,8 @@ components/
 plugins/
   <agent-provider>/plugin.json + provider.json
   zed/plugin.json + adapter/
+examples/authentication/
+  <authentication-provider>/plugin.json + authentication.json
 ```
 
 Machine Plugin state lives under `plugins/`. Startup atomically adopts the old

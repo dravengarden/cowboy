@@ -37,7 +37,7 @@ struct SettingsView: View {
                         Text("Every 14 days").tag(Int64(1_209_600_000))
                     }
                     .disabled(refresh.registeredCount == 0)
-                    Text("Off by default. Password and Cardea sessions last one day. After verification in Cowboy, that browser session rotates for up to 30 days and asks again at this frequency. Cowboy Manager keeps its separate one-day session and can sign in again from macOS Keychain.")
+                    Text("Off by default. Password and external-provider sessions last one day. After verification in Cowboy, that browser session rotates for up to 30 days and asks again at this frequency. Cowboy Manager keeps its separate one-day session and can sign in again from macOS Keychain.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     if refresh.registeredCount == 0 {

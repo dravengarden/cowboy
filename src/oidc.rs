@@ -1,6 +1,6 @@
 //! Cardea OIDC Authorization Code + PKCE consumer profile.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Read as _;
 use std::net::IpAddr;
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
@@ -9,8 +9,15 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result};
 use base64::Engine as _;
+use cowboy_plugin_sdk::{
+    AuthenticationProtocol, AuthenticationProviderContract, OidcClientAuthenticationMethod,
+    OidcIdTokenAlgorithm,
+};
 use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};
+use p256::ecdsa::{Signature as P256Signature, SigningKey as P256SigningKey};
+use p256::pkcs8::DecodePrivateKey as _;
 use reqwest::header::CONTENT_TYPE;
+use ring::signature::{RSA_PKCS1_2048_8192_SHA256, RsaPublicKeyComponents};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use url::Url;
@@ -30,6 +37,35 @@ const MAX_SECRET_BYTES: u64 = 8_192;
 const MAX_TOKEN_RESPONSE_BYTES: usize = 32 * 1_024;
 const MAX_JWT_BYTES: usize = 8_192;
 const CLIENT_ASSERTION_TYPE: &str = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct OidcProviderRuntimeDocument {
+    pub client_id: String,
+    pub redirect_uri: String,
+    pub subject: String,
+    pub account: String,
+    #[serde(default)]
+    pub admin_account: Option<String>,
+    pub client_authentication: OidcRuntimeClientAuthentication,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum OidcRuntimeClientAuthentication {
+    ClientSecretPost {
+        client_secret_file: PathBuf,
+    },
+    PrivateKeyJwtEd25519 {
+        key_id: String,
+        private_key_file: PathBuf,
+    },
+    AppleClientSecretEs256 {
+        team_id: String,
+        key_id: String,
+        private_key_file: PathBuf,
+    },
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -68,15 +104,18 @@ struct PublicJwk {
 
 #[derive(Clone)]
 pub struct OidcProvider {
+    id: String,
     display_name: String,
+    button_label: String,
     issuer: String,
     authorization_endpoint: Url,
     token_endpoint: String,
+    jwks_uri: Option<String>,
+    scopes: String,
+    authorization_parameters: BTreeMap<String, String>,
     client_id: String,
-    client_key_id: String,
-    client_signing_seed: [u8; 32],
-    id_token_key_id: String,
-    id_token_verifying_key: [u8; 32],
+    client_authentication: RuntimeClientAuthentication,
+    id_token_verifier: IdTokenVerifier,
     subject: String,
     account: String,
     admin_account: Option<String>,
@@ -84,15 +123,42 @@ pub struct OidcProvider {
     http: reqwest::Client,
 }
 
+#[derive(Clone)]
+enum RuntimeClientAuthentication {
+    ClientSecretPost(String),
+    PrivateKeyJwtEd25519 {
+        key_id: String,
+        signing_seed: [u8; 32],
+    },
+    AppleClientSecretEs256 {
+        team_id: String,
+        key_id: String,
+        signing_key: P256SigningKey,
+    },
+}
+
+#[derive(Clone)]
+enum IdTokenVerifier {
+    PinnedEd25519 {
+        key_id: String,
+        verifying_key: [u8; 32],
+    },
+    Jwks {
+        allowed_algorithms: Vec<OidcIdTokenAlgorithm>,
+    },
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PublicProvider {
-    pub id: &'static str,
+    pub id: String,
     pub display_name: String,
-    pub start_url: &'static str,
+    pub button_label: String,
+    pub start_url: String,
 }
 
 #[derive(Debug)]
 struct StoredTransaction {
+    provider_id: String,
     state_hash: String,
     nonce: String,
     pkce_verifier: String,
@@ -110,6 +176,7 @@ pub enum AuthorizationTarget {
 
 #[derive(Debug)]
 pub struct OidcTransaction {
+    provider_id: String,
     nonce: String,
     pkce_verifier: String,
     target: AuthorizationTarget,
@@ -128,6 +195,7 @@ pub struct OidcTransactions {
 
 #[derive(Debug)]
 struct StoredNativeHandoff {
+    provider_id: String,
     user_id: String,
     code_challenge: String,
     expires: Instant,
@@ -145,12 +213,16 @@ pub struct StartedNativeHandoff {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct TokenResponse {
+    #[serde(default)]
     access_token: String,
     token_type: String,
-    expires_in: u64,
-    scope: String,
+    #[serde(default)]
+    expires_in: Option<u64>,
+    #[serde(default)]
+    scope: Option<String>,
+    #[serde(default)]
+    refresh_token: Option<String>,
     id_token: String,
 }
 
@@ -177,24 +249,99 @@ struct ClientAssertionClaims<'a> {
     exp: u64,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct IdTokenHeader {
-    alg: String,
-    kid: String,
-    typ: String,
+#[derive(Serialize)]
+struct AppleClientSecretClaims<'a> {
+    iss: &'a str,
+    sub: &'a str,
+    aud: &'static str,
+    iat: u64,
+    exp: u64,
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+struct IdTokenHeader {
+    alg: String,
+    kid: String,
+    #[serde(default)]
+    typ: Option<String>,
+}
+
+#[derive(Deserialize)]
 struct IdTokenClaims {
     iss: String,
     sub: String,
-    aud: String,
+    aud: Audience,
+    #[serde(default)]
+    azp: Option<String>,
     nonce: String,
     iat: u64,
     exp: u64,
-    auth_time: u64,
+    #[serde(default)]
+    auth_time: Option<u64>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Audience {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl Audience {
+    fn contains(&self, expected: &str) -> bool {
+        match self {
+            Self::One(value) => value == expected,
+            Self::Many(values) => values.iter().any(|value| value == expected),
+        }
+    }
+
+    fn requires_authorized_party(&self) -> bool {
+        matches!(self, Self::Many(values) if values.len() > 1)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct JsonWebKeySet {
+    keys: Vec<JsonWebKey>,
+}
+
+#[derive(Debug, Deserialize)]
+struct JsonWebKey {
+    kty: String,
+    kid: String,
+    #[serde(default)]
+    alg: Option<String>,
+    #[serde(default)]
+    crv: Option<String>,
+    #[serde(default)]
+    x: Option<String>,
+    #[serde(default)]
+    n: Option<String>,
+    #[serde(default)]
+    e: Option<String>,
+    #[serde(default, rename = "use")]
+    usage: Option<String>,
+    #[serde(default)]
+    key_ops: Option<Vec<String>>,
+}
+
+impl JsonWebKeySet {
+    fn signing_key(&self, key_id: &str, algorithm: &str) -> Option<&JsonWebKey> {
+        if self.keys.is_empty() || self.keys.len() > 64 {
+            return None;
+        }
+        let mut matches = self.keys.iter().filter(|key| {
+            key.kid == key_id
+                && key.alg.as_deref().is_none_or(|value| value == algorithm)
+                && key.usage.as_deref().is_none_or(|value| value == "sig")
+                && key
+                    .key_ops
+                    .as_ref()
+                    .is_none_or(|operations| operations.iter().any(|value| value == "verify"))
+        });
+        let selected = matches.next()?;
+        matches.next().is_none().then_some(selected)
+    }
 }
 
 impl OidcProvider {
@@ -206,7 +353,7 @@ impl OidcProvider {
             "unsupported OIDC provider config"
         );
         anyhow::ensure!(
-            valid_display_name(&document.display_name),
+            valid_label(&document.display_name, 64),
             "OIDC display_name must be 1-64 printable characters"
         );
         anyhow::ensure!(
@@ -268,15 +415,24 @@ impl OidcProvider {
             .build()
             .context("building OIDC HTTP client")?;
         Ok(Self {
+            id: "cardea".to_owned(),
             display_name: document.display_name,
+            button_label: "Continue with Cardea".to_owned(),
             issuer,
             authorization_endpoint,
             token_endpoint,
+            jwks_uri: None,
+            scopes: "openid".to_owned(),
+            authorization_parameters: BTreeMap::new(),
             client_id: document.client_id,
-            client_key_id: document.client_key_id,
-            client_signing_seed,
-            id_token_key_id: document.id_token_key_id,
-            id_token_verifying_key,
+            client_authentication: RuntimeClientAuthentication::PrivateKeyJwtEd25519 {
+                key_id: document.client_key_id,
+                signing_seed: client_signing_seed,
+            },
+            id_token_verifier: IdTokenVerifier::PinnedEd25519 {
+                key_id: document.id_token_key_id,
+                verifying_key: id_token_verifying_key,
+            },
             subject: document.subject,
             account,
             admin_account,
@@ -285,13 +441,184 @@ impl OidcProvider {
         })
     }
 
+    pub(crate) fn load_plugin(
+        contract: &AuthenticationProviderContract,
+        runtime: OidcProviderRuntimeDocument,
+    ) -> Result<Self> {
+        let AuthenticationProtocol::OpenIdConnect(protocol) = &contract.protocol;
+        anyhow::ensure!(
+            valid_identifier(&contract.id),
+            "authentication Plugin id is invalid"
+        );
+        anyhow::ensure!(
+            valid_label(&contract.display_name, 64) && valid_label(&contract.button_label, 80),
+            "authentication Plugin labels are invalid"
+        );
+        anyhow::ensure!(
+            valid_oidc_token(&runtime.client_id, 255),
+            "OIDC client id is invalid"
+        );
+        anyhow::ensure!(valid_subject(&runtime.subject), "OIDC subject is invalid");
+        let issuer = exact_https_url(&protocol.issuer)?;
+        anyhow::ensure!(
+            issuer.query().is_none(),
+            "OIDC issuer must not contain a query"
+        );
+        let authorization_endpoint = exact_https_url(&protocol.authorization_endpoint)?;
+        let token_endpoint = exact_https_url(&protocol.token_endpoint)?.into();
+        let jwks_uri = exact_https_url(&protocol.jwks_uri)?.into();
+        let redirect = exact_https_url(&runtime.redirect_uri)?;
+        let scoped_callback = format!("/api/auth/providers/{}/callback", contract.id);
+        let legacy_cardea_callback =
+            contract.id == "cardea" && redirect.path() == "/api/auth/oidc/callback";
+        anyhow::ensure!(
+            (redirect.path() == scoped_callback || legacy_cardea_callback)
+                && redirect.query().is_none(),
+            "OIDC redirect_uri must use the configured provider callback"
+        );
+        let account = crate::product_auth::normalize_username(&runtime.account)
+            .context("normalizing OIDC account mapping")?;
+        let admin_account = runtime
+            .admin_account
+            .as_deref()
+            .map(crate::product_auth::normalize_username)
+            .transpose()
+            .context("normalizing OIDC admin account mapping")?;
+        let client_authentication = match runtime.client_authentication {
+            OidcRuntimeClientAuthentication::ClientSecretPost { client_secret_file } => {
+                anyhow::ensure!(
+                    protocol
+                        .client_authentication_methods
+                        .contains(&OidcClientAuthenticationMethod::ClientSecretPost),
+                    "Authentication Provider does not allow client_secret_post"
+                );
+                let secret = read_secret_text(&client_secret_file, "OIDC client secret")?;
+                anyhow::ensure!(
+                    secret.len() <= 4_096 && !secret.chars().any(char::is_control),
+                    "OIDC client secret is invalid"
+                );
+                RuntimeClientAuthentication::ClientSecretPost(secret)
+            }
+            OidcRuntimeClientAuthentication::PrivateKeyJwtEd25519 {
+                key_id,
+                private_key_file,
+            } => {
+                anyhow::ensure!(
+                    protocol
+                        .client_authentication_methods
+                        .contains(&OidcClientAuthenticationMethod::PrivateKeyJwtEd25519),
+                    "Authentication Provider does not allow Ed25519 private_key_jwt"
+                );
+                anyhow::ensure!(
+                    valid_oidc_token(&key_id, 255),
+                    "OIDC client key id is invalid"
+                );
+                anyhow::ensure!(
+                    private_key_file.is_absolute(),
+                    "OIDC client private key file must be absolute"
+                );
+                let private: PrivateJwk =
+                    serde_json::from_slice(&read_protected_file(&private_key_file)?)
+                        .context("decoding OIDC client private JWK")?;
+                anyhow::ensure!(
+                    private.kty == "OKP" && private.crv == "Ed25519",
+                    "OIDC client key must be Ed25519"
+                );
+                let signing_seed = decode_32(&private.d, "OIDC client private key")?;
+                let public = decode_32(&private.x, "OIDC client public key")?;
+                anyhow::ensure!(
+                    SigningKey::from_bytes(&signing_seed)
+                        .verifying_key()
+                        .as_bytes()
+                        == &public,
+                    "OIDC client private JWK is inconsistent"
+                );
+                RuntimeClientAuthentication::PrivateKeyJwtEd25519 {
+                    key_id,
+                    signing_seed,
+                }
+            }
+            OidcRuntimeClientAuthentication::AppleClientSecretEs256 {
+                team_id,
+                key_id,
+                private_key_file,
+            } => {
+                anyhow::ensure!(
+                    protocol
+                        .client_authentication_methods
+                        .contains(&OidcClientAuthenticationMethod::AppleClientSecretEs256),
+                    "Authentication Provider does not allow Apple client-secret JWT"
+                );
+                anyhow::ensure!(
+                    valid_identifier(&team_id) && valid_identifier(&key_id),
+                    "Apple OIDC identifiers are invalid"
+                );
+                let pem = read_secret_text(&private_key_file, "Apple private key")?;
+                let signing_key = P256SigningKey::from_pkcs8_pem(&pem)
+                    .context("decoding Apple ES256 private key")?;
+                RuntimeClientAuthentication::AppleClientSecretEs256 {
+                    team_id,
+                    key_id,
+                    signing_key,
+                }
+            }
+        };
+        let http = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(10))
+            .build()
+            .context("building OIDC HTTP client")?;
+        Ok(Self {
+            id: contract.id.clone(),
+            display_name: contract.display_name.clone(),
+            button_label: contract.button_label.clone(),
+            issuer: protocol.issuer.clone(),
+            authorization_endpoint,
+            token_endpoint,
+            jwks_uri: Some(jwks_uri),
+            scopes: protocol.scopes.join(" "),
+            authorization_parameters: protocol.authorization_parameters.clone(),
+            client_id: runtime.client_id,
+            client_authentication,
+            id_token_verifier: IdTokenVerifier::Jwks {
+                allowed_algorithms: protocol.id_token_signing_algorithms.clone(),
+            },
+            subject: runtime.subject,
+            account,
+            admin_account,
+            redirect_uri: runtime.redirect_uri,
+            http,
+        })
+    }
+
     #[must_use]
     pub fn public(&self) -> PublicProvider {
+        let start_url = if self.id == "cardea"
+            && Url::parse(&self.redirect_uri)
+                .is_ok_and(|redirect| redirect.path() == "/api/auth/oidc/callback")
+        {
+            "/api/auth/oidc/start".to_owned()
+        } else {
+            format!("/api/auth/providers/{}/start", self.id)
+        };
         PublicProvider {
-            id: "cardea",
+            id: self.id.clone(),
             display_name: self.display_name.clone(),
-            start_url: "/api/auth/oidc/start",
+            button_label: self.button_label.clone(),
+            start_url,
         }
+    }
+
+    #[must_use]
+    pub fn requires_cross_site_post_cookie(&self) -> bool {
+        self.authorization_parameters
+            .get("response_mode")
+            .is_some_and(|value| value == "form_post")
+    }
+
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
     }
 
     #[must_use]
@@ -311,29 +638,52 @@ impl OidcProvider {
     ) -> Result<VerifiedIdentity> {
         anyhow::ensure!(valid_authorization_code(code), "invalid authorization code");
         let now = now_seconds()?;
-        let assertion_id = new_session_token()?;
-        let assertion = client_assertion(
-            &self.client_signing_seed,
-            &self.client_key_id,
-            &self.client_id,
-            &self.token_endpoint,
-            &assertion_id,
-            now,
-        )
-        .context("building OIDC client assertion")?;
+        anyhow::ensure!(transaction.provider_id == self.id, "OIDC provider mismatch");
+        let mut form = vec![
+            ("grant_type", "authorization_code".to_owned()),
+            ("client_id", self.client_id.clone()),
+            ("code", code.to_owned()),
+            ("redirect_uri", self.redirect_uri.clone()),
+            ("code_verifier", transaction.pkce_verifier.clone()),
+        ];
+        match &self.client_authentication {
+            RuntimeClientAuthentication::ClientSecretPost(secret) => {
+                form.push(("client_secret", secret.clone()));
+            }
+            RuntimeClientAuthentication::PrivateKeyJwtEd25519 {
+                key_id,
+                signing_seed,
+            } => {
+                let assertion_id = new_session_token()?;
+                let assertion = client_assertion(
+                    signing_seed,
+                    key_id,
+                    &self.client_id,
+                    &self.token_endpoint,
+                    &assertion_id,
+                    now,
+                )
+                .context("building OIDC client assertion")?;
+                form.push(("client_assertion_type", CLIENT_ASSERTION_TYPE.to_owned()));
+                form.push(("client_assertion", assertion));
+            }
+            RuntimeClientAuthentication::AppleClientSecretEs256 {
+                team_id,
+                key_id,
+                signing_key,
+            } => {
+                form.push((
+                    "client_secret",
+                    apple_client_secret(signing_key, team_id, key_id, &self.client_id, now)
+                        .context("building Apple client secret")?,
+                ));
+            }
+        }
         let response = self
             .http
             .post(&self.token_endpoint)
             .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
-            .form(&[
-                ("grant_type", "authorization_code"),
-                ("client_id", self.client_id.as_str()),
-                ("client_assertion_type", CLIENT_ASSERTION_TYPE),
-                ("client_assertion", assertion.as_str()),
-                ("code", code),
-                ("redirect_uri", self.redirect_uri.as_str()),
-                ("code_verifier", transaction.pkce_verifier.as_str()),
-            ])
+            .form(&form)
             .send()
             .await
             .context("exchanging OIDC authorization code")?;
@@ -366,27 +716,126 @@ impl OidcProvider {
         let token: TokenResponse =
             serde_json::from_slice(&bytes).context("decoding OIDC token response")?;
         anyhow::ensure!(
-            token.token_type == "Bearer"
-                && token.expires_in == 300
-                && token.scope == "openid"
-                && !token.access_token.is_empty(),
+            token.token_type.eq_ignore_ascii_case("Bearer")
+                && !token.access_token.is_empty()
+                && !token.id_token.is_empty(),
             "OIDC token response policy mismatch"
         );
-        let identity = verify_id_token(
-            &token.id_token,
-            &self.id_token_verifying_key,
-            &self.id_token_key_id,
-            &self.issuer,
-            &self.client_id,
-            &transaction.nonce,
-            now,
-        )
-        .context("OIDC ID token verification failed")?;
+        if let Some(expires_in) = token.expires_in {
+            anyhow::ensure!(
+                (1..=3_600).contains(&expires_in),
+                "OIDC token lifetime is invalid"
+            );
+        }
+        if let Some(scope) = token.scope.as_deref() {
+            anyhow::ensure!(
+                scope.split_whitespace().any(|value| value == "openid"),
+                "OIDC scope mismatch"
+            );
+        }
+        let _ = token.access_token;
+        let _ = token.refresh_token;
+        let identity = self
+            .verify_id_token(&token.id_token, &transaction.nonce, now)
+            .await
+            .context("OIDC ID token verification failed")?;
         anyhow::ensure!(
             identity.subject == self.subject,
             "OIDC subject is not allowed"
         );
         Ok(identity)
+    }
+
+    async fn verify_id_token(
+        &self,
+        token: &str,
+        nonce: &str,
+        now: u64,
+    ) -> Option<VerifiedIdentity> {
+        let decoded = decode_id_token(token, &self.issuer, &self.client_id, nonce, now)?;
+        match &self.id_token_verifier {
+            IdTokenVerifier::PinnedEd25519 {
+                key_id,
+                verifying_key,
+            } => {
+                if decoded.header.alg != "EdDSA" || decoded.header.kid != *key_id {
+                    return None;
+                }
+                let signature_bytes: [u8; 64] = decoded.signature.try_into().ok()?;
+                VerifyingKey::from_bytes(verifying_key)
+                    .ok()?
+                    .verify(
+                        decoded.signing_input.as_bytes(),
+                        &Signature::from_bytes(&signature_bytes),
+                    )
+                    .ok()?;
+            }
+            IdTokenVerifier::Jwks { allowed_algorithms } => {
+                let algorithm = match decoded.header.alg.as_str() {
+                    "EdDSA" => OidcIdTokenAlgorithm::EdDSA,
+                    "RS256" => OidcIdTokenAlgorithm::RS256,
+                    _ => return None,
+                };
+                if !allowed_algorithms.contains(&algorithm) {
+                    return None;
+                }
+                let response = self.http.get(self.jwks_uri.as_deref()?).send().await.ok()?;
+                if !response.status().is_success()
+                    || response
+                        .content_length()
+                        .is_some_and(|length| length > 64 * 1_024)
+                {
+                    return None;
+                }
+                let bytes = response.bytes().await.ok()?;
+                if bytes.len() > 64 * 1_024 {
+                    return None;
+                }
+                let set: JsonWebKeySet = serde_json::from_slice(&bytes).ok()?;
+                let key = set.signing_key(&decoded.header.kid, &decoded.header.alg)?;
+                match algorithm {
+                    OidcIdTokenAlgorithm::EdDSA => {
+                        if key.kty != "OKP" || key.crv.as_deref() != Some("Ed25519") {
+                            return None;
+                        }
+                        let verifying_key = decode_32(key.x.as_deref()?, "OIDC JWKS key").ok()?;
+                        let signature_bytes: [u8; 64] = decoded.signature.try_into().ok()?;
+                        VerifyingKey::from_bytes(&verifying_key)
+                            .ok()?
+                            .verify(
+                                decoded.signing_input.as_bytes(),
+                                &Signature::from_bytes(&signature_bytes),
+                            )
+                            .ok()?;
+                    }
+                    OidcIdTokenAlgorithm::RS256 => {
+                        if key.kty != "RSA" {
+                            return None;
+                        }
+                        let modulus = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                            .decode(key.n.as_deref()?)
+                            .ok()?;
+                        let exponent = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                            .decode(key.e.as_deref()?)
+                            .ok()?;
+                        RsaPublicKeyComponents {
+                            n: &modulus,
+                            e: &exponent,
+                        }
+                        .verify(
+                            &RSA_PKCS1_2048_8192_SHA256,
+                            decoded.signing_input.as_bytes(),
+                            &decoded.signature,
+                        )
+                        .ok()?;
+                    }
+                }
+            }
+        }
+        Some(VerifiedIdentity {
+            subject: decoded.claims.sub,
+            authenticated_at: decoded.claims.auth_time.unwrap_or(decoded.claims.iat),
+        })
     }
 }
 
@@ -430,6 +879,7 @@ impl OidcTransactions {
         entries.insert(
             hex_sha256(cookie_token.as_bytes()),
             StoredTransaction {
+                provider_id: provider.id.clone(),
                 state_hash: hex_sha256(state.as_bytes()),
                 nonce: nonce.clone(),
                 pkce_verifier,
@@ -445,19 +895,27 @@ impl OidcTransactions {
             ("response_type", "code"),
             ("client_id", provider.client_id.as_str()),
             ("redirect_uri", provider.redirect_uri.as_str()),
-            ("scope", "openid"),
+            ("scope", provider.scopes.as_str()),
             ("state", state.as_str()),
             ("nonce", nonce.as_str()),
             ("code_challenge", challenge.as_str()),
             ("code_challenge_method", "S256"),
         ]);
+        authorization
+            .query_pairs_mut()
+            .extend_pairs(provider.authorization_parameters.iter());
         Ok(StartedAuthorization {
             location: authorization.into(),
             cookie_token,
         })
     }
 
-    pub fn consume(&self, cookie_token: &str, state: &str) -> Result<OidcTransaction> {
+    pub fn consume(
+        &self,
+        provider_id: &str,
+        cookie_token: &str,
+        state: &str,
+    ) -> Result<OidcTransaction> {
         anyhow::ensure!(
             valid_opaque_value(cookie_token) && valid_opaque_value(state),
             "invalid OIDC transaction"
@@ -469,6 +927,10 @@ impl OidcTransactions {
             .context("OIDC transaction expired")?;
         anyhow::ensure!(stored.expires > Instant::now(), "OIDC transaction expired");
         anyhow::ensure!(
+            constant_time_equal(stored.provider_id.as_bytes(), provider_id.as_bytes()),
+            "OIDC provider mismatch"
+        );
+        anyhow::ensure!(
             constant_time_equal(
                 stored.state_hash.as_bytes(),
                 hex_sha256(state.as_bytes()).as_bytes(),
@@ -476,6 +938,7 @@ impl OidcTransactions {
             "OIDC state mismatch"
         );
         Ok(OidcTransaction {
+            provider_id: stored.provider_id,
             nonce: stored.nonce,
             pkce_verifier: stored.pkce_verifier,
             target: stored.target,
@@ -491,7 +954,16 @@ impl OidcTransaction {
 }
 
 impl NativeHandoffs {
-    pub fn issue(&self, user_id: &str, code_challenge: &str) -> Result<StartedNativeHandoff> {
+    pub fn issue(
+        &self,
+        provider_id: &str,
+        user_id: &str,
+        code_challenge: &str,
+    ) -> Result<StartedNativeHandoff> {
+        anyhow::ensure!(
+            valid_identifier(provider_id),
+            "invalid native handoff provider"
+        );
         anyhow::ensure!(valid_identifier(user_id), "invalid native handoff user");
         anyhow::ensure!(
             valid_pkce_challenge(code_challenge),
@@ -512,6 +984,7 @@ impl NativeHandoffs {
         entries.insert(
             hex_sha256(code.as_bytes()),
             StoredNativeHandoff {
+                provider_id: provider_id.to_owned(),
                 user_id: user_id.to_owned(),
                 code_challenge: code_challenge.to_owned(),
                 expires: now + NATIVE_HANDOFF_TTL,
@@ -526,7 +999,11 @@ impl NativeHandoffs {
         })
     }
 
-    pub fn consume(&self, code: &str, verifier: &str) -> Result<String> {
+    pub fn consume(&self, provider_id: &str, code: &str, verifier: &str) -> Result<String> {
+        anyhow::ensure!(
+            valid_identifier(provider_id),
+            "invalid native handoff provider"
+        );
         anyhow::ensure!(valid_opaque_value(code), "invalid native handoff");
         let challenge = pkce_challenge(verifier).context("invalid native PKCE verifier")?;
         let stored = self
@@ -535,6 +1012,10 @@ impl NativeHandoffs {
             .remove(&hex_sha256(code.as_bytes()))
             .context("native handoff expired")?;
         anyhow::ensure!(stored.expires > Instant::now(), "native handoff expired");
+        anyhow::ensure!(
+            constant_time_equal(stored.provider_id.as_bytes(), provider_id.as_bytes()),
+            "native handoff provider mismatch"
+        );
         anyhow::ensure!(
             constant_time_equal(challenge.as_bytes(), stored.code_challenge.as_bytes()),
             "native PKCE mismatch"
@@ -549,9 +1030,10 @@ pub fn native_error_location() -> &'static str {
 }
 
 #[must_use]
-pub fn transaction_cookie(token: &str, secure: bool) -> String {
+pub fn transaction_cookie(token: &str, secure: bool, cross_site_post: bool) -> String {
+    let same_site = if cross_site_post { "None" } else { "Lax" };
     let mut cookie = format!(
-        "{TRANSACTION_COOKIE}={token}; Path=/api/auth/oidc/callback; HttpOnly; SameSite=Lax; Max-Age={}",
+        "{TRANSACTION_COOKIE}={token}; Path=/api/auth; HttpOnly; SameSite={same_site}; Max-Age={}",
         TRANSACTION_TTL.as_secs()
     );
     if secure {
@@ -562,9 +1044,8 @@ pub fn transaction_cookie(token: &str, secure: bool) -> String {
 
 #[must_use]
 pub fn clear_transaction_cookie(secure: bool) -> String {
-    let mut cookie = format!(
-        "{TRANSACTION_COOKIE}=; Path=/api/auth/oidc/callback; HttpOnly; SameSite=Lax; Max-Age=0"
-    );
+    let mut cookie =
+        format!("{TRANSACTION_COOKIE}=; Path=/api/auth; HttpOnly; SameSite=Lax; Max-Age=0");
     if secure {
         cookie.push_str("; Secure");
     }
@@ -596,6 +1077,17 @@ fn read_protected_file(path: &Path) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+fn read_secret_text(path: &Path, label: &str) -> Result<String> {
+    anyhow::ensure!(path.is_absolute(), "{label} file must be absolute");
+    let bytes = read_protected_file(path)?;
+    let value = std::str::from_utf8(&bytes)
+        .with_context(|| format!("decoding {label}"))?
+        .trim()
+        .to_owned();
+    anyhow::ensure!(!value.is_empty(), "{label} is empty");
+    Ok(value)
+}
+
 fn decode_32(value: &str, label: &str) -> Result<[u8; 32]> {
     base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(value)
@@ -620,8 +1112,8 @@ fn client_assertion(
     assertion_id: &str,
     now: u64,
 ) -> Option<String> {
-    if !valid_identifier(key_id)
-        || !valid_identifier(client_id)
+    if !valid_oidc_token(key_id, 255)
+        || !valid_oidc_token(client_id, 255)
         || !valid_identifier(assertion_id)
         || exact_https_url(token_endpoint).is_err()
     {
@@ -648,21 +1140,55 @@ fn client_assertion(
     ))
 }
 
-#[allow(clippy::too_many_arguments)]
-fn verify_id_token(
-    token: &str,
-    verifying_key: &[u8; 32],
+fn apple_client_secret(
+    signing_key: &P256SigningKey,
+    team_id: &str,
     key_id: &str,
+    client_id: &str,
+    now: u64,
+) -> Option<String> {
+    if !valid_identifier(team_id) || !valid_identifier(key_id) || !valid_oidc_token(client_id, 255)
+    {
+        return None;
+    }
+    let header = encode_json(&ClientAssertionHeader {
+        alg: "ES256",
+        kid: key_id,
+        typ: "JWT",
+    })?;
+    let claims = encode_json(&AppleClientSecretClaims {
+        iss: team_id,
+        sub: client_id,
+        aud: "https://appleid.apple.com",
+        iat: now,
+        exp: now.checked_add(300)?,
+    })?;
+    let signing_input = format!("{header}.{claims}");
+    let signature: P256Signature = signing_key.sign(signing_input.as_bytes());
+    Some(format!(
+        "{signing_input}.{}",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature.to_bytes())
+    ))
+}
+
+struct DecodedIdToken {
+    header: IdTokenHeader,
+    claims: IdTokenClaims,
+    signature: Vec<u8>,
+    signing_input: String,
+}
+
+fn decode_id_token(
+    token: &str,
     issuer: &str,
     client_id: &str,
     nonce: &str,
     now: u64,
-) -> Option<VerifiedIdentity> {
+) -> Option<DecodedIdToken> {
     if token.len() > MAX_JWT_BYTES
-        || !valid_identifier(key_id)
-        || !valid_identifier(client_id)
+        || !valid_oidc_token(client_id, 255)
         || !valid_opaque_value(nonce)
-        || exact_https_origin(issuer).is_err()
+        || exact_https_url(issuer).is_err()
     {
         return None;
     }
@@ -676,34 +1202,68 @@ fn verify_id_token(
         return None;
     };
     let header_value: IdTokenHeader = decode_json(header)?;
-    if header_value.alg != "EdDSA" || header_value.typ != "JWT" || header_value.kid != key_id {
+    if header_value.kid.is_empty()
+        || header_value
+            .typ
+            .as_deref()
+            .is_some_and(|value| value != "JWT")
+    {
         return None;
     }
     let claims_value: IdTokenClaims = decode_json(claims)?;
     if claims_value.iss != issuer
-        || claims_value.aud != client_id
+        || !claims_value.aud.contains(client_id)
+        || (claims_value.aud.requires_authorized_party()
+            && claims_value.azp.as_deref() != Some(client_id))
+        || claims_value
+            .azp
+            .as_deref()
+            .is_some_and(|authorized_party| authorized_party != client_id)
         || claims_value.nonce != nonce
-        || !valid_identifier(&claims_value.sub)
-        || claims_value.iat > now
-        || claims_value.auth_time > claims_value.iat
+        || !valid_subject(&claims_value.sub)
+        || claims_value.iat > now.saturating_add(60)
+        || claims_value
+            .auth_time
+            .is_some_and(|authenticated_at| authenticated_at > claims_value.iat)
         || claims_value.exp <= now
-        || claims_value.exp > claims_value.iat.checked_add(300)?
+        || claims_value.exp > claims_value.iat.checked_add(3_600)?
     {
         return None;
     }
-    let signature_bytes: [u8; 64] = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(signature)
-        .ok()?
-        .try_into()
-        .ok()?;
+    Some(DecodedIdToken {
+        header: header_value,
+        claims: claims_value,
+        signature: base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(signature)
+            .ok()?,
+        signing_input: format!("{header}.{claims}"),
+    })
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+fn verify_id_token(
+    token: &str,
+    verifying_key: &[u8; 32],
+    key_id: &str,
+    issuer: &str,
+    client_id: &str,
+    nonce: &str,
+    now: u64,
+) -> Option<VerifiedIdentity> {
+    let decoded = decode_id_token(token, issuer, client_id, nonce, now)?;
+    if decoded.header.alg != "EdDSA" || decoded.header.kid != key_id {
+        return None;
+    }
+    let signature_bytes: [u8; 64] = decoded.signature.try_into().ok()?;
     let signature = Signature::from_bytes(&signature_bytes);
     VerifyingKey::from_bytes(verifying_key)
         .ok()?
-        .verify(format!("{header}.{claims}").as_bytes(), &signature)
+        .verify(decoded.signing_input.as_bytes(), &signature)
         .ok()?;
     Some(VerifiedIdentity {
-        subject: claims_value.sub,
-        authenticated_at: claims_value.auth_time,
+        subject: decoded.claims.sub,
+        authenticated_at: decoded.claims.auth_time.unwrap_or(decoded.claims.iat),
     })
 }
 
@@ -749,8 +1309,18 @@ fn valid_identifier(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
-fn valid_display_name(value: &str) -> bool {
-    (1..=64).contains(&value.chars().count())
+fn valid_subject(value: &str) -> bool {
+    (1..=255).contains(&value.len())
+        && value.trim() == value
+        && !value.chars().any(char::is_control)
+}
+
+fn valid_oidc_token(value: &str, maximum: usize) -> bool {
+    (1..=maximum).contains(&value.len()) && value.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
+}
+
+fn valid_label(value: &str, maximum: usize) -> bool {
+    (1..=maximum).contains(&value.chars().count())
         && value.trim() == value
         && !value.chars().any(char::is_control)
 }
@@ -760,10 +1330,7 @@ fn valid_opaque_value(value: &str) -> bool {
 }
 
 fn valid_authorization_code(value: &str) -> bool {
-    (16..=512).contains(&value.len())
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    valid_oidc_token(value, 1_024)
 }
 
 fn valid_pkce_challenge(value: &str) -> bool {
@@ -812,16 +1379,38 @@ mod tests {
     fn transaction_cookie_is_callback_scoped() {
         let cleared = clear_transaction_cookie(true);
         assert!(cleared.starts_with(&format!("{TRANSACTION_COOKIE}=;")));
-        assert!(cleared.contains("Path=/api/auth/oidc/callback"));
+        assert!(cleared.contains("Path=/api/auth"));
         assert!(cleared.contains("SameSite=Lax"));
         assert!(cleared.contains("Secure"));
+    }
+
+    #[test]
+    fn form_post_transaction_cookie_is_cross_site_and_secure() {
+        let cookie = super::transaction_cookie(&"a".repeat(64), true, true);
+        assert!(cookie.contains("SameSite=None"));
+        assert!(cookie.contains("Secure"));
+        let ordinary = super::transaction_cookie(&"a".repeat(64), true, false);
+        assert!(ordinary.contains("SameSite=Lax"));
+    }
+
+    #[test]
+    fn generic_oidc_values_accept_opaque_provider_syntax_but_not_controls() {
+        assert!(super::valid_authorization_code(
+            "4/0AVMBsJg.example~opaque-code"
+        ));
+        assert!(super::valid_oidc_token(
+            "client:https://tenant.example/application",
+            255
+        ));
+        assert!(!super::valid_authorization_code("code\nheader"));
+        assert!(!super::valid_oidc_token("client id", 255));
     }
 
     #[test]
     fn missing_transaction_fails_closed() {
         assert!(
             OidcTransactions::default()
-                .consume(&"a".repeat(64), &"b".repeat(64))
+                .consume("cardea", &"a".repeat(64), &"b".repeat(64))
                 .is_err()
         );
     }
@@ -831,7 +1420,9 @@ mod tests {
         let handoffs = NativeHandoffs::default();
         let verifier = "a".repeat(64);
         let challenge = super::pkce_challenge(&verifier).unwrap();
-        let started = handoffs.issue(&"b".repeat(32), &challenge).unwrap();
+        let started = handoffs
+            .issue("cardea", &"b".repeat(32), &challenge)
+            .unwrap();
         let callback = url::Url::parse(&started.location).unwrap();
         assert_eq!(callback.scheme(), NATIVE_CALLBACK_SCHEME);
         assert_eq!(callback.host_str(), Some("auth"));
@@ -841,8 +1432,11 @@ mod tests {
             .find(|(name, _)| name == "code")
             .map(|(_, value)| value.into_owned())
             .unwrap();
-        assert_eq!(handoffs.consume(&code, &verifier).unwrap(), "b".repeat(32));
-        assert!(handoffs.consume(&code, &verifier).is_err());
+        assert_eq!(
+            handoffs.consume("cardea", &code, &verifier).unwrap(),
+            "b".repeat(32)
+        );
+        assert!(handoffs.consume("cardea", &code, &verifier).is_err());
     }
 
     #[test]
@@ -850,15 +1444,17 @@ mod tests {
         let handoffs = NativeHandoffs::default();
         let verifier = "a".repeat(64);
         let challenge = super::pkce_challenge(&verifier).unwrap();
-        let started = handoffs.issue(&"b".repeat(32), &challenge).unwrap();
+        let started = handoffs
+            .issue("cardea", &"b".repeat(32), &challenge)
+            .unwrap();
         let callback = url::Url::parse(&started.location).unwrap();
         let code = callback
             .query_pairs()
             .find(|(name, _)| name == "code")
             .map(|(_, value)| value.into_owned())
             .unwrap();
-        assert!(handoffs.consume(&code, &"c".repeat(64)).is_err());
-        assert!(handoffs.consume(&code, &verifier).is_err());
+        assert!(handoffs.consume("cardea", &code, &"c".repeat(64)).is_err());
+        assert!(handoffs.consume("cardea", &code, &verifier).is_err());
     }
 
     #[test]
@@ -951,5 +1547,100 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn oidc_id_token_accepts_standard_extra_claims_and_requires_azp_for_multiple_audiences() {
+        let signing = SigningKey::from_bytes(&[9; 32]);
+        let header = super::encode_json(&serde_json::json!({
+            "alg": "EdDSA",
+            "kid": "cardea-2026",
+        }))
+        .unwrap();
+        let claims = super::encode_json(&serde_json::json!({
+            "iss": "https://cardea.example",
+            "sub": "opaque-subject:with/provider-format",
+            "aud": ["cowboy-production", "another-audience"],
+            "azp": "cowboy-production",
+            "nonce": "a".repeat(64),
+            "iat": 1_000,
+            "exp": 1_300,
+            "email": "presentation-only@example.test",
+            "email_verified": true,
+        }))
+        .unwrap();
+        let input = format!("{header}.{claims}");
+        let signature = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(signing.sign(input.as_bytes()).to_bytes());
+        let token = format!("{input}.{signature}");
+        assert!(
+            super::verify_id_token(
+                &token,
+                signing.verifying_key().as_bytes(),
+                "cardea-2026",
+                "https://cardea.example",
+                "cowboy-production",
+                &"a".repeat(64),
+                1_100,
+            )
+            .is_some()
+        );
+
+        let claims_without_azp = super::encode_json(&serde_json::json!({
+            "iss": "https://cardea.example",
+            "sub": "opaque-subject",
+            "aud": ["cowboy-production", "another-audience"],
+            "nonce": "a".repeat(64),
+            "iat": 1_000,
+            "exp": 1_300,
+        }))
+        .unwrap();
+        let input = format!("{header}.{claims_without_azp}");
+        let signature = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(signing.sign(input.as_bytes()).to_bytes());
+        assert!(
+            super::verify_id_token(
+                &format!("{input}.{signature}"),
+                signing.verifying_key().as_bytes(),
+                "cardea-2026",
+                "https://cardea.example",
+                "cowboy-production",
+                &"a".repeat(64),
+                1_100,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn jwks_selection_rejects_duplicate_or_non_signing_keys() {
+        let valid: super::JsonWebKeySet = serde_json::from_value(serde_json::json!({
+            "keys": [{
+                "kty": "RSA",
+                "kid": "key-1",
+                "alg": "RS256",
+                "use": "sig",
+                "key_ops": ["verify"],
+                "n": "AQAB",
+                "e": "AQAB"
+            }]
+        }))
+        .unwrap();
+        assert!(valid.signing_key("key-1", "RS256").is_some());
+
+        let duplicate: super::JsonWebKeySet = serde_json::from_value(serde_json::json!({
+            "keys": [
+                {"kty": "RSA", "kid": "key-1", "alg": "RS256"},
+                {"kty": "RSA", "kid": "key-1", "alg": "RS256"}
+            ]
+        }))
+        .unwrap();
+        assert!(duplicate.signing_key("key-1", "RS256").is_none());
+
+        let encryption: super::JsonWebKeySet = serde_json::from_value(serde_json::json!({
+            "keys": [{"kty": "RSA", "kid": "key-1", "use": "enc"}]
+        }))
+        .unwrap();
+        assert!(encryption.signing_key("key-1", "RS256").is_none());
     }
 }

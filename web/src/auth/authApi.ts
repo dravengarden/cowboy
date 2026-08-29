@@ -19,15 +19,24 @@ export interface ProductMe {
 }
 
 export interface ProductOidcProvider {
-  id: "cardea";
+  id: string;
   display_name: string;
+  button_label: string;
   start_url: string;
+}
+
+export interface ProductPasskeyServerPolicy {
+  enabled: boolean;
+  prompt_after_login: boolean;
+  session_refresh_enabled: boolean;
 }
 
 export interface AuthStatus {
   registration: RegistrationPublicStatus;
   setup_required?: boolean;
   setup_pending?: boolean;
+  password_enabled?: boolean;
+  passkeys?: ProductPasskeyServerPolicy;
   providers?: ProductOidcProvider[];
   me?: ProductMe;
 }
@@ -42,6 +51,8 @@ export function authStatusFromJson(value: unknown): AuthStatus | undefined {
     registration?: Partial<RegistrationPublicStatus>;
     setup_required?: boolean;
     setup_pending?: boolean;
+    password_enabled?: boolean;
+    passkeys?: Partial<ProductPasskeyServerPolicy>;
     providers?: unknown;
     me?: Partial<ProductMe>;
   };
@@ -64,30 +75,56 @@ export function authStatusFromJson(value: unknown): AuthStatus | undefined {
     },
     setup_required: record.setup_required === true,
     setup_pending: record.setup_pending === true,
+    password_enabled: record.password_enabled !== false,
     providers: [],
   };
+  if (
+    typeof record.passkeys?.enabled === "boolean" &&
+    typeof record.passkeys.prompt_after_login === "boolean" &&
+    typeof record.passkeys.session_refresh_enabled === "boolean"
+  ) {
+    status.passkeys = {
+      enabled: record.passkeys.enabled,
+      prompt_after_login: record.passkeys.prompt_after_login,
+      session_refresh_enabled: record.passkeys.session_refresh_enabled,
+    };
+  }
   if (Array.isArray(record.providers)) {
-    status.providers = record.providers.flatMap((provider): ProductOidcProvider[] => {
-      if (provider == null || typeof provider !== "object") return [];
-      const candidate = provider as Partial<ProductOidcProvider>;
-      return candidate.id === "cardea" &&
-          typeof candidate.display_name === "string" && candidate.display_name.length > 0 &&
-          candidate.start_url === "/api/auth/oidc/start"
-        ? [{
-          id: candidate.id,
-          display_name: candidate.display_name,
-          start_url: candidate.start_url,
-        }]
-        : [];
-    });
+    status.providers = record.providers.flatMap(
+      (provider): ProductOidcProvider[] => {
+        if (provider == null || typeof provider !== "object") return [];
+        const candidate = provider as Partial<ProductOidcProvider>;
+        return typeof candidate.id === "string" &&
+            /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidate.id) &&
+            typeof candidate.display_name === "string" &&
+            candidate.display_name.length > 0 &&
+            typeof candidate.button_label === "string" &&
+            candidate.button_label.length > 0 &&
+            (candidate.start_url ===
+                `/api/auth/providers/${candidate.id}/start` ||
+              candidate.id === "cardea" &&
+                candidate.start_url === "/api/auth/oidc/start")
+          ? [{
+            id: candidate.id,
+            display_name: candidate.display_name,
+            button_label: candidate.button_label,
+            start_url: candidate.start_url,
+          }]
+          : [];
+      },
+    );
   }
   const me = record.me;
   if (me && typeof me.account === "string" && me.account.length > 0) {
     const role = me.role;
     if (role === "owner" || role === "operator" || role === "viewer") {
       const next: ProductMe = { account: me.account, role };
-      if (typeof me.auth_enabled === "boolean") next.auth_enabled = me.auth_enabled;
-      if (typeof me.passkey_count === "number") next.passkey_count = me.passkey_count;
+      if (typeof me.auth_enabled === "boolean") {
+        next.auth_enabled = me.auth_enabled;
+      }
+      if (typeof me.passkey_count === "number") {
+        next.passkey_count = me.passkey_count;
+      }
       if (typeof me.passkey_reauth_enabled === "boolean") {
         next.passkey_reauth_enabled = me.passkey_reauth_enabled;
       }
@@ -97,7 +134,10 @@ export function authStatusFromJson(value: unknown): AuthStatus | undefined {
       if (typeof me.passkey_reauth_after_ms === "number") {
         next.passkey_reauth_after_ms = me.passkey_reauth_after_ms;
       }
-      if (typeof me.passkey_reauth_due_at_ms === "number" || me.passkey_reauth_due_at_ms === null) {
+      if (
+        typeof me.passkey_reauth_due_at_ms === "number" ||
+        me.passkey_reauth_due_at_ms === null
+      ) {
         next.passkey_reauth_due_at_ms = me.passkey_reauth_due_at_ms;
       }
       status.me = next;
@@ -124,7 +164,9 @@ async function readJson<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { accept: "application/json", ...init?.headers },
   });
   const text = await response.text();
-  if (!response.ok) throw new AuthApiError(text || response.statusText, response.status);
+  if (!response.ok) {
+    throw new AuthApiError(text || response.statusText, response.status);
+  }
   return (text ? JSON.parse(text) as T : {}) as T;
 }
 
@@ -200,8 +242,7 @@ export const authApi = {
     }),
   logout: () =>
     readJson<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
-  listTokens: () =>
-    readJson<{ tokens: ProductApiToken[] }>("/api/auth/tokens"),
+  listTokens: () => readJson<{ tokens: ProductApiToken[] }>("/api/auth/tokens"),
   createToken: (name: string, ttlSeconds?: number) =>
     readJson<CreatedProductApiToken>("/api/auth/tokens", {
       method: "POST",
@@ -225,7 +266,10 @@ export const authApi = {
         body: JSON.stringify({ nickname }),
       },
     ),
-  completePasskeyRegister: (challengeId: string, credential: PublicKeyCredentialJSON) =>
+  completePasskeyRegister: (
+    challengeId: string,
+    credential: PublicKeyCredentialJSON,
+  ) =>
     readJson<ProductPasskey>("/api/auth/passkeys/register/complete", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -235,7 +279,10 @@ export const authApi = {
     readJson<PasskeyCeremony>("/api/auth/passkeys/assert/options", {
       method: "POST",
     }),
-  completePasskeyAssert: (challengeId: string, credential: PublicKeyCredentialJSON) =>
+  completePasskeyAssert: (
+    challengeId: string,
+    credential: PublicKeyCredentialJSON,
+  ) =>
     readJson<ProductMe>("/api/auth/passkeys/assert/complete", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -260,7 +307,9 @@ export interface ProductPasskey {
 
 export interface PasskeyCeremony {
   challenge_id: string;
-  publicKey: PublicKeyCredentialCreationOptionsJSON | PublicKeyCredentialRequestOptionsJSON;
+  publicKey:
+    | PublicKeyCredentialCreationOptionsJSON
+    | PublicKeyCredentialRequestOptionsJSON;
 }
 
 type PublicKeyCredentialJSON = Record<string, unknown>;

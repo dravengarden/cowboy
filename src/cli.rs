@@ -26,7 +26,7 @@ enum Command {
     /// service that owns the Hub + supervisor; every surface (Web UI, phone,
     /// native shell) connects to it as a client.
     #[cfg(feature = "full")]
-    Serve(ServeArgs),
+    Serve(Box<ServeArgs>),
     /// Expose the running cowboy daemon as a stdio ACP agent for Zed or any
     /// other ACP client. This is a thin bridge; it never starts a second Hub.
     #[cfg(feature = "full")]
@@ -210,6 +210,11 @@ pub struct ServeArgs {
     #[arg(long, env = "COWBOY_CARDEA_OIDC_CONFIG")]
     pub cardea_oidc_config: Option<PathBuf>,
 
+    /// Protected authentication-method configuration. Every referenced
+    /// Authentication Provider must be an exact signed Catalog release.
+    #[arg(long, env = "COWBOY_AUTH_CONFIG")]
+    pub auth_config: Option<PathBuf>,
+
     /// Unix socket of Cowboy's isolated Zed protocol adapter. When omitted,
     /// code review remains available but language intelligence is reported as
     /// unavailable.
@@ -282,7 +287,7 @@ impl Cli {
         let _ = rustls::crypto::ring::default_provider().install_default();
         match self.command {
             #[cfg(feature = "full")]
-            Command::Serve(args) => crate::server::serve(args).await,
+            Command::Serve(args) => crate::server::serve(*args).await,
             #[cfg(feature = "full")]
             Command::ServeAcp(args) => {
                 crate::server::init_tracing();

@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "id": "apple",
+  "version": "1.0.0",
+  "display_name": "Apple",
+  "button_label": "Continue with Apple",
+  "protocol": {
+    "kind": "open_id_connect",
+    "configuration": {
+      "issuer": "https://appleid.apple.com",
+      "authorization_endpoint": "https://appleid.apple.com/auth/authorize",
+      "token_endpoint": "https://appleid.apple.com/auth/token",
+      "jwks_uri": "https://appleid.apple.com/auth/keys",
+      "scopes": ["openid", "name", "email"],
+      "client_authentication_methods": ["apple_client_secret_es256"],
+      "id_token_signing_algorithms": ["RS256"],
+      "authorization_parameters": { "response_mode": "form_post" }
+    }
+  }
+}

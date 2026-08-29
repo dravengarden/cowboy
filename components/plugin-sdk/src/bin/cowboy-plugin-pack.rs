@@ -45,6 +45,9 @@ fn build(arguments: &[std::ffi::OsString]) -> Result<()> {
             let source: StandardProviderSource = read_json(&root.join(&manifest.entrypoint))?;
             PluginPayload::AgentProvider(Box::new(build_package(source.compile()?)?))
         }
+        PluginKind::AuthenticationProvider => {
+            PluginPayload::AuthenticationProvider(read_json(&root.join(&manifest.entrypoint))?)
+        }
         PluginKind::CodeIntelligence => {
             PluginPayload::CodeIntelligence(read_json(&root.join(&manifest.entrypoint))?)
         }
@@ -65,9 +68,10 @@ fn build(arguments: &[std::ffi::OsString]) -> Result<()> {
                 architecture: platform.architecture.clone(),
             })
             .collect(),
+        PluginPayload::AuthenticationProvider(_) => Vec::new(),
         PluginPayload::CodeIntelligence(contract) => contract.supported_platforms.clone(),
     };
-    let release = PluginRelease {
+    let mut release = PluginRelease {
         release_schema: RELEASE_SCHEMA_VERSION,
         plugin_id: package.manifest.id.clone(),
         plugin_version: package.manifest.version.clone(),
@@ -85,6 +89,9 @@ fn build(arguments: &[std::ffi::OsString]) -> Result<()> {
         supported_platforms,
         runtime_artifacts: Vec::new(),
     };
+    if package.authentication_provider().is_some() {
+        release.artifact_digest = release.computed_artifact_digest()?;
+    }
     let release_path = output.with_extension("release.json");
     write_json_atomic(&release_path, &release)?;
     println!(
@@ -143,7 +150,7 @@ fn bind_runtime(arguments: &[std::ffi::OsString]) -> Result<()> {
     );
     release.runtime_artifacts = read_json::<Vec<PluginRuntimeArtifacts>>(Path::new(&arguments[2]))?;
     release.artifact_digest = release.computed_artifact_digest()?;
-    release.signature = "pending-signature".to_owned();
+    "pending-signature".clone_into(&mut release.signature);
     release.validate_for(&package)?;
     release.signature.clear();
     write_json_atomic(&release_path, &release)
@@ -158,7 +165,7 @@ fn sign(arguments: &[std::ffi::OsString]) -> Result<()> {
     let release_path = PathBuf::from(&arguments[1]);
     let bytes = std::fs::read(&artifact)?;
     let mut release: PluginRelease = read_json(&release_path)?;
-    release.signature = "pending-signature".to_owned();
+    "pending-signature".clone_into(&mut release.signature);
     release.validate_bytes(&bytes)?;
     release.signature = ssh_sign(Path::new(&arguments[2]), &release.proof())?;
     write_json_atomic(&release_path, &release)

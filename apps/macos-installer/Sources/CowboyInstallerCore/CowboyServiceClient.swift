@@ -78,6 +78,8 @@ public protocol CowboyServiceClient: Sendable {
     func completeOidcAuthorization(
         controllerURL: String,
         callbackURL: URL,
+        providerID: String,
+        usesLegacyRoutes: Bool,
         codeVerifier: String
     ) async throws -> AccountStatus
     func setPasskeySessionRefresh(
@@ -121,7 +123,7 @@ public enum CowboyServiceClientError: LocalizedError, Equatable {
         case .invalidAuthenticationCallback:
             "Cowboy Manager received an invalid sign-in callback. Start the sign-in again."
         case .authenticationCancelled:
-            "Cardea sign-in was cancelled or could not be completed."
+            "External sign-in was cancelled or could not be completed."
         case .secureRandomnessUnavailable:
             "macOS could not create a secure sign-in challenge."
         case .credentialsRequired:
@@ -186,8 +188,10 @@ public final class URLSessionCowboyServiceClient: CowboyServiceClient, @unchecke
         controllerURL: String,
         provider: AccountSignInProvider
     ) throws -> OidcAuthorizationRequest {
-        guard provider.startPath == "/api/auth/oidc/start",
-              Self.validProviderID(provider.id)
+        let usesLegacyRoutes = provider.id == "cardea"
+            && provider.startPath == "/api/auth/oidc/start"
+        guard Self.validProviderID(provider.id),
+              provider.startPath == Self.providerStartPath(provider.id) || usesLegacyRoutes
         else {
             throw CowboyServiceClientError.invalidResponse
         }
@@ -208,14 +212,24 @@ public final class URLSessionCowboyServiceClient: CowboyServiceClient, @unchecke
         guard let launchURL = components.url else {
             throw CowboyServiceClientError.invalidControllerURL
         }
-        return OidcAuthorizationRequest(launchURL: launchURL, codeVerifier: verifier)
+        return OidcAuthorizationRequest(
+            providerID: provider.id,
+            launchURL: launchURL,
+            codeVerifier: verifier,
+            usesLegacyRoutes: usesLegacyRoutes
+        )
     }
 
     public func completeOidcAuthorization(
         controllerURL: String,
         callbackURL: URL,
+        providerID: String,
+        usesLegacyRoutes: Bool,
         codeVerifier: String
     ) async throws -> AccountStatus {
+        guard Self.validProviderID(providerID), !usesLegacyRoutes || providerID == "cardea" else {
+            throw CowboyServiceClientError.invalidAuthenticationCallback
+        }
         guard let components = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false),
               components.scheme == "xyz.stormbird.cowboy.manager",
               components.host == "auth",
@@ -249,7 +263,9 @@ public final class URLSessionCowboyServiceClient: CowboyServiceClient, @unchecke
         }
         let _: ProductMeDTO = try await post(
             controllerURL,
-            path: "/api/auth/oidc/native/exchange",
+            path: usesLegacyRoutes
+                ? "/api/auth/oidc/native/exchange"
+                : Self.providerNativeExchangePath(providerID),
             body: OidcNativeExchangeDTO(code: codes[0], codeVerifier: codeVerifier)
         )
         return try await accountStatus(controllerURL: controllerURL)
@@ -503,8 +519,15 @@ public final class URLSessionCowboyServiceClient: CowboyServiceClient, @unchecke
             (97...122).contains(byte)
                 || (48...57).contains(byte)
                 || byte == 45
-                || byte == 95
         }
+    }
+
+    private static func providerStartPath(_ providerID: String) -> String {
+        "/api/auth/providers/\(providerID)/start"
+    }
+
+    private static func providerNativeExchangePath(_ providerID: String) -> String {
+        "/api/auth/providers/\(providerID)/native/exchange"
     }
 
     private static func accountStatus(
@@ -513,11 +536,13 @@ public final class URLSessionCowboyServiceClient: CowboyServiceClient, @unchecke
     ) -> AccountStatus {
         let administratorAccess = admin.authenticated
             && ["owner", "operator"].contains(admin.role ?? "")
+        let passwordEnabled = product.passwordEnabled != false
         let providers = (product.providers ?? []).compactMap { provider -> AccountSignInProvider? in
             guard validProviderID(provider.id),
                   !provider.displayName.isEmpty,
                   provider.displayName.count <= 64,
-                  provider.startURL == "/api/auth/oidc/start"
+                  provider.startURL == providerStartPath(provider.id)
+                    || provider.id == "cardea" && provider.startURL == "/api/auth/oidc/start"
             else {
                 return nil
             }
@@ -546,6 +571,7 @@ public final class URLSessionCowboyServiceClient: CowboyServiceClient, @unchecke
             return AccountStatus(
                 phase: .setupRequired,
                 administratorAccess: administratorAccess,
+                passwordEnabled: passwordEnabled,
                 signInProviders: providers,
                 message: "Complete first-time setup in Cowboy before signing in here."
             )
@@ -556,6 +582,7 @@ public final class URLSessionCowboyServiceClient: CowboyServiceClient, @unchecke
                 account: product.me?.account ?? "local",
                 role: product.me?.role ?? "owner",
                 administratorAccess: administratorAccess,
+                passwordEnabled: passwordEnabled,
                 signInProviders: providers,
                 passkeySessionRefresh: passkeySessionRefresh,
                 message: administratorAccess
@@ -569,6 +596,7 @@ public final class URLSessionCowboyServiceClient: CowboyServiceClient, @unchecke
                 account: me.account,
                 role: me.role,
                 administratorAccess: administratorAccess,
+                passwordEnabled: passwordEnabled,
                 signInProviders: providers,
                 passkeySessionRefresh: passkeySessionRefresh,
                 message: administratorAccess
@@ -579,6 +607,7 @@ public final class URLSessionCowboyServiceClient: CowboyServiceClient, @unchecke
         return AccountStatus(
             phase: .signedOut,
             administratorAccess: administratorAccess,
+            passwordEnabled: passwordEnabled,
             signInProviders: providers,
             message: "Sign in to this Cowboy Service."
         )
@@ -637,11 +666,13 @@ private struct ProductAuthStatusDTO: Decodable {
     let setupRequired: Bool
     let me: ProductMeDTO?
     let providers: [ProductProviderDTO]?
+    let passwordEnabled: Bool?
 
     enum CodingKeys: String, CodingKey {
         case setupRequired = "setup_required"
         case me
         case providers
+        case passwordEnabled = "password_enabled"
     }
 }
 

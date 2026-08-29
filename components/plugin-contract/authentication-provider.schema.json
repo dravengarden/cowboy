@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cowboy.stormbird.xyz/schemas/authentication-provider-v1.json",
+  "title": "Cowboy Authentication Provider contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "version",
+    "display_name",
+    "button_label",
+    "protocol"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)$"
+    },
+    "display_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "button_label": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "protocol": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "configuration"],
+      "properties": {
+        "kind": { "const": "open_id_connect" },
+        "configuration": { "$ref": "#/$defs/openIdConnect" }
+      }
+    }
+  },
+  "$defs": {
+    "httpsUrl": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://[^#]+$",
+      "maxLength": 2048
+    },
+    "issuerUrl": {
+      "allOf": [
+        { "$ref": "#/$defs/httpsUrl" },
+        { "pattern": "^https://[^?#]+$" }
+      ]
+    },
+    "openIdConnect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "issuer",
+        "authorization_endpoint",
+        "token_endpoint",
+        "jwks_uri",
+        "scopes",
+        "client_authentication_methods",
+        "id_token_signing_algorithms"
+      ],
+      "properties": {
+        "issuer": { "$ref": "#/$defs/issuerUrl" },
+        "authorization_endpoint": { "$ref": "#/$defs/httpsUrl" },
+        "token_endpoint": { "$ref": "#/$defs/httpsUrl" },
+        "jwks_uri": { "$ref": "#/$defs/httpsUrl" },
+        "scopes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "prefixItems": [{ "const": "openid" }],
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[\\x21\\x23-\\x5b\\x5d-\\x7e]+$"
+          }
+        },
+        "client_authentication_methods": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "client_secret_post",
+              "private_key_jwt_ed25519",
+              "apple_client_secret_es256"
+            ]
+          }
+        },
+        "id_token_signing_algorithms": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": { "enum": ["EdDSA", "RS256"] }
+        },
+        "authorization_parameters": {
+          "type": "object",
+          "default": {},
+          "maxProperties": 32,
+          "propertyNames": {
+            "pattern": "^[a-z0-9_]{1,64}$",
+            "not": {
+              "enum": [
+                "response_type",
+                "client_id",
+                "redirect_uri",
+                "scope",
+                "state",
+                "nonce",
+                "code_challenge",
+                "code_challenge_method",
+                "request_uri"
+              ]
+            }
+          },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+          }
+        }
+      }
+    }
+  }
+}

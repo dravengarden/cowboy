@@ -1,0 +1,18 @@
+{
+  "plugin_id": "apple",
+  "plugin_version": "1.0.0",
+  "artifact_digest": "sha256:<signed-release-artifact-digest>",
+  "oidc": {
+    "client_id": "com.example.cowboy.web",
+    "redirect_uri": "https://cowboy.example/api/auth/providers/apple/callback",
+    "subject": "<exact-apple-sub>",
+    "account": "owner",
+    "admin_account": "owner",
+    "client_authentication": {
+      "method": "apple_client_secret_es256",
+      "team_id": "<apple-team-id>",
+      "key_id": "<apple-key-id>",
+      "private_key_file": "/run/credentials/cowboy/apple-sign-in-key.p8"
+    }
+  }
+}

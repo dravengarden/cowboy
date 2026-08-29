@@ -1,0 +1,16 @@
+{
+  "plugin_id": "cloudflare-email",
+  "plugin_version": "1.0.0",
+  "artifact_digest": "sha256:<signed-release-artifact-digest>",
+  "oidc": {
+    "client_id": "cowboy-production",
+    "redirect_uri": "https://cowboy.example/api/auth/providers/cloudflare-email/callback",
+    "subject": "<opaque-email-authority-subject>",
+    "account": "owner",
+    "admin_account": "owner",
+    "client_authentication": {
+      "method": "client_secret_post",
+      "client_secret_file": "/run/credentials/cowboy/cloudflare-email-client-secret"
+    }
+  }
+}

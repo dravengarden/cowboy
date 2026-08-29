@@ -1,7 +1,7 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert";
 import {
-  AuthApiError,
   authApi,
+  AuthApiError,
   authStatusFromJson,
   fetchAuthStatus,
   isHtmlContentType,
@@ -105,29 +105,42 @@ Deno.test("auth login and register POST JSON with credentials", async () => {
     assertEquals(calls[0]?.init?.method, "POST");
     assertEquals(calls[0]?.init?.credentials, "same-origin");
     assertEquals(calls[0]?.init?.cache, "no-store");
-    const loginHeaders = calls[0]?.init?.headers as Record<string, string> | undefined;
+    const loginHeaders = calls[0]?.init?.headers as
+      | Record<string, string>
+      | undefined;
     assertEquals(loginHeaders?.["content-type"], "application/json");
     assertEquals(loginHeaders?.accept, "application/json");
-    assertEquals(calls[0]?.init?.body, JSON.stringify({
-      account: "draven",
-      password: "supersecret1",
-    }));
+    assertEquals(
+      calls[0]?.init?.body,
+      JSON.stringify({
+        account: "draven",
+        password: "supersecret1",
+      }),
+    );
     assertEquals(calls[1]?.input, "/api/auth/setup");
-    assertEquals(calls[1]?.init?.body, JSON.stringify({
-      token: "cow_setup_test",
-    }));
+    assertEquals(
+      calls[1]?.init?.body,
+      JSON.stringify({
+        token: "cow_setup_test",
+      }),
+    );
     assertEquals(calls[2]?.input, "/api/auth/register");
-    assertEquals(calls[2]?.init?.body, JSON.stringify({
-      account: "draven",
-      password: "supersecret1",
-    }));
+    assertEquals(
+      calls[2]?.init?.body,
+      JSON.stringify({
+        account: "draven",
+        password: "supersecret1",
+      }),
+    );
   } finally {
     restore();
   }
 });
 
 Deno.test("auth API surfaces HTTP error text", async () => {
-  const restore = withFetch(() => new Response("invalid credentials", { status: 401 }));
+  const restore = withFetch(() =>
+    new Response("invalid credentials", { status: 401 })
+  );
   try {
     const error = await assertRejects(
       () => authApi.login("draven", "nope"),
@@ -195,14 +208,24 @@ Deno.test("token CRUD is same-origin and never sends the hash", async () => {
     }
     return new Response(
       JSON.stringify({
-        tokens: [{ id: "tok1", name: "zed", token_prefix: "cow_secr", created_at_ms: 1 }],
+        tokens: [{
+          id: "tok1",
+          name: "zed",
+          token_prefix: "cow_secr",
+          created_at_ms: 1,
+        }],
       }),
       { status: 200 },
     );
   });
   try {
     assertEquals(await authApi.listTokens(), {
-      tokens: [{ id: "tok1", name: "zed", token_prefix: "cow_secr", created_at_ms: 1 }],
+      tokens: [{
+        id: "tok1",
+        name: "zed",
+        token_prefix: "cow_secr",
+        created_at_ms: 1,
+      }],
     });
     assertEquals((await authApi.createToken("zed")).token, "cow_secret");
     assertEquals(await authApi.deleteToken("tok1"), { ok: true });
@@ -240,15 +263,91 @@ Deno.test("auth status JSON requires the public registration shape", () => {
   assertEquals(authStatusFromJson("<!doctype html>"), undefined);
   assertEquals(
     authStatusFromJson({
-      registration: { enabled: true, mode: "token", accepts_registration: true },
+      registration: {
+        enabled: true,
+        mode: "token",
+        accepts_registration: true,
+      },
       me: { account: "draven", role: "operator", auth_enabled: false },
     }),
     {
-      registration: { enabled: true, mode: "token", accepts_registration: true },
+      registration: {
+        enabled: true,
+        mode: "token",
+        accepts_registration: true,
+      },
       setup_required: false,
       setup_pending: false,
+      password_enabled: true,
       providers: [],
       me: { account: "draven", role: "operator", auth_enabled: false },
+    },
+  );
+});
+
+Deno.test("auth status accepts pinned provider routes and server Passkey policy", () => {
+  assertEquals(
+    authStatusFromJson({
+      registration: {
+        enabled: false,
+        mode: "disabled",
+        accepts_registration: false,
+      },
+      password_enabled: false,
+      passkeys: {
+        enabled: true,
+        prompt_after_login: true,
+        session_refresh_enabled: false,
+      },
+      providers: [
+        {
+          id: "cardea",
+          display_name: "Cardea",
+          button_label: "Continue with Cardea",
+          start_url: "/api/auth/oidc/start",
+        },
+        {
+          id: "google",
+          display_name: "Google",
+          button_label: "Continue with Google",
+          start_url: "/api/auth/providers/google/start",
+        },
+        {
+          id: "forged",
+          display_name: "Forged",
+          button_label: "Continue",
+          start_url: "/api/auth/providers/google/start",
+        },
+      ],
+    }),
+    {
+      registration: {
+        enabled: false,
+        mode: "disabled",
+        accepts_registration: false,
+      },
+      setup_required: false,
+      setup_pending: false,
+      password_enabled: false,
+      passkeys: {
+        enabled: true,
+        prompt_after_login: true,
+        session_refresh_enabled: false,
+      },
+      providers: [
+        {
+          id: "cardea",
+          display_name: "Cardea",
+          button_label: "Continue with Cardea",
+          start_url: "/api/auth/oidc/start",
+        },
+        {
+          id: "google",
+          display_name: "Google",
+          button_label: "Continue with Google",
+          start_url: "/api/auth/providers/google/start",
+        },
+      ],
     },
   );
 });

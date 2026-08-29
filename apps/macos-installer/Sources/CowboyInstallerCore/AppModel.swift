@@ -304,6 +304,7 @@ public final class AppModel: ObservableObject {
             pendingOidcAuthorization = (request, previousStatus)
             accountStatus = AccountStatus(
                 phase: .checking,
+                passwordEnabled: previousStatus.passwordEnabled,
                 signInProviders: previousStatus.signInProviders,
                 message: "Continue sign-in with \(provider.displayName)"
             )
@@ -329,6 +330,7 @@ public final class AppModel: ObservableObject {
         pendingOidcAuthorization = nil
         accountStatus = AccountStatus(
             phase: .checking,
+            passwordEnabled: pending.previousStatus.passwordEnabled,
             signInProviders: pending.previousStatus.signInProviders,
             message: "Completing secure sign-in"
         )
@@ -338,6 +340,8 @@ public final class AppModel: ObservableObject {
                 accountStatus = try await serviceClient.completeOidcAuthorization(
                     controllerURL: settings.controllerURL,
                     callbackURL: callbackURL,
+                    providerID: pending.request.providerID,
+                    usesLegacyRoutes: pending.request.usesLegacyRoutes,
                     codeVerifier: pending.request.codeVerifier
                 )
                 rejectedAutomaticCredential = nil

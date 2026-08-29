@@ -185,12 +185,21 @@ public struct PasskeySessionRefreshStatus: Equatable, Sendable {
 }
 
 public struct OidcAuthorizationRequest: Equatable, Sendable {
+    public let providerID: String
     public let launchURL: URL
     public let codeVerifier: String
+    public let usesLegacyRoutes: Bool
 
-    public init(launchURL: URL, codeVerifier: String) {
+    public init(
+        providerID: String,
+        launchURL: URL,
+        codeVerifier: String,
+        usesLegacyRoutes: Bool = false
+    ) {
+        self.providerID = providerID
         self.launchURL = launchURL
         self.codeVerifier = codeVerifier
+        self.usesLegacyRoutes = usesLegacyRoutes
     }
 }
 
@@ -199,6 +208,7 @@ public struct AccountStatus: Equatable, Sendable {
     public var account: String?
     public var role: String?
     public var administratorAccess: Bool
+    public var passwordEnabled: Bool
     public var signInProviders: [AccountSignInProvider]
     public var passkeySessionRefresh: PasskeySessionRefreshStatus?
     public var message: String
@@ -209,6 +219,7 @@ public struct AccountStatus: Equatable, Sendable {
         account: String? = nil,
         role: String? = nil,
         administratorAccess: Bool = false,
+        passwordEnabled: Bool = true,
         signInProviders: [AccountSignInProvider] = [],
         passkeySessionRefresh: PasskeySessionRefreshStatus? = nil,
         message: String = "Account status has not been checked",
@@ -218,6 +229,7 @@ public struct AccountStatus: Equatable, Sendable {
         self.account = account
         self.role = role
         self.administratorAccess = administratorAccess
+        self.passwordEnabled = passwordEnabled
         self.signInProviders = signInProviders
         self.passkeySessionRefresh = passkeySessionRefresh
         self.message = message

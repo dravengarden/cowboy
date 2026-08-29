@@ -29,7 +29,7 @@ interface PluginManifest {
   version: string;
   component_release: string;
   publisher: string;
-  kind: "agent_provider" | "code_intelligence";
+  kind: "agent_provider" | "authentication_provider" | "code_intelligence";
   entrypoint: string;
   components: Array<{ id: string; version: string }>;
 }
@@ -105,7 +105,10 @@ for (const component of active.components) {
     `${component.id}: invalid component publisher`,
   );
   assert(component.sources.length > 0, `${component.id}: no source roots`);
-  assert(component.package !== undefined, `${component.id}: no distributable package`);
+  assert(
+    component.package !== undefined,
+    `${component.id}: no distributable package`,
+  );
   await validatePackage(component);
   const digest = await sourceDigest(component.sources);
   if (Deno.args.includes("--print-digests")) {
@@ -205,7 +208,7 @@ for (const pluginId of pluginEntries) {
       provider.version === manifest.version,
       `${pluginId}: Provider payload version mismatch`,
     );
-  } else {
+  } else if (manifest.kind === "code_intelligence") {
     assert(
       pluginId === "zed",
       `${pluginId}: unsupported code-intelligence plugin`,
@@ -222,11 +225,29 @@ for (const pluginId of pluginEntries) {
       contract.version === manifest.version,
       `${pluginId}: contract version mismatch`,
     );
-    const cargo = await Deno.readTextFile(`plugins/${pluginId}/adapter/Cargo.toml`);
+    const cargo = await Deno.readTextFile(
+      `plugins/${pluginId}/adapter/Cargo.toml`,
+    );
     const packageBlock = cargo.split("[dependencies]", 1)[0] ?? cargo;
     assert(
       packageBlock.includes(`version = "${manifest.version}"`),
       `${pluginId}: adapter package version mismatch`,
+    );
+  } else {
+    assert(
+      pluginId !== "zed",
+      `${pluginId}: Authentication Provider cannot use the Zed plugin identity`,
+    );
+    const contract = await readJson<{ id: string; version: string }>(
+      `plugins/${pluginId}/${manifest.entrypoint}`,
+    );
+    assert(
+      contract.id === pluginId,
+      `${pluginId}: Authentication Provider payload identity mismatch`,
+    );
+    assert(
+      contract.version === manifest.version,
+      `${pluginId}: Authentication Provider payload version mismatch`,
     );
   }
 }
@@ -267,7 +288,10 @@ export function validateIndependentPluginVersion(
   version: string,
   componentReleaseMinimum: string,
 ): void {
-  assert(exactVersion(version), `${pluginId}: invalid plugin version ${version}`);
+  assert(
+    exactVersion(version),
+    `${pluginId}: invalid plugin version ${version}`,
+  );
   assert(
     compareVersion(version, componentReleaseMinimum) >= 0,
     `${pluginId}: version predates the active component release`,
@@ -276,7 +300,10 @@ export function validateIndependentPluginVersion(
 
 async function validatePackage(component: ComponentRecord): Promise<void> {
   const descriptor = component.package!;
-  assert(exists(descriptor.manifest), `${component.id}: package manifest is missing`);
+  assert(
+    exists(descriptor.manifest),
+    `${component.id}: package manifest is missing`,
+  );
   if (descriptor.kind === "npm") {
     const manifest = await readJson<{
       name?: string;
@@ -286,13 +313,28 @@ async function validatePackage(component: ComponentRecord): Promise<void> {
       dependencies?: Record<string, string>;
       peerDependencies?: Record<string, string>;
     }>(descriptor.manifest);
-    assert(manifest.name === descriptor.name, `${component.id}: npm package name mismatch`);
-    assert(manifest.version === component.version, `${component.id}: npm package version mismatch`);
-    assert(manifest.private !== true, `${component.id}: npm package is private`);
-    assert(manifest.exports !== undefined, `${component.id}: npm package has no public exports`);
+    assert(
+      manifest.name === descriptor.name,
+      `${component.id}: npm package name mismatch`,
+    );
+    assert(
+      manifest.version === component.version,
+      `${component.id}: npm package version mismatch`,
+    );
+    assert(
+      manifest.private !== true,
+      `${component.id}: npm package is private`,
+    );
+    assert(
+      manifest.exports !== undefined,
+      `${component.id}: npm package has no public exports`,
+    );
     const packageRoot = dirname(descriptor.manifest);
     for (const target of exportTargets(manifest.exports)) {
-      assert(target.startsWith("./"), `${component.id}: export is not package-relative`);
+      assert(
+        target.startsWith("./"),
+        `${component.id}: export is not package-relative`,
+      );
       const exportedPath = resolve(packageRoot, target);
       assert(
         confined(packageRoot, exportedPath) && exists(exportedPath),
@@ -316,7 +358,10 @@ async function validatePackage(component: ComponentRecord): Promise<void> {
     packageBlock.includes(`version = "${component.version}"`),
     `${component.id}: Cargo package version mismatch`,
   );
-  assert(!packageBlock.includes("publish = false"), `${component.id}: Cargo package is private`);
+  assert(
+    !packageBlock.includes("publish = false"),
+    `${component.id}: Cargo package is private`,
+  );
 }
 
 async function validateNpmSourceClosure(

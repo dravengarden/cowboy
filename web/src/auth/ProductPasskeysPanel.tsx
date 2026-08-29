@@ -13,12 +13,16 @@ import {
 } from "@mui/material";
 import { useCallback, useEffect, useState } from "react";
 import {
-  AuthApiError,
   authApi,
+  AuthApiError,
   type ProductMe,
   type ProductPasskey,
 } from "./authApi";
-import { assertPasskey, createPasskey, passkeysSupported } from "./passkeyBrowser";
+import {
+  assertPasskey,
+  createPasskey,
+  passkeysSupported,
+} from "./passkeyBrowser";
 import { useProductAuth } from "./ProductAuthGate";
 
 const REFRESH_INTERVALS = [
@@ -32,7 +36,7 @@ export function ProductPasskeysPanel({
 }: {
   onMe?: (me: ProductMe) => void;
 }): React.JSX.Element {
-  const { me, updateMe } = useProductAuth();
+  const { me, passkeys: policy, updateMe } = useProductAuth();
   const [passkeys, setPasskeys] = useState<ProductPasskey[]>([]);
   const [nickname, setNickname] = useState("This device");
   const [enabled, setEnabled] = useState(me.passkey_reauth_enabled === true);
@@ -49,11 +53,13 @@ export function ProductPasskeysPanel({
   }, []);
 
   useEffect(() => {
-    if (me.auth_enabled === false) return;
+    if (me.auth_enabled === false || policy?.enabled === false) return;
     void load().catch((err: unknown) => {
-      setError(err instanceof AuthApiError ? err.message : "Could not load passkeys");
+      setError(
+        err instanceof AuthApiError ? err.message : "Could not load passkeys",
+      );
     });
-  }, [load, me.auth_enabled]);
+  }, [load, me.auth_enabled, policy?.enabled]);
 
   const add = (): void => {
     if (busy || !passkeysSupported() || nickname.trim() === "") return;
@@ -68,7 +74,9 @@ export function ProductPasskeysPanel({
       updateMe(await authApi.me());
     })()
       .catch((err: unknown) => {
-        setError(err instanceof AuthApiError ? err.message : "Could not add a passkey");
+        setError(
+          err instanceof AuthApiError ? err.message : "Could not add a passkey",
+        );
       })
       .finally(() => setBusy(false));
   };
@@ -87,7 +95,11 @@ export function ProductPasskeysPanel({
         onMe?.(updated);
       })
       .catch((err: unknown) => {
-        setError(err instanceof AuthApiError ? err.message : "Could not revoke passkey");
+        setError(
+          err instanceof AuthApiError
+            ? err.message
+            : "Could not revoke passkey",
+        );
       })
       .finally(() => setBusy(false));
   };
@@ -101,9 +113,14 @@ export function ProductPasskeysPanel({
         try {
           const ceremony = await authApi.startPasskeyAssert();
           const credential = await assertPasskey(ceremony);
-          updated = await authApi.completePasskeyAssert(ceremony.challenge_id, credential);
+          updated = await authApi.completePasskeyAssert(
+            ceremony.challenge_id,
+            credential,
+          );
         } catch (error) {
-          await authApi.setPasskeyReauth(false, reauthAfterMs).catch(() => undefined);
+          await authApi.setPasskeyReauth(false, reauthAfterMs).catch(() =>
+            undefined
+          );
           throw error;
         }
       }
@@ -115,7 +132,9 @@ export function ProductPasskeysPanel({
         onMe?.(updated);
       })
       .catch((err: unknown) => {
-        setError(err instanceof AuthApiError ? err.message : "Could not save setting");
+        setError(
+          err instanceof AuthApiError ? err.message : "Could not save setting",
+        );
       })
       .finally(() => setBusy(false));
   };
@@ -131,90 +150,118 @@ export function ProductPasskeysPanel({
         onMe?.(updated);
       })
       .catch((err: unknown) => {
-        setError(err instanceof AuthApiError ? err.message : "Could not save setting");
+        setError(
+          err instanceof AuthApiError ? err.message : "Could not save setting",
+        );
       })
       .finally(() => setBusy(false));
   };
 
   if (me.auth_enabled === false) return <></>;
+  if (policy?.enabled === false) {
+    return (
+      <Alert severity="info">
+        Passkeys are disabled by this Cowboy Service.
+      </Alert>
+    );
+  }
+
+  const refreshEnabled = policy?.session_refresh_enabled !== false;
 
   return (
     <Stack spacing={1.5}>
       <Typography variant="body2" color="text.secondary">
-        Password and Cardea sign-ins last one day. Passkey refresh is optional
+        Password and external sign-ins last one day. Passkey refresh is optional
         and off by default. A successful Passkey rotates this browser&apos;s
         session and extends it for up to 30 days. Turning it on verifies your
         Passkey immediately.
       </Typography>
       {error && <Alert severity="error">{error}</Alert>}
-      <FormControlLabel
-        control={
-          <Switch
-            checked={enabled}
-            disabled={busy || passkeys.length === 0}
-            onChange={(event) => toggle(event.target.checked)}
-          />
-        }
-        label="Keep this session signed in with Passkey refresh"
-      />
-      <FormControl size="small" disabled={busy || passkeys.length === 0}>
-        <InputLabel id="passkey-refresh-interval-label">Refresh frequency</InputLabel>
-        <Select
-          labelId="passkey-refresh-interval-label"
-          label="Refresh frequency"
-          value={reauthAfterMs}
-          onChange={(event) => changeInterval(Number(event.target.value))}
-        >
-          {REFRESH_INTERVALS.map((option) => (
-            <MenuItem key={option.value} value={option.value}>{option.label}</MenuItem>
-          ))}
-        </Select>
-      </FormControl>
-      {passkeysSupported() ? (
-        <Stack direction="row" spacing={1} alignItems="center">
-          <TextField
-            size="small"
-            label="Passkey name"
-            value={nickname}
-            onChange={(event) => setNickname(event.target.value)}
-            fullWidth
-          />
-          <Button
-            variant="contained"
-            disabled={busy || nickname.trim() === ""}
-            onClick={add}
-          >
-            Add
-          </Button>
-        </Stack>
-      ) : (
-        <Alert severity="info">This browser cannot create a Passkey.</Alert>
-      )}
-      {passkeys.length === 0 ? (
-        <Typography variant="body2" color="text.secondary">
-          No passkeys yet. Add one, then turn on session refresh when you want it.
-        </Typography>
-      ) : (
-        passkeys.map((passkey) => (
-          <Stack
-            key={passkey.id}
-            direction="row"
-            spacing={1}
-            alignItems="center"
-            justifyContent="space-between"
-          >
-            <Typography variant="body2">{passkey.nickname}</Typography>
-            <Button
-              color="inherit"
+      {refreshEnabled
+        ? (
+          <>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={enabled}
+                  disabled={busy || passkeys.length === 0}
+                  onChange={(event) => toggle(event.target.checked)}
+                />
+              }
+              label="Keep this session signed in with Passkey refresh"
+            />
+            <FormControl size="small" disabled={busy || passkeys.length === 0}>
+              <InputLabel id="passkey-refresh-interval-label">
+                Refresh frequency
+              </InputLabel>
+              <Select
+                labelId="passkey-refresh-interval-label"
+                label="Refresh frequency"
+                value={reauthAfterMs}
+                onChange={(event) => changeInterval(Number(event.target.value))}
+              >
+                {REFRESH_INTERVALS.map((option) => (
+                  <MenuItem key={option.value} value={option.value}>
+                    {option.label}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          </>
+        )
+        : (
+          <Alert severity="info">
+            Passkey session refresh is disabled by this Cowboy Service.
+          </Alert>
+        )}
+      {passkeysSupported()
+        ? (
+          <Stack direction="row" spacing={1} alignItems="center">
+            <TextField
               size="small"
-              disabled={busy}
-              onClick={() => revoke(passkey.id)}
+              label="Passkey name"
+              value={nickname}
+              onChange={(event) => setNickname(event.target.value)}
+              fullWidth
+            />
+            <Button
+              variant="contained"
+              disabled={busy || nickname.trim() === ""}
+              onClick={add}
             >
-              Revoke
+              Add
             </Button>
           </Stack>
-        ))
-      )}
+        )
+        : <Alert severity="info">This browser cannot create a Passkey.</Alert>}
+      {passkeys.length === 0
+        ? (
+          <Typography variant="body2" color="text.secondary">
+            No passkeys yet. Add one, then turn on session refresh when you want
+            it.
+          </Typography>
+        )
+        : (
+          passkeys.map((passkey) => (
+            <Stack
+              key={passkey.id}
+              direction="row"
+              spacing={1}
+              alignItems="center"
+              justifyContent="space-between"
+            >
+              <Typography variant="body2">{passkey.nickname}</Typography>
+              <Button
+                color="inherit"
+                size="small"
+                disabled={busy}
+                onClick={() => revoke(passkey.id)}
+              >
+                Revoke
+              </Button>
+            </Stack>
+          ))
+        )}
     </Stack>
   );
 }

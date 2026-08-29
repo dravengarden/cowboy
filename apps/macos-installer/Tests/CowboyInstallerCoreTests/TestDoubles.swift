@@ -137,12 +137,13 @@ final class MockCowboyServiceClient: CowboyServiceClient, @unchecked Sendable {
 
     func oidcAuthorizationRequest(
         controllerURL _: String,
-        provider _: AccountSignInProvider
+        provider: AccountSignInProvider
     ) throws -> OidcAuthorizationRequest {
         oidcStartCount += 1
         if let error { throw error }
         return OidcAuthorizationRequest(
-            launchURL: URL(string: "https://cowboy.example/api/auth/oidc/start")!,
+            providerID: provider.id,
+            launchURL: URL(string: "https://cowboy.example/api/auth/providers/\(provider.id)/start")!,
             codeVerifier: String(repeating: "a", count: 43)
         )
     }
@@ -150,6 +151,8 @@ final class MockCowboyServiceClient: CowboyServiceClient, @unchecked Sendable {
     func completeOidcAuthorization(
         controllerURL _: String,
         callbackURL _: URL,
+        providerID _: String,
+        usesLegacyRoutes _: Bool,
         codeVerifier _: String
     ) async throws -> AccountStatus {
         oidcCompleteCount += 1

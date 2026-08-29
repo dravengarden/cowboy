@@ -41,7 +41,8 @@ struct AccountView: View {
                         .controlSize(.small)
                 }
 
-                if optionalSignInAvailable && !showsOptionalSignIn {
+                if optionalSignInAvailable && model.accountStatus.passwordEnabled
+                    && !showsOptionalSignIn {
                     Text("This Service explicitly allows trusted local-owner access. Sign in only when you need protected administrator actions.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -61,12 +62,13 @@ struct AccountView: View {
                             }
                         }
                     }
-                    Text("One Cardea authorization signs Cowboy Manager into the product and its explicitly mapped administrator account. No Cardea token is stored by this app.")
+                    Text("External sign-in uses Authorization Code flow with PKCE and signs Cowboy Manager into the provider's explicitly mapped Cowboy account. Provider tokens are never stored by this app.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
 
-                if needsCredentials && (!optionalSignInAvailable || showsOptionalSignIn) {
+                if needsCredentials && model.accountStatus.passwordEnabled
+                    && (!optionalSignInAvailable || showsOptionalSignIn) {
                     if !model.accountStatus.signInProviders.isEmpty {
                         Divider()
                         Text("Or use the Cowboy account password")
@@ -178,7 +180,10 @@ struct AccountView: View {
         if model.accountStatus.authenticationIsOptional {
             return "This Service is currently in explicit trusted local-owner mode. A password is sent only to the configured HTTPS Cowboy Service and, when saved, stays in this app's macOS Keychain item."
         }
-        return "Login is required. Cowboy passwords are sent only to the configured HTTPS Cowboy Service and can be stored only in this app's macOS Keychain. Cardea uses Authorization Code flow with PKCE; the app receives only a short-lived one-time handoff code, never Cardea credentials or tokens."
+        if model.accountStatus.passwordEnabled {
+            return "Login is required. Cowboy passwords are sent only to the configured HTTPS Cowboy Service and can be stored only in this app's macOS Keychain. External providers use Authorization Code flow with PKCE; the app receives only a short-lived one-time handoff code, never provider credentials or tokens."
+        }
+        return "Login is required through an external provider using Authorization Code flow with PKCE. The app receives only a short-lived one-time handoff code, never provider credentials or tokens."
     }
 
     private var accountSymbol: String {

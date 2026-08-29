@@ -203,7 +203,7 @@ struct AppModelTests {
         let provider = AccountSignInProvider(
             id: "cardea",
             displayName: "Cardea",
-            startPath: "/api/auth/oidc/start"
+            startPath: "/api/auth/providers/cardea/start"
         )
 
         #expect(model.beginFederatedSignIn(provider: provider) != nil)
