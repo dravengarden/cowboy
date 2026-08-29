@@ -61,6 +61,27 @@ pub struct PluginPackage {
     pub contract_fingerprint: String,
 }
 
+#[derive(Serialize)]
+struct LegacyContractFingerprint<'a> {
+    manifest: &'a PluginManifest,
+    component_release: &'a str,
+    payload: &'a PluginPayload,
+}
+
+#[derive(Serialize)]
+struct LegacyReleaseFingerprint<'a> {
+    release_schema: u16,
+    plugin_id: &'a str,
+    plugin_version: &'a str,
+    plugin_kind: PluginKind,
+    package_digest: &'a str,
+    publisher: &'a str,
+    contract_fingerprint: &'a str,
+    component_release: &'a str,
+    supported_platforms: &'a [PlatformTarget],
+    runtime_artifacts: &'a [PluginRuntimeArtifacts],
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "contract", rename_all = "snake_case")]
 pub enum PluginPayload {
@@ -289,8 +310,10 @@ impl PluginPackage {
             package.component_release.clone(),
             package.payload.clone(),
         )?;
+        let legacy_fingerprint = legacy_contract_fingerprint(&package)?;
         ensure!(
-            package.contract_fingerprint == rebuilt.contract_fingerprint,
+            package.contract_fingerprint == rebuilt.contract_fingerprint
+                || package.contract_fingerprint == legacy_fingerprint,
             "plugin contract fingerprint mismatch"
         );
         Ok(package)
@@ -446,8 +469,11 @@ impl PluginRelease {
             supported.len() == self.supported_platforms.len() && supported == expected,
             "plugin platform matrix mismatch"
         );
+        let canonical_artifact_digest = self.computed_artifact_digest()?;
+        let legacy_artifact_digest = self.legacy_artifact_digest()?;
         ensure!(
-            self.artifact_digest == self.computed_artifact_digest()?,
+            self.artifact_digest == canonical_artifact_digest
+                || self.artifact_digest == legacy_artifact_digest,
             "plugin composite artifact digest mismatch"
         );
         if package.agent_provider().is_some() {
@@ -473,6 +499,25 @@ impl PluginRelease {
             "supported_platforms": self.supported_platforms,
             "runtime_artifacts": self.runtime_artifacts,
         }))
+    }
+
+    fn legacy_artifact_digest(&self) -> Result<String> {
+        let input = LegacyReleaseFingerprint {
+            release_schema: self.release_schema,
+            plugin_id: &self.plugin_id,
+            plugin_version: &self.plugin_version,
+            plugin_kind: self.plugin_kind,
+            package_digest: &self.package_digest,
+            publisher: &self.publisher,
+            contract_fingerprint: &self.contract_fingerprint,
+            component_release: &self.component_release,
+            supported_platforms: &self.supported_platforms,
+            runtime_artifacts: &self.runtime_artifacts,
+        };
+        Ok(format!(
+            "sha256:{:x}",
+            Sha256::digest(serde_json::to_vec(&input)?)
+        ))
     }
 
     #[must_use]
@@ -725,9 +770,23 @@ fn unique_values<T: Ord>(values: &[T]) -> bool {
 }
 
 fn fingerprint_json(value: &serde_json::Value) -> Result<String> {
+    let mut value = value.clone();
+    value.sort_all_objects();
     Ok(format!(
         "sha256:{:x}",
-        Sha256::digest(serde_json::to_vec(value)?)
+        Sha256::digest(serde_json::to_vec(&value)?)
+    ))
+}
+
+fn legacy_contract_fingerprint(package: &PluginPackage) -> Result<String> {
+    let input = LegacyContractFingerprint {
+        manifest: &package.manifest,
+        component_release: &package.component_release,
+        payload: &package.payload,
+    };
+    Ok(format!(
+        "sha256:{:x}",
+        Sha256::digest(serde_json::to_vec(&input)?)
     ))
 }
 
@@ -833,6 +892,41 @@ mod tests {
         )
         .unwrap();
         assert!(package.expected_platforms().is_empty());
+
+        let mut legacy_package = package.clone();
+        legacy_package.contract_fingerprint = legacy_contract_fingerprint(&legacy_package).unwrap();
+        assert_ne!(
+            legacy_package.contract_fingerprint,
+            package.contract_fingerprint
+        );
+        let legacy_bytes = legacy_package.canonical_bytes().unwrap();
+        assert_eq!(
+            PluginPackage::from_bytes(&legacy_bytes).unwrap(),
+            legacy_package
+        );
+
+        let package_bytes = package.canonical_bytes().unwrap();
+        let mut legacy_release = PluginRelease {
+            release_schema: RELEASE_SCHEMA_VERSION,
+            plugin_id: package.manifest.id.clone(),
+            plugin_version: package.manifest.version.clone(),
+            plugin_kind: package.manifest.kind,
+            package_digest: PluginPackage::artifact_digest(&package_bytes),
+            artifact_digest: String::new(),
+            artifact_url: "https://plugins.example/google.cowboy-plugin".to_owned(),
+            publisher: package.manifest.publisher.clone(),
+            contract_fingerprint: package.contract_fingerprint.clone(),
+            component_release: package.component_release.clone(),
+            signature: "legacy-signature".to_owned(),
+            supported_platforms: Vec::new(),
+            runtime_artifacts: Vec::new(),
+        };
+        legacy_release.artifact_digest = legacy_release.legacy_artifact_digest().unwrap();
+        assert_ne!(
+            legacy_release.artifact_digest,
+            legacy_release.computed_artifact_digest().unwrap()
+        );
+        legacy_release.validate_for(&package).unwrap();
 
         let mut too_many_scopes = contract.clone();
         let AuthenticationProtocol::OpenIdConnect(oidc) = &mut too_many_scopes.protocol;

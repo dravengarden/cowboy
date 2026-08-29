@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result, bail, ensure};
 use base64::Engine as _;
 use sha2::Digest as _;
 
@@ -22,6 +22,8 @@ pub(crate) const PROVIDER_AUTH_SIGNATURE_NAMESPACE: &str = "cowboy-provider-auth
 /// Verification-only compatibility domain for Provider generations installed
 /// before generic Plugin releases replaced Provider release envelopes.
 pub(crate) const LEGACY_PROVIDER_RELEASE_SIGNATURE_NAMESPACE: &str = "cowboy-provider-release-v1";
+const SSH_SIGNATURE_HEADER: &[u8] = b"-----BEGIN SSH SIGNATURE-----";
+const MAX_SSH_SIGNATURE_BYTES: usize = 16 * 1_024;
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone)]
@@ -166,7 +168,8 @@ pub(crate) fn verify_namespaced(
     let temp = VerificationTemp::new()?;
     fs::write(&temp.allowed_signers, format!("machine {public_key}\n"))
         .context("writing temporary allowed signers")?;
-    fs::write(&temp.signature, signature).context("writing temporary SSH signature")?;
+    fs::write(&temp.signature, decode_ssh_signature(signature)?)
+        .context("writing temporary SSH signature")?;
     let mut child = Command::new(ssh_keygen)
         .args(["-Y", "verify", "-f"])
         .arg(&temp.allowed_signers)
@@ -187,6 +190,25 @@ pub(crate) fn verify_namespaced(
         .wait()
         .context("waiting for ssh-keygen verification")?
         .success())
+}
+
+fn decode_ssh_signature(signature: &str) -> Result<Vec<u8>> {
+    ensure!(
+        signature.len() <= MAX_SSH_SIGNATURE_BYTES * 2,
+        "SSH signature is too large"
+    );
+    let decoded = if signature.as_bytes().starts_with(SSH_SIGNATURE_HEADER) {
+        signature.as_bytes().to_vec()
+    } else {
+        base64::engine::general_purpose::STANDARD
+            .decode(signature)
+            .context("decoding SSH signature")?
+    };
+    ensure!(
+        decoded.len() <= MAX_SSH_SIGNATURE_BYTES && decoded.starts_with(SSH_SIGNATURE_HEADER),
+        "invalid SSH signature encoding"
+    );
+    Ok(decoded)
 }
 
 fn resolve_ssh_keygen() -> Result<PathBuf> {
@@ -382,6 +404,11 @@ mod tests {
         let identity = MachineIdentity::load_or_create(&directory).expect("create identity");
         let signature = identity.sign(b"challenge-a").expect("sign");
         assert!(verify(identity.public_key(), b"challenge-a", &signature).expect("verify"));
+        let encoded_signature = base64::engine::general_purpose::STANDARD.encode(&signature);
+        assert!(
+            verify(identity.public_key(), b"challenge-a", &encoded_signature)
+                .expect("verify base64 signature")
+        );
         assert!(!verify(identity.public_key(), b"challenge-b", &signature).expect("reject"));
         let legacy_signature = identity
             .sign_namespaced(

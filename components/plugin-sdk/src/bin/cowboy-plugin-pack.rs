@@ -226,10 +226,17 @@ fn ssh_verify(public_key: &str, proof: &[u8], signature: &str) -> Result<bool> {
     let allowed = root.path().join("allowed_signers");
     let signature_path = root.path().join("release.sig");
     std::fs::write(&allowed, format!("cowboy-plugin {public_key}\n"))?;
-    std::fs::write(
-        &signature_path,
-        base64::engine::general_purpose::STANDARD.decode(signature)?,
-    )?;
+    ensure!(signature.len() <= 32 * 1_024, "SSH signature is too large");
+    let signature = if signature.starts_with("-----BEGIN SSH SIGNATURE-----") {
+        signature.as_bytes().to_vec()
+    } else {
+        base64::engine::general_purpose::STANDARD.decode(signature)?
+    };
+    ensure!(
+        signature.len() <= 16 * 1_024 && signature.starts_with(b"-----BEGIN SSH SIGNATURE-----"),
+        "invalid SSH signature encoding"
+    );
+    std::fs::write(&signature_path, signature)?;
     let mut child = Command::new("ssh-keygen")
         .args(["-Y", "verify", "-f"])
         .arg(&allowed)

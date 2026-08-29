@@ -107,13 +107,16 @@ impl PluginCatalog {
             }
             let bytes = fs::read(&path)
                 .with_context(|| format!("reading Plugin artifact {}", path.display()))?;
-            let package = PluginPackage::from_bytes(&bytes)?;
+            let package = PluginPackage::from_bytes(&bytes)
+                .with_context(|| format!("validating Plugin artifact {}", path.display()))?;
             let release_path = path.with_extension("release.json");
             let release: PluginRelease = serde_json::from_slice(
                 &fs::read(&release_path)
                     .with_context(|| format!("reading {}", release_path.display()))?,
             )?;
-            release.validate_bytes(&bytes)?;
+            release
+                .validate_bytes(&bytes)
+                .with_context(|| format!("validating Plugin release {}", release_path.display()))?;
             let key_path = trust_root.join(format!("{}.pub", package.manifest.publisher));
             let public_key = fs::read_to_string(&key_path)
                 .with_context(|| format!("reading trusted publisher {}", key_path.display()))?;
