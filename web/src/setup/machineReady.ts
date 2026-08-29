@@ -6,8 +6,6 @@ export interface SetupMachine {
   fingerprint?: string | null;
 }
 
-export const MACHINE_SETUP_REFRESH_EVENT = "cowboy:machine-setup-refresh";
-
 export function parseSetupMachines(value: unknown): SetupMachine[] {
   if (!Array.isArray(value)) return [];
   const machines: SetupMachine[] = [];
@@ -28,18 +26,8 @@ export function parseSetupMachines(value: unknown): SetupMachine[] {
 
 /** True when this instance has no enrolled device yet. A local stub or a
  *  not-yet-consumed enrollment slot is not enough to enter the session UI. */
-export function needsMachineSetup(machines: SetupMachine[]): boolean {
+export function needsMachineSetup(machines: readonly SetupMachine[]): boolean {
   return !machines.some((machine) =>
     machine.schedulable || (Boolean(machine.fingerprint) && !machine.local)
   );
-}
-
-export async function fetchSetupMachines(): Promise<SetupMachine[]> {
-  const response = await fetch("/api/machines", {
-    cache: "no-store",
-    credentials: "same-origin",
-    headers: { accept: "application/json" },
-  });
-  if (!response.ok) return [];
-  return parseSetupMachines(await response.json());
 }

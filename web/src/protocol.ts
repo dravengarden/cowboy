@@ -2,6 +2,8 @@
 // inbound commands parsed in src/server.rs. The ACP pass-through `update`
 // payloads are typed loosely; their discriminant is `sessionUpdate`.
 
+import type { ProviderContractInventory } from "@cowboy/provider-ui";
+
 export type Status =
   | "starting"
   | "running"
@@ -11,6 +13,53 @@ export type Status =
   // Restored from a daemon restart that happened mid-turn — the last turn never
   // finished (src/core.rs Hub::restore). A dead/resumable state like exited.
   | "interrupted";
+
+export type MachinePresence =
+  | "online"
+  | "reconnecting"
+  | "offline"
+  | "updating"
+  | "degraded";
+
+export interface MachineSummary {
+  id: string;
+  display_name: string;
+  platform: "linux" | "macos";
+  architecture: "x86_64" | "aarch64";
+  status: MachinePresence;
+  local: boolean;
+  connected: boolean;
+  schedulable: boolean;
+  fingerprint?: string | null;
+  workspaces: readonly {
+    id: string;
+    display_name: string;
+    canonical_path: string;
+  }[];
+  workspace_revision?: string | null;
+  components: readonly {
+    id: { kind: string; slot?: string };
+    state: string;
+    version: string;
+    generation: string;
+    rollback_generation?: string;
+    active_leases: number;
+    auth?: string;
+    detail?: string;
+    update?: {
+      latest_version: string;
+      available: boolean;
+      source: string;
+      checked_at_ms: number;
+      installable: boolean;
+    };
+  }[];
+  plugins: readonly unknown[];
+  provider_contracts?: ProviderContractInventory;
+  capacity: { max_sessions: number; draining: boolean };
+  active_sessions: number;
+  pending_updates?: readonly { kind: string; slot?: string }[];
+}
 
 // Which surface opened the session — for the sidebar badge. The wire values are
 // legacy implementation names: "web" also covers the PWA/native shell, while
@@ -201,6 +250,7 @@ export interface DraftSchedule {
 
 export type Outbound =
   | { type: "sessions"; sessions: SessionMeta[] }
+  | { type: "machines"; revision: number; machines: MachineSummary[]; resync?: boolean }
   // End of the deterministic connect snapshot. Browser clients need no action;
   // stdio bridges use it to avoid racing session/list against bootstrap.
   | { type: "bootstrap_complete" }

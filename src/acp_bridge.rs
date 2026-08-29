@@ -1171,6 +1171,7 @@ impl Bridge {
                 }
             }
             Outbound::BootstrapComplete
+            | Outbound::Machines { .. }
             | Outbound::Ping
             | Outbound::SyncPatch { .. }
             | Outbound::Settings { .. } => {}
@@ -1512,6 +1513,7 @@ fn apply_bootstrap_outbound(state: &Arc<Mutex<BridgeState>>, outbound: Outbound)
             cached.events.push(envelope);
         }
         Outbound::BootstrapComplete
+        | Outbound::Machines { .. }
         | Outbound::Ping
         | Outbound::SyncPatch { .. }
         | Outbound::Settings { .. }

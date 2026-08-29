@@ -58,6 +58,7 @@ interface ProviderMachine {
   architecture: "x86_64" | "aarch64";
   status: string;
   schedulable: boolean;
+  plugins: readonly unknown[];
   provider_contracts?: ProviderContractInventory;
 }
 
@@ -391,7 +392,13 @@ function ProviderManagement(
 ): React.JSX.Element {
   const { catalog, error: catalogError, refresh: refreshCatalog } =
     useProviderCatalog();
-  const [inventory, setInventory] = useState<MachineProviderInventory[]>([]);
+  const inventory = useMemo<MachineProviderInventory[]>(
+    () =>
+      scope === "machine"
+        ? projectAgentPluginInventory(machine.plugins)
+        : [],
+    [machine?.plugins, scope],
+  );
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [flow, setFlow] = useState<AuthenticationFlow | null>(null);
   const [loginInput, setLoginInput] = useState("");
@@ -407,7 +414,6 @@ function ProviderManagement(
   const [expandedCredentialScopes, setExpandedCredentialScopes] = useState<
     ReadonlySet<string>
   >(() => new Set());
-  const machineId = machine?.id;
   const detailsId = scope === "service"
     ? "provider-service-management"
     : `provider-machine-management-${machine?.id ?? "unknown"}`;
@@ -483,30 +489,6 @@ function ProviderManagement(
       authenticationsByScope.get(entry.authentication_scope),
     [authentications, authenticationsByScope],
   );
-  const refreshInventory = useCallback(async (): Promise<void> => {
-    if (!machineId) {
-      setInventory([]);
-      return;
-    }
-    const response = await fetch(
-      `/api/machines/${encodeURIComponent(machineId)}/plugins`,
-    );
-    if (!response.ok) {
-      throw new Error(
-        (await response.text()).trim() || "Could not load installed Providers",
-      );
-    }
-    setInventory(projectAgentPluginInventory(await response.json()));
-  }, [machineId]);
-  useEffect(() => {
-    if (scope !== "machine") return undefined;
-    void refreshInventory().catch(() => undefined);
-    const timer = globalThis.setInterval(
-      () => void refreshInventory().catch(() => undefined),
-      2_000,
-    );
-    return () => globalThis.clearInterval(timer);
-  }, [refreshInventory, scope]);
   useEffect(() => {
     if (!flow?.requestId) return undefined;
     let active = true;
@@ -552,7 +534,6 @@ function ProviderManagement(
         );
         if (ready) {
           await refreshCatalog();
-          await refreshInventory();
         }
       } catch {
         // A later poll can recover a transient network failure.
@@ -568,7 +549,6 @@ function ProviderManagement(
     flow?.provider.provider_id,
     flow?.requestId,
     refreshCatalog,
-    refreshInventory,
   ]);
 
   const requestUninstallPlan = async (providerId: string): Promise<void> => {
@@ -622,7 +602,6 @@ function ProviderManagement(
             },
           );
           await expectSuccess(response, "Provider installation failed");
-          await refreshInventory();
           return;
         }
         case "begin_service_authentication":
@@ -665,7 +644,6 @@ function ProviderManagement(
           );
           await expectSuccess(response, copy.clearFailed);
           await refreshCatalog();
-          await refreshInventory();
           return;
         }
         case "request_uninstall_plan": {
@@ -836,7 +814,6 @@ function ProviderManagement(
     await expectSuccess(response, "Provider uninstall failed");
     setUninstallPlan(null);
     setConfirmActive(false);
-    await refreshInventory();
   };
 
   const challenge = flow?.events.findLast((event) =>

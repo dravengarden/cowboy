@@ -56,7 +56,8 @@ Deno.test("enrollment expiry is live and offers a fresh code", async () => {
   assert(source.includes("remainingSeconds"));
   assert(source.includes("This one-time token has expired."));
   assert(source.includes("Create a new code"));
-  assert(source.includes("Date.now() < issued.expires_at_ms"));
+  assert(source.includes("setNowMs(Date.now())"));
+  assertEquals(source.includes("fetchSetupMachines"), false);
 });
 
 Deno.test("issued enrollment can be discarded before returning to details", async () => {

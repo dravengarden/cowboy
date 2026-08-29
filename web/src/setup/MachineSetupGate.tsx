@@ -1,10 +1,9 @@
 import { Box, CircularProgress, Stack, Typography } from "@mui/material";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
+import { useStoreSelector } from "../store";
 import { MachineSetupPage } from "./MachineSetupPage";
 import {
-  fetchSetupMachines,
-  MACHINE_SETUP_REFRESH_EVENT,
   needsMachineSetup,
   type SetupMachine,
 } from "./machineReady";
@@ -14,50 +13,40 @@ export function MachineSetupGate({
 }: {
   children: ReactNode;
 }): React.JSX.Element {
-  const [machines, setMachines] = useState<SetupMachine[] | null>(null);
+  const pushedMachines = useStoreSelector((snapshot) => snapshot.machines);
+  const pushedMachinesLoaded = useStoreSelector((snapshot) =>
+    snapshot.machinesLoaded
+  );
+  const [presented, setPresented] = useState<{
+    loaded: boolean;
+    machines: readonly SetupMachine[];
+  }>({ loaded: false, machines: [] });
+  const presentedRef = useRef(presented);
 
   useEffect(() => {
-    let cancelled = false;
-    const commit = (next: SetupMachine[], transitionToSetup: boolean): void => {
-      if (cancelled) return;
-      if (
-        transitionToSetup && needsMachineSetup(next) &&
-        "startViewTransition" in document
-      ) {
-        try {
-          const transition = document.startViewTransition(() => {
-            flushSync(() => setMachines(next));
-          });
-          void transition.finished.catch(() => undefined);
-          return;
-        } catch {
-          // A browser may expose the API while another transition owns it.
-          // The setup gate remains authoritative and falls back immediately.
-        }
+    if (!pushedMachinesLoaded) return;
+    const previous = presentedRef.current;
+    const next = { loaded: true, machines: pushedMachines };
+    const transitionToSetup = previous.loaded &&
+      !needsMachineSetup(previous.machines) && needsMachineSetup(next.machines);
+    const commit = (): void => {
+      presentedRef.current = next;
+      setPresented(next);
+    };
+    if (transitionToSetup && "startViewTransition" in document) {
+      try {
+        const transition = document.startViewTransition(() => flushSync(commit));
+        void transition.finished.catch(() => undefined);
+        return;
+      } catch {
+        // A browser may expose the API while another transition owns it.
+        // The setup gate remains authoritative and falls back immediately.
       }
-      setMachines(next);
-    };
-    const load = (transitionToSetup = false): void => {
-      void fetchSetupMachines()
-        .then((next) => {
-          commit(next, transitionToSetup);
-        })
-        .catch(() => {
-          commit([], transitionToSetup);
-        });
-    };
-    load();
-    const timer = globalThis.setInterval(load, 3000);
-    const refreshAfterMutation = (): void => load(true);
-    globalThis.addEventListener(MACHINE_SETUP_REFRESH_EVENT, refreshAfterMutation);
-    return () => {
-      cancelled = true;
-      globalThis.clearInterval(timer);
-      globalThis.removeEventListener(MACHINE_SETUP_REFRESH_EVENT, refreshAfterMutation);
-    };
-  }, []);
+    }
+    commit();
+  }, [pushedMachines, pushedMachinesLoaded]);
 
-  if (machines == null) {
+  if (!presented.loaded) {
     return (
       <Box
         sx={{
@@ -77,7 +66,7 @@ export function MachineSetupGate({
       </Box>
     );
   }
-  if (needsMachineSetup(machines)) {
+  if (needsMachineSetup(presented.machines)) {
     return (
       <Box
         data-machine-setup-gate

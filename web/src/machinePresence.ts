@@ -1,9 +1,6 @@
-export type MachinePresence =
-  | "online"
-  | "reconnecting"
-  | "offline"
-  | "updating"
-  | "degraded";
+import type { MachinePresence } from "./protocol";
+
+export type { MachinePresence } from "./protocol";
 
 export function machinePresencePresentation(status: MachinePresence): {
   indicator: "running" | "starting" | "exited";

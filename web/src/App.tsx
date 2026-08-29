@@ -86,7 +86,7 @@ import {
 import { ReviewSettingsContent } from "./mobile/review/ReviewSettings";
 import { NotificationSettingsContent } from "./NotificationSettings";
 import { claimKeyboard } from "./keyboardClaim";
-import { machineVersionPresentation, type MachineComponentUpdate } from "./machineVersions";
+import { machineVersionPresentation } from "./machineVersions";
 import { DelayedNetworkProgress, NetworkIconButton } from "./NetworkActionFeedback";
 import { setObservabilityContext } from "./observability";
 import { Transcript } from "./Transcript";
@@ -104,6 +104,7 @@ import { desktopScrollbarSx } from "./desktop/desktopScrollbar";
 import {
     type ConfigOption,
     type Envelope,
+    type MachineSummary,
     type SessionMeta,
     type Status,
 } from "./protocol";
@@ -162,15 +163,8 @@ import {
     MachineProviderManagement,
     ProviderAuthenticationManagement,
 } from "./ProviderManagement";
-import {
-    type MachineProviderInventory,
-    type ProviderContractInventory,
-    projectAgentPluginInventory,
-} from "@cowboy/provider-ui";
-import {
-    type MachinePresence,
-    machinePresencePresentation,
-} from "./machinePresence";
+import { projectAgentPluginInventory } from "@cowboy/provider-ui";
+import { machinePresencePresentation } from "./machinePresence";
 import { machineCommandResultPresentation } from "./machineCommandResult";
 import {
     ExploreTranscript,
@@ -231,7 +225,6 @@ import {
 import { ProductAccountMenu } from "./auth/ProductAccountMenu";
 import { ProductPasskeysPanel } from "./auth/ProductPasskeysPanel";
 import { ProductTokensPanel } from "./auth/ProductTokensPanel";
-import { MACHINE_SETUP_REFRESH_EVENT } from "./setup/machineReady";
 import {
     sessionNotificationsMuted,
     setSessionNotificationsMuted,
@@ -1335,59 +1328,17 @@ type WorkspaceChoice = {
     active_work_items: readonly WorkspaceWorkItem[];
 };
 
-type MachineChoice = {
-    id: string;
-    display_name: string;
-    platform: "linux" | "macos";
-    architecture: "x86_64" | "aarch64";
-    provider_contracts?: ProviderContractInventory;
-    status: MachinePresence;
-    local: boolean;
-    schedulable: boolean;
-    capacity: { max_sessions: number; draining: boolean };
-    active_sessions: number;
-    pending_updates?: readonly { kind: string; slot?: string }[];
-    workspaces: readonly {
-        id: string;
-        display_name: string;
-        canonical_path: string;
-    }[];
-    components: readonly {
-        id: { kind: string; slot?: string };
-        state: string;
-        version: string;
-        generation: string;
-        rollback_generation?: string;
-        active_leases: number;
-        auth?: string;
-        detail?: string;
-        update?: MachineComponentUpdate;
-    }[];
-};
+type MachineChoice = MachineSummary;
 
 function useProductMachines(): {
-    machines: MachineChoice[] | null;
+    machines: readonly MachineChoice[] | null;
     canStartSession: boolean;
-    reload: () => void;
 } {
-    const [machines, setMachines] = useState<MachineChoice[] | null>(null);
-    const reload = useCallback((): void => {
-        void fetch("/api/machines", { cache: "no-store", credentials: "same-origin" })
-            .then((response) => (response.ok ? response.json() : []))
-            .then((data: unknown) => {
-                setMachines(Array.isArray(data) ? data as MachineChoice[] : []);
-            })
-            .catch(() => setMachines([]));
-    }, []);
-    useEffect(() => {
-        reload();
-        const timer = globalThis.setInterval(reload, 4000);
-        return () => globalThis.clearInterval(timer);
-    }, [reload]);
+    const machines = useStoreSelector((snapshot) => snapshot.machines);
+    const loaded = useStoreSelector((snapshot) => snapshot.machinesLoaded);
     return {
-        machines,
-        canStartSession: (machines ?? []).some((machine) => machine.schedulable),
-        reload,
+        machines: loaded ? machines : null,
+        canStartSession: machines.some((machine) => machine.schedulable),
     };
 }
 
@@ -1424,8 +1375,12 @@ function NewSessionDialog({
 }): React.JSX.Element {
     const [provider, setProvider] = useState<string>("");
     const [machineId, setMachineId] = useState<string>("");
-    const [machines, setMachines] = useState<readonly MachineChoice[]>([]);
-    const [machineProviders, setMachineProviders] = useState<readonly MachineProviderInventory[]>([]);
+    const machines = useStoreSelector((snapshot) => snapshot.machines);
+    const selectedMachine = machines.find((machine) => machine.id === machineId);
+    const machineProviders = useMemo(
+        () => projectAgentPluginInventory(selectedMachine?.plugins ?? []),
+        [selectedMachine?.plugins],
+    );
     const { catalog: providerCatalog } = useProviderCatalog(open);
     const providerRows = useMemo(
         () => joinProviderInstallations(providerCatalog?.providers ?? [], machineProviders),
@@ -1447,7 +1402,6 @@ function NewSessionDialog({
     // Workspace identity and ordering are owned by the selected Machine.
     const [workspaces, setWorkspaces] = useState<readonly WorkspaceChoice[]>([]);
     const selectedWorkspace = workspaces.find((workspace) => workspace.value === cwd);
-    const selectedMachine = machines.find((machine) => machine.id === machineId);
     const selectedProviderEntry = providerEntries.find((entry) => entry.provider_id === provider);
     const selectedInstalledProvider = machineProviders.find((entry) => entry.provider_id === provider);
     const providerAvailable = (candidate: string): boolean => {
@@ -1500,21 +1454,14 @@ function NewSessionDialog({
     }, [open]);
     useEffect(() => {
         if (!open) return;
-        void fetch("/api/machines")
-            .then((r) => (r.ok ? r.json() : null))
-            .then((data: MachineChoice[] | null) => {
-                if (Array.isArray(data) && data.length > 0) {
-                    setMachines(data);
-                    setMachineId((current) =>
-                        current || data.find((machine) => machine.local && machine.schedulable)?.id ||
-                            data.find((machine) => machine.schedulable)?.id || data[0]!.id
-                    );
-                }
-            })
-            .catch(() => {
-                // Older daemons remain an implicit local machine.
-            });
-    }, [open]);
+        if (machines.length === 0) return;
+        setMachineId((current) =>
+            machines.some((machine) => machine.id === current)
+                ? current
+                : machines.find((machine) => machine.local && machine.schedulable)?.id ||
+                    machines.find((machine) => machine.schedulable)?.id || machines[0]!.id
+        );
+    }, [machines, open]);
     useEffect(() => {
         if (!open) return;
         if (machineId) {
@@ -1530,27 +1477,6 @@ function NewSessionDialog({
             setWorkItemId("");
         }
     }, [open, machineId, machines]);
-    useEffect(() => {
-        if (!open || !machineId) {
-            setMachineProviders([]);
-            return;
-        }
-        let active = true;
-        void fetch(`/api/machines/${encodeURIComponent(machineId)}/plugins`)
-            .then(async (response) => {
-                if (!response.ok) throw new Error(await response.text());
-                return projectAgentPluginInventory(await response.json());
-            })
-            .then((value) => {
-                if (active) setMachineProviders(value);
-            })
-            .catch(() => {
-                if (active) setMachineProviders([]);
-            });
-        return () => {
-            active = false;
-        };
-    }, [open, machineId]);
     const navbarAtBottom = useNavbarAtBottom();
     const theme = useTheme();
     const create = (): void => {
@@ -4420,7 +4346,7 @@ function ProvidersContent({ embedded = false }: { embedded?: boolean } = {}): Re
 }
 
 function MachinesContent({ embedded = false }: { embedded?: boolean } = {}): React.JSX.Element {
-    const [machines, setMachines] = useState<readonly MachineChoice[]>([]);
+    const machines = useStoreSelector((snapshot) => snapshot.machines);
     const [commandFeedback, setCommandFeedback] = useState<Record<string, ReturnType<typeof machineCommandResultPresentation>>>({});
     const commandFeedbackTimers = useRef<Record<string, number>>({});
     const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -4455,18 +4381,6 @@ function MachinesContent({ embedded = false }: { embedded?: boolean } = {}): Rea
     useEffect(() => () => {
         Object.values(commandFeedbackTimers.current).forEach((timer) => globalThis.clearTimeout(timer));
     }, []);
-    const refresh = useCallback(async (): Promise<void> => {
-        const response = await fetch("/api/machines");
-        if (!response.ok) throw new Error(await response.text() || "Could not refresh Machines");
-        const value = await response.json() as MachineChoice[];
-        const next = Array.isArray(value) ? value : [];
-        setMachines(next);
-    }, []);
-    useEffect(() => {
-        void refresh().catch(() => undefined);
-        const timer = globalThis.setInterval(() => void refresh().catch(() => undefined), 2_000);
-        return () => globalThis.clearInterval(timer);
-    }, [refresh]);
     const refreshMachine = useCallback(async (machineId: string): Promise<void> => {
         const response = await fetch(`/api/machines/${encodeURIComponent(machineId)}/refresh`, { method: "POST" });
         if (!response.ok) throw new Error(await response.text() || "Could not refresh Machine inventory");
@@ -4482,12 +4396,11 @@ function MachinesContent({ embedded = false }: { embedded?: boolean } = {}): Rea
             if (result?.event === "command_result") {
                 showCommandFeedback(machineId, result.accepted);
                 if (!result.accepted) throw new Error(result.detail || "Machine inventory refresh failed");
-                await refresh();
                 return;
             }
         }
         throw new Error("Machine did not confirm the inventory refresh");
-    }, [refresh, showCommandFeedback]);
+    }, [showCommandFeedback]);
     const updateOne = (machineId: string, component: MachineChoice["components"][number]): void => {
         const key = `${machineId}:component:${component.id.kind}:${component.id.slot ?? ""}`;
         setBusy((current) => ({ ...current, [key]: true }));
@@ -4497,7 +4410,6 @@ function MachinesContent({ embedded = false }: { embedded?: boolean } = {}): Rea
             body: JSON.stringify({ kind: component.id.kind, slot: component.id.slot ?? "" }),
         }).finally(() => {
             setBusy((current) => ({ ...current, [key]: false }));
-            globalThis.setTimeout(() => void refresh().catch(() => undefined), 500);
         });
     };
     const updateNpm = (machineId: string, component: MachineChoice["components"][number]): void => {
@@ -4523,7 +4435,6 @@ function MachinesContent({ embedded = false }: { embedded?: boolean } = {}): Rea
                     if (result?.event === "command_result") {
                         showCommandFeedback(machineId, result.accepted);
                         if (!result.accepted) throw new Error(result.detail || "Update failed");
-                        void refresh().catch(() => undefined);
                         return;
                     }
                 }
@@ -4570,9 +4481,7 @@ function MachinesContent({ embedded = false }: { embedded?: boolean } = {}): Rea
             credentials: "same-origin",
         }).then(async (response) => {
             if (!response.ok) throw new Error(await response.text() || "Could not delete Machine");
-            setMachines((current) => current.filter((machine) => machine.id !== machineId));
             setDeleteTarget(null);
-            globalThis.dispatchEvent(new Event(MACHINE_SETUP_REFRESH_EVENT));
         }).catch((error: unknown) => {
             setDeleteError(error instanceof Error ? error.message : "Could not delete Machine");
         }).finally(() => setDeleting(false));

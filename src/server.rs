@@ -15,6 +15,7 @@ use std::io::Read as _;
 use std::net::SocketAddr;
 use std::path::{Component, Path as FsPath, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::Context as _;
 use axum::Router;
@@ -176,6 +177,7 @@ struct AppState {
     runtime_health: Arc<RuntimeHealth>,
     runtime_router: Arc<RuntimeRouter>,
     machine_control: Arc<MachineControl>,
+    machine_snapshots: MachineSnapshots,
     plugin_catalog: Arc<crate::plugin_catalog::PluginCatalog>,
     provider_catalog: Arc<crate::provider_catalog::ProviderCatalog>,
     provider_auth: Arc<crate::provider_service::ProviderAuthService>,
@@ -195,6 +197,206 @@ struct AppState {
     product_authentication: Arc<crate::auth_plugins::ProductAuthentication>,
     oidc_transactions: Arc<crate::oidc::OidcTransactions>,
     oidc_native_handoffs: Arc<crate::oidc::NativeHandoffs>,
+}
+
+#[derive(Clone)]
+struct MachineSnapshots {
+    store: Option<Store>,
+    hub: Hub,
+    runtime_router: Arc<RuntimeRouter>,
+    desired_components: Arc<Vec<crate::machine_protocol::DesiredComponent>>,
+    product_auth_enabled: bool,
+    revision: Arc<AtomicU64>,
+}
+
+impl MachineSnapshots {
+    fn new(
+        store: Option<Store>,
+        hub: Hub,
+        runtime_router: Arc<RuntimeRouter>,
+        desired_components: Arc<Vec<crate::machine_protocol::DesiredComponent>>,
+        product_auth_enabled: bool,
+    ) -> Self {
+        Self {
+            store,
+            hub,
+            runtime_router,
+            desired_components,
+            product_auth_enabled,
+            revision: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    async fn load(&self) -> anyhow::Result<Vec<crate::machine_protocol::MachineSummary>> {
+        let Some(store) = self.store.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let machines = store.list_machines().await?;
+        let mut session_loads: HashMap<String, (u32, HashMap<String, u64>)> = HashMap::new();
+        for session in self
+            .hub
+            .session_list()
+            .into_iter()
+            .filter(|session| session.status != crate::agent_model::Status::Exited)
+        {
+            let (active_sessions, providers) = session_loads
+                .entry(session.machine_id)
+                .or_insert_with(|| (0, HashMap::new()));
+            *active_sessions = active_sessions.saturating_add(1);
+            let provider_sessions = providers.entry(session.provider).or_default();
+            *provider_sessions = provider_sessions.saturating_add(1);
+        }
+        let checked_at_ms = now_ms();
+        Ok(machines
+            .into_iter()
+            .filter(|machine| product_machine_is_visible(machine, self.product_auth_enabled))
+            .map(|machine| {
+                let workspaces: Vec<crate::machine_protocol::MachineWorkspace> = machine
+                    .inventory
+                    .get("workspaces")
+                    .cloned()
+                    .and_then(|value| serde_json::from_value(value).ok())
+                    .unwrap_or_default();
+                let workspace_revision = machine
+                    .inventory
+                    .get("workspace_revision")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned);
+                let mut components: Vec<crate::machine_protocol::ComponentInventory> = machine
+                    .inventory
+                    .get("components")
+                    .cloned()
+                    .and_then(|value| serde_json::from_value(value).ok())
+                    .unwrap_or_default();
+                let plugins: Vec<crate::machine_protocol::PluginInventory> = machine
+                    .inventory
+                    .get("plugins")
+                    .or_else(|| machine.inventory.get("providers"))
+                    .cloned()
+                    .and_then(|value| serde_json::from_value(value).ok())
+                    .unwrap_or_default();
+                let capacity: crate::machine_protocol::MachineCapacity = machine
+                    .inventory
+                    .get("capacity")
+                    .cloned()
+                    .and_then(|value| serde_json::from_value(value).ok())
+                    .unwrap_or_default();
+                let provider_contracts = machine
+                    .inventory
+                    .get("provider_contracts")
+                    .cloned()
+                    .and_then(|value| serde_json::from_value(value).ok());
+                let (active_sessions, provider_sessions) = session_loads
+                    .get(&machine.id)
+                    .map_or((0, None), |(active, providers)| (*active, Some(providers)));
+                let local = machine.connection_mode == "local";
+                for component in &mut components {
+                    if matches!(
+                        component.id.kind,
+                        crate::machine_protocol::ComponentKind::AcpRuntime
+                            | crate::machine_protocol::ComponentKind::ProviderAdapter
+                            | crate::machine_protocol::ComponentKind::ProviderCli
+                    ) {
+                        component.active_leases = match component.id.kind {
+                            crate::machine_protocol::ComponentKind::ProviderAdapter
+                            | crate::machine_protocol::ComponentKind::ProviderCli => {
+                                let slot = component.id.slot.as_str();
+                                let exact = provider_sessions
+                                    .and_then(|providers| providers.get(slot))
+                                    .copied()
+                                    .unwrap_or(0);
+                                if slot == "claude" {
+                                    ["claude-code", "claude-deepseek"].iter().fold(
+                                        exact,
+                                        |total, provider| {
+                                            total.saturating_add(
+                                                provider_sessions
+                                                    .and_then(|providers| providers.get(*provider))
+                                                    .copied()
+                                                    .unwrap_or(0),
+                                            )
+                                        },
+                                    )
+                                } else {
+                                    exact
+                                }
+                            }
+                            _ => u64::from(active_sessions),
+                        };
+                    }
+                    if let Some(desired) = self
+                        .desired_components
+                        .iter()
+                        .find(|desired| desired.id == component.id)
+                    {
+                        let available = component.state
+                            != crate::machine_protocol::ComponentState::Active
+                            || !component.digest.eq_ignore_ascii_case(&desired.digest);
+                        component.update = Some(crate::machine_protocol::ComponentUpdate {
+                            latest_version: desired.version.clone(),
+                            available,
+                            source: "signed Cowboy manifest".to_owned(),
+                            checked_at_ms,
+                            installable: available,
+                        });
+                    }
+                }
+                let pending_updates = self
+                    .desired_components
+                    .iter()
+                    .filter(|desired| {
+                        !components.iter().any(|current| {
+                            current.id == desired.id
+                                && current.digest.eq_ignore_ascii_case(&desired.digest)
+                                && current.state == crate::machine_protocol::ComponentState::Active
+                        })
+                    })
+                    .map(|desired| desired.id.clone())
+                    .collect();
+                let connected = self.runtime_router.connected(&machine.id);
+                let schedulable = connected
+                    && !workspaces.is_empty()
+                    && !capacity.draining
+                    && active_sessions < capacity.max_sessions;
+                crate::machine_protocol::MachineSummary {
+                    local,
+                    connected,
+                    schedulable,
+                    id: machine.id,
+                    display_name: machine.display_name,
+                    platform: machine.platform,
+                    architecture: machine.architecture,
+                    status: machine.status,
+                    fingerprint: machine.fingerprint,
+                    workspaces,
+                    workspace_revision,
+                    components,
+                    plugins,
+                    provider_contracts,
+                    capacity,
+                    active_sessions,
+                    pending_updates,
+                }
+            })
+            .collect())
+    }
+
+    async fn connect_message(&self) -> anyhow::Result<Outbound> {
+        let revision = self.revision.load(Ordering::Acquire);
+        Ok(Outbound::Machines {
+            revision,
+            machines: self.load().await?,
+            resync: true,
+        })
+    }
+
+    async fn publish(&self) {
+        let revision = self.revision.fetch_add(1, Ordering::AcqRel) + 1;
+        match self.load().await {
+            Ok(machines) => self.hub.broadcast_machines(revision, machines),
+            Err(error) => tracing::warn!(%error, revision, "publishing Machine snapshot"),
+        }
+    }
 }
 
 const STORE_QUEUE_CAPACITY: usize = 8_192;
@@ -241,6 +443,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     } else {
         Vec::new()
     };
+    let desired_machine_components = Arc::new(desired_machine_components);
     init_tracing();
     let legacy_oidc_provider = load_oidc_provider(
         args.product_auth_enabled,
@@ -392,17 +595,29 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         store.clone(),
         Some(args.data_dir.join("usage-snapshot.json")),
     );
+    let runtime_router = RuntimeRouter::new();
+    let machine_snapshots = MachineSnapshots::new(
+        store.clone(),
+        hub.clone(),
+        Arc::clone(&runtime_router),
+        Arc::clone(&desired_machine_components),
+        args.product_auth_enabled,
+    );
     let machine_presence_task = store.as_ref().map(|store| {
         let store = store.clone();
+        let machine_snapshots = machine_snapshots.clone();
         let shutdown = shutdown_rx.clone();
-        tokio::spawn(run_machine_presence_sweeper(store, shutdown))
+        tokio::spawn(run_machine_presence_sweeper(
+            store,
+            machine_snapshots,
+            shutdown,
+        ))
     });
     let web_push_task = tokio::spawn(run_web_push_notifications(
         hub.clone(),
         Arc::clone(&web_push),
         shutdown_rx.clone(),
     ));
-    let runtime_router = RuntimeRouter::new();
     // Reset credits belong to provider accounts, not sessions. Restore one
     // shared timer per provider and keep them independent from session queues.
     if let Some(store) = store.as_ref() {
@@ -743,13 +958,14 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             runtime_health,
             runtime_router,
             machine_control: Arc::new(MachineControl::default()),
+            machine_snapshots,
             plugin_catalog,
             provider_catalog,
             provider_auth,
             provider_auth_executors: parking_lot::Mutex::new(HashMap::new()),
             plugin_uninstall_plans: parking_lot::Mutex::new(HashMap::new()),
             plugin_lifecycle_fences,
-            desired_machine_components: Arc::new(desired_machine_components),
+            desired_machine_components,
             web_root: args.web_root,
             usage,
             diff_snapshots: DiffSnapshotCache::default(),
@@ -809,11 +1025,16 @@ fn load_oidc_provider(
         .map(|provider| provider.map(Arc::new))
 }
 
-async fn run_machine_presence_sweeper(store: Store, mut shutdown: watch::Receiver<bool>) {
+async fn run_machine_presence_sweeper(
+    store: Store,
+    machine_snapshots: MachineSnapshots,
+    mut shutdown: watch::Receiver<bool>,
+) {
     loop {
         match store.expire_machine_reconnects().await {
             Ok(expired) if expired > 0 => {
                 tracing::warn!(expired, "Machine reconnect grace expired");
+                machine_snapshots.publish().await;
             }
             Ok(_) => {}
             Err(error) => tracing::warn!(%error, "expiring Machine reconnect grace"),
@@ -7080,171 +7301,14 @@ async fn api_workspaces(State(state): State<Arc<AppState>>) -> Response {
     Json(out).into_response()
 }
 
-#[derive(Debug, Serialize)]
-struct MachineSummary {
-    id: String,
-    display_name: String,
-    platform: String,
-    architecture: String,
-    status: String,
-    local: bool,
-    connected: bool,
-    schedulable: bool,
-    fingerprint: Option<String>,
-    workspaces: Vec<crate::machine_protocol::MachineWorkspace>,
-    workspace_revision: Option<String>,
-    components: Vec<crate::machine_protocol::ComponentInventory>,
-    provider_contracts: Option<cowboy_provider_sdk::ProviderContractInventory>,
-    capacity: crate::machine_protocol::MachineCapacity,
-    active_sessions: u32,
-    pending_updates: Vec<crate::machine_protocol::ComponentId>,
-}
-
 async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
-    if let Some(store) = state.store.as_ref() {
-        return match store.list_machines().await {
-            Ok(machines) => Json(
-                machines
-                    .into_iter()
-                    .filter(|machine| {
-                        product_machine_is_visible(machine, state.product_auth_enabled)
-                    })
-                    .map(|machine| {
-                        let workspaces: Vec<crate::machine_protocol::MachineWorkspace> = machine
-                            .inventory
-                            .get("workspaces")
-                            .cloned()
-                            .and_then(|value| serde_json::from_value(value).ok())
-                            .unwrap_or_default();
-                        let workspace_revision = machine
-                            .inventory
-                            .get("workspace_revision")
-                            .and_then(serde_json::Value::as_str)
-                            .map(str::to_owned);
-                        let mut components: Vec<crate::machine_protocol::ComponentInventory> =
-                            machine
-                                .inventory
-                                .get("components")
-                                .cloned()
-                                .and_then(|value| serde_json::from_value(value).ok())
-                                .unwrap_or_default();
-                        let capacity: crate::machine_protocol::MachineCapacity = machine
-                            .inventory
-                            .get("capacity")
-                            .cloned()
-                            .and_then(|value| serde_json::from_value(value).ok())
-                            .unwrap_or_default();
-                        let provider_contracts = machine
-                            .inventory
-                            .get("provider_contracts")
-                            .cloned()
-                            .and_then(|value| serde_json::from_value(value).ok());
-                        let live_sessions: Vec<_> = state
-                            .hub
-                            .session_list()
-                            .into_iter()
-                            .filter(|session| {
-                                session.machine_id == machine.id
-                                    && session.status != crate::agent_model::Status::Exited
-                            })
-                            .collect();
-                        let active_sessions =
-                            u32::try_from(live_sessions.len()).unwrap_or(u32::MAX);
-                        let local = machine.connection_mode == "local";
-                        for component in &mut components {
-                            if matches!(
-                                component.id.kind,
-                                crate::machine_protocol::ComponentKind::AcpRuntime
-                                    | crate::machine_protocol::ComponentKind::ProviderAdapter
-                                    | crate::machine_protocol::ComponentKind::ProviderCli
-                            ) {
-                                component.active_leases = match component.id.kind {
-                                    crate::machine_protocol::ComponentKind::ProviderAdapter
-                                    | crate::machine_protocol::ComponentKind::ProviderCli => {
-                                        let slot = component.id.slot.as_str();
-                                        u64::try_from(
-                                            live_sessions
-                                                .iter()
-                                                .filter(|session| {
-                                                    let provider = session.provider.as_str();
-                                                    provider == slot
-                                                        || (slot == "claude"
-                                                            && matches!(
-                                                                provider,
-                                                                "claude-code" | "claude-deepseek"
-                                                            ))
-                                                })
-                                                .count(),
-                                        )
-                                        .unwrap_or(u64::MAX)
-                                    }
-                                    _ => u64::from(active_sessions),
-                                };
-                            }
-                            if let Some(desired) = state
-                                .desired_machine_components
-                                .iter()
-                                .find(|desired| desired.id == component.id)
-                            {
-                                let available = component.state
-                                    != crate::machine_protocol::ComponentState::Active
-                                    || !component.digest.eq_ignore_ascii_case(&desired.digest);
-                                component.update = Some(crate::machine_protocol::ComponentUpdate {
-                                    latest_version: desired.version.clone(),
-                                    available,
-                                    source: "signed Cowboy manifest".to_owned(),
-                                    checked_at_ms: now_ms(),
-                                    installable: available,
-                                });
-                            }
-                        }
-                        let pending_updates = state
-                            .desired_machine_components
-                            .iter()
-                            .filter(|desired| {
-                                !components.iter().any(|current| {
-                                    current.id == desired.id
-                                        && current.digest.eq_ignore_ascii_case(&desired.digest)
-                                        && current.state
-                                            == crate::machine_protocol::ComponentState::Active
-                                })
-                            })
-                            .map(|desired| desired.id.clone())
-                            .collect();
-                        let connected = state.runtime_router.connected(&machine.id);
-                        let schedulable = connected
-                            && !workspaces.is_empty()
-                            && !capacity.draining
-                            && active_sessions < capacity.max_sessions;
-                        MachineSummary {
-                            local,
-                            connected,
-                            schedulable,
-                            id: machine.id,
-                            display_name: machine.display_name,
-                            platform: machine.platform,
-                            architecture: machine.architecture,
-                            status: machine.status,
-                            fingerprint: machine.fingerprint,
-                            workspaces,
-                            workspace_revision,
-                            components,
-                            provider_contracts,
-                            capacity,
-                            active_sessions,
-                            pending_updates,
-                        }
-                    })
-                    .collect::<Vec<_>>(),
-            )
-            .into_response(),
-            Err(error) => {
-                tracing::error!(%error, "listing Machines");
-                (StatusCode::INTERNAL_SERVER_ERROR, "could not list machines").into_response()
-            }
-        };
+    match state.machine_snapshots.load().await {
+        Ok(machines) => Json(machines).into_response(),
+        Err(error) => {
+            tracing::error!(%error, "listing Machines");
+            (StatusCode::INTERNAL_SERVER_ERROR, "could not list machines").into_response()
+        }
     }
-    Json(Vec::<MachineSummary>::new()).into_response()
 }
 
 async fn api_machine_events(
@@ -7537,6 +7601,7 @@ async fn api_machine_revoke(
         Ok(()) => {
             state.machine_control.disconnect(&machine_id);
             state.runtime_router.remove(&machine_id);
+            state.machine_snapshots.publish().await;
             StatusCode::NO_CONTENT.into_response()
         }
         Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
@@ -9019,16 +9084,16 @@ async fn api_machine_enroll(
         .consume_machine_enrollment(&request.token, &public_key, &request.encryption_public_key)
         .await
     {
-        Ok(machine) => (
-            StatusCode::CREATED,
-            Json(MachineEnrollResponse {
+        Ok(machine) => {
+            let response = MachineEnrollResponse {
                 service_id: state.service_id.clone(),
                 machine_id: machine.id,
                 display_name: machine.display_name,
                 fingerprint: machine.fingerprint,
-            }),
-        )
-            .into_response(),
+            };
+            state.machine_snapshots.publish().await;
+            (StatusCode::CREATED, Json(response)).into_response()
+        }
         Err(error) => {
             tracing::warn!(%error, "Machine enrollment rejected");
             (
@@ -9241,6 +9306,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                 MACHINE_RECONNECT_GRACE_SECONDS,
             )
             .await;
+        state.machine_snapshots.publish().await;
         return;
     }
     tracing::info!(machine = %hello.machine_id, "Machine connected");
@@ -9261,6 +9327,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
             observed_at_ms: now_ms(),
         },
     );
+    state.machine_snapshots.publish().await;
     state.machine_control.record(
         &hello.machine_id,
         crate::machine_protocol::MachineEvent::PluginInventory {
@@ -9302,6 +9369,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
         let router = Arc::clone(&state.runtime_router);
         let hub = state.hub.clone();
         let provider_auth = Arc::clone(&state.provider_auth);
+        let machine_snapshots = state.machine_snapshots.clone();
         let machine_id = hello.machine_id.clone();
         let generation = hello
             .components
@@ -9330,6 +9398,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                     );
                     router.install(machine_id, Arc::clone(&runtime));
                     runtime.start(bootstrap);
+                    machine_snapshots.publish().await;
                     let _ = runtime_tx.send(runtime);
                 }
                 Err(error) => {
@@ -9447,9 +9516,13 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                     "workspace_revision": &current_workspace_revision,
                     "capacity": &hello.capacity,
                 });
-                store
+                let result = store
                     .machine_seen(&hello.machine_id, &challenge_id, Some(&inventory))
-                    .await
+                    .await;
+                if result.is_ok() {
+                    state.machine_snapshots.publish().await;
+                }
+                result
             }
             crate::machine_protocol::MachineFrame::Event {
                 event:
@@ -9474,9 +9547,13 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                     "workspace_revision": &current_workspace_revision,
                     "capacity": &hello.capacity,
                 });
-                store
+                let result = store
                     .machine_seen(&hello.machine_id, &challenge_id, Some(&inventory))
-                    .await
+                    .await;
+                if result.is_ok() {
+                    state.machine_snapshots.publish().await;
+                }
+                result
             }
             crate::machine_protocol::MachineFrame::Event {
                 event:
@@ -9636,6 +9713,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     {
         tracing::warn!(%error, machine = %hello.machine_id, "marking Machine offline");
     }
+    state.machine_snapshots.publish().await;
 }
 
 async fn api_session_info(
@@ -12928,7 +13006,12 @@ fn global_bootstrap(hub: &Hub, principal: &ProductPrincipal) -> Vec<Outbound> {
     messages
 }
 
-fn connect_bootstrap(hub: &Hub, lazy: bool, principal: &ProductPrincipal) -> Vec<Outbound> {
+fn connect_bootstrap(
+    hub: &Hub,
+    lazy: bool,
+    principal: &ProductPrincipal,
+    machine_snapshot: Option<Outbound>,
+) -> Vec<Outbound> {
     let mut messages = global_bootstrap(hub, principal);
     if !lazy {
         for session in hub.session_list_filtered(|owner| principal.can_see(owner)) {
@@ -12937,6 +13020,7 @@ fn connect_bootstrap(hub: &Hub, lazy: bool, principal: &ProductPrincipal) -> Vec
             }
         }
     }
+    messages.extend(machine_snapshot);
     messages.push(Outbound::BootstrapComplete);
     messages
 }
@@ -12968,6 +13052,7 @@ fn project_outbound(
         Outbound::Error {
             session_id: None, ..
         }
+        | Outbound::Machines { .. }
         | Outbound::Ping
         | Outbound::BootstrapComplete
         | Outbound::Settings { .. } => Some(message),
@@ -13081,7 +13166,16 @@ async fn handle_ws(
     let mut rx = state.hub.subscribe();
     let mut shutdown = state.shutdown.clone();
 
-    for message in connect_bootstrap(&state.hub, lazy_bootstrap, &principal) {
+    let machine_snapshot = match state.machine_snapshots.connect_message().await {
+        Ok(snapshot) => Some(snapshot),
+        Err(error) => {
+            // Never project an unavailable registry as an empty one: the
+            // browser keeps its last authoritative snapshot across reconnects.
+            tracing::warn!(%error, "loading Machine WebSocket bootstrap");
+            None
+        }
+    };
+    for message in connect_bootstrap(&state.hub, lazy_bootstrap, &principal, machine_snapshot) {
         if send_json(&mut sink, &message).await.is_err() {
             return;
         }
@@ -14151,7 +14245,16 @@ mod bootstrap_tests {
 
     #[test]
     fn websocket_bootstrap_contains_only_global_state() {
-        let messages = connect_bootstrap(&hub_with_sessions(), true, &test_owner_principal());
+        let messages = connect_bootstrap(
+            &hub_with_sessions(),
+            true,
+            &test_owner_principal(),
+            Some(Outbound::Machines {
+                revision: 7,
+                machines: Vec::new(),
+                resync: true,
+            }),
+        );
         assert!(
             messages
                 .iter()
@@ -14162,6 +14265,23 @@ mod bootstrap_tests {
                 .iter()
                 .any(|message| matches!(message, Outbound::BootstrapComplete))
         );
+        assert!(messages.iter().any(|message| matches!(
+            message,
+            Outbound::Machines {
+                revision: 7,
+                resync: true,
+                ..
+            }
+        )));
+        let machines_index = messages
+            .iter()
+            .position(|message| matches!(message, Outbound::Machines { .. }))
+            .expect("Machine snapshot");
+        let complete_index = messages
+            .iter()
+            .position(|message| matches!(message, Outbound::BootstrapComplete))
+            .expect("bootstrap completion");
+        assert!(machines_index < complete_index);
         assert!(!messages.iter().any(|message| matches!(
             message,
             Outbound::Snapshot { .. } | Outbound::ConfigOptions { .. }
@@ -14174,7 +14294,8 @@ mod bootstrap_tests {
 
     #[test]
     fn legacy_websocket_bootstrap_remains_complete() {
-        let messages = connect_bootstrap(&hub_with_sessions(), false, &test_owner_principal());
+        let messages =
+            connect_bootstrap(&hub_with_sessions(), false, &test_owner_principal(), None);
         let snapshots = messages
             .iter()
             .filter(|message| matches!(message, Outbound::Snapshot { .. }))

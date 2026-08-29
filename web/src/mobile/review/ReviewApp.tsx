@@ -157,17 +157,6 @@ function checkingSymbolNavigation(): SymbolNavigationAvailability {
 
 const CodeViewer = lazy(() => import("./CodeViewer"));
 
-type ReviewMachineInventory = {
-  id: string;
-  status: string;
-  workspace_revision?: string;
-  workspaces: readonly {
-    id: string;
-    display_name: string;
-    canonical_path: string;
-  }[];
-};
-
 function ReviewModeSwitcher({
   mode,
   onChange,
@@ -1670,9 +1659,7 @@ export function ReviewApp({
     "sessions",
   );
   const [contextProjectKey, setContextProjectKey] = useState<string>();
-  const [machineInventories, setMachineInventories] = useState<
-    readonly ReviewMachineInventory[]
-  >([]);
+  const machineInventories = useStoreSelector((snapshot) => snapshot.machines);
   const [contextError, setContextError] = useState<string>();
   const [sessionHistory, setSessionHistory] = useState<string[]>([]);
   const sessionListRef = useRef<HTMLDivElement>(null);
@@ -2365,41 +2352,12 @@ export function ReviewApp({
   }, [sessions]);
   useEffect(() => {
     if (!sessionSwitcherOpen || contextTab !== "projects") return undefined;
-    let cancelled = false;
-    let settleTimer: number | undefined;
-    let refreshing = false;
-    const load = async (): Promise<void> => {
-      try {
-        const response = await fetch("/api/machines", { cache: "no-store" });
-        if (!response.ok) return;
-        const value = await response.json() as ReviewMachineInventory[];
-        if (!cancelled && Array.isArray(value)) setMachineInventories(value);
-      } catch {
-        // Retain the last good inventory while the control plane reconnects.
-      }
-    };
-    const refresh = async (): Promise<void> => {
-      if (refreshing || cancelled || currentMachineId === "local") return;
-      refreshing = true;
-      try {
-        await fetch(
-          `/api/machines/${encodeURIComponent(currentMachineId)}/refresh`,
-          { method: "POST" },
-        );
-      } catch {
-        // GET below remains useful with the last Machine-published revision.
-      } finally {
-        refreshing = false;
-      }
-      settleTimer = globalThis.setTimeout(() => void load(), 400);
-    };
-    void load().then(refresh);
-    const interval = globalThis.setInterval(refresh, 5_000);
-    return () => {
-      cancelled = true;
-      globalThis.clearInterval(interval);
-      if (settleTimer !== undefined) globalThis.clearTimeout(settleTimer);
-    };
+    if (currentMachineId === "local") return undefined;
+    void fetch(
+      `/api/machines/${encodeURIComponent(currentMachineId)}/refresh`,
+      { method: "POST" },
+    ).catch(() => undefined);
+    return undefined;
   }, [contextTab, currentMachineId, sessionSwitcherOpen]);
   useEffect(() => {
     if (!sessionSwitcherOpen) return undefined;

@@ -213,6 +213,39 @@ pub struct MachineWorkspace {
     pub canonical_path: String,
 }
 
+/// Browser-facing projection of one enrolled Machine. The HTTP registry route
+/// and the product WebSocket share this exact type so periodic browser polling
+/// cannot drift from the pushed control-plane state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MachineSummary {
+    pub id: String,
+    pub display_name: String,
+    pub platform: String,
+    pub architecture: String,
+    pub status: String,
+    pub local: bool,
+    pub connected: bool,
+    pub schedulable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
+    #[serde(default)]
+    pub workspaces: Vec<MachineWorkspace>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_revision: Option<String>,
+    #[serde(default)]
+    pub components: Vec<ComponentInventory>,
+    #[serde(default)]
+    pub plugins: Vec<PluginInventory>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_contracts: Option<cowboy_provider_sdk::ProviderContractInventory>,
+    #[serde(default)]
+    pub capacity: MachineCapacity,
+    #[serde(default)]
+    pub active_sessions: u32,
+    #[serde(default)]
+    pub pending_updates: Vec<ComponentId>,
+}
+
 /// Build the exact version-one proof signed during a remote Machine handshake.
 /// Length-prefixed fields avoid delimiter ambiguity while keeping the proof
 /// independent from later additions to the wire `Hello` object.

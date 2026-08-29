@@ -1058,6 +1058,15 @@ pub enum Inbound {
 pub enum Outbound {
     /// Full session list (sent on connect and whenever it changes).
     Sessions { sessions: Vec<SessionMeta> },
+    /// Full enrolled-Machine projection. `resync` marks the deterministic
+    /// connect snapshot; live revisions are monotonic within one Controller
+    /// process so a delayed async projection cannot overwrite newer state.
+    Machines {
+        revision: u64,
+        machines: Vec<crate::machine_protocol::MachineSummary>,
+        #[serde(default)]
+        resync: bool,
+    },
     /// Marks the end of the deterministic WebSocket connect snapshot. Thin
     /// protocol bridges wait for this before accepting client requests, so
     /// `session/list` cannot race an incomplete session cache.
@@ -1650,6 +1659,21 @@ impl Hub {
             .broadcast_last_bytes
             .store(bytes, Ordering::Relaxed);
         let _ = self.inner.tx.send(FanoutFrame::new(outbound));
+    }
+
+    /// Publish one authoritative Machine registry revision over the existing
+    /// product WebSocket. Machine state remains owned by the durable Store;
+    /// Hub is transport only and retains no second copy.
+    pub fn broadcast_machines(
+        &self,
+        revision: u64,
+        machines: Vec<crate::machine_protocol::MachineSummary>,
+    ) {
+        self.fanout(Outbound::Machines {
+            revision,
+            machines,
+            resync: false,
+        });
     }
 
     /// Arm (replace) a session's pending `ScheduleWakeup` — `acp.rs` calls this

@@ -19,7 +19,7 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { ProductAccountMenu } from "../auth/ProductAccountMenu";
 import { ProductPasskeysPanel } from "../auth/ProductPasskeysPanel";
 import { useProductAuth } from "../auth/ProductAuthGate";
@@ -31,8 +31,9 @@ import {
   setFontVariant,
   useReadingSettings,
 } from "../readingSettings";
+import { useStoreSelector } from "../store";
 import { type Mode, useThemeMode } from "../theme";
-import { fetchSetupMachines, needsMachineSetup } from "./machineReady";
+import { needsMachineSetup } from "./machineReady";
 
 // Fill these when the public guide and installable skill are published.
 const MACHINE_SETUP_DOCS_URL = "";
@@ -274,6 +275,7 @@ function SetupSettings({
 
 export function MachineSetupPage(): React.JSX.Element {
   const { me } = useProductAuth();
+  const machines = useStoreSelector((snapshot) => snapshot.machines);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [displayName, setDisplayName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -289,22 +291,10 @@ export function MachineSetupPage(): React.JSX.Element {
     origin: string;
   } | null>(null);
 
-  const watchMachines = useCallback((): void => {
-    void fetchSetupMachines()
-      .then((machines) => {
-        if (!needsMachineSetup(machines)) setWaiting(false);
-      })
-      .catch(() => undefined);
-  }, []);
-
   useEffect(() => {
     if (!issued) return;
-    watchMachines();
-    const timer = globalThis.setInterval(() => {
-      if (Date.now() < issued.expires_at_ms) watchMachines();
-    }, 3000);
-    return () => globalThis.clearInterval(timer);
-  }, [issued, watchMachines]);
+    if (!needsMachineSetup(machines)) setWaiting(false);
+  }, [issued, machines]);
 
   useEffect(() => {
     if (!issued) return;

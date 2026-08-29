@@ -52,6 +52,10 @@ import { reportClientLog, reportClientMetric } from "./observability";
 import { newUuid } from "./uuid";
 import { fireAlert, vibrateAlertOn } from "./turnNotify";
 import {
+  acceptsMachineSnapshot,
+  projectMachineOccupancy,
+} from "./machineState";
+import {
   type ConfigOption,
   type ContentBlock,
   type Delivery,
@@ -59,6 +63,7 @@ import {
   type Envelope,
   type Inbound,
   isPureTerminalOutputDelta,
+  type MachineSummary,
   type Outbound,
   type SessionBootstrapResponse,
   type SessionMeta,
@@ -125,6 +130,12 @@ export interface QueuedMessage {
 export interface State {
   connected: boolean;
   sessions: SessionMeta[];
+  // Durable Machine registry projected by the Controller over the same product
+  // WebSocket. Retain it across disconnects: transport loss is not evidence
+  // that every enrolled Machine disappeared.
+  machines: readonly MachineSummary[];
+  machinesLoaded: boolean;
+  machinesRevision: number;
   // session_id → seq-ordered, deduped event log
   timelines: Map<string, Envelope[]>;
   // session_ids whose history `snapshot` has arrived. Distinguishes "history
@@ -171,6 +182,9 @@ let errorSeq = 0;
 let state: State = {
   connected: false,
   sessions: [],
+  machines: [],
+  machinesLoaded: false,
+  machinesRevision: 0,
   timelines: new Map(),
   hydrated: new Set(),
   pagination: new Map(),
@@ -947,12 +961,29 @@ function handle(msg: Outbound): void {
       rawSessions = msg.sessions;
       if (!state.sessionsLoaded) setState({ ...state, sessionsLoaded: true });
       commitSessions();
+      const machines = projectMachineOccupancy(state.machines, msg.sessions);
+      if (machines !== state.machines) setState({ ...state, machines });
       // The list is authoritative: drop composer drafts for sessions that no
       // longer exist (deleted here or on another terminal). Tolerant + off the
       // input path.
       const validSessions = new Set(msg.sessions.map((s) => s.id));
       pruneDrafts(validSessions);
       retainTranscriptSessions(validSessions);
+      break;
+    }
+    case "machines": {
+      if (!acceptsMachineSnapshot(
+        state.machinesRevision,
+        state.machinesLoaded,
+        msg.revision,
+        msg.resync === true,
+      )) break;
+      setState({
+        ...state,
+        machines: projectMachineOccupancy(msg.machines, state.sessions),
+        machinesLoaded: true,
+        machinesRevision: msg.revision,
+      });
       break;
     }
     case "snapshot": {
