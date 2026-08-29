@@ -1,12 +1,14 @@
 import { isNativeShell } from "../nativeShell";
 import {
   closeAuthenticationBrowser,
+  NATIVE_AUTHENTICATION_BROWSER_CLOSED_EVENT,
   openAuthenticationUrl,
 } from "../openExternal";
 import {
   authApi,
   AuthApiError,
   type ExternalPasskeyAction,
+  externalPasskeyApi,
   type ExternalPasskeyFinalize,
   type ProductMe,
   type ProductPasskey,
@@ -18,7 +20,10 @@ import {
 } from "./passkeyBrowser";
 import { newPkceBinding } from "./pkce";
 
-const POLL_INTERVAL_MS = 500;
+const RECONNECT_INITIAL_MS = 250;
+const RECONNECT_MAX_MS = 4_000;
+
+type ExternalPasskeyEventStatus = "complete" | "failed" | "unavailable";
 
 export function externalPasskeyUrl(
   origin: string,
@@ -29,28 +34,126 @@ export function externalPasskeyUrl(
   return url.href;
 }
 
-function retryablePollError(reason: unknown): boolean {
+export function externalPasskeyEventsUrl(origin: string): string {
+  const url = new URL(
+    "/api/auth/passkeys/external/events",
+    new URL(origin).origin,
+  );
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.href;
+}
+
+function retryableEventError(reason: unknown): boolean {
   return reason instanceof TypeError ||
     reason instanceof AuthApiError && reason.status >= 500;
+}
+
+async function waitForDelay(
+  delayMs: number,
+  signal: AbortSignal,
+): Promise<void> {
+  if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(new DOMException("Cancelled", "AbortError"));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+async function waitForExternalPasskeyEvent(
+  transactionId: string,
+  verifier: string,
+  signal: AbortSignal,
+): Promise<ExternalPasskeyEventStatus> {
+  if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
+  return await new Promise<ExternalPasskeyEventStatus>((resolve, reject) => {
+    const socket = new WebSocket(externalPasskeyEventsUrl(location.origin));
+    let settled = false;
+    const finish = (
+      result: { status: ExternalPasskeyEventStatus } | { error: unknown },
+    ): void => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      socket.close();
+      if ("status" in result) resolve(result.status);
+      else reject(result.error);
+    };
+    const onAbort = (): void =>
+      finish({ error: new DOMException("Cancelled", "AbortError") });
+    signal.addEventListener("abort", onAbort, { once: true });
+    socket.addEventListener("open", () => {
+      socket.send(JSON.stringify({
+        transaction_id: transactionId,
+        code_verifier: verifier,
+      }));
+    }, { once: true });
+    socket.addEventListener("message", (event) => {
+      try {
+        const parsed = JSON.parse(String(event.data)) as { status?: unknown };
+        if (
+          parsed.status === "complete" || parsed.status === "failed" ||
+          parsed.status === "unavailable"
+        ) {
+          finish({ status: parsed.status });
+          return;
+        }
+      } catch {
+        // A malformed public event is a transport failure, never completion.
+      }
+      finish({ error: new TypeError("Invalid Passkey event") });
+    });
+    socket.addEventListener("error", () => {
+      finish({ error: new TypeError("Passkey event socket failed") });
+    }, { once: true });
+    socket.addEventListener("close", () => {
+      finish({ error: new TypeError("Passkey event socket closed") });
+    }, { once: true });
+  });
 }
 
 async function waitForExternalPasskey(
   transactionId: string,
   verifier: string,
   expiresInSeconds: number,
+  signal: AbortSignal,
 ): Promise<ExternalPasskeyFinalize> {
   const deadline = Date.now() + Math.max(1, expiresInSeconds) * 1_000;
+  let reconnectDelay = RECONNECT_INITIAL_MS;
   while (Date.now() < deadline) {
+    if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
     try {
-      const result = await authApi.finalizeExternalPasskey(
+      const status = await waitForExternalPasskeyEvent(
         transactionId,
         verifier,
+        signal,
       );
-      if (result.status === "complete") return result;
+      if (status === "failed") {
+        throw new DOMException("Cancelled", "AbortError");
+      }
+      if (status === "unavailable") {
+        throw new AuthApiError("Passkey setup is no longer active.", 410);
+      }
+      if (status === "complete") {
+        const result = await authApi.finalizeExternalPasskey(
+          transactionId,
+          verifier,
+        );
+        if (result.status === "complete") return result;
+      }
+      reconnectDelay = RECONNECT_INITIAL_MS;
     } catch (reason) {
-      if (!retryablePollError(reason)) throw reason;
+      if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
+      if (!retryableEventError(reason)) throw reason;
     }
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    await waitForDelay(reconnectDelay, signal);
+    reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS);
   }
   throw new AuthApiError("Passkey setup timed out. Please try again.", 408);
 }
@@ -65,16 +168,32 @@ async function runExternalPasskey(
     binding.challenge,
     nickname,
   );
-  openAuthenticationUrl(
-    externalPasskeyUrl(location.origin, started.transaction_id),
+  const flow = new AbortController();
+  const cancel = (): void => flow.abort();
+  globalThis.addEventListener(
+    NATIVE_AUTHENTICATION_BROWSER_CLOSED_EVENT,
+    cancel,
   );
   try {
+    openAuthenticationUrl(
+      externalPasskeyUrl(location.origin, started.transaction_id),
+    );
     return await waitForExternalPasskey(
       started.transaction_id,
       binding.verifier,
       started.expires_in_seconds,
+      flow.signal,
     );
+  } catch (reason) {
+    await externalPasskeyApi.fail(started.transaction_id).catch(() =>
+      undefined
+    );
+    throw reason;
   } finally {
+    globalThis.removeEventListener(
+      NATIVE_AUTHENTICATION_BROWSER_CLOSED_EVENT,
+      cancel,
+    );
     closeAuthenticationBrowser();
   }
 }
@@ -121,7 +240,7 @@ export function passkeyErrorMessage(
 ): string {
   if (reason instanceof AuthApiError) return reason.message;
   if (reason instanceof DOMException) {
-    if (reason.name === "NotAllowedError") {
+    if (reason.name === "AbortError" || reason.name === "NotAllowedError") {
       return "Passkey verification was cancelled or timed out.";
     }
     if (reason.name === "InvalidStateError") {
@@ -132,4 +251,12 @@ export function passkeyErrorMessage(
     }
   }
   return fallback;
+}
+
+export function passkeyFlowCancelled(reason: unknown): boolean {
+  if (reason instanceof DOMException) {
+    return reason.name === "AbortError" || reason.name === "NotAllowedError";
+  }
+  return reason instanceof AuthApiError &&
+    reason.message === "Passkey setup was cancelled";
 }

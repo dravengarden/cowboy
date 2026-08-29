@@ -2018,6 +2018,11 @@ struct OidcNativeEventStatus {
     status: &'static str,
 }
 
+#[derive(Debug, Serialize)]
+struct PasskeyExternalEventStatus {
+    status: &'static str,
+}
+
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 struct AdminCreateUserRequest {
@@ -2147,6 +2152,10 @@ fn product_auth_router(state: ProductAuthState) -> Router {
         .route(
             "/api/auth/passkeys/external/fail",
             post(api_auth_passkey_external_fail),
+        )
+        .route(
+            "/api/auth/passkeys/external/events",
+            get(api_auth_passkey_external_events),
         )
         .route(
             "/api/auth/passkeys/external/finalize",
@@ -5532,6 +5541,138 @@ async fn api_auth_passkey_external_fail(
     match state.passkeys.fail_external(&request.transaction_id) {
         Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
         Err(_) => (StatusCode::GONE, "Passkey setup expired").into_response(),
+    }
+}
+
+const PASSKEY_EXTERNAL_EVENTS_HANDSHAKE_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(10);
+const PASSKEY_EXTERNAL_EVENTS_TTL: std::time::Duration = std::time::Duration::from_secs(2 * 60);
+const PASSKEY_EXTERNAL_EVENTS_HEARTBEAT: std::time::Duration = std::time::Duration::from_secs(25);
+
+async fn api_auth_passkey_external_events(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+) -> Response {
+    if !state.product_authentication.passkeys.enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let peer = peer_addr(peer);
+    if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
+        return rejected;
+    }
+    let Some(store) = durable_store(&state.store) else {
+        return missing_store();
+    };
+    let Some((session, user)) = product_session_and_user_from_store_cookie(store, &headers).await
+    else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    ws.max_message_size(4 * 1_024)
+        .max_frame_size(4 * 1_024)
+        .on_upgrade(move |socket| {
+            handle_passkey_external_events(socket, state, user.id, session.token_hash)
+        })
+}
+
+async fn handle_passkey_external_events(
+    mut socket: WebSocket,
+    state: ProductAuthState,
+    user_id: String,
+    session_token_hash: String,
+) {
+    let request = match tokio::time::timeout(
+        PASSKEY_EXTERNAL_EVENTS_HANDSHAKE_TIMEOUT,
+        socket.recv(),
+    )
+    .await
+    {
+        Ok(Some(Ok(Message::Text(text)))) => {
+            serde_json::from_str::<crate::passkey::ExternalFinalizeRequest>(text.as_str()).ok()
+        }
+        _ => None,
+    };
+    let Some(request) = request else {
+        let _ = socket.close().await;
+        return;
+    };
+    let mut events = match state.passkeys.subscribe_external(
+        &request.transaction_id,
+        &user_id,
+        &session_token_hash,
+        &request.code_verifier,
+    ) {
+        Ok(events) => events,
+        Err(error) => {
+            tracing::info!(%error, "external_passkey_events_rejected");
+            let _ = send_json(
+                &mut socket,
+                &PasskeyExternalEventStatus {
+                    status: "unavailable",
+                },
+            )
+            .await;
+            let _ = socket.close().await;
+            return;
+        }
+    };
+    let deadline = tokio::time::sleep(PASSKEY_EXTERNAL_EVENTS_TTL);
+    tokio::pin!(deadline);
+    let mut heartbeat = tokio::time::interval(PASSKEY_EXTERNAL_EVENTS_HEARTBEAT);
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    heartbeat.tick().await;
+
+    loop {
+        let terminal = match *events.borrow_and_update() {
+            crate::passkey::ExternalPasskeyEvent::Pending => None,
+            crate::passkey::ExternalPasskeyEvent::Complete => Some("complete"),
+            crate::passkey::ExternalPasskeyEvent::Failed => Some("failed"),
+        };
+        if let Some(status) = terminal {
+            let _ = send_json(&mut socket, &PasskeyExternalEventStatus { status }).await;
+            let _ = socket.close().await;
+            return;
+        }
+
+        tokio::select! {
+            changed = events.changed() => {
+                if changed.is_err() {
+                    let _ = send_json(
+                        &mut socket,
+                        &PasskeyExternalEventStatus { status: "unavailable" },
+                    ).await;
+                    let _ = socket.close().await;
+                    return;
+                }
+            }
+            incoming = socket.recv() => match incoming {
+                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return,
+                Some(Ok(Message::Ping(payload))) => {
+                    if socket.send(Message::Pong(payload)).await.is_err() {
+                        return;
+                    }
+                }
+                Some(Ok(Message::Pong(_))) => {}
+                Some(Ok(_)) => {
+                    let _ = socket.close().await;
+                    return;
+                }
+            },
+            _ = heartbeat.tick() => {
+                if socket.send(Message::Ping(Vec::new().into())).await.is_err() {
+                    return;
+                }
+            }
+            () = &mut deadline => {
+                let _ = send_json(
+                    &mut socket,
+                    &PasskeyExternalEventStatus { status: "unavailable" },
+                ).await;
+                let _ = socket.close().await;
+                return;
+            }
+        }
     }
 }
 
@@ -15081,6 +15222,10 @@ mod product_auth_api_tests {
             assert_eq!(classify_route(&Method::POST, path), RouteAuth::Product);
         }
         assert_eq!(
+            classify_route(&Method::GET, "/api/auth/passkeys/external/events"),
+            RouteAuth::Product
+        );
+        assert_eq!(
             classify_route(&Method::POST, "/api/auth/setup"),
             RouteAuth::Public
         );
@@ -16413,6 +16558,41 @@ mod product_auth_api_tests {
         .await;
         assert_eq!(pending.status(), StatusCode::ACCEPTED);
 
+        let socket_url = format!(
+            "{}/api/auth/passkeys/external/events",
+            base.replacen("http://", "ws://", 1)
+        );
+        let rejected = tokio_tungstenite::connect_async(&socket_url)
+            .await
+            .expect_err("an external Passkey socket without Origin must fail");
+        assert!(matches!(
+            rejected,
+            tokio_tungstenite::tungstenite::Error::Http(response)
+                if response.status() == StatusCode::FORBIDDEN
+        ));
+        let mut socket_request = socket_url.into_client_request().unwrap();
+        socket_request
+            .headers_mut()
+            .insert(header::ORIGIN, origin.parse().unwrap());
+        socket_request
+            .headers_mut()
+            .insert(header::COOKIE, first_cookie.parse().unwrap());
+        let (mut socket, response) = tokio_tungstenite::connect_async(socket_request)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+        socket
+            .send(TungsteniteMessage::Text(
+                serde_json::json!({
+                    "transaction_id": transaction_id,
+                    "code_verifier": verifier,
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+
         let cancelled = post_json(
             &format!("{base}/api/auth/passkeys/external/fail"),
             &origin,
@@ -16421,6 +16601,18 @@ mod product_auth_api_tests {
         )
         .await;
         assert_eq!(cancelled.status(), StatusCode::OK);
+        let message = tokio::time::timeout(std::time::Duration::from_secs(2), socket.next())
+            .await
+            .expect("external Passkey event timed out")
+            .expect("external Passkey socket closed")
+            .expect("external Passkey event failed");
+        let TungsteniteMessage::Text(message) = message else {
+            panic!("expected an external Passkey text event");
+        };
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&message).unwrap(),
+            serde_json::json!({ "status": "failed" })
+        );
         let finalized = post_json(
             &format!("{base}/api/auth/passkeys/external/finalize"),
             &origin,
@@ -16436,6 +16628,7 @@ mod product_auth_api_tests {
             finalized.text().await.unwrap(),
             "Passkey setup was cancelled"
         );
+        let _ = socket.close(None).await;
 
         server.abort();
         let _ = std::fs::remove_dir_all(root);

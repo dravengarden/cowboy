@@ -152,12 +152,20 @@ enum ExternalPasskeyState {
     Failed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExternalPasskeyEvent {
+    Pending,
+    Complete,
+    Failed,
+}
+
 #[derive(Debug)]
 struct StoredExternalPasskey {
     user_id: String,
     session_token_hash: String,
     code_challenge: String,
     state: ExternalPasskeyState,
+    events: tokio::sync::watch::Sender<ExternalPasskeyEvent>,
     expires: Instant,
     created: Instant,
 }
@@ -461,7 +469,14 @@ impl PasskeyCeremonies {
             })
         })();
         let result = verified.map(|state| stored.state = state);
+        let event = if result.is_ok() {
+            ExternalPasskeyEvent::Complete
+        } else {
+            ExternalPasskeyEvent::Failed
+        };
+        let events = stored.events.clone();
         self.external.lock().insert(key, stored);
+        events.send_replace(event);
         result
     }
 
@@ -496,7 +511,14 @@ impl PasskeyCeremonies {
             })
         })();
         let result = verified.map(|state| stored.state = state);
+        let event = if result.is_ok() {
+            ExternalPasskeyEvent::Complete
+        } else {
+            ExternalPasskeyEvent::Failed
+        };
+        let events = stored.events.clone();
         self.external.lock().insert(key, stored);
+        events.send_replace(event);
         result
     }
 
@@ -513,8 +535,41 @@ impl PasskeyCeremonies {
                 | ExternalPasskeyState::AssertionReady { .. }
         ) {
             stored.state = ExternalPasskeyState::Failed;
+            stored.events.send_replace(ExternalPasskeyEvent::Failed);
         }
         Ok(())
+    }
+
+    pub fn subscribe_external(
+        &self,
+        transaction_id: &str,
+        user_id: &str,
+        session_token_hash: &str,
+        code_verifier: &str,
+    ) -> Result<tokio::sync::watch::Receiver<ExternalPasskeyEvent>> {
+        let key = external_transaction_key(transaction_id)?;
+        let challenge = pkce_challenge(code_verifier)?;
+        self.gc_external();
+        let entries = self.external.lock();
+        let stored = entries
+            .get(&key)
+            .context("external passkey ceremony expired")?;
+        anyhow::ensure!(
+            stored.user_id == user_id,
+            "external passkey ceremony expired"
+        );
+        anyhow::ensure!(
+            constant_time_equal(
+                stored.session_token_hash.as_bytes(),
+                session_token_hash.as_bytes()
+            ),
+            "external passkey session mismatch"
+        );
+        anyhow::ensure!(
+            constant_time_equal(challenge.as_bytes(), stored.code_challenge.as_bytes()),
+            "external passkey PKCE mismatch"
+        );
+        Ok(stored.events.subscribe())
     }
 
     pub fn finalize_external(
@@ -590,6 +645,8 @@ impl PasskeyCeremonies {
     ) -> Result<String> {
         let transaction_id = new_session_token()?;
         let now = Instant::now();
+        let (events, _initial_receiver) =
+            tokio::sync::watch::channel(ExternalPasskeyEvent::Pending);
         let mut entries = self.external.lock();
         entries.retain(|_, row| row.expires > now);
         if entries.len() >= MAX_EXTERNAL_CEREMONIES
@@ -607,6 +664,7 @@ impl PasskeyCeremonies {
                 session_token_hash: session_token_hash.to_owned(),
                 code_challenge: code_challenge.to_owned(),
                 state,
+                events,
                 expires: now + EXTERNAL_CEREMONY_TTL,
                 created: now,
             },
@@ -866,7 +924,17 @@ mod tests {
             ExternalFinalizeResult::Pending
         );
 
+        let events = ceremonies
+            .subscribe_external(&transaction_id, "user-1", &session_hash, &verifier)
+            .unwrap();
+        assert_eq!(*events.borrow(), ExternalPasskeyEvent::Pending);
+        assert!(
+            ceremonies
+                .subscribe_external(&transaction_id, "user-1", &session_hash, &"e".repeat(64))
+                .is_err()
+        );
         ceremonies.fail_external(&transaction_id).unwrap();
+        assert_eq!(*events.borrow(), ExternalPasskeyEvent::Failed);
         assert_eq!(
             ceremonies
                 .finalize_external(&transaction_id, "user-1", &session_hash, &verifier)

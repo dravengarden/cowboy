@@ -60,6 +60,32 @@
       #error[data-visible="true"] {
         display: block;
       }
+      #actions {
+        display: grid;
+        gap: 0.75rem;
+        margin-top: 1.5rem;
+      }
+      #actions[hidden] {
+        display: none;
+      }
+      button {
+        min-height: 3.25rem;
+        border: 0;
+        border-radius: 0.9rem;
+        padding: 0.8rem 1rem;
+        color: #171220;
+        background: #9f86ff;
+        font: inherit;
+        font-weight: 750;
+      }
+      button.secondary {
+        border: 1px solid #554963;
+        color: #f6f1ff;
+        background: transparent;
+      }
+      button:disabled {
+        opacity: 0.55;
+      }
     </style>
   </head>
   <body>
@@ -67,9 +93,13 @@
       <div class="mark">Cowboy secure verification</div>
       <h1 id="title">Preparing Passkey…</h1>
       <p id="status" role="status" aria-live="polite">
-        Keep this sheet open while Cowboy prepares the system Passkey prompt.
+        Keep this sheet open. Cowboy will ask before opening the system Passkey prompt.
       </p>
       <div id="error" role="alert"></div>
+      <div id="actions" hidden>
+        <button id="continue" type="button">Continue</button>
+        <button id="cancel" class="secondary" type="button">Cancel</button>
+      </div>
     </main>
     <script type="module" src="/src/auth/passkeyExternalPage.ts"></script>
   </body>

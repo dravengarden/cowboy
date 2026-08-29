@@ -35,6 +35,7 @@ import {
 import { PasskeyReauthLock } from "./PasskeyReauthLock";
 import {
   passkeyErrorMessage,
+  passkeyFlowCancelled,
   passkeyFlowSupported,
   registerPasskey,
 } from "./passkeyFlow";
@@ -197,6 +198,7 @@ function PasskeySetupPrompt({
       await registerPasskey("This device");
       onCreated(await authApi.me());
     })().catch((reason: unknown) => {
+      if (passkeyFlowCancelled(reason)) return;
       setError(passkeyErrorMessage(reason, "Could not add a Passkey"));
     }).finally(() => setBusy(false));
   };

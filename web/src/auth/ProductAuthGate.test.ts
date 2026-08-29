@@ -35,7 +35,10 @@ Deno.test("auth package never imports store.ts or opens the product WebSocket", 
   assertEquals(source.includes('from "../store.ts"'), false);
   assert(source.includes("nativeOidcEventsPath"));
   assert(source.includes("new WebSocket"));
-  assertEquals(source.includes('new WebSocket(`${proto}//${globalThis.location.host}/ws'), false);
+  assertEquals(
+    source.includes("new WebSocket(`${proto}//${globalThis.location.host}/ws"),
+    false,
+  );
   assertEquals(source.includes('"/ws"'), false);
 });
 
@@ -52,11 +55,28 @@ Deno.test("ProductAuthGate wraps DesktopApp and MobileApp in main.tsx", async ()
 });
 
 Deno.test("system Safari Passkey page is isolated from the cached app shell", async () => {
-  const page = await Deno.readTextFile(new URL("../../passkey.html", import.meta.url));
-  const worker = await Deno.readTextFile(new URL("../../public/sw.js", import.meta.url));
+  const page = await Deno.readTextFile(
+    new URL("../../passkey.html", import.meta.url),
+  );
+  const externalPage = await Deno.readTextFile(
+    new URL("passkeyExternalPage.ts", authDir),
+  );
+  const worker = await Deno.readTextFile(
+    new URL("../../public/sw.js", import.meta.url),
+  );
   assert(page.includes('name="referrer" content="no-referrer"'));
   assert(page.includes("default-src 'none'"));
   assert(page.includes('src="/src/auth/passkeyExternalPage.ts"'));
+  assert(page.includes('id="continue"'));
+  assert(page.includes('id="cancel"'));
+  assert(
+    externalPage.includes(
+      'continueButton?.addEventListener("click", () => void performPasskey())',
+    ),
+  );
+  assertEquals(externalPage.match(/performPasskey\(\)/g)?.length, 2);
+  assert(externalPage.includes("history.replaceState"));
+  assert(externalPage.includes("externalPasskeyApi.complete(transactionId"));
   assert(worker.includes('url.pathname === "/passkey.html"'));
   assert(worker.includes("event.respondWith(fetch(request))"));
 });
@@ -95,6 +115,7 @@ Deno.test("login page is product chrome and hides register unless accepted", asy
   assert(gate.includes("<ConfirmSheet"));
   assertEquals(gate.includes("<Dialog"), false);
   assert(gate.includes("Automatic session refresh stays off"));
+  assert(gate.includes("passkeyFlowCancelled(reason)"));
 });
 
 Deno.test("logged-out gate never mounts product children or /ws", async () => {
@@ -143,7 +164,7 @@ Deno.test("desktop can sign out through authApi without importing store", async 
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
   const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
-  assert(sw.includes('const VERSION = "cowboy-v1578"'));
+  assert(sw.includes('const VERSION = "cowboy-v1579"'));
   const authStart = sw.indexOf('url.pathname.startsWith("/api/auth/")');
   const authBranch = sw.slice(
     authStart,
