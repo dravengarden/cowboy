@@ -12,7 +12,7 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PasswordStrength } from "../admin/PasswordStrength";
 import { assessAdminPassword } from "../admin/passwordStrength";
 import {
@@ -22,6 +22,7 @@ import {
   type ProductMe,
   type ProductOidcProvider,
 } from "./authApi";
+import { nativeOidcFlowSupported, runNativeOidc } from "./nativeOidcFlow";
 
 export function ProductLoginPage({
   setupRequired,
@@ -47,12 +48,18 @@ export function ProductLoginPage({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [passwordVisible, setPasswordVisible] = useState(false);
+  const providerAbort = useRef<AbortController | null>(null);
   const [method, setMethod] = useState(() =>
     passwordEnabled ? "password" : providers[0]?.id ?? ""
   );
   useEffect(() => {
     if (creating) setPasswordVisible(true);
   }, [creating]);
+  useEffect(() => () => {
+    const pending = providerAbort.current;
+    providerAbort.current = null;
+    pending?.abort();
+  }, []);
   useEffect(() => {
     if (setupRequired) return;
     const available = passwordEnabled && method === "password" ||
@@ -74,6 +81,8 @@ export function ProductLoginPage({
     })),
   ];
   const selectedProvider = providers.find((provider) => provider.id === method);
+  const useNativeProviderFlow = selectedProvider !== undefined &&
+    nativeOidcFlowSupported();
 
   const submit = (): void => {
     if (busy) return;
@@ -93,6 +102,30 @@ export function ProductLoginPage({
         );
       })
       .finally(() => setBusy(false));
+  };
+
+  const submitProvider = (): void => {
+    if (busy || !selectedProvider || !useNativeProviderFlow) return;
+    const abort = new AbortController();
+    providerAbort.current = abort;
+    setBusy(true);
+    setError(null);
+    void runNativeOidc(selectedProvider, abort.signal)
+      .then(onAuthed)
+      .catch((err: unknown) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setError(
+          err instanceof AuthApiError
+            ? err.message
+            : "Could not complete external sign-in",
+        );
+      })
+      .finally(() => {
+        if (providerAbort.current === abort) {
+          providerAbort.current = null;
+          setBusy(false);
+        }
+      });
   };
 
   return (
@@ -181,18 +214,33 @@ export function ProductLoginPage({
                 key={loginMethod.id}
                 value={loginMethod.id}
                 label={loginMethod.label}
+                disabled={busy}
               />
             ))}
           </Tabs>
         )}
         {!setupRequired && selectedProvider && (
           <Button
-            href={selectedProvider.start_url}
+            type="button"
+            href={useNativeProviderFlow ? undefined : selectedProvider.start_url}
+            onClick={useNativeProviderFlow ? submitProvider : undefined}
             variant="contained"
             size="large"
             fullWidth
+            disabled={useNativeProviderFlow && busy}
           >
-            {selectedProvider.button_label}
+            {useNativeProviderFlow && busy
+              ? "Waiting for approval…"
+              : selectedProvider.button_label}
+          </Button>
+        )}
+        {!setupRequired && useNativeProviderFlow && busy && (
+          <Button
+            type="button"
+            variant="text"
+            onClick={() => providerAbort.current?.abort()}
+          >
+            Cancel
           </Button>
         )}
         {!setupRequired && selectedProvider && (

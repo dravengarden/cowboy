@@ -192,6 +192,47 @@ Deno.test("external Passkey handoff keeps the verifier in the signed-in client",
   }
 });
 
+Deno.test("native OIDC poll keeps both raw bindings in a same-origin body", async () => {
+  let seen: FetchArgs | undefined;
+  const restore = withFetch((args) => {
+    seen = args;
+    return new Response(
+      JSON.stringify({ account: "draven", role: "owner" }),
+      { status: 200 },
+    );
+  });
+  try {
+    assertEquals(
+      await authApi.pollNativeOidc(
+        {
+          id: "cardea",
+          display_name: "Cardea",
+          button_label: "Continue with Cardea",
+          start_url: "/api/auth/oidc/start",
+        },
+        "h".repeat(43),
+        "v".repeat(43),
+      ),
+      { account: "draven", role: "owner" },
+    );
+    assertEquals(seen?.input, "/api/auth/oidc/native/poll");
+    assertEquals(seen?.init?.method, "POST");
+    assertEquals(seen?.init?.credentials, "same-origin");
+    assertEquals(seen?.init?.cache, "no-store");
+    assertEquals(
+      seen?.init?.body,
+      JSON.stringify({
+        handoff_token: "h".repeat(43),
+        code_verifier: "v".repeat(43),
+      }),
+    );
+    assertEquals(String(seen?.input).includes("h".repeat(43)), false);
+    assertEquals(String(seen?.input).includes("v".repeat(43)), false);
+  } finally {
+    restore();
+  }
+});
+
 Deno.test("status 404 and 501 are unsupported, not login", async () => {
   for (const status of [404, 501] as const) {
     const restore = withFetch(() => new Response("not found", { status }));

@@ -171,7 +171,13 @@ struct StoredTransaction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthorizationTarget {
     Browser,
-    MacOs { code_challenge: String },
+    MacOs {
+        code_challenge: String,
+    },
+    BrowserShell {
+        code_challenge: String,
+        handoff_challenge: String,
+    },
 }
 
 #[derive(Debug)]
@@ -202,14 +208,38 @@ struct StoredNativeHandoff {
     created: Instant,
 }
 
+#[derive(Debug)]
+enum BrowserHandoffState {
+    Pending,
+    Ready { user_id: String },
+    Failed,
+}
+
+#[derive(Debug)]
+struct StoredBrowserHandoff {
+    provider_id: String,
+    code_challenge: String,
+    state: BrowserHandoffState,
+    expires: Instant,
+    created: Instant,
+}
+
 #[derive(Debug, Default)]
 pub struct NativeHandoffs {
     entries: parking_lot::Mutex<HashMap<String, StoredNativeHandoff>>,
+    browser_entries: parking_lot::Mutex<HashMap<String, StoredBrowserHandoff>>,
 }
 
 #[derive(Debug)]
 pub struct StartedNativeHandoff {
     pub location: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum BrowserHandoffPoll {
+    Pending,
+    Ready { user_id: String },
+    Failed,
 }
 
 #[derive(Debug, Deserialize)]
@@ -846,11 +876,27 @@ impl OidcTransactions {
         source_ip: IpAddr,
         target: AuthorizationTarget,
     ) -> Result<StartedAuthorization> {
-        if let AuthorizationTarget::MacOs { code_challenge } = &target {
-            anyhow::ensure!(
-                valid_pkce_challenge(code_challenge),
-                "invalid native PKCE challenge"
-            );
+        match &target {
+            AuthorizationTarget::MacOs { code_challenge } => {
+                anyhow::ensure!(
+                    valid_pkce_challenge(code_challenge),
+                    "invalid native PKCE challenge"
+                );
+            }
+            AuthorizationTarget::BrowserShell {
+                code_challenge,
+                handoff_challenge,
+            } => {
+                anyhow::ensure!(
+                    valid_pkce_challenge(code_challenge),
+                    "invalid browser-shell PKCE challenge"
+                );
+                anyhow::ensure!(
+                    valid_pkce_challenge(handoff_challenge),
+                    "invalid browser-shell handoff challenge"
+                );
+            }
+            AuthorizationTarget::Browser => {}
         }
         let cookie_token = new_session_token()?;
         let state = new_session_token()?;
@@ -944,6 +990,14 @@ impl OidcTransactions {
             target: stored.target,
         })
     }
+
+    pub fn cancel(&self, cookie_token: &str) {
+        if valid_opaque_value(cookie_token) {
+            self.entries
+                .lock()
+                .remove(&hex_sha256(cookie_token.as_bytes()));
+        }
+    }
 }
 
 impl OidcTransaction {
@@ -954,6 +1008,144 @@ impl OidcTransaction {
 }
 
 impl NativeHandoffs {
+    pub fn begin_browser(
+        &self,
+        provider_id: &str,
+        code_challenge: &str,
+        handoff_challenge: &str,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            valid_identifier(provider_id),
+            "invalid browser handoff provider"
+        );
+        anyhow::ensure!(
+            valid_pkce_challenge(code_challenge),
+            "invalid browser-shell PKCE challenge"
+        );
+        anyhow::ensure!(
+            valid_pkce_challenge(handoff_challenge),
+            "invalid browser-shell handoff challenge"
+        );
+        let key = hex_sha256(handoff_challenge.as_bytes());
+        let now = Instant::now();
+        let mut entries = self.browser_entries.lock();
+        entries.retain(|_, row| row.expires > now);
+        anyhow::ensure!(
+            !entries.contains_key(&key),
+            "browser handoff already exists"
+        );
+        if entries.len() >= MAX_NATIVE_HANDOFFS
+            && let Some(oldest) = entries
+                .iter()
+                .min_by_key(|(_, row)| row.created)
+                .map(|(key, _)| key.clone())
+        {
+            entries.remove(&oldest);
+        }
+        entries.insert(
+            key,
+            StoredBrowserHandoff {
+                provider_id: provider_id.to_owned(),
+                code_challenge: code_challenge.to_owned(),
+                state: BrowserHandoffState::Pending,
+                expires: now + TRANSACTION_TTL,
+                created: now,
+            },
+        );
+        Ok(())
+    }
+
+    pub fn complete_browser(
+        &self,
+        provider_id: &str,
+        handoff_challenge: &str,
+        user_id: &str,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            valid_identifier(provider_id),
+            "invalid browser handoff provider"
+        );
+        anyhow::ensure!(valid_identifier(user_id), "invalid browser handoff user");
+        anyhow::ensure!(
+            valid_pkce_challenge(handoff_challenge),
+            "invalid browser-shell handoff challenge"
+        );
+        let now = Instant::now();
+        let mut entries = self.browser_entries.lock();
+        entries.retain(|_, row| row.expires > now);
+        let stored = entries
+            .get_mut(&hex_sha256(handoff_challenge.as_bytes()))
+            .context("browser handoff expired")?;
+        anyhow::ensure!(
+            constant_time_equal(stored.provider_id.as_bytes(), provider_id.as_bytes()),
+            "browser handoff provider mismatch"
+        );
+        stored.state = BrowserHandoffState::Ready {
+            user_id: user_id.to_owned(),
+        };
+        Ok(())
+    }
+
+    pub fn fail_browser(&self, provider_id: &str, handoff_challenge: &str) -> Result<()> {
+        anyhow::ensure!(
+            valid_identifier(provider_id),
+            "invalid browser handoff provider"
+        );
+        anyhow::ensure!(
+            valid_pkce_challenge(handoff_challenge),
+            "invalid browser-shell handoff challenge"
+        );
+        let now = Instant::now();
+        let mut entries = self.browser_entries.lock();
+        entries.retain(|_, row| row.expires > now);
+        let stored = entries
+            .get_mut(&hex_sha256(handoff_challenge.as_bytes()))
+            .context("browser handoff expired")?;
+        anyhow::ensure!(
+            constant_time_equal(stored.provider_id.as_bytes(), provider_id.as_bytes()),
+            "browser handoff provider mismatch"
+        );
+        stored.state = BrowserHandoffState::Failed;
+        Ok(())
+    }
+
+    pub fn poll_browser(
+        &self,
+        provider_id: &str,
+        handoff_token: &str,
+        code_verifier: &str,
+    ) -> Result<BrowserHandoffPoll> {
+        anyhow::ensure!(
+            valid_identifier(provider_id),
+            "invalid browser handoff provider"
+        );
+        let handoff_challenge =
+            pkce_challenge(handoff_token).context("invalid browser handoff token")?;
+        let code_challenge =
+            pkce_challenge(code_verifier).context("invalid browser-shell PKCE verifier")?;
+        let key = hex_sha256(handoff_challenge.as_bytes());
+        let now = Instant::now();
+        let mut entries = self.browser_entries.lock();
+        entries.retain(|_, row| row.expires > now);
+        let stored = entries.remove(&key).context("browser handoff expired")?;
+        anyhow::ensure!(
+            constant_time_equal(stored.provider_id.as_bytes(), provider_id.as_bytes()),
+            "browser handoff provider mismatch"
+        );
+        anyhow::ensure!(
+            constant_time_equal(code_challenge.as_bytes(), stored.code_challenge.as_bytes()),
+            "browser-shell PKCE mismatch"
+        );
+        match stored.state {
+            BrowserHandoffState::Pending => {
+                entries.insert(key, stored);
+                Ok(BrowserHandoffPoll::Pending)
+            }
+            BrowserHandoffState::Ready { user_id } => Ok(BrowserHandoffPoll::Ready { user_id }),
+            BrowserHandoffState::Failed => Ok(BrowserHandoffPoll::Failed),
+        }
+    }
+
     pub fn issue(
         &self,
         provider_id: &str,
@@ -1455,6 +1647,89 @@ mod tests {
             .unwrap();
         assert!(handoffs.consume("cardea", &code, &"c".repeat(64)).is_err());
         assert!(handoffs.consume("cardea", &code, &verifier).is_err());
+    }
+
+    #[test]
+    fn browser_handoff_is_pending_then_ready_and_single_use() {
+        let handoffs = NativeHandoffs::default();
+        let verifier = "v".repeat(64);
+        let handoff_token = "h".repeat(64);
+        let code_challenge = super::pkce_challenge(&verifier).unwrap();
+        let handoff_challenge = super::pkce_challenge(&handoff_token).unwrap();
+        handoffs
+            .begin_browser("cardea", &code_challenge, &handoff_challenge)
+            .unwrap();
+        assert_eq!(
+            handoffs
+                .poll_browser("cardea", &handoff_token, &verifier)
+                .unwrap(),
+            super::BrowserHandoffPoll::Pending
+        );
+        handoffs
+            .complete_browser("cardea", &handoff_challenge, &"b".repeat(32))
+            .unwrap();
+        assert_eq!(
+            handoffs
+                .poll_browser("cardea", &handoff_token, &verifier)
+                .unwrap(),
+            super::BrowserHandoffPoll::Ready {
+                user_id: "b".repeat(32)
+            }
+        );
+        assert!(
+            handoffs
+                .poll_browser("cardea", &handoff_token, &verifier)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn browser_handoff_wrong_verifier_fails_closed() {
+        let handoffs = NativeHandoffs::default();
+        let verifier = "v".repeat(64);
+        let handoff_token = "h".repeat(64);
+        let code_challenge = super::pkce_challenge(&verifier).unwrap();
+        let handoff_challenge = super::pkce_challenge(&handoff_token).unwrap();
+        handoffs
+            .begin_browser("cardea", &code_challenge, &handoff_challenge)
+            .unwrap();
+        handoffs
+            .complete_browser("cardea", &handoff_challenge, &"b".repeat(32))
+            .unwrap();
+        assert!(
+            handoffs
+                .poll_browser("cardea", &handoff_token, &"w".repeat(64))
+                .is_err()
+        );
+        assert!(
+            handoffs
+                .poll_browser("cardea", &handoff_token, &verifier)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn browser_handoff_reports_authorization_failure_once() {
+        let handoffs = NativeHandoffs::default();
+        let verifier = "v".repeat(64);
+        let handoff_token = "h".repeat(64);
+        let code_challenge = super::pkce_challenge(&verifier).unwrap();
+        let handoff_challenge = super::pkce_challenge(&handoff_token).unwrap();
+        handoffs
+            .begin_browser("cardea", &code_challenge, &handoff_challenge)
+            .unwrap();
+        handoffs.fail_browser("cardea", &handoff_challenge).unwrap();
+        assert_eq!(
+            handoffs
+                .poll_browser("cardea", &handoff_token, &verifier)
+                .unwrap(),
+            super::BrowserHandoffPoll::Failed
+        );
+        assert!(
+            handoffs
+                .poll_browser("cardea", &handoff_token, &verifier)
+                .is_err()
+        );
     }
 
     #[test]

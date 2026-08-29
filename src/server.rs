@@ -1770,6 +1770,7 @@ struct OidcCallbackQuery {
 struct OidcStartQuery {
     client: Option<String>,
     code_challenge: Option<String>,
+    handoff_challenge: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1777,6 +1778,18 @@ struct OidcStartQuery {
 struct OidcNativeExchangeRequest {
     code: String,
     code_verifier: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OidcNativePollRequest {
+    handoff_token: String,
+    code_verifier: String,
+}
+
+#[derive(Debug, Serialize)]
+struct OidcNativePollPending {
+    status: &'static str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1830,6 +1843,14 @@ fn product_auth_router(state: ProductAuthState) -> Router {
             post(api_auth_oidc_native_exchange),
         )
         .route(
+            "/api/auth/oidc/native/poll",
+            post(api_auth_oidc_native_poll),
+        )
+        .route(
+            "/api/auth/oidc/native/complete",
+            get(api_auth_oidc_native_complete),
+        )
+        .route(
             "/api/auth/providers/{provider_id}/start",
             get(api_auth_oidc_start),
         )
@@ -1840,6 +1861,10 @@ fn product_auth_router(state: ProductAuthState) -> Router {
         .route(
             "/api/auth/providers/{provider_id}/native/exchange",
             post(api_auth_oidc_native_exchange),
+        )
+        .route(
+            "/api/auth/providers/{provider_id}/native/poll",
+            post(api_auth_oidc_native_poll),
         )
         .route("/api/auth/logout", post(api_auth_logout))
         .route("/api/auth/me", get(api_auth_me))
@@ -3081,9 +3106,12 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
         || path == "/api/auth/oidc/start"
         || path == "/api/auth/oidc/callback"
         || path == "/api/auth/oidc/native/exchange"
+        || path == "/api/auth/oidc/native/poll"
+        || path == "/api/auth/oidc/native/complete"
         || authentication_provider_id(path, "start").is_some()
         || authentication_provider_id(path, "callback").is_some()
         || authentication_provider_id(path, "native/exchange").is_some()
+        || authentication_provider_id(path, "native/poll").is_some()
         || path == "/api/admin/auth"
         || path == "/api/admin/auth/setup"
         || path == "/api/admin/auth/bootstrap"
@@ -3791,10 +3819,20 @@ async fn api_auth_oidc_start(
     let Some(store) = durable_store(&state.store) else {
         return missing_store();
     };
-    let target = match (query.client.as_deref(), query.code_challenge) {
-        (None, None) => crate::oidc::AuthorizationTarget::Browser,
-        (Some("macos-manager"), Some(code_challenge)) => {
+    let target = match (
+        query.client.as_deref(),
+        query.code_challenge,
+        query.handoff_challenge,
+    ) {
+        (None, None, None) => crate::oidc::AuthorizationTarget::Browser,
+        (Some("macos-manager"), Some(code_challenge), None) => {
             crate::oidc::AuthorizationTarget::MacOs { code_challenge }
+        }
+        (Some("browser-shell"), Some(code_challenge), Some(handoff_challenge)) => {
+            crate::oidc::AuthorizationTarget::BrowserShell {
+                code_challenge,
+                handoff_challenge,
+            }
         }
         _ => return (StatusCode::BAD_REQUEST, "invalid OIDC client request").into_response(),
     };
@@ -3829,13 +3867,29 @@ async fn api_auth_oidc_start(
             .into_response();
     }
     apply_rate_limit(&state, &rate_key, &source_ip.to_string()).await;
-    let started = match state.oidc_transactions.begin(provider, source_ip, target) {
+    let started = match state
+        .oidc_transactions
+        .begin(provider, source_ip, target.clone())
+    {
         Ok(started) => started,
         Err(error) => {
             tracing::info!(%error, user_id = user.id, "oidc_start_rejected");
             return (StatusCode::TOO_MANY_REQUESTS, "try again later").into_response();
         }
     };
+    if let crate::oidc::AuthorizationTarget::BrowserShell {
+        code_challenge,
+        handoff_challenge,
+    } = &target
+        && let Err(error) =
+            state
+                .oidc_native_handoffs
+                .begin_browser(provider_id, code_challenge, handoff_challenge)
+    {
+        state.oidc_transactions.cancel(&started.cookie_token);
+        tracing::info!(%error, "oidc_browser_handoff_rejected");
+        return (StatusCode::BAD_REQUEST, "invalid OIDC client request").into_response();
+    }
     state.rate_limits.reset(&rate_key, &source_ip.to_string());
     (
         StatusCode::SEE_OTHER,
@@ -3909,33 +3963,75 @@ async fn api_auth_oidc_callback_inner(
     };
     let target = transaction.target().clone();
     if query.user.as_ref().is_some_and(|user| user.len() > 8_192) {
-        return oidc_callback_target_error(StatusCode::BAD_REQUEST, secure, &target);
+        return oidc_callback_target_error(
+            &state,
+            provider_id,
+            StatusCode::BAD_REQUEST,
+            secure,
+            &target,
+        );
     }
     if query.error.is_some() || query.error_description.is_some() {
         tracing::info!("oidc_authorization_denied");
-        return oidc_callback_target_error(StatusCode::UNAUTHORIZED, secure, &target);
+        return oidc_callback_target_error(
+            &state,
+            provider_id,
+            StatusCode::UNAUTHORIZED,
+            secure,
+            &target,
+        );
     }
     let Some(code) = query.code.as_deref() else {
-        return oidc_callback_target_error(StatusCode::UNAUTHORIZED, secure, &target);
+        return oidc_callback_target_error(
+            &state,
+            provider_id,
+            StatusCode::UNAUTHORIZED,
+            secure,
+            &target,
+        );
     };
     let identity = match provider.exchange(&transaction, code).await {
         Ok(identity) => identity,
         Err(error) => {
             tracing::info!(%error, "oidc_exchange_rejected");
-            return oidc_callback_target_error(StatusCode::UNAUTHORIZED, secure, &target);
+            return oidc_callback_target_error(
+                &state,
+                provider_id,
+                StatusCode::UNAUTHORIZED,
+                secure,
+                &target,
+            );
         }
     };
     let Some(store) = durable_store(&state.store).cloned() else {
-        return oidc_callback_target_error(StatusCode::SERVICE_UNAVAILABLE, secure, &target);
+        return oidc_callback_target_error(
+            &state,
+            provider_id,
+            StatusCode::SERVICE_UNAVAILABLE,
+            secure,
+            &target,
+        );
     };
     let user = match store.user_by_username(provider.account()).await {
         Ok(Some(user)) if user.disabled_at_ms.is_none() => user,
         Ok(_) => {
-            return oidc_callback_target_error(StatusCode::UNAUTHORIZED, secure, &target);
+            return oidc_callback_target_error(
+                &state,
+                provider_id,
+                StatusCode::UNAUTHORIZED,
+                secure,
+                &target,
+            );
         }
         Err(error) => {
             tracing::error!(%error, "oidc_account_lookup");
-            return oidc_callback_target_error(StatusCode::INTERNAL_SERVER_ERROR, secure, &target);
+            return oidc_callback_target_error(
+                &state,
+                provider_id,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                secure,
+                &target,
+            );
         }
     };
     tracing::info!(
@@ -3945,28 +4041,45 @@ async fn api_auth_oidc_callback_inner(
         ok = true,
         "product_oidc_login"
     );
-    if let crate::oidc::AuthorizationTarget::MacOs { code_challenge } = target {
-        let handoff = match state
-            .oidc_native_handoffs
-            .issue(provider_id, &user.id, &code_challenge)
-        {
-            Ok(handoff) => handoff,
-            Err(error) => {
-                tracing::error!(%error, "oidc_native_handoff_issue");
+    match &target {
+        crate::oidc::AuthorizationTarget::MacOs { code_challenge } => {
+            let handoff =
+                match state
+                    .oidc_native_handoffs
+                    .issue(provider_id, &user.id, code_challenge)
+                {
+                    Ok(handoff) => handoff,
+                    Err(error) => {
+                        tracing::error!(%error, "oidc_native_handoff_issue");
+                        return oidc_callback_error(StatusCode::INTERNAL_SERVER_ERROR, secure);
+                    }
+                };
+            return (
+                StatusCode::SEE_OTHER,
+                [
+                    (header::LOCATION, handoff.location),
+                    (
+                        header::SET_COOKIE,
+                        crate::oidc::clear_transaction_cookie(secure),
+                    ),
+                ],
+            )
+                .into_response();
+        }
+        crate::oidc::AuthorizationTarget::BrowserShell {
+            handoff_challenge, ..
+        } => {
+            if let Err(error) = state.oidc_native_handoffs.complete_browser(
+                provider_id,
+                handoff_challenge,
+                &user.id,
+            ) {
+                tracing::error!(%error, "oidc_browser_handoff_complete");
                 return oidc_callback_error(StatusCode::INTERNAL_SERVER_ERROR, secure);
             }
-        };
-        return (
-            StatusCode::SEE_OTHER,
-            [
-                (header::LOCATION, handoff.location),
-                (
-                    header::SET_COOKIE,
-                    crate::oidc::clear_transaction_cookie(secure),
-                ),
-            ],
-        )
-            .into_response();
+            return oidc_browser_shell_completion_response(secure);
+        }
+        crate::oidc::AuthorizationTarget::Browser => {}
     }
     let admin_cookie = match oidc_admin_session_cookie(&state, provider, &headers) {
         Ok(cookie) => cookie,
@@ -3995,6 +4108,8 @@ async fn api_auth_oidc_callback_inner(
 }
 
 fn oidc_callback_target_error(
+    state: &ProductAuthState,
+    provider_id: &str,
     status: StatusCode,
     secure: bool,
     target: &crate::oidc::AuthorizationTarget,
@@ -4015,7 +4130,36 @@ fn oidc_callback_target_error(
         )
             .into_response();
     }
+    if let crate::oidc::AuthorizationTarget::BrowserShell {
+        handoff_challenge, ..
+    } = target
+    {
+        if let Err(error) = state
+            .oidc_native_handoffs
+            .fail_browser(provider_id, handoff_challenge)
+        {
+            tracing::info!(%error, "oidc_browser_handoff_fail");
+        }
+        return oidc_browser_shell_completion_response(secure);
+    }
     oidc_callback_error(status, secure)
+}
+
+fn oidc_browser_shell_completion_response(secure: bool) -> Response {
+    (
+        StatusCode::SEE_OTHER,
+        [
+            (
+                header::LOCATION,
+                "/api/auth/oidc/native/complete".to_owned(),
+            ),
+            (
+                header::SET_COOKIE,
+                crate::oidc::clear_transaction_cookie(secure),
+            ),
+        ],
+    )
+        .into_response()
 }
 
 fn oidc_admin_session_cookie(
@@ -4111,6 +4255,125 @@ async fn api_auth_oidc_native_exchange(
     state.rate_limits.reset("oidc:native", &source_ip);
     tracing::info!(username = user.username, ok = true, "oidc_native_exchange");
     response
+}
+
+async fn api_auth_oidc_native_poll(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    uri: Uri,
+    headers: HeaderMap,
+    Json(request): Json<OidcNativePollRequest>,
+) -> Response {
+    if !state.product_auth_enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let provider_id = authentication_provider_id(uri.path(), "native/poll").unwrap_or("cardea");
+    let Some(provider) = state
+        .product_authentication
+        .provider(provider_id)
+        .map(AsRef::as_ref)
+    else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let peer = peer_addr(peer);
+    if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
+        return rejected;
+    }
+    if provider.admin_account().is_some()
+        && let Some(rejected) = reject_insecure_admin(&headers, peer)
+    {
+        return rejected;
+    }
+    let Some(store) = durable_store(&state.store).cloned() else {
+        return missing_store();
+    };
+    let user_id = match state.oidc_native_handoffs.poll_browser(
+        provider_id,
+        &request.handoff_token,
+        &request.code_verifier,
+    ) {
+        Ok(crate::oidc::BrowserHandoffPoll::Pending) => {
+            return (
+                StatusCode::ACCEPTED,
+                Json(OidcNativePollPending { status: "pending" }),
+            )
+                .into_response();
+        }
+        Ok(crate::oidc::BrowserHandoffPoll::Ready { user_id }) => user_id,
+        Ok(crate::oidc::BrowserHandoffPoll::Failed) => {
+            return (StatusCode::GONE, "external authorization failed").into_response();
+        }
+        Err(error) => {
+            tracing::info!(%error, "oidc_browser_handoff_poll_rejected");
+            return (StatusCode::UNAUTHORIZED, "native authorization failed").into_response();
+        }
+    };
+    let user = match store.user_by_id(&user_id).await {
+        Ok(Some(user)) if user.disabled_at_ms.is_none() && user.username == provider.account() => {
+            user
+        }
+        Ok(_) => {
+            return (StatusCode::UNAUTHORIZED, "native authorization failed").into_response();
+        }
+        Err(error) => {
+            tracing::error!(%error, "oidc_browser_handoff_account_lookup");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let admin_cookie = match oidc_admin_session_cookie(&state, provider, &headers) {
+        Ok(cookie) => cookie,
+        Err(error) => {
+            tracing::error!(%error, "oidc_browser_handoff_admin_session_issue");
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+    };
+    let mut response = issue_product_session(&state, &store, &user, &headers).await;
+    if !response.status().is_success() {
+        return response;
+    }
+    if let Some(cookie) = admin_cookie
+        && let Ok(value) = cookie.parse()
+    {
+        response.headers_mut().append(header::SET_COOKIE, value);
+    }
+    tracing::info!(
+        username = user.username,
+        ok = true,
+        "oidc_browser_handoff_complete"
+    );
+    response
+}
+
+async fn api_auth_oidc_native_complete() -> Response {
+    const PAGE: &str = r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Return to Cowboy</title>
+  <style>
+    :root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: Canvas; color: CanvasText; }
+    main { max-width: 30rem; padding: 2rem; text-align: center; }
+    h1 { font-size: 1.5rem; }
+    p { line-height: 1.5; opacity: .72; }
+  </style>
+</head>
+<body><main><h1>Return to Cowboy</h1><p>Cowboy will show the authorization result and close this window, or you can close it now.</p></main></body>
+</html>"#;
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+        .header(header::CACHE_CONTROL, "no-store")
+        .header("referrer-policy", "no-referrer")
+        .header("x-content-type-options", "nosniff")
+        .header("x-frame-options", "DENY")
+        .header(
+            "content-security-policy",
+            "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        )
+        .body(Body::from(PAGE))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 fn oidc_callback_error(status: StatusCode, secure: bool) -> Response {
@@ -14519,6 +14782,18 @@ mod product_auth_api_tests {
             RouteAuth::Public
         );
         assert_eq!(
+            classify_route(&Method::POST, "/api/auth/oidc/native/poll"),
+            RouteAuth::Public
+        );
+        assert_eq!(
+            classify_route(&Method::GET, "/api/auth/oidc/native/complete"),
+            RouteAuth::Public
+        );
+        assert_eq!(
+            classify_route(&Method::POST, "/api/auth/providers/cardea/native/poll"),
+            RouteAuth::Public
+        );
+        assert_eq!(
             classify_route(&Method::GET, "/api/admin/auth"),
             RouteAuth::Public
         );
@@ -14657,6 +14932,198 @@ mod product_auth_api_tests {
             .unwrap();
         assert_eq!(product_status["me"]["account"], "owner");
         assert_eq!(admin_status["authenticated"], true);
+
+        handle.abort();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn browser_shell_oidc_poll_is_origin_bound_pending_and_single_use() {
+        install_rustls();
+        let (store, root) = test_store().await;
+        let now = auth_now_ms();
+        let user = crate::store::ProductUser {
+            id: "a".repeat(32),
+            username: "owner".to_owned(),
+            password_algo: crate::product_auth::PASSWORD_ALGO_ARGON2ID.to_owned(),
+            password_hash: crate::product_auth::hash_password("Correct-horse-bat1").unwrap(),
+            created_at_ms: now,
+            updated_at_ms: now,
+            disabled_at_ms: None,
+        };
+        store.insert_user(&user).await.unwrap();
+        let hub = Hub::new();
+        let _ = seed_admin(&hub);
+        let mut state = auth_state(hub, Some(store));
+        state.product_authentication =
+            Arc::new(crate::auth_plugins::ProductAuthentication::test_default(
+                Some(test_oidc_provider(&root, "owner", Some("owner"))),
+            ));
+        let verifier = "v".repeat(64);
+        let handoff_token = "h".repeat(64);
+        let code_challenge = crate::oidc::pkce_challenge(&verifier).unwrap();
+        let handoff_challenge = crate::oidc::pkce_challenge(&handoff_token).unwrap();
+        let handoffs = state.oidc_native_handoffs.clone();
+        let (base, handle) = spawn_auth(state).await;
+        let mut start_url = url::Url::parse(&format!("{base}/api/auth/oidc/start")).unwrap();
+        start_url.query_pairs_mut().extend_pairs([
+            ("client", "browser-shell"),
+            ("code_challenge", code_challenge.as_str()),
+            ("handoff_challenge", handoff_challenge.as_str()),
+        ]);
+        let start = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap()
+            .get(start_url)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(start.status(), StatusCode::SEE_OTHER);
+        assert!(
+            start
+                .headers()
+                .get(header::LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|location| location.starts_with("https://cardea.example/"))
+        );
+        assert!(
+            set_cookie(&start, crate::oidc::TRANSACTION_COOKIE)
+                .is_some_and(|cookie| cookie.contains("HttpOnly"))
+        );
+        let body = serde_json::json!({
+            "handoff_token": handoff_token,
+            "code_verifier": verifier,
+        });
+
+        let missing_origin = reqwest::Client::new()
+            .post(format!("{base}/api/auth/oidc/native/poll"))
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(missing_origin.status(), StatusCode::FORBIDDEN);
+
+        let pending = post_json(
+            &format!("{base}/api/auth/oidc/native/poll"),
+            &origin_for(&base),
+            None,
+            body.clone(),
+        )
+        .await;
+        assert_eq!(pending.status(), StatusCode::ACCEPTED);
+        assert_eq!(
+            pending.json::<serde_json::Value>().await.unwrap()["status"],
+            "pending"
+        );
+
+        handoffs
+            .complete_browser("cardea", &handoff_challenge, &user.id)
+            .unwrap();
+        let exchanged = post_json(
+            &format!("{base}/api/auth/providers/cardea/native/poll"),
+            &origin_for(&base),
+            None,
+            body.clone(),
+        )
+        .await;
+        assert_eq!(exchanged.status(), StatusCode::OK);
+        let user_cookie = set_cookie(&exchanged, crate::product_auth::USER_SESSION_COOKIE)
+            .expect("product cookie");
+        let admin_cookie =
+            set_cookie(&exchanged, crate::admin::ADMIN_SESSION_COOKIE).expect("admin cookie");
+        assert!(user_cookie.contains("Max-Age=86400"));
+        assert!(admin_cookie.contains("Max-Age=43200"));
+
+        let replayed = post_json(
+            &format!("{base}/api/auth/oidc/native/poll"),
+            &origin_for(&base),
+            None,
+            body,
+        )
+        .await;
+        assert_eq!(replayed.status(), StatusCode::UNAUTHORIZED);
+
+        let denied_verifier = "d".repeat(64);
+        let denied_handoff_token = "n".repeat(64);
+        let denied_code_challenge = crate::oidc::pkce_challenge(&denied_verifier).unwrap();
+        let denied_handoff_challenge = crate::oidc::pkce_challenge(&denied_handoff_token).unwrap();
+        let mut denied_start_url = url::Url::parse(&format!("{base}/api/auth/oidc/start")).unwrap();
+        denied_start_url.query_pairs_mut().extend_pairs([
+            ("client", "browser-shell"),
+            ("code_challenge", denied_code_challenge.as_str()),
+            ("handoff_challenge", denied_handoff_challenge.as_str()),
+        ]);
+        let denied_start = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap()
+            .get(denied_start_url)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(denied_start.status(), StatusCode::SEE_OTHER);
+        let denied_transaction_cookie = cookie_header(
+            &set_cookie(&denied_start, crate::oidc::TRANSACTION_COOKIE)
+                .expect("OIDC transaction cookie"),
+        );
+        let denied_state = url::Url::parse(
+            denied_start
+                .headers()
+                .get(header::LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .expect("authorization location"),
+        )
+        .unwrap()
+        .query_pairs()
+        .find(|(name, _)| name == "state")
+        .map(|(_, value)| value.into_owned())
+        .expect("OIDC state");
+        let denied_callback = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap()
+            .get(format!(
+                "{base}/api/auth/oidc/callback?state={denied_state}&error=access_denied"
+            ))
+            .header(header::COOKIE, denied_transaction_cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(denied_callback.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            denied_callback
+                .headers()
+                .get(header::LOCATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("/api/auth/oidc/native/complete")
+        );
+        let denied_poll = post_json(
+            &format!("{base}/api/auth/oidc/native/poll"),
+            &origin_for(&base),
+            None,
+            serde_json::json!({
+                "handoff_token": denied_handoff_token,
+                "code_verifier": denied_verifier,
+            }),
+        )
+        .await;
+        assert_eq!(denied_poll.status(), StatusCode::GONE);
+
+        let completion = reqwest::Client::new()
+            .get(format!("{base}/api/auth/oidc/native/complete"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(completion.status(), StatusCode::OK);
+        assert_eq!(
+            completion
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("no-store")
+        );
+        assert!(completion.headers().contains_key("content-security-policy"));
 
         handle.abort();
         let _ = std::fs::remove_dir_all(root);

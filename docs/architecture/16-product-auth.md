@@ -73,6 +73,16 @@ Cowboy uses Authorization Code flow with two independent PKCE boundaries:
   reverse-domain `xyz.stormbird.cowboy.manager://auth/callback` URL. The app
   rejects HTTP redirects and never receives or stores a
   Cardea token or client private key.
+- The iOS Cowboy shell never navigates its sole `WKWebView` to Cardea. It opens
+  the provider in a system Safari sheet with independent S256 code and handoff
+  challenges. Safari owns only the five-minute OIDC transaction cookie; after
+  approval the callback marks the bounded handoff ready and redirects to a
+  fixed, no-store completion page. The original Cowboy window must poll with
+  both retained random secrets before Controller issues product and optional
+  admin cookies into that window. The handoff is single-use and a denial,
+  expiry, provider mismatch, Origin mismatch, or either PKCE mismatch fails
+  closed. Neither raw secret, Cowboy cookie, Cardea token, nor client key is
+  transferred through the authorization URL.
 
 The provider profile and client private JWK must both be regular, non-symlink
 files inaccessible to group and others. The profile pins all trust material;
@@ -164,6 +174,8 @@ visible id is never dropped (`[A,B,C]` + `[C,A]` → `[C,B,A]`).
 | `GET` | `/api/auth/oidc/start` | public | fixed Cardea Authorization Code + PKCE start |
 | `GET` | `/api/auth/oidc/callback` | public; transaction cookie | verify Cardea response and issue Cowboy session |
 | `POST` | `/api/auth/oidc/native/exchange` | same-origin; one-time handoff + PKCE | issue Manager product/admin cookies |
+| `POST` | `/api/auth/oidc/native/poll` | same-origin; two retained secrets | poll and consume an iOS browser-shell handoff; issue product/admin cookies only in the original app window |
+| `GET` | `/api/auth/oidc/native/complete` | public | fixed no-store Safari completion page; carries no account or handoff data |
 | `POST` | `/api/auth/logout` | cookie optional | clear cookie |
 | `GET` | `/api/auth/me` | product | current principal |
 | `POST` | `/api/auth/passkeys/assert/*` | product session | verify and rotate a Passkey-extended session |

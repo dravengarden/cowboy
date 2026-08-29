@@ -123,9 +123,15 @@ and every enabled provider's stable ID, display label, button label, and start
 URL. When more than one method exists, Web renders a generic tab per method.
 Password is selected first when enabled; no provider ID is hard-coded in Web.
 
-Native clients use the provider's returned start URL with their existing PKCE
-handoff query. The native exchange URL is the same provider-scoped path with
-`/native/exchange`.
+Native clients derive all follow-up routes from the provider's fixed returned
+start URL; packages cannot supply a callback or return destination. Cowboy
+Manager uses its existing PKCE query and the provider-scoped
+`/native/exchange`. The iOS browser shell uses `client=browser-shell` with two
+independent S256 challenges, opens the start URL outside the app's sole
+`WKWebView`, and polls the provider-scoped `/native/poll` from the original
+same-origin window. Only the original window retains the two raw random
+secrets and receives Cowboy cookies; the authorization browser receives
+neither. Legacy Cardea keeps the equivalent fixed `/api/auth/oidc/*` aliases.
 
 ## Passkey and session lifetime
 

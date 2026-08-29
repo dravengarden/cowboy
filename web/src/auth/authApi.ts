@@ -25,6 +25,14 @@ export interface ProductOidcProvider {
   start_url: string;
 }
 
+export type NativeOidcPoll = { status: "pending" } | ProductMe;
+
+export function nativeOidcPollPath(provider: ProductOidcProvider): string {
+  return provider.start_url === "/api/auth/oidc/start"
+    ? "/api/auth/oidc/native/poll"
+    : `/api/auth/providers/${encodeURIComponent(provider.id)}/native/poll`;
+}
+
 export interface ProductPasskeyServerPolicy {
   enabled: boolean;
   prompt_after_login: boolean;
@@ -243,6 +251,22 @@ export const authApi = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ account, password }),
     }),
+  pollNativeOidc: (
+    provider: ProductOidcProvider,
+    handoffToken: string,
+    codeVerifier: string,
+  ) =>
+    readJson<NativeOidcPoll>(
+      nativeOidcPollPath(provider),
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          handoff_token: handoffToken,
+          code_verifier: codeVerifier,
+        }),
+      },
+    ),
   setup: (token: string) =>
     readJson<AuthStatus>("/api/auth/setup", {
       method: "POST",

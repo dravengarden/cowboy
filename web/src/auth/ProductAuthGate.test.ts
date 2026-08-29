@@ -16,6 +16,8 @@ async function readAuthSources(): Promise<string> {
     "passkeyBrowser.ts",
     "passkeyExternalPage.ts",
     "passkeyFlow.ts",
+    "pkce.ts",
+    "nativeOidcFlow.ts",
     "idleLock.ts",
     "useIdlePasskeyLock.ts",
   ];
@@ -84,6 +86,9 @@ Deno.test("login page is product chrome and hides register unless accepted", asy
   assert(login.includes("setupToken.trim()"));
   assert(login.includes("<Tabs"));
   assert(login.includes("selectedProvider.button_label"));
+  assert(login.includes("nativeOidcFlowSupported"));
+  assert(login.includes("runNativeOidc"));
+  assert(login.includes("href={useNativeProviderFlow ? undefined"));
   assert(login.includes('id: "password", label: "Password"'));
   assert(gate.includes("<ConfirmSheet"));
   assertEquals(gate.includes("<Dialog"), false);
@@ -136,7 +141,7 @@ Deno.test("desktop can sign out through authApi without importing store", async 
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
   const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
-  assert(sw.includes('const VERSION = "cowboy-v1575"'));
+  assert(sw.includes('const VERSION = "cowboy-v1576"'));
   const authStart = sw.indexOf('url.pathname.startsWith("/api/auth/")');
   const authBranch = sw.slice(
     authStart,
