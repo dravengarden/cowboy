@@ -99,6 +99,7 @@ final class MockCowboyServiceClient: CowboyServiceClient, @unchecked Sendable {
         administratorAccess: true,
         message: "ready"
     )
+    var signInStatus: AccountStatus?
     var machineSummary = ManagedMachineSummary(
         id: "macbook-air",
         displayName: "MacBook Air",
@@ -128,7 +129,7 @@ final class MockCowboyServiceClient: CowboyServiceClient, @unchecked Sendable {
     func signIn(controllerURL _: String, account _: String, password _: String) async throws -> AccountStatus {
         signInCount += 1
         if let error { throw error }
-        return status
+        return signInStatus ?? status
     }
 
     func signOut(controllerURL _: String) async throws -> AccountStatus {
@@ -165,6 +166,30 @@ final class MockCowboyServiceClient: CowboyServiceClient, @unchecked Sendable {
     }
 }
 
+final class MemoryServiceCredentialStore: ServiceCredentialStoring {
+    var credentials: [String: ServiceCredential] = [:]
+    var error: Error?
+    private(set) var saves: [(String, ServiceCredential)] = []
+    private(set) var deletes: [String] = []
+
+    func load(controllerURL: String) throws -> ServiceCredential? {
+        if let error { throw error }
+        return credentials[controllerURL]
+    }
+
+    func save(_ credential: ServiceCredential, controllerURL: String) throws {
+        if let error { throw error }
+        credentials[controllerURL] = credential
+        saves.append((controllerURL, credential))
+    }
+
+    func delete(controllerURL: String) throws {
+        if let error { throw error }
+        credentials[controllerURL] = nil
+        deletes.append(controllerURL)
+    }
+}
+
 final class StubNotifier: InstallerNotifying {
     var authorization = true
     private(set) var notifications: [(String, String)] = []
@@ -194,7 +219,8 @@ func makeModel(
     detector: StubStatusDetector = StubStatusDetector(),
     notifier: StubNotifier = StubNotifier(),
     machineService: MockMachineServiceController = MockMachineServiceController(),
-    serviceClient: MockCowboyServiceClient = MockCowboyServiceClient()
+    serviceClient: MockCowboyServiceClient = MockCowboyServiceClient(),
+    credentialStore: MemoryServiceCredentialStore = MemoryServiceCredentialStore()
 ) -> AppModel {
     AppModel(
         backend: backend,
@@ -203,6 +229,7 @@ func makeModel(
         notifier: notifier,
         machineService: machineService,
         serviceClient: serviceClient,
+        credentialStore: credentialStore,
         targetVersion: "1.2.3"
     )
 }

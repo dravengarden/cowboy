@@ -11,6 +11,8 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var remoteMachine: ManagedMachineSummary?
     @Published public private(set) var remoteStatusError: String?
     @Published public private(set) var dependencyUpdateState: DependencyUpdateState
+    @Published public private(set) var savedLoginAvailable: Bool
+    @Published public private(set) var credentialStorageError: String?
 
     public let targetVersion: String
 
@@ -20,6 +22,7 @@ public final class AppModel: ObservableObject {
     private let notifier: InstallerNotifying
     private let machineService: MachineServiceControlling
     private let serviceClient: CowboyServiceClient
+    private let credentialStore: ServiceCredentialStoring
     private var installationTask: Task<Void, Never>?
     private var serviceActionTask: Task<Void, Never>?
     private var accountTask: Task<Void, Never>?
@@ -27,6 +30,8 @@ public final class AppModel: ObservableObject {
     private var monitoringTask: Task<Void, Never>?
     private var currentStartedAt: Date?
     private var lastRequestWithoutToken: InstallRequest?
+    private var rejectedAutomaticCredential: ServiceCredential?
+    private var nextAutomaticSignInAt = Date.distantPast
 
     public init(
         backend: InstallerBackend,
@@ -35,6 +40,7 @@ public final class AppModel: ObservableObject {
         notifier: InstallerNotifying,
         machineService: MachineServiceControlling = LaunchctlMachineServiceController(),
         serviceClient: CowboyServiceClient = URLSessionCowboyServiceClient(),
+        credentialStore: ServiceCredentialStoring = KeychainServiceCredentialStore(),
         targetVersion: String
     ) {
         self.backend = backend
@@ -43,6 +49,7 @@ public final class AppModel: ObservableObject {
         self.notifier = notifier
         self.machineService = machineService
         self.serviceClient = serviceClient
+        self.credentialStore = credentialStore
         self.targetVersion = targetVersion
 
         var loadedSettings = persistence.loadSettings()
@@ -62,6 +69,9 @@ public final class AppModel: ObservableObject {
         remoteMachine = nil
         remoteStatusError = nil
         dependencyUpdateState = DependencyUpdateState()
+        savedLoginAvailable = false
+        credentialStorageError = nil
+        refreshSavedLoginAvailability()
         recoverInterruptedInstallIfNeeded()
     }
 
@@ -87,15 +97,14 @@ public final class AppModel: ObservableObject {
         guard monitoringTask == nil else { return }
         monitoringTask = Task { [weak self] in
             guard let self else { return }
-            await refreshRemoteState(checkDependencies: settings.automaticallyCheckForUpdates)
+            await refreshAllAndWait(checkDependencies: settings.automaticallyCheckForUpdates)
             while !Task.isCancelled {
                 do {
                     try await Task.sleep(for: .seconds(30))
                 } catch {
                     return
                 }
-                refreshInstalledStatus()
-                await refreshRemoteState(checkDependencies: settings.automaticallyCheckForUpdates)
+                await refreshAllAndWait(checkDependencies: settings.automaticallyCheckForUpdates)
             }
         }
     }
@@ -190,10 +199,14 @@ public final class AppModel: ObservableObject {
     }
 
     public func refreshAll() {
-        refreshInstalledStatus()
         Task { [weak self] in
-            await self?.refreshRemoteState(checkDependencies: false)
+            await self?.refreshAllAndWait()
         }
+    }
+
+    public func refreshAllAndWait(checkDependencies: Bool = false) async {
+        refreshInstalledStatus()
+        await refreshRemoteState(checkDependencies: checkDependencies)
     }
 
     @discardableResult
@@ -261,33 +274,20 @@ public final class AppModel: ObservableObject {
     }
 
     @discardableResult
-    public func signIn(account: String, password: String) -> Bool {
-        guard accountTask == nil, !settings.controllerURL.isEmpty else { return false }
-        accountStatus = AccountStatus(phase: .checking, message: "Signing in")
-        accountTask = Task { [weak self] in
-            guard let self else { return }
-            do {
-                accountStatus = try await serviceClient.signIn(
-                    controllerURL: settings.controllerURL,
-                    account: account,
-                    password: password
-                )
-                await refreshRemoteMachine()
-            } catch {
-                accountStatus = AccountStatus(
-                    phase: .failed,
-                    message: "Sign-in failed",
-                    errorMessage: Self.userFacing(error)
-                )
-            }
-            accountTask = nil
-        }
-        return true
+    public func signIn(account: String, password: String, remember: Bool = true) -> Bool {
+        rejectedAutomaticCredential = nil
+        nextAutomaticSignInAt = .distantPast
+        return beginSignIn(
+            credential: ServiceCredential(account: account, password: password),
+            remember: remember,
+            automatic: false
+        )
     }
 
     @discardableResult
     public func signOut() -> Bool {
         guard accountTask == nil, !settings.controllerURL.isEmpty else { return false }
+        forgetSavedLogin()
         accountStatus = AccountStatus(phase: .checking, message: "Signing out")
         accountTask = Task { [weak self] in
             guard let self else { return }
@@ -309,6 +309,18 @@ public final class AppModel: ObservableObject {
 
     public func waitForAccountAction() async {
         await accountTask?.value
+    }
+
+    public func forgetSavedLogin() {
+        do {
+            try credentialStore.delete(controllerURL: settings.controllerURL)
+            savedLoginAvailable = false
+            credentialStorageError = nil
+            rejectedAutomaticCredential = nil
+            nextAutomaticSignInAt = .distantPast
+        } catch {
+            credentialStorageError = Self.userFacing(error)
+        }
     }
 
     @discardableResult
@@ -435,8 +447,14 @@ public final class AppModel: ObservableObject {
     }
 
     public func updateSettings(_ update: (inout InstallerSettings) -> Void) {
+        let previousControllerURL = settings.controllerURL
         update(&settings)
         persistence.saveSettings(settings)
+        if settings.controllerURL != previousControllerURL {
+            rejectedAutomaticCredential = nil
+            nextAutomaticSignInAt = .distantPast
+            refreshSavedLoginAvailability()
+        }
     }
 
     public func requestNotificationAuthorization() async -> Bool {
@@ -478,6 +496,7 @@ public final class AppModel: ObservableObject {
         }
         do {
             accountStatus = try await serviceClient.accountStatus(controllerURL: settings.controllerURL)
+            await attemptAutomaticSignInIfNeeded()
             await refreshRemoteMachine()
             if checkDependencies,
                dependencyTask == nil,
@@ -516,6 +535,133 @@ public final class AppModel: ObservableObject {
             remoteMachine = nil
             remoteStatusError = Self.userFacing(error)
         }
+    }
+
+    private func beginSignIn(
+        credential: ServiceCredential,
+        remember: Bool,
+        automatic: Bool
+    ) -> Bool {
+        guard accountTask == nil, !settings.controllerURL.isEmpty else { return false }
+        let previousStatus = accountStatus
+        accountStatus = AccountStatus(
+            phase: .checking,
+            message: automatic ? "Restoring all Cowboy accounts" : "Signing in"
+        )
+        accountTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                accountStatus = try await serviceClient.signIn(
+                    controllerURL: settings.controllerURL,
+                    account: credential.account,
+                    password: credential.password
+                )
+                if remember {
+                    saveCredential(credential)
+                } else {
+                    forgetSavedLogin()
+                }
+                rejectedAutomaticCredential = nil
+                nextAutomaticSignInAt = .distantPast
+                await refreshRemoteMachine()
+            } catch {
+                if automatic {
+                    if Self.isCredentialRejection(error) {
+                        rejectedAutomaticCredential = credential
+                    } else {
+                        nextAutomaticSignInAt = Date().addingTimeInterval(60)
+                    }
+                }
+                accountStatus = Self.signInFailureStatus(
+                    preserving: previousStatus,
+                    automatic: automatic,
+                    error: error
+                )
+            }
+            accountTask = nil
+        }
+        return true
+    }
+
+    private func attemptAutomaticSignInIfNeeded() async {
+        guard accountTask == nil,
+              !accountStatus.canManageDependencies,
+              Date() >= nextAutomaticSignInAt
+        else {
+            return
+        }
+        let credential: ServiceCredential
+        do {
+            guard let loaded = try credentialStore.load(controllerURL: settings.controllerURL) else {
+                savedLoginAvailable = false
+                credentialStorageError = nil
+                return
+            }
+            credential = loaded
+            savedLoginAvailable = true
+            credentialStorageError = nil
+        } catch {
+            savedLoginAvailable = false
+            credentialStorageError = Self.userFacing(error)
+            return
+        }
+        guard credential != rejectedAutomaticCredential else { return }
+        if beginSignIn(credential: credential, remember: true, automatic: true) {
+            await accountTask?.value
+        }
+    }
+
+    private func saveCredential(_ credential: ServiceCredential) {
+        do {
+            try credentialStore.save(credential, controllerURL: settings.controllerURL)
+            savedLoginAvailable = true
+            credentialStorageError = nil
+        } catch {
+            savedLoginAvailable = false
+            credentialStorageError = "Signed in, but automatic sign-in was not saved. \(Self.userFacing(error))"
+        }
+    }
+
+    private func refreshSavedLoginAvailability() {
+        guard !settings.controllerURL.isEmpty else {
+            savedLoginAvailable = false
+            credentialStorageError = nil
+            return
+        }
+        do {
+            savedLoginAvailable = try credentialStore.load(controllerURL: settings.controllerURL) != nil
+            credentialStorageError = nil
+        } catch {
+            savedLoginAvailable = false
+            credentialStorageError = Self.userFacing(error)
+        }
+    }
+
+    private static func signInFailureStatus(
+        preserving previous: AccountStatus,
+        automatic: Bool,
+        error: Error
+    ) -> AccountStatus {
+        if previous.canReadProduct {
+            var preserved = previous
+            preserved.message = automatic
+                ? "Local access remains available; automatic administrator sign-in failed."
+                : "Local access remains available; administrator sign-in failed."
+            preserved.errorMessage = userFacing(error)
+            return preserved
+        }
+        return AccountStatus(
+            phase: .failed,
+            message: automatic ? "Automatic sign-in failed" : "Sign-in failed",
+            errorMessage: userFacing(error)
+        )
+    }
+
+    private static func isCredentialRejection(_ error: Error) -> Bool {
+        guard case let CowboyServiceClientError.requestFailed(status, _) = error else {
+            return false
+        }
+        return status == 400 || status == 401 || status == 403
     }
 
     private func apply(_ progress: InstallProgress) {
@@ -612,6 +758,7 @@ public final class AppRuntime {
             notifier: SystemInstallerNotifier(),
             machineService: LaunchctlMachineServiceController(),
             serviceClient: URLSessionCowboyServiceClient(),
+            credentialStore: KeychainServiceCredentialStore(),
             targetVersion: version
         )
         return AppRuntime(

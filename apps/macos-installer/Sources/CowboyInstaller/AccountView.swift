@@ -6,6 +6,7 @@ struct AccountView: View {
     @EnvironmentObject private var model: AppModel
     @State private var account = ""
     @State private var password = ""
+    @State private var rememberLogin = true
 
     var body: some View {
         Form {
@@ -45,14 +46,36 @@ struct AccountView: View {
                     SecureField("Password", text: $password)
                         .textContentType(.password)
                     Button("Sign In") {
-                        if model.signIn(account: account, password: password) {
+                        if model.signIn(
+                            account: account,
+                            password: password,
+                            remember: rememberLogin
+                        ) {
                             password = ""
                         }
                     }
                     .keyboardShortcut(.defaultAction)
                     .disabled(account.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || password.isEmpty)
+                    Toggle(
+                        "Keep all Cowboy accounts signed in automatically",
+                        isOn: $rememberLogin
+                    )
                 } else if model.accountStatus.phase == .signedIn || model.accountStatus.administratorAccess {
                     Button("Sign Out") { model.signOut() }
+                }
+
+                if model.savedLoginAvailable {
+                    Label("Automatic sign-in is stored in macOS Keychain.", systemImage: "key.fill")
+                        .foregroundStyle(.green)
+                    Button("Forget Saved Login") {
+                        model.forgetSavedLogin()
+                        rememberLogin = false
+                    }
+                }
+                if let error = model.credentialStorageError {
+                    Text(error)
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
                 }
 
                 if model.accountStatus.phase == .setupRequired {
@@ -68,7 +91,7 @@ struct AccountView: View {
             }
 
             Section("Privacy") {
-                Text("The password is sent only to the configured HTTPS Cowboy Service and is never persisted. macOS stores the resulting Service cookies for this app's URL session; the default browser keeps its own separate Cowboy session.")
+                Text("The password is sent only to the configured HTTPS Cowboy Service. When automatic sign-in is selected, it is stored only in this app's macOS Keychain item; it never enters settings, logs, activity history, or the browser. The resulting Service cookies remain separate from the default browser.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -79,6 +102,9 @@ struct AccountView: View {
         .onAppear {
             if account.isEmpty, let current = model.accountStatus.account, current != "local" {
                 account = current
+            }
+            if model.savedLoginAvailable {
+                rememberLogin = true
             }
         }
     }

@@ -76,10 +76,14 @@ pipe; the one-time enrollment code is never placed in process arguments,
 settings, activity history, or a disk file.
 
 The Account surface uses the configured HTTPS origin's existing product and
-admin endpoints. The password remains only in the view long enough to create
-the two Service sessions and is never persisted. First-time host setup stays in
-the browser so the host setup code never enters this app. Auth-off Services
-remain usable as the synthetic local owner, while dependency mutations still
+admin endpoints. One sign-in creates both Service sessions. When the user keeps
+automatic sign-in selected, the credential is stored only in a Service-origin-
+scoped macOS Keychain item and is retried after an app restart or session
+expiry; it never enters settings, activity history, logs, browser storage, or
+process arguments. Sign-out deletes the Keychain item before ending the Service
+sessions. First-time host setup stays in the browser so the host setup code
+never enters this app. Auth-off Services remain usable as the synthetic local
+owner even when administrator sign-in fails, while dependency mutations still
 require the owner/admin session. Dependency checks read the Controller's
 Machine inventory; mutations call the existing signed reconcile or bounded npm
 update commands and never install directly from the macOS app.

@@ -157,6 +157,114 @@ struct AppModelTests {
         #expect(client.applied == [update])
         #expect(model.dependencyUpdateState.phase == .succeeded)
     }
+
+    @Test
+    func successfulSignInStoresOneServiceScopedAutomaticCredential() async {
+        let persistence = MemoryPersistence()
+        persistence.settings.controllerURL = "https://cowboy.example"
+        let client = MockCowboyServiceClient()
+        let credentialStore = MemoryServiceCredentialStore()
+        let model = makeModel(
+            backend: MockInstallerBackend(),
+            persistence: persistence,
+            serviceClient: client,
+            credentialStore: credentialStore
+        )
+
+        #expect(model.signIn(account: "owner", password: "password", remember: true))
+        await model.waitForAccountAction()
+
+        #expect(credentialStore.credentials["https://cowboy.example"] == .init(
+            account: "owner",
+            password: "password"
+        ))
+        #expect(model.savedLoginAvailable)
+    }
+
+    @Test
+    func automaticSignInRestoresAdministratorWithoutLosingLocalOwner() async {
+        let persistence = MemoryPersistence()
+        persistence.settings.controllerURL = "https://cowboy.example"
+        let client = MockCowboyServiceClient()
+        client.status = AccountStatus(
+            phase: .localOwner,
+            account: "local",
+            role: "owner",
+            administratorAccess: false,
+            message: "local access"
+        )
+        client.signInStatus = AccountStatus(
+            phase: .signedIn,
+            account: "owner",
+            role: "owner",
+            administratorAccess: true,
+            message: "all accounts ready"
+        )
+        let credentialStore = MemoryServiceCredentialStore()
+        credentialStore.credentials["https://cowboy.example"] = .init(
+            account: "owner",
+            password: "password"
+        )
+        let model = makeModel(
+            backend: MockInstallerBackend(),
+            persistence: persistence,
+            serviceClient: client,
+            credentialStore: credentialStore
+        )
+
+        await model.refreshAllAndWait()
+        await model.waitForAccountAction()
+
+        #expect(client.signInCount == 1)
+        #expect(model.accountStatus.phase == .signedIn)
+        #expect(model.accountStatus.canManageDependencies)
+        #expect(model.savedLoginAvailable)
+    }
+
+    @Test
+    func rejectedAdministratorSignInPreservesLocalProductAccess() async {
+        let persistence = MemoryPersistence()
+        persistence.settings.controllerURL = "https://cowboy.example"
+        let client = MockCowboyServiceClient()
+        let model = makeModel(
+            backend: MockInstallerBackend(),
+            persistence: persistence,
+            serviceClient: client
+        )
+
+        await model.refreshAllAndWait()
+        client.error = CowboyServiceClientError.requestFailed(401, "invalid credentials")
+
+        #expect(model.signIn(account: "owner", password: "wrong", remember: true))
+        await model.waitForAccountAction()
+
+        #expect(model.accountStatus.phase == .localOwner)
+        #expect(model.accountStatus.canReadProduct)
+        #expect(!model.accountStatus.canManageDependencies)
+        #expect(model.accountStatus.errorMessage == "invalid credentials")
+    }
+
+    @Test
+    func signOutForgetsAutomaticCredentialBeforeCallingService() async {
+        let persistence = MemoryPersistence()
+        persistence.settings.controllerURL = "https://cowboy.example"
+        let credentialStore = MemoryServiceCredentialStore()
+        credentialStore.credentials["https://cowboy.example"] = .init(
+            account: "owner",
+            password: "password"
+        )
+        let model = makeModel(
+            backend: MockInstallerBackend(),
+            persistence: persistence,
+            credentialStore: credentialStore
+        )
+
+        #expect(model.signOut())
+        await model.waitForAccountAction()
+
+        #expect(credentialStore.credentials["https://cowboy.example"] == nil)
+        #expect(!model.savedLoginAvailable)
+    }
 }
 
 private func installedStatus(running: Bool) -> InstalledStatus {

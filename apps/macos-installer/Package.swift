@@ -10,7 +10,10 @@ let package = Package(
         .library(name: "CowboyInstallerCore", targets: ["CowboyInstallerCore"]),
     ],
     targets: [
-        .target(name: "CowboyInstallerCore"),
+        .target(
+            name: "CowboyInstallerCore",
+            linkerSettings: [.linkedFramework("Security")]
+        ),
         .executableTarget(
             name: "CowboyInstaller",
             dependencies: ["CowboyInstallerCore"]
