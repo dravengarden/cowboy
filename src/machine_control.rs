@@ -394,7 +394,7 @@ mod tests {
                     MachineCommand::RefreshInventory {
                         request_id: "refresh-cancelled".to_owned(),
                     },
-                    std::time::Duration::from_secs(60),
+                    std::time::Duration::from_mins(1),
                 )
                 .await
         });
