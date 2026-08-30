@@ -1,6 +1,7 @@
 import { isNativeShell } from "../nativeShell";
 import {
   closeAuthenticationBrowser,
+  NATIVE_APP_RESUMED_EVENT,
   NATIVE_AUTHENTICATION_BROWSER_CLOSED_EVENT,
   openAuthenticationUrl,
 } from "../openExternal";
@@ -29,7 +30,13 @@ type ExternalPasskeyEventStatus =
   | "complete"
   | "failed"
   | "unavailable"
-  | "browser-closed";
+  | "browser-closed"
+  | "initiator-resumed";
+
+interface ExternalPasskeyEventDependencies {
+  createSocket: (url: string) => WebSocket;
+  origin: string;
+}
 
 interface ExternalPasskeyCloseReconcileDependencies {
   finalize: (
@@ -63,15 +70,23 @@ function retryableEventError(reason: unknown): boolean {
     reason instanceof AuthApiError && reason.status >= 500;
 }
 
+function passkeyTimeoutError(): AuthApiError {
+  return new AuthApiError("Passkey setup timed out. Please try again.", 408);
+}
+
+function passkeyAbortReason(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException("Cancelled", "AbortError");
+}
+
 async function waitForDelay(
   delayMs: number,
   signal: AbortSignal,
 ): Promise<void> {
-  if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
+  if (signal.aborted) throw passkeyAbortReason(signal);
   await new Promise<void>((resolve, reject) => {
     const onAbort = (): void => {
       clearTimeout(timer);
-      reject(new DOMException("Cancelled", "AbortError"));
+      reject(passkeyAbortReason(signal));
     };
     const timer = setTimeout(() => {
       signal.removeEventListener("abort", onAbort);
@@ -81,41 +96,69 @@ async function waitForDelay(
   });
 }
 
-async function waitForExternalPasskeyEvent(
+export async function waitForExternalPasskeyEvent(
   transactionId: string,
   verifier: string,
   signal: AbortSignal,
+  timeoutMs: number,
+  dependencies: Partial<ExternalPasskeyEventDependencies> = {},
 ): Promise<ExternalPasskeyEventStatus> {
-  if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
+  if (signal.aborted) throw passkeyAbortReason(signal);
   return await new Promise<ExternalPasskeyEventStatus>((resolve, reject) => {
-    const socket = new WebSocket(externalPasskeyEventsUrl(location.origin));
+    const origin = dependencies.origin ?? location.origin;
+    const socket = (dependencies.createSocket ?? ((url) => new WebSocket(url)))(
+      externalPasskeyEventsUrl(origin),
+    );
     let settled = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     const finish = (
       result: { status: ExternalPasskeyEventStatus } | { error: unknown },
     ): void => {
       if (settled) return;
       settled = true;
+      if (timeout !== undefined) clearTimeout(timeout);
       signal.removeEventListener("abort", onAbort);
       globalThis.removeEventListener(
         NATIVE_AUTHENTICATION_BROWSER_CLOSED_EVENT,
         onNativeBrowserClosed,
+      );
+      globalThis.removeEventListener(
+        NATIVE_APP_RESUMED_EVENT,
+        onNativeAppResumed,
       );
       socket.close();
       if ("status" in result) resolve(result.status);
       else reject(result.error);
     };
     const onAbort = (): void =>
-      finish({ error: new DOMException("Cancelled", "AbortError") });
+      finish({ error: passkeyAbortReason(signal) });
     // SFSafariViewController backgrounds the WKWebView that owns this socket.
     // Closing a successfully completed ceremony must wake the initiator so it
     // can perform the PKCE-bound durable finalize, not be treated as cancel.
     const onNativeBrowserClosed = (): void =>
       finish({ status: "browser-closed" });
+    // The native dismissal callback can run while WKWebView is suspended and
+    // lose its JavaScript event. UIApplication.didBecomeActive is repaired by
+    // the shell before it emits this second, idempotent wake-up signal.
+    const onNativeAppResumed = (): void =>
+      finish({ status: "initiator-resumed" });
     signal.addEventListener("abort", onAbort, { once: true });
     globalThis.addEventListener(
       NATIVE_AUTHENTICATION_BROWSER_CLOSED_EVENT,
       onNativeBrowserClosed,
       { once: true },
+    );
+    globalThis.addEventListener(
+      NATIVE_APP_RESUMED_EVENT,
+      onNativeAppResumed,
+      { once: true },
+    );
+    timeout = setTimeout(
+      () =>
+        finish({
+          error: passkeyTimeoutError(),
+        }),
+      Math.max(1, timeoutMs),
     );
     socket.addEventListener("open", () => {
       socket.send(JSON.stringify({
@@ -147,19 +190,54 @@ async function waitForExternalPasskeyEvent(
   });
 }
 
+export async function reconcileExternalPasskeyAfterResume(
+  transactionId: string,
+  verifier: string,
+  signal: AbortSignal,
+  dependencies: Partial<ExternalPasskeyCloseReconcileDependencies> = {},
+): Promise<ExternalPasskeyFinalize> {
+  const finalize = dependencies.finalize ??
+    ((id, codeVerifier) =>
+      authApi.finalizeExternalPasskey(id, codeVerifier, signal));
+  const wait = dependencies.wait ?? waitForDelay;
+  let sawPending = false;
+  let lastRetryableError: unknown;
+
+  for (let attempt = 0; attempt < NATIVE_CLOSE_RECONCILE_ATTEMPTS; attempt++) {
+    if (signal.aborted) throw passkeyAbortReason(signal);
+    try {
+      const result = await finalize(transactionId, verifier);
+      if (result.status === "complete") return result;
+      sawPending = true;
+      lastRetryableError = undefined;
+    } catch (reason) {
+      if (!retryableEventError(reason)) throw reason;
+      lastRetryableError = reason;
+    }
+    if (attempt + 1 < NATIVE_CLOSE_RECONCILE_ATTEMPTS) {
+      await wait(NATIVE_CLOSE_RECONCILE_DELAY_MS, signal);
+    }
+  }
+
+  if (!sawPending && lastRetryableError) throw lastRetryableError;
+  return { status: "pending" };
+}
+
 export async function reconcileExternalPasskeyAfterBrowserClose(
   transactionId: string,
   verifier: string,
   signal: AbortSignal,
   dependencies: Partial<ExternalPasskeyCloseReconcileDependencies> = {},
 ): Promise<ExternalPasskeyFinalize> {
-  const finalize = dependencies.finalize ?? authApi.finalizeExternalPasskey;
+  const finalize = dependencies.finalize ??
+    ((id, codeVerifier) =>
+      authApi.finalizeExternalPasskey(id, codeVerifier, signal));
   const fail = dependencies.fail ?? externalPasskeyApi.fail;
   const wait = dependencies.wait ?? waitForDelay;
   let lastRetryableError: unknown;
 
   for (let attempt = 0; attempt < NATIVE_CLOSE_RECONCILE_ATTEMPTS; attempt++) {
-    if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
+    if (signal.aborted) throw passkeyAbortReason(signal);
     try {
       const result = await finalize(transactionId, verifier);
       if (result.status === "complete") return result;
@@ -192,12 +270,14 @@ async function waitForExternalPasskey(
   const deadline = Date.now() + Math.max(1, expiresInSeconds) * 1_000;
   let reconnectDelay = RECONNECT_INITIAL_MS;
   while (Date.now() < deadline) {
-    if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
+    if (signal.aborted) throw passkeyAbortReason(signal);
     try {
+      const remainingMs = Math.max(1, deadline - Date.now());
       const status = await waitForExternalPasskeyEvent(
         transactionId,
         verifier,
         signal,
+        remainingMs,
       );
       if (status === "failed") {
         throw new DOMException("Cancelled", "AbortError");
@@ -212,22 +292,33 @@ async function waitForExternalPasskey(
           signal,
         );
       }
+      if (status === "initiator-resumed") {
+        const result = await reconcileExternalPasskeyAfterResume(
+          transactionId,
+          verifier,
+          signal,
+        );
+        if (result.status === "complete") return result;
+        reconnectDelay = RECONNECT_INITIAL_MS;
+        continue;
+      }
       if (status === "complete") {
         const result = await authApi.finalizeExternalPasskey(
           transactionId,
           verifier,
+          signal,
         );
         if (result.status === "complete") return result;
       }
       reconnectDelay = RECONNECT_INITIAL_MS;
     } catch (reason) {
-      if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
+      if (signal.aborted) throw passkeyAbortReason(signal);
       if (!retryableEventError(reason)) throw reason;
     }
     await waitForDelay(reconnectDelay, signal);
     reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS);
   }
-  throw new AuthApiError("Passkey setup timed out. Please try again.", 408);
+  throw passkeyTimeoutError();
 }
 
 async function runExternalPasskey(
@@ -241,6 +332,10 @@ async function runExternalPasskey(
     nickname,
   );
   const flow = new AbortController();
+  const timeout = setTimeout(
+    () => flow.abort(passkeyTimeoutError()),
+    Math.max(1, started.expires_in_seconds) * 1_000,
+  );
   try {
     openAuthenticationUrl(
       externalPasskeyUrl(location.origin, started.transaction_id),
@@ -257,6 +352,7 @@ async function runExternalPasskey(
     );
     throw reason;
   } finally {
+    clearTimeout(timeout);
     closeAuthenticationBrowser();
   }
 }

@@ -19,6 +19,7 @@ type NativeGlobals = {
 
 export const NATIVE_AUTHENTICATION_BROWSER_CLOSED_EVENT =
   "cowboy:native-authentication-browser-closed";
+export const NATIVE_APP_RESUMED_EVENT = "cowboy:native-resume";
 
 /** True only for a native shell that can hand an URL to the operating system.
  * Browser/PWA links must retain native anchor navigation instead of being

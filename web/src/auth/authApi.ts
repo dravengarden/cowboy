@@ -466,11 +466,16 @@ export const authApi = {
         ...(nickname === undefined ? {} : { nickname }),
       }),
     }),
-  finalizeExternalPasskey: (transactionId: string, codeVerifier: string) =>
+  finalizeExternalPasskey: (
+    transactionId: string,
+    codeVerifier: string,
+    signal?: AbortSignal,
+  ) =>
     readJson<ExternalPasskeyFinalize>(
       "/api/auth/passkeys/external/finalize",
       {
         method: "POST",
+        ...(signal === undefined ? {} : { signal }),
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           transaction_id: transactionId,

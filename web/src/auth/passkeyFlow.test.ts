@@ -6,7 +6,20 @@ import {
   passkeyErrorMessage,
   passkeyFlowCancelled,
   reconcileExternalPasskeyAfterBrowserClose,
+  reconcileExternalPasskeyAfterResume,
+  waitForExternalPasskeyEvent,
 } from "./passkeyFlow.ts";
+import { NATIVE_APP_RESUMED_EVENT } from "../openExternal.ts";
+
+class SilentWebSocket extends EventTarget {
+  closeCalls = 0;
+
+  close(): void {
+    this.closeCalls += 1;
+  }
+
+  send(): void {}
+}
 
 Deno.test("external Passkey URL carries only the opaque transaction in a fragment", () => {
   const transactionId = "a".repeat(64);
@@ -30,6 +43,43 @@ Deno.test("external Passkey events use a same-origin WebSocket without secrets",
   assertEquals(url.pathname, "/api/auth/passkeys/external/events");
   assertEquals(url.search, "");
   assertEquals(url.hash, "");
+});
+
+Deno.test("external Passkey event wait has a hard deadline when iOS suspends the socket", async () => {
+  const socket = new SilentWebSocket();
+  await assertRejects(
+    () =>
+      waitForExternalPasskeyEvent(
+        "a".repeat(64),
+        "v".repeat(64),
+        new AbortController().signal,
+        1,
+        {
+          createSocket: () => socket as unknown as WebSocket,
+          origin: "https://cowboy.example",
+        },
+      ),
+    AuthApiError,
+    "Passkey setup timed out",
+  );
+  assertEquals(socket.closeCalls, 1);
+});
+
+Deno.test("native foreground resume wakes a suspended Passkey event wait", async () => {
+  const socket = new SilentWebSocket();
+  const waiting = waitForExternalPasskeyEvent(
+    "a".repeat(64),
+    "v".repeat(64),
+    new AbortController().signal,
+    10_000,
+    {
+      createSocket: () => socket as unknown as WebSocket,
+      origin: "https://cowboy.example",
+    },
+  );
+  globalThis.dispatchEvent(new Event(NATIVE_APP_RESUMED_EVENT));
+  assertEquals(await waiting, "initiator-resumed");
+  assertEquals(socket.closeCalls, 1);
 });
 
 Deno.test("Passkey failures preserve server errors and explain browser cancellation", () => {
@@ -109,6 +159,30 @@ Deno.test("closing the native browser finalizes a completed Passkey after foregr
   );
   assertEquals(result.status, "complete");
   assertEquals(finalizeCalls, 2);
+  assertEquals(failCalls, 0);
+});
+
+Deno.test("foreground resume probes completion without cancelling an active Passkey", async () => {
+  let finalizeCalls = 0;
+  let failCalls = 0;
+  const result = await reconcileExternalPasskeyAfterResume(
+    "a".repeat(64),
+    "v".repeat(64),
+    new AbortController().signal,
+    {
+      finalize: () => {
+        finalizeCalls += 1;
+        return Promise.resolve({ status: "pending" });
+      },
+      fail: () => {
+        failCalls += 1;
+        return Promise.resolve({});
+      },
+      wait: () => Promise.resolve(),
+    },
+  );
+  assertEquals(result.status, "pending");
+  assertEquals(finalizeCalls, 10);
   assertEquals(failCalls, 0);
 });
 

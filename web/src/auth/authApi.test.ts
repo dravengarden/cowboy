@@ -192,6 +192,25 @@ Deno.test("external Passkey handoff keeps the verifier in the signed-in client",
   }
 });
 
+Deno.test("external Passkey finalize forwards the transaction deadline signal", async () => {
+  let seen: FetchArgs | undefined;
+  const restore = withFetch((args) => {
+    seen = args;
+    return new Response(JSON.stringify({ status: "pending" }), { status: 200 });
+  });
+  const flow = new AbortController();
+  try {
+    await authApi.finalizeExternalPasskey(
+      "a".repeat(64),
+      "v".repeat(64),
+      flow.signal,
+    );
+    assertEquals(seen?.init?.signal, flow.signal);
+  } finally {
+    restore();
+  }
+});
+
 Deno.test("native OIDC poll keeps both raw bindings in a same-origin body", async () => {
   let seen: FetchArgs | undefined;
   const restore = withFetch((args) => {
