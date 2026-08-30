@@ -875,6 +875,9 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                     let is_config_options = matches!(&event, RuntimeEvent::ConfigOptions { .. });
                     update_snapshot_from_event(shared, &session_id, runtime_seq, &event);
                     let worker = shared.workers.lock().get(&session_id).cloned();
+                    let idle_guard = worker
+                        .as_ref()
+                        .and_then(|worker| idle_snapshot_guard(shared, worker));
                     if is_config_options && let Some(worker) = worker.as_ref() {
                         sync_config_for_worker(shared, worker);
                     }
@@ -889,13 +892,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                     } else {
                         mark_projected_provider_auth_expired(shared, &session_id, &event);
                         apply_event(&shared.hub, &session_id, event);
-                        if let Some(worker) = worker.as_ref() {
-                            // A replacement worker can register as Starting and
-                            // only prove itself idle with a later Ready event.
-                            // Snapshot-only reconciliation misses that edge and
-                            // leaves a pre-restart queue dispatch guard stuck.
-                            reconcile_idle_snapshot(shared, worker);
-                        }
+                        reconcile_idle_guard(shared, &session_id, idle_guard);
                     }
                 }
                 shared.highwaters.lock().insert(key, runtime_seq);
@@ -961,9 +958,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                 .lock()
                 .insert(session_id.clone(), (*worker).clone());
             acknowledge_pending_ensure_from_snapshot(shared, &worker);
-            if apply_snapshot(shared, &worker) {
-                reconcile_idle_snapshot(shared, &worker);
-            }
+            apply_snapshot(shared, &worker);
         }
         Frame::Welcome { workers, .. } => update_worker_snapshots(shared, workers),
         Frame::Heartbeat => {}
@@ -1046,9 +1041,7 @@ fn update_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) {
             continue;
         }
         update_declaration(shared, &worker);
-        if apply_snapshot(shared, &worker) {
-            reconcile_idle_snapshot(shared, &worker);
-        }
+        apply_snapshot(shared, &worker);
         acknowledge_pending_ensure_from_snapshot(shared, &worker);
         current.insert(worker.session_id.clone(), worker);
     }
@@ -1062,9 +1055,7 @@ fn merge_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) {
             continue;
         }
         update_declaration(shared, &worker);
-        if apply_snapshot(shared, &worker) {
-            reconcile_idle_snapshot(shared, &worker);
-        }
+        apply_snapshot(shared, &worker);
         acknowledge_pending_ensure_from_snapshot(shared, &worker);
         current.insert(worker.session_id.clone(), worker);
     }
@@ -1253,6 +1244,7 @@ fn apply_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
     if !shared.hub.accept_runtime_snapshot(worker) {
         return false;
     }
+    let idle_guard = idle_snapshot_guard(shared, worker);
     if let Some(agent_session_id) = &worker.agent_session_id {
         shared
             .hub
@@ -1301,6 +1293,7 @@ fn apply_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
     shared
         .hub
         .set_status(&worker.session_id, status, recoverable_detail);
+    reconcile_idle_guard(shared, &worker.session_id, idle_guard);
     true
 }
 
@@ -1334,12 +1327,20 @@ fn pending_prompt_for(shared: &Shared, session_id: &str) -> bool {
     })
 }
 
-fn reconcile_idle_snapshot(shared: &Shared, worker: &WorkerSnapshot) {
+fn idle_snapshot_guard(shared: &Shared, worker: &WorkerSnapshot) -> Option<u64> {
     let idle = worker.current_turn_id.is_none()
         && worker.pending_prompt_count == 0
         && matches!(worker.state, WorkerState::Running | WorkerState::Draining);
     if idle && !pending_prompt_for(shared, &worker.session_id) {
-        shared.hub.reconcile_runtime_idle(&worker.session_id);
+        shared.hub.in_flight_prompt_epoch(&worker.session_id)
+    } else {
+        None
+    }
+}
+
+fn reconcile_idle_guard(shared: &Shared, session_id: &str, guard_epoch: Option<u64>) {
+    if let Some(guard_epoch) = guard_epoch {
+        shared.hub.reconcile_runtime_idle(session_id, guard_epoch);
     }
 }
 
@@ -1951,7 +1952,6 @@ mod tests {
         reconnected.current_turn_id = None;
         reconnected.launch.as_mut().expect("launch").provider = "claude-code".to_owned();
         assert!(apply_snapshot(&runtime.shared, &reconnected));
-        reconcile_idle_snapshot(&runtime.shared, &reconnected);
         assert_eq!(hub.status("ordinary"), Some(Status::Crashed));
         assert_eq!(
             hub.latest_crash_detail("ordinary").as_deref(),
@@ -2332,6 +2332,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn idle_snapshot_keeps_the_guard_for_the_prompt_it_just_dispatched() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        hub.set_dispatch_tx(tx);
+        hub.set_status("s", Status::Starting, None);
+        hub.submit("s", "first".to_owned(), vec![], None);
+        hub.submit("s", "second".to_owned(), vec![], None);
+        assert!(
+            rx.try_recv().is_err(),
+            "Starting session must retain its queue"
+        );
+
+        let runtime = RemoteRuntime::for_test(hub, vec![]);
+        let mut idle = snapshot("s");
+        idle.state = WorkerState::Running;
+        idle.current_turn_id = None;
+
+        assert!(apply_snapshot(&runtime.shared, &idle));
+        assert_eq!(rx.recv().await.expect("first dispatch").text, "first");
+        assert!(
+            rx.try_recv().is_err(),
+            "one idle snapshot must not dispatch two queued prompts"
+        );
+        let Some(crate::core::Outbound::SyncPatch { value, .. }) =
+            runtime.shared.hub.queue_resync("s")
+        else {
+            panic!("queue snapshot");
+        };
+        assert_eq!(value["queue"][0]["text"], "second");
+    }
+
+    #[tokio::test]
     async fn idle_snapshot_waits_for_controller_pending_prompt_before_reconciliation() {
         let hub = Hub::new();
         hub.create_local_session(
@@ -2364,14 +2404,16 @@ mod tests {
         idle.state = WorkerState::Running;
         idle.current_turn_id = None;
 
-        reconcile_idle_snapshot(&runtime.shared, &idle);
+        let guard_epoch = idle_snapshot_guard(&runtime.shared, &idle);
+        reconcile_idle_guard(&runtime.shared, &idle.session_id, guard_epoch);
         assert!(
             rx.try_recv().is_err(),
             "pending prompt must retain the guard"
         );
 
         runtime.shared.pending.lock().clear();
-        reconcile_idle_snapshot(&runtime.shared, &idle);
+        let guard_epoch = idle_snapshot_guard(&runtime.shared, &idle);
+        reconcile_idle_guard(&runtime.shared, &idle.session_id, guard_epoch);
         assert_eq!(
             rx.recv().await.expect("dispatch after reconciliation").text,
             "second"
@@ -2402,14 +2444,24 @@ mod tests {
         snapshot_with_pending.current_turn_id = None;
         snapshot_with_pending.pending_prompt_count = 1;
 
-        reconcile_idle_snapshot(&runtime.shared, &snapshot_with_pending);
+        let guard_epoch = idle_snapshot_guard(&runtime.shared, &snapshot_with_pending);
+        reconcile_idle_guard(
+            &runtime.shared,
+            &snapshot_with_pending.session_id,
+            guard_epoch,
+        );
         assert!(
             rx.try_recv().is_err(),
             "broker-owned prompt must retain the guard"
         );
 
         snapshot_with_pending.pending_prompt_count = 0;
-        reconcile_idle_snapshot(&runtime.shared, &snapshot_with_pending);
+        let guard_epoch = idle_snapshot_guard(&runtime.shared, &snapshot_with_pending);
+        reconcile_idle_guard(
+            &runtime.shared,
+            &snapshot_with_pending.session_id,
+            guard_epoch,
+        );
         assert_eq!(
             rx.recv().await.expect("dispatch after broker drained").text,
             "second"

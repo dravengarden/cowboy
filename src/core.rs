@@ -663,6 +663,10 @@ struct Session {
     /// so a same-tick re-drain can't double-send and overlap turns. Cleared on
     /// the `Busy`→`Running` turn-end edge or on death (see `set_status`).
     in_flight: bool,
+    /// Monotonic identity for the current in-flight dispatch guard. Runtime
+    /// reconciliation captures this before applying an idle lifecycle edge so
+    /// it cannot clear a newer guard created while that edge drains the queue.
+    in_flight_epoch: u64,
     /// Monotonic identity for the current lifecycle edge. Bumped only when the
     /// status actually changes, so duplicate worker snapshots do not disguise a
     /// stuck turn while a Busy -> Running -> Busy replacement invalidates every
@@ -1980,6 +1984,7 @@ impl Hub {
                             || runtime.is_some_and(|worker| {
                                 worker.current_turn_id.is_some() || worker.pending_prompt_count > 0
                             }),
+                        in_flight_epoch: 0,
                         lifecycle_epoch: 0,
                         mobile_review: MobileReviewState::from_stored(mobile_review_state),
                     },
@@ -2140,6 +2145,17 @@ impl Hub {
             .lock()
             .get(session_id)
             .is_some_and(|session| session.in_flight)
+    }
+
+    /// Identity of the prompt guard currently held by this session.
+    #[must_use]
+    pub fn in_flight_prompt_epoch(&self, session_id: &str) -> Option<u64> {
+        self.inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .filter(|session| session.in_flight)
+            .map(|session| session.in_flight_epoch)
     }
 
     /// Total events held in memory across all live sessions — the event-count
@@ -2412,6 +2428,7 @@ impl Hub {
                     drafts: Vec::new(),
                     editing: None,
                     in_flight: false,
+                    in_flight_epoch: 0,
                     lifecycle_epoch: 0,
                     mobile_review: MobileReviewState::default(),
                 },
@@ -3673,6 +3690,7 @@ impl Hub {
                 return;
             }
             let head = s.queue.remove(0);
+            s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
             s.in_flight = true;
             DispatchReq {
                 session_id: session_id.to_owned(),
@@ -3719,13 +3737,16 @@ impl Hub {
     /// active. Callers must first prove that no prompt command is still pending
     /// in the controller; otherwise a Running snapshot can merely predate a
     /// prompt that is still travelling to the worker.
-    pub fn reconcile_runtime_idle(&self, session_id: &str) {
+    pub fn reconcile_runtime_idle(&self, session_id: &str, expected_epoch: u64) {
         let released = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            if s.meta.status != Status::Running || !s.in_flight {
+            if s.meta.status != Status::Running
+                || !s.in_flight
+                || s.in_flight_epoch != expected_epoch
+            {
                 false
             } else {
                 s.in_flight = false;
@@ -3822,6 +3843,7 @@ impl Hub {
                 return;
             }
             if wired && Self::ready(s, true) && s.queue.is_empty() {
+                s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
                 s.in_flight = true;
                 dispatch = Some(DispatchReq {
                     session_id: session_id.to_owned(),
@@ -3881,6 +3903,7 @@ impl Hub {
             }
             if wired && Self::ready(s, true) && s.queue.is_empty() {
                 // Idle + nothing queued → straight dispatch, identical to submit.
+                s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
                 s.in_flight = true;
                 dispatch = Some(DispatchReq {
                     session_id: session_id.to_owned(),
@@ -4277,6 +4300,7 @@ impl Hub {
                 return;
             }
             if wired && !s.meta.paused && Self::ready(s, true) && s.queue.is_empty() {
+                s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
                 s.in_flight = true;
                 dispatch = Some(DispatchReq {
                     session_id: session_id.to_owned(),
@@ -6421,7 +6445,10 @@ mod core_tests {
         hub.submit("runtime-reconnect", "queued turn".to_owned(), vec![], None);
         assert_eq!(queue_texts(&hub, "runtime-reconnect"), vec!["queued turn"]);
 
-        hub.reconcile_runtime_idle("runtime-reconnect");
+        let guard_epoch = hub
+            .in_flight_prompt_epoch("runtime-reconnect")
+            .expect("stale guard epoch");
+        hub.reconcile_runtime_idle("runtime-reconnect", guard_epoch);
 
         let dispatched = rx
             .recv()
