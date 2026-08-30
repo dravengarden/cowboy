@@ -83,6 +83,13 @@ Deno.test("system Safari Passkey page is isolated from the cached app shell", as
   assertEquals(externalPage.match(/performPasskey\(\)/g)?.length, 2);
   assert(externalPage.includes("history.replaceState"));
   assert(externalPage.includes("externalPasskeyApi.complete(transactionId"));
+  const cancelHandler = externalPage.slice(
+    externalPage.indexOf('cancelButton?.addEventListener("click"'),
+    externalPage.indexOf("history.replaceState"),
+  );
+  assert(cancelHandler.includes("externalPasskeyApi.fail(transactionId)"));
+  assertEquals(externalPage.includes('addEventListener("pagehide"'), false);
+  assertEquals(externalPage.includes("navigator.sendBeacon"), false);
   assert(worker.includes('url.pathname === "/passkey.html"'));
   assert(worker.includes("event.respondWith(fetch(request))"));
 });
@@ -173,7 +180,7 @@ Deno.test("desktop can manage devices and sign out without importing store", asy
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
   const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
-  assert(sw.includes('const VERSION = "cowboy-v1594"'));
+  assert(sw.includes('const VERSION = "cowboy-v1595"'));
   const authStart = sw.indexOf('url.pathname.startsWith("/api/auth/")');
   const authBranch = sw.slice(
     authStart,

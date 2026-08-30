@@ -43,7 +43,6 @@ interface ExternalPasskeyCloseReconcileDependencies {
     transactionId: string,
     verifier: string,
   ) => Promise<ExternalPasskeyFinalize>;
-  fail: (transactionId: string) => Promise<unknown>;
   wait: (delayMs: number, signal: AbortSignal) => Promise<void>;
 }
 
@@ -242,7 +241,6 @@ export async function reconcileExternalPasskeyAfterBrowserClose(
   const finalize = dependencies.finalize ??
     ((id, codeVerifier) =>
       authApi.finalizeExternalPasskey(id, codeVerifier, signal));
-  const fail = dependencies.fail ?? externalPasskeyApi.fail;
   const wait = dependencies.wait ?? waitForDelay;
   let lastRetryableError: unknown;
 
@@ -261,7 +259,6 @@ export async function reconcileExternalPasskeyAfterBrowserClose(
     }
   }
 
-  await fail(transactionId).catch(() => undefined);
   if (lastRetryableError) {
     throw new AuthApiError(
       "Cowboy could not confirm the completed Passkey. Please try again.",
@@ -359,9 +356,15 @@ async function runExternalPasskey(
     );
   } catch (reason) {
     if (!flow.signal.aborted) flow.abort(reason);
-    await externalPasskeyApi.fail(started.transaction_id).catch(() =>
-      undefined
-    );
+    // A native sheet close can race the final public completion request. The
+    // transaction is bounded and will expire server-side, so cancellation must
+    // never overwrite a credential that Safari has already created. Explicit
+    // Cancel on /passkey.html still marks the transaction failed immediately.
+    if (externalPasskeyRequiresFailureSignal(reason)) {
+      await externalPasskeyApi.fail(started.transaction_id).catch(() =>
+        undefined
+      );
+    }
     throw reason;
   } finally {
     clearTimeout(timeout);
@@ -430,4 +433,10 @@ export function passkeyFlowCancelled(reason: unknown): boolean {
   }
   return reason instanceof AuthApiError &&
     reason.message === "Passkey setup was cancelled";
+}
+
+export function externalPasskeyRequiresFailureSignal(
+  reason: unknown,
+): boolean {
+  return !passkeyFlowCancelled(reason);
 }

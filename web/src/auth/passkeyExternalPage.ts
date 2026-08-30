@@ -116,14 +116,9 @@ async function run(): Promise<void> {
       showRetryableError("Could not cancel this Passkey request.");
     });
   });
-  globalThis.addEventListener("pagehide", () => {
-    if (terminal) return;
-    const body = new Blob(
-      [JSON.stringify({ transaction_id: transactionId })],
-      { type: "application/json" },
-    );
-    navigator.sendBeacon?.("/api/auth/passkeys/external/fail", body);
-  });
+  // `pagehide` is not cancellation: the system Passkey UI and a fast native
+  // sheet dismissal can hide this page while its completion POST is in flight.
+  // Only the explicit Cancel action above may fail the server ceremony.
   history.replaceState(null, "", location.pathname);
   if (!passkeysSupported()) {
     await externalPasskeyApi.fail(transactionId).catch(() => undefined);

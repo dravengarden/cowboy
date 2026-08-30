@@ -2,6 +2,7 @@ import { assertEquals, assertRejects } from "jsr:@std/assert";
 import { AuthApiError } from "./authApi.ts";
 import {
   externalPasskeyEventsUrl,
+  externalPasskeyRequiresFailureSignal,
   externalPasskeyUrl,
   passkeyErrorMessage,
   passkeyFlowCancelled,
@@ -144,11 +145,22 @@ Deno.test("Passkey cancellation is a normal user outcome", () => {
     passkeyFlowCancelled(new AuthApiError("Passkey setup expired", 400)),
     false,
   );
+  assertEquals(
+    externalPasskeyRequiresFailureSignal(
+      new DOMException("cancelled", "AbortError"),
+    ),
+    false,
+  );
+  assertEquals(
+    externalPasskeyRequiresFailureSignal(
+      new AuthApiError("Passkey transport failed", 503),
+    ),
+    true,
+  );
 });
 
 Deno.test("closing the native browser finalizes a completed Passkey after foreground resume", async () => {
   let finalizeCalls = 0;
-  let failCalls = 0;
   const result = await reconcileExternalPasskeyAfterBrowserClose(
     "a".repeat(64),
     "v".repeat(64),
@@ -156,32 +168,26 @@ Deno.test("closing the native browser finalizes a completed Passkey after foregr
     {
       finalize: () => {
         finalizeCalls += 1;
-        return Promise.resolve(finalizeCalls === 1
-          ? { status: "pending" as const }
-          : {
+        return Promise.resolve(
+          finalizeCalls === 1 ? { status: "pending" as const } : {
             status: "complete" as const,
             passkey: {
               id: "pk-1",
               nickname: "iPhone",
               created_at_ms: 1,
             },
-          });
-      },
-      fail: () => {
-        failCalls += 1;
-        return Promise.resolve({});
+          },
+        );
       },
       wait: () => Promise.resolve(),
     },
   );
   assertEquals(result.status, "complete");
   assertEquals(finalizeCalls, 2);
-  assertEquals(failCalls, 0);
 });
 
 Deno.test("foreground resume probes completion without cancelling an active Passkey", async () => {
   let finalizeCalls = 0;
-  let failCalls = 0;
   const result = await reconcileExternalPasskeyAfterResume(
     "a".repeat(64),
     "v".repeat(64),
@@ -191,20 +197,15 @@ Deno.test("foreground resume probes completion without cancelling an active Pass
         finalizeCalls += 1;
         return Promise.resolve({ status: "pending" });
       },
-      fail: () => {
-        failCalls += 1;
-        return Promise.resolve({});
-      },
       wait: () => Promise.resolve(),
     },
   );
   assertEquals(result.status, "pending");
   assertEquals(finalizeCalls, 10);
-  assertEquals(failCalls, 0);
 });
 
-Deno.test("closing an unfinished native Passkey request cancels it after bounded reconciliation", async () => {
-  let failCalls = 0;
+Deno.test("closing an unfinished native Passkey request never races its server completion", async () => {
+  let finalizeCalls = 0;
   await assertRejects(
     () =>
       reconcileExternalPasskeyAfterBrowserClose(
@@ -212,10 +213,9 @@ Deno.test("closing an unfinished native Passkey request cancels it after bounded
         "v".repeat(64),
         new AbortController().signal,
         {
-          finalize: () => Promise.resolve({ status: "pending" }),
-          fail: () => {
-            failCalls += 1;
-            return Promise.resolve({});
+          finalize: () => {
+            finalizeCalls += 1;
+            return Promise.resolve({ status: "pending" });
           },
           wait: () => Promise.resolve(),
         },
@@ -223,5 +223,5 @@ Deno.test("closing an unfinished native Passkey request cancels it after bounded
     DOMException,
     "Cancelled",
   );
-  assertEquals(failCalls, 1);
+  assertEquals(finalizeCalls, 10);
 });
