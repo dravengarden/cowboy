@@ -9442,7 +9442,7 @@ async fn api_machine_enroll(
 const MACHINE_HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
 const MACHINE_HEARTBEAT_MS: u64 = 15_000;
 const WEBSOCKET_FRAME_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
-const MACHINE_RUNTIME_BRIDGE_CAPACITY: usize = 16;
+const MACHINE_RUNTIME_OUTBOUND_CAPACITY: usize = 16;
 
 async fn forward_machine_runtime_frames<R>(
     mut reader: crate::runtime_wire::FrameReader<R>,
@@ -9465,7 +9465,7 @@ where
 
 async fn write_machine_runtime_frames<W>(
     mut writer: W,
-    mut rx: mpsc::Receiver<crate::runtime_wire::Frame>,
+    mut rx: mpsc::UnboundedReceiver<crate::runtime_wire::Frame>,
 ) -> anyhow::Result<()>
 where
     W: tokio::io::AsyncWrite + Unpin,
@@ -9511,7 +9511,7 @@ mod machine_runtime_bridge_tests {
             FrameReader::new(tunnel_reader),
             outbound_tx,
         ));
-        let (inbound_tx, inbound_rx) = tokio::sync::mpsc::channel(1);
+        let (inbound_tx, inbound_rx) = tokio::sync::mpsc::unbounded_channel();
         let writer = tokio::spawn(write_machine_runtime_frames(tunnel_writer, inbound_rx));
         let controller = tokio::spawn(async move {
             write_frame(&mut core_writer, &controller_frame)
@@ -9524,10 +9524,7 @@ mod machine_runtime_bridge_tests {
         });
 
         let (forwarded, received) = tokio::time::timeout(Duration::from_secs(1), async {
-            inbound_tx
-                .send(machine_frame)
-                .await
-                .expect("queue Machine frame");
+            inbound_tx.send(machine_frame).expect("queue Machine frame");
             let forwarded = outbound_rx
                 .recv()
                 .await
@@ -9802,7 +9799,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     // Machine can fill runtime_writer while RemoteRuntime simultaneously fills
     // the opposite half of the same socketpair; both tasks then await write
     // capacity and neither returns to its read branch.
-    let (runtime_frame_tx, mut runtime_frame_rx) = mpsc::channel(MACHINE_RUNTIME_BRIDGE_CAPACITY);
+    let (runtime_frame_tx, mut runtime_frame_rx) = mpsc::channel(MACHINE_RUNTIME_OUTBOUND_CAPACITY);
     let mut runtime_forwarder = tokio::spawn(forward_machine_runtime_frames(
         runtime_reader,
         runtime_frame_tx,
@@ -9810,7 +9807,11 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     // Keep Machine -> Controller writes out of the WebSocket loop as well. A
     // blocked internal consumer must not stop that loop from forwarding the
     // opposing direction, which is what lets the consumer make progress.
-    let (runtime_write_tx, runtime_write_rx) = mpsc::channel(MACHINE_RUNTIME_BRIDGE_CAPACITY);
+    // Startup can replay every unacknowledged worker event before
+    // RemoteRuntime finishes its handshake. Do not reject that finite replay
+    // based on frame count: the writer's per-frame timeout bounds a genuinely
+    // stalled consumer, and disconnect cleanup drops the remaining queue.
+    let (runtime_write_tx, runtime_write_rx) = mpsc::unbounded_channel();
     let mut runtime_writer = tokio::spawn(write_machine_runtime_frames(
         runtime_writer,
         runtime_write_rx,
@@ -10151,8 +10152,8 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                     .await
             }
             crate::machine_protocol::MachineFrame::Runtime { frame } => {
-                if let Err(error) = runtime_write_tx.try_send(frame) {
-                    tracing::warn!(%error, machine = %hello.machine_id, "Machine runtime writer saturated");
+                if let Err(error) = runtime_write_tx.send(frame) {
+                    tracing::warn!(%error, machine = %hello.machine_id, "Machine runtime writer closed");
                     break;
                 }
                 continue;
