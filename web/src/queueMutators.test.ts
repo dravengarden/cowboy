@@ -100,3 +100,105 @@ Deno.test("a transition is settled once the source id is gone from the server li
     ["op-3"],
   );
 });
+
+Deno.test("pending edits rebase locally and settle only on matching server content", () => {
+  const edited = { ...draft, text: "recovered edit" };
+  const optimistic = queueMutators.editDraft(
+    { ...emptyQueueValue(), drafts: [draft] },
+    { id: draft.id, row: edited },
+  );
+  assertEquals(optimistic.drafts, [edited]);
+  const pending = [{
+    id: "edit-op",
+    name: "editDraft",
+    args: { id: draft.id, row: edited },
+  }];
+  assertEquals(
+    settledTransitionIds(
+      pending,
+      { ...emptyQueueValue(), drafts: [draft] },
+    ),
+    [],
+  );
+  assertEquals(
+    settledTransitionIds(
+      pending,
+      { ...emptyQueueValue(), drafts: [edited] },
+    ),
+    ["edit-op"],
+  );
+});
+
+Deno.test("reschedule stays pending until the authoritative schedule matches", () => {
+  const original = { ...draft, schedule: { fire_at_ms: 10, delivery: "back" } };
+  const rescheduled = {
+    ...original,
+    schedule: { fire_at_ms: 20, delivery: "front" },
+  };
+  const pending = [{
+    id: "schedule-op",
+    name: "rescheduleDraft",
+    args: { id: draft.id, row: rescheduled },
+  }];
+  assertEquals(
+    settledTransitionIds(
+      pending,
+      { ...emptyQueueValue(), drafts: [original] },
+    ),
+    [],
+  );
+  assertEquals(
+    settledTransitionIds(
+      pending,
+      { ...emptyQueueValue(), drafts: [rescheduled] },
+    ),
+    ["schedule-op"],
+  );
+});
+
+Deno.test("remove stays pending until the authoritative row is absent", () => {
+  const removed = queueMutators.removeDraft(
+    { ...emptyQueueValue(), drafts: [draft] },
+    { id: draft.id },
+  );
+  assertEquals(removed.drafts, []);
+  const pending = [{
+    id: "remove-op",
+    name: "removeDraft",
+    args: { id: draft.id },
+  }];
+  assertEquals(
+    settledTransitionIds(pending, { ...emptyQueueValue(), drafts: [draft] }),
+    [],
+  );
+  assertEquals(settledTransitionIds(pending, emptyQueueValue()), ["remove-op"]);
+});
+
+Deno.test("unschedule stays pending until the authoritative schedule is absent", () => {
+  const scheduled = {
+    ...draft,
+    schedule: { fire_at_ms: 20, delivery: "back" },
+  };
+  const plain = { ...draft, schedule: undefined };
+  const optimistic = queueMutators.unscheduleDraft(
+    { ...emptyQueueValue(), drafts: [scheduled] },
+    { id: draft.id, row: plain },
+  );
+  assertEquals(optimistic.drafts, [plain]);
+  const pending = [{
+    id: "unschedule-op",
+    name: "unscheduleDraft",
+    args: { id: draft.id, row: plain },
+  }];
+  assertEquals(
+    settledTransitionIds(
+      pending,
+      { ...emptyQueueValue(), drafts: [scheduled] },
+    ),
+    [],
+  );
+  assertEquals(
+    settledTransitionIds(pending, { ...emptyQueueValue(), drafts: [plain] }),
+    ["unschedule-op"],
+  );
+});

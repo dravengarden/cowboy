@@ -47,12 +47,26 @@ export interface Client<T, M extends Mutators<T>> {
    *  cmid landing in this state's value confirms (drops) exactly this pending
    *  row with no duplicate. Defaults to the client's `newId`. */
   mutate<K extends keyof M & string>(name: K, args: ArgsOf<T, M, K>, id?: MutationId): Mutation<ArgsOf<T, M, K>>;
+  /** Apply locally, durably persist the pending mutation, and only then return it
+   *  to the transport owner for sending. If persistence fails, the optimistic
+   *  mutation is rolled back and the promise rejects. Use this for user-authored
+   *  data whose source editor is cleared after this promise resolves. */
+  mutateDurably<K extends keyof M & string>(
+    name: K,
+    args: ArgsOf<T, M, K>,
+    id?: MutationId,
+  ): Promise<Mutation<ArgsOf<T, M, K>>>;
   /** Drop pending mutations confirmed OUT-OF-BAND — i.e. acknowledged by a signal
    *  OTHER than this state's patch (e.g. an optimistic "submit" whose row was
    *  confirmed by a separate event stream, not by the value landing in this
    *  state). Same monotonic-fact semantics as a patch's `confirmed`, but with no
    *  base/version change. A no-op for ids not pending. */
   confirm(ids: readonly MutationId[]): void;
+  /** Durably remove pending mutations before reporting a destructive local
+   *  acknowledgement (for example, Discard). A failed persistence write restores
+   *  the pending mutations in memory so a reload cannot silently resend content
+   *  that the UI already claimed to remove. */
+  confirmDurably(ids: readonly MutationId[]): Promise<void>;
   /** Move a pending mutation to the TAIL of the pending queue, so it replays
    *  last and renders at the very end. The retry-to-end gesture (WeChat-style):
    *  clicking retry re-anchors that row after everything, and N retries land in
@@ -128,7 +142,21 @@ export function createClient<T, M extends Mutators<T>>(opts: ClientOpts<T, M>): 
 
   // Debounced app-side persistence of {base, pending}. No-op without `local`.
   let saveTimer: ReturnType<typeof setTimeout> | undefined = undefined;
+  // IndexedDB transactions are asynchronous and separate save calls may finish
+  // out of order. Serialize them so an older base/pending snapshot can never
+  // overwrite a newer acknowledgement snapshot.
+  let saveTail: Promise<void> = Promise.resolve();
   const snapshot = (): ClientSnapshot<T> => ({ base, pending: [...queue] });
+  const persist = (next: ClientSnapshot<T>): Promise<void> => {
+    if (local === undefined) {
+      return Promise.resolve();
+    }
+    const write = saveTail.then(() => local.save(next));
+    // Keep the serialization chain usable after an explicit strict write fails;
+    // callers still receive the original rejection through `write`.
+    saveTail = write.catch(() => undefined);
+    return write;
+  };
   const scheduleSave = (): void => {
     if (local === undefined) {
       return;
@@ -138,7 +166,9 @@ export function createClient<T, M extends Mutators<T>>(opts: ClientOpts<T, M>): 
     }
     saveTimer = setTimeout(() => {
       saveTimer = undefined;
-      void local.save(snapshot());
+      // Background cache persistence remains best-effort. Critical callers use
+      // `mutateDurably`/`flush`, which observe and surface a strict backend error.
+      void persist(snapshot()).catch(() => undefined);
     }, saveDebounceMs);
   };
 
@@ -166,6 +196,23 @@ export function createClient<T, M extends Mutators<T>>(opts: ClientOpts<T, M>): 
       return m;
     },
 
+    async mutateDurably<K extends keyof M & string>(
+      name: K,
+      args: ArgsOf<T, M, K>,
+      id?: MutationId,
+    ): Promise<Mutation<ArgsOf<T, M, K>>> {
+      const m = this.mutate(name, args, id);
+      try {
+        await this.flush();
+      } catch (error) {
+        // Nothing has been handed to the transport yet. Remove the optimistic
+        // row so the still-mounted editor remains the single recovery source.
+        this.confirm([m.id]);
+        throw error;
+      }
+      return m;
+    },
+
     confirm(ids: readonly MutationId[]): void {
       if (ids.length === 0) {
         return;
@@ -179,6 +226,45 @@ export function createClient<T, M extends Mutators<T>>(opts: ClientOpts<T, M>): 
       recompute();
       onChange?.(viewValue);
       scheduleSave();
+    },
+
+    async confirmDurably(ids: readonly MutationId[]): Promise<void> {
+      if (ids.length === 0) {
+        return;
+      }
+      const previous = queue;
+      const set = new Set<MutationId>(ids);
+      const next = queue.filter((m) => !set.has(m.id));
+      if (next.length === queue.length) {
+        return;
+      }
+      queue = next;
+      recompute();
+      onChange?.(viewValue);
+      try {
+        await this.flush();
+      } catch (error) {
+        // A transport patch or another optimistic mutation may have landed while
+        // the storage transaction was pending. Restore only the mutations this
+        // durable confirmation removed; preserve every concurrent queue change.
+        const previousIds = new Set(previous.map((m) => m.id));
+        const currentById = new Map(queue.map((m) => [m.id, m]));
+        const restored: Mutation[] = [];
+        for (const mutation of previous) {
+          const current = currentById.get(mutation.id);
+          if (set.has(mutation.id)) {
+            restored.push(current ?? mutation);
+          } else if (current !== undefined) {
+            restored.push(current);
+          }
+        }
+        restored.push(...queue.filter((m) => !previousIds.has(m.id)));
+        queue = restored;
+        recompute();
+        onChange?.(viewValue);
+        scheduleSave();
+        throw error;
+      }
     },
 
     bump(id: MutationId): void {
@@ -262,7 +348,7 @@ export function createClient<T, M extends Mutators<T>>(opts: ClientOpts<T, M>): 
         clearTimeout(saveTimer);
         saveTimer = undefined;
       }
-      await local.save(snapshot());
+      await persist(snapshot());
     },
   };
 }

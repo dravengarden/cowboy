@@ -655,9 +655,14 @@ struct Session {
     /// The queued-message id currently held open for editing, if any. A held
     /// head pauses the whole queue drain (the user is editing "don't send this
     /// or the ones behind it"). GLOBAL across terminals; cleared when the editing
-    /// client releases or disconnects. One hold per session (matches the
-    /// original single client-side `editingHold` model).
+    /// client releases or after a disconnected client's bounded reconnect
+    /// grace. One hold per session (matches the original single client-side
+    /// `editingHold` model).
     editing: Option<String>,
+    /// Lease generation for `editing`. A reconnect reasserts the hold and bumps
+    /// this value, so a delayed cleanup owned by the replaced WebSocket cannot
+    /// release the new connection's edit transaction.
+    editing_epoch: u64,
     /// True while a queue-dispatched prompt of ours is in flight but the session
     /// hasn't yet flipped back to idle. Guards the dispatch-before-`Busy` window
     /// so a same-tick re-drain can't double-send and overlap turns. Cleared on
@@ -1980,6 +1985,7 @@ impl Hub {
                         queue,
                         drafts,
                         editing: None,
+                        editing_epoch: 0,
                         in_flight: (defer_missing_busy && was_busy)
                             || runtime.is_some_and(|worker| {
                                 worker.current_turn_id.is_some() || worker.pending_prompt_count > 0
@@ -2427,6 +2433,7 @@ impl Hub {
                     queue: Vec::new(),
                     drafts: Vec::new(),
                     editing: None,
+                    editing_epoch: 0,
                     in_flight: false,
                     in_flight_epoch: 0,
                     lifecycle_epoch: 0,
@@ -4120,18 +4127,42 @@ impl Hub {
 
     /// Hold (`Some`) or release (`None`) the queue head for editing. A held head
     /// pauses the drain on every terminal; releasing tries the drain again.
-    pub fn set_queue_editing(&self, session_id: &str, id: Option<String>) {
+    pub fn set_queue_editing(&self, session_id: &str, id: Option<String>) -> u64 {
         let released = id.is_none();
-        {
+        let epoch = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
-                return;
+                return 0;
             };
+            s.editing_epoch = s.editing_epoch.wrapping_add(1);
             s.editing = id;
-        }
+            s.editing_epoch
+        };
         if released {
             self.try_drain(session_id);
         }
+        epoch
+    }
+
+    /// Release a disconnected editor only if no replacement connection has
+    /// renewed the same transaction during the reload grace period.
+    pub fn release_queue_editing_if_epoch(&self, session_id: &str, id: &str, epoch: u64) -> bool {
+        let released = {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return false;
+            };
+            if s.editing_epoch != epoch || s.editing.as_deref() != Some(id) {
+                return false;
+            }
+            s.editing = None;
+            s.editing_epoch = s.editing_epoch.wrapping_add(1);
+            true
+        };
+        if released {
+            self.try_drain(session_id);
+        }
+        released
     }
 
     /// Park a new draft.
@@ -5220,6 +5251,25 @@ mod core_tests {
         assert!(hub.remove_queued_by_cmid("s", "acp-1"));
         assert_eq!(hub.session_info("s").unwrap().queue_count, 0);
         assert!(!hub.remove_queued_by_cmid("s", "acp-1"));
+    }
+
+    #[test]
+    fn renewed_queue_edit_hold_survives_replaced_socket_cleanup() {
+        let hub = hub_with_session("edit-reload");
+        let replaced_epoch = hub.set_queue_editing("edit-reload", Some("queued-1".to_owned()));
+        let replacement_epoch = hub.set_queue_editing("edit-reload", Some("queued-1".to_owned()));
+
+        assert_ne!(replaced_epoch, replacement_epoch);
+        assert!(!hub.release_queue_editing_if_epoch("edit-reload", "queued-1", replaced_epoch,));
+        assert_eq!(
+            hub.inner
+                .sessions
+                .lock()
+                .get("edit-reload")
+                .and_then(|session| session.editing.as_deref()),
+            Some("queued-1"),
+        );
+        assert!(hub.release_queue_editing_if_epoch("edit-reload", "queued-1", replacement_epoch,));
     }
 
     // The queue texts as clients would see them (via the resync patch).

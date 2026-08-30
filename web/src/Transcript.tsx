@@ -1419,7 +1419,9 @@ function OptimisticUserBubble({
             <IconButton
               size="small"
               aria-label={returnLabelForHome(returnHome)}
-              onClick={(): void => returnFailedMessage(sessionId, cmid)}
+              onClick={(): void => {
+                void returnFailedMessage(sessionId, cmid).catch(() => undefined);
+              }}
             >
               <Undo fontSize="small" />
             </IconButton>
@@ -1428,7 +1430,9 @@ function OptimisticUserBubble({
             <IconButton
               size="small"
               aria-label="discard message"
-              onClick={(): void => discardMessage(sessionId, cmid)}
+              onClick={(): void => {
+                void discardMessage(sessionId, cmid).catch(() => undefined);
+              }}
             >
               <Close fontSize="small" />
             </IconButton>

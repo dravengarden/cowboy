@@ -401,6 +401,7 @@ impl MachineSnapshots {
 
 const STORE_QUEUE_CAPACITY: usize = 8_192;
 const FORCE_CANCEL_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+const QUEUE_EDIT_RECONNECT_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
 const MACHINE_RECONNECT_GRACE_SECONDS: i32 = 15;
 const RUNTIME_RECONCILIATION_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
 const MACHINE_RECONNECT_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
@@ -13730,11 +13731,11 @@ async fn handle_ws(
         }
     });
 
-    // Edit-holds this connection set (session_id → held queued-message id). The
+    // Edit-holds this connection set (session_id → message id + lease epoch). The
     // editing hold is GLOBAL server state, so a client that disconnects mid-edit
     // would otherwise leave the head pinned and stall the queue forever. We
-    // track what this socket held and release it on teardown.
-    let mut held: HashMap<String, String> = HashMap::new();
+    // track what this socket held and release it after a short reload grace.
+    let mut held: HashMap<String, (String, u64)> = HashMap::new();
 
     // Inbound command loop.
     loop {
@@ -13765,9 +13766,16 @@ async fn handle_ws(
             }
         }
     }
-    // Release any edit-holds this connection still owns so the queue can drain.
-    for session_id in held.keys() {
-        state.hub.set_queue_editing(session_id, None);
+    // A service-worker update or iOS WebView restart briefly replaces the socket.
+    // Keep the queue pinned while the restored local edit reconnects and reasserts
+    // its hold. Epoch matching prevents this old socket's timer from releasing a
+    // replacement connection; a genuine abandoned edit drains after the grace.
+    for (session_id, (id, epoch)) in held {
+        let hub = state.hub.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(QUEUE_EDIT_RECONNECT_GRACE).await;
+            hub.release_queue_editing_if_epoch(&session_id, &id, epoch);
+        });
     }
     fanout.abort();
 }
@@ -13812,7 +13820,7 @@ fn handle_command(
     state: &AppState,
     principal: &ProductPrincipal,
     text: &str,
-    held: &mut HashMap<String, String>,
+    held: &mut HashMap<String, (String, u64)>,
 ) {
     let cmd: Inbound = match serde_json::from_str(text) {
         Ok(c) => c,
@@ -14233,13 +14241,23 @@ fn handle_command(
             // (the hold is global server state — see handle_ws teardown).
             match &id {
                 Some(mid) => {
-                    held.insert(session_id.clone(), mid.clone());
+                    let epoch = state
+                        .hub
+                        .set_queue_editing(&session_id, Some(mid.clone()));
+                    held.insert(session_id.clone(), (mid.clone(), epoch));
                 }
                 None => {
-                    held.remove(&session_id);
+                    // A stale socket can deliver its final release after a
+                    // replacement socket has already renewed the edit hold.
+                    // Release only the epoch owned by THIS connection; the
+                    // replacement's newer epoch must keep the queue pinned.
+                    if let Some((mid, epoch)) = held.remove(&session_id) {
+                        state
+                            .hub
+                            .release_queue_editing_if_epoch(&session_id, &mid, epoch);
+                    }
                 }
             }
-            state.hub.set_queue_editing(&session_id, id);
             Ok(())
         }
         Inbound::AddDraft {

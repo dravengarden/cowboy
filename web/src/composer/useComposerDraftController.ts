@@ -97,6 +97,9 @@ export function useComposerDraftController(
   const initialText = useRef(seededText);
   const [hasText, setHasText] = useState(seededText.trim().length > 0);
   const attachmentsRef = useRef(seed.attachments);
+  // A durability barrier is asynchronous. Track any edit made while it is
+  // committing so its eventual acknowledgement cannot clear newer user input.
+  const draftRevisionRef = useRef(0);
   // A native editor submit and a toolbar activation can reach this controller
   // in the same browser task. Claim the commit synchronously so one physical
   // action can mint at most one cmid before React applies the cleared state.
@@ -114,6 +117,7 @@ export function useComposerDraftController(
       // defer the state commit, but a same-gesture paste can emit CM changes
       // before that commit and must reconcile against the new attachments.
       attachmentsRef.current = next;
+      if (next !== current) draftRevisionRef.current += 1;
       setAttachmentsState(next);
     },
     [],
@@ -121,6 +125,7 @@ export function useComposerDraftController(
 
   const setText = useCallback((next: string): void => {
     const previous = textRef.current;
+    if (next !== previous) draftRevisionRef.current += 1;
     textRef.current = next;
     const currentAttachments = attachmentsRef.current;
     const reconciled = reconcileDeletedInlineImages(
@@ -257,6 +262,7 @@ export function useComposerDraftController(
     // ComposerEditor is intentionally uncontrolled. Clearing React state alone
     // would leave its document visible and feeding `value` back would break IME.
     editorRef.current?.clear();
+    draftRevisionRef.current += 1;
     textRef.current = "";
     setTextState("");
     setHasText(false);
@@ -276,18 +282,22 @@ export function useComposerDraftController(
   ): Promise<void> | null => {
     if (!sendable || committingRef.current) return null;
     committingRef.current = true;
+    const submittedRevision = draftRevisionRef.current;
     try {
       if (feedback) haptic();
       const confirmation = action();
-      clear();
-      return confirmation;
-    } finally {
-      // React has now received the clear updates. The latch only arbitrates
-      // competing delivery entry points from this one physical action; it must
-      // not prevent the user composing a genuinely new prompt afterward.
-      globalThis.queueMicrotask(() => {
+      return confirmation.then(() => {
+        // The action's promise is a local durability acknowledgement, not merely
+        // an optimistic render. Keep the source editor intact until it resolves.
+        // If the user changed the buffer during that short transaction, preserve
+        // the newer buffer rather than clearing it underneath their caret.
+        if (draftRevisionRef.current === submittedRevision) clear();
+      }).finally(() => {
         committingRef.current = false;
       });
+    } catch (error) {
+      committingRef.current = false;
+      throw error;
     }
   };
   const commit = (action: () => Promise<void>, feedback = true): boolean => {
@@ -345,15 +355,13 @@ export function useComposerDraftController(
       ),
     scheduleNew: (fireAtMs, delivery) =>
       commit(
-        () => {
+        () =>
           scheduleDraft(sessionId, {
             text: preparedText(),
             attachments,
             fireAtMs,
             delivery,
-          });
-          return Promise.resolve();
-        },
+          }),
         false,
       ),
   };

@@ -22,9 +22,17 @@ export interface ReplicatedStore<T, M extends Mutators<T>> extends ReadableStore
    *  `id` to make the mutation id an externally-meaningful key (e.g. an optimistic
    *  row's cmid, for no-duplicate confirmation). */
   mutate<K extends keyof M & string>(name: K, args: ArgsOf<T, M, K>, id?: MutationId): Mutation<ArgsOf<T, M, K>>;
+  /** Persist a user-authored mutation before exposing it to the transport. */
+  mutateDurably<K extends keyof M & string>(
+    name: K,
+    args: ArgsOf<T, M, K>,
+    id?: MutationId,
+  ): Promise<Mutation<ArgsOf<T, M, K>>>;
   /** Drop pending mutations confirmed OUT-OF-BAND (acked by a signal other than
    *  this state's patch). */
   confirm(ids: readonly MutationId[]): void;
+  /** Persist an out-of-band confirmation before reporting it complete. */
+  confirmDurably(ids: readonly MutationId[]): Promise<void>;
   /** Move a pending mutation to the tail (retry-to-end gesture). */
   bump(id: MutationId): void;
   /** Fold an arbiter patch in. `force` adopts the patch value across a version
@@ -111,9 +119,19 @@ export function replicatedStore<T, M extends Mutators<T>>(opts: ReplicatedOpts<T
       opts.send(m);
       return m;
     },
+    async mutateDurably<K extends keyof M & string>(
+      name: K,
+      args: ArgsOf<T, M, K>,
+      id?: MutationId,
+    ): Promise<Mutation<ArgsOf<T, M, K>>> {
+      const m = await client.mutateDurably(name, args, id);
+      opts.send(m);
+      return m;
+    },
     confirm: (ids): void => {
       client.confirm(ids);
     },
+    confirmDurably: (ids): Promise<void> => client.confirmDurably(ids),
     bump: (id): void => {
       client.bump(id);
     },

@@ -348,8 +348,8 @@ Deno.test("native textarea owns a content-sized mobile canvas", () => {
 Deno.test("mobile pending edit stays mounted when the keyboard never reports an open frame", () => {
   assertEquals(
     composerSource.includes(
-      "() => persistEditRef.current(),\n        700,",
-    ),
+      "void persistEditRef.current().catch(() => undefined);",
+    ) && composerSource.includes("700,"),
     true,
   );
   assertEquals(
@@ -1023,7 +1023,10 @@ Deno.test("mobile pending editing keeps expansion and context delivery actions i
     composerSource.includes("const completePendingDelivery = async"),
     true,
   );
-  assertEquals(composerSource.includes("if (!persistEdit()) return;"), true);
+  assertEquals(
+    composerSource.includes("if (!await persistEdit()) return;"),
+    true,
+  );
 });
 
 Deno.test("pending Force push confirmation keeps the native editor and anchor mounted", () => {

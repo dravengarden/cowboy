@@ -51,8 +51,11 @@ Deno.test("offline durable send survives reload and resends the same cmid after 
     local: persistence,
     send: transport,
   });
-  beforeReload.mutate("submit", { text: "survive reconnect" }, "cmid-1");
-  await beforeReload.flush();
+  await beforeReload.mutateDurably(
+    "submit",
+    { text: "survive reconnect" },
+    "cmid-1",
+  );
 
   assertEquals(sent, []);
   assertEquals(persistence.snapshot()?.pending.map((mutation) => mutation.id), ["cmid-1"]);
@@ -113,8 +116,7 @@ Deno.test("a transcript prompt remains visible across reload until its user echo
     local: persistence,
     send: () => {},
   });
-  beforeReload.mutate("submitPrompt", { row }, row.cmid);
-  await beforeReload.flush();
+  await beforeReload.mutateDurably("submitPrompt", { row }, row.cmid);
 
   const afterReload = replicatedStore<QueueValue<Row>, typeof deliveryMutators>({
     clientId: "browser-tab-reloaded",
@@ -144,4 +146,106 @@ Deno.test("a transcript prompt remains visible across reload until its user echo
   await afterEchoReload.hydrate();
   assertEquals(afterEchoReload.get().inFlight, []);
   assertEquals(afterEchoReload.pending(), []);
+});
+
+Deno.test("durable mutation commits its outbox before transport delivery", async () => {
+  let releaseSave: (() => void) | undefined;
+  let noteSaveStarted: (() => void) | undefined;
+  const saveStarted = new Promise<void>((resolve) => {
+    noteSaveStarted = resolve;
+  });
+  const persistence: LocalPersistence<ClientSnapshot<QueueState>> = {
+    load: () => Promise.resolve(null),
+    save: () => {
+      noteSaveStarted?.();
+      return new Promise<void>((resolve) => {
+        releaseSave = resolve;
+      });
+    },
+  };
+  const sent: string[] = [];
+  const store = replicatedStore<QueueState, typeof queueMutators>({
+    clientId: "barrier",
+    mutators: queueMutators,
+    initial: { rows: [] },
+    local: persistence,
+    send: (mutation) => sent.push(mutation.id),
+  });
+
+  const commit = store.mutateDurably("submit", { text: "keep me" }, "cmid-barrier");
+  await saveStarted;
+  assertEquals(sent, [], "transport must not precede the IndexedDB commit");
+  assertEquals(store.get().rows, ["keep me"]);
+  releaseSave?.();
+  await commit;
+  assertEquals(sent, ["cmid-barrier"]);
+});
+
+Deno.test("failed durable mutation keeps the source editor authoritative", async () => {
+  const sent: string[] = [];
+  const store = replicatedStore<QueueState, typeof queueMutators>({
+    clientId: "failed-barrier",
+    mutators: queueMutators,
+    initial: { rows: [] },
+    local: {
+      load: () => Promise.resolve(null),
+      save: () => Promise.reject(new Error("quota unavailable")),
+    },
+    send: (mutation) => sent.push(mutation.id),
+  });
+
+  let failed = false;
+  try {
+    await store.mutateDurably("submit", { text: "do not clear" }, "cmid-failed");
+  } catch {
+    failed = true;
+  }
+  assertEquals(failed, true);
+  assertEquals(sent, []);
+  assertEquals(store.pending(), []);
+  assertEquals(store.get().rows, []);
+});
+
+Deno.test("failed durable discard restores the pending delivery", async () => {
+  let snapshot: ClientSnapshot<QueueState> | null = null;
+  let rejectWrites = false;
+  const persistence: LocalPersistence<ClientSnapshot<QueueState>> = {
+    load: () => Promise.resolve(snapshot === null ? null : structuredClone(snapshot)),
+    save: (next) => {
+      if (rejectWrites) return Promise.reject(new Error("disk unavailable"));
+      snapshot = structuredClone(next);
+      return Promise.resolve();
+    },
+  };
+  const store = replicatedStore<QueueState, typeof queueMutators>({
+    clientId: "discard-barrier",
+    mutators: queueMutators,
+    initial: { rows: [] },
+    local: persistence,
+    send: () => {},
+  });
+  await store.mutateDurably("submit", { text: "retain on failure" }, "cmid-discard");
+
+  rejectWrites = true;
+  let failed = false;
+  const discard = store.confirmDurably(["cmid-discard"]);
+  store.mutate("submit", { text: "concurrent mutation" }, "cmid-concurrent");
+  try {
+    await discard;
+  } catch {
+    failed = true;
+  }
+  assertEquals(failed, true);
+  assertEquals(store.pending().map((mutation) => mutation.id), [
+    "cmid-discard",
+    "cmid-concurrent",
+  ]);
+  assertEquals(store.get().rows, ["retain on failure", "concurrent mutation"]);
+  assertEquals(snapshot?.pending.map((mutation) => mutation.id), ["cmid-discard"]);
+
+  rejectWrites = false;
+  await store.confirmDurably(["cmid-discard", "cmid-concurrent"]);
+  assertEquals(store.pending(), []);
+  assertEquals(store.get().rows, []);
+  assertEquals(snapshot?.pending, []);
 });

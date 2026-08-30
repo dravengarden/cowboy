@@ -1021,11 +1021,11 @@ Deno.test("Provider SDK enforces semantic release identity and precedence", () =
 
 Deno.test("Provider SDK rejects incompatible authoring SDK versions before rendering", () => {
   const newer = manifest();
-  newer.sdk_version = "3.1.6";
+  newer.sdk_version = "3.1.7";
   assertThrows(() => validateProviderManifest(newer), Error, "is incompatible");
 
   const current = manifest();
-  current.sdk_version = "3.1.5";
+  current.sdk_version = "3.1.6";
   validateProviderManifest(current);
 
   const oldMajor = manifest();

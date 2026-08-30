@@ -18,6 +18,9 @@ export interface IdbOpts {
   dbName?: string;
   /** Object-store name. Default "clients". */
   storeName?: string;
+  /** Surface write/open/transaction failures to callers that use a durability
+   *  barrier. Default false keeps ordinary UI caches best-effort. */
+  strictWrites?: boolean;
 }
 
 const DEFAULT_DB = "shared-utils-sync";
@@ -65,13 +68,27 @@ async function runOn<R>(
 ): Promise<R> {
   const db = await openDb(target);
   return new Promise<R>((resolve, reject) => {
-    const r = make(db.transaction(target.storeName, mode).objectStore(target.storeName));
+    const transaction = db.transaction(target.storeName, mode);
+    const r = make(transaction.objectStore(target.storeName));
+    let result: R;
     r.addEventListener("success", () => {
-      resolve(r.result);
+      result = r.result;
+      if (mode === "readonly") resolve(result);
     });
     r.addEventListener("error", () => {
       reject(r.error ?? new Error("indexedDB request failed"));
     });
+    if (mode !== "readonly") {
+      // A successful `put` request only means IndexedDB accepted the operation;
+      // the transaction can still abort. Resolve only after the commit event.
+      transaction.addEventListener("complete", () => resolve(result));
+      transaction.addEventListener("abort", () => {
+        reject(transaction.error ?? new Error("indexedDB transaction aborted"));
+      });
+      transaction.addEventListener("error", () => {
+        reject(transaction.error ?? new Error("indexedDB transaction failed"));
+      });
+    }
   });
 }
 
@@ -92,7 +109,8 @@ export function idbPersistence<S>(key: string, opts: IdbOpts = {}): LocalPersist
     save: async (value): Promise<void> => {
       try {
         await runOn<IDBValidKey>(target, "readwrite", (s) => s.put(value, key));
-      } catch {
+      } catch (error) {
+        if (opts.strictWrites) throw error;
         // degrade gracefully — persistence must never break the app
       }
     },

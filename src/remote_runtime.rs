@@ -1467,6 +1467,12 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
         RuntimeEvent::TurnStarted { .. } => hub.set_status(session_id, Status::Busy, None),
         RuntimeEvent::TurnEnded { stop_reason, .. } => {
             hub.push(session_id, Event::TurnEnd { stop_reason });
+            // TurnEnded is the authoritative clean-completion edge. Do not rely
+            // solely on a following Busy -> Running status transition to release
+            // the dispatch guard: reconnect/snapshot ordering can already have
+            // projected Running, making that later status a no-op and trapping
+            // every queued prompt until the Machine reconnects again.
+            hub.clear_in_flight(session_id);
         }
         RuntimeEvent::AgentSessionId { agent_session_id } => {
             hub.set_agent_session_id(session_id, agent_session_id);
@@ -1672,6 +1678,50 @@ fn reset_after_workspace_replacement(shared: &Shared, session_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn turn_end_releases_guard_when_lifecycle_was_already_running() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        let (tx, mut rx) = mpsc::channel(4);
+        hub.set_dispatch_tx(tx);
+        hub.set_status("s", Status::Running, None);
+
+        hub.submit(
+            "s",
+            "first".to_owned(),
+            Vec::new(),
+            Some("cmid-1".to_owned()),
+        );
+        assert_eq!(rx.recv().await.expect("first dispatch").text, "first");
+        hub.submit(
+            "s",
+            "second".to_owned(),
+            Vec::new(),
+            Some("cmid-2".to_owned()),
+        );
+        assert!(hub.session_has_in_flight_prompt("s"));
+
+        // A reordered snapshot can leave the lifecycle projected as Running even
+        // though the dispatch guard still belongs to the just-finished turn.
+        apply_event(
+            &hub,
+            "s",
+            RuntimeEvent::TurnEnded {
+                turn_id: "turn-1".to_owned(),
+                stop_reason: "EndTurn".to_owned(),
+            },
+        );
+
+        assert_eq!(rx.recv().await.expect("queued dispatch").text, "second");
+    }
 
     #[test]
     fn short_lived_broker_connections_keep_exponential_backoff() {

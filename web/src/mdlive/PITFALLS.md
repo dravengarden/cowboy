@@ -2278,3 +2278,20 @@ Desktop Vim + IME checks:
     system-drawn pixels. The bottom-mode Transcript is the exception: it uses
     only the real safe-area inset because a synthetic 24 px floor interrupts the
     continuous reading canvas with a conspicuous empty band.
+
+99. **User-authored delivery and pending edits need a durable hand-off, not an
+    optimistic-paint hand-off.** A Queue/Transcript row can render immediately
+    while its outbox mutation is still inside a debounced IndexedDB write; a
+    service-worker reload in that interval clears the source composer and loses
+    the only copy. Commit the outbox transaction before transport and before the
+    source editor clears, serialize IndexedDB saves, and flush queue clients on
+    `visibilitychange`/`pagehide`. A failed discard or return must restore the
+    pending mutation; a replacement is persisted before its source is removed.
+    Queue/Draft edit buffers also need their own per-row local recovery record:
+    a transient empty selection is not deletion, explicit Save is the durable
+    boundary, and a row that disappears during reload is recovered once as a
+    parked draft. Keep the server queue head pinned through a short reconnect
+    grace using connection-owned epochs so an old socket cannot release a new
+    editor's hold. These are transaction and lifecycle rules only—do not remount
+    the native textarea/CM6 host or write focus, selection, or IME state to make
+    persistence appear reliable.

@@ -148,6 +148,12 @@ import {
   pendingPanelDisclosureDecision,
   pendingRowVisibleText,
 } from "./pendingEditLifecycle";
+import {
+  clearPendingEdit,
+  getPendingEdit,
+  recoverPendingEditId,
+  setPendingEdit,
+} from "./pendingEditStore";
 import { isImeKeyEvent } from "./imeKey";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { ALT_LABEL, ENTER_LABEL, MOD_LABEL } from "./platform";
@@ -1720,7 +1726,11 @@ export function ComposerWorkspace({
   >(null);
   function commitSchedule(fireAtMs: number, delivery: Delivery): void {
     if (scheduleTarget?.id !== undefined) {
-      scheduleDraft(sessionId, { id: scheduleTarget.id, fireAtMs, delivery });
+      void scheduleDraft(sessionId, {
+        id: scheduleTarget.id,
+        fireAtMs,
+        delivery,
+      }).catch(() => undefined);
       return;
     }
     // Fresh: schedule the composer's content, then clear the input like saveDraft.
@@ -1943,10 +1953,12 @@ export function ComposerWorkspace({
         editing={scheduleTarget?.id !== undefined}
         onCommit={commitSchedule}
         onUnschedule={(): void => {
-          if (scheduleTarget?.id !== undefined) {unscheduleDraft(
+          if (scheduleTarget?.id !== undefined) {
+            void unscheduleDraft(
               sessionId,
               scheduleTarget.id,
-            );}
+            ).catch(() => undefined);
+          }
         }}
       />
       {
@@ -3929,7 +3941,7 @@ function OptimisticDraftRow({
             aria-label="send draft"
             onClick={(): void => {
               haptic();
-              void activateDraft(sessionId, message.id);
+              void activateDraft(sessionId, message.id).catch(() => undefined);
             }}
           >
             <Send fontSize="small" />
@@ -3957,7 +3969,7 @@ function OptimisticDraftRow({
                 aria-label={returnLabelForHome(returnHome)}
                 onClick={(): void => {
                   haptic();
-                  returnFailedQueued(sessionId, cmid);
+                  void returnFailedQueued(sessionId, cmid).catch(() => undefined);
                 }}
               >
                 <Undo fontSize="small" />
@@ -3970,7 +3982,7 @@ function OptimisticDraftRow({
               aria-label="discard"
               onClick={(): void => {
                 importantHaptic();
-                discardQueued(sessionId, cmid);
+                void discardQueued(sessionId, cmid).catch(() => undefined);
               }}
             >
               <Close fontSize="small" />
@@ -3984,7 +3996,7 @@ function OptimisticDraftRow({
 
 interface PendingEditController {
   isDirty: () => boolean;
-  save: () => void;
+  save: () => Promise<void>;
   discard: () => void;
 }
 
@@ -4057,10 +4069,18 @@ function PendingPanel({
     const controller = editControllerRef.current;
     if (controller === null) return;
     suppressEditFocusRestoreRef.current = true;
-    if (resolution === "save") controller.save();
-    else controller.discard();
-    setConfirmCollapseEdit(false);
-    collapseComposerStackPanel(kind);
+    if (resolution === "save") {
+      void controller.save().then(() => {
+        setConfirmCollapseEdit(false);
+        collapseComposerStackPanel(kind);
+      }).catch(() => {
+        suppressEditFocusRestoreRef.current = false;
+      });
+    } else {
+      controller.discard();
+      setConfirmCollapseEdit(false);
+      collapseComposerStackPanel(kind);
+    }
   };
   useConfirmEnter(confirmCollapseEdit, () => settleEditAndCollapse("save"));
   const runBulkConfirm = async (): Promise<void> => {
@@ -4166,6 +4186,13 @@ function PendingPanel({
       setEditingId(null);
     }
   }, [editingId, items]);
+  useEffect(() => {
+    if (editingId !== null || items.length === 0) return;
+    const recoveredId = recoverPendingEditId(sessionId, kind, items);
+    if (recoveredId !== null) {
+      setEditingId(recoveredId);
+    }
+  }, [editingId, items, kind, sessionId]);
   // Reorder is a low-frequency action, so the per-row drag grips are hidden by
   // default (they'd waste ~40px on every row of a narrow phone) and revealed
   // only in this opt-in "reorder mode" (iOS list-Edit pattern). Local + ephemeral
@@ -4923,8 +4950,12 @@ function PendingRow({
    *  its future auto-send. Absent → the row omits the schedule chip + action. */
   onSchedule?: (() => void) | undefined;
 }): React.JSX.Element {
+  const recoveredEdit = useRef(
+    getPendingEdit(sessionId, kind, message.id),
+  ).current;
   const initialEditText = useRef(
-    promoteUnplacedImageTokens(message.text, message.attachments),
+    recoveredEdit?.text ??
+      promoteUnplacedImageTokens(message.text, message.attachments),
   ).current;
   const [draft, setDraft] = useState(initialEditText);
   const editTextRef = useRef(initialEditText);
@@ -4942,7 +4973,6 @@ function PendingRow({
     null,
   );
   const suppressEditTapUntilRef = useRef(0);
-  const pendingEditDirtyRef = useRef(false);
   const suppressPendingEditTap = (): void => {
     suppressEditTapUntilRef.current = performance.now() + 480;
   };
@@ -4953,8 +4983,9 @@ function PendingRow({
     // Seed the inline-image registry so this message's `cowboy-att:` tokens render
     // as thumbnails in the edit box (the same ComposerEditor + plugin), including
     // queued items synced from another terminal.
-    seedInlineAttachments(message.attachments);
-    return message.attachments;
+    const initial = recoveredEdit?.attachments ?? message.attachments;
+    seedInlineAttachments(initial);
+    return initial;
   });
   const editAttachmentsPending = editAttachments.some((attachment) =>
     attachment.pending
@@ -4962,7 +4993,6 @@ function PendingRow({
   const updateEditDraft = (next: string): void => {
     const previous = editTextRef.current;
     editTextRef.current = next;
-    pendingEditDirtyRef.current = true;
     setEditAttachments((current) =>
       reconcileDeletedInlineImages(previous, next, current, getInlineAttachment)
     );
@@ -4979,8 +5009,10 @@ function PendingRow({
   const [confirmDiscardEdit, setConfirmDiscardEdit] = useState(false);
   const doRemove = (): void => {
     importantHaptic();
-    if (kind === "draft") removeDraft(sessionId, message.id);
-    else removeQueued(sessionId, message.id);
+    const removal = kind === "draft"
+      ? removeDraft(sessionId, message.id)
+      : removeQueued(sessionId, message.id);
+    void removal.catch(() => undefined);
     setConfirmRemove(false);
   };
   useConfirmEnter(confirmRemove, doRemove);
@@ -5019,7 +5051,18 @@ function PendingRow({
   const editFileInputRef = useRef<HTMLInputElement>(null);
   const beginEdit = (): void => {
     if (performance.now() < suppressEditTapUntilRef.current) return;
-    pendingEditDirtyRef.current = false;
+    const recovery = getPendingEdit(sessionId, kind, message.id);
+    const nextText = recovery?.text ?? seedText;
+    const nextAttachments = recovery?.attachments ?? seedAttachments;
+    setPendingEdit({
+      sessionId,
+      kind,
+      id: message.id,
+      text: nextText,
+      attachments: nextAttachments,
+      baseText: message.text,
+      baseAttachments: message.attachments,
+    });
     // iOS will only open its software keyboard when the real editable control is
     // focused inside the originating tap. React normally batches `onEdit()` and
     // mounts the row editor after that activation window, leaving a visible edit
@@ -5034,23 +5077,24 @@ function PendingRow({
       beginMobileEditorFocusTransfer();
       onResumeKeyboardSurface?.();
       flushSync(() => {
-        setDraft(seedText);
-        editTextRef.current = seedText;
-        setEditAttachments(seedAttachments);
+        setDraft(nextText);
+        editTextRef.current = nextText;
+        setEditAttachments(nextAttachments);
         onEdit();
       });
       editorRef.current?.focusEnd();
       return;
     }
-    setDraft(seedText);
-    editTextRef.current = seedText;
-    setEditAttachments(seedAttachments);
+    setDraft(nextText);
+    editTextRef.current = nextText;
+    setEditAttachments(nextAttachments);
     onEdit();
   };
   const pendingEditTap = useReliableTouchTap<HTMLDivElement>(() => {
     beginEdit();
   });
   const discardEdit = (): void => {
+    clearPendingEdit(sessionId, kind, message.id);
     setConfirmDiscardEdit(false);
     setDraft(seedText);
     editTextRef.current = seedText;
@@ -5063,7 +5107,7 @@ function PendingRow({
       overlayEditorRef.current?.getValue() ?? editorRef.current?.getValue(),
       editTextRef.current,
     );
-  const persistEdit = (): boolean => {
+  const persistEdit = async (): Promise<boolean> => {
     // A synchronous paste placeholder has no ACP bytes yet. Keep the editor
     // alive until encoding either promotes or removes it; persisting the empty
     // block would make the pending row restore a broken inline token.
@@ -5072,55 +5116,54 @@ function PendingRow({
     editTextRef.current = text;
     setDraft(text);
     if (pendingContentCleared(text, editAttachments)) {
-      if (kind === "draft") removeDraft(sessionId, message.id);
-      else removeQueued(sessionId, message.id);
+      if (kind === "draft") await removeDraft(sessionId, message.id);
+      else await removeQueued(sessionId, message.id);
+      clearPendingEdit(sessionId, kind, message.id);
       setOverlayOpen(false);
       onEditDone();
       return false;
     }
     if (kind === "draft") {
-      editDraft(sessionId, message.id, text, editAttachments);
-    } else editQueued(sessionId, message.id, text, editAttachments);
+      await editDraft(sessionId, message.id, text, editAttachments);
+    } else await editQueued(sessionId, message.id, text, editAttachments);
+    clearPendingEdit(sessionId, kind, message.id);
     setCommittedText(text);
     setCommittedAttachments(editAttachments);
     return true;
   };
   useEffect(() => {
-    if (!editing || !pendingEditDirtyRef.current || editAttachmentsPending) {
-      return;
-    }
-    if (
-      !pendingContentCleared(
-        pendingEditLiveText(
-          overlayEditorRef.current?.getValue() ?? editorRef.current?.getValue(),
-          editTextRef.current,
-        ),
-        editAttachments,
-      )
-    ) return;
-    if (kind === "draft") removeDraft(sessionId, message.id);
-    else removeQueued(sessionId, message.id);
-    setOverlayOpen(false);
-    onEditDone();
+    if (!editing) return;
+    setPendingEdit({
+      sessionId,
+      kind,
+      id: message.id,
+      text: draft,
+      attachments: editAttachments,
+      baseText: message.text,
+      baseAttachments: message.attachments,
+    });
   }, [
     draft,
     editAttachments,
-    editAttachmentsPending,
     editing,
     kind,
+    message.attachments,
     message.id,
-    onEditDone,
+    message.text,
     sessionId,
   ]);
-  const saveEdit = (): void => {
-    if (!persistEdit()) return;
+  const saveEdit = async (): Promise<void> => {
+    if (!await persistEdit()) return;
     setOverlayOpen(false);
     onEditDone();
+  };
+  const requestSaveEdit = (): void => {
+    void saveEdit().catch(() => undefined);
   };
   const completePendingDelivery = async (
     operation: () => Promise<void>,
   ): Promise<void> => {
-    if (!persistEdit()) return;
+    if (!await persistEdit()) return;
     await operation();
     setOverlayOpen(false);
     onEditDone();
@@ -5129,11 +5172,11 @@ function PendingRow({
     kind === "draft"
       ? completePendingDelivery(() => activateDraft(sessionId, message.id))
       : Promise.resolve();
-  const scheduleDraftFromEdit = (): void => {
+  const scheduleDraftFromEdit = async (): Promise<void> => {
     if (kind !== "draft" || onSchedule === undefined) return;
     // The schedule sheet targets the durable draft id. Persist the current
     // inline buffer before opening it so scheduling never sends stale text.
-    if (!persistEdit()) return;
+    if (!await persistEdit()) return;
     setOverlayOpen(false);
     onEditDone();
     onSchedule();
@@ -5221,11 +5264,12 @@ function PendingRow({
   persistEditRef.current = persistEdit;
   const finishMobileEdit = (): void => {
     if (!touchInput || editAttachmentsPending) return;
-    persistEditRef.current();
-    setOverlayOpen(false);
-    onEditDone();
-    dismissMobileSoftwareKeyboard();
-    releaseMobileComposerFocus();
+    void persistEditRef.current().then(() => {
+      setOverlayOpen(false);
+      onEditDone();
+      dismissMobileSoftwareKeyboard();
+      releaseMobileComposerFocus();
+    }).catch(() => undefined);
   };
   const finishMobileEditRef = useRef(finishMobileEdit);
   finishMobileEditRef.current = finishMobileEdit;
@@ -5247,7 +5291,9 @@ function PendingRow({
     // late IME frame cannot delete the row or reveal the empty composer.
     if (!mobileEditSawKeyboardRef.current) {
       const timer = globalThis.setTimeout(
-        () => persistEditRef.current(),
+        () => {
+          void persistEditRef.current().catch(() => undefined);
+        },
         700,
       );
       return () => globalThis.clearTimeout(timer);
@@ -5273,7 +5319,7 @@ function PendingRow({
   const latestEditTransactionRef = useRef<
     {
       dirty: boolean;
-      save: () => void;
+      save: () => Promise<void>;
       discard: () => void;
     } | null
   >(null);
@@ -5286,7 +5332,7 @@ function PendingRow({
     if (!editing) return undefined;
     const controller: PendingEditController = {
       isDirty: () => latestEditTransactionRef.current?.dirty ?? true,
-      save: () => latestEditTransactionRef.current?.save(),
+      save: () => latestEditTransactionRef.current?.save() ?? Promise.resolve(),
       discard: () => latestEditTransactionRef.current?.discard(),
     };
     onEditController(controller);
@@ -5454,7 +5500,7 @@ function PendingRow({
           setEditAttachments((prev) => prev.filter((a) => a.id !== id))}
         onTrigger={(t): void => editorRef.current?.insertTrigger(t)}
         onAttach={(): void => editFileInputRef.current?.click()}
-        onSend={saveEdit}
+        onSend={requestSaveEdit}
         submitLabel="Done editing"
         submitIcon={<Check />}
         onExpand={(): void => setOverlayOpen(true)}
@@ -5578,7 +5624,7 @@ function PendingRow({
                 onSlash={(): void => editorRef.current?.insertTrigger("/")}
                 onReference={(): void => editorRef.current?.insertTrigger("@")}
                 onAttach={(): void => editFileInputRef.current?.click()}
-                onDone={saveEdit}
+                onDone={requestSaveEdit}
                 onExpand={(): void => setOverlayOpen(true)}
               />
             </Suspense>
@@ -5623,7 +5669,7 @@ function PendingRow({
                 focusEndOnMount={desktop}
                 onVimMode={setVimMode}
                 onChange={updateEditDraft}
-                onSubmit={saveEdit}
+                onSubmit={requestSaveEdit}
                 sessionId={sessionId}
                 commands={commands}
                 placeholder="Edit message…"
@@ -5660,7 +5706,7 @@ function PendingRow({
                         disabled={!editSendable}
                         onClick={(): void => {
                           haptic();
-                          scheduleDraftFromEdit();
+                          void scheduleDraftFromEdit().catch(() => undefined);
                         }}
                       >
                         <Schedule />
@@ -5720,24 +5766,23 @@ function PendingRow({
             value={draft}
             onChange={updateEditDraft}
             onSubmit={(): void => {
-              persistEdit();
-              if (touchInput) setOverlayOpen(false);
-              else {
-                saveEdit();
-                setOverlayOpen(false);
-              }
+              if (touchInput) {
+                void persistEdit().then((saved) => {
+                  if (saved) setOverlayOpen(false);
+                }).catch(() => undefined);
+              } else void saveEdit().catch(() => undefined);
             }}
             onSaveDraft={(): void => {
-              persistEdit();
-              if (touchInput) setOverlayOpen(false);
-              else {
-                saveEdit();
-                setOverlayOpen(false);
-              }
+              if (touchInput) {
+                void persistEdit().then((saved) => {
+                  if (saved) setOverlayOpen(false);
+                }).catch(() => undefined);
+              } else void saveEdit().catch(() => undefined);
             }}
             onCollapse={(): void => {
-              persistEdit();
-              setOverlayOpen(false);
+              void persistEdit().then((saved) => {
+                if (saved) setOverlayOpen(false);
+              }).catch(() => undefined);
             }}
             onAttach={(): void => editFileInputRef.current?.click()}
             onPasteFiles={(files, selection): void =>
@@ -5848,7 +5893,9 @@ function PendingRow({
         key: "return",
         label: "Return to drafts",
         icon: <Undo fontSize="small" />,
-        onClick: (): void => queuedToDraft(sessionId, message.id),
+        onClick: (): void => {
+          void queuedToDraft(sessionId, message.id).catch(() => undefined);
+        },
       },
       {
         key: "edit",
