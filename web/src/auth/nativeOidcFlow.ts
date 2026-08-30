@@ -25,6 +25,10 @@ export function nativeOidcFlowSupported(): boolean {
   return isNativeShell() && hasNativeAuthenticationBrowser();
 }
 
+export function browserOidcFlowSupported(): boolean {
+  return typeof window !== "undefined" && typeof window.open === "function";
+}
+
 export function nativeOidcStartUrl(
   origin: string,
   provider: ProductOidcProvider,
@@ -229,5 +233,82 @@ export async function runNativeOidc(
       cancel,
     );
     closeAuthenticationBrowser();
+  }
+}
+
+/**
+ * Keep browser/PWA state alive while an external Provider verifies the user.
+ * The blank window is opened synchronously from the click before PKCE work so
+ * iOS does not block it. Its opener is severed before any Provider navigation;
+ * Cowboy retains only the capability to close the window after the PKCE-bound
+ * WebSocket handoff completes.
+ */
+export async function runBrowserOidc(
+  provider: ProductOidcProvider,
+  signal?: AbortSignal,
+): Promise<ProductMe> {
+  if (!browserOidcFlowSupported()) {
+    throw new Error("Browser authentication window is unavailable");
+  }
+  const popup = window.open("about:blank", "_blank");
+  if (!popup) {
+    throw new AuthApiError(
+      "Cowboy could not open the secure sign-in window. Allow pop-ups and try again.",
+      400,
+    );
+  }
+  try {
+    popup.opener = null;
+    if (popup.opener !== null) {
+      throw new Error("Cowboy could not isolate the secure sign-in window");
+    }
+  } catch (reason) {
+    popup.close();
+    throw reason;
+  }
+
+  const flow = new AbortController();
+  const cancel = (): void => flow.abort();
+  if (signal?.aborted) cancel();
+  signal?.addEventListener("abort", cancel, { once: true });
+  let codeBinding: Awaited<ReturnType<typeof newPkceBinding>> | undefined;
+  let handoffBinding: Awaited<ReturnType<typeof newPkceBinding>> | undefined;
+  try {
+    [codeBinding, handoffBinding] = await Promise.all([
+      newPkceBinding(),
+      newPkceBinding(),
+    ]);
+    if (flow.signal.aborted) {
+      throw new DOMException("Cancelled", "AbortError");
+    }
+    if (popup.closed) {
+      throw new DOMException("Cancelled", "AbortError");
+    }
+    popup.location.replace(
+      nativeOidcStartUrl(
+        location.origin,
+        provider,
+        codeBinding.challenge,
+        handoffBinding.challenge,
+      ),
+    );
+    return await waitForNativeOidc(
+      provider,
+      handoffBinding.verifier,
+      codeBinding.verifier,
+      flow.signal,
+    );
+  } catch (reason) {
+    if (codeBinding && handoffBinding) {
+      void authApi.cancelNativeOidc(
+        provider,
+        handoffBinding.verifier,
+        codeBinding.verifier,
+      ).catch(() => undefined);
+    }
+    throw reason;
+  } finally {
+    signal?.removeEventListener("abort", cancel);
+    popup.close();
   }
 }

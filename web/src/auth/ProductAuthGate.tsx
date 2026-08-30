@@ -41,14 +41,18 @@ import {
   passkeyFlowSupported,
   registerPasskey,
 } from "./passkeyFlow";
-import { ProductLoginPage } from "./ProductLoginPage";
-import { retryWithRecentProductAuth } from "./recentAuth";
 import { ConfirmSheet } from "../Sheet";
+import { isNativeShell } from "../nativeShell";
+import { ProductLoginPage } from "./ProductLoginPage";
+import {
+  type RecentProductAuthOptions,
+  retryWithRecentProductAuth,
+} from "./recentAuth";
 
 export interface ProductAuthValue {
   me: ProductMe;
   passkeys: ProductPasskeyServerPolicy | undefined;
-  reauthenticate: () => Promise<ProductMe>;
+  reauthenticate: (options?: RecentProductAuthOptions) => Promise<ProductMe>;
   updateMe: (me: ProductMe) => void;
   signOut: () => Promise<void>;
 }
@@ -209,6 +213,10 @@ function PasskeySetupPrompt({
       await retryWithRecentProductAuth(
         () => registerPasskey(nickname.trim()),
         reauthenticate,
+        {
+          resumeLabel: "Continue to Passkey",
+          resumeWithUserGesture: !isNativeShell(),
+        },
       );
       onCreated({
         ...me,
@@ -291,6 +299,9 @@ export function ProductAuthGate({
     } | null
   >(null);
   const [recentAuthOpen, setRecentAuthOpen] = useState(false);
+  const [recentAuthOptions, setRecentAuthOptions] = useState<
+    RecentProductAuthOptions
+  >({});
 
   const applyDecision = useCallback(
     async (decision: AuthGateDecision): Promise<void> => {
@@ -393,7 +404,9 @@ export function ProductAuthGate({
     setMe(next);
   }, []);
 
-  const reauthenticate = useCallback((): Promise<ProductMe> => {
+  const reauthenticate = useCallback((
+    options: RecentProductAuthOptions = {},
+  ): Promise<ProductMe> => {
     if (recentAuthRef.current) return recentAuthRef.current.promise;
     let resolve!: (me: ProductMe) => void;
     let reject!: (reason: unknown) => void;
@@ -402,6 +415,7 @@ export function ProductAuthGate({
       reject = decline;
     });
     recentAuthRef.current = { promise, resolve, reject };
+    setRecentAuthOptions(options);
     setRecentAuthOpen(true);
     return promise;
   }, []);
@@ -423,6 +437,7 @@ export function ProductAuthGate({
     }
     updateMe(next);
     setRecentAuthOpen(false);
+    setRecentAuthOptions({});
     pending.resolve(next);
   }, [updateMe]);
 
@@ -431,6 +446,7 @@ export function ProductAuthGate({
     if (!pending) return;
     recentAuthRef.current = null;
     setRecentAuthOpen(false);
+    setRecentAuthOptions({});
     pending.reject(new DOMException("Cancelled", "AbortError"));
   }, []);
 
@@ -475,6 +491,10 @@ export function ProductAuthGate({
           providers={providers}
           passwordEnabled={passwordEnabled}
           loginMethodOrder={loginMethodOrder}
+          requireResumeGesture={
+            recentAuthOptions.resumeWithUserGesture === true
+          }
+          resumeLabel={recentAuthOptions.resumeLabel ?? "Continue"}
           onVerified={completeRecentAuth}
           onCancel={cancelRecentAuth}
         />

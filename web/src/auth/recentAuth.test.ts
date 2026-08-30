@@ -7,6 +7,7 @@ const verified: ProductMe = { account: "draven", role: "owner" };
 Deno.test("recent-auth retry verifies once and repeats the protected operation", async () => {
   let operations = 0;
   let verifications = 0;
+  let resumeLabel: string | undefined;
   const result = await retryWithRecentProductAuth(
     () => {
       operations += 1;
@@ -18,14 +19,20 @@ Deno.test("recent-auth retry verifies once and repeats the protected operation",
       }
       return Promise.resolve("created");
     },
-    () => {
+    (options) => {
       verifications += 1;
+      resumeLabel = options?.resumeLabel;
       return Promise.resolve(verified);
+    },
+    {
+      resumeLabel: "Continue to Passkey",
+      resumeWithUserGesture: true,
     },
   );
   assertEquals(result, "created");
   assertEquals(operations, 2);
   assertEquals(verifications, 1);
+  assertEquals(resumeLabel, "Continue to Passkey");
 });
 
 Deno.test("recent-auth retry does not intercept unrelated failures", async () => {

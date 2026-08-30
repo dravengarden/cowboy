@@ -180,7 +180,7 @@ Deno.test("desktop can manage devices and sign out without importing store", asy
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
   const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
-  assert(sw.includes('const VERSION = "cowboy-v1595"'));
+  assert(sw.includes('const VERSION = "cowboy-v1596"'));
   const authStart = sw.indexOf('url.pathname.startsWith("/api/auth/")');
   const authBranch = sw.slice(
     authStart,
@@ -200,7 +200,7 @@ Deno.test("Passkey changes recover from an expired recent-auth window", async ()
     new URL("ProductRecentAuthSheet.tsx", authDir),
   );
   const retry = await Deno.readTextFile(new URL("recentAuth.ts", authDir));
-  assert(gate.includes("reauthenticate: () => Promise<ProductMe>"));
+  assert(gate.includes("options?: RecentProductAuthOptions"));
   assert(gate.includes("<ProductRecentAuthSheet"));
   assert(panel.includes("retryWithRecentProductAuth"));
   assert(retry.includes("isRecentProductAuthRequired"));
@@ -208,6 +208,9 @@ Deno.test("Passkey changes recover from an expired recent-auth window", async ()
   assert(sheet.includes("authApi.login(me.account, password)"));
   assert(sheet.includes("verifyPasskey"));
   assert(sheet.includes("runNativeOidc"));
+  assert(sheet.includes("runBrowserOidc"));
+  assert(sheet.includes("useProviderHandoff"));
+  assert(sheet.includes("Identity verified. Your pending change is still here."));
   assert(sheet.includes("selectedProvider.button_label"));
   assert(sheet.includes("orderedLoginMethodIds"));
   const addHandler = panel.slice(
@@ -219,6 +222,7 @@ Deno.test("Passkey changes recover from an expired recent-auth window", async ()
     panel.indexOf("const toggle ="),
   );
   assert(addHandler.includes("Passkey setup was cancelled. Nothing changed."));
+  assert(addHandler.includes('resumeLabel: "Continue to Passkey"'));
   assert(revokeHandler.includes("Revocation was cancelled."));
 });
 

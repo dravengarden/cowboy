@@ -30,6 +30,7 @@ import {
   registerPasskey,
   verifyPasskey,
 } from "./passkeyFlow";
+import { isNativeShell } from "../nativeShell";
 import { useProductAuth } from "./ProductAuthGate";
 import { retryWithRecentProductAuth } from "./recentAuth";
 
@@ -120,6 +121,10 @@ export function ProductPasskeysPanel({
       const created = await retryWithRecentProductAuth(
         () => registerPasskey(requestedNickname),
         reauthenticate,
+        {
+          resumeLabel: "Continue to Passkey",
+          resumeWithUserGesture: !isNativeShell(),
+        },
       );
       setPasskeys((current) => [
         created,

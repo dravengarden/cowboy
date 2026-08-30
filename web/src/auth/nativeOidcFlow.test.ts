@@ -6,8 +6,10 @@ import {
   type ProductOidcProvider,
 } from "./authApi.ts";
 import {
+  browserOidcFlowSupported,
   nativeOidcEventsUrl,
   nativeOidcStartUrl,
+  runBrowserOidc,
   runNativeOidc,
 } from "./nativeOidcFlow.ts";
 import { newPkceBinding } from "./pkce.ts";
@@ -251,6 +253,114 @@ Deno.test("native OIDC waits on push and exchanges cookies exactly once", async 
       Object.defineProperty(globalThis, "WebSocket", previousWebSocket);
     } else {
       delete (globalThis as { WebSocket?: typeof WebSocket }).WebSocket;
+    }
+  }
+});
+
+Deno.test("browser OIDC opens synchronously and preserves the pending SPA action", async () => {
+  const previousFetch = globalThis.fetch;
+  const previousLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const previousOpen = Object.getOwnPropertyDescriptor(globalThis, "open");
+  const previousWebSocket = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "WebSocket",
+  );
+  const navigations: string[] = [];
+  const fetches: Array<{ input: string; init?: RequestInit }> = [];
+  let popupOpener: unknown = globalThis;
+  let popupOpened = 0;
+  let popupClosed = 0;
+
+  class FakeWebSocket extends EventTarget {
+    constructor(_url: string | URL) {
+      super();
+      queueMicrotask(() => this.dispatchEvent(new Event("open")));
+    }
+
+    send(_data: string): void {
+      queueMicrotask(() =>
+        this.dispatchEvent(
+          new MessageEvent("message", {
+            data: JSON.stringify({ status: "ready" }),
+          }),
+        )
+      );
+    }
+
+    close(): void {}
+  }
+
+  const popup = {
+    get closed(): boolean {
+      return false;
+    },
+    get opener(): unknown {
+      return popupOpener;
+    },
+    set opener(value: unknown) {
+      popupOpener = value;
+    },
+    close(): void {
+      popupClosed += 1;
+    },
+    location: {
+      replace(url: string): void {
+        navigations.push(url);
+      },
+    },
+  } as unknown as Window;
+
+  Object.defineProperty(globalThis, "location", {
+    configurable: true,
+    value: new URL("https://cowboy.example/"),
+  });
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: globalThis,
+  });
+  Object.defineProperty(globalThis, "open", {
+    configurable: true,
+    value: () => {
+      popupOpened += 1;
+      return popup;
+    },
+  });
+  Object.defineProperty(globalThis, "WebSocket", {
+    configurable: true,
+    value: FakeWebSocket,
+  });
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = typeof input === "string" ? input : input.toString();
+    fetches.push({ input: path, init });
+    return Promise.resolve(Response.json({ account: "draven", role: "owner" }));
+  }) as typeof fetch;
+
+  try {
+    assertEquals(browserOidcFlowSupported(), true);
+    const result = runBrowserOidc(cardea);
+    assertEquals(popupOpened, 1);
+    assertEquals(popupOpener, null);
+    const me = await result;
+    assertEquals(me, { account: "draven", role: "owner" });
+    assertEquals(navigations.length, 1);
+    const authorizationUrl = new URL(navigations[0]!);
+    assertEquals(authorizationUrl.searchParams.get("client"), "browser-shell");
+    assertEquals(authorizationUrl.searchParams.has("code_verifier"), false);
+    assertEquals(authorizationUrl.searchParams.has("handoff_token"), false);
+    assertEquals(fetches.length, 1);
+    assertEquals(fetches[0]?.input, "/api/auth/oidc/native/poll");
+    assertEquals(popupClosed, 1);
+  } finally {
+    globalThis.fetch = previousFetch;
+    for (const [name, descriptor] of [
+      ["location", previousLocation],
+      ["window", previousWindow],
+      ["open", previousOpen],
+      ["WebSocket", previousWebSocket],
+    ] as const) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+      else delete (globalThis as Record<string, unknown>)[name];
     }
   }
 });

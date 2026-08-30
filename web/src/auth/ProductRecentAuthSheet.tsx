@@ -18,7 +18,12 @@ import {
   type ProductMe,
   type ProductOidcProvider,
 } from "./authApi";
-import { nativeOidcFlowSupported, runNativeOidc } from "./nativeOidcFlow";
+import {
+  browserOidcFlowSupported,
+  nativeOidcFlowSupported,
+  runBrowserOidc,
+  runNativeOidc,
+} from "./nativeOidcFlow";
 import {
   passkeyErrorMessage,
   passkeyFlowCancelled,
@@ -58,6 +63,8 @@ export function ProductRecentAuthSheet({
   providers,
   passwordEnabled,
   loginMethodOrder,
+  requireResumeGesture = false,
+  resumeLabel = "Continue",
   onVerified,
   onCancel,
 }: {
@@ -66,6 +73,8 @@ export function ProductRecentAuthSheet({
   providers: ProductOidcProvider[];
   passwordEnabled: boolean;
   loginMethodOrder: string[];
+  requireResumeGesture?: boolean;
+  resumeLabel?: string;
   onVerified: (me: ProductMe) => void;
   onCancel: () => void;
 }): React.JSX.Element {
@@ -84,6 +93,7 @@ export function ProductRecentAuthSheet({
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [verifiedMe, setVerifiedMe] = useState<ProductMe | null>(null);
   const providerAbort = useRef<AbortController | null>(null);
   const passkeyAvailable = (me.passkey_count ?? 0) > 0 &&
     passkeyFlowSupported();
@@ -104,12 +114,16 @@ export function ProductRecentAuthSheet({
   );
   const useNativeProviderFlow = selectedProvider !== undefined &&
     nativeOidcFlowSupported();
+  const useBrowserProviderFlow = selectedProvider !== undefined &&
+    !useNativeProviderFlow && browserOidcFlowSupported();
+  const useProviderHandoff = useNativeProviderFlow || useBrowserProviderFlow;
 
   useEffect(() => () => providerAbort.current?.abort(), []);
   useEffect(() => {
     if (!open) return;
     setPassword("");
     setError(null);
+    setVerifiedMe(null);
     setMethod(
       initialMethod(me, passwordEnabled, providers, orderedLoginMethodIds),
     );
@@ -129,7 +143,10 @@ export function ProductRecentAuthSheet({
     setBusy(true);
     setError(null);
     void request()
-      .then(onVerified)
+      .then((next) => {
+        if (requireResumeGesture) setVerifiedMe(next);
+        else onVerified(next);
+      })
       .catch((reason: unknown) => {
         if (passkeyFlowCancelled(reason)) return;
         setError(
@@ -142,12 +159,14 @@ export function ProductRecentAuthSheet({
   };
 
   const verifyProvider = (): void => {
-    if (!selectedProvider || !useNativeProviderFlow) return;
+    if (!selectedProvider || !useProviderHandoff) return;
     const abort = new AbortController();
     providerAbort.current = abort;
     finish(
       () =>
-        runNativeOidc(selectedProvider, abort.signal).finally(() => {
+        (useNativeProviderFlow
+          ? runNativeOidc(selectedProvider, abort.signal)
+          : runBrowserOidc(selectedProvider, abort.signal)).finally(() => {
           if (providerAbort.current === abort) providerAbort.current = null;
         }),
       "Could not complete external verification",
@@ -182,11 +201,27 @@ export function ProductRecentAuthSheet({
         <Stack spacing={2}>
           <Typography color="text.secondary">
             Passkey changes require a sign-in or Passkey check from the last
-            five minutes. Verify now, then Cowboy will continue your pending
-            change automatically.
+            five minutes. Verify now, then {requireResumeGesture
+              ? "tap Continue once so Safari can open the Passkey prompt."
+              : "Cowboy will continue your pending change automatically."}
           </Typography>
           {error && <Alert severity="error">{error}</Alert>}
-          {methods.length > 1 && (
+          {verifiedMe && (
+            <>
+              <Alert severity="success">
+                Identity verified. Your pending change is still here.
+              </Alert>
+              <Button
+                type="button"
+                variant="contained"
+                size="large"
+                onClick={() => onVerified(verifiedMe)}
+              >
+                {resumeLabel}
+              </Button>
+            </>
+          )}
+          {!verifiedMe && methods.length > 1 && (
             <Tabs
               value={method}
               onChange={(_event, value: string) => setMethod(value)}
@@ -204,7 +239,7 @@ export function ProductRecentAuthSheet({
               ))}
             </Tabs>
           )}
-          {method === PASSKEY_METHOD && (
+          {!verifiedMe && method === PASSKEY_METHOD && (
             <Button
               type="button"
               variant="contained"
@@ -216,7 +251,7 @@ export function ProductRecentAuthSheet({
               Verify with Passkey
             </Button>
           )}
-          {method === PASSWORD_LOGIN_METHOD && (
+          {!verifiedMe && method === PASSWORD_LOGIN_METHOD && (
             <>
               <TextField
                 label="Account"
@@ -245,28 +280,28 @@ export function ProductRecentAuthSheet({
               </Button>
             </>
           )}
-          {selectedProvider && (
+          {!verifiedMe && selectedProvider && (
             <>
               <Button
                 type="button"
-                href={useNativeProviderFlow
+                href={useProviderHandoff
                   ? undefined
                   : selectedProvider.start_url}
-                onClick={useNativeProviderFlow ? verifyProvider : undefined}
+                onClick={useProviderHandoff ? verifyProvider : undefined}
                 variant="contained"
                 size="large"
-                disabled={useNativeProviderFlow && busy}
+                disabled={useProviderHandoff && busy}
               >
-                {useNativeProviderFlow && busy
+                {useProviderHandoff && busy
                   ? "Waiting for approval…"
                   : selectedProvider.button_label}
               </Button>
-              {!useNativeProviderFlow && (
+              {!useProviderHandoff && (
                 <Typography variant="body2" color="text.secondary">
                   After the secure redirect returns, repeat the Passkey change.
                 </Typography>
               )}
-              {useNativeProviderFlow && busy && (
+              {useProviderHandoff && busy && (
                 <Button
                   type="button"
                   variant="text"
@@ -277,7 +312,7 @@ export function ProductRecentAuthSheet({
               )}
             </>
           )}
-          {methods.length === 0 && (
+          {!verifiedMe && methods.length === 0 && (
             <Alert severity="error">
               This Cowboy Service has no verification method available.
             </Alert>
