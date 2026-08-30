@@ -83,6 +83,7 @@ export function ProductPasskeysPanel({
       updateMe(await authApi.me());
     })()
       .catch((err: unknown) => {
+        if (passkeyFlowCancelled(err)) return;
         setError(passkeyErrorMessage(err, "Could not add a passkey"));
       })
       .finally(() => setBusy(false));
@@ -104,6 +105,7 @@ export function ProductPasskeysPanel({
         onMe?.(updated);
       })
       .catch((err: unknown) => {
+        if (passkeyFlowCancelled(err)) return;
         setError(
           err instanceof AuthApiError
             ? err.message

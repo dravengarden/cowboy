@@ -167,7 +167,7 @@ Deno.test("desktop can sign out through authApi without importing store", async 
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
   const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
-  assert(sw.includes('const VERSION = "cowboy-v1584"'));
+  assert(sw.includes('const VERSION = "cowboy-v1585"'));
   const authStart = sw.indexOf('url.pathname.startsWith("/api/auth/")');
   const authBranch = sw.slice(
     authStart,
@@ -196,6 +196,16 @@ Deno.test("Passkey changes recover from an expired recent-auth window", async ()
   assert(sheet.includes("verifyPasskey"));
   assert(sheet.includes("runNativeOidc"));
   assert(sheet.includes("selectedProvider.button_label"));
+  const addHandler = panel.slice(
+    panel.indexOf("const add ="),
+    panel.indexOf("const revoke ="),
+  );
+  const revokeHandler = panel.slice(
+    panel.indexOf("const revoke ="),
+    panel.indexOf("const toggle ="),
+  );
+  assert(addHandler.includes("if (passkeyFlowCancelled(err)) return;"));
+  assert(revokeHandler.includes("if (passkeyFlowCancelled(err)) return;"));
 });
 
 Deno.test("Passkey names are explicit and the product lock is event-driven", async () => {
