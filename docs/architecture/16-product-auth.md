@@ -184,9 +184,15 @@ visible id is never dropped (`[A,B,C]` + `[C,A]` → `[C,B,A]`).
 | `POST` | `/api/auth/passkeys/external/complete` | public; Origin + opaque transaction | verify and stage Safari's credential without changing account state |
 | `POST` | `/api/auth/passkeys/external/finalize` | exact product cookie + Origin + PKCE | persist or rotate only after the original window proves the handoff |
 | `PUT` | `/api/auth/passkeys/reauth` | fresh product session | opt in/out and set the bounded interval |
-| `POST` | `/api/auth/tokens` | product operator+ | create own `cow_…` token |
-| `GET` | `/api/auth/tokens` | product (own rows) | list prefixes |
-| `DELETE` | `/api/auth/tokens/{id}` | product (own row; else 404) | revoke |
+| `POST` | `/api/auth/device/authorizations` | public, rate-limited | start a PKCE- and public-key-bound request |
+| `POST` | `/api/auth/device/authorizations/inspect` | approval capability | show the client name and full public-key fingerprint |
+| `POST` | `/api/auth/device/authorizations/approve` | recent product login + Origin | approve the one-time device request |
+| `GET` | `/api/auth/device/authorizations/events` | PKCE-bound WebSocket | push approval or denial without polling |
+| `POST` | `/api/auth/device/exchange` | approved request + key proof | issue sender-constrained access and rotating refresh credentials |
+| `POST` | `/api/auth/device/refresh` | refresh bearer + key proof | rotate once; replay revokes the device |
+| `GET` | `/api/auth/devices` | fresh product session | list own authorized devices, never secrets |
+| `DELETE` | `/api/auth/devices/{id}` | recent product login + Origin | revoke own device and active access |
+| `POST`/`GET`/`DELETE` | `/api/auth/tokens[/…]` | legacy product boundary | migration-only personal token compatibility |
 | `ANY` | `/ws` | product; cookie also Origin | 401 before upgrade; later revoke closes **4001** |
 | `POST` | `/api/sessions` | product operator+ | stamps `owner_user_id` |
 | `GET` | `/api/sessions/{id}/*` | product + `can_see` | session REST |
@@ -209,8 +215,18 @@ Passkey assertion rotates the current token rather than extending it in place,
 sets a 30-day absolute lifetime, and records the assertion time on that session
 only. One device can never refresh another device's cookie.
 
-`serve-acp` requires `--token` / `COWBOY_USER_TOKEN` and **exits** on
-401/403. There is no anonymous loopback product bypass.
+`serve-acp` normally uses browser-approved, sender-constrained device
+credentials. First use opens the configured login and explicit fingerprint
+approval; subsequent access uses a 10-minute access token and a rotating
+30-day refresh token stored with its private Ed25519 key in a mode-0600 local
+file. A loopback API connection uses the configured `COWBOY_PUBLIC_ORIGIN` for
+the browser approval page; clients accept that cross-origin handoff only when
+the page is HTTPS, while non-loopback API connections remain same-origin. A
+refresh replay revokes the whole device. `--token` /
+`COWBOY_USER_TOKEN` remain hidden migration inputs only. When auth is enabled,
+there is no anonymous loopback product bypass; when the explicit auth-off flag
+is deployed, `/api/auth/status` authoritatively preserves synthetic local-owner
+access.
 
 Admin routes are listed in [Admin](14-admin.md). Settings redaction is
 [Server](06-server-api.md) (`settings_for_product_clients`).
@@ -269,8 +285,9 @@ controller activate is a **planned outage** of `/` and Zed.
    and the PWA serves `ProductAuthGate`. Do not pair a new gate with an old
    controller, or a new controller with old `store.ts`.
 3. Sign in on `/`. `/admin` is login-only after first-run.
-4. Mint a `cow_…` token. Set `COWBOY_USER_TOKEN` on every
-   `agent_servers.cowboy-*` `serve-acp`.
+4. Start each `agent_servers.cowboy-*` bridge (or run `cowboy login` once),
+   compare the full `SHA256:` fingerprint, and approve the client in the normal
+   Cowboy login. Do not create or copy a personal token.
 5. Hard-reload the PWA (`sw.js` VERSION + `/version`). A WS reconnect keeps
    stale JS.
 6. This instance stays single-user. Extra-user APIs return 403.
@@ -287,4 +304,4 @@ only controller activate that is both safe and useful by itself.
 
 - [Admin](14-admin.md) — registration policy, admin HTTP
 - [Server & wire API](06-server-api.md) — route table, `/metrics`, `/ws`
-- [Zed ACP](../integrations/zed.md) — `COWBOY_USER_TOKEN`
+- [Zed ACP](../integrations/zed.md) — browser-approved device authorization

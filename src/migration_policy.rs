@@ -17,6 +17,10 @@ const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "0036_passkey_reauth_interval.sql",
         "facb5411f50a2ca2f56032d89bfc50e1fb5dea59800d1957ba45b11ec18d59f5",
     ),
+    (
+        "0037_user_device_sessions.sql",
+        "bd1cfc10078f7927d9e802fd6b9ec7dfaaa1151a66e5176e66636f9d99e25b27",
+    ),
 ];
 const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
@@ -30,6 +34,10 @@ const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "0010_passkey_reauth_interval.sql",
         "6d1bf69955046a8fbe8a5115ad192a089019a7b663249b941847682d926b740c",
+    ),
+    (
+        "0011_user_device_sessions.sql",
+        "e678ec9e58f7266c615b33094636077e7b963b8098e1725e7314774d5028b7ca",
     ),
 ];
 

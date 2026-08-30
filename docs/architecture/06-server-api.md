@@ -138,20 +138,31 @@ ignored so a stale installed PWA cannot restore removed auto-resume behavior.
 
 ## Auth
 
-Accounts are required. There is no `cowboy.auth.mode` and no loopback
-product bypass. A product cookie (`cowboy_user`) or `Authorization: Bearer
-cow_...` is required on `/ws` and product APIs. Cookie `/ws` upgrades also
-run the CSRF Origin allow-list; missing or disallowed Origin is 403 and
-does not open a socket. Bearer requests skip Origin. Missing, expired, or
-disabled principals return **401 before `on_upgrade`**. A later revoke
-closes the socket with application code **4001**.
+When product authentication is enabled, accounts are required and there is no
+implicit loopback bypass. A product cookie (`cowboy_user`), a browser-approved
+device access token plus its per-request Ed25519 proof, or a legacy
+`Authorization: Bearer cow_...` token is required on `/ws` and product APIs.
+Cookie `/ws` upgrades also run the CSRF Origin allow-list; missing or disallowed
+Origin is 403 and does not open a socket. Sender-constrained and legacy bearer
+requests skip Origin. Missing, expired, disabled, or invalid principals return
+**401 before `on_upgrade`**. A later revoke closes the socket with application
+code **4001**. The explicit auth-off deployment flag remains the trusted-intranet
+rollback and exposes the synthetic local owner without manufacturing a client
+credential.
 
-Personal access tokens are created by the owning product operator+
-(`POST /api/auth/tokens`). The secret is `cow_` plus 32 url-safe bytes and
-is shown once. The store keeps only `token_hash` and the first 8 characters
-of the full secret as `token_prefix`. Default TTL is 365 days (minimum 1
-hour). `serve-acp` requires `--token` / `COWBOY_USER_TOKEN` and exits on
-401/403 instead of reconnecting.
+Native and ACP clients use browser-approved device authorization. The client
+generates its Ed25519 key and PKCE verifier; the browser performs the configured
+Cardea/password/plugin login and explicitly approves the public-key fingerprint.
+The exchange returns a 10-minute access token and an absolute 30-day refresh
+token. Every API and WebSocket handshake signs method, path/query, token hash,
+timestamp, and a single-use nonce. Refresh tokens are hash-only in storage,
+rotate on every use, and revoke the device family on replay. Access tokens are
+memory-only and one active token is retained per device. `serve-acp` opens this
+flow automatically and retries once after a rejected short access token.
+
+Personal access token endpoints remain only as a hidden migration boundary for
+old clients. Their secrets are still hash-only at rest, but normal Account and
+Zed setup no longer creates, displays, or asks users to copy one.
 
 Session REST families (`/api/sessions/{id}/*`, `/api/code/sessions/{id}/*`,
 `/api/history/{id}`) use `can_see` / `can_mutate`. Product viewers see own

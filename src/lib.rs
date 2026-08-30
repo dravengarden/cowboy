@@ -25,6 +25,10 @@ mod cgroup;
 mod claude_shell;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod cli;
+#[cfg(feature = "full")]
+mod client_auth;
+#[cfg(feature = "full")]
+mod client_auth_client;
 #[cfg(any(feature = "full", feature = "code-adapter"))]
 pub mod code_adapter;
 #[cfg(feature = "full")]

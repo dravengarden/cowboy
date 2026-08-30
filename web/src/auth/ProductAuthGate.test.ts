@@ -10,7 +10,8 @@ async function readAuthSources(): Promise<string> {
     "ProductAuthGate.tsx",
     "ProductLoginPage.tsx",
     "ProductAccountMenu.tsx",
-    "ProductTokensPanel.tsx",
+    "ProductDevicesPanel.tsx",
+    "DeviceAuthorizationPage.tsx",
     "ProductPasskeysPanel.tsx",
     "ProductRecentAuthSheet.tsx",
     "PasskeyReauthLock.tsx",
@@ -50,6 +51,8 @@ Deno.test("ProductAuthGate wraps DesktopApp and MobileApp in main.tsx", async ()
   const app = await Deno.readTextFile(new URL("App.tsx", webSrc));
   assert(main.includes("ProductAuthGate"));
   assert(main.includes("<ProductAuthGate>"));
+  assert(main.includes("DeviceAuthorizationRoute"));
+  assert(main.includes("captureDeviceAuthorizationFromLocation"));
   assert(main.includes("MachineSetupGate"));
   assert(main.includes("<DesktopApp"));
   assert(main.includes("<MobileApp"));
@@ -135,7 +138,7 @@ Deno.test("logged-out gate never mounts product children or /ws", async () => {
   assert(loginBranch.includes("ProductLoginPage"));
 });
 
-Deno.test("desktop can sign out through authApi without importing store", async () => {
+Deno.test("desktop can manage devices and sign out without importing store", async () => {
   const desktop = await Deno.readTextFile(
     new URL("desktop/DesktopApp.tsx", webSrc),
   );
@@ -143,8 +146,9 @@ Deno.test("desktop can sign out through authApi without importing store", async 
   const store = await Deno.readTextFile(new URL("store.ts", webSrc));
   assert(desktop.includes("useProductAuth"));
   assert(desktop.includes("account.signOut"));
-  assert(desktop.includes("account.tokens"));
-  assert(desktop.includes("ProductTokensPanel"));
+  assert(desktop.includes("account.devices"));
+  assert(desktop.includes("ProductDevicesPanel"));
+  assertEquals(desktop.includes("ProductTokensPanel"), false);
   assertEquals(desktop.includes('from "../store"'), false);
   assert(gate.includes("announceProductSessionEnd"));
   assert(gate.includes("location.reload"));
@@ -169,7 +173,7 @@ Deno.test("desktop can sign out through authApi without importing store", async 
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
   const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
-  assert(sw.includes('const VERSION = "cowboy-v1590"'));
+  assert(sw.includes('const VERSION = "cowboy-v1591"'));
   const authStart = sw.indexOf('url.pathname.startsWith("/api/auth/")');
   const authBranch = sw.slice(
     authStart,

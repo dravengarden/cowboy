@@ -13,7 +13,7 @@ use clap::{Args, Parser, Subcommand};
     name = "cowboy",
     version,
     about = "Drive coding-agent CLIs from anywhere over ACP",
-    after_help = "On a new computer:\n  1. In the Cowboy UI, create a one-time code\n  2. cowboy register https://<origin>\n  3. Paste the one-time token when asked\n\nThe default register command runs Cowboy Machine in the current terminal. Add --background to install and start a user background service.\nCowboy assigns the machine id. Each Service gets isolated Machine state under ~/.local/state/cowboy-machine/services/.\nCowboy Service stores only the public key."
+    after_help = "Product clients sign in with `cowboy login https://<origin>`; Cowboy opens the configured browser login and stores a sender-constrained device credential locally.\n\nMachine registration is separate:\n  1. In the Cowboy UI, create a one-time Machine code\n  2. cowboy register https://<origin>\n  3. Paste the one-time token when asked\n\nThe default register command runs Cowboy Machine in the current terminal. Add --background to install and start a user background service.\nCowboy assigns the machine id. Each Service gets isolated Machine state under ~/.local/state/cowboy-machine/services/.\nCowboy Service stores only the public key."
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -31,6 +31,9 @@ enum Command {
     /// other ACP client. This is a thin bridge; it never starts a second Hub.
     #[cfg(feature = "full")]
     ServeAcp(ServeAcpArgs),
+    /// Sign this computer in through the configured Cowboy browser login.
+    #[cfg(feature = "full")]
+    Login(LoginArgs),
     /// Debug: drive one provider end-to-end (spawn, initialize, prompt, stream).
     #[cfg(feature = "full")]
     TryAgent(TryAgentArgs),
@@ -154,10 +157,33 @@ pub struct ServeAcpArgs {
     )]
     pub daemon_url: String,
 
-    /// Product personal access token (`cow_…`). Required; there is no
-    /// headerless ACP path. Create one on `/` → account menu → tokens.
-    #[arg(long, env = "COWBOY_USER_TOKEN")]
+    /// Legacy personal access token. New clients authorize automatically in
+    /// the browser and do not need this option.
+    #[arg(long, env = "COWBOY_USER_TOKEN", hide = true)]
     pub token: Option<String>,
+
+    /// Override the private device-credential directory.
+    #[arg(long, env = "COWBOY_AUTH_STATE_DIR")]
+    pub auth_state_dir: Option<PathBuf>,
+
+    /// Name shown when approving this computer and in Account → Devices.
+    #[arg(long)]
+    pub device_name: Option<String>,
+}
+
+#[cfg(feature = "full")]
+#[derive(Args)]
+pub struct LoginArgs {
+    /// Published HTTPS origin of the Cowboy instance.
+    pub origin: String,
+
+    /// Override the private device-credential directory.
+    #[arg(long, env = "COWBOY_AUTH_STATE_DIR")]
+    pub auth_state_dir: Option<PathBuf>,
+
+    /// Name shown when approving this computer and in Account → Devices.
+    #[arg(long)]
+    pub device_name: Option<String>,
 }
 
 #[cfg(feature = "full")]
@@ -294,6 +320,8 @@ impl Cli {
                 crate::acp_bridge::serve(args).await
             }
             #[cfg(feature = "full")]
+            Command::Login(args) => login_client(args).await,
+            #[cfg(feature = "full")]
             Command::TryAgent(args) => {
                 crate::server::init_tracing();
                 let spec = crate::provider::lookup(&args.provider)
@@ -375,6 +403,21 @@ impl Cli {
             }
         }
     }
+}
+
+#[cfg(feature = "full")]
+async fn login_client(args: LoginArgs) -> anyhow::Result<()> {
+    crate::server::init_tracing();
+    let base_url = crate::client_auth_client::normalized_base_url(&args.origin)?;
+    let authentication = crate::client_auth_client::ClientAuthentication::new(
+        base_url.clone(),
+        None,
+        args.auth_state_dir,
+        args.device_name,
+    )?;
+    authentication.ensure_login().await?;
+    eprintln!("Cowboy login ready for {base_url}");
+    Ok(())
 }
 
 #[cfg(feature = "full")]
@@ -548,7 +591,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "full")]
-    fn serve_acp_accepts_token_flag() {
+    fn serve_acp_keeps_hidden_legacy_token_compatibility() {
         let cli = Cli::try_parse_from([
             "cowboy",
             "serve-acp",
@@ -562,6 +605,31 @@ mod tests {
             panic!("expected serve-acp command");
         };
         assert_eq!(args.token.as_deref(), Some("cow_testtoken"));
+    }
+
+    #[test]
+    #[cfg(feature = "full")]
+    fn serve_acp_and_login_default_to_browser_authorized_devices() {
+        let cli = Cli::try_parse_from(["cowboy", "serve-acp", "--provider", "codex"]).unwrap();
+        let Command::ServeAcp(args) = cli.command else {
+            panic!("expected serve-acp command");
+        };
+        assert!(args.token.is_none());
+        assert!(args.auth_state_dir.is_none());
+
+        let cli = Cli::try_parse_from([
+            "cowboy",
+            "login",
+            "https://cowboy.example",
+            "--device-name",
+            "Zed on Hawk",
+        ])
+        .unwrap();
+        let Command::Login(args) = cli.command else {
+            panic!("expected login command");
+        };
+        assert_eq!(args.origin, "https://cowboy.example");
+        assert_eq!(args.device_name.as_deref(), Some("Zed on Hawk"));
     }
 
     #[test]

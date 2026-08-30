@@ -84,7 +84,8 @@ or hardlink fallbacks.
 The hidden legacy `--postgres-url` spelling remains accepted for existing
 deployments.
 
-Other subcommands: `serve-acp` (the ACP server face for Zed), `try-agent`
+Other subcommands: `serve-acp` (the ACP server face for Zed), `login` (complete
+browser-approved client authorization ahead of first use), and `try-agent`
 (one-shot provider smoke test).
 
 `serve-acp` is a thin stdio bridge to the running daemon, not a second cowboy
@@ -96,6 +97,13 @@ cowboy serve-acp --provider claude-code
 cowboy serve-acp --provider gemini
 cowboy serve-acp --provider grok
 ```
+
+No copied API token is required. The first authenticated connection opens the
+server's normal Cardea/password login and explicit device-approval page, then
+stores a sender-constrained rotating credential locally. Use
+`cowboy login https://cowboy.example` to pre-authorize a computer. A remote
+origin must use HTTPS; an explicitly auth-off local Service remains anonymous
+local-owner by policy.
 
 Each entry filters `session/list` and `session/load` to that provider, which
 keeps imported threads under the correct agent identity. The bridge implements

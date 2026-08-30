@@ -226,7 +226,7 @@ import {
 } from "./desktop/controlCenterTabs";
 import { ProductAccountMenu } from "./auth/ProductAccountMenu";
 import { ProductPasskeysPanel } from "./auth/ProductPasskeysPanel";
-import { ProductTokensPanel } from "./auth/ProductTokensPanel";
+import { ProductDevicesPanel } from "./auth/ProductDevicesPanel";
 import {
     sessionNotificationsMuted,
     setSessionNotificationsMuted,
@@ -5886,12 +5886,12 @@ function SettingsShell({
                 <MobileSettingsRoute
                     id="account"
                     title="Account"
-                    description="Product login, tokens, and sign out"
+                    description="Product login, devices, Passkeys, and sign out"
                     activeSection={mobileSettingsSection}
                     onChange={changeMobileSettingsSection}
                 >
                     <Stack data-mobile-account-sections spacing={2}>
-                        <ProductTokensPanel />
+                        <ProductDevicesPanel />
                         <ProductPasskeysPanel />
                         <ProductAccountMenu />
                     </Stack>

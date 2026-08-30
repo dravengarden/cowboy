@@ -3,6 +3,10 @@ import { createRoot } from "react-dom/client";
 import { CssBaseline, ThemeProvider } from "@mui/material";
 import { AppErrorBoundary } from "./AppErrorBoundary";
 import { ProductAuthGate } from "./auth/ProductAuthGate";
+import {
+  captureDeviceAuthorizationFromLocation,
+  DeviceAuthorizationRoute,
+} from "./auth/DeviceAuthorizationPage";
 import { MachineSetupGate } from "./setup/MachineSetupGate";
 import { SurfaceProvider, useSurfaceProfile } from "./surface/SurfaceProfile";
 import { useThemeMode } from "./theme";
@@ -46,6 +50,7 @@ function Root(): React.JSX.Element {
   // the keyboard + its iOS-native accessory bar.
   useKeyboardInset();
   const surface = useSurfaceProfile();
+  const deviceAuthorizationActive = captureDeviceAuthorizationFromLocation();
   const app = surface.kind === "desktop"
     ? <DesktopApp themeMode={mode} onSetThemeMode={setMode} />
     : <MobileApp themeMode={mode} onSetThemeMode={setMode} />;
@@ -61,9 +66,11 @@ function Root(): React.JSX.Element {
           error card with a reload instead of a blank white screen. */}
       <AppErrorBoundary>
         <ProductAuthGate>
-          <MachineSetupGate>
-            <Suspense fallback={null}>{app}</Suspense>
-          </MachineSetupGate>
+          <DeviceAuthorizationRoute active={deviceAuthorizationActive}>
+            <MachineSetupGate>
+              <Suspense fallback={null}>{app}</Suspense>
+            </MachineSetupGate>
+          </DeviceAuthorizationRoute>
         </ProductAuthGate>
       </AppErrorBoundary>
     </ThemeProvider>

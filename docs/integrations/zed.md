@@ -14,45 +14,48 @@ provider:
     "cowboy-codex": {
       "type": "custom",
       "command": "cowboy",
-      "args": ["serve-acp", "--provider", "codex"],
-      "env": {
-        "COWBOY_USER_TOKEN": "cow_…"
-      }
+      "args": ["serve-acp", "--provider", "codex"]
     },
     "cowboy-claude": {
       "type": "custom",
       "command": "cowboy",
-      "args": ["serve-acp", "--provider", "claude-code"],
-      "env": {
-        "COWBOY_USER_TOKEN": "cow_…"
-      }
+      "args": ["serve-acp", "--provider", "claude-code"]
     },
     "cowboy-gemini": {
       "type": "custom",
       "command": "cowboy",
-      "args": ["serve-acp", "--provider", "gemini"],
-      "env": {
-        "COWBOY_USER_TOKEN": "cow_…"
-      }
+      "args": ["serve-acp", "--provider", "gemini"]
     },
     "cowboy-grok": {
       "type": "custom",
       "command": "cowboy",
-      "args": ["serve-acp", "--provider", "grok"],
-      "env": {
-        "COWBOY_USER_TOKEN": "cow_…"
-      }
+      "args": ["serve-acp", "--provider", "grok"]
     }
   }
 }
 ```
 
-`serve-acp` requires a product personal access token. Create one on `/` →
-account menu → tokens (or `POST /api/auth/tokens`), then set
-`COWBOY_USER_TOKEN` or pass `--token`. The bridge sends
-`Authorization: Bearer cow_…` on `POST /api/sessions` and `/ws`. There is
-no headerless or loopback ACP path. An unset token fails at start; a
-401/403 from the daemon exits the process instead of reconnecting.
+`serve-acp` does not require a copied token. On the first connection it creates
+an Ed25519 key locally, opens Cowboy's configured login page, and asks the
+signed-in user to approve that public key. The browser may use Cardea,
+password, or any other server-configured login method. The bridge then keeps a
+private rotating credential under `~/.config/cowboy/client-auth/` (mode 0600),
+uses 10-minute sender-constrained access tokens, and rotates its 30-day refresh
+token on every refresh. The Service stores only the public key and refresh-token
+hash. Account → Authorized devices lists and revokes these clients.
+
+On a headless host the ACP bridge may keep its API connection on loopback. The
+Controller then advertises `COWBOY_PUBLIC_ORIGIN` as the HTTPS browser approval
+page, so the link opens on another device without exposing the API port. A
+non-loopback API connection accepts only its own HTTPS origin.
+
+`cowboy login https://cowboy.example` may be run ahead of Zed to complete the
+same flow. If product login is explicitly disabled, the bridge verifies that
+policy through `/api/auth/status` and preserves local-owner access without
+creating a credential. Network errors, unsupported controllers, and malformed
+status responses never downgrade to anonymous access. `COWBOY_USER_TOKEN` and
+`--token` remain hidden, migration-only compatibility inputs for existing
+deployments; new configurations must not use them.
 
 Do not override Registry agent IDs (including `codex-acp`, `claude-acp`, and
 `gemini`) unless replacing a native agent is intentional. Zed's custom-agent settings have no
@@ -61,7 +64,8 @@ Distinct provider icons require separate published ACP Registry entries.
 
 When Zed is attached to a remote project, the command must resolve on that
 remote host. Set `COWBOY_DAEMON_URL` or add `--daemon-url` when the daemon is not
-on the default loopback address.
+on the default loopback address. Non-loopback device authorization requires
+HTTPS.
 
 The bridge supports:
 

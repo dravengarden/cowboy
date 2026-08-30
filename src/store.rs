@@ -107,6 +107,68 @@ fn truncate_user_agent(user_agent: Option<&str>) -> Option<String> {
     }
 }
 
+fn validate_device_refresh(refresh: &ProductDeviceRefreshToken) -> Result<()> {
+    anyhow::ensure!(
+        crate::client_auth::valid_device_id(&refresh.device_id),
+        "device id must be 32 hex characters"
+    );
+    anyhow::ensure!(
+        crate::client_auth::valid_device_id(&refresh.family_id),
+        "device refresh family id must be 32 hex characters"
+    );
+    anyhow::ensure!(
+        !refresh.token_hash.is_empty(),
+        "device refresh hash cannot be empty"
+    );
+    anyhow::ensure!(
+        refresh.expires_at_ms > refresh.created_at_ms,
+        "device refresh expiry must follow creation"
+    );
+    Ok(())
+}
+
+fn validate_user_device(device: &ProductDevice, refresh: &ProductDeviceRefreshToken) -> Result<()> {
+    anyhow::ensure!(
+        crate::client_auth::valid_device_id(&device.id),
+        "device id must be 32 hex characters"
+    );
+    anyhow::ensure!(
+        device.id == refresh.device_id,
+        "device refresh owner is inconsistent"
+    );
+    anyhow::ensure!(
+        !device.public_key.is_empty(),
+        "device public key cannot be empty"
+    );
+    crate::client_auth::decode_public_key(&device.public_key)?;
+    validate_device_refresh(refresh)
+}
+
+async fn insert_pg_device_refresh(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    refresh: &ProductDeviceRefreshToken,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO user_device_refresh_tokens (token_hash, device_id, family_id, created_at, \
+         expires_at, used_at, revoked_at) VALUES ($1, $2, $3, \
+         to_timestamp($4::double precision / 1000), \
+         to_timestamp($5::double precision / 1000), \
+         to_timestamp($6::double precision / 1000), \
+         to_timestamp($7::double precision / 1000))",
+    )
+    .bind(&refresh.token_hash)
+    .bind(&refresh.device_id)
+    .bind(&refresh.family_id)
+    .bind(refresh.created_at_ms)
+    .bind(refresh.expires_at_ms)
+    .bind(refresh.used_at_ms)
+    .bind(refresh.revoked_at_ms)
+    .execute(&mut **transaction)
+    .await
+    .context("INSERT user device refresh token")?;
+    Ok(())
+}
+
 fn validate_encryption_public_key(value: &str) -> Result<()> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(value)
@@ -624,6 +686,30 @@ pub struct ProductApiToken {
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProductDevice {
+    pub id: String,
+    pub user_id: String,
+    pub name: String,
+    pub public_key: String,
+    pub created_at_ms: i64,
+    pub last_used_at_ms: Option<i64>,
+    pub revoked_at_ms: Option<i64>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProductDeviceRefreshToken {
+    pub token_hash: String,
+    pub device_id: String,
+    pub family_id: String,
+    pub created_at_ms: i64,
+    pub expires_at_ms: i64,
+    pub used_at_ms: Option<i64>,
+    pub revoked_at_ms: Option<i64>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(sqlx::FromRow)]
 struct ProductUserRow {
     id: String,
@@ -658,6 +744,30 @@ struct ProductApiTokenRow {
     created_at: DateTime<Utc>,
     expires_at: Option<DateTime<Utc>>,
     last_used_at: Option<DateTime<Utc>>,
+    revoked_at: Option<DateTime<Utc>>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(sqlx::FromRow)]
+struct ProductDeviceRow {
+    id: String,
+    user_id: String,
+    name: String,
+    public_key: String,
+    created_at: DateTime<Utc>,
+    last_used_at: Option<DateTime<Utc>>,
+    revoked_at: Option<DateTime<Utc>>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(sqlx::FromRow)]
+struct ProductDeviceRefreshTokenRow {
+    token_hash: String,
+    device_id: String,
+    family_id: String,
+    created_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+    used_at: Option<DateTime<Utc>>,
     revoked_at: Option<DateTime<Utc>>,
 }
 
@@ -751,6 +861,36 @@ impl ProductApiToken {
             created_at_ms: row.created_at.timestamp_millis(),
             expires_at_ms: row.expires_at.map(|value| value.timestamp_millis()),
             last_used_at_ms: row.last_used_at.map(|value| value.timestamp_millis()),
+            revoked_at_ms: row.revoked_at.map(|value| value.timestamp_millis()),
+        }
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl ProductDevice {
+    fn from_pg(row: ProductDeviceRow) -> Self {
+        Self {
+            id: row.id,
+            user_id: row.user_id,
+            name: row.name,
+            public_key: row.public_key,
+            created_at_ms: row.created_at.timestamp_millis(),
+            last_used_at_ms: row.last_used_at.map(|value| value.timestamp_millis()),
+            revoked_at_ms: row.revoked_at.map(|value| value.timestamp_millis()),
+        }
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl ProductDeviceRefreshToken {
+    fn from_pg(row: ProductDeviceRefreshTokenRow) -> Self {
+        Self {
+            token_hash: row.token_hash,
+            device_id: row.device_id,
+            family_id: row.family_id,
+            created_at_ms: row.created_at.timestamp_millis(),
+            expires_at_ms: row.expires_at.timestamp_millis(),
+            used_at_ms: row.used_at.map(|value| value.timestamp_millis()),
             revoked_at_ms: row.revoked_at.map(|value| value.timestamp_millis()),
         }
     }
@@ -1289,7 +1429,8 @@ impl Store {
         dispatch_storage!(self, list_users())
     }
 
-    /// Replace the stored password hash.
+    /// Replace the stored password hash and revoke every existing login,
+    /// compatibility token, and browser-authorized device in one transaction.
     ///
     /// # Errors
     /// Returns when the user is missing or the update fails.
@@ -1423,6 +1564,69 @@ impl Store {
     /// Returns when the update fails.
     pub async fn touch_user_api_token_last_used(&self, token_id: &str, now_ms: i64) -> Result<u64> {
         dispatch_storage!(self, touch_user_api_token_last_used(token_id, now_ms))
+    }
+
+    /// Atomically persist a browser-approved device and its first refresh token.
+    pub async fn insert_user_device(
+        &self,
+        device: &ProductDevice,
+        refresh: &ProductDeviceRefreshToken,
+    ) -> Result<()> {
+        dispatch_storage!(self, insert_user_device(device, refresh))
+    }
+
+    /// List a user's active device sessions without returning credential hashes.
+    pub async fn list_user_devices_for_user(&self, user_id: &str) -> Result<Vec<ProductDevice>> {
+        dispatch_storage!(self, list_user_devices_for_user(user_id))
+    }
+
+    /// Resolve a refresh token to its device and rotation record.
+    pub async fn user_device_refresh_by_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<(ProductDevice, ProductDeviceRefreshToken)>> {
+        dispatch_storage!(self, user_device_refresh_by_hash(token_hash))
+    }
+
+    /// Consume one refresh token and insert its replacement in one transaction.
+    pub async fn rotate_user_device_refresh(
+        &self,
+        previous_token_hash: &str,
+        refresh: &ProductDeviceRefreshToken,
+        now_ms: i64,
+    ) -> Result<bool> {
+        dispatch_storage!(
+            self,
+            rotate_user_device_refresh(previous_token_hash, refresh, now_ms)
+        )
+    }
+
+    /// Revoke one device owned by a product user.
+    pub async fn revoke_user_device_for_user(
+        &self,
+        user_id: &str,
+        device_id: &str,
+        now_ms: i64,
+    ) -> Result<u64> {
+        dispatch_storage!(
+            self,
+            revoke_user_device_for_user(user_id, device_id, now_ms)
+        )
+    }
+
+    /// Revoke a device after refresh-token replay is detected.
+    pub async fn revoke_user_device(&self, device_id: &str, now_ms: i64) -> Result<u64> {
+        dispatch_storage!(self, revoke_user_device(device_id, now_ms))
+    }
+
+    /// Revoke every device session for a disabled product user.
+    pub async fn revoke_user_devices_for_user(&self, user_id: &str, now_ms: i64) -> Result<u64> {
+        dispatch_storage!(self, revoke_user_devices_for_user(user_id, now_ms))
+    }
+
+    /// Coarsely update device activity without writing on every API request.
+    pub async fn touch_user_device_last_used(&self, device_id: &str, now_ms: i64) -> Result<u64> {
+        dispatch_storage!(self, touch_user_device_last_used(device_id, now_ms))
     }
 
     pub async fn list_user_passkeys(
@@ -2715,6 +2919,7 @@ impl PostgresStorage {
         password_hash: &str,
     ) -> Result<()> {
         anyhow::ensure!(!password_hash.is_empty(), "password hash cannot be empty");
+        let mut transaction = self.pool.begin().await.context("BEGIN password update")?;
         let result = sqlx::query(
             "UPDATE users SET password_algo = $2, password_hash = $3, updated_at = now() \
              WHERE id = $1",
@@ -2722,10 +2927,44 @@ impl PostgresStorage {
         .bind(id)
         .bind(password_algo)
         .bind(password_hash)
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await
         .with_context(|| format!("UPDATE user password {id}"))?;
         anyhow::ensure!(result.rows_affected() == 1, "user {id} not found");
+        sqlx::query("DELETE FROM user_sessions WHERE user_id = $1")
+            .bind(id)
+            .execute(&mut *transaction)
+            .await
+            .with_context(|| format!("DELETE sessions after password update for {id}"))?;
+        sqlx::query(
+            "UPDATE user_api_tokens SET revoked_at = now() \
+             WHERE user_id = $1 AND revoked_at IS NULL",
+        )
+        .bind(id)
+        .execute(&mut *transaction)
+        .await
+        .with_context(|| format!("REVOKE API tokens after password update for {id}"))?;
+        sqlx::query(
+            "UPDATE user_devices SET revoked_at = now() \
+             WHERE user_id = $1 AND revoked_at IS NULL",
+        )
+        .bind(id)
+        .execute(&mut *transaction)
+        .await
+        .with_context(|| format!("REVOKE devices after password update for {id}"))?;
+        sqlx::query(
+            "UPDATE user_device_refresh_tokens SET revoked_at = now() \
+             WHERE revoked_at IS NULL AND device_id IN \
+             (SELECT id FROM user_devices WHERE user_id = $1)",
+        )
+        .bind(id)
+        .execute(&mut *transaction)
+        .await
+        .with_context(|| format!("REVOKE device refresh after password update for {id}"))?;
+        transaction
+            .commit()
+            .await
+            .context("COMMIT password update")?;
         Ok(())
     }
 
@@ -2983,6 +3222,245 @@ impl PostgresStorage {
         .execute(&self.pool)
         .await
         .with_context(|| format!("TOUCH user API token {token_id}"))?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn insert_user_device(
+        &self,
+        device: &ProductDevice,
+        refresh: &ProductDeviceRefreshToken,
+    ) -> Result<()> {
+        validate_user_device(device, refresh)?;
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN user device insert")?;
+        sqlx::query(
+            "INSERT INTO user_devices (id, user_id, name, public_key, created_at, \
+             last_used_at, revoked_at) VALUES ($1, $2, $3, $4, \
+             to_timestamp($5::double precision / 1000), \
+             to_timestamp($6::double precision / 1000), \
+             to_timestamp($7::double precision / 1000))",
+        )
+        .bind(&device.id)
+        .bind(&device.user_id)
+        .bind(&device.name)
+        .bind(&device.public_key)
+        .bind(device.created_at_ms)
+        .bind(device.last_used_at_ms)
+        .bind(device.revoked_at_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("INSERT user device")?;
+        insert_pg_device_refresh(&mut transaction, refresh).await?;
+        transaction
+            .commit()
+            .await
+            .context("COMMIT user device insert")?;
+        Ok(())
+    }
+
+    pub async fn list_user_devices_for_user(&self, user_id: &str) -> Result<Vec<ProductDevice>> {
+        let rows = sqlx::query_as::<_, ProductDeviceRow>(
+            "SELECT id, user_id, name, public_key, created_at, last_used_at, revoked_at \
+             FROM user_devices WHERE user_id = $1 AND revoked_at IS NULL \
+             ORDER BY created_at DESC",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .with_context(|| format!("SELECT user devices for {user_id}"))?;
+        Ok(rows.into_iter().map(ProductDevice::from_pg).collect())
+    }
+
+    pub async fn user_device_refresh_by_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<(ProductDevice, ProductDeviceRefreshToken)>> {
+        let refresh = sqlx::query_as::<_, ProductDeviceRefreshTokenRow>(
+            "SELECT token_hash, device_id, family_id, created_at, expires_at, used_at, revoked_at \
+             FROM user_device_refresh_tokens WHERE token_hash = $1",
+        )
+        .bind(token_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .context("SELECT user device refresh token")?;
+        let Some(refresh) = refresh else {
+            return Ok(None);
+        };
+        let device = sqlx::query_as::<_, ProductDeviceRow>(
+            "SELECT id, user_id, name, public_key, created_at, last_used_at, revoked_at \
+             FROM user_devices WHERE id = $1",
+        )
+        .bind(&refresh.device_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("SELECT user device for refresh token")?;
+        Ok(device.map(|device| {
+            (
+                ProductDevice::from_pg(device),
+                ProductDeviceRefreshToken::from_pg(refresh),
+            )
+        }))
+    }
+
+    pub async fn rotate_user_device_refresh(
+        &self,
+        previous_token_hash: &str,
+        refresh: &ProductDeviceRefreshToken,
+        now_ms: i64,
+    ) -> Result<bool> {
+        validate_device_refresh(refresh)?;
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN device refresh rotation")?;
+        let consumed = sqlx::query(
+            "UPDATE user_device_refresh_tokens SET used_at = \
+             to_timestamp($4::double precision / 1000) \
+             WHERE token_hash = $1 AND device_id = $2 AND family_id = $3 \
+             AND used_at IS NULL AND revoked_at IS NULL \
+             AND expires_at > to_timestamp($4::double precision / 1000)",
+        )
+        .bind(previous_token_hash)
+        .bind(&refresh.device_id)
+        .bind(&refresh.family_id)
+        .bind(now_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("CONSUME user device refresh token")?;
+        if consumed.rows_affected() != 1 {
+            transaction
+                .rollback()
+                .await
+                .context("ROLLBACK unavailable device refresh")?;
+            return Ok(false);
+        }
+        insert_pg_device_refresh(&mut transaction, refresh).await?;
+        sqlx::query("UPDATE user_devices SET last_used_at = to_timestamp($2::double precision / 1000) WHERE id = $1 AND revoked_at IS NULL")
+            .bind(&refresh.device_id)
+            .bind(now_ms)
+            .execute(&mut *transaction)
+            .await
+            .context("TOUCH refreshed user device")?;
+        transaction
+            .commit()
+            .await
+            .context("COMMIT device refresh rotation")?;
+        Ok(true)
+    }
+
+    pub async fn revoke_user_device_for_user(
+        &self,
+        user_id: &str,
+        device_id: &str,
+        now_ms: i64,
+    ) -> Result<u64> {
+        self.revoke_user_device_scoped(Some(user_id), device_id, now_ms)
+            .await
+    }
+
+    pub async fn revoke_user_device(&self, device_id: &str, now_ms: i64) -> Result<u64> {
+        self.revoke_user_device_scoped(None, device_id, now_ms)
+            .await
+    }
+
+    async fn revoke_user_device_scoped(
+        &self,
+        user_id: Option<&str>,
+        device_id: &str,
+        now_ms: i64,
+    ) -> Result<u64> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN user device revoke")?;
+        let result = match user_id {
+            Some(user_id) => sqlx::query(
+                "UPDATE user_devices SET revoked_at = to_timestamp($3::double precision / 1000) \
+                 WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL",
+            )
+            .bind(device_id)
+            .bind(user_id)
+            .bind(now_ms)
+            .execute(&mut *transaction)
+            .await,
+            None => sqlx::query(
+                "UPDATE user_devices SET revoked_at = to_timestamp($2::double precision / 1000) \
+                 WHERE id = $1 AND revoked_at IS NULL",
+            )
+            .bind(device_id)
+            .bind(now_ms)
+            .execute(&mut *transaction)
+            .await,
+        }
+        .context("REVOKE user device")?;
+        if result.rows_affected() == 1 {
+            sqlx::query(
+                "UPDATE user_device_refresh_tokens SET revoked_at = \
+                 to_timestamp($2::double precision / 1000) \
+                 WHERE device_id = $1 AND revoked_at IS NULL",
+            )
+            .bind(device_id)
+            .bind(now_ms)
+            .execute(&mut *transaction)
+            .await
+            .context("REVOKE user device refresh tokens")?;
+        }
+        transaction
+            .commit()
+            .await
+            .context("COMMIT user device revoke")?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn revoke_user_devices_for_user(&self, user_id: &str, now_ms: i64) -> Result<u64> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN user devices revoke")?;
+        let result = sqlx::query(
+            "UPDATE user_devices SET revoked_at = to_timestamp($2::double precision / 1000) \
+             WHERE user_id = $1 AND revoked_at IS NULL",
+        )
+        .bind(user_id)
+        .bind(now_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("REVOKE all user devices")?;
+        sqlx::query(
+            "UPDATE user_device_refresh_tokens SET revoked_at = \
+             to_timestamp($2::double precision / 1000) WHERE revoked_at IS NULL \
+             AND device_id IN (SELECT id FROM user_devices WHERE user_id = $1)",
+        )
+        .bind(user_id)
+        .bind(now_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("REVOKE all user device refresh tokens")?;
+        transaction
+            .commit()
+            .await
+            .context("COMMIT user devices revoke")?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn touch_user_device_last_used(&self, device_id: &str, now_ms: i64) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE user_devices SET last_used_at = to_timestamp($2::double precision / 1000) \
+             WHERE id = $1 AND revoked_at IS NULL AND (last_used_at IS NULL OR last_used_at <= \
+             to_timestamp(($2::double precision - $3::double precision) / 1000))",
+        )
+        .bind(device_id)
+        .bind(now_ms)
+        .bind(crate::client_auth::DEVICE_LAST_USED_TOUCH_MS)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("TOUCH user device {device_id}"))?;
         Ok(result.rows_affected())
     }
 
@@ -6844,6 +7322,113 @@ mod storage_contract_tests {
             })
             .await?;
         assert_eq!(store.revoke_user_api_tokens_for_user(&user.id).await?, 1);
+
+        let signing_key = crate::client_auth::new_signing_key()?;
+        let device = ProductDevice {
+            id: "deafbeefdeafbeefdeafbeefdeafbeef".to_owned(),
+            user_id: user.id.clone(),
+            name: "Zed on Hawk".to_owned(),
+            public_key: crate::client_auth::public_key_to_base64(&signing_key),
+            created_at_ms,
+            last_used_at_ms: None,
+            revoked_at_ms: None,
+        };
+        let refresh = ProductDeviceRefreshToken {
+            token_hash: "dd".repeat(32),
+            device_id: device.id.clone(),
+            family_id: "facefeedfacefeedfacefeedfacefeed".to_owned(),
+            created_at_ms,
+            expires_at_ms: created_at_ms + crate::client_auth::REFRESH_TOKEN_TTL_MS,
+            used_at_ms: None,
+            revoked_at_ms: None,
+        };
+        store.insert_user_device(&device, &refresh).await?;
+        assert_eq!(
+            store.list_user_devices_for_user(&user.id).await?,
+            vec![device.clone()]
+        );
+        let (restored_device, restored_refresh) = store
+            .user_device_refresh_by_hash(&refresh.token_hash)
+            .await?
+            .context("device refresh token was not restored")?;
+        assert_eq!(restored_device, device);
+        assert_eq!(restored_refresh, refresh);
+        assert_eq!(
+            store
+                .touch_user_device_last_used(&device.id, created_at_ms + 1)
+                .await?,
+            1
+        );
+        assert_eq!(
+            store
+                .touch_user_device_last_used(&device.id, created_at_ms + 2)
+                .await?,
+            0
+        );
+        let replacement = ProductDeviceRefreshToken {
+            token_hash: "ee".repeat(32),
+            created_at_ms: created_at_ms + 3,
+            ..refresh.clone()
+        };
+        assert!(
+            store
+                .rotate_user_device_refresh(&refresh.token_hash, &replacement, created_at_ms + 3,)
+                .await?
+        );
+        assert!(
+            !store
+                .rotate_user_device_refresh(&refresh.token_hash, &replacement, created_at_ms + 4,)
+                .await?
+        );
+        assert_eq!(
+            store
+                .revoke_user_device_for_user("missing-user", &device.id, created_at_ms + 5)
+                .await?,
+            0
+        );
+        assert_eq!(
+            store
+                .revoke_user_device_for_user(&user.id, &device.id, created_at_ms + 5)
+                .await?,
+            1
+        );
+        assert!(store.list_user_devices_for_user(&user.id).await?.is_empty());
+        let (revoked_device, revoked_refresh) = store
+            .user_device_refresh_by_hash(&replacement.token_hash)
+            .await?
+            .context("revoked device refresh token was not retained for replay detection")?;
+        assert_eq!(revoked_device.revoked_at_ms, Some(created_at_ms + 5));
+        assert_eq!(revoked_refresh.revoked_at_ms, Some(created_at_ms + 5));
+
+        let password_session = ProductUserSession {
+            token_hash: "12".repeat(32),
+            ..rotated.clone()
+        };
+        store.insert_user_session(&password_session).await?;
+        let password_token = ProductApiToken {
+            id: "11111111111111111111111111111111".to_owned(),
+            token_hash: "13".repeat(32),
+            revoked_at_ms: None,
+            ..token.clone()
+        };
+        store.insert_user_api_token(&password_token).await?;
+        let password_device = ProductDevice {
+            id: "22222222222222222222222222222222".to_owned(),
+            name: "Cowboy CLI on Hawk".to_owned(),
+            revoked_at_ms: None,
+            ..device.clone()
+        };
+        let password_refresh = ProductDeviceRefreshToken {
+            token_hash: "14".repeat(32),
+            device_id: password_device.id.clone(),
+            family_id: "33333333333333333333333333333333".to_owned(),
+            used_at_ms: None,
+            revoked_at_ms: None,
+            ..refresh.clone()
+        };
+        store
+            .insert_user_device(&password_device, &password_refresh)
+            .await?;
         store
             .update_user_password(&user.id, "argon2id", "replacement-hash")
             .await?;
@@ -6854,6 +7439,25 @@ mod storage_contract_tests {
                 .map(|row| row.password_hash),
             Some("replacement-hash".to_owned())
         );
+        assert!(
+            store
+                .user_session_by_token_hash(&password_session.token_hash)
+                .await?
+                .is_none()
+        );
+        assert!(
+            store
+                .list_user_api_tokens_for_user(&user.id)
+                .await?
+                .is_empty()
+        );
+        assert!(store.list_user_devices_for_user(&user.id).await?.is_empty());
+        let (password_revoked_device, password_revoked_refresh) = store
+            .user_device_refresh_by_hash(&password_refresh.token_hash)
+            .await?
+            .context("password-revoked device refresh token was not retained")?;
+        assert!(password_revoked_device.revoked_at_ms.is_some());
+        assert!(password_revoked_refresh.revoked_at_ms.is_some());
 
         store
             .set_user_disabled_at(&user.id, Some(created_at_ms + 1))

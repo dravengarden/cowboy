@@ -24,6 +24,28 @@ fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
+async fn insert_sqlite_device_refresh(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    refresh: &ProductDeviceRefreshToken,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO user_device_refresh_tokens (token_hash, device_id, family_id, \
+         created_at_ms, expires_at_ms, used_at_ms, revoked_at_ms) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+    )
+    .bind(&refresh.token_hash)
+    .bind(&refresh.device_id)
+    .bind(&refresh.family_id)
+    .bind(refresh.created_at_ms)
+    .bind(refresh.expires_at_ms)
+    .bind(refresh.used_at_ms)
+    .bind(refresh.revoked_at_ms)
+    .execute(&mut **transaction)
+    .await
+    .context("INSERT SQLite user device refresh token")?;
+    Ok(())
+}
+
 fn merge_jsonb_values(
     existing: Option<serde_json::Value>,
     update: serde_json::Value,
@@ -99,6 +121,30 @@ struct SqliteProductApiTokenRow {
     created_at_ms: i64,
     expires_at_ms: Option<i64>,
     last_used_at_ms: Option<i64>,
+    revoked_at_ms: Option<i64>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(sqlx::FromRow)]
+struct SqliteProductDeviceRow {
+    id: String,
+    user_id: String,
+    name: String,
+    public_key: String,
+    created_at_ms: i64,
+    last_used_at_ms: Option<i64>,
+    revoked_at_ms: Option<i64>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(sqlx::FromRow)]
+struct SqliteProductDeviceRefreshTokenRow {
+    token_hash: String,
+    device_id: String,
+    family_id: String,
+    created_at_ms: i64,
+    expires_at_ms: i64,
+    used_at_ms: Option<i64>,
     revoked_at_ms: Option<i64>,
 }
 
@@ -190,6 +236,36 @@ impl From<SqliteProductApiTokenRow> for ProductApiToken {
             created_at_ms: row.created_at_ms,
             expires_at_ms: row.expires_at_ms,
             last_used_at_ms: row.last_used_at_ms,
+            revoked_at_ms: row.revoked_at_ms,
+        }
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl From<SqliteProductDeviceRow> for ProductDevice {
+    fn from(row: SqliteProductDeviceRow) -> Self {
+        Self {
+            id: row.id,
+            user_id: row.user_id,
+            name: row.name,
+            public_key: row.public_key,
+            created_at_ms: row.created_at_ms,
+            last_used_at_ms: row.last_used_at_ms,
+            revoked_at_ms: row.revoked_at_ms,
+        }
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl From<SqliteProductDeviceRefreshTokenRow> for ProductDeviceRefreshToken {
+    fn from(row: SqliteProductDeviceRefreshTokenRow) -> Self {
+        Self {
+            token_hash: row.token_hash,
+            device_id: row.device_id,
+            family_id: row.family_id,
+            created_at_ms: row.created_at_ms,
+            expires_at_ms: row.expires_at_ms,
+            used_at_ms: row.used_at_ms,
             revoked_at_ms: row.revoked_at_ms,
         }
     }
@@ -2524,6 +2600,12 @@ impl SqliteStorage {
         password_hash: &str,
     ) -> Result<()> {
         anyhow::ensure!(!password_hash.is_empty(), "password hash cannot be empty");
+        let changed_at_ms = now_ms();
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN SQLite password update")?;
         let result = sqlx::query(
             "UPDATE users SET password_algo = ?2, password_hash = ?3, updated_at_ms = ?4 \
              WHERE id = ?1",
@@ -2531,11 +2613,48 @@ impl SqliteStorage {
         .bind(id)
         .bind(password_algo)
         .bind(password_hash)
-        .bind(now_ms())
-        .execute(&self.pool)
+        .bind(changed_at_ms)
+        .execute(&mut *transaction)
         .await
         .with_context(|| format!("UPDATE SQLite user password {id}"))?;
         anyhow::ensure!(result.rows_affected() == 1, "user {id} not found");
+        sqlx::query("DELETE FROM user_sessions WHERE user_id = ?1")
+            .bind(id)
+            .execute(&mut *transaction)
+            .await
+            .with_context(|| format!("DELETE SQLite sessions after password update for {id}"))?;
+        sqlx::query(
+            "UPDATE user_api_tokens SET revoked_at_ms = ?2 \
+             WHERE user_id = ?1 AND revoked_at_ms IS NULL",
+        )
+        .bind(id)
+        .bind(changed_at_ms)
+        .execute(&mut *transaction)
+        .await
+        .with_context(|| format!("REVOKE SQLite API tokens after password update for {id}"))?;
+        sqlx::query(
+            "UPDATE user_devices SET revoked_at_ms = ?2 \
+             WHERE user_id = ?1 AND revoked_at_ms IS NULL",
+        )
+        .bind(id)
+        .bind(changed_at_ms)
+        .execute(&mut *transaction)
+        .await
+        .with_context(|| format!("REVOKE SQLite devices after password update for {id}"))?;
+        sqlx::query(
+            "UPDATE user_device_refresh_tokens SET revoked_at_ms = ?2 \
+             WHERE revoked_at_ms IS NULL AND device_id IN \
+             (SELECT id FROM user_devices WHERE user_id = ?1)",
+        )
+        .bind(id)
+        .bind(changed_at_ms)
+        .execute(&mut *transaction)
+        .await
+        .with_context(|| format!("REVOKE SQLite device refresh after password update for {id}"))?;
+        transaction
+            .commit()
+            .await
+            .context("COMMIT SQLite password update")?;
         Ok(())
     }
 
@@ -2803,6 +2922,255 @@ impl SqliteStorage {
         .execute(&self.pool)
         .await
         .with_context(|| format!("TOUCH SQLite user API token {token_id}"))?;
+        Ok(result.rows_affected())
+    }
+
+    pub(super) async fn insert_user_device(
+        &self,
+        device: &ProductDevice,
+        refresh: &ProductDeviceRefreshToken,
+    ) -> Result<()> {
+        validate_user_device(device, refresh)?;
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN SQLite user device insert")?;
+        sqlx::query(
+            "INSERT INTO user_devices (id, user_id, name, public_key, created_at_ms, \
+             last_used_at_ms, revoked_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )
+        .bind(&device.id)
+        .bind(&device.user_id)
+        .bind(&device.name)
+        .bind(&device.public_key)
+        .bind(device.created_at_ms)
+        .bind(device.last_used_at_ms)
+        .bind(device.revoked_at_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("INSERT SQLite user device")?;
+        insert_sqlite_device_refresh(&mut transaction, refresh).await?;
+        transaction
+            .commit()
+            .await
+            .context("COMMIT SQLite user device insert")?;
+        Ok(())
+    }
+
+    pub(super) async fn list_user_devices_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<ProductDevice>> {
+        let rows = sqlx::query_as::<_, SqliteProductDeviceRow>(
+            "SELECT id, user_id, name, public_key, created_at_ms, last_used_at_ms, revoked_at_ms \
+             FROM user_devices WHERE user_id = ?1 AND revoked_at_ms IS NULL \
+             ORDER BY created_at_ms DESC",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .with_context(|| format!("SELECT SQLite user devices for {user_id}"))?;
+        Ok(rows.into_iter().map(ProductDevice::from).collect())
+    }
+
+    pub(super) async fn user_device_refresh_by_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<(ProductDevice, ProductDeviceRefreshToken)>> {
+        let refresh = sqlx::query_as::<_, SqliteProductDeviceRefreshTokenRow>(
+            "SELECT token_hash, device_id, family_id, created_at_ms, expires_at_ms, \
+             used_at_ms, revoked_at_ms FROM user_device_refresh_tokens WHERE token_hash = ?1",
+        )
+        .bind(token_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .context("SELECT SQLite user device refresh token")?;
+        let Some(refresh) = refresh else {
+            return Ok(None);
+        };
+        let device = sqlx::query_as::<_, SqliteProductDeviceRow>(
+            "SELECT id, user_id, name, public_key, created_at_ms, last_used_at_ms, revoked_at_ms \
+             FROM user_devices WHERE id = ?1",
+        )
+        .bind(&refresh.device_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("SELECT SQLite user device for refresh token")?;
+        Ok(device.map(|device| {
+            (
+                ProductDevice::from(device),
+                ProductDeviceRefreshToken::from(refresh),
+            )
+        }))
+    }
+
+    pub(super) async fn rotate_user_device_refresh(
+        &self,
+        previous_token_hash: &str,
+        refresh: &ProductDeviceRefreshToken,
+        now_ms: i64,
+    ) -> Result<bool> {
+        validate_device_refresh(refresh)?;
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN SQLite device refresh rotation")?;
+        let consumed = sqlx::query(
+            "UPDATE user_device_refresh_tokens SET used_at_ms = ?4 \
+             WHERE token_hash = ?1 AND device_id = ?2 AND family_id = ?3 \
+             AND used_at_ms IS NULL AND revoked_at_ms IS NULL AND expires_at_ms > ?4",
+        )
+        .bind(previous_token_hash)
+        .bind(&refresh.device_id)
+        .bind(&refresh.family_id)
+        .bind(now_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("CONSUME SQLite user device refresh token")?;
+        if consumed.rows_affected() != 1 {
+            transaction
+                .rollback()
+                .await
+                .context("ROLLBACK unavailable SQLite device refresh")?;
+            return Ok(false);
+        }
+        insert_sqlite_device_refresh(&mut transaction, refresh).await?;
+        sqlx::query(
+            "UPDATE user_devices SET last_used_at_ms = ?2 WHERE id = ?1 AND revoked_at_ms IS NULL",
+        )
+        .bind(&refresh.device_id)
+        .bind(now_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("TOUCH refreshed SQLite user device")?;
+        transaction
+            .commit()
+            .await
+            .context("COMMIT SQLite device refresh rotation")?;
+        Ok(true)
+    }
+
+    pub(super) async fn revoke_user_device_for_user(
+        &self,
+        user_id: &str,
+        device_id: &str,
+        now_ms: i64,
+    ) -> Result<u64> {
+        self.revoke_user_device_scoped(Some(user_id), device_id, now_ms)
+            .await
+    }
+
+    pub(super) async fn revoke_user_device(&self, device_id: &str, now_ms: i64) -> Result<u64> {
+        self.revoke_user_device_scoped(None, device_id, now_ms)
+            .await
+    }
+
+    async fn revoke_user_device_scoped(
+        &self,
+        user_id: Option<&str>,
+        device_id: &str,
+        now_ms: i64,
+    ) -> Result<u64> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN SQLite user device revoke")?;
+        let result = match user_id {
+            Some(user_id) => {
+                sqlx::query(
+                    "UPDATE user_devices SET revoked_at_ms = ?3 \
+                 WHERE id = ?1 AND user_id = ?2 AND revoked_at_ms IS NULL",
+                )
+                .bind(device_id)
+                .bind(user_id)
+                .bind(now_ms)
+                .execute(&mut *transaction)
+                .await
+            }
+            None => {
+                sqlx::query(
+                    "UPDATE user_devices SET revoked_at_ms = ?2 \
+                 WHERE id = ?1 AND revoked_at_ms IS NULL",
+                )
+                .bind(device_id)
+                .bind(now_ms)
+                .execute(&mut *transaction)
+                .await
+            }
+        }
+        .context("REVOKE SQLite user device")?;
+        if result.rows_affected() == 1 {
+            sqlx::query(
+                "UPDATE user_device_refresh_tokens SET revoked_at_ms = ?2 \
+                 WHERE device_id = ?1 AND revoked_at_ms IS NULL",
+            )
+            .bind(device_id)
+            .bind(now_ms)
+            .execute(&mut *transaction)
+            .await
+            .context("REVOKE SQLite user device refresh tokens")?;
+        }
+        transaction
+            .commit()
+            .await
+            .context("COMMIT SQLite user device revoke")?;
+        Ok(result.rows_affected())
+    }
+
+    pub(super) async fn revoke_user_devices_for_user(
+        &self,
+        user_id: &str,
+        now_ms: i64,
+    ) -> Result<u64> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN SQLite user devices revoke")?;
+        let result = sqlx::query(
+            "UPDATE user_devices SET revoked_at_ms = ?2 \
+             WHERE user_id = ?1 AND revoked_at_ms IS NULL",
+        )
+        .bind(user_id)
+        .bind(now_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("REVOKE all SQLite user devices")?;
+        sqlx::query(
+            "UPDATE user_device_refresh_tokens SET revoked_at_ms = ?2 \
+             WHERE revoked_at_ms IS NULL AND device_id IN \
+             (SELECT id FROM user_devices WHERE user_id = ?1)",
+        )
+        .bind(user_id)
+        .bind(now_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("REVOKE all SQLite user device refresh tokens")?;
+        transaction
+            .commit()
+            .await
+            .context("COMMIT SQLite user devices revoke")?;
+        Ok(result.rows_affected())
+    }
+
+    pub(super) async fn touch_user_device_last_used(
+        &self,
+        device_id: &str,
+        now_ms: i64,
+    ) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE user_devices SET last_used_at_ms = ?2 WHERE id = ?1 \
+             AND revoked_at_ms IS NULL AND (last_used_at_ms IS NULL OR last_used_at_ms <= ?2 - ?3)",
+        )
+        .bind(device_id)
+        .bind(now_ms)
+        .bind(crate::client_auth::DEVICE_LAST_USED_TOUCH_MS)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("TOUCH SQLite user device {device_id}"))?;
         Ok(result.rows_affected())
     }
 
@@ -4236,7 +4604,10 @@ mod baseline_compatibility_tests {
                 .fetch_all(&storage.pool)
                 .await
                 .unwrap();
-        assert_eq!(versions, (1_i64..=10).collect::<Vec<_>>());
+        let expected_versions = (1_i64..crate::migration_compat::SQLITE_BASELINE_VERSION)
+            .chain(SQLITE_MIGRATIONS.iter().map(|migration| migration.version))
+            .collect::<Vec<_>>();
+        assert_eq!(versions, expected_versions);
         let machines_after: i64 = sqlx::query_scalar("SELECT count(*) FROM machines")
             .fetch_one(&storage.pool)
             .await

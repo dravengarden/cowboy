@@ -304,6 +304,26 @@ export interface CreatedProductApiToken extends ProductApiToken {
   token: string;
 }
 
+export interface ProductDevice {
+  id: string;
+  name: string;
+  created_at_ms: number;
+  last_used_at_ms?: number | null;
+}
+
+export interface DeviceAuthorizationRequest {
+  request_id: string;
+  approval_token: string;
+}
+
+export interface DeviceAuthorizationInfo {
+  request_id: string;
+  name: string;
+  fingerprint: string;
+  expires_at_ms: number;
+  status: "pending" | "approved" | "denied";
+}
+
 export const authApi = {
   status: () => fetchAuthStatus(),
   me: () => readJson<ProductMe>("/api/auth/me"),
@@ -370,6 +390,33 @@ export const authApi = {
     }),
   deleteToken: (id: string) =>
     readJson<{ ok: boolean }>(`/api/auth/tokens/${id}`, { method: "DELETE" }),
+  inspectDeviceAuthorization: (request: DeviceAuthorizationRequest) =>
+    readPublicJson<DeviceAuthorizationInfo>(
+      "/api/auth/device/authorizations/inspect",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(request),
+      },
+    ),
+  approveDeviceAuthorization: (request: DeviceAuthorizationRequest) =>
+    readJson<{ ok: boolean }>("/api/auth/device/authorizations/approve", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(request),
+    }),
+  denyDeviceAuthorization: (request: DeviceAuthorizationRequest) =>
+    readJson<{ ok: boolean }>("/api/auth/device/authorizations/deny", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(request),
+    }),
+  listDevices: () =>
+    readJson<{ devices: ProductDevice[] }>("/api/auth/devices"),
+  deleteDevice: (id: string) =>
+    readJson<{ ok: boolean }>(`/api/auth/devices/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
   listPasskeys: () =>
     readJson<{ passkeys: ProductPasskey[]; reauth_after_ms: number }>(
       "/api/auth/passkeys",

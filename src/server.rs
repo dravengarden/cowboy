@@ -22,7 +22,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::extract::DefaultBodyLimit;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{ConnectInfo, Form, Json, Path, Query, State};
+use axum::extract::{ConnectInfo, Extension, Form, Json, Path, Query, State};
 use axum::http::{HeaderMap, Method, StatusCode, Uri, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -197,6 +197,8 @@ struct AppState {
     product_authentication: Arc<crate::auth_plugins::ProductAuthentication>,
     oidc_transactions: Arc<crate::oidc::OidcTransactions>,
     oidc_native_handoffs: Arc<crate::oidc::NativeHandoffs>,
+    device_authorizations: Arc<crate::client_auth::DeviceAuthorizations>,
+    device_access: Arc<crate::client_auth::DeviceAccessSessions>,
 }
 
 #[derive(Clone)]
@@ -979,6 +981,8 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             product_authentication,
             oidc_transactions: Arc::new(crate::oidc::OidcTransactions::default()),
             oidc_native_handoffs: Arc::new(crate::oidc::NativeHandoffs::default()),
+            device_authorizations: Arc::new(crate::client_auth::DeviceAuthorizations::default()),
+            device_access: Arc::new(crate::client_auth::DeviceAccessSessions::default()),
         },
         shutdown_tx,
     )
@@ -1960,6 +1964,8 @@ struct ProductAuthState {
     product_authentication: Arc<crate::auth_plugins::ProductAuthentication>,
     oidc_transactions: Arc<crate::oidc::OidcTransactions>,
     oidc_native_handoffs: Arc<crate::oidc::NativeHandoffs>,
+    device_authorizations: Arc<crate::client_auth::DeviceAuthorizations>,
+    device_access: Arc<crate::client_auth::DeviceAccessSessions>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2116,6 +2122,30 @@ fn product_auth_router(state: ProductAuthState) -> Router {
         )
         .route("/api/auth/logout", post(api_auth_logout))
         .route("/api/auth/me", get(api_auth_me))
+        .route(
+            "/api/auth/device/authorizations",
+            post(api_auth_device_authorization_start),
+        )
+        .route(
+            "/api/auth/device/authorizations/inspect",
+            post(api_auth_device_authorization_inspect),
+        )
+        .route(
+            "/api/auth/device/authorizations/approve",
+            post(api_auth_device_authorization_approve),
+        )
+        .route(
+            "/api/auth/device/authorizations/deny",
+            post(api_auth_device_authorization_deny),
+        )
+        .route(
+            "/api/auth/device/authorizations/events",
+            get(api_auth_device_authorization_events),
+        )
+        .route("/api/auth/device/exchange", post(api_auth_device_exchange))
+        .route("/api/auth/device/refresh", post(api_auth_device_refresh))
+        .route("/api/auth/devices", get(api_auth_list_devices))
+        .route("/api/auth/devices/{id}", delete(api_auth_delete_device))
         .route(
             "/api/auth/tokens",
             get(api_auth_list_tokens).post(api_auth_create_token),
@@ -3247,6 +3277,25 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
     }
     if matches!(
         path,
+        "/api/auth/device/authorizations"
+            | "/api/auth/device/authorizations/inspect"
+            | "/api/auth/device/authorizations/events"
+            | "/api/auth/device/exchange"
+            | "/api/auth/device/refresh"
+    ) {
+        return RouteAuth::Public;
+    }
+    if matches!(
+        path,
+        "/api/auth/device/authorizations/approve"
+            | "/api/auth/device/authorizations/deny"
+            | "/api/auth/devices"
+    ) || path.starts_with("/api/auth/devices/")
+    {
+        return RouteAuth::Product;
+    }
+    if matches!(
+        path,
         "/api/auth/passkeys/external/options"
             | "/api/auth/passkeys/external/complete"
             | "/api/auth/passkeys/external/fail"
@@ -3448,6 +3497,82 @@ async fn resolve_product_request_principal(
     Some((product_principal(hub, &user), Some(session)))
 }
 
+async fn resolve_product_api_request_principal(
+    state: &AppState,
+    method: &Method,
+    uri: &Uri,
+    headers: &HeaderMap,
+) -> Result<Option<AuthenticatedProductRequest>, ()> {
+    if !state.product_auth_enabled {
+        return Ok(Some(AuthenticatedProductRequest {
+            principal: crate::product_auth::local_product_principal(),
+            cookie_session: None,
+            device_identity: None,
+        }));
+    }
+    let bearer = crate::product_auth::bearer_token(headers);
+    if bearer
+        .as_deref()
+        .is_some_and(|token| token.starts_with(crate::client_auth::ACCESS_TOKEN_PREFIX))
+    {
+        let path_and_query = uri
+            .path_and_query()
+            .map_or(uri.path(), axum::http::uri::PathAndQuery::as_str);
+        let identity = state
+            .device_access
+            .authenticate(headers, method, path_and_query, auth_now_ms())
+            .map_err(|error| {
+                tracing::info!(%error, "device_access_rejected");
+            })?
+            .ok_or(())?;
+        let Some(store) = state.store.as_ref() else {
+            return Ok(None);
+        };
+        let user = store
+            .user_by_id(&identity.user_id)
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, "device_access_user_lookup");
+            })?
+            .filter(|user| user.disabled_at_ms.is_none());
+        let Some(user) = user else {
+            state.device_access.revoke_device(&identity.device_id);
+            return Ok(None);
+        };
+        let store = store.clone();
+        let device_id = identity.device_id.clone();
+        tokio::spawn(async move {
+            let _ = store
+                .touch_user_device_last_used(&device_id, auth_now_ms())
+                .await;
+        });
+        return Ok(Some(AuthenticatedProductRequest {
+            principal: product_principal(&state.hub, &user),
+            cookie_session: None,
+            device_identity: Some(identity),
+        }));
+    }
+    Ok(resolve_product_request_principal(
+        state.product_auth_enabled,
+        state.store.as_ref(),
+        &state.hub,
+        headers,
+    )
+    .await
+    .map(|(principal, cookie_session)| AuthenticatedProductRequest {
+        principal,
+        cookie_session,
+        device_identity: None,
+    }))
+}
+
+#[derive(Clone)]
+struct AuthenticatedProductRequest {
+    principal: ProductPrincipal,
+    cookie_session: Option<crate::store::ProductUserSession>,
+    device_identity: Option<crate::client_auth::DeviceAccessIdentity>,
+}
+
 async fn product_user_from_store_cookie(
     store: &Store,
     headers: &HeaderMap,
@@ -3582,7 +3707,7 @@ fn authorize_ws_upgrade(
 async fn enforce_product_api(
     State(state): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    request: axum::extract::Request,
+    mut request: axum::extract::Request,
     next: Next,
 ) -> Response {
     let method = request.method().clone();
@@ -3650,16 +3775,22 @@ async fn enforce_product_api(
         }
         _ => {}
     }
-    let Some((principal, cookie_session)) = resolve_product_request_principal(
-        state.product_auth_enabled,
-        state.store.as_ref(),
-        &state.hub,
+    let resolved = match resolve_product_api_request_principal(
+        &state,
+        &method,
+        request.uri(),
         request.headers(),
     )
     .await
-    else {
+    {
+        Ok(resolved) => resolved,
+        Err(()) => return StatusCode::UNAUTHORIZED.into_response(),
+    };
+    let Some(authenticated) = resolved else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
+    let principal = authenticated.principal.clone();
+    let cookie_session = authenticated.cookie_session.clone();
     if let (Some(store), Some(session)) = (state.store.as_ref(), cookie_session.as_ref())
         && let Err(response) = ensure_product_session_passkey_fresh(
             store,
@@ -3710,6 +3841,7 @@ async fn enforce_product_api(
         }
         _ => {}
     }
+    request.extensions_mut().insert(authenticated);
     next.run(request).await
 }
 
@@ -5855,6 +5987,577 @@ async fn api_auth_delete_passkey(
     }
 }
 
+const DEVICE_AUTH_EVENTS_HANDSHAKE_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(10);
+const DEVICE_AUTH_EVENTS_TTL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+const DEVICE_AUTH_EVENTS_HEARTBEAT: std::time::Duration = std::time::Duration::from_secs(25);
+
+fn no_store_json<T: Serialize>(status: StatusCode, value: T) -> Response {
+    let mut response = (status, Json(value)).into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("no-store"),
+    );
+    response
+}
+
+fn device_authorization_error(error: &anyhow::Error) -> Response {
+    tracing::info!(%error, "device_authorization_rejected");
+    let message = error.to_string();
+    let status = if message.contains("too many") {
+        StatusCode::TOO_MANY_REQUESTS
+    } else if message.contains("unavailable") || message.contains("no longer") {
+        StatusCode::GONE
+    } else {
+        StatusCode::BAD_REQUEST
+    };
+    (status, "device authorization is unavailable").into_response()
+}
+
+fn device_verification_url(
+    public_origins: &[String],
+    request_id: &str,
+    approval_token: &str,
+) -> String {
+    let path = format!("/auth/device#request_id={request_id}&approval_token={approval_token}");
+    public_origins
+        .first()
+        .map_or(path.clone(), |origin| format!("{origin}{path}"))
+}
+
+async fn api_auth_device_authorization_start(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(request): Json<crate::client_auth::StartAuthorizationRequest>,
+) -> Response {
+    if !state.product_auth_enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    if durable_store(&state.store).is_none() {
+        return missing_store();
+    }
+    let source_ip = crate::product_auth::client_ip(&headers, peer_addr(peer));
+    match state
+        .device_authorizations
+        .start(request, source_ip, auth_now_ms())
+    {
+        Ok((request_id, approval_token, expires_at_ms)) => {
+            let verification_url = device_verification_url(
+                state.public_origins.as_ref(),
+                &request_id,
+                &approval_token,
+            );
+            no_store_json(
+                StatusCode::CREATED,
+                crate::client_auth::StartAuthorizationResponse {
+                    request_id,
+                    verification_url,
+                    expires_at_ms,
+                },
+            )
+        }
+        Err(error) => device_authorization_error(&error),
+    }
+}
+
+async fn api_auth_device_authorization_inspect(
+    State(state): State<ProductAuthState>,
+    Json(request): Json<crate::client_auth::BrowserAuthorizationRequest>,
+) -> Response {
+    if !state.product_auth_enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    match state
+        .device_authorizations
+        .browser_info(&request.request_id, &request.approval_token)
+    {
+        Ok(info) => no_store_json(StatusCode::OK, info),
+        Err(error) => device_authorization_error(&error),
+    }
+}
+
+async fn api_auth_device_authorization_approve(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(request): Json<crate::client_auth::BrowserAuthorizationRequest>,
+) -> Response {
+    if !state.product_auth_enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    if let Some(rejected) = reject_bad_origin(&headers, peer_addr(peer), &state.public_origins) {
+        return rejected;
+    }
+    let user = match require_recent_product_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    match state.device_authorizations.approve(&request, &user.id) {
+        Ok(()) => {
+            tracing::info!(
+                user_id = user.id,
+                request_id = request.request_id,
+                "device_authorization_approved"
+            );
+            no_store_json(StatusCode::OK, serde_json::json!({ "ok": true }))
+        }
+        Err(error) => device_authorization_error(&error),
+    }
+}
+
+async fn api_auth_device_authorization_deny(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(request): Json<crate::client_auth::BrowserAuthorizationRequest>,
+) -> Response {
+    if !state.product_auth_enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    if let Some(rejected) = reject_bad_origin(&headers, peer_addr(peer), &state.public_origins) {
+        return rejected;
+    }
+    if let Err(response) = require_product_user(&state, &headers).await {
+        return response;
+    }
+    match state.device_authorizations.deny(&request) {
+        Ok(()) => no_store_json(StatusCode::OK, serde_json::json!({ "ok": true })),
+        Err(error) => device_authorization_error(&error),
+    }
+}
+
+async fn api_auth_device_authorization_events(
+    State(state): State<ProductAuthState>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    if !state.product_auth_enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    ws.max_message_size(4 * 1_024)
+        .max_frame_size(4 * 1_024)
+        .on_upgrade(move |socket| handle_device_authorization_events(socket, state))
+}
+
+async fn handle_device_authorization_events(mut socket: WebSocket, state: ProductAuthState) {
+    let handshake =
+        match tokio::time::timeout(DEVICE_AUTH_EVENTS_HANDSHAKE_TIMEOUT, socket.recv()).await {
+            Ok(Some(Ok(Message::Text(text)))) => serde_json::from_str::<
+                crate::client_auth::AuthorizationEventsHandshake,
+            >(text.as_str())
+            .ok(),
+            _ => None,
+        };
+    let Some(handshake) = handshake else {
+        let _ = socket.close().await;
+        return;
+    };
+    let mut events = match state
+        .device_authorizations
+        .subscribe(&handshake.request_id, &handshake.code_verifier)
+    {
+        Ok(events) => events,
+        Err(error) => {
+            tracing::info!(%error, "device_authorization_events_rejected");
+            let _ = send_json(
+                &mut socket,
+                &crate::client_auth::AuthorizationEventStatus {
+                    status: "unavailable".to_owned(),
+                },
+            )
+            .await;
+            let _ = socket.close().await;
+            return;
+        }
+    };
+    let deadline = tokio::time::sleep(DEVICE_AUTH_EVENTS_TTL);
+    tokio::pin!(deadline);
+    let mut heartbeat = tokio::time::interval(DEVICE_AUTH_EVENTS_HEARTBEAT);
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    heartbeat.tick().await;
+
+    loop {
+        let terminal = match *events.borrow_and_update() {
+            crate::client_auth::AuthorizationEvent::Pending => None,
+            crate::client_auth::AuthorizationEvent::Approved => Some("approved"),
+            crate::client_auth::AuthorizationEvent::Denied => Some("denied"),
+        };
+        if let Some(status) = terminal {
+            let _ = send_json(
+                &mut socket,
+                &crate::client_auth::AuthorizationEventStatus {
+                    status: status.to_owned(),
+                },
+            )
+            .await;
+            let _ = socket.close().await;
+            return;
+        }
+        tokio::select! {
+            changed = events.changed() => {
+                if changed.is_err() {
+                    let _ = send_json(
+                        &mut socket,
+                        &crate::client_auth::AuthorizationEventStatus {
+                            status: "unavailable".to_owned(),
+                        },
+                    ).await;
+                    let _ = socket.close().await;
+                    return;
+                }
+            }
+            incoming = socket.recv() => match incoming {
+                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return,
+                Some(Ok(Message::Ping(payload))) => {
+                    if socket.send(Message::Pong(payload)).await.is_err() {
+                        return;
+                    }
+                }
+                Some(Ok(Message::Pong(_))) => {}
+                Some(Ok(_)) => {
+                    let _ = socket.close().await;
+                    return;
+                }
+            },
+            _ = heartbeat.tick() => {
+                if socket.send(Message::Ping(Vec::new().into())).await.is_err() {
+                    return;
+                }
+            }
+            () = &mut deadline => {
+                let _ = send_json(
+                    &mut socket,
+                    &crate::client_auth::AuthorizationEventStatus {
+                        status: "unavailable".to_owned(),
+                    },
+                ).await;
+                let _ = socket.close().await;
+                return;
+            }
+        }
+    }
+}
+
+async fn api_auth_device_exchange(
+    State(state): State<ProductAuthState>,
+    Json(request): Json<crate::client_auth::ExchangeRequest>,
+) -> Response {
+    if !state.product_auth_enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(store) = durable_store(&state.store) else {
+        return missing_store();
+    };
+    let approved = match state
+        .device_authorizations
+        .begin_exchange(&request, auth_now_ms())
+    {
+        Ok(approved) => approved,
+        Err(error) => return device_authorization_error(&error),
+    };
+    let finish_failed = || {
+        state
+            .device_authorizations
+            .finish_exchange(&request.request_id, false)
+    };
+    let user = match store.user_by_id(&approved.user_id).await {
+        Ok(Some(user)) if user.disabled_at_ms.is_none() => user,
+        Ok(_) => {
+            finish_failed();
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+        Err(error) => {
+            finish_failed();
+            tracing::error!(%error, "device_authorization_user_lookup");
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+    };
+    let now = auth_now_ms();
+    let device_id = match crate::product_auth::new_user_id() {
+        Ok(id) => id,
+        Err(error) => {
+            finish_failed();
+            tracing::error!(%error, "device_id_generation");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let family_id = match crate::product_auth::new_user_id() {
+        Ok(id) => id,
+        Err(error) => {
+            finish_failed();
+            tracing::error!(%error, "device_refresh_family_generation");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let refresh_token = match crate::client_auth::new_refresh_token() {
+        Ok(token) => token,
+        Err(error) => {
+            finish_failed();
+            tracing::error!(%error, "device_refresh_generation");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let refresh_expires_at_ms = now.saturating_add(crate::client_auth::REFRESH_TOKEN_TTL_MS);
+    let device = crate::store::ProductDevice {
+        id: device_id.clone(),
+        user_id: user.id.clone(),
+        name: approved.name,
+        public_key: approved.public_key,
+        created_at_ms: now,
+        last_used_at_ms: Some(now),
+        revoked_at_ms: None,
+    };
+    let refresh = crate::store::ProductDeviceRefreshToken {
+        token_hash: crate::admin::hex_sha256(refresh_token.as_bytes()),
+        device_id: device_id.clone(),
+        family_id,
+        created_at_ms: now,
+        expires_at_ms: refresh_expires_at_ms,
+        used_at_ms: None,
+        revoked_at_ms: None,
+    };
+    if let Err(error) = store.insert_user_device(&device, &refresh).await {
+        finish_failed();
+        tracing::error!(%error, "device_authorization_persist");
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    let (access_token, access_expires_at_ms) =
+        match state
+            .device_access
+            .issue(&device.id, &device.user_id, &device.public_key, now)
+        {
+            Ok(access) => access,
+            Err(error) => {
+                let _ = store.revoke_user_device(&device.id, now).await;
+                finish_failed();
+                tracing::error!(%error, "device_access_issue");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        };
+    state
+        .device_authorizations
+        .finish_exchange(&request.request_id, true);
+    tracing::info!(
+        user_id = user.id,
+        device_id,
+        "device_authorization_complete"
+    );
+    no_store_json(
+        StatusCode::OK,
+        crate::client_auth::DeviceTokenResponse {
+            device_id,
+            access_token,
+            access_expires_at_ms,
+            refresh_token,
+            refresh_expires_at_ms,
+        },
+    )
+}
+
+fn refresh_bearer(headers: &HeaderMap) -> Option<String> {
+    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?.trim();
+    let token = value
+        .strip_prefix("Bearer ")
+        .or_else(|| value.strip_prefix("bearer "))?
+        .trim();
+    token
+        .starts_with(crate::client_auth::REFRESH_TOKEN_PREFIX)
+        .then(|| token.to_owned())
+}
+
+async fn revoke_replayed_device(
+    state: &ProductAuthState,
+    store: &Store,
+    device_id: &str,
+    now: i64,
+) {
+    if let Err(error) = store.revoke_user_device(device_id, now).await {
+        tracing::error!(%error, device_id, "device_replay_revoke_failed");
+    }
+    state.device_access.revoke_device(device_id);
+}
+
+async fn api_auth_device_refresh(
+    State(state): State<ProductAuthState>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.product_auth_enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(store) = durable_store(&state.store) else {
+        return missing_store();
+    };
+    let Some(refresh_token) = refresh_bearer(&headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let token_hash = crate::admin::hex_sha256(refresh_token.as_bytes());
+    let (device, previous) = match store.user_device_refresh_by_hash(&token_hash).await {
+        Ok(Some(value)) => value,
+        Ok(None) => return StatusCode::UNAUTHORIZED.into_response(),
+        Err(error) => {
+            tracing::error!(%error, "device_refresh_lookup");
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+    };
+    let now = auth_now_ms();
+    // Refresh tokens are sender-constrained. Authenticate the key before
+    // treating reuse as theft; possession of an obsolete token alone must not
+    // let an attacker revoke the legitimate device as a denial of service.
+    if let Err(error) = state.device_access.verify_token_proof(
+        &headers,
+        crate::client_auth::TokenProofContext {
+            method: &Method::POST,
+            path_and_query: "/api/auth/device/refresh",
+            token: &refresh_token,
+            device_id: &device.id,
+            public_key: &device.public_key,
+            now_ms: now,
+        },
+    ) {
+        tracing::info!(%error, device_id = device.id, "device_refresh_proof_rejected");
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if previous.used_at_ms.is_some() {
+        tracing::warn!(device_id = device.id, "device_refresh_replay_detected");
+        revoke_replayed_device(&state, store, &device.id, now).await;
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if previous.revoked_at_ms.is_some()
+        || device.revoked_at_ms.is_some()
+        || previous.expires_at_ms <= now
+    {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let user = match store.user_by_id(&device.user_id).await {
+        Ok(Some(user)) if user.disabled_at_ms.is_none() => user,
+        Ok(_) => return StatusCode::UNAUTHORIZED.into_response(),
+        Err(error) => {
+            tracing::error!(%error, "device_refresh_user_lookup");
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+    };
+    let replacement = match crate::client_auth::new_refresh_token() {
+        Ok(token) => token,
+        Err(error) => {
+            tracing::error!(%error, "device_refresh_generation");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let next = crate::store::ProductDeviceRefreshToken {
+        token_hash: crate::admin::hex_sha256(replacement.as_bytes()),
+        device_id: device.id.clone(),
+        family_id: previous.family_id,
+        created_at_ms: now,
+        expires_at_ms: previous.expires_at_ms,
+        used_at_ms: None,
+        revoked_at_ms: None,
+    };
+    match store
+        .rotate_user_device_refresh(&token_hash, &next, now)
+        .await
+    {
+        Ok(true) => {}
+        Ok(false) => {
+            tracing::warn!(device_id = device.id, "device_refresh_rotation_race");
+            revoke_replayed_device(&state, store, &device.id, now).await;
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+        Err(error) => {
+            tracing::error!(%error, "device_refresh_rotate");
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+    }
+    let (access_token, access_expires_at_ms) =
+        match state
+            .device_access
+            .issue(&device.id, &user.id, &device.public_key, now)
+        {
+            Ok(access) => access,
+            Err(error) => {
+                tracing::error!(%error, "device_access_refresh_issue");
+                revoke_replayed_device(&state, store, &device.id, now).await;
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        };
+    no_store_json(
+        StatusCode::OK,
+        crate::client_auth::DeviceTokenResponse {
+            device_id: device.id,
+            access_token,
+            access_expires_at_ms,
+            refresh_token: replacement,
+            refresh_expires_at_ms: next.expires_at_ms,
+        },
+    )
+}
+
+fn device_public_json(device: crate::store::ProductDevice) -> serde_json::Value {
+    serde_json::json!({
+        "id": device.id,
+        "name": device.name,
+        "created_at_ms": device.created_at_ms,
+        "last_used_at_ms": device.last_used_at_ms,
+    })
+}
+
+async fn api_auth_list_devices(
+    State(state): State<ProductAuthState>,
+    headers: HeaderMap,
+) -> Response {
+    let user = match require_fresh_product_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(store) = durable_store(&state.store) else {
+        return missing_store();
+    };
+    match store.list_user_devices_for_user(&user.id).await {
+        Ok(devices) => no_store_json(
+            StatusCode::OK,
+            serde_json::json!({
+                "devices": devices.into_iter().map(device_public_json).collect::<Vec<_>>(),
+            }),
+        ),
+        Err(error) => {
+            tracing::error!(%error, "device_list");
+            StatusCode::SERVICE_UNAVAILABLE.into_response()
+        }
+    }
+}
+
+async fn api_auth_delete_device(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(rejected) = reject_bad_origin(&headers, peer_addr(peer), &state.public_origins) {
+        return rejected;
+    }
+    let user = match require_recent_product_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(store) = durable_store(&state.store) else {
+        return missing_store();
+    };
+    match store
+        .revoke_user_device_for_user(&user.id, &id, auth_now_ms())
+        .await
+    {
+        Ok(0) => StatusCode::NOT_FOUND.into_response(),
+        Ok(_) => {
+            state.device_access.revoke_device(&id);
+            tracing::info!(user_id = user.id, device_id = id, "user_device_revoked");
+            no_store_json(StatusCode::OK, serde_json::json!({ "ok": true }))
+        }
+        Err(error) => {
+            tracing::error!(%error, "device_revoke");
+            StatusCode::SERVICE_UNAVAILABLE.into_response()
+        }
+    }
+}
+
 fn token_public_json(token: &crate::store::ProductApiToken) -> serde_json::Value {
     serde_json::json!({
         "id": token.id,
@@ -6104,6 +6807,8 @@ async fn api_admin_disable_user(
     }
     let _ = store.delete_user_sessions_for_user(&id).await;
     let _ = store.revoke_user_api_tokens_for_user(&id).await;
+    let _ = store.revoke_user_devices_for_user(&id, now).await;
+    state.device_access.revoke_user(&id);
     match store.user_by_id(&id).await {
         Ok(Some(user)) => Json(user_json(&state.hub, &user)).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
@@ -6154,6 +6859,7 @@ async fn api_admin_set_password(
     {
         return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
     }
+    state.device_access.revoke_user(&id);
     StatusCode::NO_CONTENT.into_response()
 }
 
@@ -6216,6 +6922,8 @@ async fn serve_axum(
         product_authentication: state.product_authentication.clone(),
         oidc_transactions: state.oidc_transactions.clone(),
         oidc_native_handoffs: state.oidc_native_handoffs.clone(),
+        device_authorizations: state.device_authorizations.clone(),
+        device_access: state.device_access.clone(),
     };
 
     let app = Router::new()
@@ -10555,19 +11263,10 @@ fn product_session_owner(
 
 async fn api_new_session(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    Extension(authenticated): Extension<AuthenticatedProductRequest>,
     Json(req): Json<NewSessionRequest>,
 ) -> Response {
-    let Some(principal) = resolve_product_principal(
-        state.product_auth_enabled,
-        state.store.as_ref(),
-        &state.hub,
-        &headers,
-    )
-    .await
-    else {
-        return StatusCode::UNAUTHORIZED.into_response();
-    };
+    let principal = authenticated.principal;
     if !principal.role.at_least(crate::admin::AdminRole::Operator) {
         return StatusCode::FORBIDDEN.into_response();
     }
@@ -13108,20 +13807,9 @@ async fn api_question_page(
 
 async fn api_artifact(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    Extension(_authenticated): Extension<AuthenticatedProductRequest>,
     Path(name): Path<String>,
 ) -> Response {
-    if resolve_product_principal(
-        state.product_auth_enabled,
-        state.store.as_ref(),
-        &state.hub,
-        &headers,
-    )
-    .await
-    .is_none()
-    {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
     let Some(path) = state
         .store
         .as_ref()
@@ -13425,21 +14113,29 @@ struct WebSocketQuery {
     bootstrap: Option<String>,
 }
 
+#[derive(Clone)]
+struct WebSocketAuthentication {
+    principal: ProductPrincipal,
+    via_cookie: bool,
+    cookie_token: Option<String>,
+    bearer: Option<String>,
+    device_identity: Option<crate::client_auth::DeviceAccessIdentity>,
+}
+
 async fn ws_upgrade(
     ws: WebSocketUpgrade,
     State(state): State<Arc<AppState>>,
+    Extension(authenticated): Extension<AuthenticatedProductRequest>,
     Query(query): Query<WebSocketQuery>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Response {
-    let principal = resolve_product_principal(
-        state.product_auth_enabled,
-        state.store.as_ref(),
-        &state.hub,
+    let principal = match authorize_ws_upgrade(
         &headers,
-    )
-    .await;
-    let principal = match authorize_ws_upgrade(&headers, peer, &state.public_origins, principal) {
+        peer,
+        &state.public_origins,
+        Some(authenticated.principal),
+    ) {
         Ok(principal) => principal,
         Err(status) => return status.into_response(),
     };
@@ -13449,15 +14145,19 @@ async fn ws_upgrade(
         && crate::product_auth::bearer_token(&headers).is_none();
     let cookie_token = crate::product_auth::user_cookie_token(&headers);
     let bearer = crate::product_auth::bearer_token(&headers);
+    let device_identity = authenticated.device_identity;
     ws.on_upgrade(move |socket| {
         handle_ws(
             socket,
             state,
             lazy_bootstrap,
-            principal,
-            via_cookie,
-            cookie_token,
-            bearer,
+            WebSocketAuthentication {
+                principal,
+                via_cookie,
+                cookie_token,
+                bearer,
+                device_identity,
+            },
         )
     })
 }
@@ -13579,6 +14279,7 @@ async fn principal_still_valid(
     via_cookie: bool,
     cookie_token: Option<&str>,
     bearer: Option<&str>,
+    device_identity: Option<&crate::client_auth::DeviceAccessIdentity>,
     expected: &ProductPrincipal,
 ) -> bool {
     if !state.product_auth_enabled {
@@ -13587,7 +14288,23 @@ async fn principal_still_valid(
     let Some(store) = state.store.as_ref() else {
         return false;
     };
-    let current = if via_cookie {
+    let current = if let Some(identity) = device_identity {
+        let Some(token) = bearer else {
+            return false;
+        };
+        if !state
+            .device_access
+            .token_still_valid(token, identity, auth_now_ms())
+        {
+            return false;
+        }
+        match store.user_by_id(&identity.user_id).await {
+            Ok(Some(user)) if user.disabled_at_ms.is_none() => {
+                Some(product_principal(&state.hub, &user))
+            }
+            _ => None,
+        }
+    } else if via_cookie {
         let Some(token) = cookie_token else {
             return false;
         };
@@ -13629,11 +14346,15 @@ async fn handle_ws(
     socket: WebSocket,
     state: Arc<AppState>,
     lazy_bootstrap: bool,
-    principal: ProductPrincipal,
-    via_cookie: bool,
-    cookie_token: Option<String>,
-    bearer: Option<String>,
+    authentication: WebSocketAuthentication,
 ) {
+    let WebSocketAuthentication {
+        principal,
+        via_cookie,
+        cookie_token,
+        bearer,
+        device_identity,
+    } = authentication;
     let (mut sink, mut stream) = socket.split();
 
     // Subscribe BEFORE snapshotting so no event slips through the gap; the
@@ -13664,6 +14385,7 @@ async fn handle_ws(
     let fanout_principal = principal.clone();
     let fanout_cookie = cookie_token.clone();
     let fanout_bearer = bearer.clone();
+    let fanout_device = device_identity.clone();
     let mut fanout = tokio::spawn(async move {
         let mut heartbeat = tokio::time::interval(HEARTBEAT);
         // The first tick fires immediately; consume it so the first ping waits a
@@ -13717,6 +14439,7 @@ async fn handle_ws(
                         via_cookie,
                         fanout_cookie.as_deref(),
                         fanout_bearer.as_deref(),
+                        fanout_device.as_ref(),
                         &fanout_principal,
                     )
                     .await
@@ -13751,6 +14474,7 @@ async fn handle_ws(
                             via_cookie,
                             cookie_token.as_deref(),
                             bearer.as_deref(),
+                            device_identity.as_ref(),
                             &principal,
                         )
                         .await
@@ -15050,6 +15774,8 @@ mod product_auth_api_tests {
             ),
             oidc_transactions: Arc::new(crate::oidc::OidcTransactions::default()),
             oidc_native_handoffs: Arc::new(crate::oidc::NativeHandoffs::default()),
+            device_authorizations: Arc::new(crate::client_auth::DeviceAuthorizations::default()),
+            device_access: Arc::new(crate::client_auth::DeviceAccessSessions::default()),
         }
     }
 
@@ -15270,6 +15996,295 @@ mod product_auth_api_tests {
         (format!("http://{addr}"), handle)
     }
 
+    #[tokio::test]
+    async fn browser_approved_device_rotates_sender_constrained_credentials() {
+        let (store, root) = test_store().await;
+        let now = auth_now_ms();
+        let user = crate::store::ProductUser {
+            id: "a".repeat(32),
+            username: "draven".to_owned(),
+            password_algo: crate::product_auth::PASSWORD_ALGO_ARGON2ID.to_owned(),
+            password_hash: crate::product_auth::hash_password("Correct-horse-bat1").unwrap(),
+            created_at_ms: now,
+            updated_at_ms: now,
+            disabled_at_ms: None,
+        };
+        store.insert_user(&user).await.unwrap();
+        let cookie_token = crate::product_auth::new_session_token().unwrap();
+        store
+            .insert_user_session(&crate::store::ProductUserSession {
+                token_hash: crate::admin::hex_sha256(cookie_token.as_bytes()),
+                user_id: user.id.clone(),
+                created_at_ms: now,
+                expires_at_ms: now + crate::product_auth::USER_SESSION_TTL_MS,
+                last_seen_at_ms: now,
+                user_agent: Some("device-authorization-test".to_owned()),
+                passkey_verified_at_ms: None,
+            })
+            .await
+            .unwrap();
+        let cookie = format!("{USER_SESSION_COOKIE}={cookie_token}");
+        let state = auth_state(Hub::new(), Some(store.clone()));
+        let device_access = state.device_access.clone();
+        let (base, server) = spawn_auth(state).await;
+        let origin = origin_for(&base);
+
+        let signing_key = crate::client_auth::new_signing_key().unwrap();
+        let code_verifier = crate::client_auth::new_code_verifier().unwrap();
+        let started = reqwest::Client::new()
+            .post(format!("{base}/api/auth/device/authorizations"))
+            .json(&crate::client_auth::StartAuthorizationRequest {
+                name: "Zed on Hawk".to_owned(),
+                public_key: crate::client_auth::public_key_to_base64(&signing_key),
+                code_challenge: crate::client_auth::code_challenge(&code_verifier).unwrap(),
+            })
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(started.status(), StatusCode::CREATED);
+        assert_eq!(
+            started.headers()[header::CACHE_CONTROL],
+            header::HeaderValue::from_static("no-store")
+        );
+        let started = started
+            .json::<crate::client_auth::StartAuthorizationResponse>()
+            .await
+            .unwrap();
+        let verification = url::Url::parse(&format!("{base}{}", started.verification_url)).unwrap();
+        assert_eq!(verification.path(), "/auth/device");
+        let capability = url::form_urlencoded::parse(
+            verification
+                .fragment()
+                .expect("authorization fragment")
+                .as_bytes(),
+        )
+        .into_owned()
+        .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(capability.get("request_id"), Some(&started.request_id));
+        let approval_token = capability
+            .get("approval_token")
+            .expect("approval token")
+            .clone();
+        let browser_request = serde_json::json!({
+            "request_id": started.request_id,
+            "approval_token": approval_token,
+        });
+
+        let inspected = reqwest::Client::new()
+            .post(format!("{base}/api/auth/device/authorizations/inspect"))
+            .json(&browser_request)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(inspected.status(), StatusCode::OK);
+        let inspected: serde_json::Value = inspected.json().await.unwrap();
+        assert_eq!(inspected["name"], "Zed on Hawk");
+        assert_eq!(inspected["status"], "pending");
+        assert!(
+            inspected["fingerprint"]
+                .as_str()
+                .unwrap()
+                .starts_with("SHA256:")
+        );
+
+        let socket_url = format!(
+            "{}/api/auth/device/authorizations/events",
+            base.replacen("http://", "ws://", 1)
+        );
+        let (mut socket, _) = tokio_tungstenite::connect_async(socket_url).await.unwrap();
+        socket
+            .send(TungsteniteMessage::Text(
+                serde_json::to_string(&crate::client_auth::AuthorizationEventsHandshake {
+                    request_id: started.request_id.clone(),
+                    code_verifier: code_verifier.clone(),
+                })
+                .unwrap()
+                .into(),
+            ))
+            .await
+            .unwrap();
+
+        let missing_login = post_json(
+            &format!("{base}/api/auth/device/authorizations/approve"),
+            &origin,
+            None,
+            browser_request.clone(),
+        )
+        .await;
+        assert_eq!(missing_login.status(), StatusCode::UNAUTHORIZED);
+        let approved = post_json(
+            &format!("{base}/api/auth/device/authorizations/approve"),
+            &origin,
+            Some(&cookie),
+            browser_request,
+        )
+        .await;
+        assert_eq!(approved.status(), StatusCode::OK);
+        let event = tokio::time::timeout(std::time::Duration::from_secs(2), socket.next())
+            .await
+            .expect("device approval event timed out")
+            .expect("device approval socket closed")
+            .expect("device approval event failed");
+        let TungsteniteMessage::Text(event) = event else {
+            panic!("expected a device authorization text event");
+        };
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&event).unwrap()["status"],
+            "approved"
+        );
+
+        let exchange = crate::client_auth::signed_exchange_request(
+            &signing_key,
+            started.request_id.clone(),
+            code_verifier,
+            auth_now_ms(),
+        )
+        .unwrap();
+        let exchanged = reqwest::Client::new()
+            .post(format!("{base}/api/auth/device/exchange"))
+            .json(&exchange)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(exchanged.status(), StatusCode::OK);
+        let tokens = exchanged
+            .json::<crate::client_auth::DeviceTokenResponse>()
+            .await
+            .unwrap();
+        assert!(
+            tokens
+                .access_token
+                .starts_with(crate::client_auth::ACCESS_TOKEN_PREFIX)
+        );
+        assert!(
+            tokens
+                .refresh_token
+                .starts_with(crate::client_auth::REFRESH_TOKEN_PREFIX)
+        );
+
+        let mut proof_headers = HeaderMap::new();
+        proof_headers.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {}", tokens.access_token).parse().unwrap(),
+        );
+        for (name, value) in crate::client_auth::signed_proof_headers(
+            &signing_key,
+            &tokens.device_id,
+            &tokens.access_token,
+            "GET",
+            "/api/sessions",
+            auth_now_ms(),
+        )
+        .unwrap()
+        {
+            proof_headers.insert(
+                header::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                value.parse().unwrap(),
+            );
+        }
+        let identity = device_access
+            .authenticate(&proof_headers, &Method::GET, "/api/sessions", auth_now_ms())
+            .unwrap()
+            .expect("device access identity");
+        assert_eq!(identity.user_id, user.id);
+        assert!(
+            device_access
+                .authenticate(&proof_headers, &Method::GET, "/api/sessions", auth_now_ms(),)
+                .is_err()
+        );
+
+        let listed = reqwest::Client::new()
+            .get(format!("{base}/api/auth/devices"))
+            .header(header::COOKIE, &cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(listed.status(), StatusCode::OK);
+        assert_eq!(
+            listed.json::<serde_json::Value>().await.unwrap()["devices"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let refresh_path = "/api/auth/device/refresh";
+        let mut refresh_request = reqwest::Client::new()
+            .post(format!("{base}{refresh_path}"))
+            .bearer_auth(&tokens.refresh_token);
+        for (name, value) in crate::client_auth::signed_proof_headers(
+            &signing_key,
+            &tokens.device_id,
+            &tokens.refresh_token,
+            "POST",
+            refresh_path,
+            auth_now_ms(),
+        )
+        .unwrap()
+        {
+            refresh_request = refresh_request.header(name, value);
+        }
+        let refreshed = refresh_request.send().await.unwrap();
+        assert_eq!(refreshed.status(), StatusCode::OK);
+        let refreshed = refreshed
+            .json::<crate::client_auth::DeviceTokenResponse>()
+            .await
+            .unwrap();
+        assert_ne!(refreshed.refresh_token, tokens.refresh_token);
+
+        let unsigned_replay = reqwest::Client::new()
+            .post(format!("{base}{refresh_path}"))
+            .bearer_auth(&tokens.refresh_token)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(unsigned_replay.status(), StatusCode::UNAUTHORIZED);
+        assert!(device_access.token_still_valid(&refreshed.access_token, &identity, auth_now_ms()));
+
+        let mut replay = reqwest::Client::new()
+            .post(format!("{base}{refresh_path}"))
+            .bearer_auth(&tokens.refresh_token);
+        for (name, value) in crate::client_auth::signed_proof_headers(
+            &signing_key,
+            &tokens.device_id,
+            &tokens.refresh_token,
+            "POST",
+            refresh_path,
+            auth_now_ms(),
+        )
+        .unwrap()
+        {
+            replay = replay.header(name, value);
+        }
+        assert_eq!(
+            replay.send().await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert!(!device_access.token_still_valid(
+            &refreshed.access_token,
+            &identity,
+            auth_now_ms()
+        ));
+        assert!(
+            store
+                .list_user_devices_for_user(&user.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        let replayed_exchange = reqwest::Client::new()
+            .post(format!("{base}/api/auth/device/exchange"))
+            .json(&exchange)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(replayed_exchange.status(), StatusCode::GONE);
+
+        server.abort();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     async fn test_ws_upgrade(
         ws: WebSocketUpgrade,
         State(state): State<ProductAuthState>,
@@ -15376,6 +16391,32 @@ mod product_auth_api_tests {
             RouteAuth::Product
         );
         for path in [
+            "/api/auth/device/authorizations",
+            "/api/auth/device/authorizations/inspect",
+            "/api/auth/device/exchange",
+            "/api/auth/device/refresh",
+        ] {
+            assert_eq!(classify_route(&Method::POST, path), RouteAuth::Public);
+        }
+        assert_eq!(
+            classify_route(&Method::GET, "/api/auth/device/authorizations/events"),
+            RouteAuth::Public
+        );
+        for path in [
+            "/api/auth/device/authorizations/approve",
+            "/api/auth/device/authorizations/deny",
+        ] {
+            assert_eq!(classify_route(&Method::POST, path), RouteAuth::Product);
+        }
+        assert_eq!(
+            classify_route(&Method::GET, "/api/auth/devices"),
+            RouteAuth::Product
+        );
+        assert_eq!(
+            classify_route(&Method::DELETE, "/api/auth/devices/device-1"),
+            RouteAuth::Product
+        );
+        for path in [
             "/api/auth/passkeys/external/options",
             "/api/auth/passkeys/external/complete",
             "/api/auth/passkeys/external/fail",
@@ -15476,6 +16517,22 @@ mod product_auth_api_tests {
             classify_route(&Method::GET, "/api/unknown"),
             RouteAuth::Public | RouteAuth::Product
         ));
+    }
+
+    #[test]
+    fn device_authorization_prefers_the_configured_public_browser_origin() {
+        assert_eq!(
+            device_verification_url(
+                &["https://cowboy.example".to_owned()],
+                "request",
+                "approval",
+            ),
+            "https://cowboy.example/auth/device#request_id=request&approval_token=approval",
+        );
+        assert_eq!(
+            device_verification_url(&[], "request", "approval"),
+            "/auth/device#request_id=request&approval_token=approval",
+        );
     }
 
     #[tokio::test]

@@ -304,7 +304,7 @@ Deno.test("status network and 5xx stay unavailable", async () => {
   }
 });
 
-Deno.test("token CRUD is same-origin and never sends the hash", async () => {
+Deno.test("legacy token CRUD remains same-origin and never sends the hash", async () => {
   const calls: FetchArgs[] = [];
   const restore = withFetch((args) => {
     calls.push(args);
@@ -353,6 +353,64 @@ Deno.test("token CRUD is same-origin and never sends the hash", async () => {
     assertEquals(calls[1]?.init?.body, JSON.stringify({ name: "zed" }));
     assertEquals(calls[2]?.input, "/api/auth/tokens/tok1");
     assertEquals(calls[2]?.init?.method, "DELETE");
+  } finally {
+    restore();
+  }
+});
+
+Deno.test("device authorization keeps the capability off authenticated requests", async () => {
+  const calls: FetchArgs[] = [];
+  const request = {
+    request_id: "request_abcdefghijklmnopqrstuvwxyz",
+    approval_token: "approval_abcdefghijklmnopqrstuvwxyz",
+  };
+  const restore = withFetch((args) => {
+    calls.push(args);
+    if (args.input.endsWith("/inspect")) {
+      return new Response(
+        JSON.stringify({
+          request_id: request.request_id,
+          name: "Zed on Hawk",
+          fingerprint: "SHA256:test",
+          expires_at_ms: 1_900_000_000_000,
+          status: "pending",
+        }),
+        { status: 200 },
+      );
+    }
+    if (args.input === "/api/auth/devices") {
+      return new Response(
+        JSON.stringify({
+          devices: [{
+            id: "device-1",
+            name: "Zed on Hawk",
+            created_at_ms: 1_900_000_000_000,
+          }],
+        }),
+        { status: 200 },
+      );
+    }
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  });
+  try {
+    assertEquals((await authApi.inspectDeviceAuthorization(request)).status, "pending");
+    assertEquals(await authApi.approveDeviceAuthorization(request), { ok: true });
+    assertEquals(await authApi.denyDeviceAuthorization(request), { ok: true });
+    assertEquals((await authApi.listDevices()).devices[0]?.id, "device-1");
+    assertEquals(await authApi.deleteDevice("device/1"), { ok: true });
+
+    assertEquals(
+      calls[0]?.input,
+      "/api/auth/device/authorizations/inspect",
+    );
+    assertEquals(calls[0]?.init?.credentials, "omit");
+    assertEquals(calls[0]?.init?.referrerPolicy, "no-referrer");
+    assertEquals(calls[0]?.init?.body, JSON.stringify(request));
+    assertEquals(calls[1]?.init?.credentials, "same-origin");
+    assertEquals(calls[2]?.init?.credentials, "same-origin");
+    assertEquals(calls[3]?.input, "/api/auth/devices");
+    assertEquals(calls[4]?.input, "/api/auth/devices/device%2F1");
+    assertEquals(calls[4]?.init?.method, "DELETE");
   } finally {
     restore();
   }

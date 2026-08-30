@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { App } from "../App";
 import { useProductAuth } from "../auth/ProductAuthGate";
 import { ProductPasskeysPanel } from "../auth/ProductPasskeysPanel";
-import { ProductTokensPanel } from "../auth/ProductTokensPanel";
+import { ProductDevicesPanel } from "../auth/ProductDevicesPanel";
 import type { Mode as ThemeMode } from "../theme";
 import {
   type DesktopCommand,
@@ -24,7 +24,7 @@ function EnabledDesktopAccountCommands({
   me,
   signOut,
 }: Pick<ReturnType<typeof useProductAuth>, "me" | "signOut">): React.JSX.Element {
-  const [tokensOpen, setTokensOpen] = useState(false);
+  const [devicesOpen, setDevicesOpen] = useState(false);
   const [passkeysOpen, setPasskeysOpen] = useState(false);
   const signOutCommand = useMemo<DesktopCommand>(() => ({
     id: "account.signOut",
@@ -35,12 +35,12 @@ function EnabledDesktopAccountCommands({
       void signOut();
     },
   }), [me.account, signOut]);
-  const tokensCommand = useMemo<DesktopCommand>(() => ({
-    id: "account.tokens",
-    title: "API tokens",
-    description: "Create or revoke personal access tokens",
+  const devicesCommand = useMemo<DesktopCommand>(() => ({
+    id: "account.devices",
+    title: "Authorized devices",
+    description: "Review or revoke signed-in Cowboy clients",
     group: "Account",
-    run: () => setTokensOpen(true),
+    run: () => setDevicesOpen(true),
   }), []);
   const passkeysCommand = useMemo<DesktopCommand>(() => ({
     id: "account.passkeys",
@@ -50,19 +50,19 @@ function EnabledDesktopAccountCommands({
     run: () => setPasskeysOpen(true),
   }), []);
   useDesktopCommand(signOutCommand);
-  useDesktopCommand(tokensCommand);
+  useDesktopCommand(devicesCommand);
   useDesktopCommand(passkeysCommand);
   return (
     <>
     <DesktopModal
-      open={tokensOpen}
-      onClose={() => setTokensOpen(false)}
-      title="API tokens"
-      description={`Tokens for ${me.account}. Use COWBOY_USER_TOKEN with serve-acp.`}
+      open={devicesOpen}
+      onClose={() => setDevicesOpen(false)}
+      title="Authorized devices"
+      description={`Cowboy clients signed in as ${me.account}. No copied token is required.`}
       width={520}
     >
       <Box sx={{ px: 2.25, py: 2 }}>
-        <ProductTokensPanel />
+        <ProductDevicesPanel />
       </Box>
     </DesktopModal>
     <DesktopModal
