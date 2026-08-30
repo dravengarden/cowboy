@@ -36,7 +36,7 @@ Deno.test("Code settings open on the Code section and Agent settings stay on Age
 Deno.test("desktop settings use compact section tabs and expose product sign out", () => {
   const settings = appSource.slice(
     appSource.indexOf("function DesktopSettingsContent("),
-    appSource.indexOf("type MachineEventView"),
+    appSource.indexOf("function machineComponentName("),
   );
   assert(settings.includes("data-desktop-settings-section-tabs"));
   assert(settings.includes('width: "fit-content"'));
@@ -44,6 +44,17 @@ Deno.test("desktop settings use compact section tabs and expose product sign out
   assert(settings.includes('label="Account"'));
   assert(settings.includes("<ProductAccountMenu />"));
   assertEquals(settings.includes("<SegmentedPill"), false);
+});
+
+Deno.test("Machine mutations use correlated Controller receipts instead of polling event history", () => {
+  const machines = appSource.slice(
+    appSource.indexOf("function MachinesContent("),
+    appSource.indexOf("function isSettingsEditableTarget("),
+  );
+  assert(machines.includes("await fetch(`/api/machines/${encodeURIComponent(machineId)}/refresh`"));
+  assert(machines.includes("await fetch(`/api/machines/${encodeURIComponent(machineId)}/components/update-npm`"));
+  assertEquals(machines.includes("/events"), false);
+  assertEquals(machines.includes("request_id"), false);
 });
 
 Deno.test("Code chrome uses Agent instead of a local settings sheet", () => {

@@ -17,6 +17,19 @@ const WORKSPACE_ADAPTER_TIMEOUT: std::time::Duration = std::time::Duration::from
 const CACHE_STATUS_ADAPTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 const PROVIDER_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 
+type PendingResponse = oneshot::Sender<Result<serde_json::Value, String>>;
+
+struct PendingRequestGuard<'a> {
+    pending: &'a RwLock<HashMap<String, PendingResponse>>,
+    request_id: &'a str,
+}
+
+impl Drop for PendingRequestGuard<'_> {
+    fn drop(&mut self) {
+        self.pending.write().remove(self.request_id);
+    }
+}
+
 fn adapter_timeout(adapter: &str) -> std::time::Duration {
     if adapter == "workspace" {
         WORKSPACE_ADAPTER_TIMEOUT
@@ -38,7 +51,7 @@ struct Connection {
 pub struct MachineControl {
     connections: RwLock<HashMap<String, Connection>>,
     events: RwLock<HashMap<String, Vec<MachineEvent>>>,
-    pending: RwLock<HashMap<String, oneshot::Sender<Result<serde_json::Value, String>>>>,
+    pending: RwLock<HashMap<String, PendingResponse>>,
 }
 
 impl MachineControl {
@@ -170,24 +183,22 @@ impl MachineControl {
         );
         let (tx, rx) = oneshot::channel();
         self.pending.write().insert(request_id.clone(), tx);
-        if let Err(error) = self.send(
+        let _pending = PendingRequestGuard {
+            pending: &self.pending,
+            request_id: &request_id,
+        };
+        self.send(
             machine_id,
             MachineCommand::AdapterRequest {
                 request_id: request_id.clone(),
                 adapter: adapter.to_owned(),
                 payload,
             },
-        ) {
-            self.pending.write().remove(&request_id);
-            return Err(error);
-        }
+        )?;
         match tokio::time::timeout(adapter_timeout(adapter), rx).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err("Machine adapter response channel closed".to_owned()),
-            Err(_) => {
-                self.pending.write().remove(&request_id);
-                Err("Machine adapter request timed out".to_owned())
-            }
+            Err(_) => Err("Machine adapter request timed out".to_owned()),
         }
     }
 
@@ -197,20 +208,29 @@ impl MachineControl {
         request_id: String,
         command: MachineCommand,
     ) -> Result<(), String> {
+        self.command_request_with_timeout(machine_id, request_id, command, PROVIDER_COMMAND_TIMEOUT)
+            .await
+    }
+
+    pub async fn command_request_with_timeout(
+        &self,
+        machine_id: &str,
+        request_id: String,
+        command: MachineCommand,
+        timeout: std::time::Duration,
+    ) -> Result<(), String> {
         let (tx, rx) = oneshot::channel();
         self.pending.write().insert(request_id.clone(), tx);
-        if let Err(error) = self.send(machine_id, command) {
-            self.pending.write().remove(&request_id);
-            return Err(error);
-        }
-        match tokio::time::timeout(PROVIDER_COMMAND_TIMEOUT, rx).await {
+        let _pending = PendingRequestGuard {
+            pending: &self.pending,
+            request_id: &request_id,
+        };
+        self.send(machine_id, command)?;
+        match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(Ok(_))) => Ok(()),
             Ok(Ok(Err(error))) => Err(error),
             Ok(Err(_)) => Err("Machine command response channel closed".to_owned()),
-            Err(_) => {
-                self.pending.write().remove(&request_id);
-                Err("Machine command timed out".to_owned())
-            }
+            Err(_) => Err("Machine command timed out".to_owned()),
         }
     }
 
@@ -298,6 +318,92 @@ mod tests {
             request.await.expect("task").expect("response")["type"],
             "health"
         );
+    }
+
+    #[tokio::test]
+    async fn command_response_is_correlated_without_polling_event_history() {
+        let control = Arc::new(MachineControl::default());
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        control.install("mac".to_owned(), "epoch".to_owned(), false, 3, tx);
+        let requester = Arc::clone(&control);
+        let request = tokio::spawn(async move {
+            requester
+                .command_request_with_timeout(
+                    "mac",
+                    "refresh-1".to_owned(),
+                    MachineCommand::RefreshInventory {
+                        request_id: "refresh-1".to_owned(),
+                    },
+                    std::time::Duration::from_secs(1),
+                )
+                .await
+        });
+
+        assert_eq!(
+            rx.recv().await.expect("command"),
+            MachineCommand::RefreshInventory {
+                request_id: "refresh-1".to_owned(),
+            }
+        );
+        control.record(
+            "mac",
+            MachineEvent::CommandResult {
+                request_id: "refresh-1".to_owned(),
+                accepted: true,
+                detail: None,
+            },
+        );
+
+        request.await.expect("task").expect("response");
+        assert!(control.pending.read().is_empty());
+    }
+
+    #[tokio::test]
+    async fn command_timeout_removes_the_pending_correlation() {
+        let control = MachineControl::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        control.install("mac".to_owned(), "epoch".to_owned(), false, 3, tx);
+
+        let error = control
+            .command_request_with_timeout(
+                "mac",
+                "refresh-timeout".to_owned(),
+                MachineCommand::RefreshInventory {
+                    request_id: "refresh-timeout".to_owned(),
+                },
+                std::time::Duration::from_millis(1),
+            )
+            .await
+            .expect_err("timeout");
+
+        assert_eq!(error, "Machine command timed out");
+        assert!(control.pending.read().is_empty());
+    }
+
+    #[tokio::test]
+    async fn cancelled_command_wait_removes_the_pending_correlation() {
+        let control = Arc::new(MachineControl::default());
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        control.install("mac".to_owned(), "epoch".to_owned(), false, 3, tx);
+        let requester = Arc::clone(&control);
+        let request = tokio::spawn(async move {
+            requester
+                .command_request_with_timeout(
+                    "mac",
+                    "refresh-cancelled".to_owned(),
+                    MachineCommand::RefreshInventory {
+                        request_id: "refresh-cancelled".to_owned(),
+                    },
+                    std::time::Duration::from_secs(60),
+                )
+                .await
+        });
+        let _ = rx.recv().await.expect("command");
+
+        request.abort();
+        let _ = request.await;
+
+        assert!(control.pending.read().is_empty());
     }
 
     #[test]

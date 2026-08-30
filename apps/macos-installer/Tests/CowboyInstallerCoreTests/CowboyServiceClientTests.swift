@@ -262,6 +262,64 @@ struct CowboyServiceClientTests {
     }
 
     @Test
+    func refreshedPlanUsesTheControllerReceiptWithoutPollingMachineEvents() async throws {
+        let transport = SequenceHTTPTransport(responses: [
+            jsonResponse(#"{"request_id":"refresh-1"}"#),
+            jsonResponse(#"[{"id":"macbook-air","display_name":"MacBook Air","status":"online","connected":true,"active_sessions":0,"pending_updates":[],"components":[]}]"#),
+        ])
+        let client = URLSessionCowboyServiceClient(transport: transport)
+
+        let plan = try await client.dependencyUpdatePlan(
+            controllerURL: "https://cowboy.example",
+            machineID: "macbook-air",
+            refresh: true
+        )
+        let requests = await transport.requests
+
+        #expect(plan.items.isEmpty)
+        #expect(requests.map(\.url?.path) == [
+            "/api/machines/macbook-air/refresh",
+            "/api/machines",
+        ])
+        #expect(requests.map(\.httpMethod) == ["POST", "GET"])
+        #expect(requests[0].timeoutInterval == 95)
+        #expect(!requests.contains { $0.url?.path.hasSuffix("/events") == true })
+    }
+
+    @Test
+    func dependencyUpdateUsesTheControllerReceiptWithoutPollingMachineEvents() async throws {
+        let transport = SequenceHTTPTransport(responses: [
+            jsonResponse(#"{"request_id":"update-npm-1"}"#),
+        ])
+        let client = URLSessionCowboyServiceClient(transport: transport)
+        let item = DependencyUpdateItem(
+            component: MachineComponentIdentifier(kind: "provider_cli", slot: "codex"),
+            displayName: "Codex CLI",
+            currentVersion: "1.0.0",
+            targetVersion: "1.1.0",
+            activeLeases: 0,
+            channel: .npm
+        )
+
+        try await client.applyDependencyUpdate(
+            controllerURL: "https://cowboy.example",
+            machineID: "macbook-air",
+            item: item
+        )
+        let requests = await transport.requests
+        let body = try #require(requests.first?.httpBody)
+        let component = try #require(
+            JSONSerialization.jsonObject(with: body) as? [String: String]
+        )
+
+        #expect(requests.count == 1)
+        #expect(requests[0].httpMethod == "POST")
+        #expect(requests[0].url?.path == "/api/machines/macbook-air/components/update-npm")
+        #expect(requests[0].timeoutInterval == 305)
+        #expect(component == ["kind": "provider_cli", "slot": "codex"])
+    }
+
+    @Test
     func rejectsRemotePlaintextControllerURLs() async {
         let client = URLSessionCowboyServiceClient(transport: SequenceHTTPTransport(responses: []))
 

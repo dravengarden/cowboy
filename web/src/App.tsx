@@ -4269,12 +4269,6 @@ function DesktopAccountSettingsBlock(): React.JSX.Element {
     );
 }
 
-type MachineEventView =
-    | { event: "login_challenge"; request_id: string; provider: string; verification_url: string; user_code?: string; input_required?: boolean; input_label?: string; secret_input?: boolean; expires_at_ms: number }
-    | { event: "login_state"; request_id: string; provider: string; state: string; account_label?: string; detail?: string }
-    | { event: "command_result"; request_id: string; accepted: boolean; detail?: string }
-    | { event: "inventory"; observed_at_ms: number; components: unknown[] };
-
 function machineComponentName(component: MachineChoice["components"][number]): string {
     if (component.id.kind === "zed_server") return "Zed";
     if (component.id.kind === "zed_adapter") return "Zed adapter";
@@ -4371,33 +4365,31 @@ function MachinesContent({ embedded = false }: { embedded?: boolean } = {}): Rea
     const refreshMachine = useCallback(async (machineId: string): Promise<void> => {
         const response = await fetch(`/api/machines/${encodeURIComponent(machineId)}/refresh`, { method: "POST" });
         if (!response.ok) throw new Error(await response.text() || "Could not refresh Machine inventory");
-        const { request_id: requestId } = await response.json() as { request_id: string };
-        for (let attempt = 0; attempt < 40; attempt += 1) {
-            await new Promise((resolve) => globalThis.setTimeout(resolve, 150));
-            const eventResponse = await fetch(`/api/machines/${encodeURIComponent(machineId)}/events`);
-            if (!eventResponse.ok) continue;
-            const machineEvents = await eventResponse.json() as MachineEventView[];
-            const result = machineEvents.find((event) =>
-                event.event === "command_result" && event.request_id === requestId
-            );
-            if (result?.event === "command_result") {
-                showCommandFeedback(machineId, result.accepted);
-                if (!result.accepted) throw new Error(result.detail || "Machine inventory refresh failed");
-                return;
-            }
-        }
-        throw new Error("Machine did not confirm the inventory refresh");
+        showCommandFeedback(machineId, true);
     }, [showCommandFeedback]);
     const updateOne = (machineId: string, component: MachineChoice["components"][number]): void => {
         const key = `${machineId}:component:${component.id.kind}:${component.id.slot ?? ""}`;
         setBusy((current) => ({ ...current, [key]: true }));
-        void fetch(`/api/machines/${encodeURIComponent(machineId)}/components/reconcile-one`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ kind: component.id.kind, slot: component.id.slot ?? "" }),
-        }).finally(() => {
-            setBusy((current) => ({ ...current, [key]: false }));
-        });
+        setComponentErrors((current) => ({ ...current, [key]: "" }));
+        void (async () => {
+            try {
+                const response = await fetch(`/api/machines/${encodeURIComponent(machineId)}/components/reconcile-one`, {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ kind: component.id.kind, slot: component.id.slot ?? "" }),
+                });
+                if (!response.ok) throw new Error(await response.text() || "Could not update component");
+                showCommandFeedback(machineId, true);
+            } catch (error) {
+                showCommandFeedback(machineId, false);
+                setComponentErrors((current) => ({
+                    ...current,
+                    [key]: error instanceof Error ? error.message : "Update failed",
+                }));
+            } finally {
+                setBusy((current) => ({ ...current, [key]: false }));
+            }
+        })();
     };
     const updateNpm = (machineId: string, component: MachineChoice["components"][number]): void => {
         const key = `${machineId}:npm:${component.id.kind}:${component.id.slot ?? ""}`;
@@ -4411,22 +4403,9 @@ function MachinesContent({ embedded = false }: { embedded?: boolean } = {}): Rea
                     body: JSON.stringify({ kind: component.id.kind, slot: component.id.slot ?? "" }),
                 });
                 if (!response.ok) throw new Error(await response.text() || "Could not start update");
-                const { request_id: requestId } = await response.json() as { request_id: string };
-                for (let attempt = 0; attempt < 180; attempt += 1) {
-                    await new Promise((resolve) => globalThis.setTimeout(resolve, 1_000));
-                    const eventResponse = await fetch(`/api/machines/${encodeURIComponent(machineId)}/events`);
-                    const machineEvents = eventResponse.ok ? await eventResponse.json() as MachineEventView[] : [];
-                    const result = machineEvents.find((event) =>
-                        event.event === "command_result" && event.request_id === requestId
-                    );
-                    if (result?.event === "command_result") {
-                        showCommandFeedback(machineId, result.accepted);
-                        if (!result.accepted) throw new Error(result.detail || "Update failed");
-                        return;
-                    }
-                }
-                throw new Error("Update is still running; refresh to check its result");
+                showCommandFeedback(machineId, true);
             } catch (error) {
+                showCommandFeedback(machineId, false);
                 setComponentErrors((current) => ({
                     ...current,
                     [key]: error instanceof Error ? error.message : "Update failed",

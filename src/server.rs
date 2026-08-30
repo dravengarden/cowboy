@@ -8531,6 +8531,59 @@ struct MachineCommandResponse {
     request_id: String,
 }
 
+const MACHINE_INVENTORY_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+const MACHINE_COMPONENT_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+fn machine_command_error_status(error: &str) -> StatusCode {
+    if error == "Machine command timed out" {
+        StatusCode::GATEWAY_TIMEOUT
+    } else if error == "Machine command response channel closed" {
+        StatusCode::BAD_GATEWAY
+    } else {
+        StatusCode::CONFLICT
+    }
+}
+
+async fn await_machine_command(
+    state: &AppState,
+    machine_id: &str,
+    request_id: String,
+    command: crate::machine_protocol::MachineCommand,
+    operation: &'static str,
+    timeout: std::time::Duration,
+) -> Response {
+    let started = std::time::Instant::now();
+    let result = state
+        .machine_control
+        .command_request_with_timeout(machine_id, request_id.clone(), command, timeout)
+        .await;
+    let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    match result {
+        Ok(()) => {
+            tracing::info!(
+                %machine_id,
+                %request_id,
+                operation,
+                elapsed_ms,
+                "Machine command completed"
+            );
+            Json(MachineCommandResponse { request_id }).into_response()
+        }
+        Err(error) => {
+            tracing::warn!(
+                %machine_id,
+                %request_id,
+                operation,
+                elapsed_ms,
+                timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
+                %error,
+                "Machine command failed"
+            );
+            (machine_command_error_status(&error), error).into_response()
+        }
+    }
+}
+
 fn machine_request_id(prefix: &str) -> String {
     format!(
         "{prefix}-{}",
@@ -8555,15 +8608,17 @@ async fn api_machine_refresh(
     Path(machine_id): Path<String>,
 ) -> Response {
     let request_id = machine_request_id("refresh");
-    match state.machine_control.send(
+    await_machine_command(
+        state.as_ref(),
         &machine_id,
+        request_id.clone(),
         crate::machine_protocol::MachineCommand::RefreshInventory {
             request_id: request_id.clone(),
         },
-    ) {
-        Ok(()) => Json(MachineCommandResponse { request_id }).into_response(),
-        Err(error) => (StatusCode::CONFLICT, error).into_response(),
-    }
+        "refresh_inventory",
+        MACHINE_INVENTORY_COMMAND_TIMEOUT,
+    )
+    .await
 }
 
 async fn api_machine_reconcile(
@@ -8578,16 +8633,18 @@ async fn api_machine_reconcile(
             .into_response();
     }
     let request_id = machine_request_id("reconcile");
-    match state.machine_control.send(
+    await_machine_command(
+        state.as_ref(),
         &machine_id,
+        request_id.clone(),
         crate::machine_protocol::MachineCommand::Reconcile {
             request_id: request_id.clone(),
             components: state.desired_machine_components.as_ref().clone(),
         },
-    ) {
-        Ok(()) => Json(MachineCommandResponse { request_id }).into_response(),
-        Err(error) => (StatusCode::CONFLICT, error).into_response(),
-    }
+        "reconcile_components",
+        MACHINE_COMPONENT_COMMAND_TIMEOUT,
+    )
+    .await
 }
 
 async fn api_machine_reconcile_one(
@@ -8604,16 +8661,18 @@ async fn api_machine_reconcile_one(
         return (StatusCode::NOT_FOUND, "no signed update for this component").into_response();
     };
     let request_id = machine_request_id("reconcile-one");
-    match state.machine_control.send(
+    await_machine_command(
+        state.as_ref(),
         &machine_id,
+        request_id.clone(),
         crate::machine_protocol::MachineCommand::Reconcile {
             request_id: request_id.clone(),
             components: vec![component],
         },
-    ) {
-        Ok(()) => Json(MachineCommandResponse { request_id }).into_response(),
-        Err(error) => (StatusCode::CONFLICT, error).into_response(),
-    }
+        "reconcile_component",
+        MACHINE_COMPONENT_COMMAND_TIMEOUT,
+    )
+    .await
 }
 
 async fn api_machine_update_npm(
@@ -8622,16 +8681,18 @@ async fn api_machine_update_npm(
     Json(component): Json<crate::machine_protocol::ComponentId>,
 ) -> Response {
     let request_id = machine_request_id("update-npm");
-    match state.machine_control.send(
+    await_machine_command(
+        state.as_ref(),
         &machine_id,
+        request_id.clone(),
         crate::machine_protocol::MachineCommand::UpdateNpmComponent {
             request_id: request_id.clone(),
             component,
         },
-    ) {
-        Ok(()) => Json(MachineCommandResponse { request_id }).into_response(),
-        Err(error) => (StatusCode::CONFLICT, error).into_response(),
-    }
+        "update_npm_component",
+        MACHINE_COMPONENT_COMMAND_TIMEOUT,
+    )
+    .await
 }
 
 async fn api_machine_revoke(

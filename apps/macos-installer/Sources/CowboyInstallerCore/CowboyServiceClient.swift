@@ -316,17 +316,11 @@ public final class URLSessionCowboyServiceClient: CowboyServiceClient, @unchecke
         refresh: Bool
     ) async throws -> DependencyUpdatePlan {
         if refresh {
-            let command: MachineCommandResponseDTO = try await post(
+            let _: MachineCommandResponseDTO = try await post(
                 controllerURL,
                 path: "/api/machines/\(escaped(machineID))/refresh",
-                body: EmptyBody()
-            )
-            try await waitForCommand(
-                controllerURL: controllerURL,
-                machineID: machineID,
-                requestID: command.requestID,
-                attempts: 40,
-                delay: .milliseconds(250)
+                body: EmptyBody(),
+                timeout: 95
             )
         }
         let machine = try await machine(controllerURL: controllerURL, machineID: machineID)
@@ -371,47 +365,12 @@ public final class URLSessionCowboyServiceClient: CowboyServiceClient, @unchecke
         case .signedComponent: "reconcile-one"
         case .npm: "update-npm"
         }
-        let command: MachineCommandResponseDTO = try await post(
+        let _: MachineCommandResponseDTO = try await post(
             controllerURL,
             path: "/api/machines/\(escaped(machineID))/components/\(suffix)",
-            body: item.component
+            body: item.component,
+            timeout: 305
         )
-        try await waitForCommand(
-            controllerURL: controllerURL,
-            machineID: machineID,
-            requestID: command.requestID,
-            attempts: 180,
-            delay: .seconds(1)
-        )
-    }
-
-    private func waitForCommand(
-        controllerURL: String,
-        machineID: String,
-        requestID: String,
-        attempts: Int,
-        delay: Duration
-    ) async throws {
-        for _ in 0..<attempts {
-            try Task.checkCancellation()
-            try await Task.sleep(for: delay)
-            let events: [MachineEventDTO] = try await get(
-                controllerURL,
-                path: "/api/machines/\(escaped(machineID))/events"
-            )
-            guard let result = events.first(where: {
-                $0.event == "command_result" && $0.requestID == requestID
-            }) else {
-                continue
-            }
-            guard result.accepted == true else {
-                throw CowboyServiceClientError.commandFailed(
-                    result.detail ?? "Cowboy Machine rejected the command."
-                )
-            }
-            return
-        }
-        throw CowboyServiceClientError.commandTimedOut
     }
 
     private func get<Response: Decodable>(_ controllerURL: String, path: String) async throws -> Response {
@@ -426,7 +385,8 @@ public final class URLSessionCowboyServiceClient: CowboyServiceClient, @unchecke
     private func post<Body: Encodable, Response: Decodable>(
         _ controllerURL: String,
         path: String,
-        body: Body
+        body: Body,
+        timeout: TimeInterval? = nil
     ) async throws -> Response {
         let endpoint = try endpoint(controllerURL, path: path)
         var request = URLRequest(url: endpoint.url)
@@ -435,6 +395,9 @@ public final class URLSessionCowboyServiceClient: CowboyServiceClient, @unchecke
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(endpoint.origin, forHTTPHeaderField: "Origin")
+        if let timeout {
+            request.timeoutInterval = timeout
+        }
         return try await send(request)
     }
 
@@ -716,19 +679,5 @@ private struct MachineCommandResponseDTO: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case requestID = "request_id"
-    }
-}
-
-private struct MachineEventDTO: Decodable {
-    let event: String
-    let requestID: String?
-    let accepted: Bool?
-    let detail: String?
-
-    enum CodingKeys: String, CodingKey {
-        case event
-        case requestID = "request_id"
-        case accepted
-        case detail
     }
 }
