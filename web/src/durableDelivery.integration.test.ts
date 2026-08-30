@@ -5,6 +5,7 @@ import {
   type LocalPersistence,
   type Mutation,
   replicatedStore,
+  snapshotPatch,
 } from "@cowboy/state-sync";
 import { durableDeliveryAttempt } from "./durableDelivery.ts";
 import {
@@ -179,6 +180,72 @@ Deno.test("durable mutation commits its outbox before transport delivery", async
   releaseSave?.();
   await commit;
   assertEquals(sent, ["cmid-barrier"]);
+});
+
+Deno.test("late hydration preserves live authority and restores only unconfirmed outbox rows", async () => {
+  let finishLoad: ((snapshot: ClientSnapshot<QueueState>) => void) | undefined;
+  let persisted: ClientSnapshot<QueueState> | null = null;
+  const persistence: LocalPersistence<ClientSnapshot<QueueState>> = {
+    load: () => new Promise((resolve) => {
+      finishLoad = resolve;
+    }),
+    save: (snapshot) => {
+      persisted = structuredClone(snapshot);
+      return Promise.resolve();
+    },
+  };
+  const sent: string[] = [];
+  const store = replicatedStore<QueueState, typeof queueMutators>({
+    clientId: "slow-indexeddb",
+    mutators: queueMutators,
+    initial: { rows: [] },
+    local: persistence,
+    send: (mutation) => sent.push(mutation.id),
+  });
+
+  store.applyPatch(
+    snapshotPatch(7, { rows: ["live server row"] }, ["cmid-already-confirmed"]),
+  );
+  // Cowboy can receive this patch while IndexedDB is still enumerating keys;
+  // the per-session hydrate call starts only after the live base already exists.
+  const hydration = store.hydrate();
+  store.mutate("submit", { text: "typed after socket open" }, "cmid-live");
+
+  finishLoad?.({
+    base: { version: 2, value: { rows: ["stale cached row"] } },
+    pending: [
+      {
+        id: "cmid-offline",
+        client: "previous-page",
+        name: "submit",
+        args: { text: "restored offline row" },
+      },
+      {
+        id: "cmid-already-confirmed",
+        client: "previous-page",
+        name: "submit",
+        args: { text: "must not resurrect" },
+      },
+    ],
+  });
+  await hydration;
+
+  assertEquals(store.version(), 7);
+  assertEquals(store.get().rows, [
+    "live server row",
+    "restored offline row",
+    "typed after socket open",
+  ]);
+  assertEquals(store.pending().map((mutation) => mutation.id), [
+    "cmid-offline",
+    "cmid-live",
+  ]);
+  assertEquals(persisted?.base.version, 7);
+  assertEquals(persisted?.pending.map((mutation) => mutation.id), [
+    "cmid-offline",
+    "cmid-live",
+  ]);
+  assertEquals(sent, ["cmid-live"]);
 });
 
 Deno.test("failed durable mutation keeps the source editor authoritative", async () => {

@@ -945,7 +945,7 @@
           "version": "1.2.0",
           "publisher": "cowboy",
           "sources": ["components/state-sync"],
-          "digest": "sha256:3a8f7dab1bb77b98cc3a0c571fff7829190415e873f94e6af70eb4237ff09e25",
+          "digest": "sha256:833ebfc5e72e9128229f2bd59d4899b2e1498123ac47b945727f10dcafba21a4",
           "package": {
             "kind": "npm",
             "name": "@cowboy/state-sync",

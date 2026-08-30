@@ -1363,8 +1363,22 @@ function connect(): void {
   const grace = setTimeout(openOnce, 1500);
   void (async (): Promise<void> => {
     try {
-      await Promise.all([...syncClients.values()].map((e) => e.hydrate()));
-      await hydrateCachedQueues();
+      // Queue outboxes carry authored prompts and must not wait behind an
+      // unrelated title/order cache whose IndexedDB read is blocked. Hydrate
+      // both classes concurrently; each client now merges safely if the socket
+      // wins the grace race.
+      await Promise.all([
+        Promise.allSettled([...syncClients.values()].map((e) => e.hydrate())),
+        hydrateCachedQueues(),
+      ]);
+      // If the 1.5s grace opened the socket before a slow IndexedDB read
+      // completed, onopen could not see the restored outbox. Re-send now as
+      // well. Mutation ids make the overlap with a simultaneous onopen safe and
+      // idempotent; this closes the visible-pending-but-never-runs window.
+      if (socket?.readyState === WebSocket.OPEN) {
+        for (const entry of syncClients.values()) entry.resend();
+        for (const store of qClients.values()) store.resend();
+      }
     } catch (err) {
       console.warn("sync hydrate failed", err);
     } finally {
@@ -2051,9 +2065,14 @@ function qClient(sessionId: string): ReplicatedStore<QValue, typeof qMut> {
 async function hydrateCachedQueues(): Promise<void> {
   const prefix = "cowboy:sync:queue:";
   const keys = await idbListKeys();
-  await Promise.all(
+  const outcomes = await Promise.allSettled(
     keys.filter((k) => k.startsWith(prefix)).map((k) => qClient(k.slice(prefix.length)).hydrate()),
   );
+  for (const outcome of outcomes) {
+    if (outcome.status === "rejected") {
+      console.warn("queue outbox hydrate failed", outcome.reason);
+    }
+  }
 }
 
 /** Render queue + drafts for one session: the sync client's view (server base +

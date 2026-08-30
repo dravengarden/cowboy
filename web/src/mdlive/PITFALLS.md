@@ -2285,8 +2285,11 @@ Desktop Vim + IME checks:
     service-worker reload in that interval clears the source composer and loses
     the only copy. Commit the outbox transaction before transport and before the
     source editor clears, serialize IndexedDB saves, and flush queue clients on
-    `visibilitychange`/`pagehide`. A failed discard or return must restore the
-    pending mutation; a replacement is persisted before its source is removed.
+    `visibilitychange`/`pagehide`. If WebSocket opens before a slow IndexedDB
+    hydrate, merge the late outbox into the live base and re-send it after the
+    read; never let a stale cache overwrite an already-applied server patch. A
+    failed discard or return must restore the pending mutation; a replacement
+    is persisted before its source is removed.
     Queue/Draft edit buffers also need their own per-row local recovery record:
     a transient empty selection is not deletion, explicit Save is the durable
     boundary, and a row that disappears during reload is recovered once as a

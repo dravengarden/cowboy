@@ -139,6 +139,24 @@ export function createClient<T, M extends Mutators<T>>(opts: ClientOpts<T, M>): 
   let base: SyncState<T> = freeze(opts.initial);
   let queue: Mutation[] = [];
   let viewValue: T = base.value;
+  // `hydrate()` normally completes before a transport connects. Some browsers,
+  // however, can leave an IndexedDB open/read pending long enough that the app
+  // deliberately opens its socket first. Track live changes made during that
+  // read so the late cache result can merge its durable outbox without
+  // overwriting a newer server base. Confirmations are tracked separately: a
+  // patch can acknowledge an id before that persisted mutation has been loaded.
+  let stateRevision = 0;
+  let baseRevision = 0;
+  let hasAppliedPatch = false;
+  let hydrationComplete = local === undefined;
+  // Mutation ids are globally unique. Remember confirmations for this client
+  // lifetime so a cache read that STARTS after the corresponding socket patch
+  // cannot resurrect an already-accepted outbox row.
+  const confirmedFacts = new Set<MutationId>();
+  const noteHydrateConfirmations = (ids: readonly MutationId[]): void => {
+    if (ids.length === 0) return;
+    for (const id of ids) confirmedFacts.add(id);
+  };
 
   // Debounced app-side persistence of {base, pending}. No-op without `local`.
   let saveTimer: ReturnType<typeof setTimeout> | undefined = undefined;
@@ -191,6 +209,7 @@ export function createClient<T, M extends Mutators<T>>(opts: ClientOpts<T, M>): 
       // Incremental: apply on the current view (== replaying just this one on top
       // of the already-replayed queue), equivalent to a full recompute.
       viewValue = applyMutation(mutators, viewValue, m);
+      stateRevision += 1;
       onChange?.(viewValue);
       scheduleSave();
       return m;
@@ -214,6 +233,7 @@ export function createClient<T, M extends Mutators<T>>(opts: ClientOpts<T, M>): 
     },
 
     confirm(ids: readonly MutationId[]): void {
+      noteHydrateConfirmations(ids);
       if (ids.length === 0) {
         return;
       }
@@ -224,6 +244,7 @@ export function createClient<T, M extends Mutators<T>>(opts: ClientOpts<T, M>): 
       }
       queue = next;
       recompute();
+      stateRevision += 1;
       onChange?.(viewValue);
       scheduleSave();
     },
@@ -240,6 +261,7 @@ export function createClient<T, M extends Mutators<T>>(opts: ClientOpts<T, M>): 
       }
       queue = next;
       recompute();
+      stateRevision += 1;
       onChange?.(viewValue);
       try {
         await this.flush();
@@ -261,6 +283,7 @@ export function createClient<T, M extends Mutators<T>>(opts: ClientOpts<T, M>): 
         restored.push(...queue.filter((m) => !previousIds.has(m.id)));
         queue = restored;
         recompute();
+        stateRevision += 1;
         onChange?.(viewValue);
         scheduleSave();
         throw error;
@@ -278,11 +301,13 @@ export function createClient<T, M extends Mutators<T>>(opts: ClientOpts<T, M>): 
       }
       queue = [...queue.slice(0, i), ...queue.slice(i + 1), m];
       recompute();
+      stateRevision += 1;
       onChange?.(viewValue);
       scheduleSave();
     },
 
     applyPatch(patch: Patch<T>, applyOpts?: { force?: boolean }): void {
+      noteHydrateConfirmations(patch.confirmed);
       let changed = false;
       // CONFIRMATIONS ARE MONOTONIC FACTS — process them from EVERY patch, even a
       // reordered/older/dup one. A patch's value may be stale (an absolute
@@ -303,6 +328,8 @@ export function createClient<T, M extends Mutators<T>>(opts: ClientOpts<T, M>): 
       // would additionally require fromVersion === base.version + gap → resync.)
       if (applyOpts?.force === true || patch.toVersion > base.version) {
         base = freeze({ version: patch.toVersion, value: patch.apply(base.value) });
+        baseRevision += 1;
+        hasAppliedPatch = true;
         changed = true;
       }
       // Machine-checked convergence: once we're AT this patch's version with NO
@@ -321,23 +348,77 @@ export function createClient<T, M extends Mutators<T>>(opts: ClientOpts<T, M>): 
       }
       if (changed) {
         recompute();
+        stateRevision += 1;
         onChange?.(viewValue);
         scheduleSave();
       }
     },
 
     async hydrate(): Promise<void> {
-      if (local === undefined) {
+      if (local === undefined || hydrationComplete) {
         return;
       }
-      const snap = await local.load();
-      if (snap === null) {
-        return;
+      try {
+        const startedStateRevision = stateRevision;
+        const startedBaseRevision = baseRevision;
+        const snap = await local.load();
+        if (snap === null) {
+          return;
+        }
+
+        // Any live patch is newer than the browser cache, including one received
+        // while IndexedDB was still enumerating keys before this hydrate call
+        // started. Keep it. If only local mutations happened, the cached base is
+        // still useful and those mutations are replayed on top below.
+        if (!hasAppliedPatch && baseRevision === startedBaseRevision) {
+          base = freeze(snap.base);
+        }
+
+        // Durable mutations predate anything authored after this hydrate began,
+        // so restore them first, then append current-only mutations. For an id
+        // present in both places the live copy wins. Never resurrect an id that
+        // a socket patch/user echo has already confirmed on this page.
+        const currentById = new Map(queue.map((mutation) => [mutation.id, mutation]));
+        const persistedIds = new Set<MutationId>();
+        const merged: Mutation[] = [];
+        let skippedConfirmed = false;
+        for (const mutation of snap.pending) {
+          persistedIds.add(mutation.id);
+          if (confirmedFacts.has(mutation.id)) {
+            skippedConfirmed = true;
+            continue;
+          }
+          merged.push(currentById.get(mutation.id) ?? mutation);
+        }
+        merged.push(
+          ...queue.filter((mutation) =>
+            !persistedIds.has(mutation.id) &&
+            !confirmedFacts.has(mutation.id)
+          ),
+        );
+        queue = merged;
+        recompute();
+        stateRevision += 1;
+        onChange?.(viewValue);
+
+        // A concurrent patch/mutation may already have persisted a snapshot that
+        // did not yet contain the restored outbox. Likewise, a stale record may
+        // still contain an id the server confirmed. Serialize one corrected write
+        // before reporting hydration complete.
+        if (
+          stateRevision !== startedStateRevision + 1 ||
+          skippedConfirmed ||
+          baseRevision !== startedBaseRevision
+        ) {
+          await persist(snapshot());
+        }
+      } finally {
+        // Hydration is a one-shot startup operation. Stop retaining confirmation
+        // ids afterward so a long-running client does not grow this set forever,
+        // and prevent a later accidental cache read from replacing live state.
+        hydrationComplete = true;
+        confirmedFacts.clear();
       }
-      base = freeze(snap.base);
-      queue = [...snap.pending];
-      recompute();
-      onChange?.(viewValue);
     },
 
     async flush(): Promise<void> {
